@@ -8,7 +8,7 @@ namespace IntentSystem.Cli.Commands;
 /// <summary>
 /// G523: <c>intent-cli automation stalled-work --domain &lt;d&gt; --repo &lt;r&gt;
 /// [--stale-minutes &lt;m&gt;] [--claimed-silent-minutes &lt;m&gt;]
-/// [--format json|markdown]</c> — read-only inventory of pending pipeline
+/// [--repair-silent-minutes &lt;m&gt;] [--format json|markdown]</c> — read-only inventory of pending pipeline
 /// transitions with ages, so a single orchestrator wake (or an external
 /// heartbeat) can detect a stall without a human cross-checking GitHub
 /// labels, PR state, and queue-state by hand.
@@ -39,6 +39,18 @@ namespace IntentSystem.Cli.Commands;
 ///   candidate, and no runs.jsonl activity for longer than
 ///   <c>--backlog-idle-minutes</c> (G544 — the last uncovered stall class:
 ///   work that is ready but never started).</item>
+/// <item><c>repair-stalled</c> — a PR in the repair lifecycle
+///   (<c>intent-pr-request-update</c>, <c>intent-pr-update-in-progress</c>,
+///   or <c>intent-pr-rereview-ready</c>) with no observable activity for
+///   longer than <c>--repair-silent-minutes</c> (default
+///   <see cref="DefaultRepairSilentMinutes"/> minutes) — G546, promoting the
+///   G533 informational repair kinds once, and only once, the silence is
+///   long enough to mean a dead worker rather than a repair in progress.
+///   Actionable, but the <c>recommended_action</c> is a status check to the
+///   responsible thread, NEVER a transition (see
+///   <see cref="BuildRepairStalledAction"/>). Covers draft PRs too, which
+///   every other PR kind here deliberately skips — the four-day G545 stall
+///   was invisible precisely because its repair PR was a draft.</item>
 /// </list>
 ///
 /// Informational categories (G533 — age for visibility only,
@@ -66,6 +78,10 @@ namespace IntentSystem.Cli.Commands;
 ///   waiting, not silently stalled. Names the canonical <c>automation
 ///   issue-block</c> reconcile command.</item>
 /// </list>
+///
+/// G546: <c>repair-pending</c> and <c>rereview-pending</c> stay exactly as
+/// described above INSIDE <c>--repair-silent-minutes</c>; past it they are
+/// promoted to the actionable <c>repair-stalled</c> kind above.
 ///
 /// Age is approximated from the relevant GitHub entity's `createdAt` /
 /// `updatedAt` timestamp (GitHub does not expose per-label-application
@@ -204,6 +220,46 @@ internal static class AutomationStalledWorkCommand
     public const int DefaultClaimedSilentMinutes = 720;
 
     /// <summary>
+    /// G546: a PR in the repair lifecycle (<c>intent-pr-request-update</c>,
+    /// <c>intent-pr-update-in-progress</c>, or <c>intent-pr-rereview-ready</c>)
+    /// with no observable activity for longer than
+    /// <see cref="DefaultRepairSilentMinutes"/> (override
+    /// <c>--repair-silent-minutes</c>). ACTIONABLE — but the recommendation is
+    /// always a status check to the responsible thread, never a transition:
+    /// the transition owner is unchanged, and silence alone never establishes
+    /// that a repair succeeded, failed, or should be taken away from its
+    /// current owner.
+    ///
+    /// G533 deliberately left <see cref="KindRepairPending"/> /
+    /// <see cref="KindRereviewPending"/> thresholdless pending field data.
+    /// The data arrived twice: a G545 repair claimed
+    /// <c>intent-pr-update-in-progress</c> went silent for FOUR DAYS
+    /// (2026-07-23 → 07-27) after the implement session died, and a G538 PR
+    /// sat <c>intent-pr-rereview-ready</c> for 105 minutes
+    /// (2026-07-20) — both recovered only by a manual ping. The G545 case is
+    /// the sharper one: its PR was a DRAFT, and
+    /// <see cref="CollectPrCreatedNotReviewing"/> skips draft PRs outright, so
+    /// <c>stalled-work</c> reported <c>stalled=false, items=[]</c> throughout.
+    /// A dead worker mid-repair was the only measured stall class the detector
+    /// could not see at all; this kind closes it on both the draft and
+    /// non-draft paths.
+    /// </summary>
+    public const string KindRepairStalled = "repair-stalled";
+
+    /// <summary>
+    /// G546: conservative default for <c>--repair-silent-minutes</c> (3
+    /// hours). A repair has a well-defined observable footprint (new head
+    /// commits, PR comments, label changes — GitHub bumps the PR's
+    /// <c>updatedAt</c> on every one of them), so a long-but-not-absurd
+    /// threshold catches a multi-hour worker death without flagging a repair
+    /// that is merely mid-thought. Both measured field incidents exceed it
+    /// (105 minutes is under it by design — G538 was recovered by a ping
+    /// before it became a genuine stall; the four-day G545 case exceeds it
+    /// by more than thirtyfold).
+    /// </summary>
+    public const int DefaultRepairSilentMinutes = 180;
+
+    /// <summary>
     /// G532 review repair: a title matched more than one distinct packet's
     /// declared <c>source_execution_unit</c> as a token — the execution unit
     /// cannot be picked without guessing, so it is reported here instead of
@@ -232,7 +288,7 @@ internal static class AutomationStalledWorkCommand
     };
 
     private const string UsageLine =
-        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--format json|markdown]";
+        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -246,7 +302,7 @@ internal static class AutomationStalledWorkCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var domain, out var repo, out var staleMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var format, out var error))
+        if (!TryParseArguments(args, out var domain, out var repo, out var staleMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var repairSilentMinutes, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -256,7 +312,7 @@ internal static class AutomationStalledWorkCommand
         AutomationStalledWorkResult result;
         try
         {
-            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes);
+            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes, repairSilentMinutes);
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
@@ -298,7 +354,8 @@ internal static class AutomationStalledWorkCommand
         string repo,
         int staleMinutes,
         int claimedSilentMinutes = DefaultClaimedSilentMinutes,
-        int backlogIdleMinutes = DefaultBacklogIdleMinutes)
+        int backlogIdleMinutes = DefaultBacklogIdleMinutes,
+        int repairSilentMinutes = DefaultRepairSilentMinutes)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
@@ -316,7 +373,8 @@ internal static class AutomationStalledWorkCommand
         var warnings = new List<string>();
 
         CollectPublishedNotDelegated(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
-        CollectPrCreatedNotReviewing(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
+        CollectPrCreatedNotReviewing(context, domain, candidateDomains, openIssues, openPrs, repo, now, repairSilentMinutes, items, excluded);
+        CollectDraftRepairStalled(context, domain, candidateDomains, openIssues, openPrs, repo, now, repairSilentMinutes, items, excluded);
         CollectMergedNotClosedOut(context, domain, candidateDomains, repo, mergedPrs, now, items, excluded, warnings);
         CollectClaimedButSilent(context, domain, candidateDomains, openIssues, openPrs, repo, now, claimedSilentMinutes, items, excluded, warnings);
         CollectBacklogReadyIdle(context, domain, candidateDomains, openIssues, openPrs, repo, now, backlogIdleMinutes, items, excluded);
@@ -420,6 +478,7 @@ internal static class AutomationStalledWorkCommand
         IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
         string repo,
         DateTimeOffset now,
+        int repairSilentMinutes,
         List<StalledWorkItem> items,
         List<StalledWorkExcluded> excluded)
     {
@@ -525,6 +584,20 @@ internal static class AutomationStalledWorkCommand
             // modification of ANY kind (which may postdate the specific
             // label change) unless a dedicated label-event fetch is added.
             var ageSource = isInformational ? pr.UpdatedAt : pr.CreatedAt;
+            var ageMinutes = ComputeAgeMinutes(ageSource, now);
+
+            // G546: promote a repair-lifecycle PR that has been observably
+            // silent past the threshold. Inside the threshold — and whenever
+            // the silence cannot be established at all — the G533
+            // informational item below is emitted completely unchanged.
+            if (isInformational
+                && TryPromoteToRepairStalled(pr, prLabels, repo, now, repairSilentMinutes, out var promotedAction, out var silentMinutes))
+            {
+                kind = KindRepairStalled;
+                isInformational = false;
+                recommendedAction = promotedAction;
+                ageMinutes = silentMinutes;
+            }
 
             items.Add(new StalledWorkItem
             {
@@ -532,11 +605,196 @@ internal static class AutomationStalledWorkCommand
                 ExecutionUnit = resolution.ExecutionUnit,
                 Issue = new StalledWorkRef { Number = matchedIssue.Number, Url = matchedIssue.Url },
                 Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
-                AgeMinutes = ComputeAgeMinutes(ageSource, now),
+                AgeMinutes = ageMinutes,
                 IsInformational = isInformational,
                 RecommendedAction = recommendedAction,
             });
         }
+    }
+
+    /// <summary>
+    /// G546: the draft half of <see cref="KindRepairStalled"/>.
+    /// <see cref="CollectPrCreatedNotReviewing"/> skips draft PRs outright
+    /// (correctly — a draft PR is not "review hasn't started"), which is
+    /// exactly why the four-day G545 stall was invisible: its repair PR was a
+    /// draft carrying <c>intent-pr-update-in-progress</c>, so no kind covered
+    /// it and <c>stalled-work</c> reported healthy for four days. A draft PR
+    /// in the repair lifecycle is still a claimed repair, and a claimed repair
+    /// that stops emitting activity is still a dead worker.
+    ///
+    /// Deliberately narrow, so the draft path adds no new false positives:
+    /// it fires ONLY past the threshold. Inside the threshold a draft repair
+    /// PR stays invisible exactly as it is today — no informational item is
+    /// invented for it, keeping current output byte-compatible. The two paths
+    /// are disjoint by construction (this one handles drafts,
+    /// <see cref="CollectPrCreatedNotReviewing"/> handles non-drafts), so a PR
+    /// can never be reported twice.
+    /// </summary>
+    private static void CollectDraftRepairStalled(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
+        IReadOnlyList<GitHubAutomationIssueCandidate> openIssues,
+        IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
+        string repo,
+        DateTimeOffset now,
+        int repairSilentMinutes,
+        List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded)
+    {
+        var openIssuesByNumber = openIssues
+            .Where(issue => IsOpen(issue.State))
+            .ToDictionary(issue => issue.Number);
+
+        foreach (var pr in openPrs)
+        {
+            if (!IsOpen(pr.State) || !pr.IsDraft)
+            {
+                continue;
+            }
+
+            var prLabels = LabelSet(pr.Labels);
+            if (!CarriesRepairLifecycleLabel(prLabels))
+            {
+                continue;
+            }
+
+            if (!TryPromoteToRepairStalled(pr, prLabels, repo, now, repairSilentMinutes, out var recommendedAction, out var silentMinutes))
+            {
+                continue;
+            }
+
+            // The linked issue supplies the execution unit and the domain
+            // corroboration every other collector here relies on. A repair PR
+            // with no resolvable open source issue cannot be domain-confirmed,
+            // so it is left alone rather than reported into a domain it may
+            // not belong to.
+            GitHubAutomationIssueCandidate? matchedIssue = null;
+            foreach (var reference in pr.ClosingIssuesReferences)
+            {
+                if (reference.Number > 0
+                    && ReferenceMatchesRepo(reference, repo)
+                    && openIssuesByNumber.TryGetValue(reference.Number, out var candidate))
+                {
+                    matchedIssue = candidate;
+                    break;
+                }
+            }
+
+            if (matchedIssue is null)
+            {
+                continue;
+            }
+
+            var resolution = ResolveExecutionUnit(context, matchedIssue.Title);
+            var packetDeclaredDomain = resolution.Corroborated ? ReadPacketDeclaredDomain(context, resolution.ExecutionUnit) : null;
+            if (!TryConfirmDomain(domain, resolution, packetDeclaredDomain, candidateDomains, repo,
+                    out var reason, out var detail))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindRepairStalled,
+                    ExecutionUnit = resolution.ExecutionUnit,
+                    Issue = new StalledWorkRef { Number = matchedIssue.Number, Url = matchedIssue.Url },
+                    Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
+                    Reason = reason,
+                    Detail = detail,
+                });
+                continue;
+            }
+
+            items.Add(new StalledWorkItem
+            {
+                Kind = KindRepairStalled,
+                ExecutionUnit = resolution.ExecutionUnit,
+                Issue = new StalledWorkRef { Number = matchedIssue.Number, Url = matchedIssue.Url },
+                Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
+                AgeMinutes = silentMinutes,
+                IsInformational = false,
+                RecommendedAction = recommendedAction,
+            });
+        }
+    }
+
+    private static bool CarriesRepairLifecycleLabel(ISet<string> prLabels) =>
+        prLabels.Contains(WorkerNextActionConstants.Labels.IntentPrRequestUpdate)
+        || prLabels.Contains(WorkerNextActionConstants.Labels.IntentPrUpdateInProgress)
+        || prLabels.Contains(WorkerNextActionConstants.Labels.IntentPrRereviewReady);
+
+    /// <summary>
+    /// G546: decides whether a repair-lifecycle PR has been observably silent
+    /// past <paramref name="repairSilentMinutes"/>, and if so produces the
+    /// status-check recommendation for the responsible thread.
+    ///
+    /// "Observable activity" is the PR's own <c>updatedAt</c> — the same
+    /// proxy <see cref="CollectClaimedButSilent"/> already relies on, and the
+    /// one field that covers ALL THREE activity classes this kind cares
+    /// about: GitHub bumps a PR's <c>updatedAt</c> on a push to its head
+    /// branch, on any PR/review comment, and on any label change. The
+    /// approximation is conservative in the only direction that matters: it
+    /// can be bumped by activity that is not repair progress (making a stalled
+    /// repair look alive), but it cannot stay still while a repair is
+    /// genuinely progressing — so it never manufactures a false stall.
+    ///
+    /// Fails closed like <see cref="CollectClaimedButSilent"/>: a missing or
+    /// malformed <c>updatedAt</c> means silence cannot be established, so the
+    /// PR is NOT promoted (it keeps its existing informational treatment, or
+    /// stays invisible on the draft path) rather than being flagged on
+    /// unusable evidence. A future-dated timestamp is clamped to
+    /// <paramref name="now"/>, which can only ever make the PR look less
+    /// silent.
+    /// </summary>
+    private static bool TryPromoteToRepairStalled(
+        GitHubAutomationPrCandidate pr,
+        ISet<string> prLabels,
+        string repo,
+        DateTimeOffset now,
+        int repairSilentMinutes,
+        out string recommendedAction,
+        out int silentMinutes)
+    {
+        recommendedAction = string.Empty;
+        silentMinutes = 0;
+
+        if (!TryParseActivityTimestamp(pr.UpdatedAt, out var activity, out _))
+        {
+            return false;
+        }
+
+        var minutes = ComputeAgeMinutesFromInstant(ClampToNow(activity, now), now);
+        if (minutes < repairSilentMinutes)
+        {
+            return false;
+        }
+
+        silentMinutes = minutes;
+        recommendedAction = BuildRepairStalledAction(pr, prLabels, repo, minutes);
+        return true;
+    }
+
+    /// <summary>
+    /// G546: the recommendation is always a status check addressed to the
+    /// thread that owns the current repair state — never a transition. Which
+    /// thread depends on the label: <c>intent-pr-request-update</c> /
+    /// <c>intent-pr-update-in-progress</c> are owned by the implement thread
+    /// (a repair was requested of, or claimed by, the implementer), whereas
+    /// <c>intent-pr-rereview-ready</c> is owned by review dispatch (the repair
+    /// is pushed and it is the review side that has gone quiet).
+    /// </summary>
+    private static string BuildRepairStalledAction(
+        GitHubAutomationPrCandidate pr, ISet<string> prLabels, string repo, int silentMinutes)
+    {
+        var (state, thread) =
+            prLabels.Contains(WorkerNextActionConstants.Labels.IntentPrUpdateInProgress)
+                ? (WorkerNextActionConstants.Labels.IntentPrUpdateInProgress, "implement")
+                : prLabels.Contains(WorkerNextActionConstants.Labels.IntentPrRequestUpdate)
+                    ? (WorkerNextActionConstants.Labels.IntentPrRequestUpdate, "implement")
+                    : (WorkerNextActionConstants.Labels.IntentPrRereviewReady, "review-dispatch");
+
+        return
+            $"status check: PR #{pr.Number} in {repo} has carried `{state}` with no observable activity "
+            + $"(head commits, comments, label changes) for {silentMinutes}m — ask the responsible `{thread}` "
+            + "thread for a status update; do not transition the PR or reassign the repair from silence alone.";
     }
 
     private static void CollectMergedNotClosedOut(
@@ -1680,6 +1938,7 @@ internal static class AutomationStalledWorkCommand
         out int staleMinutes,
         out int claimedSilentMinutes,
         out int backlogIdleMinutes,
+        out int repairSilentMinutes,
         out string format,
         out string error)
     {
@@ -1688,6 +1947,7 @@ internal static class AutomationStalledWorkCommand
         staleMinutes = 0;
         claimedSilentMinutes = DefaultClaimedSilentMinutes;
         backlogIdleMinutes = DefaultBacklogIdleMinutes;
+        repairSilentMinutes = DefaultRepairSilentMinutes;
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -1745,6 +2005,18 @@ internal static class AutomationStalledWorkCommand
                         return false;
                     }
                     backlogIdleMinutes = parsedBacklogIdleMinutes;
+                    index++;
+                    break;
+                case "--repair-silent-minutes":
+                    if (index + 1 >= args.Length
+                        || !int.TryParse(args[index + 1], System.Globalization.NumberStyles.Integer,
+                            System.Globalization.CultureInfo.InvariantCulture, out var parsedRepairSilentMinutes)
+                        || parsedRepairSilentMinutes < 0)
+                    {
+                        error = "--repair-silent-minutes requires a non-negative integer.";
+                        return false;
+                    }
+                    repairSilentMinutes = parsedRepairSilentMinutes;
                     index++;
                     break;
                 case "--format":

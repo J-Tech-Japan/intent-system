@@ -305,13 +305,41 @@ queue-state、`runs.jsonl` を変更することは一切ありません — inf
   明示的な人間/design 側からの WAKE メッセージが必要でした。
   `backlog_idle_minutes_threshold` は、すべての result で
   `stale_minutes_threshold` と並んで報告されます。
+- `repair-stalled` (G546) — repair lifecycle にある PR
+  (`intent-pr-request-update`、`intent-pr-update-in-progress`、
+  `intent-pr-rereview-ready`)で、`--repair-silent-minutes`
+  (デフォルト **180** 分)を超えて観測可能な活動が一切ないもの。これは
+  G533 が「field data が出るまで」と保留した promotion であり、その
+  field data は 2 度得られました。より鋭いのは次のケースです: G545 の
+  repair が `intent-pr-update-in-progress` を claim したまま、implement
+  セッションの死亡により **4 日間**(2026-07-23 → 07-27)沈黙し、その間
+  `stalled-work` は `stalled: false, items: []` を報告し続け、復旧には
+  手動 ping が必要でした。その PR は **draft** であり、ここの他の PR 系
+  kind はすべて draft PR を除外するため、どの kind もこれを捕捉できて
+  いませんでした。したがって `repair-stalled` は draft も対象にします
+  (閾値内では draft の repair PR は従来どおり不可視のままで、そのために
+  informational な item を新たに捏造することはしません)。
+  `recommended_action` は常に**責任スレッドへの status check** です —
+  `intent-pr-request-update` / `intent-pr-update-in-progress` は
+  `implement`、`intent-pr-rereview-ready` は `review-dispatch` — であり、
+  transition や担当の付け替えでは**決してありません**: 沈黙だけでは、
+  repair が成功したのか失敗したのか、担当を取り上げるべきなのかを
+  確立できないためです。観測可能な活動は PR 自身の `updatedAt` で、
+  これは 3 つの活動クラスすべてをカバーする唯一のフィールドです
+  (GitHub は head branch への push、あらゆる comment、あらゆる label 変更で
+  これを更新します)。`claimed-but-silent` と同様に fail closed です:
+  `updatedAt` が欠落・不正な場合は沈黙を確立できないため、使えない証拠に
+  基づいて flag するのではなく promotion **しません**。
 
 **informational なカテゴリ (G533)** — `is_informational: true`、
 `recommended_action` は（transition コマンドではなく）説明的な prose、
 age は可視性のためだけに報告されます:
 
 - `repair-pending` — `intent-pr-request-update` および/または
-  `intent-pr-update-in-progress` を持つ PR。field finding: まさにこの
+  `intent-pr-update-in-progress` を持つ PR で、`--repair-silent-minutes`
+  の**閾値内**にあるもの(G546 — 閾値を超えると上記の actionable な
+  `repair-stalled` kind へ promotion されます。閾値内の出力は不変です)。
+  field finding: まさにこの
   状態にあった OPEN PR（PR #1750）が、以前は `pr-created-not-reviewing`
   として誤報告され、`review-start` が推奨されていました — repair の
   最中としては意味的に間違っています。推奨を毎回疑ってかからなければ
@@ -323,8 +351,9 @@ age は可視性のためだけに報告されます:
   fetch を追加しない限り）その label の変更より後になり得る、PR への
   あらゆる種類の最新の変更を反映します。
 - `rereview-pending` — `intent-pr-rereview-ready` を持つ PR（repair が
-  push され、re-review 待ち）。`repair-pending` と同じ `updatedAt` ベース
-  の age 近似です。
+  push され、re-review 待ち）で、`--repair-silent-minutes` の**閾値内**に
+  あるもの(G546)。`repair-pending` と同じ `updatedAt` ベースの age
+  近似です。
 - `claimed-but-silent` — `intent-issue-in-progress` を持つが **まだ PR が
   作成されていない** issue で、`--claimed-silent-minutes`（デフォルトは
   **720** 分 / 12 時間 — 通常の作業セッションでは決して発火しないよう
@@ -444,12 +473,12 @@ transition は拒否されます。これは `queue reprioritize` の reason 要
 （番号 + url）、`age_minutes`、`is_informational`、`recommended_action`
 を報告します。`--stale-minutes` は、指定した閾値より新しい item を
 除外します（デフォルトは `0` — すべてを age 付きで報告し、閾値は
-呼び出し側が選ぶ）— これは 8 つすべての kind に一律に適用されます。
-`claimed-but-silent` と `backlog-ready-idle` は、そもそも item が
-検討される前に、それぞれ自身の `--claimed-silent-minutes` /
-`--backlog-idle-minutes` 閾値でも追加でゲートされます（そのため
-`--stale-minutes` を上げるだけでは、いずれの kind の item も
-自身の閾値より早く現れることはありません）。`age_minutes` は、
+呼び出し側が選ぶ）— これは 9 つすべての kind に一律に適用されます。
+`claimed-but-silent`、`backlog-ready-idle`、`repair-stalled` は、そもそも
+item が検討される前に、それぞれ自身の `--claimed-silent-minutes` /
+`--backlog-idle-minutes` / `--repair-silent-minutes` 閾値でも追加で
+ゲートされます（そのため `--stale-minutes` を上げるだけでは、いずれの
+kind の item も自身の閾値より早く現れることはありません）。`age_minutes` は、
 GitHub が label 適用時刻や、専用の per-issue fetch 無しでの timeline
 event を公開していないため、該当する GitHub entity の
 `createdAt`/`updatedAt` タイムスタンプからの近似値です。
