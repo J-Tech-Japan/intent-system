@@ -10,11 +10,12 @@ namespace IntentSystem.Cli.Tests;
 public sealed class WorkflowLabelPaletteAnalyzerTests
 {
     [Fact]
-    public void Canonical_PaletteContainsExactlyTenLabels()
+    public void Canonical_PaletteContainsExactlyElevenLabels()
     {
         // G366 acceptance: the canonical palette is exhaustive and stable.
         // G374: extended with the two structured worker-signal labels.
-        Assert.Equal(10, WorkflowLabelPaletteContract.Canonical.Count);
+        // G545: extended with the issue-level blocked mirror label.
+        Assert.Equal(11, WorkflowLabelPaletteContract.Canonical.Count);
         var names = WorkflowLabelPaletteContract.Canonical.Select(e => e.Name).ToHashSet();
         Assert.Contains("intent-target", names);
         Assert.Contains("intent-issue-in-progress", names);
@@ -24,6 +25,8 @@ public sealed class WorkflowLabelPaletteAnalyzerTests
         Assert.Contains("intent-pr-update-in-progress", names);
         Assert.Contains("intent-pr-rereview-ready", names);
         Assert.Contains("intent-pr-approved", names);
+        // G545: issue-level mirror of queue-state's state=blocked.
+        Assert.Contains("intent-issue-blocked", names);
         // G374: signal-protocol labels are part of the canonical palette so
         // `automation label-palette-audit` / `-sync` provision them too.
         Assert.Contains("intent-signal-sent", names);

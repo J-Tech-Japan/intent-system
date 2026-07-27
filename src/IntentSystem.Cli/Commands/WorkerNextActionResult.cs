@@ -214,5 +214,14 @@ internal static class WorkerNextActionConstants
         public const string IntentIssueInProgress = "intent-issue-in-progress";
         public const string IntentPrCreated = "intent-pr-created";
         public const string IntentPrReviewing = "intent-pr-reviewing";
+
+        /// <summary>
+        /// G545: issue-level canonical representation of the queue's
+        /// <c>state=blocked</c> — applied/cleared only via <c>automation
+        /// issue-block</c>, never a raw <c>gh</c> label edit. Coexists with
+        /// <see cref="IntentIssueInProgress"/> (the worker still owns the
+        /// issue; it just cannot currently proceed) rather than replacing it.
+        /// </summary>
+        public const string IntentIssueBlocked = "intent-issue-blocked";
     }
 }

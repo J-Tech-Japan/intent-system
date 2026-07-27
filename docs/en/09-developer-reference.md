@@ -347,13 +347,97 @@ is reported for visibility only:
   completion, failure, or any transition from silence alone. Once a PR
   exists for the issue (`intent-pr-created`), the PR-lifecycle kinds take
   over instead; detecting a repair-state PR that is itself stale beyond a
-  threshold is an explicit out-of-scope follow-up.
+  threshold is an explicit out-of-scope follow-up. **G545: exempts a unit
+  whose queue-state item is `state=blocked`** — consulted once per
+  `stalled-work` call, tolerant of a missing/malformed `queue-state.json`
+  (falls through to this kind's pre-G545 GitHub-labels-only behavior
+  unchanged, so a domain that never uses `queue-state.json` never loses
+  this detection). A queue-blocked unit is never reported here; see
+  `blocked-label-drift` below.
+- `blocked-label-drift` (G545) — a transitional GitHub/queue-state mismatch,
+  never a stall: the queue-state item for this unit is `state=blocked` with
+  an explicit `blocked_by` reason, but its GitHub issue does not yet carry
+  `intent-issue-blocked` — the label side hasn't been reconciled yet.
+  `recommended_action` names the exact canonical reconcile command
+  (`intent-cli automation issue-block <unit> --repo <r> --issue <n> --reason
+  "<blocked_by text>" --write --format json`). Once that command converges
+  the label, the same unit disappears from `stalled-work` entirely (neither
+  `claimed-but-silent` nor `blocked-label-drift` fires — GitHub and
+  queue-state agree). Field finding, 2026-07-21 (sekiban-as-a-service): 5
+  items (SKS-G818, SKS-G837, SKS-G835, SKS-G839, SKS-G840) were `state=blocked`
+  in queue-state with an explicit `blocked_by` dependency, yet each was
+  reported as `claimed-but-silent` every wake because `claimed-but-silent`
+  read only GitHub labels and no issue-level "blocked" representation
+  existed at all.
+
+**`intent-cli automation issue-block <execution-unit> --repo <owner/repo>
+--issue <n> --reason <text> [--write] [--dry-run] [--format text|json]`**
+(and its `--clear` counterpart, `--reason` omitted) is the ONE canonical,
+bounded transition that converges BOTH authoritative representations of
+"blocked" for a single execution unit:
+
+- **queue-state** — `state=blocked` and `blocked_by: ["<reason>"]`, applied
+  through the existing, unmodified `QueueManager` blocking transition (the
+  same mechanism `queue transition <unit> blocked` uses), plus a durable
+  `runs.jsonl` audit event (`event: blocked` / `queued`, `by: intent-cli
+  automation issue-block`, carrying the reason).
+- **GitHub** — the `intent-issue-blocked` label, applied through the same
+  `IGitHubLabelMutator` seam `worker claim`/`worker complete` use. Raw `gh
+  ... edit --add-label`/`--remove-label` is never permitted.
+
+`--clear` converges both sides back: it restores `state=queued` **and
+empties `blocked_by`**, then removes the label. Emptying `blocked_by` is not
+cosmetic — `intent next-slice`'s eligibility gate rejects any item with a
+non-empty `blocked_by` regardless of its state, so leaving the stale reason
+behind would keep a "cleared" unit permanently unselectable, merely
+relocating the drift from GitHub into queue-state.
+
+The execution unit is a **required positional argument**, never inferred
+from the issue title. The queue item must additionally carry a **complete
+`linked_issue`** — both a repo and a number — and both must agree with
+`--repo`/`--issue`: the repo is compared canonically (URL/ssh/`.git`/
+trailing-slash shapes normalized to `owner/repo`) and case-insensitively,
+the number exactly. Missing linkage, a different repo, and a different
+number are each refused; a missing linkage is absent evidence, not consent,
+and number-only agreement proves nothing because issue #818 exists in
+almost every repository. A unit already blocked with a *different* reason is
+likewise refused, not silently overwritten; clear it first.
+
+A present but unreadable/unparseable `runs.jsonl` is also a hard stop: the
+command refuses before appending, writing queue-state, or even *reading*
+GitHub labels, and names `intent-cli automation runs-audit` as the repair
+path. Transitioning against a trail it cannot parse would corrupt that trail
+further and would decide retry-vs-fresh-append from no evidence at all. A
+**missing** run log remains the valid first-event case. Every refusal above
+happens before any interaction with the run log, queue-state, or GitHub, so
+all three sides are left byte-identical.
+
+**Write ordering is fail-loud and repairable.** The `runs.jsonl` audit event
+is appended FIRST and `queue-state.json` written SECOND (matching `queue
+reprioritize`'s convention), so no queue mutation is ever silently
+unaudited. The two sides are then converged **independently**: each side
+checks its own current state and mutates only if it is not already at the
+target. Re-running the exact same command after any partial failure
+therefore retries only what has not converged — a completed step is never
+repeated. Queue-side audit idempotency is decided by the run log itself: a
+matching event is reused (never duplicated) only when it is the most recent
+event for that unit *and* queue-state has not yet caught up to it, which
+distinguishes a genuine partial-failure retry from a later re-block that
+happens to reuse the same reason text after a full block/unblock cycle.
+
+Dry-run by default: it reports what would change on both sides and touches
+neither `queue-state.json`, `runs.jsonl`, nor GitHub, and never reports
+`converged: true`. `--reason` is required when applying and never permitted
+with `--clear` — a blocked transition without a recorded reason is refused,
+mirroring `queue reprioritize`'s reason requirement. `intent-issue-blocked`
+coexists with `intent-issue-in-progress` rather than replacing it: the
+worker still owns the issue, it just cannot currently proceed.
 
 Each item reports `kind`, `execution_unit`, `issue` and/or `pr` (number +
 url), `age_minutes`, `is_informational`, and `recommended_action`.
 `--stale-minutes` filters out items younger than the given threshold
 (default `0` — report everything with its age; callers pick their own
-threshold) — this applies uniformly across all seven kinds; `claimed-but-silent`
+threshold) — this applies uniformly across all eight kinds; `claimed-but-silent`
 and `backlog-ready-idle` each additionally gate on their OWN
 `--claimed-silent-minutes` / `--backlog-idle-minutes` threshold before an
 item is even considered (so raising `--stale-minutes` alone can never make
