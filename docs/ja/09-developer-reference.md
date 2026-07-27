@@ -359,14 +359,14 @@ age は可視性のためだけに報告されます:
   報告されません——下記の `blocked-label-drift` を参照してください。
 - `blocked-label-drift` (G545) — GitHub と queue-state の一時的な
   mismatch であり、stall では**ありません**: この unit の queue-state
-  item は `state=blocked`(`queue transition <unit> blocked --reason
-  <text>` で記録された明示的な `blocked_by` reason を持つ)ですが、
+  item は明示的な `blocked_by` reason を伴う `state=blocked` ですが、
   対応する GitHub issue はまだ `intent-issue-blocked` を持っていません
   ——label 側がまだ reconcile されていない状態です。`recommended_action`
   は正確な canonical reconcile コマンド(`intent-cli automation
-  issue-block --repo <r> --issue <n> --reason "<blocked_by のテキスト>"
-  --write --format json`)を名指しします。このコマンドが label を適用
-  すると、同じ unit は `stalled-work` から完全に姿を消します
+  issue-block <unit> --repo <r> --issue <n> --reason
+  "<blocked_by のテキスト>" --write --format json`)を名指しします。
+  このコマンドが label を収束させると、同じ unit は `stalled-work` から
+  完全に姿を消します
   (`claimed-but-silent` も `blocked-label-drift` も発火しません——
   GitHub と queue-state が一致するためです)。field finding、
   2026-07-21(sekiban-as-a-service): 5 item(SKS-G818、SKS-G837、
@@ -376,23 +376,55 @@ age は可視性のためだけに報告されます:
   「blocked」表現が全く存在しなかったため、毎 wake `claimed-but-silent`
   として報告されていました。
 
-**`intent-cli automation issue-block --repo <owner/repo> --issue <n>
---reason <text> [--write] [--dry-run] [--format text|json]`**
-(および、その `--clear` 版——`--reason` を省略)は、`intent-issue-blocked`
-を適用/削除する canonical で bounded な transition です——queue-state の
-`blocked` transition と GitHub を一致させる唯一サポートされた方法であり、
-raw な `gh ... edit --add-label`/`--remove-label` は決して許可されません。
-デフォルトは dry-run。双方向で idempotent です(label が既に要求された
-状態を反映していれば `applied: false` と、その旨を説明する `summary`)。
-`--reason` は apply 時には必須です(`--clear` とは決して併用できません)
-——reason が記録されない blocked transition は拒否されます。これは
-`queue reprioritize` の reason 要件を踏襲しています。`intent-issue-blocked`
-は `intent-issue-in-progress` を置き換えるのではなく共存します——worker は
-引き続き issue を所有しており、単に現時点で作業を進められないだけです。
-このコマンドは `queue-state.json` や `runs.jsonl` に一切触れません——
-既に `queue transition <unit> blocked --reason <text>`(この slice では
-変更しません)経由で起きた `blocked` transition に GitHub 側を
-reconcile するためだけに存在します。
+**`intent-cli automation issue-block <execution-unit> --repo <owner/repo>
+--issue <n> --reason <text> [--write] [--dry-run] [--format text|json]`**
+(および、その `--clear` 版——`--reason` を省略)は、単一 execution unit に
+ついて「blocked」の**両方の authoritative な表現を収束させる唯一の
+canonical で bounded な transition** です:
+
+- **queue-state** — `state=blocked` と `blocked_by: ["<reason>"]`。既存の
+  変更されていない `QueueManager` の blocking transition(`queue transition
+  <unit> blocked` と同じ機構)経由で適用し、あわせて durable な
+  `runs.jsonl` audit event(`event: blocked` / `queued`、`by: intent-cli
+  automation issue-block`、reason 付き)を追記します。
+- **GitHub** — `intent-issue-blocked` label。`worker claim`/`worker complete`
+  と同じ `IGitHubLabelMutator` seam 経由で適用します。raw な
+  `gh ... edit --add-label`/`--remove-label` は決して許可されません。
+
+`--clear` は両側を元に戻します: `state=queued` へ戻すことに加えて
+**`blocked_by` を空にし**、その後 label を削除します。`blocked_by` を空に
+するのは体裁上の話ではありません——`intent next-slice` の eligibility gate は
+state に関係なく `blocked_by` が非空の item を不適格にするため、stale な
+reason を残すと「clear された」はずの unit が永久に選択不能のままとなり、
+drift を GitHub から queue-state へ移動させただけになります。
+
+execution unit は**必須の positional 引数**であり、issue title から推測する
+ことはありません。queue item が `linked_issue` を宣言している場合、その番号が
+`--issue` と突き合わせられ、不一致は信用せずに拒否されます——誤った issue に
+label を付ける可能性を排除するためです。既に**異なる** reason で blocked に
+なっている unit も同様に、黙って上書きせず拒否します(先に clear してください)。
+
+**書き込み順序は fail-loud かつ repairable です。** `runs.jsonl` の audit
+event を先に追記し、`queue-state.json` の書き込みを後に行います
+(`queue reprioritize` の規約と同じ)。これにより queue の変更が audit なしで
+黙って成立することは決してありません。その上で両側は**独立に**収束されます:
+各 side は自分自身の現在状態を確認し、既に目標状態であれば変更しません。
+したがって partial failure 後に全く同じコマンドを再実行すると、まだ収束して
+いない側だけが再試行され、完了済みの step が繰り返されることはありません。
+queue 側の audit idempotency は run log 自身で判定します: 一致する event が
+再利用される(二重追記されない)のは、それがその unit の最新 event であり
+**かつ** queue-state がまだ追いついていない場合だけであり、これにより
+「partial failure の再試行」と「block/unblock を一巡した後に同じ reason
+テキストで再度 block した」ケースが区別されます。
+
+デフォルトは dry-run: 両側で何が変わるかを報告するだけで、
+`queue-state.json`、`runs.jsonl`、GitHub のいずれにも触れず、
+`converged: true` を返すこともありません。`--reason` は apply 時には必須です
+(`--clear` とは決して併用できません)——reason が記録されない blocked
+transition は拒否されます。これは `queue reprioritize` の reason 要件を
+踏襲しています。`intent-issue-blocked` は `intent-issue-in-progress` を
+置き換えるのではなく共存します——worker は引き続き issue を所有しており、
+単に現時点で作業を進められないだけです。
 
 各 item は `kind`、`execution_unit`、`issue` および/または `pr`
 （番号 + url）、`age_minutes`、`is_informational`、`recommended_action`

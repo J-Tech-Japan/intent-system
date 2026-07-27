@@ -355,13 +355,12 @@ is reported for visibility only:
   this detection). A queue-blocked unit is never reported here; see
   `blocked-label-drift` below.
 - `blocked-label-drift` (G545) — a transitional GitHub/queue-state mismatch,
-  never a stall: the queue-state item for this unit is `state=blocked` (an
-  explicit `blocked_by` reason recorded via `queue transition <unit>
-  blocked --reason <text>`), but its GitHub issue does not yet carry
+  never a stall: the queue-state item for this unit is `state=blocked` with
+  an explicit `blocked_by` reason, but its GitHub issue does not yet carry
   `intent-issue-blocked` — the label side hasn't been reconciled yet.
   `recommended_action` names the exact canonical reconcile command
-  (`intent-cli automation issue-block --repo <r> --issue <n> --reason
-  "<blocked_by text>" --write --format json`). Once that command applies
+  (`intent-cli automation issue-block <unit> --repo <r> --issue <n> --reason
+  "<blocked_by text>" --write --format json`). Once that command converges
   the label, the same unit disappears from `stalled-work` entirely (neither
   `claimed-but-silent` nor `blocked-label-drift` fires — GitHub and
   queue-state agree). Field finding, 2026-07-21 (sekiban-as-a-service): 5
@@ -371,22 +370,55 @@ is reported for visibility only:
   read only GitHub labels and no issue-level "blocked" representation
   existed at all.
 
-**`intent-cli automation issue-block --repo <owner/repo> --issue <n>
---reason <text> [--write] [--dry-run] [--format text|json]`** (and its
-`--clear` counterpart, `--reason` omitted) is the canonical, bounded
-transition that applies/removes `intent-issue-blocked` — the ONLY supported
-way to make GitHub agree with a queue-state `blocked` transition; raw `gh
-... edit --add-label`/`--remove-label` is never permitted. Dry-run by
-default. Idempotent both directions (`applied: false` with an explanatory
-`summary` if the label already reflects the requested state). `--reason` is
-required when applying (never permitted with `--clear`) — a blocked
-transition without a recorded reason is refused, mirroring `queue
-reprioritize`'s reason requirement. `intent-issue-blocked` coexists with
-`intent-issue-in-progress` rather than replacing it: the worker still owns
-the issue, it just cannot currently proceed. This command never touches
-`queue-state.json` or `runs.jsonl` — it exists purely to reconcile GitHub
-onto a `blocked` transition that already happened via `queue transition
-<unit> blocked --reason <text>` (unchanged by this slice).
+**`intent-cli automation issue-block <execution-unit> --repo <owner/repo>
+--issue <n> --reason <text> [--write] [--dry-run] [--format text|json]`**
+(and its `--clear` counterpart, `--reason` omitted) is the ONE canonical,
+bounded transition that converges BOTH authoritative representations of
+"blocked" for a single execution unit:
+
+- **queue-state** — `state=blocked` and `blocked_by: ["<reason>"]`, applied
+  through the existing, unmodified `QueueManager` blocking transition (the
+  same mechanism `queue transition <unit> blocked` uses), plus a durable
+  `runs.jsonl` audit event (`event: blocked` / `queued`, `by: intent-cli
+  automation issue-block`, carrying the reason).
+- **GitHub** — the `intent-issue-blocked` label, applied through the same
+  `IGitHubLabelMutator` seam `worker claim`/`worker complete` use. Raw `gh
+  ... edit --add-label`/`--remove-label` is never permitted.
+
+`--clear` converges both sides back: it restores `state=queued` **and
+empties `blocked_by`**, then removes the label. Emptying `blocked_by` is not
+cosmetic — `intent next-slice`'s eligibility gate rejects any item with a
+non-empty `blocked_by` regardless of its state, so leaving the stale reason
+behind would keep a "cleared" unit permanently unselectable, merely
+relocating the drift from GitHub into queue-state.
+
+The execution unit is a **required positional argument**, never inferred
+from the issue title. When the queue item declares a `linked_issue`, its
+number is cross-checked against `--issue` and a mismatch is refused rather
+than trusted — the command will not label a possibly-wrong issue. A unit
+that is already blocked with a *different* reason is likewise refused, not
+silently overwritten; clear it first.
+
+**Write ordering is fail-loud and repairable.** The `runs.jsonl` audit event
+is appended FIRST and `queue-state.json` written SECOND (matching `queue
+reprioritize`'s convention), so no queue mutation is ever silently
+unaudited. The two sides are then converged **independently**: each side
+checks its own current state and mutates only if it is not already at the
+target. Re-running the exact same command after any partial failure
+therefore retries only what has not converged — a completed step is never
+repeated. Queue-side audit idempotency is decided by the run log itself: a
+matching event is reused (never duplicated) only when it is the most recent
+event for that unit *and* queue-state has not yet caught up to it, which
+distinguishes a genuine partial-failure retry from a later re-block that
+happens to reuse the same reason text after a full block/unblock cycle.
+
+Dry-run by default: it reports what would change on both sides and touches
+neither `queue-state.json`, `runs.jsonl`, nor GitHub, and never reports
+`converged: true`. `--reason` is required when applying and never permitted
+with `--clear` — a blocked transition without a recorded reason is refused,
+mirroring `queue reprioritize`'s reason requirement. `intent-issue-blocked`
+coexists with `intent-issue-in-progress` rather than replacing it: the
+worker still owns the issue, it just cannot currently proceed.
 
 Each item reports `kind`, `execution_unit`, `issue` and/or `pr` (number +
 url), `age_minutes`, `is_informational`, and `recommended_action`.

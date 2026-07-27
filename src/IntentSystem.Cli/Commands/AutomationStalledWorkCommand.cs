@@ -812,8 +812,8 @@ internal static class AutomationStalledWorkCommand
                             $"queue-state reports `{resolution.ExecutionUnit}` as blocked (blocked_by: {blockedReason}), "
                             + $"but issue #{issue.Number} does not yet carry the "
                             + $"`{WorkerNextActionConstants.Labels.IntentIssueBlocked}` label — reconcile via: "
-                            + $"intent-cli automation issue-block --repo {repo} --issue {issue.Number} "
-                            + $"--reason \"{blockedReason}\" --write --format json",
+                            + $"intent-cli automation issue-block {resolution.ExecutionUnit} --repo {repo} "
+                            + $"--issue {issue.Number} --reason \"{blockedReason}\" --write --format json",
                     });
                 }
 

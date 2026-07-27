@@ -1,40 +1,90 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using IntentSystem.Supervisor;
+using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G545: the canonical issue-level mirror of queue-state's <c>state=blocked</c>
-/// — <c>intent-cli automation issue-block --repo &lt;owner/repo&gt; --issue &lt;n&gt;
-/// --reason &lt;text&gt; [--write] [--dry-run] [--format text|json]</c> applies
-/// <see cref="WorkerNextActionConstants.Labels.IntentIssueBlocked"/>, recording
-/// the queue's own <c>blocked_by</c> reason text; the counterpart <c>--clear</c>
-/// removes it once the unit is unblocked. Coexists with
-/// <see cref="WorkerNextActionConstants.Labels.IntentIssueInProgress"/> rather
-/// than replacing it — the worker still owns the issue, it just cannot
-/// currently proceed. Dry-run by default; WITHOUT raw <c>gh ... edit
-/// --add-label</c>/<c>--remove-label</c>, mutating labels only through the
-/// installed <see cref="IGitHubLabelMutator"/>, exactly like the existing
-/// <see cref="AutomationIssueReleaseCommand"/>. Never edits queue-state or
-/// runs.jsonl, and never launches an AI provider — this command only makes
-/// GitHub agree with a `blocked` transition that already happened via
-/// <c>queue transition &lt;unit&gt; blocked --reason &lt;text&gt;</c>.
+/// G545: <c>intent-cli automation issue-block &lt;execution-unit&gt; --repo
+/// &lt;owner/repo&gt; --issue &lt;n&gt; --reason &lt;text&gt; [--write] [--dry-run]
+/// [--format text|json]</c> — the ONE canonical, bounded transition that
+/// converges BOTH authoritative representations of "blocked" for a single
+/// execution unit: queue-state (<c>state=blocked</c> + <c>blocked_by</c>
+/// reason, via the existing, unmodified <see cref="QueueManager.TransitionBlocking"/>)
+/// and the GitHub issue-level <see cref="WorkerNextActionConstants.Labels.IntentIssueBlocked"/>
+/// label (via the installed <see cref="IGitHubLabelMutator"/>). The
+/// counterpart <c>--clear</c> (no <c>--reason</c>) converges both back to
+/// unblocked. Never a raw <c>gh ... edit --add-label</c>/<c>--remove-label</c>;
+/// never a direct queue-state hand-edit.
+///
+/// Review repair (G545 round 2): a prior label-only version of this command
+/// left queue-state untouched, immediately recreating the exact drift this
+/// slice exists to close. The execution unit is now a REQUIRED positional
+/// argument (never guessed from the issue title) so "which queue item does
+/// this affect" is resolved exactly, not heuristically — and, when the
+/// queue item declares a <see cref="QueueItem.LinkedIssue"/>, its number is
+/// cross-checked against <c>--issue</c>, refusing to label a possibly-wrong
+/// issue rather than trusting the caller blindly.
+///
+/// Fail-closed, repairable write order — mirrors <see
+/// cref="QueueReprioritizeCommand"/>'s established convention: the queue-side
+/// <c>runs.jsonl</c> audit event is appended FIRST, <c>queue-state.json</c>
+/// SECOND, so a failure at either step never produces a silent, unaudited
+/// queue mutation. The two authoritative sides (queue-state, GitHub label)
+/// are then converged INDEPENDENTLY of each other — if the queue side is
+/// already in the target state, its own mutation is skipped, but the label
+/// side is still checked/applied, and vice versa — so re-running this exact
+/// command after ANY partial failure retries only whatever has not yet
+/// converged, without duplicating a completed step. Idempotency for the
+/// queue-side audit event itself is decided by <see cref="FindPendingRetryEvent"/>:
+/// a matching event is treated as an already-recorded pending write (reused,
+/// never duplicated) only when it is the MOST RECENT run-log event for this
+/// execution unit AND queue-state does not yet reflect it — distinguishing a
+/// genuine partial-failure retry from an unrelated later re-request that
+/// happens to reuse the same reason text after a full block/unblock cycle.
+///
+/// Clearing also empties <see cref="QueueItem.BlockedBy"/>, not just the
+/// state. <see cref="QueueManager.TransitionNonBlocking"/> deliberately
+/// leaves <c>blocked_by</c> alone (it is a general-purpose transition that
+/// must not assume the caller owns that list), but the blocking half of THIS
+/// command sets it wholesale to the single recorded reason, so its exact
+/// inverse is to empty it. Leaving the stale reason behind would keep the
+/// unit permanently ineligible for selection — <see
+/// cref="IntentNextSliceCommand"/>'s dependency/blocked-by gate rejects any
+/// item with a non-empty <c>blocked_by</c> regardless of its state — i.e. a
+/// "cleared" unit that is still, in effect, blocked.
 /// </summary>
 internal static class AutomationIssueBlockCommand
 {
     private const string FormatText = "text";
     private const string FormatJson = "json";
     private const string BlockedLabel = WorkerNextActionConstants.Labels.IntentIssueBlocked;
+    private const string TransitionActor = "intent-cli automation issue-block";
+
+    /// <summary>The queue-side target for <c>--clear</c> — restores the item to the pool <see cref="IntentNextSliceCommand"/>/<c>next-slice</c> selects from.</summary>
+    private const QueueItemState UnblockTargetState = QueueItemState.Queued;
 
     public static Func<IGitHubLabelMutator>? MutatorFactory { get; set; }
 
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
+
+    /// <summary>Test seam: throws to simulate a runs.jsonl append failure AFTER it would have succeeded, or replaces the real append.</summary>
+    internal static Action<string, RunEvent>? AppendRunEventOverride { get; set; }
+
+    /// <summary>Test seam: throws to simulate a queue-state.json write failure AFTER the runs event was already durably appended.</summary>
+    internal static Action<string, QueueState>? WriteQueueStateOverride { get; set; }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.Never,
     };
+
+    private const string UsageLine =
+        "Usage: intent-cli automation issue-block <execution-unit> --repo <owner/repo> --issue <n> --reason <text> [--write] [--dry-run] [--format text|json]\n"
+        + "       intent-cli automation issue-block <execution-unit> --repo <owner/repo> --issue <n> --clear [--write] [--dry-run] [--format text|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -48,9 +98,62 @@ internal static class AutomationIssueBlockCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var repo, out var issue, out var reason, out var clear, out var mode, out var format, out var error))
+        if (!TryParseArguments(args, out var executionUnit, out var repo, out var issue, out var reason, out var clear, out var write, out var format, out var error))
         {
             writer.WriteLine(error);
+            writer.WriteLine(UsageLine);
+            return 1;
+        }
+
+        var queueStatePath = context.GetQueueStatePath();
+        if (!File.Exists(queueStatePath))
+        {
+            writer.WriteLine($"No queue state found at {queueStatePath}");
+            return 1;
+        }
+
+        QueueState queueState;
+        try
+        {
+            queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or JsonException)
+        {
+            writer.WriteLine($"queue-state.json could not be parsed: {exception.Message}");
+            return 1;
+        }
+
+        var queueItem = queueState.Items.FirstOrDefault(item => string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+        if (queueItem is null)
+        {
+            writer.WriteLine($"queue-state.json has no item with execution_unit '{executionUnit}'.");
+            return 1;
+        }
+
+        if (queueItem.LinkedIssue is { Number: { } linkedNumber } && linkedNumber != issue)
+        {
+            writer.WriteLine(
+                $"'{executionUnit}'s queue-state linked_issue is #{linkedNumber}, not the requested #{issue}; "
+                + "refusing to label a possibly-wrong issue. Re-invoke with the linked issue number, or fix the "
+                + "queue-state linkage first.");
+            return 1;
+        }
+
+        var now = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        var runLogPath = context.GetRunLogPath();
+        var beforeState = queueItem.State;
+        var beforeBlockedBy = queueItem.BlockedBy;
+
+        QueueQueueSideResult queueResult;
+        try
+        {
+            queueResult = clear
+                ? ConvergeQueueSide(queueStatePath, runLogPath, queueState, queueItem, executionUnit!, UnblockTargetState, reason: null, write, now)
+                : ConvergeQueueSide(queueStatePath, runLogPath, queueState, queueItem, executionUnit!, QueueItemState.Blocked, reason, write, now);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or JsonException)
+        {
+            writer.WriteLine($"failed to converge queue-state for '{executionUnit}': {exception.Message}");
             return 1;
         }
 
@@ -76,61 +179,90 @@ internal static class AutomationIssueBlockCommand
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
         {
-            writer.WriteLine($"failed to read current labels for issue #{issue} in {repo}: {exception.Message}");
+            writer.WriteLine(
+                $"queue-state converged for '{executionUnit}' (or already was), but failed to read current labels "
+                + $"for issue #{issue} in {repo}: {exception.Message}. Re-run this exact command to retry the label step only.");
             return 1;
         }
 
         var hasBlockedLabel = currentLabels.Contains(BlockedLabel, StringComparer.Ordinal);
-        var applied = false;
-        var transitionAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
-        var isWrite = string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal);
+        var labelApplied = false;
 
-        if (clear)
+        if (write)
         {
-            if (isWrite && hasBlockedLabel)
+            if (!clear && !hasBlockedLabel)
+            {
+                try
+                {
+                    mutator.ApplyLabelTransitions(repo!, GhCliGitHubLabelMutator.Kinds.Issue, issue!.Value, [BlockedLabel], Array.Empty<string>());
+                    labelApplied = true;
+                }
+                catch (Exception exception) when (exception is InvalidOperationException or IOException)
+                {
+                    writer.WriteLine(
+                        $"queue-state converged for '{executionUnit}' (or already was), but failed to apply the "
+                        + $"{BlockedLabel} label on issue #{issue} in {repo}: {exception.Message}. Re-run this exact "
+                        + "command to retry the label step only.");
+                    return 1;
+                }
+            }
+            else if (clear && hasBlockedLabel)
             {
                 try
                 {
                     mutator.ApplyLabelTransitions(repo!, GhCliGitHubLabelMutator.Kinds.Issue, issue!.Value, Array.Empty<string>(), [BlockedLabel]);
-                    applied = true;
+                    labelApplied = true;
                 }
                 catch (Exception exception) when (exception is InvalidOperationException or IOException)
                 {
-                    writer.WriteLine($"failed to clear the blocked transition on issue #{issue} in {repo}: {exception.Message}");
+                    writer.WriteLine(
+                        $"queue-state converged for '{executionUnit}' (or already was), but failed to clear the "
+                        + $"{BlockedLabel} label on issue #{issue} in {repo}: {exception.Message}. Re-run this exact "
+                        + "command to retry the label step only.");
                     return 1;
                 }
             }
         }
-        else if (isWrite && !hasBlockedLabel)
-        {
-            try
-            {
-                mutator.ApplyLabelTransitions(repo!, GhCliGitHubLabelMutator.Kinds.Issue, issue!.Value, [BlockedLabel], Array.Empty<string>());
-                applied = true;
-            }
-            catch (Exception exception) when (exception is InvalidOperationException or IOException)
-            {
-                writer.WriteLine($"failed to apply the blocked transition on issue #{issue} in {repo}: {exception.Message}");
-                return 1;
-            }
-        }
+
+        // Converged only ever means "both sides now agree" — dry-run never
+        // claims it, since nothing was actually written.
+        var queueConverged = clear
+            ? queueResult.AfterState != QueueItemState.Blocked && queueResult.AfterBlockedBy.Count == 0
+            : queueResult.AfterState == QueueItemState.Blocked;
+        var labelConverged = clear
+            ? !hasBlockedLabel || labelApplied
+            : hasBlockedLabel || labelApplied;
+        var converged = write && queueConverged && labelConverged;
 
         var result = new AutomationIssueBlockResult
         {
             Repo = repo!,
+            ExecutionUnit = executionUnit!,
             Issue = issue!.Value,
             IssueUrl = BuildIssueUrl(repo!, issue.Value),
-            Mode = mode,
+            Mode = write ? WorkerClaimCompleteConstants.Modes.Write : WorkerClaimCompleteConstants.Modes.DryRun,
             Clear = clear,
-            Applied = applied,
-            BlockedLabel = BlockedLabel,
-            HadBlockedLabel = hasBlockedLabel,
             Reason = reason,
-            AddLabels = clear ? Array.Empty<string>() : [BlockedLabel],
-            RemoveLabels = clear ? [BlockedLabel] : Array.Empty<string>(),
-            CurrentLabels = currentLabels,
-            TransitionedAt = transitionAt,
-            Summary = BuildSummary(issue.Value, clear, hasBlockedLabel, reason),
+            Queue = new AutomationIssueBlockQueueResult
+            {
+                BeforeState = FormatState(beforeState),
+                BeforeBlockedBy = beforeBlockedBy,
+                TargetState = FormatState(clear ? UnblockTargetState : QueueItemState.Blocked),
+                AlreadyConverged = queueResult.AlreadyConverged,
+                Applied = queueResult.Applied,
+                AfterState = FormatState(queueResult.AfterState),
+                AfterBlockedBy = queueResult.AfterBlockedBy,
+            },
+            Label = new AutomationIssueBlockLabelResult
+            {
+                BlockedLabel = BlockedLabel,
+                HadBlockedLabel = hasBlockedLabel,
+                Applied = labelApplied,
+                CurrentLabels = currentLabels,
+            },
+            Converged = converged,
+            TransitionedAt = now,
+            Summary = BuildSummary(executionUnit!, issue.Value, clear, write, queueResult, hasBlockedLabel, labelApplied),
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -145,48 +277,251 @@ internal static class AutomationIssueBlockCommand
         return 0;
     }
 
-    private static string BuildSummary(int issue, bool clear, bool hasBlockedLabel, string? reason)
+    private readonly record struct QueueQueueSideResult(
+        bool AlreadyConverged, bool Applied, QueueItemState AfterState, IReadOnlyList<string> AfterBlockedBy);
+
+    /// <summary>
+    /// Converges the queue-side state toward <paramref name="targetState"/>
+    /// (Blocked with <paramref name="reason"/>, or the unblock target with no
+    /// reason). Idempotent: a no-op when already converged. Dry-run reports
+    /// what WOULD happen without writing anything.
+    /// </summary>
+    private static QueueQueueSideResult ConvergeQueueSide(
+        string queueStatePath,
+        string runLogPath,
+        QueueState queueState,
+        QueueItem queueItem,
+        string executionUnit,
+        QueueItemState targetState,
+        string? reason,
+        bool write,
+        DateTimeOffset now)
     {
-        if (clear)
+        // Convergence is judged on BOTH queue fields this command owns:
+        // blocked means state=blocked AND blocked_by == [reason]; unblocked
+        // means state!=blocked AND blocked_by empty. A unit left with a
+        // stale blocked_by is NOT converged — the selector still treats it
+        // as blocked.
+        var alreadyConverged = targetState == QueueItemState.Blocked
+            ? queueItem.State == QueueItemState.Blocked && queueItem.BlockedBy.Count == 1 && string.Equals(queueItem.BlockedBy[0], reason, StringComparison.Ordinal)
+            : queueItem.State != QueueItemState.Blocked && queueItem.BlockedBy.Count == 0;
+
+        if (alreadyConverged)
         {
-            return hasBlockedLabel
-                ? $"Would clear the blocked transition on issue #{issue} by removing {BlockedLabel}."
-                : $"Issue #{issue} does not carry {BlockedLabel}; nothing to clear.";
+            return new QueueQueueSideResult(true, false, queueItem.State, queueItem.BlockedBy);
         }
 
-        return hasBlockedLabel
-            ? $"Issue #{issue} already carries {BlockedLabel}; nothing to apply."
-            : $"Would apply the blocked transition on issue #{issue} by adding {BlockedLabel}"
-                + (string.IsNullOrWhiteSpace(reason) ? "." : $" (reason: {reason}).");
+        if (targetState == QueueItemState.Blocked && queueItem.State == QueueItemState.Blocked)
+        {
+            // Already blocked, but with a DIFFERENT reason than requested —
+            // a genuine conflict, never silently overwritten.
+            throw new InvalidOperationException(
+                $"'{executionUnit}' is already blocked with reason '{string.Join("; ", queueItem.BlockedBy)}', "
+                + $"which does not match the requested reason '{reason}'. Reconcile manually (e.g. clear first) "
+                + "before requesting a different reason.");
+        }
+
+        if (!write)
+        {
+            var previewState = targetState == QueueItemState.Blocked
+                ? QueueManager.TransitionBlocking(queueState, executionUnit, targetState, reason!, TransitionActor, now).UpdatedState
+                : ClearQueueSideBlocking(
+                    QueueManager.TransitionNonBlocking(queueState, executionUnit, targetState, TransitionActor, now).UpdatedState,
+                    executionUnit,
+                    targetState);
+            var previewItem = previewState.Items.First(item => string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+            return new QueueQueueSideResult(false, true, previewItem.State, previewItem.BlockedBy);
+        }
+
+        var eventName = targetState == QueueItemState.Blocked ? "blocked" : MapUnblockEventName(targetState);
+        var pendingEvent = FindPendingRetryEvent(runLogPath, executionUnit, eventName, reason);
+
+        RunEvent runEvent;
+        QueueState updatedState;
+        if (pendingEvent is not null)
+        {
+            // A matching event is already durably recorded from a prior
+            // attempt whose queue-state write must have failed — reuse it
+            // rather than appending a duplicate.
+            runEvent = pendingEvent;
+            updatedState = targetState == QueueItemState.Blocked
+                ? ApplyBlockedState(queueState, executionUnit, reason!)
+                : ClearQueueSideBlocking(queueState, executionUnit, targetState);
+        }
+        else
+        {
+            var transitionResult = targetState == QueueItemState.Blocked
+                ? QueueManager.TransitionBlocking(queueState, executionUnit, targetState, reason!, TransitionActor, now)
+                : QueueManager.TransitionNonBlocking(queueState, executionUnit, targetState, TransitionActor, now);
+            runEvent = transitionResult.Event;
+            updatedState = targetState == QueueItemState.Blocked
+                ? transitionResult.UpdatedState
+                : ClearQueueSideBlocking(transitionResult.UpdatedState, executionUnit, targetState);
+
+            AppendRunEvent(runLogPath, runEvent);
+        }
+
+        WriteQueueState(queueStatePath, updatedState);
+
+        var finalItem = updatedState.Items.First(item => string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+        return new QueueQueueSideResult(false, true, finalItem.State, finalItem.BlockedBy);
+    }
+
+    private static QueueState ApplyBlockedState(QueueState state, string executionUnit, string reason) =>
+        state with
+        {
+            Items = state.Items.Select(item => string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                ? item with { State = QueueItemState.Blocked, BlockedBy = [reason] }
+                : item).ToArray(),
+        };
+
+    /// <summary>
+    /// The exact inverse of the blocking half of this command: restores
+    /// <paramref name="targetState"/> AND empties <c>blocked_by</c>, which
+    /// <see cref="QueueManager.TransitionNonBlocking"/> deliberately leaves
+    /// untouched. Without this, a "cleared" unit keeps the stale reason and
+    /// stays ineligible for selection — the drift this slice exists to close,
+    /// merely relocated from GitHub to queue-state.
+    /// </summary>
+    private static QueueState ClearQueueSideBlocking(QueueState state, string executionUnit, QueueItemState targetState) =>
+        state with
+        {
+            Items = state.Items.Select(item => string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                ? item with { State = targetState, BlockedBy = Array.Empty<string>() }
+                : item).ToArray(),
+        };
+
+    private static string MapUnblockEventName(QueueItemState targetState) => targetState switch
+    {
+        QueueItemState.Queued => "queued",
+        QueueItemState.Active => "activated",
+        QueueItemState.Review => "review-started",
+        QueueItemState.Fixing => "fix-requested",
+        _ => throw new InvalidOperationException($"Unsupported unblock target state '{targetState}'."),
+    };
+
+    /// <summary>
+    /// G545 round 2: a matching event is treated as an already-recorded
+    /// PENDING write — reused rather than duplicated — only when it is the
+    /// MOST RECENT run-log event for this execution unit AND (implicitly,
+    /// since this is only called when queue-state does NOT yet show the
+    /// target) queue-state has not caught up to it yet. If anything else
+    /// happened to this unit afterward (including a full unblock/reblock
+    /// cycle reusing the same reason text), the matching event is historical,
+    /// not pending, and a fresh event is appended instead.
+    /// </summary>
+    private static RunEvent? FindPendingRetryEvent(string runLogPath, string executionUnit, string eventName, string? reason)
+    {
+        if (!File.Exists(runLogPath))
+        {
+            return null;
+        }
+
+        IReadOnlyList<RunEvent> events;
+        try
+        {
+            events = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or JsonException)
+        {
+            // Fail OPEN: an unreadable runs.jsonl must never suppress a
+            // genuinely-needed audit event. Worst case is a redundant
+            // append once the file is repaired.
+            return null;
+        }
+
+        var lastForUnit = events.LastOrDefault(runEvent => string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+        if (lastForUnit is null
+            || !string.Equals(lastForUnit.Event, eventName, StringComparison.Ordinal)
+            || !string.Equals(lastForUnit.By, TransitionActor, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        if (eventName == "blocked" && !string.Equals(lastForUnit.Reason, reason, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return lastForUnit;
+    }
+
+    private static void AppendRunEvent(string runLogPath, RunEvent runEvent)
+    {
+        if (AppendRunEventOverride is not null)
+        {
+            AppendRunEventOverride(runLogPath, runEvent);
+            return;
+        }
+
+        var runLogDirectory = Path.GetDirectoryName(runLogPath)
+            ?? throw new InvalidOperationException("Run log path did not contain a directory.");
+        Directory.CreateDirectory(runLogDirectory);
+        File.AppendAllText(runLogPath, RunLogSerializer.SerializeLine(runEvent) + Environment.NewLine);
+    }
+
+    private static void WriteQueueState(string queueStatePath, QueueState state)
+    {
+        if (WriteQueueStateOverride is not null)
+        {
+            WriteQueueStateOverride(queueStatePath, state);
+            return;
+        }
+
+        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(state));
+    }
+
+    private static string BuildSummary(
+        string executionUnit, int issue, bool clear, bool write, QueueQueueSideResult queueResult, bool hadBlockedLabel, bool labelApplied)
+    {
+        var mode = write ? "Applied" : "Would apply";
+        var queuePart = queueResult.AlreadyConverged
+            ? "queue-state already converged"
+            : $"queue-state {(write ? "transitioned" : "would transition")} to {FormatState(queueResult.AfterState)}";
+        var labelPart = clear
+            ? (hadBlockedLabel ? $"{mode.ToLowerInvariant()} label removal" : "label already absent")
+            : (hadBlockedLabel ? "label already present" : $"{mode.ToLowerInvariant()} label addition");
+        return clear
+            ? $"Clearing the blocked transition for '{executionUnit}' (issue #{issue}): {queuePart}; {labelPart}."
+            : $"Applying the blocked transition for '{executionUnit}' (issue #{issue}): {queuePart}; {labelPart}.";
     }
 
     private static bool TryParseArguments(
         string[] args,
+        out string? executionUnit,
         out string? repo,
         out int? issue,
         out string? reason,
         out bool clear,
-        out string mode,
+        out bool write,
         out string format,
         out string error)
     {
+        executionUnit = null;
         repo = null;
         issue = null;
         reason = null;
         clear = false;
-        mode = WorkerClaimCompleteConstants.Modes.DryRun;
+        write = false;
         format = FormatText;
         error = string.Empty;
 
-        for (var index = 0; index < args.Length; index++)
+        if (args.Length == 0 || string.IsNullOrWhiteSpace(args[0]) || args[0].StartsWith("--", StringComparison.Ordinal))
+        {
+            error = "automation issue-block requires an execution unit as the first argument.";
+            return false;
+        }
+
+        executionUnit = args[0];
+
+        for (var index = 1; index < args.Length; index++)
         {
             var argument = args[index];
             switch (argument)
             {
                 case "--repo":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { error = "--repo requires a value (e.g. owner/repo)."; return false; }
-                    repo = args[index + 1].Trim();
-                    index++;
+                    repo = args[++index].Trim();
                     break;
                 case "--issue":
                     if (index + 1 >= args.Length
@@ -201,21 +536,20 @@ internal static class AutomationIssueBlockCommand
                     break;
                 case "--reason":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { error = "--reason requires a value."; return false; }
-                    reason = args[index + 1].Trim();
-                    index++;
+                    reason = args[++index].Trim();
                     break;
                 case "--clear":
                     clear = true;
                     break;
                 case "--write":
-                    mode = WorkerClaimCompleteConstants.Modes.Write;
+                    write = true;
                     break;
                 case "--dry-run":
-                    mode = WorkerClaimCompleteConstants.Modes.DryRun;
+                    write = false;
                     break;
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { error = "--format requires a value (text or json)."; return false; }
-                    var requestedFormat = args[index + 1];
+                    var requestedFormat = args[++index];
                     if (!string.Equals(requestedFormat, FormatText, StringComparison.Ordinal)
                         && !string.Equals(requestedFormat, FormatJson, StringComparison.Ordinal))
                     {
@@ -223,10 +557,9 @@ internal static class AutomationIssueBlockCommand
                         return false;
                     }
                     format = requestedFormat;
-                    index++;
                     break;
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: --repo <owner/repo> --issue <n> [--reason <text>] [--clear] [--write] [--dry-run] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: <execution-unit> --repo <owner/repo> --issue <n> [--reason <text>] [--clear] [--write] [--dry-run] [--format text|json].";
                     return false;
             }
         }
@@ -258,6 +591,12 @@ internal static class AutomationIssueBlockCommand
         return true;
     }
 
+    private static string FormatState(QueueItemState state) => state switch
+    {
+        QueueItemState.ClarifyBlocked => "clarify-blocked",
+        _ => state.ToString().ToLowerInvariant(),
+    };
+
     private static string BuildIssueUrl(string repo, int issue) =>
         $"https://github.com/{repo}/issues/{issue.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
 
@@ -265,28 +604,38 @@ internal static class AutomationIssueBlockCommand
     {
         writer.WriteLine(result.Summary);
         writer.WriteLine($"mode: {result.Mode}");
+        writer.WriteLine($"execution_unit: {result.ExecutionUnit}");
         writer.WriteLine($"repo: {result.Repo}");
         writer.WriteLine($"issue: {result.Issue.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
         writer.WriteLine($"issue_url: {result.IssueUrl}");
         writer.WriteLine($"clear: {result.Clear.ToString().ToLowerInvariant()}");
-        writer.WriteLine($"blocked_label: {result.BlockedLabel}");
-        writer.WriteLine($"had_blocked_label: {result.HadBlockedLabel.ToString().ToLowerInvariant()}");
-        writer.WriteLine($"applied: {result.Applied.ToString().ToLowerInvariant()}");
         if (!string.IsNullOrWhiteSpace(result.Reason))
         {
             writer.WriteLine($"reason: {result.Reason}");
         }
+        writer.WriteLine($"queue.before_state: {result.Queue.BeforeState}");
+        writer.WriteLine($"queue.target_state: {result.Queue.TargetState}");
+        writer.WriteLine($"queue.already_converged: {result.Queue.AlreadyConverged.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"queue.applied: {result.Queue.Applied.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"queue.after_state: {result.Queue.AfterState}");
+        writer.WriteLine($"queue.after_blocked_by: {(result.Queue.AfterBlockedBy.Count == 0 ? "(none)" : string.Join(", ", result.Queue.AfterBlockedBy))}");
+        writer.WriteLine($"label.blocked_label: {result.Label.BlockedLabel}");
+        writer.WriteLine($"label.had_blocked_label: {result.Label.HadBlockedLabel.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"label.applied: {result.Label.Applied.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"converged: {result.Converged.ToString().ToLowerInvariant()}");
         writer.WriteLine($"transitioned_at: {result.TransitionedAt:O}");
     }
 
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("automation issue-block");
-        writer.WriteLine("Usage: intent-cli automation issue-block --repo <owner/repo> --issue <n> --reason <text> [--write] [--dry-run] [--format text|json]");
-        writer.WriteLine("       intent-cli automation issue-block --repo <owner/repo> --issue <n> --clear [--write] [--dry-run] [--format text|json]");
-        writer.WriteLine("Applies (or, with --clear, removes) the issue-level intent-issue-blocked label (G545) so GitHub");
-        writer.WriteLine("agrees with a queue-state `blocked` transition. Coexists with intent-issue-in-progress; never");
-        writer.WriteLine("uses raw gh label mutation.");
+        writer.WriteLine(UsageLine);
+        writer.WriteLine("The ONE canonical transition that converges BOTH queue-state (state=blocked + blocked_by");
+        writer.WriteLine("reason, via the existing queue transition mechanism) and the GitHub intent-issue-blocked");
+        writer.WriteLine("label (G545) for a single execution unit. --clear converges both back to unblocked. Each");
+        writer.WriteLine("side is converged independently and idempotently, so re-running after a partial failure");
+        writer.WriteLine("only retries whatever has not yet converged. Never uses raw gh label mutation or a direct");
+        writer.WriteLine("queue-state hand-edit.");
     }
 }
 
@@ -294,6 +643,9 @@ internal sealed record AutomationIssueBlockResult
 {
     [JsonPropertyName("repo")]
     public required string Repo { get; init; }
+
+    [JsonPropertyName("execution_unit")]
+    public required string ExecutionUnit { get; init; }
 
     [JsonPropertyName("issue")]
     public required int Issue { get; init; }
@@ -307,30 +659,60 @@ internal sealed record AutomationIssueBlockResult
     [JsonPropertyName("clear")]
     public required bool Clear { get; init; }
 
-    [JsonPropertyName("applied")]
-    public required bool Applied { get; init; }
-
-    [JsonPropertyName("blocked_label")]
-    public required string BlockedLabel { get; init; }
-
-    [JsonPropertyName("had_blocked_label")]
-    public required bool HadBlockedLabel { get; init; }
-
     [JsonPropertyName("reason")]
     public string? Reason { get; init; }
 
-    [JsonPropertyName("add_labels")]
-    public required IReadOnlyList<string> AddLabels { get; init; }
+    [JsonPropertyName("queue")]
+    public required AutomationIssueBlockQueueResult Queue { get; init; }
 
-    [JsonPropertyName("remove_labels")]
-    public required IReadOnlyList<string> RemoveLabels { get; init; }
+    [JsonPropertyName("label")]
+    public required AutomationIssueBlockLabelResult Label { get; init; }
 
-    [JsonPropertyName("current_labels")]
-    public required IReadOnlyList<string> CurrentLabels { get; init; }
+    [JsonPropertyName("converged")]
+    public required bool Converged { get; init; }
 
     [JsonPropertyName("transitioned_at")]
     public required DateTimeOffset TransitionedAt { get; init; }
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+}
+
+internal sealed record AutomationIssueBlockQueueResult
+{
+    [JsonPropertyName("before_state")]
+    public required string BeforeState { get; init; }
+
+    [JsonPropertyName("before_blocked_by")]
+    public required IReadOnlyList<string> BeforeBlockedBy { get; init; }
+
+    [JsonPropertyName("target_state")]
+    public required string TargetState { get; init; }
+
+    [JsonPropertyName("already_converged")]
+    public required bool AlreadyConverged { get; init; }
+
+    [JsonPropertyName("applied")]
+    public required bool Applied { get; init; }
+
+    [JsonPropertyName("after_state")]
+    public required string AfterState { get; init; }
+
+    [JsonPropertyName("after_blocked_by")]
+    public required IReadOnlyList<string> AfterBlockedBy { get; init; }
+}
+
+internal sealed record AutomationIssueBlockLabelResult
+{
+    [JsonPropertyName("blocked_label")]
+    public required string BlockedLabel { get; init; }
+
+    [JsonPropertyName("had_blocked_label")]
+    public required bool HadBlockedLabel { get; init; }
+
+    [JsonPropertyName("applied")]
+    public required bool Applied { get; init; }
+
+    [JsonPropertyName("current_labels")]
+    public required IReadOnlyList<string> CurrentLabels { get; init; }
 }
