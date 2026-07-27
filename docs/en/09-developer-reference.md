@@ -306,13 +306,38 @@ is always a runnable `intent-cli` command):
   `stalled-work` reported `stalled: false` regardless — recovery required an
   explicit human/design WAKE message. `backlog_idle_minutes_threshold` is
   reported alongside `stale_minutes_threshold` in every result.
+- `repair-stalled` (G546) — a PR in the repair lifecycle
+  (`intent-pr-request-update`, `intent-pr-update-in-progress`, or
+  `intent-pr-rereview-ready`) with no observable activity for longer than
+  `--repair-silent-minutes` (default **180** minutes). This is the promotion
+  G533 deferred "until field data exists"; the data arrived twice. The
+  sharper incident: a G545 repair claimed `intent-pr-update-in-progress` and
+  went silent for **four days** (2026-07-23 → 07-27) after the implement
+  session died, while `stalled-work` reported `stalled: false, items: []`
+  throughout — recovery needed a manual ping. That PR was a **draft**, and
+  every other PR kind here skips draft PRs, so no kind covered it at all;
+  `repair-stalled` therefore covers drafts too (inside the threshold a draft
+  repair PR stays invisible exactly as before — no informational item is
+  invented for it). `recommended_action` is always a **status check to the
+  responsible thread** — `implement` for `intent-pr-request-update` /
+  `intent-pr-update-in-progress`, `review-dispatch` for
+  `intent-pr-rereview-ready` — and **never** a transition or a reassignment:
+  silence alone never establishes that a repair succeeded, failed, or should
+  be taken from its owner. Observable activity is the PR's own `updatedAt`,
+  the one field covering all three activity classes (GitHub bumps it on a
+  push to the head branch, on any comment, and on any label change). Fails
+  closed like `claimed-but-silent`: a missing or malformed `updatedAt` means
+  silence cannot be established, so the PR is **not** promoted rather than
+  flagged on unusable evidence.
 
 **Informational categories (G533)** — `is_informational: true`,
 `recommended_action` is descriptive prose (never a transition command), age
 is reported for visibility only:
 
 - `repair-pending` — a PR carrying `intent-pr-request-update` and/or
-  `intent-pr-update-in-progress`. Field finding: an OPEN PR in exactly this
+  `intent-pr-update-in-progress`, **inside** `--repair-silent-minutes`
+  (G546 — past it, the item is promoted to the actionable `repair-stalled`
+  kind above; inside it the output is unchanged). Field finding: an OPEN PR in exactly this
   state (PR #1750) was previously misreported as `pr-created-not-reviewing`
   with a `review-start` recommendation — semantically wrong mid-repair; a
   detector whose recommendation must be second-guessed loses its value.
@@ -323,8 +348,8 @@ is reported for visibility only:
   recent modification of any kind (which may postdate the specific label
   change) unless a dedicated label-event fetch is added.
 - `rereview-pending` — a PR carrying `intent-pr-rereview-ready` (repair
-  pushed, awaiting re-review). Same `updatedAt`-based age approximation as
-  `repair-pending`.
+  pushed, awaiting re-review), **inside** `--repair-silent-minutes` (G546).
+  Same `updatedAt`-based age approximation as `repair-pending`.
 - `claimed-but-silent` — an issue carrying `intent-issue-in-progress` with
   **no PR created yet** and no observable activity for longer than
   `--claimed-silent-minutes` (default **720** minutes / 12 hours — chosen so
@@ -437,11 +462,12 @@ Each item reports `kind`, `execution_unit`, `issue` and/or `pr` (number +
 url), `age_minutes`, `is_informational`, and `recommended_action`.
 `--stale-minutes` filters out items younger than the given threshold
 (default `0` — report everything with its age; callers pick their own
-threshold) — this applies uniformly across all eight kinds; `claimed-but-silent`
-and `backlog-ready-idle` each additionally gate on their OWN
-`--claimed-silent-minutes` / `--backlog-idle-minutes` threshold before an
-item is even considered (so raising `--stale-minutes` alone can never make
-either kind appear earlier than its own threshold allows).
+threshold) — this applies uniformly across all nine kinds; `claimed-but-silent`,
+`backlog-ready-idle` and `repair-stalled` each additionally gate on their OWN
+`--claimed-silent-minutes` / `--backlog-idle-minutes` / `--repair-silent-minutes`
+threshold before an item is even considered (so raising `--stale-minutes`
+alone can never make any of them appear earlier than its own threshold
+allows).
 `age_minutes` is approximated from the relevant GitHub entity's
 `createdAt`/`updatedAt` timestamp, since GitHub does not expose
 per-label-application timestamps or per-issue timeline events without a

@@ -219,9 +219,13 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         using var workspace = new StalledWorkWorkspace();
         workspace.WritePacketDomain("G521", "intent-cli");
         var issue = BuildIssue(1143, "G521: Document agmsg Codex monitor", FixedNow.AddDays(-2), "intent-pr-created");
+        // G546: updatedAt is deliberately INSIDE --repair-silent-minutes so
+        // this fixture keeps pinning the G533 informational semantics; the
+        // promotion past the threshold is covered by its own fixtures below.
         var pr = BuildPr(1144, "G521: Document agmsg Codex monitor", FixedNow.AddHours(-5),
             state: "OPEN", closingIssueNumber: 1143,
-            extraLabels: ["intent-pr-request-update", "intent-pr-update-in-progress"]);
+            extraLabels: ["intent-pr-request-update", "intent-pr-update-in-progress"],
+            updatedAt: FixedNow.AddMinutes(-30));
         AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue], prs: [pr]);
 
         using var writer = new StringWriter();
@@ -258,6 +262,246 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         Assert.True(item.GetProperty("is_informational").GetBoolean());
         Assert.Equal(45, item.GetProperty("age_minutes").GetInt32());
         Assert.DoesNotContain("--transition", item.GetProperty("recommended_action").GetString(), StringComparison.Ordinal);
+    }
+
+    // ── G546: repair-stalled ────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_RepairStalled_ReproducesG545FourDayDraftSilence_G546()
+    {
+        // Field regression, 2026-07-23 → 07-27: the G545 repair was claimed
+        // (intent-pr-update-in-progress) and the implement session died. The
+        // PR was a DRAFT, so CollectPrCreatedNotReviewing skipped it outright
+        // and stalled-work reported `stalled=false, items=[]` for four days —
+        // the exact gap the orchestrator reported. It must now surface.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G545", "intent-cli");
+        var issue = BuildIssue(1192, "G545: Exempt queue-blocked units from claimed-but-silent",
+            FixedNow.AddDays(-5), "intent-pr-created");
+        var pr = BuildPr(1193, "G545: Exempt queue-blocked units from claimed-but-silent",
+            FixedNow.AddDays(-4), state: "OPEN", closingIssueNumber: 1192,
+            extraLabels: ["intent-pr-request-update", "intent-pr-update-in-progress"],
+            updatedAt: FixedNow.AddDays(-4), isDraft: true);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue], prs: [pr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.True(doc.RootElement.GetProperty("stalled").GetBoolean());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindRepairStalled, item.GetProperty("kind").GetString());
+        Assert.False(item.GetProperty("is_informational").GetBoolean());
+        Assert.Equal(1193, item.GetProperty("pr").GetProperty("number").GetInt32());
+        Assert.Equal(4 * 24 * 60, item.GetProperty("age_minutes").GetInt32());
+
+        var action = item.GetProperty("recommended_action").GetString()!;
+        Assert.Contains("status check", action, StringComparison.Ordinal);
+        Assert.Contains("`implement`", action, StringComparison.Ordinal);
+        Assert.Contains("intent-pr-update-in-progress", action, StringComparison.Ordinal);
+        // Never a transition, and never a reassignment, from silence alone.
+        Assert.DoesNotContain("--transition", action, StringComparison.Ordinal);
+        Assert.DoesNotContain("worker claim", action, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RepairStalled_FiresForNonDraftRequestUpdate_NamingImplementThread_G546()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G521", "intent-cli");
+        var issue = BuildIssue(1143, "G521: Document agmsg Codex monitor", FixedNow.AddDays(-2), "intent-pr-created");
+        var pr = BuildPr(1750, "G521: Document agmsg Codex monitor", FixedNow.AddHours(-9),
+            state: "OPEN", closingIssueNumber: 1143, extraLabels: ["intent-pr-request-update"],
+            updatedAt: FixedNow.AddHours(-6));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue], prs: [pr]);
+
+        using var writer = new StringWriter();
+        AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindRepairStalled, item.GetProperty("kind").GetString());
+        Assert.False(item.GetProperty("is_informational").GetBoolean());
+        Assert.Equal(360, item.GetProperty("age_minutes").GetInt32());
+        var action = item.GetProperty("recommended_action").GetString()!;
+        Assert.Contains("`implement`", action, StringComparison.Ordinal);
+        Assert.Contains("intent-pr-request-update", action, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RepairStalled_FiresForRereviewReady_NamingReviewDispatchThread_G546()
+    {
+        // The responsible thread differs by state: a pushed repair awaiting
+        // re-review is the REVIEW side going quiet, not the implementer.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G538", "intent-cli");
+        var issue = BuildIssue(1180, "G538: Something awaiting rereview", FixedNow.AddDays(-2), "intent-pr-created");
+        var pr = BuildPr(1181, "G538: Something awaiting rereview", FixedNow.AddDays(-1),
+            state: "OPEN", closingIssueNumber: 1180, extraLabels: ["intent-pr-rereview-ready"],
+            updatedAt: FixedNow.AddHours(-4));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue], prs: [pr]);
+
+        using var writer = new StringWriter();
+        AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindRepairStalled, item.GetProperty("kind").GetString());
+        var action = item.GetProperty("recommended_action").GetString()!;
+        Assert.Contains("`review-dispatch`", action, StringComparison.Ordinal);
+        Assert.Contains("intent-pr-rereview-ready", action, StringComparison.Ordinal);
+        Assert.DoesNotContain("`implement`", action, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    // Each of the three observable activity classes named by the contract —
+    // a push to the head branch, a PR comment, and a label change — bumps the
+    // PR's updatedAt, which is the single field this detector reads. An
+    // actively-progressing repair must never be flagged.
+    [InlineData(5, "recent head commit")]
+    [InlineData(30, "recent PR comment")]
+    [InlineData(179, "recent label change")]
+    public void Execute_RepairStalled_DoesNotFireForActivelyProgressingRepair_G546(int minutesSinceActivity, string activity)
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G521", "intent-cli");
+        var issue = BuildIssue(1143, "G521: Document agmsg Codex monitor", FixedNow.AddDays(-2), "intent-pr-created");
+        var pr = BuildPr(1750, $"G521: Document agmsg Codex monitor ({activity})", FixedNow.AddDays(-3),
+            state: "OPEN", closingIssueNumber: 1143, extraLabels: ["intent-pr-update-in-progress"],
+            updatedAt: FixedNow.AddMinutes(-minutesSinceActivity));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue], prs: [pr]);
+
+        using var writer = new StringWriter();
+        AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        // Still the G533 informational kind, byte-for-byte as before.
+        Assert.Equal(AutomationStalledWorkCommand.KindRepairPending, item.GetProperty("kind").GetString());
+        Assert.True(item.GetProperty("is_informational").GetBoolean());
+        Assert.Equal(minutesSinceActivity, item.GetProperty("age_minutes").GetInt32());
+        Assert.DoesNotContain(
+            doc.RootElement.GetProperty("items").EnumerateArray(),
+            candidate => candidate.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindRepairStalled);
+    }
+
+    [Fact]
+    public void Execute_RepairStalled_ActiveDraftRepairInsideThreshold_StaysInvisibleExactlyAsToday_G546()
+    {
+        // A draft repair PR inside the threshold must produce NO item at all
+        // — the draft path deliberately invents no informational kind, so
+        // today's output stays byte-compatible.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G545", "intent-cli");
+        var issue = BuildIssue(1192, "G545: Exempt queue-blocked units", FixedNow.AddDays(-2), "intent-pr-created");
+        var pr = BuildPr(1193, "G545: Exempt queue-blocked units", FixedNow.AddDays(-1),
+            state: "OPEN", closingIssueNumber: 1192, extraLabels: ["intent-pr-update-in-progress"],
+            updatedAt: FixedNow.AddMinutes(-20), isDraft: true);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue], prs: [pr]);
+
+        using var writer = new StringWriter();
+        AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.GetProperty("stalled").GetBoolean());
+        Assert.Empty(doc.RootElement.GetProperty("items").EnumerateArray());
+    }
+
+    [Fact]
+    public void Execute_RepairStalled_ThresholdOverrideChangesPromotion_G546()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G538", "intent-cli");
+        var issue = BuildIssue(1180, "G538: Something awaiting rereview", FixedNow.AddDays(-2), "intent-pr-created");
+        // The measured G538 shape: 105 minutes — under the 180m default, so
+        // it stays informational unless an operator lowers the threshold.
+        var pr = BuildPr(1181, "G538: Something awaiting rereview", FixedNow.AddDays(-1),
+            state: "OPEN", closingIssueNumber: 1180, extraLabels: ["intent-pr-rereview-ready"],
+            updatedAt: FixedNow.AddMinutes(-105));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue], prs: [pr]);
+
+        using var defaultWriter = new StringWriter();
+        AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            defaultWriter);
+
+        using var defaultDoc = JsonDocument.Parse(defaultWriter.ToString());
+        Assert.Equal(
+            AutomationStalledWorkCommand.KindRereviewPending,
+            Assert.Single(defaultDoc.RootElement.GetProperty("items").EnumerateArray()).GetProperty("kind").GetString());
+
+        using var overrideWriter = new StringWriter();
+        AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system",
+             "--repair-silent-minutes", "90", "--format", "json"],
+            overrideWriter);
+
+        using var overrideDoc = JsonDocument.Parse(overrideWriter.ToString());
+        var promoted = Assert.Single(overrideDoc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindRepairStalled, promoted.GetProperty("kind").GetString());
+        Assert.Equal(105, promoted.GetProperty("age_minutes").GetInt32());
+    }
+
+    [Fact]
+    public void Execute_RepairStalled_RejectsNegativeThresholdOverride_G546()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--repair-silent-minutes", "-1"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--repair-silent-minutes requires a non-negative integer", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RepairStalled_UnusableActivityTimestamp_IsNeverPromoted_G546()
+    {
+        // Silence cannot be established from a malformed updatedAt, so the
+        // PR keeps its informational treatment rather than being flagged on
+        // unusable evidence — the same fail-closed rule claimed-but-silent
+        // already follows.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G521", "intent-cli");
+        var issue = BuildIssue(1143, "G521: Document agmsg Codex monitor", FixedNow.AddDays(-2), "intent-pr-created");
+        var pr = BuildPr(1750, "G521: Document agmsg Codex monitor", FixedNow.AddDays(-3),
+            state: "OPEN", closingIssueNumber: 1143, extraLabels: ["intent-pr-update-in-progress"]) with
+        {
+            UpdatedAt = "not-a-timestamp",
+        };
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue], prs: [pr]);
+
+        using var writer = new StringWriter();
+        AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindRepairPending, item.GetProperty("kind").GetString());
+        Assert.True(item.GetProperty("is_informational").GetBoolean());
     }
 
     [Fact]
@@ -2047,6 +2291,40 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         Assert.DoesNotContain(AutomationStalledWorkCommand.KindClaimedButSilent, messageBody, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_Heartbeat_SurfacesRepairStalledAsActionableInMessageBody_G546()
+    {
+        // The four-day G545 shape again, this time through the heartbeat the
+        // orchestrator actually reads: it must be counted as a PENDING
+        // TRANSITION line (actionable), not an "FYI" note, and must name the
+        // kind so a reader can route it.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G545", "intent-cli");
+        var issue = BuildIssue(1192, "G545: Exempt queue-blocked units from claimed-but-silent",
+            FixedNow.AddDays(-5), "intent-pr-created");
+        var pr = BuildPr(1193, "G545: Exempt queue-blocked units from claimed-but-silent",
+            FixedNow.AddDays(-4), state: "OPEN", closingIssueNumber: 1192,
+            extraLabels: ["intent-pr-update-in-progress"],
+            updatedAt: FixedNow.AddDays(-4), isDraft: true);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue], prs: [pr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHeartbeatCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.True(doc.RootElement.GetProperty("stale").GetBoolean());
+        var messageBody = doc.RootElement.GetProperty("message_body").GetString()!;
+        Assert.Contains(AutomationStalledWorkCommand.KindRepairStalled, messageBody, StringComparison.Ordinal);
+        Assert.Contains("G545", messageBody, StringComparison.Ordinal);
+        Assert.Contains("pr #1193", messageBody, StringComparison.Ordinal);
+        Assert.Contains("1 pending transition(s)", messageBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("FYI:", messageBody, StringComparison.Ordinal);
+    }
+
     private static string BuildCompleteContractBody()
     {
         return """
@@ -2140,7 +2418,8 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         string state,
         int? closingIssueNumber = null,
         string[]? extraLabels = null,
-        DateTimeOffset? updatedAt = null) => new()
+        DateTimeOffset? updatedAt = null,
+        bool isDraft = false) => new()
         {
             Number = number,
             Title = title,
@@ -2148,7 +2427,7 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
             CreatedAt = createdAt.ToString("O"),
             UpdatedAt = (updatedAt ?? createdAt).ToString("O"),
             State = state,
-            IsDraft = false,
+            IsDraft = isDraft,
             Labels = (extraLabels ?? Array.Empty<string>()).Select(name => new GitHubAutomationLabel { Name = name }).ToArray(),
             ClosingIssuesReferences = closingIssueNumber is int n
                 ? new[]

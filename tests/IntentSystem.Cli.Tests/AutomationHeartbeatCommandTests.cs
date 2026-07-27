@@ -253,7 +253,11 @@ public sealed class AutomationHeartbeatCommandTests : IDisposable
         using var workspace = new HeartbeatWorkspace();
         workspace.WritePacketDomain("G521", "intent-cli");
         var issue = BuildIssue(1143, "G521: Document agmsg Codex monitor", FixedNow.AddDays(-2), "intent-pr-created");
-        var pr = BuildOpenPrClosingIssue(1750, FixedNow.AddHours(-3), 1143, "intent-pr-request-update");
+        // G546: kept INSIDE --repair-silent-minutes (default 180m) so this
+        // fixture keeps pinning the G533 informational framing; the past-
+        // threshold promotion to the actionable repair-stalled kind has its
+        // own heartbeat fixture in AutomationStalledWorkCommandTests.
+        var pr = BuildOpenPrClosingIssue(1750, FixedNow.AddHours(-1), 1143, "intent-pr-request-update");
         AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue], prs: [pr]);
 
         using var writer = new StringWriter();
