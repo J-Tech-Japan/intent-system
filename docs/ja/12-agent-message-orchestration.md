@@ -108,12 +108,14 @@ monitor bridge を arm する（G521）ため、canonical な実行ファイル�
 
 > **権限境界 — 詰まりを解くことは決定することではない。** pane に立ち会うことは、設計
 > スレッドが決定者になることを意味しません。設計スレッドは **実際に読んだ pane の内容に
-> 対してのみ** 行動でき（レンダリングしていないダイアログへのブラインド入力は禁止）、
-> **この provisioning のためにオペレーターが明示的に認可した trust/allowlist ケースに
-> 限り** 回答できます（自身の hook-trust ケースを含む）。その認可の外にある credential
-> プロンプト・security プロンプト・permission プロンプトは、すべて **オペレーターへ
-> エスカレーション** し、未回答のまま残さなければなりません。回答がアクセス付与・
-> permission mode の拡大・security 警告の受諾になるなら、それはオペレーターの判断です。
+> 対してのみ** 行動できます（レンダリングしていないダイアログへのブラインド入力は禁止）。
+> オペレーターの認可が及ぶのは **読んだ pane の trust/allowlist ケースに限られます** —
+> たとえば設計スレッド自身の hook-trust ケースです。credential プロンプト・security
+> プロンプト・permission プロンプトを設計スレッドが回答することは **決してありません**:
+> 事前認可の有無にかかわらず **常に** 未回答のまま **常に** オペレーターへ
+> エスカレーションします — どんな認可もこれらを回答可能にはしません。回答がアクセス
+> 付与・permission mode の拡大・security 警告の受諾になるなら、それはオペレーターの
+> 判断です。
 
 **4. ロール初期化。** pane の CLI に合った actas 形式をタイプします — claude は
 `/agmsg actas <role>`、codex は `$agmsg actas <role>`。その後 readiness を
@@ -122,7 +124,10 @@ monitor bridge を arm する（G521）ため、canonical な実行ファイル�
 1. **delivery 設定** — `delivery.sh status` がモード（例: `mode=monitor`）を報告することは、
    登録と設定を証明するだけです。watcher が生きていることも、セッションが attach されている
    ことも **証明しません**。`mode=monitor` を報告しながら何もストリームされていない receiver は
-   ありえます。
+   ありえます。逆も成り立ちます: trust 画面のままの pane は **live-attached でも
+   session-active でもありません** が、起動前に `delivery.sh` で設定した delivery 設定は
+   影響を受けません。起動 UI の状態が設定を消すことはなく、設定が attachment を意味することも
+   ありません。
 2. **live attachment — agent ごとに異なる。** **claude** では、その receiver 自身の
    セッションに現れる Claude Code Monitor マーカーが証拠です: transcript の
    `Monitor(agmsg inbox stream)`、フッターの `1 monitor`（`1 shell` は **不可** —

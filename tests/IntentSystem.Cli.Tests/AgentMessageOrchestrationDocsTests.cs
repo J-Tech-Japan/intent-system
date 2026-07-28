@@ -84,6 +84,13 @@ public sealed class AgentMessageOrchestrationDocsTests
         // Ping/ack stays the sole end-to-end proof on both mirrors.
         Assert.Contains("ack is the **only** end-to-end proof", en, StringComparison.Ordinal);
         Assert.Contains("ack が **唯一の** end-to-end の証明です", ja, StringComparison.Ordinal);
+
+        // Round-2 repair: the separation holds in both directions — launch-UI
+        // state (a trust screen) does not erase delivery configuration.
+        Assert.Contains("not live-attached and not session-active**", en, StringComparison.Ordinal);
+        Assert.Contains("Launch-UI state never erases configuration, and configuration never implies attachment", en, StringComparison.Ordinal);
+        Assert.Contains("session-active でもありません**", ja, StringComparison.Ordinal);
+        Assert.Contains("起動 UI の状態が設定を消すことはなく", ja, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -96,15 +103,22 @@ public sealed class AgentMessageOrchestrationDocsTests
         // authorization only, escalate credential/security/permission prompts.
         Assert.Contains("Authority boundary — unsticking is not deciding.", en, StringComparison.Ordinal);
         Assert.Contains("only on pane contents it has actually read", en, StringComparison.Ordinal);
-        Assert.Contains("only for the trust/allowlist cases the operator explicitly authorized", en, StringComparison.Ordinal);
-        Assert.Contains("its own hook-trust case", en, StringComparison.Ordinal);
-        Assert.Contains("must be escalated to the operator", en, StringComparison.Ordinal);
-
         Assert.Contains("権限境界 — 詰まりを解くことは決定することではない。", ja, StringComparison.Ordinal);
         Assert.Contains("実際に読んだ pane の内容に", ja, StringComparison.Ordinal);
-        Assert.Contains("オペレーターが明示的に認可した trust/allowlist ケースに", ja, StringComparison.Ordinal);
-        Assert.Contains("hook-trust ケースを含む", ja, StringComparison.Ordinal);
-        Assert.Contains("エスカレーション", ja, StringComparison.Ordinal);
+
+        // Round-2 repair: authorization reaches read-pane trust/allowlist cases
+        // only; credential/security/permission prompts are absolutely never
+        // answerable by design — on both mirrors.
+        Assert.Contains("only to read-pane trust/allowlist cases**", en, StringComparison.Ordinal);
+        Assert.Contains("own hook-trust case", en, StringComparison.Ordinal);
+        Assert.Contains("permission prompts are **never** answerable by the design thread", en, StringComparison.Ordinal);
+        Assert.Contains("**always** escalated to the operator", en, StringComparison.Ordinal);
+        Assert.Contains("no authorization makes them answerable", en, StringComparison.Ordinal);
+
+        Assert.Contains("読んだ pane の trust/allowlist ケースに限られます**", ja, StringComparison.Ordinal);
+        Assert.Contains("hook-trust ケースです", ja, StringComparison.Ordinal);
+        Assert.Contains("設計スレッドが回答することは **決してありません**", ja, StringComparison.Ordinal);
+        Assert.Contains("どんな認可もこれらを回答可能にはしません", ja, StringComparison.Ordinal);
     }
 
     [Fact]

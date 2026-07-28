@@ -111,13 +111,14 @@ than a per-invocation approval that re-prompts on the next wake.
 
 > **Authority boundary — unsticking is not deciding.** Attending a pane does not
 > make the design thread the decider. It may act **only on pane contents it has
-> actually read** — never a blind keystroke into a dialog it has not rendered —
-> and **only for the trust/allowlist cases the operator explicitly authorized**
-> for this provisioning, including its own hook-trust case. Every credential
-> prompt, security prompt, and permission prompt outside that authorization
-> **must be escalated to the operator** and left unanswered. If answering would
-> grant access, widen a permission mode, or accept a security warning, it is the
-> operator's call.
+> actually read** — never a blind keystroke into a dialog it has not rendered.
+> Operator authorization can extend **only to read-pane trust/allowlist cases**,
+> such as the design thread's own hook-trust case. Credential, security, and
+> permission prompts are **never** answerable by the design thread: they
+> **always** remain unanswered and are **always** escalated to the operator,
+> with or without prior authorization — no authorization makes them answerable.
+> If answering would grant access, widen a permission mode, or accept a security
+> warning, it is the operator's call.
 
 **4. Role initialization.** Type the actas form matching the pane's CLI —
 `/agmsg actas <role>` for claude, `$agmsg actas <role>` for codex — then confirm
@@ -126,7 +127,11 @@ readiness in **three layers that must not be collapsed**:
 1. **Delivery configuration** — `delivery.sh status` reporting a mode (e.g.
    `mode=monitor`) proves registration and configuration only. It does **not**
    prove a watcher is alive or that any session is attached; a receiver can
-   report `mode=monitor` while nothing is streaming.
+   report `mode=monitor` while nothing is streaming. The converse holds too: a
+   pane sitting on a trust screen is **not live-attached and not session-active**
+   but its delivery configuration — set with `delivery.sh` before launch — is
+   unaffected. Launch-UI state never erases configuration, and configuration
+   never implies attachment.
 2. **Live attachment — agent-specific.** For **claude**, the proof is the Claude
    Code Monitor markers in that receiver's own session: `Monitor(agmsg inbox
    stream)` in the transcript, footer `1 monitor` (**not** `1 shell` — a

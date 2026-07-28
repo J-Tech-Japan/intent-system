@@ -1504,13 +1504,13 @@ internal static class GuideOrchestratorThreadCommand
                 AuthorityBoundary =
                     "attending a pane is not authority to decide for the operator. The design "
                     + "thread may act ONLY on pane contents it has actually READ (never on a blind keystroke into a "
-                    + "dialog it has not rendered), and ONLY for the trust/allowlist cases the operator explicitly "
-                    + "authorized for this provisioning — including its own hook-trust case, which it may accept for "
-                    + "itself. Every credential prompt, security prompt, and permission prompt outside that explicit "
-                    + "authorization MUST be ESCALATED to the operator and left unanswered until the operator decides. "
-                    + "Unsticking a pane is not deciding for the operator: if answering the dialog would grant access, "
-                    + "widen a permission mode, or accept a security warning, it is the operator's call, not the design "
-                    + "thread's.",
+                    + "dialog it has not rendered). Operator authorization can extend ONLY to read-pane TRUST/ALLOWLIST "
+                    + "cases — such as the design thread's own hook-trust case, which it may accept for itself. "
+                    + "CREDENTIAL, SECURITY, and PERMISSION prompts are NEVER answerable by the design thread: they "
+                    + "ALWAYS remain unanswered and are ALWAYS ESCALATED to the operator, with or without prior "
+                    + "authorization — no authorization makes them answerable. Unsticking a pane is not deciding for "
+                    + "the operator: if answering the dialog would grant access, widen a permission mode, or accept a "
+                    + "security warning, it is the operator's call, not the design thread's.",
             },
             RoleInitialization = new OrchestratorProvisioningRoleInitialization
             {
@@ -1537,7 +1537,10 @@ internal static class GuideOrchestratorThreadCommand
                     "WAIT for the role to report ready before sending anything — actas is submitted, not completed, at "
                     + "the moment you type it. Readiness has THREE separate layers and they must not be collapsed: "
                     + "delivery CONFIGURATION, LIVE ATTACHMENT, and END-TO-END delivery. A pane still sitting on a trust "
-                    + "screen is not even configured yet, let alone ready.",
+                    + "screen is NOT live-attached and NOT session-active — and that says nothing about its delivery "
+                    + "configuration, which is set with `delivery.sh` before launch and stays configured regardless of "
+                    + "what the launch UI is showing. Launch-UI state never erases configuration, and configuration "
+                    + "never implies attachment.",
                 ConfigurationProof =
                     "CONFIGURATION only — `delivery.sh status` reporting a delivery mode (e.g. `mode=monitor`) proves "
                     + "the role is registered and how it is CONFIGURED to receive. It does NOT prove a watcher is alive, "
@@ -1629,7 +1632,7 @@ internal static class GuideOrchestratorThreadCommand
                 Fill("Create one workspace for team `<team>` with a tab named after the team; keep the design thread outside it."),
                 "Split one pane per role, each opened with that role's folder as cwd.",
                 "Launch each pane's agent by TYPING into its interactive shell — codex through the shim, claude with the operator's chosen permission mode; never spawn the executable directly.",
-                "Attend the first run of each pane: answer ONLY the trust/allowlist dialogs you have actually read and the operator explicitly authorized (durably, not per-invocation), and ESCALATE every credential, security, or other permission prompt to the operator instead of answering it.",
+                "Attend the first run of each pane: answer ONLY the read-pane trust/allowlist dialogs the operator explicitly authorized (durably, not per-invocation). ALWAYS leave every credential, security, and permission prompt unanswered and escalate it to the operator — no authorization makes those answerable by the design thread.",
                 "Type the actas form into each pane (`/agmsg actas <role>` for claude, `$agmsg actas <role>` for codex), then confirm readiness LAYER BY LAYER: delivery configuration (`delivery.sh status`), then the agent-specific live-attachment marker (claude: `Monitor(agmsg inbox stream)` / footer `1 monitor`; codex: `Codex bridge: <team>/<role> alive (pid N)`).",
                 "Ping-test every role and require an ack before the first real delegation — the ack is the ONLY end-to-end proof; configuration and live markers are preconditions, not readiness.",
                 "Continue with `Setup (starting orchestrator mode)` — the delivery mode, role prompts, read-only first wake, and the rest of the setup checklist.",

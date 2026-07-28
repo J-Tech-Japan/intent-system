@@ -1923,11 +1923,33 @@ public sealed class GuideOrchestratorThreadCommandTests
         // operator — read-first, explicit-authorization-only, escalate the rest.
         Assert.Contains("> **Authority boundary:**", output, StringComparison.Ordinal);
         Assert.Contains("ONLY on pane contents it has actually READ", output, StringComparison.Ordinal);
-        Assert.Contains("ONLY for the trust/allowlist cases the operator explicitly authorized", output, StringComparison.Ordinal);
-        Assert.Contains("its own hook-trust case", output, StringComparison.Ordinal);
-        Assert.Contains("Every credential prompt, security prompt, and permission prompt", output, StringComparison.Ordinal);
-        Assert.Contains("MUST be ESCALATED to the operator", output, StringComparison.Ordinal);
         Assert.Contains("Unsticking a pane is not deciding for the operator", output, StringComparison.Ordinal);
+
+        // Round-2 repair: authorization reaches read-pane trust/allowlist cases
+        // ONLY — credential/security/permission prompts are absolutely never
+        // answerable by design, with or without prior authorization.
+        Assert.Contains("ONLY to read-pane TRUST/ALLOWLIST", output, StringComparison.Ordinal);
+        Assert.Contains("own hook-trust case, which it may accept for itself", output, StringComparison.Ordinal);
+        Assert.Contains("CREDENTIAL, SECURITY, and PERMISSION prompts are NEVER answerable", output, StringComparison.Ordinal);
+        Assert.Contains("ALWAYS remain unanswered and are ALWAYS ESCALATED to the operator", output, StringComparison.Ordinal);
+        Assert.Contains("with or without prior authorization", output, StringComparison.Ordinal);
+        Assert.Contains("no authorization makes them answerable", output, StringComparison.Ordinal);
+        // The old conditional framing ("outside that authorization") is gone.
+        Assert.DoesNotContain("outside that explicit authorization", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Provisioning_LaunchUiState_DoesNotEraseDeliveryConfiguration_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        // Round-2 repair: a trust screen means NOT live-attached / NOT
+        // session-active — it says nothing about delivery configuration, which
+        // is set before launch. The layers must stay separate in both
+        // directions.
+        Assert.Contains("NOT live-attached and NOT session-active", output, StringComparison.Ordinal);
+        Assert.Contains("Launch-UI state never erases configuration, and configuration never implies attachment", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("is not even configured yet", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1981,8 +2003,11 @@ public sealed class GuideOrchestratorThreadCommandTests
         // folded into the attended-first-run rule.
         var authorityBoundary = launchRules.GetProperty("authority_boundary").GetString()!;
         Assert.Contains("READ", authorityBoundary, StringComparison.Ordinal);
-        Assert.Contains("explicitly authorized", authorityBoundary, StringComparison.Ordinal);
-        Assert.Contains("ESCALATED to the operator", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("read-pane TRUST/ALLOWLIST", authorityBoundary, StringComparison.Ordinal);
+        // Round-2 repair: the escalation rule is absolute in JSON too.
+        Assert.Contains("NEVER answerable", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("ALWAYS ESCALATED to the operator", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("no authorization makes them answerable", authorityBoundary, StringComparison.Ordinal);
 
         var roleInitialization = provisioning.GetProperty("role_initialization");
         Assert.NotEmpty(roleInitialization.GetProperty("actas_forms").EnumerateArray());
@@ -1991,6 +2016,12 @@ public sealed class GuideOrchestratorThreadCommandTests
         // the end-to-end ack are three separate JSON fields.
         Assert.Contains("does NOT prove", roleInitialization.GetProperty("configuration_proof").GetString(), StringComparison.Ordinal);
         Assert.Contains("ONLY end-to-end proof", roleInitialization.GetProperty("end_to_end_proof").GetString(), StringComparison.Ordinal);
+
+        // Round-2 repair: a trust screen is a live-attachment/session-active
+        // fact, not a configuration fact.
+        var readinessWait = roleInitialization.GetProperty("readiness_wait").GetString()!;
+        Assert.Contains("NOT live-attached and NOT session-active", readinessWait, StringComparison.Ordinal);
+        Assert.DoesNotContain("not even configured", readinessWait, StringComparison.Ordinal);
 
         var liveEvidence = roleInitialization.GetProperty("live_attachment_evidence").EnumerateArray()
             .Select(e => (AgentType: e.GetProperty("agent_type").GetString()!, Evidence: e.GetProperty("evidence").GetString()!))
