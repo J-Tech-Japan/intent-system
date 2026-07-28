@@ -105,15 +105,40 @@ shim is what arms the agmsg monitor bridge (G521), and a workspace manager that
 exec's the canonical executable directly bypasses it — the session looks healthy
 and messages are simply never delivered. claude is launched with the permission
 mode the **operator** chose. **Attend** each pane's first run: trust screens and
-permission prompts block the session until answered, and they must be answered so
-they produce **durable** allowlists rather than a per-invocation approval that
-re-prompts on the next wake.
+permission prompts block the session until answered, and where the design thread
+is authorized to answer, the answer must produce a **durable** allowlist rather
+than a per-invocation approval that re-prompts on the next wake.
+
+> **Authority boundary — unsticking is not deciding.** Attending a pane does not
+> make the design thread the decider. It may act **only on pane contents it has
+> actually read** — never a blind keystroke into a dialog it has not rendered —
+> and **only for the trust/allowlist cases the operator explicitly authorized**
+> for this provisioning, including its own hook-trust case. Every credential
+> prompt, security prompt, and permission prompt outside that authorization
+> **must be escalated to the operator** and left unanswered. If answering would
+> grant access, widen a permission mode, or accept a security warning, it is the
+> operator's call.
 
 **4. Role initialization.** Type the actas form matching the pane's CLI —
-`/agmsg actas <role>` for claude, `$agmsg actas <role>` for codex — then **wait
-for readiness** (a pane still on a trust screen is not ready), then run the
-existing [ping test](#receiver-readiness). Readiness is a precondition for the
-ping test, not a replacement for it.
+`/agmsg actas <role>` for claude, `$agmsg actas <role>` for codex — then confirm
+readiness in **three layers that must not be collapsed**:
+
+1. **Delivery configuration** — `delivery.sh status` reporting a mode (e.g.
+   `mode=monitor`) proves registration and configuration only. It does **not**
+   prove a watcher is alive or that any session is attached; a receiver can
+   report `mode=monitor` while nothing is streaming.
+2. **Live attachment — agent-specific.** For **claude**, the proof is the Claude
+   Code Monitor markers in that receiver's own session: `Monitor(agmsg inbox
+   stream)` in the transcript, footer `1 monitor` (**not** `1 shell` — a
+   background `watch.sh` is diagnostic/fallback only), and `Monitor event` lines
+   as messages arrive (see [Monitor tool vs delivery-mode](#monitor-recovery)).
+   For **codex**, it is the bridge-alive marker where the bridge applies:
+   `delivery.sh status` showing `Codex bridge: <team>/<role> alive (pid N)` —
+   noting the bridge arms on the first turn sent to the session, not at startup.
+3. **End-to-end** — the [ping test](#receiver-readiness) ack is the **only**
+   end-to-end proof. Layers 1 and 2 are preconditions, never a substitute; when
+   the live markers are unavailable, fall back explicitly (`turn` delivery or
+   manual `inbox.sh`), say so, and still require the ack.
 
 **5. Exclusivity and handover.** Exactly one live session may hold a role; a
 second actas attempt is refused, and that refusal is correct. Replacing a

@@ -1498,8 +1498,19 @@ internal static class GuideOrchestratorThreadCommand
                 AttendedFirstRunRule =
                     "ATTEND the first run of every pane. First-run trust screens (codex hooks-trust) and permission "
                     + "prompts block the session until answered, and an unattended pane looks \"launched\" while it is "
-                    + "actually waiting. Answer them so they produce DURABLE allowlists/trust records — a per-invocation "
-                    + "approval re-prompts on the next wake and stalls the role again.",
+                    + "actually waiting. Where the design thread is authorized to answer (see the authority boundary "
+                    + "below), answer so the result is a DURABLE allowlist/trust record — a per-invocation approval "
+                    + "re-prompts on the next wake and stalls the role again.",
+                AuthorityBoundary =
+                    "attending a pane is not authority to decide for the operator. The design "
+                    + "thread may act ONLY on pane contents it has actually READ (never on a blind keystroke into a "
+                    + "dialog it has not rendered), and ONLY for the trust/allowlist cases the operator explicitly "
+                    + "authorized for this provisioning — including its own hook-trust case, which it may accept for "
+                    + "itself. Every credential prompt, security prompt, and permission prompt outside that explicit "
+                    + "authorization MUST be ESCALATED to the operator and left unanswered until the operator decides. "
+                    + "Unsticking a pane is not deciding for the operator: if answering the dialog would grant access, "
+                    + "widen a permission mode, or accept a security warning, it is the operator's call, not the design "
+                    + "thread's.",
             },
             RoleInitialization = new OrchestratorProvisioningRoleInitialization
             {
@@ -1524,9 +1535,44 @@ internal static class GuideOrchestratorThreadCommand
                 },
                 ReadinessWait =
                     "WAIT for the role to report ready before sending anything — actas is submitted, not completed, at "
-                    + "the moment you type it. Treat the role as ready only when its watcher/bridge is attached (the "
-                    + "session says so, or `delivery.sh status` shows the watcher alive for that role). A pane that is "
-                    + "still on a trust screen is NOT ready.",
+                    + "the moment you type it. Readiness has THREE separate layers and they must not be collapsed: "
+                    + "delivery CONFIGURATION, LIVE ATTACHMENT, and END-TO-END delivery. A pane still sitting on a trust "
+                    + "screen is not even configured yet, let alone ready.",
+                ConfigurationProof =
+                    "CONFIGURATION only — `delivery.sh status` reporting a delivery mode (e.g. `mode=monitor`) proves "
+                    + "the role is registered and how it is CONFIGURED to receive. It does NOT prove a watcher is alive, "
+                    + "and it does NOT prove any session is attached: a receiver can report `mode=monitor` while nothing "
+                    + "is streaming. Never treat a delivery mode as readiness.",
+                LiveAttachmentEvidence = new[]
+                {
+                    new OrchestratorProvisioningLiveEvidence
+                    {
+                        AgentType = "claude",
+                        Evidence =
+                            "Live attachment is proven by the Claude Code MONITOR markers in that receiver's own "
+                            + "session, not by `delivery.sh status`: the transcript shows `Monitor(agmsg inbox stream)`, "
+                            + "the footer shows `1 monitor` (NOT `1 shell` — a background `watch.sh` shell is "
+                            + "diagnostic/fallback only and never counts as attached), and `Monitor event` lines appear "
+                            + "as messages arrive. See `Monitor tool vs delivery-mode` for the full marker list and the "
+                            + "trust/fallback ladder when they are missing.",
+                    },
+                    new OrchestratorProvisioningLiveEvidence
+                    {
+                        AgentType = "codex",
+                        Evidence =
+                            "Live attachment is proven by the BRIDGE-ALIVE marker where the codex bridge applies: "
+                            + "`delivery.sh status` shows `Codex bridge: <team>/<role> alive (pid N)`. Note the bridge "
+                            + "arms on the FIRST turn sent to the session, not at codex startup, and an already-running "
+                            + "session stays unmonitored until it is restarted — so absence of the marker right after "
+                            + "launch is expected, and its presence is what you wait for. See `Codex monitor (beta) "
+                            + "failure modes` for the caveats.",
+                    },
+                },
+                EndToEndProof =
+                    "PING/ACK is the ONLY end-to-end proof. Configuration and live-attachment evidence are necessary "
+                    + "preconditions, never a substitute: a role counts as ready only after it has ACKED a ping. If the "
+                    + "live markers are unavailable for an agent surface, do not infer readiness — fall back explicitly "
+                    + "(e.g. `turn` delivery or manual `inbox.sh`), say so, and still require the ack.",
                 PingTestReference =
                     "After readiness, run the existing ping test before ANY delegation: send one agmsg message to each "
                     + "role and require the ack (see `Receiver readiness` / `ping_test`). Readiness is a precondition "
@@ -1583,9 +1629,9 @@ internal static class GuideOrchestratorThreadCommand
                 Fill("Create one workspace for team `<team>` with a tab named after the team; keep the design thread outside it."),
                 "Split one pane per role, each opened with that role's folder as cwd.",
                 "Launch each pane's agent by TYPING into its interactive shell — codex through the shim, claude with the operator's chosen permission mode; never spawn the executable directly.",
-                "Attend the first run of each pane: answer trust screens and permission prompts so they produce durable allowlists.",
-                "Type the actas form into each pane (`/agmsg actas <role>` for claude, `$agmsg actas <role>` for codex) and wait for each role to be ready.",
-                "Ping-test every role and require an ack before the first real delegation.",
+                "Attend the first run of each pane: answer ONLY the trust/allowlist dialogs you have actually read and the operator explicitly authorized (durably, not per-invocation), and ESCALATE every credential, security, or other permission prompt to the operator instead of answering it.",
+                "Type the actas form into each pane (`/agmsg actas <role>` for claude, `$agmsg actas <role>` for codex), then confirm readiness LAYER BY LAYER: delivery configuration (`delivery.sh status`), then the agent-specific live-attachment marker (claude: `Monitor(agmsg inbox stream)` / footer `1 monitor`; codex: `Codex bridge: <team>/<role> alive (pid N)`).",
+                "Ping-test every role and require an ack before the first real delegation — the ack is the ONLY end-to-end proof; configuration and live markers are preconditions, not readiness.",
                 "Continue with `Setup (starting orchestrator mode)` — the delivery mode, role prompts, read-only first wake, and the rest of the setup checklist.",
                 "On a role handover, drop the role from the current holder (with its operator confirmation) BEFORE the successor claims it, then redo readiness + ping test.",
             },
@@ -2008,6 +2054,8 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
         writer.WriteLine($"> **Warning:** {provisioning.LaunchRules.CodexDirectSpawnWarning}");
         writer.WriteLine();
+        writer.WriteLine($"> **Authority boundary:** {provisioning.LaunchRules.AuthorityBoundary}");
+        writer.WriteLine();
 
         writer.WriteLine("### 4. Role initialization (actas and readiness)");
         writer.WriteLine();
@@ -2019,6 +2067,16 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
         writer.WriteLine($"- **readiness wait** — {provisioning.RoleInitialization.ReadinessWait}");
+        writer.WriteLine();
+        writer.WriteLine("#### Readiness layers (do not collapse them)");
+        writer.WriteLine();
+        writer.WriteLine($"- **1. delivery configuration** — {provisioning.RoleInitialization.ConfigurationProof}");
+        foreach (var evidence in provisioning.RoleInitialization.LiveAttachmentEvidence)
+        {
+            writer.WriteLine($"- **2. live attachment ({evidence.AgentType})** — {evidence.Evidence}");
+        }
+        writer.WriteLine($"- **3. end-to-end** — {provisioning.RoleInitialization.EndToEndProof}");
+        writer.WriteLine();
         writer.WriteLine($"- **ping test** — {provisioning.RoleInitialization.PingTestReference}");
         writer.WriteLine();
 
@@ -3254,6 +3312,15 @@ internal sealed record OrchestratorProvisioningLaunchRules
 
     [JsonPropertyName("attended_first_run_rule")]
     public required string AttendedFirstRunRule { get; init; }
+
+    /// <summary>
+    /// G549 repair: attending a pane is not authority to decide for the
+    /// operator. Design acts only on pane contents it has read, and only for
+    /// explicitly authorized trust/allowlist cases; credential, security, and
+    /// permission prompts escalate. Unsticking is not deciding.
+    /// </summary>
+    [JsonPropertyName("authority_boundary")]
+    public required string AuthorityBoundary { get; init; }
 }
 
 internal sealed record OrchestratorProvisioningRoleInitialization
@@ -3267,8 +3334,29 @@ internal sealed record OrchestratorProvisioningRoleInitialization
     [JsonPropertyName("readiness_wait")]
     public required string ReadinessWait { get; init; }
 
+    /// <summary>G549 repair: a delivery mode proves configuration, never live attachment.</summary>
+    [JsonPropertyName("configuration_proof")]
+    public required string ConfigurationProof { get; init; }
+
+    /// <summary>G549 repair: live attachment evidence is agent-specific — Claude Monitor markers vs the codex bridge-alive marker.</summary>
+    [JsonPropertyName("live_attachment_evidence")]
+    public required IReadOnlyList<OrchestratorProvisioningLiveEvidence> LiveAttachmentEvidence { get; init; }
+
+    /// <summary>G549 repair: ping/ack remains the only end-to-end proof.</summary>
+    [JsonPropertyName("end_to_end_proof")]
+    public required string EndToEndProof { get; init; }
+
     [JsonPropertyName("ping_test_reference")]
     public required string PingTestReference { get; init; }
+}
+
+internal sealed record OrchestratorProvisioningLiveEvidence
+{
+    [JsonPropertyName("agent_type")]
+    public required string AgentType { get; init; }
+
+    [JsonPropertyName("evidence")]
+    public required string Evidence { get; init; }
 }
 
 internal sealed record OrchestratorProvisioningHandover

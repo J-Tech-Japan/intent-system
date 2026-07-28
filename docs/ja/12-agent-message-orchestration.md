@@ -102,14 +102,39 @@ monitor bridge を arm する（G521）ため、canonical な実行ファイル�
 ワークスペースマネージャーはこれを bypass し、セッションは健全に見えるのにメッセージが
 一切配信されません。claude は **オペレーター** が選んだ permission mode で起動します。
 各 pane の初回起動には **必ず立ち会って** ください: trust 画面と permission プロンプトは
-回答されるまでセッションをブロックし、しかも次の wake で再プロンプトされる 1 回限りの
-承認ではなく **durable な** allowlist を生むように回答する必要があります。
+回答されるまでセッションをブロックします。設計スレッドが回答を認可されている場合、その回答は
+次の wake で再プロンプトされる 1 回限りの承認ではなく **durable な** allowlist を生む必要が
+あります。
+
+> **権限境界 — 詰まりを解くことは決定することではない。** pane に立ち会うことは、設計
+> スレッドが決定者になることを意味しません。設計スレッドは **実際に読んだ pane の内容に
+> 対してのみ** 行動でき（レンダリングしていないダイアログへのブラインド入力は禁止）、
+> **この provisioning のためにオペレーターが明示的に認可した trust/allowlist ケースに
+> 限り** 回答できます（自身の hook-trust ケースを含む）。その認可の外にある credential
+> プロンプト・security プロンプト・permission プロンプトは、すべて **オペレーターへ
+> エスカレーション** し、未回答のまま残さなければなりません。回答がアクセス付与・
+> permission mode の拡大・security 警告の受諾になるなら、それはオペレーターの判断です。
 
 **4. ロール初期化。** pane の CLI に合った actas 形式をタイプします — claude は
-`/agmsg actas <role>`、codex は `$agmsg actas <role>` — その後 **readiness を待ち**
-（trust 画面のままの pane は ready ではありません）、既存の
-[ping テスト](#receiver-の準備状態readiness) を実行します。readiness は ping テストの
-前提条件であって、代替ではありません。
+`/agmsg actas <role>`、codex は `$agmsg actas <role>`。その後 readiness を
+**混同してはいけない 3 つのレイヤー** で確認します:
+
+1. **delivery 設定** — `delivery.sh status` がモード（例: `mode=monitor`）を報告することは、
+   登録と設定を証明するだけです。watcher が生きていることも、セッションが attach されている
+   ことも **証明しません**。`mode=monitor` を報告しながら何もストリームされていない receiver は
+   ありえます。
+2. **live attachment — agent ごとに異なる。** **claude** では、その receiver 自身の
+   セッションに現れる Claude Code Monitor マーカーが証拠です: transcript の
+   `Monitor(agmsg inbox stream)`、フッターの `1 monitor`（`1 shell` は **不可** —
+   バックグラウンドの `watch.sh` は診断/フォールバック専用）、メッセージ到着時の
+   `Monitor event` 行（[Monitor ツールと delivery-mode](#monitor-リカバリ) を参照）。
+   **codex** では、bridge が適用される場合の bridge-alive マーカー:
+   `delivery.sh status` の `Codex bridge: <team>/<role> alive (pid N)`。bridge は codex 起動時
+   ではなくセッションへの **最初の turn** で arm される点に注意してください。
+3. **end-to-end** — [ping テスト](#receiver-の準備状態readiness) の ack が **唯一の**
+   end-to-end の証明です。レイヤー 1・2 は前提条件であって代替ではありません。live マーカーが
+   得られない場合は明示的にフォールバックし（`turn` delivery または手動 `inbox.sh`）、その旨を
+   述べたうえで、それでも ack を必須にします。
 
 **5. 排他性とハンドオーバー。** 1 つのロールを保持できる生きたセッションはちょうど 1 つで、
 2 番目の actas は拒否されます — その拒否が正しい挙動です。セッションの置き換えは

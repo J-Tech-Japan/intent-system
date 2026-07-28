@@ -65,6 +65,49 @@ public sealed class AgentMessageOrchestrationDocsTests
     }
 
     [Fact]
+    public void BothDocs_SeparateDeliveryConfigFromLiveAttachment_AndKeepPingAckSoleProof_G549()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        // G549 repair: a delivery mode proves configuration only.
+        Assert.Contains("proves registration and configuration only", en, StringComparison.Ordinal);
+        Assert.Contains("登録と設定を証明するだけです", ja, StringComparison.Ordinal);
+
+        // Live-attachment evidence is agent-specific on both mirrors.
+        foreach (var marker in new[] { "Monitor(agmsg inbox stream)", "`1 monitor`", "`1 shell`", "Codex bridge: <team>/<role> alive (pid N)" })
+        {
+            Assert.Contains(marker, en, StringComparison.Ordinal);
+            Assert.Contains(marker, ja, StringComparison.Ordinal);
+        }
+
+        // Ping/ack stays the sole end-to-end proof on both mirrors.
+        Assert.Contains("ack is the **only** end-to-end proof", en, StringComparison.Ordinal);
+        Assert.Contains("ack が **唯一の** end-to-end の証明です", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BothDocs_CarryTheAuthorityBoundary_G549()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        // G549 repair: unsticking is not deciding — read-first, explicit
+        // authorization only, escalate credential/security/permission prompts.
+        Assert.Contains("Authority boundary — unsticking is not deciding.", en, StringComparison.Ordinal);
+        Assert.Contains("only on pane contents it has actually read", en, StringComparison.Ordinal);
+        Assert.Contains("only for the trust/allowlist cases the operator explicitly authorized", en, StringComparison.Ordinal);
+        Assert.Contains("its own hook-trust case", en, StringComparison.Ordinal);
+        Assert.Contains("must be escalated to the operator", en, StringComparison.Ordinal);
+
+        Assert.Contains("権限境界 — 詰まりを解くことは決定することではない。", ja, StringComparison.Ordinal);
+        Assert.Contains("実際に読んだ pane の内容に", ja, StringComparison.Ordinal);
+        Assert.Contains("オペレーターが明示的に認可した trust/allowlist ケースに", ja, StringComparison.Ordinal);
+        Assert.Contains("hook-trust ケースを含む", ja, StringComparison.Ordinal);
+        Assert.Contains("エスカレーション", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BothDocs_KeepTheSixNumberedProvisioningElements_G549()
     {
         var en = ReadDoc("en");
@@ -96,10 +139,14 @@ public sealed class AgentMessageOrchestrationDocsTests
             var candidate = Path.Combine(current.FullName, "docs", language, DocRelativePath);
             if (File.Exists(candidate))
             {
-                // Both mirrors are hard-wrapped, so a sentence spans lines.
-                // Collapse whitespace runs so the assertions below pin wording,
-                // not the wrap points.
-                return string.Join(' ', File.ReadAllText(candidate)
+                // Both mirrors are hard-wrapped and some guidance lives inside
+                // blockquotes, so a sentence spans lines and carries `> `
+                // continuation markers. Strip the markers and collapse
+                // whitespace runs so the assertions pin wording, not wrap points.
+                var unwrapped = File.ReadAllLines(candidate)
+                    .Select(line => line.TrimStart().TrimStart('>'));
+
+                return string.Join(' ', string.Join('\n', unwrapped)
                     .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
             }
 

@@ -1867,7 +1867,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("exec's the canonical `codex` executable directly BYPASSES the shim", output, StringComparison.Ordinal);
         // Operator-chosen permission mode for claude; attended first-run screens.
         Assert.Contains("permission mode the OPERATOR chose", output, StringComparison.Ordinal);
-        Assert.Contains("DURABLE allowlists", output, StringComparison.Ordinal);
+        Assert.Contains("DURABLE allowlist/trust record", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1885,6 +1885,49 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("GRACEFUL DROP", output, StringComparison.Ordinal);
         Assert.Contains("OPERATOR CONFIRMATION", output, StringComparison.Ordinal);
         Assert.Contains("only AFTER the drop is confirmed", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Provisioning_SeparatesDeliveryConfigFromLiveAttachment_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        // G549 repair: a delivery mode proves CONFIGURATION, never live
+        // attachment — the two layers must stay separate in the guidance.
+        Assert.Contains("#### Readiness layers (do not collapse them)", output, StringComparison.Ordinal);
+        Assert.Contains("**1. delivery configuration**", output, StringComparison.Ordinal);
+        Assert.Contains("It does NOT prove a watcher is alive", output, StringComparison.Ordinal);
+        Assert.Contains("Never treat a delivery mode as readiness", output, StringComparison.Ordinal);
+
+        // Live-attachment evidence is agent-specific: Claude Monitor markers…
+        Assert.Contains("**2. live attachment (claude)**", output, StringComparison.Ordinal);
+        Assert.Contains("`Monitor(agmsg inbox stream)`", output, StringComparison.Ordinal);
+        Assert.Contains("`1 monitor`", output, StringComparison.Ordinal);
+        Assert.Contains("NOT `1 shell`", output, StringComparison.Ordinal);
+        // …vs the codex bridge-alive marker.
+        Assert.Contains("**2. live attachment (codex)**", output, StringComparison.Ordinal);
+        Assert.Contains("`Codex bridge: <team>/<role> alive (pid N)`", output, StringComparison.Ordinal);
+
+        // Ping/ack stays the SOLE end-to-end proof.
+        Assert.Contains("**3. end-to-end**", output, StringComparison.Ordinal);
+        Assert.Contains("PING/ACK is the ONLY end-to-end proof", output, StringComparison.Ordinal);
+        Assert.Contains("never a substitute", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Provisioning_AuthorityBoundary_EscalatesUnauthorizedPrompts_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        // G549 repair: attending a pane is not authority to decide for the
+        // operator — read-first, explicit-authorization-only, escalate the rest.
+        Assert.Contains("> **Authority boundary:**", output, StringComparison.Ordinal);
+        Assert.Contains("ONLY on pane contents it has actually READ", output, StringComparison.Ordinal);
+        Assert.Contains("ONLY for the trust/allowlist cases the operator explicitly authorized", output, StringComparison.Ordinal);
+        Assert.Contains("its own hook-trust case", output, StringComparison.Ordinal);
+        Assert.Contains("Every credential prompt, security prompt, and permission prompt", output, StringComparison.Ordinal);
+        Assert.Contains("MUST be ESCALATED to the operator", output, StringComparison.Ordinal);
+        Assert.Contains("Unsticking a pane is not deciding for the operator", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1931,8 +1974,29 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains(roles, r => r.Role == "review" && r.Command.Contains("<owner/host-repo>", StringComparison.Ordinal));
         Assert.Contains(roles, r => r.Role == "implementation" && r.Command.Contains("owner/repo", StringComparison.Ordinal));
 
-        Assert.Contains("shim", provisioning.GetProperty("launch_rules").GetProperty("codex_shim_rule").GetString(), StringComparison.Ordinal);
-        Assert.NotEmpty(provisioning.GetProperty("role_initialization").GetProperty("actas_forms").EnumerateArray());
+        var launchRules = provisioning.GetProperty("launch_rules");
+        Assert.Contains("shim", launchRules.GetProperty("codex_shim_rule").GetString(), StringComparison.Ordinal);
+
+        // G549 repair: the authority boundary is a first-class field, not prose
+        // folded into the attended-first-run rule.
+        var authorityBoundary = launchRules.GetProperty("authority_boundary").GetString()!;
+        Assert.Contains("READ", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("explicitly authorized", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("ESCALATED to the operator", authorityBoundary, StringComparison.Ordinal);
+
+        var roleInitialization = provisioning.GetProperty("role_initialization");
+        Assert.NotEmpty(roleInitialization.GetProperty("actas_forms").EnumerateArray());
+
+        // G549 repair: configuration proof, agent-specific live attachment, and
+        // the end-to-end ack are three separate JSON fields.
+        Assert.Contains("does NOT prove", roleInitialization.GetProperty("configuration_proof").GetString(), StringComparison.Ordinal);
+        Assert.Contains("ONLY end-to-end proof", roleInitialization.GetProperty("end_to_end_proof").GetString(), StringComparison.Ordinal);
+
+        var liveEvidence = roleInitialization.GetProperty("live_attachment_evidence").EnumerateArray()
+            .Select(e => (AgentType: e.GetProperty("agent_type").GetString()!, Evidence: e.GetProperty("evidence").GetString()!))
+            .ToArray();
+        Assert.Contains(liveEvidence, e => e.AgentType == "claude" && e.Evidence.Contains("1 monitor", StringComparison.Ordinal));
+        Assert.Contains(liveEvidence, e => e.AgentType == "codex" && e.Evidence.Contains("Codex bridge", StringComparison.Ordinal));
         Assert.True(provisioning.GetProperty("exclusivity_handover").GetProperty("operator_confirmation_rule").GetString()!.Length > 0);
 
         var referenceManager = provisioning.GetProperty("reference_manager");
