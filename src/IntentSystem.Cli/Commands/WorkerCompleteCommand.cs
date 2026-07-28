@@ -1,3 +1,4 @@
+using IntentSystem.Supervisor;
 using System.Text.Json;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;

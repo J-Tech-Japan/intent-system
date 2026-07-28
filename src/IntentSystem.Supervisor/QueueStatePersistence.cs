@@ -1,11 +1,20 @@
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 
-namespace IntentSystem.Cli;
+namespace IntentSystem.Supervisor;
 
 /// <summary>
 /// G548: the single shared persistence layer every canonical
 /// <c>queue-state.json</c> mutation writes through.
+///
+/// It lives in <c>IntentSystem.Supervisor</c> — the assembly that owns the
+/// queue-state model and serializer, and the only one BOTH
+/// <c>IntentSystem.Cli</c> and <c>IntentSystem.Drift</c> reference — so
+/// "every canonical writer" can mean every writer in the solution, not just
+/// the ones that happen to live in the CLI (G548 round 2: the drift
+/// service's corrective enqueue and the bounded metadata writer were
+/// reachable loss paths precisely because the guard had been placed one
+/// layer too high).
 ///
 /// <c>queue-state.json</c> is ONE file shared by every domain on a
 /// multi-domain host, written concurrently by several loops from different
@@ -50,7 +59,7 @@ namespace IntentSystem.Cli;
 /// fast-forward-clean history, so the defense has to sit at the writer,
 /// before anything reaches a commit.
 /// </summary>
-internal static class QueueStatePersistence
+public static class QueueStatePersistence
 {
     /// <summary>
     /// G548: the canonical restoration path, proven end-to-end on
@@ -58,12 +67,176 @@ internal static class QueueStatePersistence
     /// abort message so an operator hitting the invariant is never left
     /// guessing how to recover the state it just refused to overwrite.
     /// </summary>
-    internal const string RecoverySurfaces =
+    public const string RecoverySurfaces =
         "recover with: (1) `intent-cli automation queue-seed-from-packet <unit> --write` to re-seed a lost "
         + "item from its packet, (2) `intent-cli issue publish-flow <unit> --repo <owner/repo> --write` "
         + "(idempotent rerun) to restore its publish linkage, then (3) `intent-cli review closeout-plan "
         + "--pr <n> --repo <owner/repo> --write-recovered-linkage` to recover PR linkage from GitHub "
         + "closing references";
+
+    /// <summary>
+    /// G548 round 2: test seam invoked immediately before the guard reads the
+    /// current on-disk state, with the target path. It exists so a
+    /// COMMAND-level fixture can make the file move between a command's own
+    /// read and its persist — the one interleaving a single-process test
+    /// cannot otherwise produce, and the exact interleaving this guard is
+    /// built for. Never set in production.
+    /// </summary>
+    public static Action<string>? BeforePersistHook { get; set; }
+
+    /// <summary>
+    /// G548 round 2: guarded write for the ONE canonical writer that mutates
+    /// queue-state as raw JSON text rather than through the model —
+    /// <c>metadata update</c>, deliberately a bounded controlled writer that
+    /// preserves any field it does not own.
+    ///
+    /// On the ordinary path (the file has not moved since the caller read it)
+    /// the caller's own text is written VERBATIM, so that bounded-writer
+    /// property is fully preserved; the invariant is still enforced by
+    /// deserializing both sides purely to compare item sets. Only when a
+    /// concurrent write is actually detected does it fall back to the model
+    /// round-trip used to re-apply the delta — which is exactly what every
+    /// other canonical writer does unconditionally, so the rare stale path is
+    /// no less faithful than the rest of the system.
+    /// </summary>
+    public static QueueStatePersistResult PersistRawJson(
+        string queueStatePath,
+        string baseRawText,
+        string outgoingRawText,
+        IReadOnlyCollection<string>? expectedRemovals = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(queueStatePath);
+        ArgumentNullException.ThrowIfNull(baseRawText);
+        ArgumentNullException.ThrowIfNull(outgoingRawText);
+
+        BeforePersistHook?.Invoke(queueStatePath);
+
+        if (!File.Exists(queueStatePath))
+        {
+            WriteText(queueStatePath, outgoingRawText);
+            return QueueStatePersistResult.DirectWrite(null);
+        }
+
+        var onDiskRawText = File.ReadAllText(queueStatePath);
+
+        if (!RawJsonMatches(onDiskRawText, baseRawText))
+        {
+            // Concurrent write detected. Re-applying an item-level delta needs
+            // the model, so try that; if this file cannot round-trip through
+            // the model (the very reason this writer works on raw text), abort
+            // loud and repairable rather than normalizing a file this writer
+            // exists NOT to normalize, or overwriting a change it cannot see.
+            try
+            {
+                return PersistCore(
+                    queueStatePath,
+                    QueueStateSerializer.Deserialize(baseRawText),
+                    QueueStateSerializer.Deserialize(outgoingRawText),
+                    expectedRemovals,
+                    skipHook: true);
+            }
+            catch (Exception exception) when (exception is not QueueStateItemLossException
+                && exception is InvalidOperationException or System.Text.Json.JsonException)
+            {
+                throw new QueueStateItemLossException(
+                    $"refusing to persist queue-state to {queueStatePath}: the file changed after it was read (a "
+                    + "concurrent canonical write), and this bounded raw-text writer cannot re-apply its change onto "
+                    + $"the new state ({exception.Message}). Nothing was written. Re-run this command against the "
+                    + "current state.");
+            }
+        }
+
+        // Clean base: enforce the invariant on execution units only — read
+        // straight out of the JSON, never through the model, so a partial or
+        // legacy queue file is checked exactly like any other instead of being
+        // rejected by a contract this writer deliberately does not impose.
+        var removalAllowList = new HashSet<string>(expectedRemovals ?? Array.Empty<string>(), StringComparer.Ordinal);
+        var lost = ReadExecutionUnits(onDiskRawText)
+            .Where(unit => !ReadExecutionUnits(outgoingRawText).Contains(unit) && !removalAllowList.Contains(unit))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(unit => unit, StringComparer.Ordinal)
+            .ToArray();
+
+        if (lost.Length > 0)
+        {
+            throw new QueueStateItemLossException(
+                $"refusing to persist queue-state to {queueStatePath}: this write would remove {lost.Length} queue "
+                + $"item(s) it was not asked to remove — {string.Join(", ", lost)}. This is the 2026-07-23 lost-update "
+                + "shape (a write from a stale base silently erasing another domain's item); the write was aborted and "
+                + $"the file is unchanged. Re-run this command against current state, or if an item is already lost, "
+                + $"{RecoverySurfaces}.");
+        }
+
+        // The caller's own text is written VERBATIM, preserving the
+        // bounded-writer property: no field this writer does not own is
+        // touched, and nothing is normalized on its behalf.
+        WriteText(queueStatePath, outgoingRawText);
+        return QueueStatePersistResult.DirectWrite(null);
+    }
+
+    /// <summary>
+    /// Structural comparison of two queue-state documents without the model,
+    /// so whitespace/formatting differences never read as a concurrent write
+    /// and a partial document never throws.
+    /// </summary>
+    private static bool RawJsonMatches(string left, string right)
+    {
+        try
+        {
+            using var leftDoc = System.Text.Json.JsonDocument.Parse(left);
+            using var rightDoc = System.Text.Json.JsonDocument.Parse(right);
+            return string.Equals(
+                System.Text.Json.JsonSerializer.Serialize(leftDoc.RootElement),
+                System.Text.Json.JsonSerializer.Serialize(rightDoc.RootElement),
+                StringComparison.Ordinal);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Unparseable on either side: treat as different, so the caller
+            // takes the loud path rather than overwriting blind.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Extracts <c>items[].execution_unit</c> directly from the JSON. The
+    /// no-item-loss invariant only needs identity, and identity is the one
+    /// field every queue document has regardless of how complete it is.
+    /// </summary>
+    private static IReadOnlyCollection<string> ReadExecutionUnits(string rawText)
+    {
+        var units = new List<string>();
+        using var document = System.Text.Json.JsonDocument.Parse(rawText);
+        if (!document.RootElement.TryGetProperty("items", out var items)
+            || items.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            return units;
+        }
+
+        foreach (var item in items.EnumerateArray())
+        {
+            if (item.ValueKind == System.Text.Json.JsonValueKind.Object
+                && item.TryGetProperty("execution_unit", out var unit)
+                && unit.ValueKind == System.Text.Json.JsonValueKind.String
+                && unit.GetString() is { Length: > 0 } value)
+            {
+                units.Add(value);
+            }
+        }
+
+        return units;
+    }
+
+    private static void WriteText(string queueStatePath, string text)
+    {
+        var directory = Path.GetDirectoryName(queueStatePath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        File.WriteAllText(queueStatePath, text);
+    }
 
     /// <summary>
     /// Persists <paramref name="outgoingState"/>, enforcing every guarantee
@@ -88,11 +261,24 @@ internal static class QueueStatePersistence
         string queueStatePath,
         QueueState baseState,
         QueueState outgoingState,
-        IReadOnlyCollection<string>? expectedRemovals = null)
+        IReadOnlyCollection<string>? expectedRemovals = null) =>
+        PersistCore(queueStatePath, baseState, outgoingState, expectedRemovals, skipHook: false);
+
+    private static QueueStatePersistResult PersistCore(
+        string queueStatePath,
+        QueueState baseState,
+        QueueState outgoingState,
+        IReadOnlyCollection<string>? expectedRemovals,
+        bool skipHook)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(queueStatePath);
         ArgumentNullException.ThrowIfNull(baseState);
         ArgumentNullException.ThrowIfNull(outgoingState);
+
+        if (!skipHook)
+        {
+            BeforePersistHook?.Invoke(queueStatePath);
+        }
 
         var removalAllowList = new HashSet<string>(expectedRemovals ?? Array.Empty<string>(), StringComparer.Ordinal);
 
@@ -226,7 +412,7 @@ internal static class QueueStatePersistence
             + "must touch only the items it originally changed, plus updated_at.");
     }
 
-    internal static bool QueueItemsEqual(QueueItem left, QueueItem right) =>
+    public static bool QueueItemsEqual(QueueItem left, QueueItem right) =>
         string.Equals(
             QueueStateSerializer.Serialize(SingleItemState(left)),
             QueueStateSerializer.Serialize(SingleItemState(right)),
@@ -258,7 +444,7 @@ internal static class QueueStatePersistence
 /// so every existing writer gets stale-base recovery without restructuring
 /// its own mutation logic.
 /// </summary>
-internal sealed record QueueStateItemDelta
+public sealed record QueueStateItemDelta
 {
     /// <summary>Items added or modified by the mutation, in outgoing order.</summary>
     public required IReadOnlyList<QueueItem> Upserts { get; init; }
@@ -325,10 +511,13 @@ internal sealed record QueueStateItemDelta
 }
 
 /// <summary>G548: outcome of a guarded queue-state write.</summary>
-internal sealed record QueueStatePersistResult
+public sealed record QueueStatePersistResult
 {
-    /// <summary>The state actually written to disk.</summary>
-    public required QueueState PersistedState { get; init; }
+    /// <summary>
+    /// The state actually written to disk. Null for the raw-text path, which
+    /// deliberately never materializes the model.
+    /// </summary>
+    public required QueueState? PersistedState { get; init; }
 
     /// <summary>
     /// True when the on-disk file had changed since the caller read it and
@@ -340,7 +529,7 @@ internal sealed record QueueStatePersistResult
     /// <summary>The execution units the re-applied mutation covered.</summary>
     public required IReadOnlyList<string> ReappliedExecutionUnits { get; init; }
 
-    public static QueueStatePersistResult DirectWrite(QueueState state) => new()
+    public static QueueStatePersistResult DirectWrite(QueueState? state) => new()
     {
         PersistedState = state,
         ReappliedOnFreshBase = false,
@@ -363,7 +552,7 @@ internal sealed record QueueStatePersistResult
 /// already catch that type report it through their existing failure paths
 /// instead of crashing.
 /// </summary>
-internal sealed class QueueStateItemLossException : InvalidOperationException
+public sealed class QueueStateItemLossException : InvalidOperationException
 {
     public QueueStateItemLossException(string message)
         : base(message)

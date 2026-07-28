@@ -1,3 +1,4 @@
+using IntentSystem.Supervisor;
 using System.Text;
 using System.Text.Json;
 using IntentSystem.Cli;
@@ -318,7 +319,11 @@ internal static class MetadataUpdateCommand
         // on first write (legacy root is always present because --root
         // exists). Idempotent.
         Directory.CreateDirectory(Path.GetDirectoryName(queueStatePath)!);
-        File.WriteAllText(queueStatePath, newQueueText);
+        // G548: guarded write. This is the bounded controlled metadata writer
+        // — it mutates raw JSON so it never rewrites a field it does not own
+        // — so it uses the raw-text guard: the invariant is enforced, and on
+        // a clean base its own text is written verbatim.
+        QueueStatePersistence.PersistRawJson(queueStatePath, queueStateRaw, newQueueText);
         updatedFiles.Add(queueStateRelative);
 
         var newPublishText = AppendPrBlockToPublishYaml(

@@ -1,4 +1,6 @@
 using IntentSystem.Cli;
+using IntentSystem.Cli.Commands;
+using IntentSystem.Supervisor;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 
@@ -26,6 +28,7 @@ public sealed class QueueStatePersistenceTests : IDisposable
 
     public void Dispose()
     {
+        QueueStatePersistence.BeforePersistHook = null;
         if (Directory.Exists(root))
         {
             Directory.Delete(root, recursive: true);
@@ -311,6 +314,212 @@ public sealed class QueueStatePersistenceTests : IDisposable
 
         Assert.False(result.ReappliedOnFreshBase);
         Assert.Equal(QueueItemState.Active, ReadBack().Items.Single().State);
+    }
+
+    // ── Command-level: re-application is observable in output ───────────
+
+    [Fact]
+    public void QueueTransitionCommand_OnAStaleBase_ReportsTheReapplicationAndNamesTheUnit_G548()
+    {
+        // The contract requires writer B to RECORD its re-application in its
+        // own output — a writer that silently repairs itself teaches an
+        // operator nothing about the contention that caused it.
+        //
+        // The interleaving is produced with the guard's BeforePersistHook: it
+        // fires after the command has read queue-state and before the guard
+        // reads it again, which is precisely the window a concurrent
+        // canonical write occupies in the field.
+        Directory.CreateDirectory(Path.Combine(root, ".intent-cli"));
+        var context = new CliContext
+        {
+            RepoRoot = root,
+            Config = new Models.CliConfig
+            {
+                Project = new Models.ProjectConfig { Domain = "intent-cli", ArtifactRoot = ".intent-cli" },
+            },
+        };
+
+        WriteRaw(State(BaseTime, Item("SKS-G841", QueueItemState.Active)));
+
+        var concurrentWriteDone = false;
+        QueueStatePersistence.BeforePersistHook = _ =>
+        {
+            if (concurrentWriteDone)
+            {
+                return;
+            }
+
+            concurrentWriteDone = true;
+            // Another domain's loop seeds G545 in the window.
+            WriteRaw(State(BaseTime.AddMinutes(10), Item("SKS-G841", QueueItemState.Active), Item("G545", QueueItemState.Queued)));
+        };
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = QueueTransitionCommand.Execute(context, ["SKS-G841", "completed"], writer);
+
+            Assert.Equal(0, exitCode);
+            var output = writer.ToString();
+            Assert.Contains("Transitioned SKS-G841 to completed.", output, StringComparison.Ordinal);
+            // Observable, and it names the re-applied execution unit.
+            Assert.Contains("queue-state changed after it was read", output, StringComparison.Ordinal);
+            Assert.Contains("re-applied to the current state for SKS-G841", output, StringComparison.Ordinal);
+            Assert.Contains("no other item was modified", output, StringComparison.Ordinal);
+
+            var persisted = ReadBack();
+            Assert.Equal(["SKS-G841", "G545"], persisted.Items.Select(item => item.ExecutionUnit).ToArray());
+            Assert.Equal(QueueItemState.Completed, persisted.Items.Single(item => item.ExecutionUnit == "SKS-G841").State);
+            Assert.Equal(QueueItemState.Queued, persisted.Items.Single(item => item.ExecutionUnit == "G545").State);
+        }
+        finally
+        {
+            QueueStatePersistence.BeforePersistHook = null;
+        }
+    }
+
+    [Fact]
+    public void QueueTransitionCommand_OnACleanBase_SaysNothingAboutReapplication_G548()
+    {
+        Directory.CreateDirectory(Path.Combine(root, ".intent-cli"));
+        var context = new CliContext
+        {
+            RepoRoot = root,
+            Config = new Models.CliConfig
+            {
+                Project = new Models.ProjectConfig { Domain = "intent-cli", ArtifactRoot = ".intent-cli" },
+            },
+        };
+
+        WriteRaw(State(BaseTime, Item("SKS-G841", QueueItemState.Active)));
+
+        using var writer = new StringWriter();
+        var exitCode = QueueTransitionCommand.Execute(context, ["SKS-G841", "completed"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("re-applied", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    // ── Raw-JSON writer guard (metadata update) ─────────────────────────
+
+    [Fact]
+    public void PersistRawJson_CleanBase_WritesTheCallersTextVerbatim_G548()
+    {
+        // The bounded controlled metadata writer must keep its raw-text
+        // fidelity on the ordinary path.
+        var onDisk = State(BaseTime, Item("G545", QueueItemState.Queued));
+        WriteRaw(onDisk);
+        var baseText = File.ReadAllText(QueueStatePath);
+        var outgoingText = baseText.Replace("\"queued\"", "\"completed\"", StringComparison.Ordinal);
+
+        var result = QueueStatePersistence.PersistRawJson(QueueStatePath, baseText, outgoingText);
+
+        Assert.False(result.ReappliedOnFreshBase);
+        Assert.Equal(outgoingText, File.ReadAllText(QueueStatePath));
+    }
+
+    [Fact]
+    public void PersistRawJson_WouldDropAnUnrequestedItem_AbortsLoud_G548()
+    {
+        var onDisk = State(BaseTime, Item("SKS-G841", QueueItemState.Active), Item("G545", QueueItemState.Queued));
+        WriteRaw(onDisk);
+        var baseText = File.ReadAllText(QueueStatePath);
+        var outgoingText = QueueStateSerializer.Serialize(State(BaseTime.AddMinutes(1), onDisk.Items[0]));
+
+        var exception = Assert.Throws<QueueStateItemLossException>(
+            () => QueueStatePersistence.PersistRawJson(QueueStatePath, baseText, outgoingText));
+
+        Assert.Contains("G545", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(baseText, File.ReadAllText(QueueStatePath));
+    }
+
+    [Fact]
+    public void PersistRawJson_StaleBase_FallsBackToTheModelGuardAndReapplies_G548()
+    {
+        var sharedBase = State(BaseTime, Item("SKS-G841", QueueItemState.Active));
+        WriteRaw(sharedBase);
+        var baseText = File.ReadAllText(QueueStatePath);
+
+        // Concurrent seed of another domain's item.
+        WriteRaw(State(BaseTime.AddMinutes(10), sharedBase.Items[0], Item("G545", QueueItemState.Queued)));
+
+        var outgoingText = QueueStateSerializer.Serialize(
+            State(BaseTime.AddMinutes(20), sharedBase.Items[0] with { State = QueueItemState.Completed }));
+
+        var result = QueueStatePersistence.PersistRawJson(QueueStatePath, baseText, outgoingText);
+
+        Assert.True(result.ReappliedOnFreshBase);
+        Assert.Equal(["SKS-G841"], result.ReappliedExecutionUnits);
+        var persisted = ReadBack();
+        Assert.Equal(["SKS-G841", "G545"], persisted.Items.Select(item => item.ExecutionUnit).ToArray());
+        Assert.Equal(QueueItemState.Completed, persisted.Items.Single(item => item.ExecutionUnit == "SKS-G841").State);
+    }
+
+    [Fact]
+    public void PersistRawJson_PartialDocument_IsCheckedOnIdentityAlone_NotTheModelContract_G548()
+    {
+        // The bounded metadata writer operates on queue documents that need
+        // not satisfy the full QueueItem contract — that is precisely why it
+        // works on raw text. The guard must check identity out of the JSON,
+        // never by deserializing, or it would reject the very files this
+        // writer exists to handle.
+        const string partial = """
+            {"schema_version":"1","updated_at":"2026-07-23T09:00:00+00:00","items":[
+              {"execution_unit":"SKS-G841","state":"active"},
+              {"execution_unit":"G545","state":"queued"}
+            ]}
+            """;
+        Directory.CreateDirectory(Path.GetDirectoryName(QueueStatePath)!);
+        File.WriteAllText(QueueStatePath, partial);
+
+        var outgoing = partial.Replace("\"active\"", "\"completed\"", StringComparison.Ordinal);
+        var result = QueueStatePersistence.PersistRawJson(QueueStatePath, partial, outgoing);
+
+        Assert.False(result.ReappliedOnFreshBase);
+        Assert.Null(result.PersistedState);
+        Assert.Equal(outgoing, File.ReadAllText(QueueStatePath));
+
+        // ...and losing an item from that same partial document still aborts.
+        var lossy = """
+            {"schema_version":"1","updated_at":"2026-07-23T09:05:00+00:00","items":[
+              {"execution_unit":"SKS-G841","state":"completed"}
+            ]}
+            """;
+        var exception = Assert.Throws<QueueStateItemLossException>(
+            () => QueueStatePersistence.PersistRawJson(QueueStatePath, outgoing, lossy));
+        Assert.Contains("G545", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(outgoing, File.ReadAllText(QueueStatePath));
+    }
+
+    [Fact]
+    public void PersistRawJson_StaleBaseOnAPartialDocument_AbortsLoudRatherThanNormalizing_G548()
+    {
+        // Re-application needs the model. When the document cannot round-trip
+        // through it, the raw writer refuses — it will not normalize a file it
+        // exists not to normalize, and it will not overwrite a change it
+        // cannot see. Nothing is written either way.
+        const string partialBase = """
+            {"schema_version":"1","updated_at":"2026-07-23T09:00:00+00:00","items":[
+              {"execution_unit":"SKS-G841","state":"active"}
+            ]}
+            """;
+        const string concurrent = """
+            {"schema_version":"1","updated_at":"2026-07-23T09:10:00+00:00","items":[
+              {"execution_unit":"SKS-G841","state":"active"},
+              {"execution_unit":"G545","state":"queued"}
+            ]}
+            """;
+        Directory.CreateDirectory(Path.GetDirectoryName(QueueStatePath)!);
+        File.WriteAllText(QueueStatePath, concurrent);
+
+        var outgoing = partialBase.Replace("\"active\"", "\"completed\"", StringComparison.Ordinal);
+
+        var exception = Assert.Throws<QueueStateItemLossException>(
+            () => QueueStatePersistence.PersistRawJson(QueueStatePath, partialBase, outgoing));
+
+        Assert.Contains("the file changed after it was read", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Re-run this command against the current state", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(concurrent, File.ReadAllText(QueueStatePath));
     }
 
     // ── Delta derivation ────────────────────────────────────────────────

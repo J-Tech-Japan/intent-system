@@ -1809,8 +1809,12 @@ days, then surfaced as `closeout-plan host-metadata-blocked` and combined
 with the `pr-is-draft` recovery gate into a circular deadlock. Restoration
 took three canonical surfaces plus an operator (host commit `c0897649`).
 
-Every canonical mutation now writes through one shared guard
-(`QueueStatePersistence.Persist`), which enforces three things:
+Every canonical mutation now writes through one shared guard,
+`QueueStatePersistence`. It lives in **`IntentSystem.Supervisor`** — the
+assembly that owns the queue-state model and serializer, and the only one
+*both* `IntentSystem.Cli` and `IntentSystem.Drift` reference — so "every
+canonical writer" means every writer in the solution, including the drift
+service's corrective enqueue. It enforces three things:
 
 1. **Stale-base detection and re-application.** The state the caller *read*
    is compared against what is on disk *now*, at persist time (through the
@@ -1840,11 +1844,34 @@ only; an allow-list entry excuses that unit and nothing else. Retire itself
 needs no entry — it rewrites the item as `state=retired` rather than removing
 it.
 
+**Re-application is reported, never silent.** A canonical command whose
+write was re-applied says so in its own output, naming the execution units it
+was re-applied for — a writer that quietly repaired itself against a
+concurrent write teaches an operator nothing about the contention that caused
+it. `queue transition`, for example, prints `note: queue-state changed after
+it was read (a concurrent canonical write); this transition was re-applied to
+the current state for <units> and no other item was modified.`
+
+**The one raw-text writer.** `metadata update` is the bounded controlled
+metadata writer: it mutates queue-state as raw JSON so it never rewrites a
+field it does not own, and it accepts documents that need not satisfy the
+full `QueueItem` contract. It uses `PersistRawJson`, which checks the
+invariant on `items[].execution_unit` read straight out of the JSON — never
+by deserializing — and on a clean base writes the caller's own text verbatim.
+Only if a concurrent write is actually detected does it need the model to
+re-apply; when the document cannot round-trip through the model it **aborts
+loud** ("re-run this command against the current state") rather than
+normalizing a file it exists not to normalize, or overwriting a change it
+cannot see. Nothing is written either way.
+
 **Multi-writer expectations for shared hosts.** Concurrent canonical writers
 are supported and expected: a losing writer is repaired (re-applied), not
 rejected, so no loop has to serialize against another. What is *not*
 supported is a writer that bypasses the guard — hand-editing
-`queue-state.json`, or a new command calling `File.WriteAllText` directly.
+`queue-state.json`, or a new command calling `File.WriteAllText` directly — a
+source-level fixture (`QueueStateWriterCoverageTests`) fails with the file and
+line of any writer added anywhere in `src/` that bypasses the guard, so the
+all-writers claim cannot regress by hand-verification again.
 Deliberately out of scope, and unchanged by this slice: a per-domain queue
 file split (a future design decision; a recurrence after this lands is the
 escalation criterion), file-locking daemons, cross-process mutexes, and

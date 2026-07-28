@@ -1,3 +1,4 @@
+using IntentSystem.Supervisor;
 using IntentSystem.Drift.Models;
 using IntentSystem.Projection;
 using IntentSystem.Projection.Models;
@@ -90,7 +91,10 @@ public static class IntentDriftService
 
         if (appendedEvents.Count > 0)
         {
-            File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedQueueState));
+            // G548: guarded write. The corrective enqueue writes the SAME
+            // shared multi-domain queue-state every CLI writer does, so it
+            // goes through the same no-item-loss / stale-base guard.
+            QueueStatePersistence.Persist(queueStatePath, queueState, updatedQueueState);
 
             var runLogDirectory = Path.GetDirectoryName(runLogPath)
                 ?? throw new InvalidOperationException("Run log path did not contain a directory.");

@@ -1,3 +1,4 @@
+using IntentSystem.Supervisor;
 using IntentSystem.Clarify;
 using IntentSystem.Clarify.Models;
 using IntentSystem.Clarify.Serialization;

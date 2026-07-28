@@ -1951,7 +1951,12 @@ commit message は linkage 変更のみを主張していました。この loss
 (host commit `c0897649`)。
 
 現在は、すべての canonical mutation が 1 つの共有 guard
-(`QueueStatePersistence.Persist`)経由で書き込み、次の 3 点を強制します:
+`QueueStatePersistence` 経由で書き込みます。この guard は
+**`IntentSystem.Supervisor`** — queue-state の model と serializer を所有し、
+`IntentSystem.Cli` と `IntentSystem.Drift` の*両方*が参照する唯一の assembly —
+に置かれているため、「すべての canonical writer」は CLI 内だけでなく solution
+全体の writer(drift service の corrective enqueue を含む)を意味します。
+強制する内容は次の 3 点です:
 
 1. **stale-base の検出と再適用。** caller が*読んだ*状態と、persist 時点で
    ディスク上に*実際にある*状態を比較します(同一の serializer round-trip を
@@ -1978,11 +1983,34 @@ expected removal として渡します。invariant が対象とするのは**要
 loss のみであり、allow-list の entry はその unit だけを免除します。retire 自体は
 entry 不要です — item を削除するのではなく `state=retired` へ書き換えるためです。
 
+**再適用は報告され、決して silent になりません。** 書き込みが再適用された
+canonical command は、その事実と再適用対象の execution unit を自身の出力に
+記載します — 並行書き込みに対して黙って自己修復した writer は、その contention
+について operator に何も伝えないためです。例えば `queue transition` は
+`note: queue-state changed after it was read (a concurrent canonical write);
+this transition was re-applied to the current state for <units> and no other
+item was modified.` を出力します。
+
+**唯一の raw-text writer。** `metadata update` は bounded controlled metadata
+writer です: 所有していない field を書き換えないよう queue-state を raw JSON
+として変更し、完全な `QueueItem` 契約を満たさない document も受け付けます。
+この writer は `PersistRawJson` を使い、invariant を JSON から直接読んだ
+`items[].execution_unit` で検査し(deserialize は一切しません)、base が clean
+なら caller 自身のテキストをそのまま書き込みます。model が必要になるのは並行
+書き込みを実際に検出して再適用する場合だけで、document が model を round-trip
+できないときは、normalize しないために存在する writer が normalize することも、
+見えていない変更を上書きすることもせず、**loud に中止**します
+(「current state に対して再実行してください」)。いずれの場合もファイルへの
+書き込みは行われません。
+
 **共有 host における multi-writer の期待。** canonical writer の並行実行は
 サポートされ、想定されています: 競争に負けた writer は拒否されるのではなく修復
 (再適用)されるため、どの loop も他をシリアライズして待つ必要はありません。
 サポート**されない**のは guard を迂回する writer です — `queue-state.json` の
-手編集や、新規コマンドが直接 `File.WriteAllText` を呼ぶことです。意図的に
+手編集や、新規コマンドが直接 `File.WriteAllText` を呼ぶことです。source レベルの
+fixture (`QueueStateWriterCoverageTests`) が、`src/` 配下のどこかに guard を
+迂回する writer が追加された場合にファイル名と行番号付きで失敗するため、
+all-writers の主張が再び目視確認頼みで退行することはありません。意図的に
 スコープ外かつ本スライスで不変なもの: per-domain の queue file 分割(将来の設計
 判断であり、本スライス後の再発が escalation criterion)、file-locking daemon、
 プロセス間 mutex、git レベルの merge 戦略 — 2ab082cf の loss は
