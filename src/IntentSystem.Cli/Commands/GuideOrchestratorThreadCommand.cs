@@ -941,6 +941,7 @@ internal static class GuideOrchestratorThreadCommand
                     },
                 },
             },
+            TerminalWorkspaceProvisioning = BuildTerminalWorkspaceProvisioning(repo, values["<team>"]),
             DesignTrafficController = new OrchestratorDesignTrafficController
             {
                 Summary =
@@ -1380,6 +1381,266 @@ internal static class GuideOrchestratorThreadCommand
         };
     }
 
+    // G549: the provisioning section a design thread executes BEFORE the setup
+    // checklist — it creates what the rest of the guide already assumes exists.
+    // Only the target repo and the agmsg team come from CLI inputs; the project
+    // name and the host metadata repo stay as placeholders, because a design
+    // thread asked to "set this team up" knows them from its own context and
+    // intent-cli never needs them for any mutation.
+    private static OrchestratorTerminalWorkspaceProvisioning BuildTerminalWorkspaceProvisioning(string targetRepo, string team)
+    {
+        string Fill(string template) => template
+            .Replace("<owner/repo>", targetRepo, StringComparison.Ordinal)
+            .Replace("<team>", team, StringComparison.Ordinal);
+
+        return new OrchestratorTerminalWorkspaceProvisioning
+        {
+            Summary = Fill(
+                "Provision the whole team on a terminal-workspace manager BEFORE running the setup checklist. The rest "
+                + "of this guide assumes each role already has its own folder and its own live terminal session; this "
+                + "section creates both. Work through it top to bottom — role folders (create them when absent), "
+                + "workspace topology, launch rules, role initialization, exclusivity/handover — then continue at "
+                + "`Setup (starting orchestrator mode)`. Every step below is executable with the placeholders listed "
+                + "next; nothing here requires knowledge outside this page."),
+            Placeholders = new[]
+            {
+                new OrchestratorProvisioningPlaceholder { Token = "<Project>", Meaning = "the project/product name used as the folder-name prefix (e.g. `Estivo` → `EstivoOrchestrator`)." },
+                new OrchestratorProvisioningPlaceholder { Token = "<owner/host-repo>", Meaning = "the HOST metadata repo that owns `.intent-cli/` and `intents/<domain>/` — cloned for the host-side roles (orchestrator, review)." },
+                new OrchestratorProvisioningPlaceholder { Token = Fill("<owner/repo>"), Meaning = "the TARGET repo the work lands in — cloned for the implementation role." },
+                new OrchestratorProvisioningPlaceholder { Token = Fill("<team>"), Meaning = "the agmsg team name; also the workspace tab name." },
+                new OrchestratorProvisioningPlaceholder { Token = "<workspace-root>", Meaning = "the parent directory the role folders are created under (e.g. `~/dev`)." },
+            },
+            FolderProvisioning = new OrchestratorProvisioningFolders
+            {
+                Summary = Fill(
+                    "Each role runs from its OWN dedicated folder. Host-side roles (orchestrator, review) run from a "
+                    + "clone of the host metadata repo `<owner/host-repo>`; the implementation role runs from a clone of "
+                    + "the target repo `<owner/repo>`. Create any folder that does not exist yet — do not reuse an "
+                    + "existing checkout that another role already occupies, and do not point two roles at one folder."),
+                NeverShareRule =
+                    "NEVER share a folder between two roles. agmsg identity and the codex monitor bridge are "
+                    + "(project, type)-scoped (G521): two roles of the same agent type in one folder resolve to the SAME "
+                    + "identity, so actas exclusivity, delivery, and the bridge collide and one role silently stops "
+                    + "receiving. One role = one folder, always.",
+                Roles = new[]
+                {
+                    new OrchestratorProvisioningRoleFolder
+                    {
+                        Role = "orchestrator",
+                        Folder = "<workspace-root>/<Project>Orchestrator",
+                        CloneSource = "host metadata repo `<owner/host-repo>` (owns `.intent-cli/` and `intents/<domain>/`)",
+                        CreateCommand = "git clone https://github.com/<owner/host-repo>.git <workspace-root>/<Project>Orchestrator",
+                    },
+                    new OrchestratorProvisioningRoleFolder
+                    {
+                        Role = "review",
+                        Folder = "<workspace-root>/<Project>Review",
+                        CloneSource = "host metadata repo `<owner/host-repo>` — a SECOND, separate clone (not the orchestrator's)",
+                        CreateCommand = "git clone https://github.com/<owner/host-repo>.git <workspace-root>/<Project>Review",
+                    },
+                    new OrchestratorProvisioningRoleFolder
+                    {
+                        Role = "implementation",
+                        Folder = "<workspace-root>/<Project>Implementation",
+                        CloneSource = Fill("target repo `<owner/repo>` — implementation is GitHub-contract-only and never reads host `.intent-cli/` state"),
+                        CreateCommand = Fill("git clone https://github.com/<owner/repo>.git <workspace-root>/<Project>Implementation"),
+                    },
+                },
+                AbsentFolderRule =
+                    "When a folder is absent, CREATE it with the clone command for that role before launching anything "
+                    + "in that pane — a pane opened at a missing cwd falls back to the shell's default directory, which "
+                    + "silently gives the role the wrong (or a shared) identity.",
+                Verification = new[]
+                {
+                    "Each of the three folders exists and is a distinct path — no two roles share one.",
+                    "`git -C <folder> remote get-url origin` matches the intended source for that role (host metadata repo for orchestrator/review, target repo for implementation).",
+                    "`git -C <folder> status` is clean in every folder before any role is launched.",
+                },
+            },
+            Topology = new OrchestratorProvisioningTopology
+            {
+                Summary = Fill(
+                    "One workspace per team, one tab named after the team, one pane per role, each pane opened with that "
+                    + "role's own folder as its cwd. The topology is what makes the folder rule hold in practice: the "
+                    + "pane carries the cwd, and the cwd carries the identity."),
+                Rules = new[]
+                {
+                    Fill("One WORKSPACE per agmsg team — the team `<team>` gets its own workspace, not a pane inside someone else's."),
+                    Fill("One TAB named after the team (`<team>`) so the team is identifiable at a glance."),
+                    "One PANE per role — orchestrator, implementation, review (plus design only if design is a monitored receiver in this team).",
+                    "Each pane's cwd is that role's dedicated folder — set the cwd at pane creation, do not `cd` after launching the agent.",
+                    "Panes are long-lived: a role's session lives for the whole run, so do not recycle a pane for a second role.",
+                },
+                DesignThreadPosition =
+                    "The DESIGN thread stays OUTSIDE the workspace. It is the thread doing the provisioning — it drives "
+                    + "the workspace manager from where it already runs and never claims a pane inside the team "
+                    + "workspace it is constructing.",
+            },
+            LaunchRules = new OrchestratorProvisioningLaunchRules
+            {
+                Summary =
+                    "How an agent is launched decides whether its message bridge arms and whether its first run stalls "
+                    + "on an unattended prompt. Launch every agent by TYPING into the pane's interactive shell, then "
+                    + "attend the first-run screens.",
+                CodexShimRule =
+                    "codex MUST be launched by typing into the pane's interactive shell (send-text + enter), never by "
+                    + "spawning the executable. The `codex()` shell shim is what wraps the launch and arms the agmsg "
+                    + "monitor bridge (G521); typing goes through the shell, so the shim applies.",
+                CodexDirectSpawnWarning =
+                    "a workspace manager that exec's the canonical `codex` executable directly BYPASSES the "
+                    + "shim, so the bridge never arms. The session looks healthy and messages are simply never "
+                    + "delivered. If a manager offers a \"run this command\" pane option, do NOT use it for codex; use "
+                    + "the send-text-into-the-shell path.",
+                ClaudePermissionModeRule =
+                    "claude is launched with the permission mode the OPERATOR chose for this team — the design thread "
+                    + "does not silently pick a broader mode. Type the launch into the pane's shell the same way, so "
+                    + "the session inherits the folder as cwd.",
+                AttendedFirstRunRule =
+                    "ATTEND the first run of every pane. First-run trust screens (codex hooks-trust) and permission "
+                    + "prompts block the session until answered, and an unattended pane looks \"launched\" while it is "
+                    + "actually waiting. Where the design thread is authorized to answer (see the authority boundary "
+                    + "below), answer so the result is a DURABLE allowlist/trust record — a per-invocation approval "
+                    + "re-prompts on the next wake and stalls the role again.",
+                AuthorityBoundary =
+                    "attending a pane is not authority to decide for the operator. The design "
+                    + "thread may act ONLY on pane contents it has actually READ (never on a blind keystroke into a "
+                    + "dialog it has not rendered). Operator authorization can extend ONLY to read-pane TRUST/ALLOWLIST "
+                    + "cases — such as the design thread's own hook-trust case, which it may accept for itself. "
+                    + "CREDENTIAL, SECURITY, and PERMISSION prompts are NEVER answerable by the design thread: they "
+                    + "ALWAYS remain unanswered and are ALWAYS ESCALATED to the operator, with or without prior "
+                    + "authorization — no authorization makes them answerable. Unsticking a pane is not deciding for "
+                    + "the operator: if answering the dialog would grant access, widen a permission mode, or accept a "
+                    + "security warning, it is the operator's call, not the design thread's.",
+            },
+            RoleInitialization = new OrchestratorProvisioningRoleInitialization
+            {
+                Summary = Fill(
+                    "Once a pane's agent is running, give it its agmsg role, wait for readiness, and only then ping-test "
+                    + "it. Use the actas form that matches the CLI in that pane; `<role>` is `orchestrator`, "
+                    + "`implementation`, or `review`, joined under team `<team>`."),
+                ActasForms = new[]
+                {
+                    new OrchestratorRoleStartup
+                    {
+                        AgentType = "claude",
+                        ActasInvocation = "/agmsg actas <role>",
+                        Note = "Type the slash-command form into the claude pane; it claims the role's exclusivity lock and re-points that session's inbox subscription at the role.",
+                    },
+                    new OrchestratorRoleStartup
+                    {
+                        AgentType = "codex",
+                        ActasInvocation = "$agmsg actas <role>",
+                        Note = "Type the `$agmsg actas <role>` form into the codex pane; the monitor bridge only attaches if the session was launched through the shim.",
+                    },
+                },
+                ReadinessWait =
+                    "WAIT for the role to report ready before sending anything — actas is submitted, not completed, at "
+                    + "the moment you type it. Readiness has THREE separate layers and they must not be collapsed: "
+                    + "delivery CONFIGURATION, LIVE ATTACHMENT, and END-TO-END delivery. A pane still sitting on a trust "
+                    + "screen is NOT live-attached and NOT session-active — and that says nothing about its delivery "
+                    + "configuration, which is set with `delivery.sh` before launch and stays configured regardless of "
+                    + "what the launch UI is showing. Launch-UI state never erases configuration, and configuration "
+                    + "never implies attachment.",
+                ConfigurationProof =
+                    "CONFIGURATION only — `delivery.sh status` reporting a delivery mode (e.g. `mode=monitor`) proves "
+                    + "the role is registered and how it is CONFIGURED to receive. It does NOT prove a watcher is alive, "
+                    + "and it does NOT prove any session is attached: a receiver can report `mode=monitor` while nothing "
+                    + "is streaming. Never treat a delivery mode as readiness.",
+                LiveAttachmentEvidence = new[]
+                {
+                    new OrchestratorProvisioningLiveEvidence
+                    {
+                        AgentType = "claude",
+                        Evidence =
+                            "Live attachment is proven by the Claude Code MONITOR markers in that receiver's own "
+                            + "session, not by `delivery.sh status`: the transcript shows `Monitor(agmsg inbox stream)`, "
+                            + "the footer shows `1 monitor` (NOT `1 shell` — a background `watch.sh` shell is "
+                            + "diagnostic/fallback only and never counts as attached), and `Monitor event` lines appear "
+                            + "as messages arrive. See `Monitor tool vs delivery-mode` for the full marker list and the "
+                            + "trust/fallback ladder when they are missing.",
+                    },
+                    new OrchestratorProvisioningLiveEvidence
+                    {
+                        AgentType = "codex",
+                        Evidence =
+                            "Live attachment is proven by the BRIDGE-ALIVE marker where the codex bridge applies: "
+                            + "`delivery.sh status` shows `Codex bridge: <team>/<role> alive (pid N)`. Note the bridge "
+                            + "arms on the FIRST turn sent to the session, not at codex startup, and an already-running "
+                            + "session stays unmonitored until it is restarted — so absence of the marker right after "
+                            + "launch is expected, and its presence is what you wait for. See `Codex monitor (beta) "
+                            + "failure modes` for the caveats.",
+                    },
+                },
+                EndToEndProof =
+                    "PING/ACK is the ONLY end-to-end proof. Configuration and live-attachment evidence are necessary "
+                    + "preconditions, never a substitute: a role counts as ready only after it has ACKED a ping. If the "
+                    + "live markers are unavailable for an agent surface, do not infer readiness — fall back explicitly "
+                    + "(e.g. `turn` delivery or manual `inbox.sh`), say so, and still require the ack.",
+                PingTestReference =
+                    "After readiness, run the existing ping test before ANY delegation: send one agmsg message to each "
+                    + "role and require the ack (see `Receiver readiness` / `ping_test`). Readiness is a precondition "
+                    + "for the ping test, not a replacement for it.",
+            },
+            ExclusivityHandover = new OrchestratorProvisioningHandover
+            {
+                OneHolderRule =
+                    "Exactly ONE live session may hold a role at a time. A second session trying to actas the same role "
+                    + "is refused (the role is reported held by the owning session) — that refusal is correct behavior, "
+                    + "not a bug to work around by joining under a near-miss name.",
+                GracefulDropRule =
+                    "Replacing a role's session goes through the GRACEFUL DROP first: the current holder drops the role "
+                    + "(releasing the exclusivity lock and its registration), and only then does the successor actas it. "
+                    + "Never kill the holder's pane and hope the lock clears.",
+                OperatorConfirmationRule =
+                    "The graceful drop carries an OPERATOR CONFIRMATION — the human running the outgoing session "
+                    + "confirms the handover. The design thread requests the drop and waits for that confirmation; it "
+                    + "does not force a role away from a live session.",
+                SuccessorClaimRule =
+                    "The successor claims the role only AFTER the drop is confirmed, then repeats readiness + ping test "
+                    + "for that role. A handover is not complete until the new holder has acked a ping.",
+            },
+            ReferenceManager = new OrchestratorProvisioningReferenceManager
+            {
+                Name = "herdr",
+                Summary =
+                    "herdr is the REFERENCE workspace manager for this flow — the surfaces below are the ones a design "
+                    + "thread drives programmatically to build the team. intent-cli does not own, ship, or wrap herdr; "
+                    + "it states the operational steps and the success criteria only.",
+                Surfaces = new[]
+                {
+                    new OrchestratorProvisioningSurface { Surface = "`workspace create`", UsedFor = "create the team's workspace and its team-named tab." },
+                    new OrchestratorProvisioningSurface { Surface = "`pane split`", UsedFor = "add one pane per role, each opened with that role's dedicated folder as cwd." },
+                    new OrchestratorProvisioningSurface { Surface = "`pane send-text` / `send-keys`", UsedFor = "type the agent launch and the actas prompt into the pane's interactive shell — this is the shim-safe path." },
+                    new OrchestratorProvisioningSurface { Surface = "`agent prompt`", UsedFor = "deliver a prompt to an agent already running in a pane." },
+                    new OrchestratorProvisioningSurface { Surface = "`agent wait`", UsedFor = "block until the pane's agent is idle/ready before the next step." },
+                },
+                InternalsLinkOut =
+                    "For herdr internals — installation, socket/API details, exact flags — consult herdr's own "
+                    + "documentation. This guide deliberately links out rather than restating them, exactly as it does "
+                    + "for agmsg internals.",
+                SubstitutionRule =
+                    "ANY equivalent workspace manager may be substituted, provided the same rules hold: one dedicated "
+                    + "folder per role as the pane cwd, launch typed into an interactive shell (shim-safe), attended "
+                    + "first-run trust/permission prompts, actas + readiness before the ping test, and one holder per "
+                    + "role with a graceful drop on handover.",
+            },
+            Checklist = new[]
+            {
+                Fill("Collect the placeholders: `<Project>`, host metadata repo `<owner/host-repo>`, target repo `<owner/repo>`, agmsg team `<team>`, `<workspace-root>`."),
+                "For each role, check whether its dedicated folder exists; CREATE any missing one with that role's clone command (host metadata repo for orchestrator/review, target repo for implementation).",
+                "Verify the three folders are distinct, have the expected `origin`, and are clean.",
+                Fill("Create one workspace for team `<team>` with a tab named after the team; keep the design thread outside it."),
+                "Split one pane per role, each opened with that role's folder as cwd.",
+                "Launch each pane's agent by TYPING into its interactive shell — codex through the shim, claude with the operator's chosen permission mode; never spawn the executable directly.",
+                "Attend the first run of each pane: answer ONLY the read-pane trust/allowlist dialogs the operator explicitly authorized (durably, not per-invocation). ALWAYS leave every credential, security, and permission prompt unanswered and escalate it to the operator — no authorization makes those answerable by the design thread.",
+                "Type the actas form into each pane (`/agmsg actas <role>` for claude, `$agmsg actas <role>` for codex), then confirm readiness LAYER BY LAYER: delivery configuration (`delivery.sh status`), then the agent-specific live-attachment marker (claude: `Monitor(agmsg inbox stream)` / footer `1 monitor`; codex: `Codex bridge: <team>/<role> alive (pid N)`).",
+                "Ping-test every role and require an ack before the first real delegation — the ack is the ONLY end-to-end proof; configuration and live markers are preconditions, not readiness.",
+                "Continue with `Setup (starting orchestrator mode)` — the delivery mode, role prompts, read-only first wake, and the rest of the setup checklist.",
+                "On a role handover, drop the role from the current holder (with its operator confirmation) BEFORE the successor claims it, then redo readiness + ping test.",
+            },
+        };
+    }
+
     // G500: turn an orchestrator setup request into a concrete, operational
     // intake. The visible outcome is one of missing-inputs / setup-ready /
     // blocked. When inputs are complete the intake emits copy-paste agmsg
@@ -1731,6 +1992,127 @@ internal static class GuideOrchestratorThreadCommand
         }
     }
 
+    // G549: render the provisioning section as a paste-ready checklist — the
+    // six elements in execution order, then the flat checklist a design thread
+    // can work straight down.
+    private static void WriteTerminalWorkspaceProvisioning(TextWriter writer, OrchestratorTerminalWorkspaceProvisioning provisioning)
+    {
+        writer.WriteLine("## Terminal-workspace provisioning (G549)");
+        writer.WriteLine();
+        writer.WriteLine(provisioning.Summary);
+        writer.WriteLine();
+
+        writer.WriteLine("### Placeholders");
+        writer.WriteLine();
+        foreach (var placeholder in provisioning.Placeholders)
+        {
+            writer.WriteLine($"- `{placeholder.Token}` — {placeholder.Meaning}");
+        }
+        writer.WriteLine();
+
+        writer.WriteLine("### 1. Role folders (create them when absent)");
+        writer.WriteLine();
+        writer.WriteLine(provisioning.FolderProvisioning.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"> **Never share a folder:** {provisioning.FolderProvisioning.NeverShareRule}");
+        writer.WriteLine();
+        foreach (var role in provisioning.FolderProvisioning.Roles)
+        {
+            writer.WriteLine($"- **{role.Role}** — folder `{role.Folder}` — clone of the {role.CloneSource}");
+            writer.WriteLine();
+            writer.WriteLine("  ```bash");
+            writer.WriteLine($"  {role.CreateCommand}");
+            writer.WriteLine("  ```");
+            writer.WriteLine();
+        }
+        writer.WriteLine($"- **folder absent** — {provisioning.FolderProvisioning.AbsentFolderRule}");
+        writer.WriteLine();
+        writer.WriteLine("Verify before launching anything:");
+        writer.WriteLine();
+        foreach (var check in provisioning.FolderProvisioning.Verification)
+        {
+            writer.WriteLine($"- {check}");
+        }
+        writer.WriteLine();
+
+        writer.WriteLine("### 2. Workspace topology");
+        writer.WriteLine();
+        writer.WriteLine(provisioning.Topology.Summary);
+        writer.WriteLine();
+        foreach (var rule in provisioning.Topology.Rules)
+        {
+            writer.WriteLine($"- {rule}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **design thread stays outside** — {provisioning.Topology.DesignThreadPosition}");
+        writer.WriteLine();
+
+        writer.WriteLine("### 3. Launch rules (and why)");
+        writer.WriteLine();
+        writer.WriteLine(provisioning.LaunchRules.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- **codex — shim-safe typed launch** — {provisioning.LaunchRules.CodexShimRule}");
+        writer.WriteLine($"- **claude — operator-chosen permission mode** — {provisioning.LaunchRules.ClaudePermissionModeRule}");
+        writer.WriteLine($"- **attended first run** — {provisioning.LaunchRules.AttendedFirstRunRule}");
+        writer.WriteLine();
+        writer.WriteLine($"> **Warning:** {provisioning.LaunchRules.CodexDirectSpawnWarning}");
+        writer.WriteLine();
+        writer.WriteLine($"> **Authority boundary:** {provisioning.LaunchRules.AuthorityBoundary}");
+        writer.WriteLine();
+
+        writer.WriteLine("### 4. Role initialization (actas and readiness)");
+        writer.WriteLine();
+        writer.WriteLine(provisioning.RoleInitialization.Summary);
+        writer.WriteLine();
+        foreach (var form in provisioning.RoleInitialization.ActasForms)
+        {
+            writer.WriteLine($"- **{form.AgentType}** — `{form.ActasInvocation}` — {form.Note}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **readiness wait** — {provisioning.RoleInitialization.ReadinessWait}");
+        writer.WriteLine();
+        writer.WriteLine("#### Readiness layers (do not collapse them)");
+        writer.WriteLine();
+        writer.WriteLine($"- **1. delivery configuration** — {provisioning.RoleInitialization.ConfigurationProof}");
+        foreach (var evidence in provisioning.RoleInitialization.LiveAttachmentEvidence)
+        {
+            writer.WriteLine($"- **2. live attachment ({evidence.AgentType})** — {evidence.Evidence}");
+        }
+        writer.WriteLine($"- **3. end-to-end** — {provisioning.RoleInitialization.EndToEndProof}");
+        writer.WriteLine();
+        writer.WriteLine($"- **ping test** — {provisioning.RoleInitialization.PingTestReference}");
+        writer.WriteLine();
+
+        writer.WriteLine("### 5. Role exclusivity and handover");
+        writer.WriteLine();
+        writer.WriteLine($"- **one holder per role** — {provisioning.ExclusivityHandover.OneHolderRule}");
+        writer.WriteLine($"- **graceful drop first** — {provisioning.ExclusivityHandover.GracefulDropRule}");
+        writer.WriteLine($"- **operator confirmation** — {provisioning.ExclusivityHandover.OperatorConfirmationRule}");
+        writer.WriteLine($"- **successor claims after** — {provisioning.ExclusivityHandover.SuccessorClaimRule}");
+        writer.WriteLine();
+
+        writer.WriteLine($"### 6. Reference workspace manager — {provisioning.ReferenceManager.Name}");
+        writer.WriteLine();
+        writer.WriteLine(provisioning.ReferenceManager.Summary);
+        writer.WriteLine();
+        foreach (var surface in provisioning.ReferenceManager.Surfaces)
+        {
+            writer.WriteLine($"- {surface.Surface} — {surface.UsedFor}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **internals** — {provisioning.ReferenceManager.InternalsLinkOut}");
+        writer.WriteLine($"- **substitution** — {provisioning.ReferenceManager.SubstitutionRule}");
+        writer.WriteLine();
+
+        writer.WriteLine("### Provisioning checklist (paste-ready)");
+        writer.WriteLine();
+        for (var i = 0; i < provisioning.Checklist.Count; i++)
+        {
+            writer.WriteLine($"{i + 1}. {provisioning.Checklist[i]}");
+        }
+        writer.WriteLine();
+    }
+
     private static void WriteMarkdown(TextWriter writer, OrchestratorThreadGuide guide)
     {
         writer.WriteLine("# Guide — agmsg-backed orchestrator thread (G487)");
@@ -1844,6 +2226,8 @@ internal static class GuideOrchestratorThreadCommand
             writer.WriteLine($"- **{startup.AgentType}** — `{startup.ActasInvocation}` — {startup.Note}");
         }
         writer.WriteLine();
+
+        WriteTerminalWorkspaceProvisioning(writer, guide.TerminalWorkspaceProvisioning);
 
         writer.WriteLine("## Preflight (all three cwds)");
         writer.WriteLine();
@@ -2593,6 +2977,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("intake_form")]
     public required OrchestratorIntakeForm IntakeForm { get; init; }
 
+    [JsonPropertyName("terminal_workspace_provisioning")]
+    public required OrchestratorTerminalWorkspaceProvisioning TerminalWorkspaceProvisioning { get; init; }
+
     [JsonPropertyName("design_traffic_controller")]
     public required OrchestratorDesignTrafficController DesignTrafficController { get; init; }
 
@@ -2812,6 +3199,209 @@ internal sealed record OrchestratorRoleStartup
 
     [JsonPropertyName("note")]
     public required string Note { get; init; }
+}
+
+/// <summary>
+/// G549: terminal-workspace provisioning for a whole team — the setup step
+/// that runs BEFORE the existing setup checklist can be executed at all.
+/// Earlier guidance assumed the role folders and terminal sessions already
+/// existed ("each role runs from its own folder, clone, or worktree") and said
+/// nothing about creating them, so a design thread asked to "set this team up"
+/// had to supply the missing knowledge itself. This section makes the flow
+/// executable end to end with placeholders only: folder provisioning (with the
+/// project-scoped-identity reason from G521), workspace topology, shim-safe
+/// launch, actas + readiness, role exclusivity/handover, and herdr named as the
+/// reference workspace manager whose internals are linked out rather than owned.
+/// </summary>
+internal sealed record OrchestratorTerminalWorkspaceProvisioning
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("placeholders")]
+    public required IReadOnlyList<OrchestratorProvisioningPlaceholder> Placeholders { get; init; }
+
+    [JsonPropertyName("folder_provisioning")]
+    public required OrchestratorProvisioningFolders FolderProvisioning { get; init; }
+
+    [JsonPropertyName("topology")]
+    public required OrchestratorProvisioningTopology Topology { get; init; }
+
+    [JsonPropertyName("launch_rules")]
+    public required OrchestratorProvisioningLaunchRules LaunchRules { get; init; }
+
+    [JsonPropertyName("role_initialization")]
+    public required OrchestratorProvisioningRoleInitialization RoleInitialization { get; init; }
+
+    [JsonPropertyName("exclusivity_handover")]
+    public required OrchestratorProvisioningHandover ExclusivityHandover { get; init; }
+
+    [JsonPropertyName("reference_manager")]
+    public required OrchestratorProvisioningReferenceManager ReferenceManager { get; init; }
+
+    [JsonPropertyName("checklist")]
+    public required IReadOnlyList<string> Checklist { get; init; }
+}
+
+internal sealed record OrchestratorProvisioningPlaceholder
+{
+    [JsonPropertyName("token")]
+    public required string Token { get; init; }
+
+    [JsonPropertyName("meaning")]
+    public required string Meaning { get; init; }
+}
+
+internal sealed record OrchestratorProvisioningFolders
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    /// <summary>G521: agmsg identity and the codex monitor bridge are (project, type)-scoped, so two roles sharing one folder collide.</summary>
+    [JsonPropertyName("never_share_rule")]
+    public required string NeverShareRule { get; init; }
+
+    [JsonPropertyName("roles")]
+    public required IReadOnlyList<OrchestratorProvisioningRoleFolder> Roles { get; init; }
+
+    [JsonPropertyName("absent_folder_rule")]
+    public required string AbsentFolderRule { get; init; }
+
+    [JsonPropertyName("verification")]
+    public required IReadOnlyList<string> Verification { get; init; }
+}
+
+internal sealed record OrchestratorProvisioningRoleFolder
+{
+    [JsonPropertyName("role")]
+    public required string Role { get; init; }
+
+    [JsonPropertyName("folder")]
+    public required string Folder { get; init; }
+
+    [JsonPropertyName("clone_source")]
+    public required string CloneSource { get; init; }
+
+    [JsonPropertyName("create_command")]
+    public required string CreateCommand { get; init; }
+}
+
+internal sealed record OrchestratorProvisioningTopology
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("rules")]
+    public required IReadOnlyList<string> Rules { get; init; }
+
+    [JsonPropertyName("design_thread_position")]
+    public required string DesignThreadPosition { get; init; }
+}
+
+internal sealed record OrchestratorProvisioningLaunchRules
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    /// <summary>G521: the codex shell shim must wrap the launch or the monitor bridge never arms.</summary>
+    [JsonPropertyName("codex_shim_rule")]
+    public required string CodexShimRule { get; init; }
+
+    [JsonPropertyName("codex_direct_spawn_warning")]
+    public required string CodexDirectSpawnWarning { get; init; }
+
+    [JsonPropertyName("claude_permission_mode_rule")]
+    public required string ClaudePermissionModeRule { get; init; }
+
+    [JsonPropertyName("attended_first_run_rule")]
+    public required string AttendedFirstRunRule { get; init; }
+
+    /// <summary>
+    /// G549 repair: attending a pane is not authority to decide for the
+    /// operator. Design acts only on pane contents it has read, and only for
+    /// explicitly authorized trust/allowlist cases; credential, security, and
+    /// permission prompts escalate. Unsticking is not deciding.
+    /// </summary>
+    [JsonPropertyName("authority_boundary")]
+    public required string AuthorityBoundary { get; init; }
+}
+
+internal sealed record OrchestratorProvisioningRoleInitialization
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("actas_forms")]
+    public required IReadOnlyList<OrchestratorRoleStartup> ActasForms { get; init; }
+
+    [JsonPropertyName("readiness_wait")]
+    public required string ReadinessWait { get; init; }
+
+    /// <summary>G549 repair: a delivery mode proves configuration, never live attachment.</summary>
+    [JsonPropertyName("configuration_proof")]
+    public required string ConfigurationProof { get; init; }
+
+    /// <summary>G549 repair: live attachment evidence is agent-specific — Claude Monitor markers vs the codex bridge-alive marker.</summary>
+    [JsonPropertyName("live_attachment_evidence")]
+    public required IReadOnlyList<OrchestratorProvisioningLiveEvidence> LiveAttachmentEvidence { get; init; }
+
+    /// <summary>G549 repair: ping/ack remains the only end-to-end proof.</summary>
+    [JsonPropertyName("end_to_end_proof")]
+    public required string EndToEndProof { get; init; }
+
+    [JsonPropertyName("ping_test_reference")]
+    public required string PingTestReference { get; init; }
+}
+
+internal sealed record OrchestratorProvisioningLiveEvidence
+{
+    [JsonPropertyName("agent_type")]
+    public required string AgentType { get; init; }
+
+    [JsonPropertyName("evidence")]
+    public required string Evidence { get; init; }
+}
+
+internal sealed record OrchestratorProvisioningHandover
+{
+    [JsonPropertyName("one_holder_rule")]
+    public required string OneHolderRule { get; init; }
+
+    [JsonPropertyName("graceful_drop_rule")]
+    public required string GracefulDropRule { get; init; }
+
+    [JsonPropertyName("operator_confirmation_rule")]
+    public required string OperatorConfirmationRule { get; init; }
+
+    [JsonPropertyName("successor_claim_rule")]
+    public required string SuccessorClaimRule { get; init; }
+}
+
+internal sealed record OrchestratorProvisioningReferenceManager
+{
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("surfaces")]
+    public required IReadOnlyList<OrchestratorProvisioningSurface> Surfaces { get; init; }
+
+    [JsonPropertyName("internals_link_out")]
+    public required string InternalsLinkOut { get; init; }
+
+    [JsonPropertyName("substitution_rule")]
+    public required string SubstitutionRule { get; init; }
+}
+
+internal sealed record OrchestratorProvisioningSurface
+{
+    [JsonPropertyName("surface")]
+    public required string Surface { get; init; }
+
+    [JsonPropertyName("used_for")]
+    public required string UsedFor { get; init; }
 }
 
 internal sealed record OrchestratorDesignTrafficController

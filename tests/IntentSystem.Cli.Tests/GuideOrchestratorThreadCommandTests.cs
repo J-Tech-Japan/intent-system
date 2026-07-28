@@ -1811,6 +1811,231 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.True(verification.GetProperty("dead_address_example").GetString()!.Length > 0);
     }
 
+    [Fact]
+    public void Execute_Markdown_TerminalWorkspaceProvisioning_HasAllSixElements_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        // AC: the section exists with all six elements in paste-ready form.
+        Assert.Contains("## Terminal-workspace provisioning (G549)", output, StringComparison.Ordinal);
+        Assert.Contains("### Placeholders", output, StringComparison.Ordinal);
+        Assert.Contains("### 1. Role folders (create them when absent)", output, StringComparison.Ordinal);
+        Assert.Contains("### 2. Workspace topology", output, StringComparison.Ordinal);
+        Assert.Contains("### 3. Launch rules (and why)", output, StringComparison.Ordinal);
+        Assert.Contains("### 4. Role initialization (actas and readiness)", output, StringComparison.Ordinal);
+        Assert.Contains("### 5. Role exclusivity and handover", output, StringComparison.Ordinal);
+        Assert.Contains("### 6. Reference workspace manager — herdr", output, StringComparison.Ordinal);
+        Assert.Contains("### Provisioning checklist (paste-ready)", output, StringComparison.Ordinal);
+        // Placeholders the design thread fills in from its own context.
+        Assert.Contains("`<Project>`", output, StringComparison.Ordinal);
+        Assert.Contains("`<owner/host-repo>`", output, StringComparison.Ordinal);
+        Assert.Contains("`<workspace-root>`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Provisioning_FolderCommands_SplitHostSideFromImplementation_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        // AC: host-side roles clone the HOST metadata repo; the implementation
+        // role clones the TARGET repo — with runnable commands for each.
+        Assert.Contains("git clone https://github.com/<owner/host-repo>.git <workspace-root>/<Project>Orchestrator", output, StringComparison.Ordinal);
+        Assert.Contains("git clone https://github.com/<owner/host-repo>.git <workspace-root>/<Project>Review", output, StringComparison.Ordinal);
+        Assert.Contains("git clone https://github.com/J-Tech-Japan/intent-system.git <workspace-root>/<Project>Implementation", output, StringComparison.Ordinal);
+        // AC: the never-share rule appears WITH its (project, type)-scoping reason.
+        Assert.Contains("NEVER share a folder between two roles", output, StringComparison.Ordinal);
+        Assert.Contains("(project, type)-scoped", output, StringComparison.Ordinal);
+        Assert.Contains("G521", output, StringComparison.Ordinal);
+        // An absent folder is created, not worked around.
+        Assert.Contains("When a folder is absent, CREATE it", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Provisioning_TopologyAndLaunchRules_WarnAgainstDirectSpawn_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--team", "orch-team"]);
+
+        // AC: one workspace / one team-named tab / one pane per role, design outside.
+        Assert.Contains("One WORKSPACE per agmsg team", output, StringComparison.Ordinal);
+        Assert.Contains("One TAB named after the team (`orch-team`)", output, StringComparison.Ordinal);
+        Assert.Contains("One PANE per role", output, StringComparison.Ordinal);
+        Assert.Contains("The DESIGN thread stays OUTSIDE the workspace", output, StringComparison.Ordinal);
+        // AC: the shim-safe launch rule appears with its reason, and direct
+        // executable spawn is explicitly warned against.
+        Assert.Contains("typing into the pane's interactive shell", output, StringComparison.Ordinal);
+        Assert.Contains("`codex()` shell shim", output, StringComparison.Ordinal);
+        Assert.Contains("exec's the canonical `codex` executable directly BYPASSES the shim", output, StringComparison.Ordinal);
+        // Operator-chosen permission mode for claude; attended first-run screens.
+        Assert.Contains("permission mode the OPERATOR chose", output, StringComparison.Ordinal);
+        Assert.Contains("DURABLE allowlist/trust record", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Provisioning_ActasReadinessAndHandover_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        // AC: both actas forms, the readiness wait, and the ping-test reference.
+        Assert.Contains("`/agmsg actas <role>`", output, StringComparison.Ordinal);
+        Assert.Contains("`$agmsg actas <role>`", output, StringComparison.Ordinal);
+        Assert.Contains("**readiness wait**", output, StringComparison.Ordinal);
+        Assert.Contains("run the existing ping test before ANY delegation", output, StringComparison.Ordinal);
+        // AC: exclusivity + graceful drop with operator confirmation before the successor claims.
+        Assert.Contains("Exactly ONE live session may hold a role at a time", output, StringComparison.Ordinal);
+        Assert.Contains("GRACEFUL DROP", output, StringComparison.Ordinal);
+        Assert.Contains("OPERATOR CONFIRMATION", output, StringComparison.Ordinal);
+        Assert.Contains("only AFTER the drop is confirmed", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Provisioning_SeparatesDeliveryConfigFromLiveAttachment_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        // G549 repair: a delivery mode proves CONFIGURATION, never live
+        // attachment — the two layers must stay separate in the guidance.
+        Assert.Contains("#### Readiness layers (do not collapse them)", output, StringComparison.Ordinal);
+        Assert.Contains("**1. delivery configuration**", output, StringComparison.Ordinal);
+        Assert.Contains("It does NOT prove a watcher is alive", output, StringComparison.Ordinal);
+        Assert.Contains("Never treat a delivery mode as readiness", output, StringComparison.Ordinal);
+
+        // Live-attachment evidence is agent-specific: Claude Monitor markers…
+        Assert.Contains("**2. live attachment (claude)**", output, StringComparison.Ordinal);
+        Assert.Contains("`Monitor(agmsg inbox stream)`", output, StringComparison.Ordinal);
+        Assert.Contains("`1 monitor`", output, StringComparison.Ordinal);
+        Assert.Contains("NOT `1 shell`", output, StringComparison.Ordinal);
+        // …vs the codex bridge-alive marker.
+        Assert.Contains("**2. live attachment (codex)**", output, StringComparison.Ordinal);
+        Assert.Contains("`Codex bridge: <team>/<role> alive (pid N)`", output, StringComparison.Ordinal);
+
+        // Ping/ack stays the SOLE end-to-end proof.
+        Assert.Contains("**3. end-to-end**", output, StringComparison.Ordinal);
+        Assert.Contains("PING/ACK is the ONLY end-to-end proof", output, StringComparison.Ordinal);
+        Assert.Contains("never a substitute", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Provisioning_AuthorityBoundary_EscalatesUnauthorizedPrompts_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        // G549 repair: attending a pane is not authority to decide for the
+        // operator — read-first, explicit-authorization-only, escalate the rest.
+        Assert.Contains("> **Authority boundary:**", output, StringComparison.Ordinal);
+        Assert.Contains("ONLY on pane contents it has actually READ", output, StringComparison.Ordinal);
+        Assert.Contains("Unsticking a pane is not deciding for the operator", output, StringComparison.Ordinal);
+
+        // Round-2 repair: authorization reaches read-pane trust/allowlist cases
+        // ONLY — credential/security/permission prompts are absolutely never
+        // answerable by design, with or without prior authorization.
+        Assert.Contains("ONLY to read-pane TRUST/ALLOWLIST", output, StringComparison.Ordinal);
+        Assert.Contains("own hook-trust case, which it may accept for itself", output, StringComparison.Ordinal);
+        Assert.Contains("CREDENTIAL, SECURITY, and PERMISSION prompts are NEVER answerable", output, StringComparison.Ordinal);
+        Assert.Contains("ALWAYS remain unanswered and are ALWAYS ESCALATED to the operator", output, StringComparison.Ordinal);
+        Assert.Contains("with or without prior authorization", output, StringComparison.Ordinal);
+        Assert.Contains("no authorization makes them answerable", output, StringComparison.Ordinal);
+        // The old conditional framing ("outside that authorization") is gone.
+        Assert.DoesNotContain("outside that explicit authorization", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Provisioning_LaunchUiState_DoesNotEraseDeliveryConfiguration_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        // Round-2 repair: a trust screen means NOT live-attached / NOT
+        // session-active — it says nothing about delivery configuration, which
+        // is set before launch. The layers must stay separate in both
+        // directions.
+        Assert.Contains("NOT live-attached and NOT session-active", output, StringComparison.Ordinal);
+        Assert.Contains("Launch-UI state never erases configuration, and configuration never implies attachment", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("is not even configured yet", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Provisioning_NamesHerdrSurfaces_AndLinksOutInternals_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        // AC: herdr is named as the REFERENCE manager with its surfaces listed…
+        Assert.Contains("`workspace create`", output, StringComparison.Ordinal);
+        Assert.Contains("`pane split`", output, StringComparison.Ordinal);
+        Assert.Contains("`pane send-text` / `send-keys`", output, StringComparison.Ordinal);
+        Assert.Contains("`agent prompt`", output, StringComparison.Ordinal);
+        Assert.Contains("`agent wait`", output, StringComparison.Ordinal);
+        // …internals linked out, not restated, and any equivalent manager allowed.
+        Assert.Contains("intent-cli does not own, ship, or wrap herdr", output, StringComparison.Ordinal);
+        Assert.Contains("consult herdr's own", output, StringComparison.Ordinal);
+        Assert.Contains("ANY equivalent workspace manager may be substituted", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_TerminalWorkspaceProvisioning_HasStructuredShape_G549()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var provisioning = doc.RootElement.GetProperty("terminal_workspace_provisioning");
+
+        Assert.NotEmpty(provisioning.GetProperty("placeholders").EnumerateArray());
+        Assert.NotEmpty(provisioning.GetProperty("checklist").EnumerateArray());
+
+        var folders = provisioning.GetProperty("folder_provisioning");
+        Assert.Contains("(project, type)-scoped", folders.GetProperty("never_share_rule").GetString(), StringComparison.Ordinal);
+
+        var roles = folders.GetProperty("roles").EnumerateArray()
+            .Select(r => (Role: r.GetProperty("role").GetString()!, Command: r.GetProperty("create_command").GetString()!))
+            .ToArray();
+        Assert.Equal(3, roles.Length);
+        Assert.Contains(roles, r => r.Role == "orchestrator" && r.Command.Contains("<owner/host-repo>", StringComparison.Ordinal));
+        Assert.Contains(roles, r => r.Role == "review" && r.Command.Contains("<owner/host-repo>", StringComparison.Ordinal));
+        Assert.Contains(roles, r => r.Role == "implementation" && r.Command.Contains("owner/repo", StringComparison.Ordinal));
+
+        var launchRules = provisioning.GetProperty("launch_rules");
+        Assert.Contains("shim", launchRules.GetProperty("codex_shim_rule").GetString(), StringComparison.Ordinal);
+
+        // G549 repair: the authority boundary is a first-class field, not prose
+        // folded into the attended-first-run rule.
+        var authorityBoundary = launchRules.GetProperty("authority_boundary").GetString()!;
+        Assert.Contains("READ", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("read-pane TRUST/ALLOWLIST", authorityBoundary, StringComparison.Ordinal);
+        // Round-2 repair: the escalation rule is absolute in JSON too.
+        Assert.Contains("NEVER answerable", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("ALWAYS ESCALATED to the operator", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("no authorization makes them answerable", authorityBoundary, StringComparison.Ordinal);
+
+        var roleInitialization = provisioning.GetProperty("role_initialization");
+        Assert.NotEmpty(roleInitialization.GetProperty("actas_forms").EnumerateArray());
+
+        // G549 repair: configuration proof, agent-specific live attachment, and
+        // the end-to-end ack are three separate JSON fields.
+        Assert.Contains("does NOT prove", roleInitialization.GetProperty("configuration_proof").GetString(), StringComparison.Ordinal);
+        Assert.Contains("ONLY end-to-end proof", roleInitialization.GetProperty("end_to_end_proof").GetString(), StringComparison.Ordinal);
+
+        // Round-2 repair: a trust screen is a live-attachment/session-active
+        // fact, not a configuration fact.
+        var readinessWait = roleInitialization.GetProperty("readiness_wait").GetString()!;
+        Assert.Contains("NOT live-attached and NOT session-active", readinessWait, StringComparison.Ordinal);
+        Assert.DoesNotContain("not even configured", readinessWait, StringComparison.Ordinal);
+
+        var liveEvidence = roleInitialization.GetProperty("live_attachment_evidence").EnumerateArray()
+            .Select(e => (AgentType: e.GetProperty("agent_type").GetString()!, Evidence: e.GetProperty("evidence").GetString()!))
+            .ToArray();
+        Assert.Contains(liveEvidence, e => e.AgentType == "claude" && e.Evidence.Contains("1 monitor", StringComparison.Ordinal));
+        Assert.Contains(liveEvidence, e => e.AgentType == "codex" && e.Evidence.Contains("Codex bridge", StringComparison.Ordinal));
+        Assert.True(provisioning.GetProperty("exclusivity_handover").GetProperty("operator_confirmation_rule").GetString()!.Length > 0);
+
+        var referenceManager = provisioning.GetProperty("reference_manager");
+        Assert.Equal("herdr", referenceManager.GetProperty("name").GetString());
+        Assert.NotEmpty(referenceManager.GetProperty("surfaces").EnumerateArray());
+        Assert.True(referenceManager.GetProperty("substitution_rule").GetString()!.Length > 0);
+    }
+
     private static string RunMarkdown(string[] args)
     {
         using var writer = new StringWriter();

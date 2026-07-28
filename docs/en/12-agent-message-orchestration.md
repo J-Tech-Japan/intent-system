@@ -72,6 +72,94 @@ The full reference checklist follows the intake:
 > message, and clean up only through the agmsg scripts. Hand-editing agmsg state
 > corrupts delivery.
 
+## Terminal-workspace provisioning (building the team)
+
+The setup checklist above assumes each role **already** has its own folder and
+its own live terminal session. When it does not — a design thread asked to "set
+this team up" from nothing — `guide orchestrator-thread` renders a
+**terminal-workspace provisioning** section that creates both, executable with
+placeholders only (`<Project>`, host metadata repo `<owner/host-repo>`, target
+repo `<owner/repo>`, agmsg team `<team>`, `<workspace-root>`). Generate it with
+the same command and work down its checklist; the summary below is orientation,
+not a substitute.
+
+**1. Role folders — create them when absent.** Host-side roles (orchestrator,
+review) run from clones of the **host metadata repo**; the implementation role
+runs from a clone of the **target repo** (implementation is GitHub-contract-only
+and never reads host `.intent-cli/` state). Two roles must **never** share a
+folder: agmsg identity and the codex monitor bridge are `(project, type)`-scoped
+(G521), so two same-type roles in one folder resolve to the same identity and one
+of them silently stops receiving. A pane opened at a missing cwd falls back to
+the shell's default directory, which produces exactly that collision — so create
+the folder first, then verify each is distinct, has the expected `origin`, and is
+clean.
+
+**2. Workspace topology.** One workspace per team; one tab named after the team;
+one pane per role, each opened with that role's folder as its cwd (set at pane
+creation — do not `cd` after launching the agent). The **design thread stays
+outside** the workspace it is constructing.
+
+**3. Launch rules.** Launch every agent by **typing into the pane's interactive
+shell** (send-text + enter). For codex this is mandatory: the `codex()` shell
+shim is what arms the agmsg monitor bridge (G521), and a workspace manager that
+exec's the canonical executable directly bypasses it — the session looks healthy
+and messages are simply never delivered. claude is launched with the permission
+mode the **operator** chose. **Attend** each pane's first run: trust screens and
+permission prompts block the session until answered, and where the design thread
+is authorized to answer, the answer must produce a **durable** allowlist rather
+than a per-invocation approval that re-prompts on the next wake.
+
+> **Authority boundary — unsticking is not deciding.** Attending a pane does not
+> make the design thread the decider. It may act **only on pane contents it has
+> actually read** — never a blind keystroke into a dialog it has not rendered.
+> Operator authorization can extend **only to read-pane trust/allowlist cases**,
+> such as the design thread's own hook-trust case. Credential, security, and
+> permission prompts are **never** answerable by the design thread: they
+> **always** remain unanswered and are **always** escalated to the operator,
+> with or without prior authorization — no authorization makes them answerable.
+> If answering would grant access, widen a permission mode, or accept a security
+> warning, it is the operator's call.
+
+**4. Role initialization.** Type the actas form matching the pane's CLI —
+`/agmsg actas <role>` for claude, `$agmsg actas <role>` for codex — then confirm
+readiness in **three layers that must not be collapsed**:
+
+1. **Delivery configuration** — `delivery.sh status` reporting a mode (e.g.
+   `mode=monitor`) proves registration and configuration only. It does **not**
+   prove a watcher is alive or that any session is attached; a receiver can
+   report `mode=monitor` while nothing is streaming. The converse holds too: a
+   pane sitting on a trust screen is **not live-attached and not session-active**
+   but its delivery configuration — set with `delivery.sh` before launch — is
+   unaffected. Launch-UI state never erases configuration, and configuration
+   never implies attachment.
+2. **Live attachment — agent-specific.** For **claude**, the proof is the Claude
+   Code Monitor markers in that receiver's own session: `Monitor(agmsg inbox
+   stream)` in the transcript, footer `1 monitor` (**not** `1 shell` — a
+   background `watch.sh` is diagnostic/fallback only), and `Monitor event` lines
+   as messages arrive (see [Monitor tool vs delivery-mode](#monitor-recovery)).
+   For **codex**, it is the bridge-alive marker where the bridge applies:
+   `delivery.sh status` showing `Codex bridge: <team>/<role> alive (pid N)` —
+   noting the bridge arms on the first turn sent to the session, not at startup.
+3. **End-to-end** — the [ping test](#receiver-readiness) ack is the **only**
+   end-to-end proof. Layers 1 and 2 are preconditions, never a substitute; when
+   the live markers are unavailable, fall back explicitly (`turn` delivery or
+   manual `inbox.sh`), say so, and still require the ack.
+
+**5. Exclusivity and handover.** Exactly one live session may hold a role; a
+second actas attempt is refused, and that refusal is correct. Replacing a
+session goes through the **graceful drop** — the current holder drops the role
+(with its operator confirmation) and only then does the successor claim it,
+followed by readiness + ping test again.
+
+**6. herdr is the reference workspace manager.** The surfaces a design thread
+drives are `workspace create`, `pane split`, `pane send-text` / `send-keys`,
+`agent prompt`, and `agent wait`. intent-cli does not own, ship, or wrap herdr —
+consult herdr's own documentation for internals, exactly as this guide links out
+for agmsg internals. **Any** equivalent workspace manager may be substituted
+provided the same rules hold: one dedicated folder per role as the pane cwd,
+shim-safe typed launch, attended first-run prompts, actas + readiness before the
+ping test, and one holder per role with a graceful drop on handover.
+
 ## Role boundary — design authors, orchestrator coordinates
 
 **Design creates packets; the orchestrator moves ready packets through the

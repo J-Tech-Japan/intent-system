@@ -68,6 +68,92 @@ intake の後に、完全なリファレンスチェックリストが続きま�
 > クリーンアップはすべて agmsg スクリプト経由で行います。agmsg state の手編集は delivery を
 > 壊します。
 
+## ターミナルワークスペースの provisioning（チームを構築する）
+
+上記のセットアップチェックリストは、各ロールが **すでに** 専用フォルダーと稼働中の
+ターミナルセッションを持っていることを前提にしています。そうでない場合 — 設計スレッドが
+何もない状態から「このチームをセットアップして」と依頼された場合 —
+`guide orchestrator-thread` は両方を作る **terminal-workspace provisioning**
+セクションをレンダリングします。プレースホルダーだけで実行可能です
+（`<Project>`、host メタデータリポジトリ `<owner/host-repo>`、target repo
+`<owner/repo>`、agmsg team `<team>`、`<workspace-root>`）。同じコマンドで生成し、
+そのチェックリストを上から実行してください。以下の要約はオリエンテーションであり、
+代替ではありません。
+
+**1. ロールフォルダー — 無ければ作る。** host 側のロール（orchestrator、review）は
+**host メタデータリポジトリ** のクローンから、implementation ロールは **target repo**
+のクローンから実行します（implementation は GitHub-contract-only であり、host の
+`.intent-cli/` state を読みません）。2 つのロールが 1 つのフォルダーを共有しては
+**いけません**: agmsg identity と codex monitor bridge は `(project, type)` スコープ
+（G521）であり、同じ型の 2 ロールが 1 フォルダーにいると同一 identity に解決され、
+片方が静かに受信を停止します。存在しない cwd で開かれた pane はシェルの既定
+ディレクトリにフォールバックし、まさにこの衝突を起こします — 先にフォルダーを作成し、
+その後で各フォルダーが別パスであること、`origin` が期待どおりであること、clean である
+ことを検証してください。
+
+**2. ワークスペーストポロジー。** team ごとに 1 ワークスペース、team 名を付けた
+タブ 1 つ、ロールごとに pane 1 つ（そのロールのフォルダーを cwd として pane 作成時に
+設定する — agent 起動後に `cd` しない）。**設計スレッドは** 自分が構築している
+ワークスペースの **外に留まります**。
+
+**3. 起動ルール。** すべての agent は pane の **対話シェルにタイプして**
+（send-text + enter）起動します。codex では必須です: `codex()` シェル shim が agmsg
+monitor bridge を arm する（G521）ため、canonical な実行ファイルを直接 exec する
+ワークスペースマネージャーはこれを bypass し、セッションは健全に見えるのにメッセージが
+一切配信されません。claude は **オペレーター** が選んだ permission mode で起動します。
+各 pane の初回起動には **必ず立ち会って** ください: trust 画面と permission プロンプトは
+回答されるまでセッションをブロックします。設計スレッドが回答を認可されている場合、その回答は
+次の wake で再プロンプトされる 1 回限りの承認ではなく **durable な** allowlist を生む必要が
+あります。
+
+> **権限境界 — 詰まりを解くことは決定することではない。** pane に立ち会うことは、設計
+> スレッドが決定者になることを意味しません。設計スレッドは **実際に読んだ pane の内容に
+> 対してのみ** 行動できます（レンダリングしていないダイアログへのブラインド入力は禁止）。
+> オペレーターの認可が及ぶのは **読んだ pane の trust/allowlist ケースに限られます** —
+> たとえば設計スレッド自身の hook-trust ケースです。credential プロンプト・security
+> プロンプト・permission プロンプトを設計スレッドが回答することは **決してありません**:
+> 事前認可の有無にかかわらず **常に** 未回答のまま **常に** オペレーターへ
+> エスカレーションします — どんな認可もこれらを回答可能にはしません。回答がアクセス
+> 付与・permission mode の拡大・security 警告の受諾になるなら、それはオペレーターの
+> 判断です。
+
+**4. ロール初期化。** pane の CLI に合った actas 形式をタイプします — claude は
+`/agmsg actas <role>`、codex は `$agmsg actas <role>`。その後 readiness を
+**混同してはいけない 3 つのレイヤー** で確認します:
+
+1. **delivery 設定** — `delivery.sh status` がモード（例: `mode=monitor`）を報告することは、
+   登録と設定を証明するだけです。watcher が生きていることも、セッションが attach されている
+   ことも **証明しません**。`mode=monitor` を報告しながら何もストリームされていない receiver は
+   ありえます。逆も成り立ちます: trust 画面のままの pane は **live-attached でも
+   session-active でもありません** が、起動前に `delivery.sh` で設定した delivery 設定は
+   影響を受けません。起動 UI の状態が設定を消すことはなく、設定が attachment を意味することも
+   ありません。
+2. **live attachment — agent ごとに異なる。** **claude** では、その receiver 自身の
+   セッションに現れる Claude Code Monitor マーカーが証拠です: transcript の
+   `Monitor(agmsg inbox stream)`、フッターの `1 monitor`（`1 shell` は **不可** —
+   バックグラウンドの `watch.sh` は診断/フォールバック専用）、メッセージ到着時の
+   `Monitor event` 行（[Monitor ツールと delivery-mode](#monitor-リカバリ) を参照）。
+   **codex** では、bridge が適用される場合の bridge-alive マーカー:
+   `delivery.sh status` の `Codex bridge: <team>/<role> alive (pid N)`。bridge は codex 起動時
+   ではなくセッションへの **最初の turn** で arm される点に注意してください。
+3. **end-to-end** — [ping テスト](#receiver-の準備状態readiness) の ack が **唯一の**
+   end-to-end の証明です。レイヤー 1・2 は前提条件であって代替ではありません。live マーカーが
+   得られない場合は明示的にフォールバックし（`turn` delivery または手動 `inbox.sh`）、その旨を
+   述べたうえで、それでも ack を必須にします。
+
+**5. 排他性とハンドオーバー。** 1 つのロールを保持できる生きたセッションはちょうど 1 つで、
+2 番目の actas は拒否されます — その拒否が正しい挙動です。セッションの置き換えは
+**graceful drop** を通します: 現保持者が（オペレーター確認つきで）ロールを drop し、
+その後にはじめて後継が claim し、readiness + ping テストを再実行します。
+
+**6. 参照ワークスペースマネージャーは herdr。** 設計スレッドが駆動する surface は
+`workspace create`、`pane split`、`pane send-text` / `send-keys`、`agent prompt`、
+`agent wait` です。intent-cli は herdr を所有・同梱・ラップしません — internals は
+agmsg internals と同じくリンクアウトし、herdr 自身のドキュメントを参照します。同じルール
+（ロールごとの専用フォルダーを pane の cwd にする、shim-safe なタイプ起動、初回プロンプトに
+立ち会う、ping テスト前の actas + readiness、1 ロール 1 保持者と handover 時の graceful
+drop）が満たされるなら、**任意の** 同等なワークスペースマネージャーで置き換えられます。
+
 ## ロール境界 — design が authoring、orchestrator は coordinate
 
 **design が packet を作成し、orchestrator は ready な packet を workflow に通します。**
