@@ -1897,116 +1897,119 @@ literal:
 
 ```json
 {
-  "stableVersion": "0.4.0",
-  "nextVersion": "0.5.0"
+  "stableVersion": "0.5.0",
+  "nextVersion": "0.6.0"
 }
 ```
 
 | Stage | Version form | How it is derived |
 | --- | --- | --- |
-| Local pack / install | `0.5.0-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
-| Main CI preview | `0.5.0-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
-| Release candidate (optional) | `0.5.0-rc.N` | Publishing the GitHub Release for tag `v0.5.0-rc.N` triggers `release.yml` (`on: release: published`); the tag supplies the version |
-| Stable release | `0.5.0` | Publishing the GitHub Release for tag `v0.5.0` triggers `release.yml` (`on: release: published`); the tag supplies the version (`-p:Version=<tag>` wins) |
-| Post-release main builds | `0.5.1-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.5.1` |
+| Local pack / install | `0.6.0-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
+| Main CI preview | `0.6.0-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
+| Release candidate (optional) | `0.6.0-rc.N` | Publishing the GitHub Release for tag `v0.6.0-rc.N` triggers `release.yml` (`on: release: published`); the tag supplies the version |
+| Stable release | `0.6.0` | Publishing the GitHub Release for tag `v0.6.0` triggers `release.yml` (`on: release: published`); the tag supplies the version (`-p:Version=<tag>` wins) |
+| Post-release main builds | `0.6.1-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.6.1` |
 
-**After releasing `v0.5.0`**, bump both fields in `eng/version.json`:
+**After releasing `v0.6.0`**, bump both fields in `eng/version.json`:
 
 ```json
 {
-  "stableVersion": "0.5.0",
-  "nextVersion": "0.5.1"
+  "stableVersion": "0.6.0",
+  "nextVersion": "0.6.1"
 }
 ```
 
 This ensures the next main-branch CI build (and local pack) immediately produces
-`0.5.1-preview.<run>.<attempt>` / `0.5.1-<sha>-<G-unit>` rather than continuing to
-emit `0.5.0` (which would collide with the stable release version).
+`0.6.1-preview.<run>.<attempt>` / `0.6.1-<sha>-<G-unit>` rather than continuing to
+emit `0.6.0` (which would collide with the stable release version).
 
-### Next release readiness (v0.5.0)
+### Next release readiness (v0.6.0)
 
-**`v0.4.0` shipped** (GitHub Release + NuGet) and the version policy was bumped
-to the `0.5.0` development line — a **minor** bump, not a patch: the batch
-ships two new commands (`intent facet-check`, `queue reprioritize`), a new
-intent-tree schema surface (`facets`), new stalled-work kinds, and a new
-transition target (`retired`) — more than a patch release justifies. The
-repository is now on the in-development **`0.5.0`** `nextVersion`; G538 is
-**prepare-only** — it bumps the version metadata and docs and adds no publish
-steps. The version-bump merge does **not** create a GitHub Release or tag.
-After it merges and the
-[release-readiness gate](release-notes-v0.5.0.md#release-readiness-gate-g538)
+**`v0.5.0` shipped** (GitHub Release + NuGet) and the version policy was bumped
+to the `0.6.0` development line — a **minor** bump, not a patch: the batch ships
+three new stalled-work detection kinds (`backlog-ready-idle`,
+`blocked-label-drift`, `repair-stalled`), three new commands (`automation
+runs-audit`, `queue priority-drift`, `automation issue-block`), visible
+behavior changes to already-shipped commands, and the repositioning of
+four-thread agmsg orchestration as the PRIMARY documented model — more than a
+patch release justifies. The repository is now on the in-development **`0.6.0`**
+`nextVersion`; G551 is **prepare-only** — it bumps the version metadata and docs
+and adds no publish steps. The version-bump merge does **not** create a GitHub
+Release or tag. After it merges and the
+[release-readiness gate](release-notes-v0.6.0.md#release-readiness-gate-g551)
 holds, a **maintainer/operator (or external release automation) creates and
-publishes the GitHub Release** for `v0.5.0`; publishing that Release fires
+publishes the GitHub Release** for `v0.6.0`; publishing that Release fires
 `.github/workflows/release.yml` (`on: release: published`), which builds and
 publishes the NuGet package and the per-platform binary artifacts. Full
 changelog and operator checklist:
-[release-notes-v0.5.0.md](release-notes-v0.5.0.md).
+[release-notes-v0.6.0.md](release-notes-v0.6.0.md).
 
-**To ship in `v0.5.0` (changes since `v0.4.0`) — semantic facets, stalled-work
-correctness, queue robustness, label supersession, publish reliability, and
-priority override:**
+> **G547 is not part of this release.** The cycle's original release-prep unit
+> was canonically **retired** when the operator directed that G549/G550 join the
+> release scope; retirement is terminal for a unit id, so the continuation is
+> the new unit **G551** rather than a republish. G547 shipped no code and no
+> documentation. The range `G539–G550` spans twelve unit ids, **eleven** of
+> which are merged and shipped in `v0.6.0`.
 
-- **Semantic facets** (G529–G531) — a closed set of four `facets:` values
-  (`vocabulary`, `invariant`, `decider`, `acceptance-property`) an intent-tree
-  node may declare in its frontmatter; `intent-cli context collect` and
-  `packet draft` now supply a facet-classified `## Facet context` section as
-  the preferred, localized semantic context ahead of the unclassified
-  queue-state/clarification context; and read-only `intent facet-check`
-  points a change proposal at the facet nodes it should respect, surfacing
-  naming collisions and coverage gaps without ever gating.
-- **stalled-work correctness** (G532–G533) — leading-ID/nested-domain
-  execution-unit identification is corroborated against real packet/queue
-  linkage rather than trusted from a title alone; `--domain` is a required,
-  authoritative scoping input; and three new informational kinds
-  (`repair-pending`, `rereview-pending`, `claimed-but-silent`) stop
-  mid-repair and mid-rereview PRs from being misreported with a wrong
-  `review-start` recommendation.
-- **Queue robustness** (G534) — packet readers accept both YAML list-item
-  indentation conventions; `retired` is now a guarded, terminal `queue
-  transition` target (verified against the linked PR's real GitHub state
-  before applying); and `intent next-slice` combines queue-state and
-  packet-lifecycle retirement evidence explicitly, fail-closed on
-  contradiction.
-- **Label supersession** (G535) — `automation pr-transition --transition
-  request-update` now clears a stale `intent-pr-rereview-ready` in the same
-  write, closing a deadlock where `worker claim` refused a PR that
-  `request-update` had marked for repair.
-- **Publish reliability** (G536) — `issue publish-flow`'s idempotent rerun
-  now independently verifies and restores all three durable artifacts (the
-  GitHub issue, the queue-state entry, the `runs.jsonl` event) instead of
-  trusting one signal for all three, and fails loud rather than silently
-  leaving state inconsistent.
-- **Priority override** (G537) — the new `queue reprioritize` command sets a
-  queued, unpublished execution unit's priority under a durable, revision-
-  counted, lock-protected audit protocol; `intent next-slice` selects
-  eligible candidates priority-class-first (high > normal > low, stable
-  tiebreak by authoring order), with dependency/WIP/clarification/lifecycle
-  gates always dominating priority.
-- **Historical note (v0.5.0-era, pre-G540/G541):** at the time `v0.5.0` shipped,
-  orchestrator mode was described here as preview/experimental and opt-in.
-  **That framing is superseded.** As of G540/G541, four-thread agmsg
-  orchestration (design/orchestrator/implementation/review) is the **PRIMARY**
-  documented collaboration model — the practiced, maintained workflow — with
-  timer-loop mode retained as the fully supported, simpler alternative. See
-  the current guidance in
-  [Agent-message orchestration](12-agent-message-orchestration.md) and
-  [ADR 0001](../adr/0001-four-thread-orchestration-primary-model.md).
+**To ship in `v0.6.0` (changes since `v0.5.0`) — primary-model repositioning
+and provisioning, stall-detection completion, durable-state integrity, and
+operational guidance:**
 
-**Release-readiness verification (run before merging the `v0.5.0` version
+- **Primary-model repositioning and provisioning** (G540/G541, G549, G550) —
+  four-thread agmsg orchestration is the PRIMARY documented model across every
+  guide surface, the README, the NuGet description, and the docs indexes, with
+  the design↔orchestrator double-check rule and
+  [ADR 0001](../adr/0001-four-thread-orchestration-primary-model.md); timer-loop
+  mode is retained as the fully supported, simpler alternative. `guide
+  orchestrator-thread` gains a **terminal-workspace provisioning** section (role
+  folders created when absent, workspace topology, shim-safe launch, actas, and
+  three-layer readiness) and a **design-thread workspace supervision** section
+  (operator-granted session-layer authority with workflow ownership unchanged,
+  three supervision layers with cadences, the restart re-arm rule, and the
+  verified-read dialog boundary).
+- **Stall-detection completion** (G543, G544, G545, G546) — `backlog-ready-idle`
+  fires when an empty WIP coexists with a publishable candidate and an idle
+  `runs.jsonl`; a queue-`blocked` unit is exempt from `claimed-but-silent` and
+  surfaces as `blocked-label-drift` instead, with canonical `automation
+  issue-block` applying the new `intent-issue-blocked` label; `repair-stalled`
+  promotes a silent repair/rereview claim to actionable with a status-check
+  recommendation (never a transition or reassignment); and priority ranking for
+  the documented enum plus legacy out-of-enum values is unified in one shared
+  classification, with read-only `queue priority-drift` reporting the
+  distribution.
+- **Durable-state integrity** (G542, G548) — `automation runs-audit` reports and
+  repairs malformed `runs.jsonl` rows, separating within-record derivation from
+  explicitly-flagged peer-convention inference, while publish validation becomes
+  domain-scoped (another domain's malformed row warns instead of hard-blocking);
+  and every canonical queue-state mutation now writes through one layer
+  providing stale-base detection with item-scoped re-application and a
+  no-item-loss invariant that aborts rather than silently dropping units.
+- **Operational guidance** (G539) — the design-thread watchdog loop is the
+  RECOMMENDED default safety net, with an orchestrator-side long-interval
+  automation as the selectable alternative. **This supersedes the v0.5.0-era
+  external cron/launchd scheduler recommendation**, retired with field evidence
+  (silent failure on every run for five continuous days; a 105-minute stall
+  detected but unrecovered). See
+  [Agent-message orchestration](12-agent-message-orchestration.md#design-thread-watchdog-recommended-safety-net).
+- **Note on orchestration-mode framing:** the "preview/experimental" description
+  that applied through the `v0.5.0` line is fully superseded as of G540/G541 and
+  no longer appears anywhere in the shipped documentation.
+
+**Release-readiness verification (run before merging the `v0.6.0` version
 bump):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.4.0 (published), nextVersion 0.5.0 (to release)
+cat eng/version.json   # stableVersion 0.5.0 (published), nextVersion 0.6.0 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.5.0-<sha>-G53x   (NOT a stale literal)
+#   expected shape: intent-cli 0.6.0-<sha>-G55x   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.5.0.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.6.0.nupkg
 
 # 4. Confirm package metadata (id / command / license / project URL).
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
@@ -2014,12 +2017,13 @@ dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
 ```
 
 After the version-bump merge lands on `main`, a maintainer/operator (or external
-release automation) creates and publishes the GitHub Release for `v0.5.0`;
+release automation) creates and publishes the GitHub Release for `v0.6.0`;
 publishing it triggers `release.yml` (`on: release: published`) to build and
 publish the NuGet package and the per-platform binary artifacts. Once it has
 published, apply the post-release `eng/version.json` bump above
-(`stableVersion → 0.5.0`, `nextVersion → 0.5.1`) — deferred to the NEXT
+(`stableVersion → 0.6.0`, `nextVersion → 0.6.1`) — deferred to the NEXT
 release-prep packet, not this one.
+
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 

@@ -124,14 +124,16 @@ public sealed class VersionPolicyTests : IDisposable
     public void EngVersionJson_InThisRepo_IsReadableAndHasExpectedNextVersion()
     {
         // Smoke-test: the actual eng/version.json in the repository must
-        // be parseable and must point to 0.5.0 as the next development line
-        // (post-v0.4.0 release bump, see G538 — v0.4.0 was published to
+        // be parseable and must point to 0.6.0 as the next development line
+        // (post-v0.5.0 release bump, see G551 — v0.5.0 was published to
         // GitHub Releases + NuGet, so the policy moves the development line
-        // forward to 0.5.0 — a minor bump, since the batch ships two new
-        // commands (`intent facet-check`, `queue reprioritize`), a new
-        // intent-tree schema surface (`facets`), new stalled-work kinds, and
-        // a new transition target (`retired`) — while recording 0.4.0 as
-        // the published stable).
+        // forward to 0.6.0 — a minor bump, since the batch ships three new
+        // stalled-work kinds (`backlog-ready-idle`, `blocked-label-drift`,
+        // `repair-stalled`), three new commands (`automation runs-audit`,
+        // `queue priority-drift`, `automation issue-block`), visible behavior
+        // changes to already-shipped commands, and the repositioning of
+        // four-thread agmsg orchestration as the primary documented model —
+        // while recording 0.5.0 as the published stable).
         var repoRoot = FindRepoRoot();
         if (repoRoot is null)
         {
@@ -141,8 +143,8 @@ public sealed class VersionPolicyTests : IDisposable
         var policy = VersionPolicy.TryReadFromRepo(repoRoot);
 
         Assert.NotNull(policy);
-        Assert.Equal("0.5.0", policy.NextVersion);
-        Assert.Equal("0.4.0", policy.StableVersion);
+        Assert.Equal("0.6.0", policy.NextVersion);
+        Assert.Equal("0.5.0", policy.StableVersion);
     }
 
     private static string? FindRepoRoot()
