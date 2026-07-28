@@ -25,7 +25,6 @@ public sealed class MetadataUpdateCommandTests : IDisposable
 
     public void Dispose()
     {
-        QueueStatePersistence.BeforePersistHook = null;
         MetadataUpdateCommand.NestedProviderLauncher = null;
         MetadataUpdateCommand.UtcNowProvider = null;
     }
@@ -48,7 +47,9 @@ public sealed class MetadataUpdateCommandTests : IDisposable
 
         var queueStatePath = Path.Combine(ws.RootPath, ".intent-cli", "queue-state.json");
         var seeded = false;
-        QueueStatePersistence.BeforePersistHook = _ =>
+        // Scoped to THIS workspace's queue-state path, so fixtures in other
+        // classes running in parallel cannot contend for the seam.
+        using var hook = QueueStatePersistence.RegisterBeforePersistHook(queueStatePath, _ =>
         {
             if (seeded)
             {
@@ -63,9 +64,8 @@ public sealed class MetadataUpdateCommandTests : IDisposable
                 "\"items\": [\n    {\"execution_unit\": \"G545\", \"title\": \"intent-cli item\", \"state\": \"queued\"},",
                 StringComparison.Ordinal);
             File.WriteAllText(queueStatePath, withSeed);
-        };
+        });
 
-        try
         {
             using var writer = new StringWriter();
             var exitCode = MetadataUpdateCommand.Execute(
@@ -106,10 +106,6 @@ public sealed class MetadataUpdateCommandTests : IDisposable
             var seededItem = items.Single(item => item.GetProperty("execution_unit").GetString() == "G545");
             Assert.Equal("queued", seededItem.GetProperty("state").GetString());
             Assert.False(seededItem.TryGetProperty("linked_pr", out _));
-        }
-        finally
-        {
-            QueueStatePersistence.BeforePersistHook = null;
         }
     }
 

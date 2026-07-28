@@ -28,7 +28,6 @@ public sealed class QueueStatePersistenceTests : IDisposable
 
     public void Dispose()
     {
-        QueueStatePersistence.BeforePersistHook = null;
         if (Directory.Exists(root))
         {
             Directory.Delete(root, recursive: true);
@@ -342,7 +341,9 @@ public sealed class QueueStatePersistenceTests : IDisposable
         WriteRaw(State(BaseTime, Item("SKS-G841", QueueItemState.Active)));
 
         var concurrentWriteDone = false;
-        QueueStatePersistence.BeforePersistHook = _ =>
+        // Scoped to THIS fixture's own queue-state path, so a fixture in
+        // another class running in parallel can never clear or replace it.
+        using var hook = QueueStatePersistence.RegisterBeforePersistHook(QueueStatePath, _ =>
         {
             if (concurrentWriteDone)
             {
@@ -352,9 +353,8 @@ public sealed class QueueStatePersistenceTests : IDisposable
             concurrentWriteDone = true;
             // Another domain's loop seeds G545 in the window.
             WriteRaw(State(BaseTime.AddMinutes(10), Item("SKS-G841", QueueItemState.Active), Item("G545", QueueItemState.Queued)));
-        };
+        });
 
-        try
         {
             using var writer = new StringWriter();
             var exitCode = QueueTransitionCommand.Execute(context, ["SKS-G841", "completed"], writer);
@@ -371,10 +371,6 @@ public sealed class QueueStatePersistenceTests : IDisposable
             Assert.Equal(["SKS-G841", "G545"], persisted.Items.Select(item => item.ExecutionUnit).ToArray());
             Assert.Equal(QueueItemState.Completed, persisted.Items.Single(item => item.ExecutionUnit == "SKS-G841").State);
             Assert.Equal(QueueItemState.Queued, persisted.Items.Single(item => item.ExecutionUnit == "G545").State);
-        }
-        finally
-        {
-            QueueStatePersistence.BeforePersistHook = null;
         }
     }
 
@@ -530,6 +526,59 @@ public sealed class QueueStatePersistenceTests : IDisposable
         Assert.Equal("preserved", items[0].GetProperty("custom_host_field").GetString());
         Assert.Equal("another-domain", items[1].GetProperty("seeded_by").GetString());
         Assert.Equal("2026-07-23T09:20:00+00:00", document.RootElement.GetProperty("updated_at").GetString());
+    }
+
+    // ── The test seam itself is isolation-safe ──────────────────────────
+
+    [Fact]
+    public void BeforePersistHook_IsScopedByPath_SoParallelFixturesCannotContend_G548()
+    {
+        // Round 4 regression: the seam used to be a single mutable static, so
+        // fixtures in different xUnit classes — which run in parallel — cleared
+        // and overwrote each other's hook. The focused suites passed alone and
+        // failed together. Path scoping removes the contention structurally.
+        var otherPath = Path.Combine(root, ".intent-cli", "other-queue-state.json");
+        var mineFired = 0;
+        var theirsFired = 0;
+
+        using var mine = QueueStatePersistence.RegisterBeforePersistHook(QueueStatePath, _ => mineFired++);
+        using var theirs = QueueStatePersistence.RegisterBeforePersistHook(otherPath, _ => theirsFired++);
+
+        var onDisk = State(BaseTime, Item("G545", QueueItemState.Queued));
+        WriteRaw(onDisk);
+        QueueStatePersistence.Persist(QueueStatePath, onDisk, State(BaseTime.AddMinutes(1), onDisk.Items[0] with { State = QueueItemState.Active }));
+
+        // Only the hook registered for THIS path fired.
+        Assert.Equal(1, mineFired);
+        Assert.Equal(0, theirsFired);
+    }
+
+    [Fact]
+    public void BeforePersistHook_RefusesASecondRegistrationForTheSamePath_G548()
+    {
+        // Silently replacing a registration is precisely how the round-3
+        // fixtures broke each other, so it is an error rather than a no-op.
+        using var first = QueueStatePersistence.RegisterBeforePersistHook(QueueStatePath, _ => { });
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => QueueStatePersistence.RegisterBeforePersistHook(QueueStatePath, _ => { }));
+
+        Assert.Contains("already registered", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BeforePersistHook_IsRemovedOnDispose_G548()
+    {
+        var fired = 0;
+        using (QueueStatePersistence.RegisterBeforePersistHook(QueueStatePath, _ => fired++))
+        {
+        }
+
+        var onDisk = State(BaseTime, Item("G545", QueueItemState.Queued));
+        WriteRaw(onDisk);
+        QueueStatePersistence.Persist(QueueStatePath, onDisk, State(BaseTime.AddMinutes(1), onDisk.Items[0] with { State = QueueItemState.Active }));
+
+        Assert.Equal(0, fired);
     }
 
     // ── Delta derivation ────────────────────────────────────────────────

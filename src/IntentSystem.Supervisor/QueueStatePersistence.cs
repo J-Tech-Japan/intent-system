@@ -76,13 +76,63 @@ public static class QueueStatePersistence
 
     /// <summary>
     /// G548 round 2: test seam invoked immediately before the guard reads the
-    /// current on-disk state, with the target path. It exists so a
-    /// COMMAND-level fixture can make the file move between a command's own
-    /// read and its persist — the one interleaving a single-process test
-    /// cannot otherwise produce, and the exact interleaving this guard is
-    /// built for. Never set in production.
+    /// current on-disk state. It exists so a COMMAND-level fixture can make
+    /// the file move between a command's own read and its persist — the one
+    /// interleaving a single-process test cannot otherwise produce, and the
+    /// exact interleaving this guard is built for.
+    ///
+    /// Round 4: the seam is keyed BY QUEUE-STATE PATH, not process-global. A
+    /// single mutable static was contended between fixtures in different
+    /// xUnit classes, which run in parallel — each cleared or overwrote the
+    /// other's hook, so the focused suites passed alone and failed together.
+    /// Keying by path removes the contention structurally rather than
+    /// serializing the suites: each fixture owns its own temp workspace, so
+    /// two fixtures can never address the same key.
     /// </summary>
-    public static Action<string>? BeforePersistHook { get; set; }
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Action<string>> BeforePersistHooks =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Registers a before-persist hook for ONE queue-state path. Dispose the
+    /// returned registration to remove it. Registering a second hook for the
+    /// same path throws rather than silently replacing the first — that
+    /// silent replacement is exactly the failure this replaced.
+    /// </summary>
+    public static IDisposable RegisterBeforePersistHook(string queueStatePath, Action<string> hook)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(queueStatePath);
+        ArgumentNullException.ThrowIfNull(hook);
+
+        var key = Path.GetFullPath(queueStatePath);
+        if (!BeforePersistHooks.TryAdd(key, hook))
+        {
+            throw new InvalidOperationException($"a before-persist hook is already registered for '{key}'.");
+        }
+
+        return new BeforePersistHookRegistration(key);
+    }
+
+    private static void InvokeBeforePersistHook(string queueStatePath)
+    {
+        if (BeforePersistHooks.IsEmpty)
+        {
+            return;
+        }
+
+        if (BeforePersistHooks.TryGetValue(Path.GetFullPath(queueStatePath), out var hook))
+        {
+            hook(queueStatePath);
+        }
+    }
+
+    private sealed class BeforePersistHookRegistration : IDisposable
+    {
+        private readonly string key;
+
+        public BeforePersistHookRegistration(string key) => this.key = key;
+
+        public void Dispose() => BeforePersistHooks.TryRemove(key, out _);
+    }
 
     /// <summary>
     /// G548 round 2: guarded write for the ONE canonical writer that mutates
@@ -109,7 +159,7 @@ public static class QueueStatePersistence
         ArgumentNullException.ThrowIfNull(baseRawText);
         ArgumentNullException.ThrowIfNull(outgoingRawText);
 
-        BeforePersistHook?.Invoke(queueStatePath);
+        InvokeBeforePersistHook(queueStatePath);
 
         if (!File.Exists(queueStatePath))
         {
@@ -374,7 +424,7 @@ public static class QueueStatePersistence
 
         if (!skipHook)
         {
-            BeforePersistHook?.Invoke(queueStatePath);
+            InvokeBeforePersistHook(queueStatePath);
         }
 
         var removalAllowList = new HashSet<string>(expectedRemovals ?? Array.Empty<string>(), StringComparer.Ordinal);
