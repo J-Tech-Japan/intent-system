@@ -160,6 +160,89 @@ provided the same rules hold: one dedicated folder per role as the pane cwd,
 shim-safe typed launch, attended first-run prompts, actas + readiness before the
 ping test, and one holder per role with a graceful drop on handover.
 
+## Design-thread workspace supervision (keeping the team moving)
+
+Provisioning builds the team; **supervision keeps it moving** — and that half is
+what the operator relies on daily. Under authority the operator **grants** it,
+the design thread drives the team's **session layer** through the workspace
+manager: provisioning (above), session lifecycle, and stall supervision. It
+answers a blocking dialog only inside an explicit boundary and only after
+**reading that dialog from the pane**. This adds a session-layer role; it moves
+**no** workflow authority.
+
+**Granted authority — session layer only.** Two layers, two owners. The
+**session** layer (panes, processes, holds, blocking dialogs) is what the
+operator grants. The **workflow** layer — labels, queue-state, publication,
+delegation, CI/review gating, closeout — is not granted and never moves: it
+stays with intent-cli, GitHub, and the orchestrator, and the
+[design↔orchestrator double-check rule](#role-boundary--design-authors-orchestrator-coordinates)
+applies exactly as before. Supervising a session never authorizes a workflow
+transition, and a stuck pane is never a reason to move a label by hand. The
+authority is **granted, not assumed**: outside a grant the design thread
+observes and reports rather than acts.
+
+**Session lifecycle.** An unresponsive session is a session-layer fault the
+design thread may repair — repair meaning a correctly held, live session again,
+not taking over the role's work. Read the pane first (an "unresponsive" session
+is usually blocked on a dialog, not dead), distinguish a delivery problem from a
+dead session, confirm the role is still held, and prefer the least invasive fix;
+replacement is the last step. Replace through the **graceful drop** — the
+incumbent releases the role, then the successor claims it and re-runs readiness
+plus the ping test — honoring **one holder per role** throughout. The drop's
+confirmation is **operator-visible**: retiring a live session is the operator's
+decision, and the confirmation records it.
+
+**Three supervision layers.** Each catches what the others structurally cannot:
+
+| layer | purpose | cadence |
+| --- | --- | --- |
+| real-time message monitor | inbound agmsg replies, blockers, escalations | continuous (a live attached stream) |
+| blocking-UI pane scan | panes stuck on approval / selection / trust prompts — the failure mode that emits no message at all | sub-minute class |
+| periodic state watchdog | canonical intent-cli/GitHub state vs expected progress; the existing [design-thread watchdog](#design-thread-watchdog-recommended-safety-net) | tens-of-minutes class |
+
+> **Re-arm across restarts.** Supervision schedulers are session-scoped: a
+> `/loop`, an automation, or an attached monitor dies with the design session
+> hosting it, and nothing announces that it stopped. Every layer must survive a
+> design-session restart or be **re-armed as the first act of the new session**.
+> Field cost of forgetting: a claim lost inside a session-restart window left a
+> published issue stalled for **5.5 hours** because no layer happened to be
+> running.
+
+**Blocking dialogs — the boundary.** The **verified-read rule** governs
+everything here: the design thread may answer a dialog **only after reading its
+content from the pane** and being able to state what it is approving. A blind
+keystroke into an unrendered dialog is prohibited however routine it looks; if
+the content cannot be read or verified, the dialog is an escalation.
+
+It **may answer** exactly four kinds, each only after that read:
+
+1. **Confirmations of work it itself requested** — the prompt must match an
+   action this design thread just initiated (same target, same operation).
+2. **Command approvals verified read-only** — the exact command shown must be
+   read and verified read-only; anything that writes, deletes, installs,
+   publishes, or mutates escalates ("probably read-only" is not verified).
+3. **Trust screens for hooks it itself installed** — its own hook-trust case;
+   a trust screen for anything it did not install is not its to accept.
+4. **Operator-preauthorized mode changes** — preauthorization must be specific
+   and prior, and the read pane must show that same change; it is never inferred
+   from a general grant to supervise sessions.
+
+It **must escalate** four categories: **unreadable or unverifiable** dialogs
+(nothing to base an answer on); **destructive or irreversible** approvals (the
+cost of a wrong answer is unrecoverable); choices that **embed a product or
+design decision** (design content goes through the operator and the
+double-check); and **credential, security, and permission waits** — never
+answerable, with or without prior authorization.
+
+> **Unsticking a session is not deciding for it.** The design thread's job is to
+> keep the session layer alive so the role can do its own work — not to make the
+> role's choices, and not to make the operator's.
+
+The [watchdog safety rules](#design-thread-watchdog-recommended-safety-net)
+apply to all supervision verbatim: no duplicate delegation, no clearing a
+permission prompt, no cancelling or resetting in-flight work, no force-closing an
+issue/PR, and no speculative durable-state surgery.
+
 ## Role boundary — design authors, orchestrator coordinates
 
 **Design creates packets; the orchestrator moves ready packets through the

@@ -942,6 +942,7 @@ internal static class GuideOrchestratorThreadCommand
                 },
             },
             TerminalWorkspaceProvisioning = BuildTerminalWorkspaceProvisioning(repo, values["<team>"]),
+            DesignWorkspaceSupervision = BuildDesignWorkspaceSupervision(domain, repo),
             DesignTrafficController = new OrchestratorDesignTrafficController
             {
                 Summary =
@@ -1641,6 +1642,213 @@ internal static class GuideOrchestratorThreadCommand
         };
     }
 
+    // G550: the design thread's supervision half. G549 builds the team; this
+    // keeps it moving. Every rule here is session-layer only — the workflow
+    // transitions stay with the orchestrator and the canonical commands, and
+    // the dialog lists are deliberately closed sets rather than judgment calls.
+    private static OrchestratorDesignWorkspaceSupervision BuildDesignWorkspaceSupervision(string domain, string targetRepo)
+    {
+        string Fill(string template) => template
+            .Replace("<domain>", domain, StringComparison.Ordinal)
+            .Replace("<owner/repo>", targetRepo, StringComparison.Ordinal);
+
+        return new OrchestratorDesignWorkspaceSupervision
+        {
+            Summary = Fill(
+                "Under authority the OPERATOR granted it, the design thread drives the team's SESSION LAYER through "
+                + "the workspace manager: it provisions the team (see `Terminal-workspace provisioning`), keeps the "
+                + "sessions alive and correctly held, and supervises for stalls. It answers a blocking dialog only "
+                + "inside an explicit boundary and only after READING that dialog from the pane; everything outside "
+                + "the boundary escalates to the operator. This adds a session-layer role — it moves NO workflow "
+                + "authority."),
+            GrantedAuthority = new OrchestratorSupervisionAuthority
+            {
+                Summary =
+                    "Two layers, two owners. The SESSION layer (panes, processes, holds, blocking dialogs) is what "
+                    + "the operator grants the design thread. The WORKFLOW layer (labels, queue-state, publication, "
+                    + "delegation, closeout) is not granted and never moves — it stays with intent-cli, GitHub, and "
+                    + "the orchestrator exactly as before.",
+                OperatorGrantRule =
+                    "the design thread supervises the session layer because the operator asked it to, and the grant's scope is what the operator stated. Outside a grant "
+                    + "the design thread observes and reports rather than acts. A grant to supervise sessions is "
+                    + "never read as a grant to decide workflow, product, or security questions.",
+                DesignOperatesSessionLayer = new[]
+                {
+                    "PROVISIONING — build the team's workspace, folders, panes, launches, and role initialization per `Terminal-workspace provisioning` (G549); supervision references that section rather than repeating it.",
+                    "SESSION LIFECYCLE — investigate an unresponsive session and, when it must be replaced, do so through the graceful drop that honors one-holder exclusivity.",
+                    "STALL SUPERVISION — run the three supervision layers below so a stall is noticed by a layer that is actually running, not by luck.",
+                    "BLOCKING DIALOGS — answer only what the MAY list allows, only after the verified read; escalate everything else.",
+                },
+                WorkflowStateOwnershipUnchanged =
+                    "workflow state ownership does not move. Labels, queue-state, publication, delegation, CI/review gating, and closeout remain with intent-cli, GitHub, and the "
+                    + "orchestrator; the design↔orchestrator double-check rule and the orchestrator's ownership of "
+                    + "workflow transitions apply exactly as before. Supervising a session never authorizes a "
+                    + "workflow transition, and a stuck pane is never a reason to move a label by hand.",
+            },
+            SessionLifecycle = new OrchestratorSupervisionSessionLifecycle
+            {
+                Summary =
+                    "A session that stops responding is a session-layer fault, and the design thread may repair it — "
+                    + "but repair means restoring a correctly held, live session, not taking over the role's work or "
+                    + "its decisions.",
+                UnresponsiveSessionInvestigation = new[]
+                {
+                    "READ the pane first — an \"unresponsive\" session is most often blocked on a dialog, a trust screen, or a prompt waiting for input, not dead. Diagnose from what the pane actually shows.",
+                    "Distinguish the layers: a live session that is merely not attached to delivery is a delivery problem (re-check the readiness layers), not a reason to replace the session.",
+                    "Confirm the role is still held by that session before concluding anything — a role silently dropped elsewhere looks identical to a dead session from the outside.",
+                    "Prefer the least invasive repair that restores liveness: answer an in-boundary dialog, re-arm delivery, or restart the session — replacement is the last step, not the first.",
+                },
+                ExclusivityRule =
+                    "replacing a session never means two sessions holding the same role for even a moment. The successor claims only after the incumbent's hold is released; a refused "
+                    + "actas is the exclusivity rule working, not an obstacle to route around.",
+                GracefulDropRule =
+                    "Replace through the GRACEFUL DROP: the incumbent drops the role (releasing its exclusivity lock "
+                    + "and registration), then the successor claims it and re-runs readiness plus the ping test. "
+                    + "Never kill a pane and assume the hold cleared, and never force a role away from a live session.",
+                OperatorVisibleConfirmation =
+                    "The drop's confirmation is OPERATOR-VISIBLE: the handover surfaces to the operator rather than "
+                    + "happening silently inside the design thread. The design thread may request and sequence the "
+                    + "handover; the decision to retire a live session remains the operator's, and the confirmation "
+                    + "is what records it.",
+            },
+            SupervisionLayers = new[]
+            {
+                new OrchestratorSupervisionLayer
+                {
+                    Layer = "real-time message monitor",
+                    Purpose =
+                        "Catch inbound agmsg traffic as it arrives — replies, blockers, and escalations that should "
+                        + "wake the design thread immediately.",
+                    Cadence = "continuous / real-time (a live attached inbox stream, not a poll).",
+                    Note =
+                        "This layer is what the message-driven steady state assumes. It sees only what is SENT — it "
+                        + "cannot notice a session that went quiet or a pane blocked on a dialog, which is why the "
+                        + "other two layers exist.",
+                },
+                new OrchestratorSupervisionLayer
+                {
+                    Layer = "blocking-UI pane scan",
+                    Purpose =
+                        "Notice panes blocked on approval, selection, or trust prompts — the failure mode that "
+                        + "produces no message at all, so no message-driven layer can ever detect it.",
+                    Cadence =
+                        "sub-minute class (e.g. every few tens of seconds) — blocking dialogs stall a role for their "
+                        + "entire lifetime, so this layer is the fast one.",
+                    Note =
+                        "Scanning is READING. What the scan finds is then handled by the dialog rules below: answer "
+                        + "only what the MAY list covers after the verified read, and escalate the rest.",
+                },
+                new OrchestratorSupervisionLayer
+                {
+                    Layer = "periodic state watchdog",
+                    Purpose = Fill(
+                        "Compare canonical intent-cli/GitHub state against expected progress and nudge the "
+                        + "orchestrator when work has gone stale — the existing design-thread watchdog "
+                        + "(`intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`)."),
+                    Cadence =
+                        "tens-of-minutes class (e.g. every 30 minutes) — quiet enough to stay out of the way, "
+                        + "frequent enough to bound a stall.",
+                    Note =
+                        "This is the existing watchdog, not a second one: its safety rules apply verbatim (see the "
+                        + "watchdog safety-rules reference below). One canonical nudge per wake, never a batch.",
+                },
+            },
+            RearmRule =
+                "supervision schedulers are session-scoped: a `/loop`, an automation, or an "
+                + "attached monitor dies with the design session that hosts it, and nothing announces that it stopped. "
+                + "Every supervision layer must either survive a design-session restart or be RE-ARMED as the first "
+                + "act of the new session — treat re-arming as part of starting the session, not as an optional "
+                + "follow-up. Field cost of forgetting: a claim-now lost inside a session-restart window left a "
+                + "published issue stalled for 5.5 HOURS because no supervision layer happened to be running.",
+            VerifiedReadRule =
+                "the design thread may answer a dialog ONLY after it has actually read "
+                + "that dialog's content from the pane and can state what it is approving. A blind keystroke into a "
+                + "dialog it has not rendered is prohibited, no matter how routine the prompt looks or how confident "
+                + "it is about which key clears it. If the content cannot be read or cannot be verified, the dialog "
+                + "is an escalation, not an answer.",
+            MayAnswer = new[]
+            {
+                new OrchestratorSupervisionMayAnswer
+                {
+                    Dialog = "confirmations of work the design thread itself requested",
+                    Verification =
+                        "the read pane's prompt must match an action THIS design thread just initiated — same target, "
+                        + "same operation. A confirmation it cannot trace to its own request is not its to answer.",
+                },
+                new OrchestratorSupervisionMayAnswer
+                {
+                    Dialog = "command approvals verified read-only",
+                    Verification =
+                        "the exact command shown in the pane must be read and verified to be READ-ONLY. Anything that "
+                        + "writes, deletes, installs, publishes, or mutates state fails this check and escalates — "
+                        + "\"probably read-only\" is not verified.",
+                },
+                new OrchestratorSupervisionMayAnswer
+                {
+                    Dialog = "trust screens for hooks the design thread itself installed",
+                    Verification =
+                        "the trust screen must name a hook THIS design thread installed as part of this provisioning "
+                        + "(its own hook-trust case). A trust screen for anything it did not install is not its to "
+                        + "accept.",
+                },
+                new OrchestratorSupervisionMayAnswer
+                {
+                    Dialog = "operator-preauthorized mode changes",
+                    Verification =
+                        "the operator must have PREAUTHORIZED this specific mode change, and the read pane must show "
+                        + "that same change. Preauthorization is specific and prior — it is never inferred from a "
+                        + "general grant to supervise sessions.",
+                },
+            },
+            MustEscalate = new[]
+            {
+                new OrchestratorSupervisionMustEscalate
+                {
+                    Category = "unreadable or unverifiable dialogs",
+                    Reason =
+                        "if the pane content cannot be read, or the claim it makes cannot be verified, there is "
+                        + "nothing to base an answer on — answering would be guessing on the operator's behalf.",
+                },
+                new OrchestratorSupervisionMustEscalate
+                {
+                    Category = "destructive or irreversible approvals",
+                    Reason =
+                        "deletions, force operations, overwrites, and anything else that cannot be undone are the "
+                        + "operator's call — the cost of a wrong answer is unbounded and unrecoverable.",
+                },
+                new OrchestratorSupervisionMustEscalate
+                {
+                    Category = "choices that embed a product or design decision",
+                    Reason =
+                        "a dialog that picks behavior, scope, or defaults is design content, and design content goes "
+                        + "through the operator and the design↔orchestrator double-check — not through whoever "
+                        + "happens to be unblocking a pane.",
+                },
+                new OrchestratorSupervisionMustEscalate
+                {
+                    Category = "credential, security, and permission waits",
+                    Reason =
+                        "these are NEVER answerable by the design thread, with or without prior authorization: they "
+                        + "always remain unanswered and always escalate to the operator. No grant makes them "
+                        + "answerable.",
+                },
+            },
+            BoundarySentence =
+                "UNSTICKING A SESSION IS NOT DECIDING FOR IT. The design thread's job is to keep the session layer "
+                + "alive so the role can do its own work — not to make the role's choices, and not to make the "
+                + "operator's.",
+            ProvisioningReference =
+                "Provisioning is NOT repeated here — see `Terminal-workspace provisioning` for role folders, "
+                + "workspace topology, shim-safe launch, actas/readiness, and the exclusivity/handover rules this "
+                + "section supervises.",
+            WatchdogSafetyRulesReference =
+                "The watchdog safety rules apply to ALL supervision verbatim: no duplicate delegation, no clearing a "
+                + "permission prompt, no cancelling or resetting in-flight work, no force-closing an issue/PR, and no "
+                + "speculative durable-state surgery (no hand-edited labels, queue-state, or host metadata). See "
+                + "`Design-thread watchdog (recommended safety net)`.",
+        };
+    }
+
     // G500: turn an orchestrator setup request into a concrete, operational
     // intake. The visible outcome is one of missing-inputs / setup-ready /
     // blocked. When inputs are complete the intake emits copy-paste agmsg
@@ -2113,6 +2321,84 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
     }
 
+    // G550: render the supervision section — granted authority first (so the
+    // boundary frames everything that follows), then session lifecycle, the
+    // three layers with their cadences, and the two closed dialog lists.
+    private static void WriteDesignWorkspaceSupervision(TextWriter writer, OrchestratorDesignWorkspaceSupervision supervision)
+    {
+        writer.WriteLine("## Design-thread workspace supervision (G550)");
+        writer.WriteLine();
+        writer.WriteLine(supervision.Summary);
+        writer.WriteLine();
+
+        writer.WriteLine("### Granted authority — session layer only");
+        writer.WriteLine();
+        writer.WriteLine(supervision.GrantedAuthority.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- **authority is granted, not assumed** — {supervision.GrantedAuthority.OperatorGrantRule}");
+        writer.WriteLine();
+        writer.WriteLine("The design thread operates the session layer:");
+        writer.WriteLine();
+        foreach (var item in supervision.GrantedAuthority.DesignOperatesSessionLayer)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"> **Workflow state ownership:** {supervision.GrantedAuthority.WorkflowStateOwnershipUnchanged}");
+        writer.WriteLine();
+
+        writer.WriteLine("### Session lifecycle (investigate, then replace gracefully)");
+        writer.WriteLine();
+        writer.WriteLine(supervision.SessionLifecycle.Summary);
+        writer.WriteLine();
+        foreach (var step in supervision.SessionLifecycle.UnresponsiveSessionInvestigation)
+        {
+            writer.WriteLine($"- {step}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **one holder per role** — {supervision.SessionLifecycle.ExclusivityRule}");
+        writer.WriteLine($"- **graceful drop** — {supervision.SessionLifecycle.GracefulDropRule}");
+        writer.WriteLine($"- **operator-visible confirmation** — {supervision.SessionLifecycle.OperatorVisibleConfirmation}");
+        writer.WriteLine();
+
+        writer.WriteLine("### Three supervision layers");
+        writer.WriteLine();
+        foreach (var layer in supervision.SupervisionLayers)
+        {
+            writer.WriteLine($"- **{layer.Layer}**");
+            writer.WriteLine($"  - purpose — {layer.Purpose}");
+            writer.WriteLine($"  - cadence — {layer.Cadence}");
+            writer.WriteLine($"  - note — {layer.Note}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"> **Re-arm across restarts:** {supervision.RearmRule}");
+        writer.WriteLine();
+
+        writer.WriteLine("### Blocking dialogs — the boundary");
+        writer.WriteLine();
+        writer.WriteLine($"> **Verified read before answer:** {supervision.VerifiedReadRule}");
+        writer.WriteLine();
+        writer.WriteLine("#### MAY answer (only after the verified read)");
+        writer.WriteLine();
+        foreach (var entry in supervision.MayAnswer)
+        {
+            writer.WriteLine($"- **{entry.Dialog}** — verify: {entry.Verification}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("#### MUST escalate to the operator");
+        writer.WriteLine();
+        foreach (var entry in supervision.MustEscalate)
+        {
+            writer.WriteLine($"- **{entry.Category}** — {entry.Reason}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"> **Boundary:** {supervision.BoundarySentence}");
+        writer.WriteLine();
+        writer.WriteLine($"- **provisioning** — {supervision.ProvisioningReference}");
+        writer.WriteLine($"- **watchdog safety rules** — {supervision.WatchdogSafetyRulesReference}");
+        writer.WriteLine();
+    }
+
     private static void WriteMarkdown(TextWriter writer, OrchestratorThreadGuide guide)
     {
         writer.WriteLine("# Guide — agmsg-backed orchestrator thread (G487)");
@@ -2228,6 +2514,8 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
 
         WriteTerminalWorkspaceProvisioning(writer, guide.TerminalWorkspaceProvisioning);
+
+        WriteDesignWorkspaceSupervision(writer, guide.DesignWorkspaceSupervision);
 
         writer.WriteLine("## Preflight (all three cwds)");
         writer.WriteLine();
@@ -2980,6 +3268,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("terminal_workspace_provisioning")]
     public required OrchestratorTerminalWorkspaceProvisioning TerminalWorkspaceProvisioning { get; init; }
 
+    [JsonPropertyName("design_workspace_supervision")]
+    public required OrchestratorDesignWorkspaceSupervision DesignWorkspaceSupervision { get; init; }
+
     [JsonPropertyName("design_traffic_controller")]
     public required OrchestratorDesignTrafficController DesignTrafficController { get; init; }
 
@@ -3241,6 +3532,120 @@ internal sealed record OrchestratorTerminalWorkspaceProvisioning
 
     [JsonPropertyName("checklist")]
     public required IReadOnlyList<string> Checklist { get; init; }
+}
+
+/// <summary>
+/// G550: the other half of the design thread's workspace role. G549 documents
+/// how a team comes into existence; this documents how the design thread keeps
+/// it moving — under authority the operator granted, over the SESSION layer
+/// only. Workflow state (labels, queue, publish) stays with intent-cli, GitHub,
+/// and the orchestrator: this record moves no workflow authority. It exists
+/// because the field practice lived only in session transcripts, and because a
+/// claim lost in a design-session restart window stalled a published issue for
+/// 5.5 hours with no supervision layer running.
+/// </summary>
+internal sealed record OrchestratorDesignWorkspaceSupervision
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("granted_authority")]
+    public required OrchestratorSupervisionAuthority GrantedAuthority { get; init; }
+
+    [JsonPropertyName("session_lifecycle")]
+    public required OrchestratorSupervisionSessionLifecycle SessionLifecycle { get; init; }
+
+    [JsonPropertyName("supervision_layers")]
+    public required IReadOnlyList<OrchestratorSupervisionLayer> SupervisionLayers { get; init; }
+
+    /// <summary>G550: session-scoped supervision schedulers die with the design session — they must survive or be re-armed.</summary>
+    [JsonPropertyName("rearm_rule")]
+    public required string RearmRule { get; init; }
+
+    [JsonPropertyName("verified_read_rule")]
+    public required string VerifiedReadRule { get; init; }
+
+    [JsonPropertyName("may_answer")]
+    public required IReadOnlyList<OrchestratorSupervisionMayAnswer> MayAnswer { get; init; }
+
+    [JsonPropertyName("must_escalate")]
+    public required IReadOnlyList<OrchestratorSupervisionMustEscalate> MustEscalate { get; init; }
+
+    [JsonPropertyName("boundary_sentence")]
+    public required string BoundarySentence { get; init; }
+
+    [JsonPropertyName("provisioning_reference")]
+    public required string ProvisioningReference { get; init; }
+
+    [JsonPropertyName("watchdog_safety_rules_reference")]
+    public required string WatchdogSafetyRulesReference { get; init; }
+}
+
+internal sealed record OrchestratorSupervisionAuthority
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("operator_grant_rule")]
+    public required string OperatorGrantRule { get; init; }
+
+    [JsonPropertyName("design_operates_session_layer")]
+    public required IReadOnlyList<string> DesignOperatesSessionLayer { get; init; }
+
+    /// <summary>G550: workflow-state ownership is explicitly UNCHANGED — this slice adds a session-layer role only.</summary>
+    [JsonPropertyName("workflow_state_ownership_unchanged")]
+    public required string WorkflowStateOwnershipUnchanged { get; init; }
+}
+
+internal sealed record OrchestratorSupervisionSessionLifecycle
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("unresponsive_session_investigation")]
+    public required IReadOnlyList<string> UnresponsiveSessionInvestigation { get; init; }
+
+    [JsonPropertyName("exclusivity_rule")]
+    public required string ExclusivityRule { get; init; }
+
+    [JsonPropertyName("graceful_drop_rule")]
+    public required string GracefulDropRule { get; init; }
+
+    [JsonPropertyName("operator_visible_confirmation")]
+    public required string OperatorVisibleConfirmation { get; init; }
+}
+
+internal sealed record OrchestratorSupervisionLayer
+{
+    [JsonPropertyName("layer")]
+    public required string Layer { get; init; }
+
+    [JsonPropertyName("purpose")]
+    public required string Purpose { get; init; }
+
+    [JsonPropertyName("cadence")]
+    public required string Cadence { get; init; }
+
+    [JsonPropertyName("note")]
+    public required string Note { get; init; }
+}
+
+internal sealed record OrchestratorSupervisionMayAnswer
+{
+    [JsonPropertyName("dialog")]
+    public required string Dialog { get; init; }
+
+    [JsonPropertyName("verification")]
+    public required string Verification { get; init; }
+}
+
+internal sealed record OrchestratorSupervisionMustEscalate
+{
+    [JsonPropertyName("category")]
+    public required string Category { get; init; }
+
+    [JsonPropertyName("reason")]
+    public required string Reason { get; init; }
 }
 
 internal sealed record OrchestratorProvisioningPlaceholder
