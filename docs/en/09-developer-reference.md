@@ -1858,11 +1858,16 @@ field it does not own, and it accepts documents that need not satisfy the
 full `QueueItem` contract. It uses `PersistRawJson`, which checks the
 invariant on `items[].execution_unit` read straight out of the JSON — never
 by deserializing — and on a clean base writes the caller's own text verbatim.
-Only if a concurrent write is actually detected does it need the model to
-re-apply; when the document cannot round-trip through the model it **aborts
-loud** ("re-run this command against the current state") rather than
-normalizing a file it exists not to normalize, or overwriting a change it
-cannot see. Nothing is written either way.
+When a concurrent write *is* detected, the re-application happens at the
+**JSON level** too — items this writer did not touch are carried across as
+the fresh document's own nodes, so fields the model does not know about
+survive on both sides and a stale copy's older view of another item can never
+overwrite a newer one.
+
+Because `metadata update` is the bounded **linkage** writer — the role writer
+B played in the 2ab082cf incident — a re-application on this path is reported
+in its own result: `queue_state_reapplied` / `queue_state_reapplied_execution_units`
+in JSON, and a `queue_state_reapplied:` block in the text output.
 
 **Multi-writer expectations for shared hosts.** Concurrent canonical writers
 are supported and expected: a losing writer is repaired (re-applied), not

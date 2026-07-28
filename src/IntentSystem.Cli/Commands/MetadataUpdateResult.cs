@@ -44,6 +44,30 @@ internal sealed record MetadataUpdateResult
     [JsonPropertyName("eventAppended")]
     public string? EventAppendedCamelCase => EventAppended;
 
+    /// <summary>
+    /// G548: true when <c>queue-state.json</c> had changed since this command
+    /// read it (a concurrent canonical write from another loop or domain) and
+    /// this command's own linkage/closeout change was re-applied onto that
+    /// fresher state rather than overwriting it. This is the 2026-07-23
+    /// <c>2ab082cf</c> shape — a bounded linkage writer starting from a stale
+    /// base — so it is reported, never silent: an operator reading this output
+    /// must be able to see that contention occurred and on which units.
+    /// </summary>
+    [JsonPropertyName("queue_state_reapplied")]
+    public bool QueueStateReapplied { get; init; }
+
+    /// <summary>G208 contract alias — camelCase.</summary>
+    [JsonPropertyName("queueStateReapplied")]
+    public bool QueueStateReappliedCamelCase => QueueStateReapplied;
+
+    /// <summary>G548: the execution units the re-applied mutation covered.</summary>
+    [JsonPropertyName("queue_state_reapplied_execution_units")]
+    public IReadOnlyList<string> QueueStateReappliedExecutionUnits { get; init; } = Array.Empty<string>();
+
+    /// <summary>G208 contract alias — camelCase.</summary>
+    [JsonPropertyName("queueStateReappliedExecutionUnits")]
+    public IReadOnlyList<string> QueueStateReappliedExecutionUnitsCamelCase => QueueStateReappliedExecutionUnits;
+
     [JsonPropertyName("errors")]
     public required IReadOnlyList<MetadataValidateFinding> Errors { get; init; }
 

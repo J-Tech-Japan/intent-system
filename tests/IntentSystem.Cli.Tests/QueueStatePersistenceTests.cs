@@ -492,34 +492,44 @@ public sealed class QueueStatePersistenceTests : IDisposable
     }
 
     [Fact]
-    public void PersistRawJson_StaleBaseOnAPartialDocument_AbortsLoudRatherThanNormalizing_G548()
+    public void PersistRawJson_StaleBaseOnAPartialDocument_ReappliesAtTheJsonLevel_G548()
     {
-        // Re-application needs the model. When the document cannot round-trip
-        // through it, the raw writer refuses — it will not normalize a file it
-        // exists not to normalize, and it will not overwrite a change it
-        // cannot see. Nothing is written either way.
+        // Round 3: re-application for the raw writer happens at the JSON
+        // level, never through the model — so the partial/legacy host
+        // documents this writer exists to accept get the SAME stale-base
+        // recovery every other writer gets, and untouched items are carried
+        // across as the fresh document's own nodes.
         const string partialBase = """
             {"schema_version":"1","updated_at":"2026-07-23T09:00:00+00:00","items":[
-              {"execution_unit":"SKS-G841","state":"active"}
+              {"execution_unit":"SKS-G841","state":"active","custom_host_field":"preserved"}
             ]}
             """;
         const string concurrent = """
             {"schema_version":"1","updated_at":"2026-07-23T09:10:00+00:00","items":[
-              {"execution_unit":"SKS-G841","state":"active"},
-              {"execution_unit":"G545","state":"queued"}
+              {"execution_unit":"SKS-G841","state":"active","custom_host_field":"preserved"},
+              {"execution_unit":"G545","state":"queued","seeded_by":"another-domain"}
             ]}
             """;
         Directory.CreateDirectory(Path.GetDirectoryName(QueueStatePath)!);
         File.WriteAllText(QueueStatePath, concurrent);
 
-        var outgoing = partialBase.Replace("\"active\"", "\"completed\"", StringComparison.Ordinal);
+        var outgoing = partialBase
+            .Replace("\"active\"", "\"completed\"", StringComparison.Ordinal)
+            .Replace("09:00:00", "09:20:00", StringComparison.Ordinal);
 
-        var exception = Assert.Throws<QueueStateItemLossException>(
-            () => QueueStatePersistence.PersistRawJson(QueueStatePath, partialBase, outgoing));
+        var result = QueueStatePersistence.PersistRawJson(QueueStatePath, partialBase, outgoing);
 
-        Assert.Contains("the file changed after it was read", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("Re-run this command against the current state", exception.Message, StringComparison.Ordinal);
-        Assert.Equal(concurrent, File.ReadAllText(QueueStatePath));
+        Assert.True(result.ReappliedOnFreshBase);
+        Assert.Equal(["SKS-G841"], result.ReappliedExecutionUnits);
+
+        using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(QueueStatePath));
+        var items = document.RootElement.GetProperty("items").EnumerateArray().ToArray();
+        Assert.Equal(["SKS-G841", "G545"], items.Select(item => item.GetProperty("execution_unit").GetString()).ToArray());
+        Assert.Equal("completed", items[0].GetProperty("state").GetString());
+        // Fields the model does not know about survive on both sides.
+        Assert.Equal("preserved", items[0].GetProperty("custom_host_field").GetString());
+        Assert.Equal("another-domain", items[1].GetProperty("seeded_by").GetString());
+        Assert.Equal("2026-07-23T09:20:00+00:00", document.RootElement.GetProperty("updated_at").GetString());
     }
 
     // ── Delta derivation ────────────────────────────────────────────────

@@ -121,29 +121,20 @@ public static class QueueStatePersistence
 
         if (!RawJsonMatches(onDiskRawText, baseRawText))
         {
-            // Concurrent write detected. Re-applying an item-level delta needs
-            // the model, so try that; if this file cannot round-trip through
-            // the model (the very reason this writer works on raw text), abort
-            // loud and repairable rather than normalizing a file this writer
-            // exists NOT to normalize, or overwriting a change it cannot see.
-            try
-            {
-                return PersistCore(
-                    queueStatePath,
-                    QueueStateSerializer.Deserialize(baseRawText),
-                    QueueStateSerializer.Deserialize(outgoingRawText),
-                    expectedRemovals,
-                    skipHook: true);
-            }
-            catch (Exception exception) when (exception is not QueueStateItemLossException
-                && exception is InvalidOperationException or System.Text.Json.JsonException)
-            {
-                throw new QueueStateItemLossException(
-                    $"refusing to persist queue-state to {queueStatePath}: the file changed after it was read (a "
-                    + "concurrent canonical write), and this bounded raw-text writer cannot re-apply its change onto "
-                    + $"the new state ({exception.Message}). Nothing was written. Re-run this command against the "
-                    + "current state.");
-            }
+            // Concurrent write detected. Re-apply this writer's own change
+            // onto the fresh document AT THE JSON LEVEL — never through the
+            // model. Untouched items are carried across as the exact JSON
+            // nodes the fresh document holds, so this path preserves the
+            // bounded-writer property just as completely as the clean one,
+            // and works on the partial/legacy documents this writer exists to
+            // accept.
+            var reapplied = ReapplyRawDelta(onDiskRawText, baseRawText, outgoingRawText, out var touchedUnits);
+
+            var staleRemovalAllowList = new HashSet<string>(expectedRemovals ?? Array.Empty<string>(), StringComparer.Ordinal);
+            AssertNoUnrequestedRawLoss(onDiskRawText, reapplied, staleRemovalAllowList, queueStatePath);
+
+            WriteText(queueStatePath, reapplied);
+            return QueueStatePersistResult.Reapplied(null, touchedUnits);
         }
 
         // Clean base: enforce the invariant on execution units only — read
@@ -151,27 +142,133 @@ public static class QueueStatePersistence
         // legacy queue file is checked exactly like any other instead of being
         // rejected by a contract this writer deliberately does not impose.
         var removalAllowList = new HashSet<string>(expectedRemovals ?? Array.Empty<string>(), StringComparer.Ordinal);
-        var lost = ReadExecutionUnits(onDiskRawText)
-            .Where(unit => !ReadExecutionUnits(outgoingRawText).Contains(unit) && !removalAllowList.Contains(unit))
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(unit => unit, StringComparer.Ordinal)
-            .ToArray();
-
-        if (lost.Length > 0)
-        {
-            throw new QueueStateItemLossException(
-                $"refusing to persist queue-state to {queueStatePath}: this write would remove {lost.Length} queue "
-                + $"item(s) it was not asked to remove — {string.Join(", ", lost)}. This is the 2026-07-23 lost-update "
-                + "shape (a write from a stale base silently erasing another domain's item); the write was aborted and "
-                + $"the file is unchanged. Re-run this command against current state, or if an item is already lost, "
-                + $"{RecoverySurfaces}.");
-        }
+        AssertNoUnrequestedRawLoss(onDiskRawText, outgoingRawText, removalAllowList, queueStatePath);
 
         // The caller's own text is written VERBATIM, preserving the
         // bounded-writer property: no field this writer does not own is
         // touched, and nothing is normalized on its behalf.
         WriteText(queueStatePath, outgoingRawText);
         return QueueStatePersistResult.DirectWrite(null);
+    }
+
+    /// <summary>
+    /// The no-item-loss invariant, evaluated on execution units read straight
+    /// out of the JSON — identity is the one field every queue document has
+    /// regardless of how complete it is.
+    /// </summary>
+    private static void AssertNoUnrequestedRawLoss(
+        string onDiskRawText, string outgoingRawText, HashSet<string> removalAllowList, string queueStatePath)
+    {
+        var surviving = new HashSet<string>(ReadExecutionUnits(outgoingRawText), StringComparer.Ordinal);
+        var lost = ReadExecutionUnits(onDiskRawText)
+            .Where(unit => !surviving.Contains(unit) && !removalAllowList.Contains(unit))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(unit => unit, StringComparer.Ordinal)
+            .ToArray();
+
+        if (lost.Length == 0)
+        {
+            return;
+        }
+
+        throw new QueueStateItemLossException(
+            $"refusing to persist queue-state to {queueStatePath}: this write would remove {lost.Length} queue "
+            + $"item(s) it was not asked to remove — {string.Join(", ", lost)}. This is the 2026-07-23 lost-update "
+            + "shape (a write from a stale base silently erasing another domain's item); the write was aborted and "
+            + $"the file is unchanged. Re-run this command against current state, or if an item is already lost, "
+            + $"{RecoverySurfaces}.");
+    }
+
+    /// <summary>
+    /// Re-applies a raw-text writer's item-level change onto the fresh
+    /// document without deserializing either side into the model. Items the
+    /// writer did not touch are carried over as the fresh document's own JSON
+    /// nodes — byte-preserved, in the fresh document's order — so a stale
+    /// copy's older view of another item can never overwrite a newer one.
+    /// </summary>
+    private static string ReapplyRawDelta(
+        string onDiskRawText, string baseRawText, string outgoingRawText, out IReadOnlyList<string> touchedUnits)
+    {
+        var freshRoot = System.Text.Json.Nodes.JsonNode.Parse(onDiskRawText)?.AsObject()
+            ?? throw new QueueStateItemLossException("queue-state on disk is not a JSON object.");
+        var baseItems = ReadItemsByUnit(baseRawText);
+        var outgoingItems = ReadItemsByUnit(outgoingRawText);
+
+        var upserts = outgoingItems
+            .Where(entry => !baseItems.TryGetValue(entry.Key, out var original)
+                || !string.Equals(original, entry.Value, StringComparison.Ordinal))
+            .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+        var removals = new HashSet<string>(
+            baseItems.Keys.Where(unit => !outgoingItems.ContainsKey(unit)), StringComparer.Ordinal);
+
+        touchedUnits = upserts.Keys.Concat(removals).Distinct(StringComparer.Ordinal).ToArray();
+
+        var merged = new System.Text.Json.Nodes.JsonArray();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (freshRoot["items"] is System.Text.Json.Nodes.JsonArray freshItems)
+        {
+            foreach (var node in freshItems)
+            {
+                var unit = node?["execution_unit"]?.GetValue<string>();
+                if (unit is not null && removals.Contains(unit))
+                {
+                    continue;
+                }
+
+                if (unit is not null && upserts.TryGetValue(unit, out var replacement))
+                {
+                    merged.Add(System.Text.Json.Nodes.JsonNode.Parse(replacement));
+                    seen.Add(unit);
+                    continue;
+                }
+
+                merged.Add(node?.DeepClone());
+                if (unit is not null)
+                {
+                    seen.Add(unit);
+                }
+            }
+        }
+
+        foreach (var (unit, json) in upserts.Where(entry => !seen.Contains(entry.Key)))
+        {
+            merged.Add(System.Text.Json.Nodes.JsonNode.Parse(json));
+        }
+
+        freshRoot["items"] = merged;
+
+        // updated_at is the writer's own stamp; every other top-level field
+        // stays as the fresh document has it.
+        if (System.Text.Json.Nodes.JsonNode.Parse(outgoingRawText)?["updated_at"] is { } updatedAt)
+        {
+            freshRoot["updated_at"] = updatedAt.DeepClone();
+        }
+
+        return freshRoot.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static Dictionary<string, string> ReadItemsByUnit(string rawText)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        using var document = System.Text.Json.JsonDocument.Parse(rawText);
+        if (!document.RootElement.TryGetProperty("items", out var items)
+            || items.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            return map;
+        }
+
+        foreach (var item in items.EnumerateArray())
+        {
+            if (item.ValueKind == System.Text.Json.JsonValueKind.Object
+                && item.TryGetProperty("execution_unit", out var unit)
+                && unit.ValueKind == System.Text.Json.JsonValueKind.String
+                && unit.GetString() is { Length: > 0 } value)
+            {
+                map[value] = System.Text.Json.JsonSerializer.Serialize(item);
+            }
+        }
+
+        return map;
     }
 
     /// <summary>

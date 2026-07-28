@@ -1996,12 +1996,16 @@ writer です: 所有していない field を書き換えないよう queue-sta
 として変更し、完全な `QueueItem` 契約を満たさない document も受け付けます。
 この writer は `PersistRawJson` を使い、invariant を JSON から直接読んだ
 `items[].execution_unit` で検査し(deserialize は一切しません)、base が clean
-なら caller 自身のテキストをそのまま書き込みます。model が必要になるのは並行
-書き込みを実際に検出して再適用する場合だけで、document が model を round-trip
-できないときは、normalize しないために存在する writer が normalize することも、
-見えていない変更を上書きすることもせず、**loud に中止**します
-(「current state に対して再実行してください」)。いずれの場合もファイルへの
-書き込みは行われません。
+なら caller 自身のテキストをそのまま書き込みます。並行書き込みを実際に検出した場合の再適用も **JSON レベル**で行われます —
+この writer が触れていない item は fresh document 自身の node としてそのまま
+引き継がれるため、model が知らない field も両側で保持され、stale copy が持つ
+他 item の古い姿が新しいものを上書きすることはありません。
+
+`metadata update` は bounded **linkage** writer — 2ab082cf incident における
+writer B の役割そのもの — であるため、この経路での再適用は自身の result に
+記録されます: JSON では `queue_state_reapplied` /
+`queue_state_reapplied_execution_units`、text 出力では `queue_state_reapplied:`
+ブロックです。
 
 **共有 host における multi-writer の期待。** canonical writer の並行実行は
 サポートされ、想定されています: 競争に負けた writer は拒否されるのではなく修復
