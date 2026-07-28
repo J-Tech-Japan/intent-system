@@ -99,7 +99,7 @@ internal static class ClarifyOpenCommand
 
             var clarification = BuildClarification(queueItem, packet, reviewContext, timestamp, reason);
             var artifactPath = PersistClarification(context.RepoRoot, clarification);
-            PersistTransition(context, transition);
+            PersistTransition(context, queueState, transition);
 
             writer.WriteLine($"Clarification opened for {executionUnit}.");
             writer.WriteLine($"Artifact path: {artifactPath}");
@@ -164,10 +164,11 @@ internal static class ClarifyOpenCommand
         return artifactPath;
     }
 
-    private static void PersistTransition(CliContext context, QueueTransitionResult result)
+    private static void PersistTransition(CliContext context, QueueState baseState, QueueTransitionResult result)
     {
         var queueStatePath = context.GetQueueStatePath();
-        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(result.UpdatedState));
+        // G548: guarded write (no-item-loss + stale-base re-application).
+        QueueStatePersistence.Persist(queueStatePath, baseState, result.UpdatedState);
 
         var runLogPath = context.GetRunLogPath();
         var runLogDirectory = Path.GetDirectoryName(runLogPath)

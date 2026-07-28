@@ -96,13 +96,14 @@ internal static class QueueTransitionCommand
                     return 0;
                 }
 
-                PersistTransition(context, new QueueTransitionResult
+                var retirePersist = PersistTransition(context, queueState, new QueueTransitionResult
                 {
                     UpdatedState = retireResult.UpdatedState,
                     Event = retireResult.Event!
                 });
 
                 writer.WriteLine($"Transitioned {args[0]} to retired.");
+                WriteReapplicationNotice(writer, retirePersist);
                 return 0;
             }
 
@@ -121,9 +122,10 @@ internal static class QueueTransitionCommand
                     TransitionActor,
                     DateTimeOffset.UtcNow);
 
-            PersistTransition(context, result);
+            var persistResult = PersistTransition(context, queueState, result);
 
             writer.WriteLine($"Transitioned {args[0]} to {FormatState(targetState)}.");
+            WriteReapplicationNotice(writer, persistResult);
             return 0;
         }
         catch (InvalidOperationException exception)
@@ -275,10 +277,14 @@ internal static class QueueTransitionCommand
         return state is QueueItemState.Blocked or QueueItemState.ClarifyBlocked;
     }
 
-    private static void PersistTransition(CliContext context, QueueTransitionResult result)
+    private static QueueStatePersistResult PersistTransition(
+        CliContext context, QueueState baseState, QueueTransitionResult result)
     {
         var queueStatePath = context.GetQueueStatePath();
-        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(result.UpdatedState));
+        // G548: guarded write — never silently drops another domain's item,
+        // and re-applies this item-scoped transition if the shared file moved
+        // since it was read.
+        var persistResult = QueueStatePersistence.Persist(queueStatePath, baseState, result.UpdatedState);
 
         var runLogPath = context.GetRunLogPath();
         var runLogDirectory = Path.GetDirectoryName(runLogPath)
@@ -287,6 +293,28 @@ internal static class QueueTransitionCommand
         File.AppendAllText(
             runLogPath,
             RunLogSerializer.SerializeLine(result.Event) + Environment.NewLine);
+
+        return persistResult;
+    }
+
+    /// <summary>
+    /// G548 round 2: a re-application is a recovery signal, so it must be
+    /// OBSERVABLE — a writer that silently repaired itself against a
+    /// concurrent write teaches an operator nothing about the contention that
+    /// caused it. The notice names the execution units the mutation was
+    /// re-applied for, so the message is actionable rather than atmospheric.
+    /// </summary>
+    private static void WriteReapplicationNotice(TextWriter writer, QueueStatePersistResult persistResult)
+    {
+        if (!persistResult.ReappliedOnFreshBase)
+        {
+            return;
+        }
+
+        writer.WriteLine(
+            "note: queue-state changed after it was read (a concurrent canonical write); this transition was "
+            + $"re-applied to the current state for {string.Join(", ", persistResult.ReappliedExecutionUnits)} "
+            + "and no other item was modified.");
     }
 
     private static string FormatState(QueueItemState state)

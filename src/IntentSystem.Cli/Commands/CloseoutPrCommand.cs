@@ -1,3 +1,4 @@
+using IntentSystem.Supervisor;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using IntentSystem.Supervisor.Models;
@@ -269,7 +270,8 @@ internal static class CloseoutPrCommand
             // present because RepoRoot/.intent-cli/ exists by host
             // contract). Idempotent.
             Directory.CreateDirectory(Path.GetDirectoryName(queueStatePath)!);
-            File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
+            // G548: guarded write (no-item-loss + stale-base re-application).
+            QueueStatePersistence.Persist(queueStatePath, queueState, updatedState);
 
             Directory.CreateDirectory(Path.GetDirectoryName(runsLogPath)!);
             using var stream = new FileStream(runsLogPath, FileMode.Append, FileAccess.Write);

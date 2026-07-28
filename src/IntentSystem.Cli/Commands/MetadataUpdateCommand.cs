@@ -1,3 +1,4 @@
+using IntentSystem.Supervisor;
 using System.Text;
 using System.Text.Json;
 using IntentSystem.Cli;
@@ -318,7 +319,11 @@ internal static class MetadataUpdateCommand
         // on first write (legacy root is always present because --root
         // exists). Idempotent.
         Directory.CreateDirectory(Path.GetDirectoryName(queueStatePath)!);
-        File.WriteAllText(queueStatePath, newQueueText);
+        // G548: guarded write. This is the bounded controlled metadata writer
+        // — it mutates raw JSON so it never rewrites a field it does not own
+        // — so it uses the raw-text guard: the invariant is enforced, and on
+        // a clean base its own text is written verbatim.
+        var queuePersist = QueueStatePersistence.PersistRawJson(queueStatePath, queueStateRaw, newQueueText);
         updatedFiles.Add(queueStateRelative);
 
         var newPublishText = AppendPrBlockToPublishYaml(
@@ -360,6 +365,12 @@ internal static class MetadataUpdateCommand
             Mode = MetadataUpdateConstants.Modes.CompletedCloseout,
             UpdatedFiles = updatedFiles,
             EventAppended = MetadataUpdateConstants.EventNames.CompletedCloseout,
+            // G548: this command is the bounded linkage writer — the exact
+            // role writer B played in the 2ab082cf incident — so a successful
+            // re-application onto a concurrently-changed queue-state is
+            // surfaced here rather than being repaired silently.
+            QueueStateReapplied = queuePersist.ReappliedOnFreshBase,
+            QueueStateReappliedExecutionUnits = queuePersist.ReappliedExecutionUnits,
             Errors = errors,
             Warnings = warnings,
         };
@@ -591,6 +602,15 @@ internal static class MetadataUpdateCommand
         if (!string.IsNullOrEmpty(result.EventAppended))
         {
             writer.WriteLine($"- event_appended: {result.EventAppended}");
+        }
+        if (result.QueueStateReapplied)
+        {
+            writer.WriteLine("- queue_state_reapplied: true");
+            writer.WriteLine(
+                $"- queue_state_reapplied_execution_units: {string.Join(", ", result.QueueStateReappliedExecutionUnits)}");
+            writer.WriteLine(
+                "  note: queue-state changed after it was read (a concurrent canonical write); this update was "
+                + "re-applied to the current state and no other item was modified.");
         }
         writer.WriteLine();
 

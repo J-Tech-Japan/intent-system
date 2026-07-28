@@ -1,3 +1,4 @@
+using IntentSystem.Supervisor;
 using IntentSystem.Clarify;
 using IntentSystem.Clarify.Models;
 using IntentSystem.Clarify.Serialization;
@@ -74,7 +75,7 @@ internal static class ClarifyAnswerCommand
             var result = ClarifyGateway.Apply(answeredClarification, queueState, TransitionActor, timestamp);
 
             File.WriteAllText(artifactPath, ClarificationSerializer.Serialize(result.AppliedClarification));
-            PersistQueueState(context, result.UpdatedQueueState);
+            PersistQueueState(context, queueState, result.UpdatedQueueState);
             AppendRunEvents(context, result.Events);
 
             var resumedItem = result.UpdatedQueueState.Items.Single(item =>
@@ -181,10 +182,12 @@ internal static class ClarifyAnswerCommand
             : Path.GetFullPath(Path.Combine(repoRoot, artifactRef.Replace('/', Path.DirectorySeparatorChar)));
     }
 
-    private static void PersistQueueState(CliContext context, Supervisor.Models.QueueState queueState)
+    private static void PersistQueueState(
+        CliContext context, Supervisor.Models.QueueState baseState, Supervisor.Models.QueueState queueState)
     {
         var queueStatePath = context.GetQueueStatePath();
-        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(queueState));
+        // G548: guarded write (no-item-loss + stale-base re-application).
+        QueueStatePersistence.Persist(queueStatePath, baseState, queueState);
     }
 
     private static void AppendRunEvents(CliContext context, IReadOnlyList<Supervisor.Models.RunEvent> events)

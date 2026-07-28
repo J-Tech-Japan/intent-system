@@ -1932,6 +1932,95 @@ within-record のソースが **無い** フィールド(最も典型的には `
 残しています(このスライスのスコープ外)。`RunLogSerializer` /
 RunEvent の必須フィールド契約は変更されていません。
 
+### queue-state の書き込みは guard 経由: no-item-loss invariant と stale-base 再適用 (G548)
+
+`queue-state.json` は multi-domain host において**全 domain が共有する 1 つの
+ファイル**であり、複数の loop が別々の checkout から並行して書き込みます。
+canonical な writer はいずれもファイル全体を deserialize し、メモリ上で変更し、
+ファイル全体を再 serialize します — したがって read-modify-write の race は
+単なる衝突ではなく、stale な in-memory copy がたまたま保持していなかったものを
+**黙って消去**します。
+
+**field incident、2026-07-23**(host commit `2ab082cf`): sekiban domain の
+書き込みが 1 時間前に読んだ base から G841 の PR linkage を記録し、その間に
+seed された intent-cli の G545 queue item を削除しました。エラーは一切出ず、
+commit message は linkage 変更のみを主張していました。この loss は 4 日間
+不可視のままとなり、その後 `closeout-plan host-metadata-blocked` として表面化し、
+`pr-is-draft` の recovery gate と組み合わさって循環デッドロックになりました。
+復旧には 3 つの canonical surface と operator の介入が必要でした
+(host commit `c0897649`)。
+
+現在は、すべての canonical mutation が 1 つの共有 guard
+`QueueStatePersistence` 経由で書き込みます。この guard は
+**`IntentSystem.Supervisor`** — queue-state の model と serializer を所有し、
+`IntentSystem.Cli` と `IntentSystem.Drift` の*両方*が参照する唯一の assembly —
+に置かれているため、「すべての canonical writer」は CLI 内だけでなく solution
+全体の writer(drift service の corrective enqueue を含む)を意味します。
+強制する内容は次の 3 点です:
+
+1. **stale-base の検出と再適用。** caller が*読んだ*状態と、persist 時点で
+   ディスク上に*実際にある*状態を比較します(同一の serializer round-trip を
+   通すため、単なる書式の差異が並行書き込みと誤認されることはありません)。
+   不一致の場合、caller の mutation — base と outgoing state の item 単位
+   delta として自動導出されます — を stale copy ではなく**新しい**状態へ
+   再適用し、再適用が行われたことを結果として報告します(不可視になりません)。
+2. **no-item-loss invariant。** ディスク上に存在するのに outgoing state から
+   欠落しており、かつ明示的な削除として指定されていない execution unit が
+   1 つでもあれば、**書き込みを中止**します — 対象 unit を正確に名指しし、
+   canonical な復旧手段(`queue-seed-from-packet` → 冪等な
+   `issue publish-flow` 再実行 → `closeout-plan --write-recovered-linkage`)も
+   併記します。ファイルは無変更のまま残ります。ディスク上の状態が*読めない*
+   場合も、どちらの保証も確立できないため中止します。
+3. **item-scoped な再適用。** 再適用される mutation が触れるのは、その delta が
+   実際にカバーする unit と `updated_at` だけです。無関係な item はすべて、
+   新しい状態から byte 単位で同一のまま、その順序も保って引き継がれます —
+   したがって stale copy が持つ古い他 item の姿が、新しいものを上書きすることは
+   ありません。
+
+**明示的な削除は引き続き正当です。** retire (G525)、completed item の
+lifecycle、および契約上その item を削除しうると宣言している操作は、対象 unit を
+expected removal として渡します。invariant が対象とするのは**要求されていない**
+loss のみであり、allow-list の entry はその unit だけを免除します。retire 自体は
+entry 不要です — item を削除するのではなく `state=retired` へ書き換えるためです。
+
+**再適用は報告され、決して silent になりません。** 書き込みが再適用された
+canonical command は、その事実と再適用対象の execution unit を自身の出力に
+記載します — 並行書き込みに対して黙って自己修復した writer は、その contention
+について operator に何も伝えないためです。例えば `queue transition` は
+`note: queue-state changed after it was read (a concurrent canonical write);
+this transition was re-applied to the current state for <units> and no other
+item was modified.` を出力します。
+
+**唯一の raw-text writer。** `metadata update` は bounded controlled metadata
+writer です: 所有していない field を書き換えないよう queue-state を raw JSON
+として変更し、完全な `QueueItem` 契約を満たさない document も受け付けます。
+この writer は `PersistRawJson` を使い、invariant を JSON から直接読んだ
+`items[].execution_unit` で検査し(deserialize は一切しません)、base が clean
+なら caller 自身のテキストをそのまま書き込みます。並行書き込みを実際に検出した場合の再適用も **JSON レベル**で行われます —
+この writer が触れていない item は fresh document 自身の node としてそのまま
+引き継がれるため、model が知らない field も両側で保持され、stale copy が持つ
+他 item の古い姿が新しいものを上書きすることはありません。
+
+`metadata update` は bounded **linkage** writer — 2ab082cf incident における
+writer B の役割そのもの — であるため、この経路での再適用は自身の result に
+記録されます: JSON では `queue_state_reapplied` /
+`queue_state_reapplied_execution_units`、text 出力では `queue_state_reapplied:`
+ブロックです。
+
+**共有 host における multi-writer の期待。** canonical writer の並行実行は
+サポートされ、想定されています: 競争に負けた writer は拒否されるのではなく修復
+(再適用)されるため、どの loop も他をシリアライズして待つ必要はありません。
+サポート**されない**のは guard を迂回する writer です — `queue-state.json` の
+手編集や、新規コマンドが直接 `File.WriteAllText` を呼ぶことです。source レベルの
+fixture (`QueueStateWriterCoverageTests`) が、`src/` 配下のどこかに guard を
+迂回する writer が追加された場合にファイル名と行番号付きで失敗するため、
+all-writers の主張が再び目視確認頼みで退行することはありません。意図的に
+スコープ外かつ本スライスで不変なもの: per-domain の queue file 分割(将来の設計
+判断であり、本スライス後の再発が escalation criterion)、file-locking daemon、
+プロセス間 mutex、git レベルの merge 戦略 — 2ab082cf の loss は
+fast-forward-clean な履歴の内側で起きたため、防御は commit に到達する前の
+writer 層に置く必要があります。
+
 ---
 
 ## バージョンフロー

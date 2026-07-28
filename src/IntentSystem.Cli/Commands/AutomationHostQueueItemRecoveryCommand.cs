@@ -1,3 +1,4 @@
+using IntentSystem.Supervisor;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using IntentSystem.Supervisor.Models;
@@ -472,7 +473,11 @@ internal static class AutomationHostQueueItemRecoveryCommand
         };
 
         Directory.CreateDirectory(Path.GetDirectoryName(writePath)!);
-        File.WriteAllText(writePath, QueueStateSerializer.Serialize(newState));
+        // G548: guarded write (no-item-loss + stale-base re-application).
+        QueueStatePersistence.Persist(
+            writePath,
+            currentState ?? new QueueState { SchemaVersion = "1", UpdatedAt = newState.UpdatedAt, Items = Array.Empty<QueueItem>() },
+            newState);
         return newState;
     }
 

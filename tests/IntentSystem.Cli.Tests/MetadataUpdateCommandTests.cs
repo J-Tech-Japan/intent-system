@@ -3,6 +3,7 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -26,6 +27,115 @@ public sealed class MetadataUpdateCommandTests : IDisposable
     {
         MetadataUpdateCommand.NestedProviderLauncher = null;
         MetadataUpdateCommand.UtcNowProvider = null;
+    }
+
+    [Fact]
+    public void Execute_StaleBase_LinkageWriteIsReappliedAndRecordedInOutput_ReproducesIncident2ab082cf_G548()
+    {
+        // THE incident shape, at the command level and with the writer that
+        // actually caused it: `metadata update` is the bounded linkage writer
+        // — the role writer B played on 2026-07-23 (host commit 2ab082cf),
+        // when it recorded a G841 linkage from an hour-old base and silently
+        // dropped the intent-cli item seeded in between.
+        //
+        // The interleaving is produced with the guard's BeforePersistHook,
+        // which fires in exactly the window a concurrent canonical write
+        // occupies: after this command has read queue-state, before the guard
+        // reads it again.
+        using var ws = new MetadataUpdateWorkspace();
+        ws.WriteHostShapePacket("SKS-G841", linkedIssue: 841, state: "queued");
+
+        var queueStatePath = Path.Combine(ws.RootPath, ".intent-cli", "queue-state.json");
+        var seeded = false;
+        // Scoped to THIS workspace's queue-state path, so fixtures in other
+        // classes running in parallel cannot contend for the seam.
+        using var hook = QueueStatePersistence.RegisterBeforePersistHook(queueStatePath, _ =>
+        {
+            if (seeded)
+            {
+                return;
+            }
+
+            seeded = true;
+            // Writer A (another domain's loop) seeds an unrelated item.
+            var raw = File.ReadAllText(queueStatePath);
+            var withSeed = raw.Replace(
+                "\"items\": [",
+                "\"items\": [\n    {\"execution_unit\": \"G545\", \"title\": \"intent-cli item\", \"state\": \"queued\"},",
+                StringComparison.Ordinal);
+            File.WriteAllText(queueStatePath, withSeed);
+        });
+
+        {
+            using var writer = new StringWriter();
+            var exitCode = MetadataUpdateCommand.Execute(
+                ws.Context,
+                new[]
+                {
+                    "--root", ws.RootPath,
+                    "--execution-unit", "SKS-G841",
+                    "--mode", "completed-closeout",
+                    "--linked-pr", "841",
+                    "--linked-pr-repo", "J-Tech-Japan/sekiban",
+                    "--linked-pr-url", "https://github.com/J-Tech-Japan/sekiban/pull/841",
+                    "--head-sha", "abc123",
+                    "--merge-commit", "def456",
+                    "--format", "json",
+                },
+                writer);
+
+            Assert.Equal(0, exitCode);
+
+            // B's own output records the re-application and names the unit.
+            var result = JsonSerializer.Deserialize<MetadataUpdateResult>(writer.ToString())!;
+            Assert.True(result.Valid);
+            Assert.True(result.QueueStateReapplied);
+            Assert.Equal(["SKS-G841"], result.QueueStateReappliedExecutionUnits);
+
+            // Both changes survive: B's linkage AND A's concurrently seeded item.
+            var queueRaw = File.ReadAllText(queueStatePath);
+            using var doc = JsonDocument.Parse(queueRaw);
+            var items = doc.RootElement.GetProperty("items").EnumerateArray().ToArray();
+            Assert.Contains(items, item => item.GetProperty("execution_unit").GetString() == "G545");
+
+            var linked = items.Single(item => item.GetProperty("execution_unit").GetString() == "SKS-G841");
+            Assert.Equal("completed", linked.GetProperty("state").GetString());
+            Assert.Equal(841, linked.GetProperty("linked_pr").GetProperty("number").GetInt32());
+
+            // A's item is untouched by B.
+            var seededItem = items.Single(item => item.GetProperty("execution_unit").GetString() == "G545");
+            Assert.Equal("queued", seededItem.GetProperty("state").GetString());
+            Assert.False(seededItem.TryGetProperty("linked_pr", out _));
+        }
+    }
+
+    [Fact]
+    public void Execute_CleanBase_ReportsNoQueueStateReapplication_G548()
+    {
+        using var ws = new MetadataUpdateWorkspace();
+        ws.WriteHostShapePacket("G208", linkedIssue: 521, state: "queued");
+
+        using var writer = new StringWriter();
+        var exitCode = MetadataUpdateCommand.Execute(
+            ws.Context,
+            new[]
+            {
+                "--root", ws.RootPath,
+                "--execution-unit", "G208",
+                "--mode", "completed-closeout",
+                "--linked-pr", "999",
+                "--linked-pr-repo", "J-Tech-Japan/intent-system",
+                "--linked-pr-url", "https://github.com/J-Tech-Japan/intent-system/pull/999",
+                "--head-sha", "abc123",
+                "--merge-commit", "def456",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<MetadataUpdateResult>(writer.ToString())!;
+        Assert.False(result.QueueStateReapplied);
+        Assert.Empty(result.QueueStateReappliedExecutionUnits);
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using IntentSystem.Supervisor;
+using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Commands;
@@ -133,7 +134,7 @@ internal static class QueueDispatchCommand
             TransitionActor,
             TimestampFactory());
 
-        PersistDispatch(context, result);
+        PersistDispatch(context, queueState, result);
 
         return new QueueDispatchCommandResult
         {
@@ -159,10 +160,11 @@ internal static class QueueDispatchCommand
         return Path.GetFullPath(Path.Combine(repoRoot, directoryRef, "github-body.md"));
     }
 
-    private static void PersistDispatch(CliContext context, QueueTransitionResult result)
+    private static void PersistDispatch(CliContext context, QueueState baseState, QueueTransitionResult result)
     {
         var queueStatePath = context.GetQueueStatePath();
-        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(result.UpdatedState));
+        // G548: guarded write (no-item-loss + stale-base re-application).
+        QueueStatePersistence.Persist(queueStatePath, baseState, result.UpdatedState);
 
         PersistRunEvent(context, result.Event);
     }

@@ -1792,6 +1792,98 @@ deliberately left on the legacy whole-file behavior (out of scope for this
 slice); `RunLogSerializer` / the RunEvent required-field contract are
 unchanged.
 
+### Queue-state writes are guarded: no-item-loss invariant and stale-base re-application (G548)
+
+`queue-state.json` is **one file shared by every domain** on a multi-domain
+host, written concurrently by several loops from different checkouts. Every
+canonical writer deserializes the whole file, mutates in memory, and
+reserializes the whole file — so a read-modify-write race does not merely
+conflict, it **silently erases** whatever the stale in-memory copy happened
+not to contain.
+
+**Field incident, 2026-07-23** (host commit `2ab082cf`): a sekiban-domain
+write recorded a G841 PR linkage from a base read an hour earlier and dropped
+the intent-cli G545 queue item seeded in between. Nothing errored; the commit
+message claimed only the linkage change. The loss stayed invisible for four
+days, then surfaced as `closeout-plan host-metadata-blocked` and combined
+with the `pr-is-draft` recovery gate into a circular deadlock. Restoration
+took three canonical surfaces plus an operator (host commit `c0897649`).
+
+Every canonical mutation now writes through one shared guard,
+`QueueStatePersistence`. It lives in **`IntentSystem.Supervisor`** — the
+assembly that owns the queue-state model and serializer, and the only one
+*both* `IntentSystem.Cli` and `IntentSystem.Drift` reference — so "every
+canonical writer" means every writer in the solution, including the drift
+service's corrective enqueue. It enforces three things:
+
+1. **Stale-base detection and re-application.** The state the caller *read*
+   is compared against what is on disk *now*, at persist time (through the
+   same serializer round-trip, so pure formatting drift is never mistaken for
+   a concurrent write). On a mismatch the caller's mutation — derived
+   automatically as an item-level delta between its base and its outgoing
+   state — is re-applied to the **fresh** state instead of persisting the
+   stale copy, and the re-application is reported back so it is never
+   invisible.
+2. **No-item-loss invariant.** Any execution unit present on disk but missing
+   from the outgoing state, and not named as an expected removal, **aborts
+   the write** — naming the exact units and the canonical recovery path
+   (`queue-seed-from-packet` → idempotent `issue publish-flow` rerun →
+   `closeout-plan --write-recovered-linkage`). The file is left untouched.
+   An on-disk state that cannot be *read* also aborts, since neither
+   guarantee can be established against it.
+3. **Item-scoped re-application.** A re-applied mutation touches only the
+   units its delta actually covers, plus `updated_at`. Every unrelated item
+   is carried through byte-identically from the fresh state, in the fresh
+   state's order — so a stale copy's older view of another item can never
+   overwrite a newer one.
+
+**Explicit removals stay legitimate.** Retire (G525), the completed-item
+lifecycle, and any operation whose contract names the item it may remove pass
+those units as expected removals. The invariant targets **unrequested** loss
+only; an allow-list entry excuses that unit and nothing else. Retire itself
+needs no entry — it rewrites the item as `state=retired` rather than removing
+it.
+
+**Re-application is reported, never silent.** A canonical command whose
+write was re-applied says so in its own output, naming the execution units it
+was re-applied for — a writer that quietly repaired itself against a
+concurrent write teaches an operator nothing about the contention that caused
+it. `queue transition`, for example, prints `note: queue-state changed after
+it was read (a concurrent canonical write); this transition was re-applied to
+the current state for <units> and no other item was modified.`
+
+**The one raw-text writer.** `metadata update` is the bounded controlled
+metadata writer: it mutates queue-state as raw JSON so it never rewrites a
+field it does not own, and it accepts documents that need not satisfy the
+full `QueueItem` contract. It uses `PersistRawJson`, which checks the
+invariant on `items[].execution_unit` read straight out of the JSON — never
+by deserializing — and on a clean base writes the caller's own text verbatim.
+When a concurrent write *is* detected, the re-application happens at the
+**JSON level** too — items this writer did not touch are carried across as
+the fresh document's own nodes, so fields the model does not know about
+survive on both sides and a stale copy's older view of another item can never
+overwrite a newer one.
+
+Because `metadata update` is the bounded **linkage** writer — the role writer
+B played in the 2ab082cf incident — a re-application on this path is reported
+in its own result: `queue_state_reapplied` / `queue_state_reapplied_execution_units`
+in JSON, and a `queue_state_reapplied:` block in the text output.
+
+**Multi-writer expectations for shared hosts.** Concurrent canonical writers
+are supported and expected: a losing writer is repaired (re-applied), not
+rejected, so no loop has to serialize against another. What is *not*
+supported is a writer that bypasses the guard — hand-editing
+`queue-state.json`, or a new command calling `File.WriteAllText` directly — a
+source-level fixture (`QueueStateWriterCoverageTests`) fails with the file and
+line of any writer added anywhere in `src/` that bypasses the guard, so the
+all-writers claim cannot regress by hand-verification again.
+Deliberately out of scope, and unchanged by this slice: a per-domain queue
+file split (a future design decision; a recurrence after this lands is the
+escalation criterion), file-locking daemons, cross-process mutexes, and
+git-level merge strategy — the 2ab082cf loss happened inside a
+fast-forward-clean history, so the defense has to sit at the writer, before
+anything reaches a commit.
+
 ---
 
 ## Version flow

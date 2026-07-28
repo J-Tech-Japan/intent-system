@@ -1,3 +1,4 @@
+using IntentSystem.Supervisor;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using IntentSystem.Supervisor.Models;
@@ -456,7 +457,8 @@ internal static class AutomationCloseoutDriftCheckCommand
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(queueStatePath)!);
-                File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
+                // G548: guarded write (no-item-loss + stale-base re-application).
+                QueueStatePersistence.Persist(queueStatePath, queueState, updatedState);
 
                 // Append run events for each repaired item.
                 Directory.CreateDirectory(Path.GetDirectoryName(runsLogPath)!);

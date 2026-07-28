@@ -1,3 +1,4 @@
+using IntentSystem.Supervisor;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -266,7 +267,8 @@ internal static class AutomationStateDoctorCommand
             try
             {
                 var updatedState = queueState with { Items = items, UpdatedAt = DateTimeOffset.UtcNow };
-                File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
+                // G548: guarded write (no-item-loss + stale-base re-application).
+                QueueStatePersistence.Persist(queueStatePath, queueState, updatedState);
                 AppendRunEvents(context, appliedEvents);
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException)

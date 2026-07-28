@@ -1,3 +1,4 @@
+using IntentSystem.Supervisor;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using IntentSystem.Supervisor.Models;
@@ -263,7 +264,11 @@ internal static class AutomationQueueSeedFromPacketCommand
         };
 
         Directory.CreateDirectory(Path.GetDirectoryName(queueStatePath)!);
-        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updated));
+        // G548: guarded write (no-item-loss + stale-base re-application).
+        QueueStatePersistence.Persist(
+            queueStatePath,
+            existing ?? new QueueState { SchemaVersion = "1", UpdatedAt = updated.UpdatedAt, Items = Array.Empty<QueueItem>() },
+            updated);
 
         var runsPath = Path.Combine(context.RepoRoot, ".intent-cli", "runs.jsonl");
         Directory.CreateDirectory(Path.GetDirectoryName(runsPath)!);

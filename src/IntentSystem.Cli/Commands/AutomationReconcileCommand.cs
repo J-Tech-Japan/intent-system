@@ -1,3 +1,4 @@
+using IntentSystem.Supervisor;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using IntentSystem.Supervisor.Models;
@@ -395,7 +396,8 @@ internal static class AutomationReconcileCommand
             Items = newItems,
             UpdatedAt = DateTimeOffset.UtcNow,
         };
-        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
+        // G548: guarded write (no-item-loss + stale-base re-application).
+        QueueStatePersistence.Persist(queueStatePath, queueState, updatedState);
     }
 
     private static string BuildSummary(

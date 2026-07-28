@@ -1,3 +1,4 @@
+using IntentSystem.Supervisor;
 using System.Text.Json;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
@@ -453,7 +454,8 @@ internal static class WorkerCompleteCommand
                 Items = newItems,
                 UpdatedAt = DateTimeOffset.UtcNow,
             };
-            File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
+            // G548: guarded write (no-item-loss + stale-base re-application).
+            QueueStatePersistence.Persist(queueStatePath, queueState, updatedState);
             return (true, null);
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException or System.Text.Json.JsonException)
