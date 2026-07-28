@@ -2036,6 +2036,169 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.True(referenceManager.GetProperty("substitution_rule").GetString()!.Length > 0);
     }
 
+    [Fact]
+    public void Execute_Markdown_Supervision_GrantedAuthorityIsSessionLayerOnly_G550()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("## Design-thread workspace supervision (G550)", output, StringComparison.Ordinal);
+        Assert.Contains("### Granted authority — session layer only", output, StringComparison.Ordinal);
+        // AC: the grant is the operator's, and it is not assumed.
+        Assert.Contains("**authority is granted, not assumed**", output, StringComparison.Ordinal);
+        Assert.Contains("because the operator asked it to", output, StringComparison.Ordinal);
+        // AC: workflow-state ownership is explicitly UNCHANGED — this slice
+        // moves no workflow authority.
+        Assert.Contains("> **Workflow state ownership:**", output, StringComparison.Ordinal);
+        Assert.Contains("workflow state ownership does not move", output, StringComparison.Ordinal);
+        Assert.Contains("remain with intent-cli, GitHub, and the orchestrator", output, StringComparison.Ordinal);
+        Assert.Contains("Supervising a session never authorizes a workflow transition", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Supervision_SessionLifecycle_ExclusivityAndGracefulDrop_G550()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("### Session lifecycle (investigate, then replace gracefully)", output, StringComparison.Ordinal);
+        // Investigate before replacing — read the pane first.
+        Assert.Contains("READ the pane first", output, StringComparison.Ordinal);
+        Assert.Contains("replacement is the last step, not the first", output, StringComparison.Ordinal);
+        // AC: exclusivity + graceful drop + operator-visible confirmation.
+        Assert.Contains("never means two sessions holding the same role", output, StringComparison.Ordinal);
+        Assert.Contains("Replace through the GRACEFUL DROP", output, StringComparison.Ordinal);
+        Assert.Contains("**operator-visible confirmation**", output, StringComparison.Ordinal);
+        Assert.Contains("the decision to retire a live session remains the operator's", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Supervision_ThreeLayersWithCadences_AndRearmRule_G550()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("### Three supervision layers", output, StringComparison.Ordinal);
+        // AC: three layers, each with a purpose and a cadence.
+        Assert.Contains("**real-time message monitor**", output, StringComparison.Ordinal);
+        Assert.Contains("continuous / real-time", output, StringComparison.Ordinal);
+        Assert.Contains("**blocking-UI pane scan**", output, StringComparison.Ordinal);
+        Assert.Contains("sub-minute class", output, StringComparison.Ordinal);
+        Assert.Contains("**periodic state watchdog**", output, StringComparison.Ordinal);
+        Assert.Contains("tens-of-minutes class", output, StringComparison.Ordinal);
+        // The watchdog layer resolves to the existing heartbeat command.
+        Assert.Contains("intent-cli automation heartbeat --domain intent-cli --repo J-Tech-Japan/intent-system", output, StringComparison.Ordinal);
+        // AC: the re-arm rule with the measured cost of forgetting it.
+        Assert.Contains("> **Re-arm across restarts:**", output, StringComparison.Ordinal);
+        Assert.Contains("RE-ARMED as the first act of the new session", output, StringComparison.Ordinal);
+        Assert.Contains("5.5 HOURS", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Supervision_DialogLists_AreClosedSets_WithVerifiedRead_G550()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        // AC: the verified-read rule gates every answer.
+        Assert.Contains("> **Verified read before answer:**", output, StringComparison.Ordinal);
+        Assert.Contains("ONLY after it has actually read that dialog's content from the pane", output, StringComparison.Ordinal);
+        Assert.Contains("blind keystroke into a dialog it has not rendered is prohibited", output, StringComparison.Ordinal);
+
+        // AC: the MAY list is exactly four items, each with its verification.
+        Assert.Contains("#### MAY answer (only after the verified read)", output, StringComparison.Ordinal);
+        Assert.Contains("**confirmations of work the design thread itself requested** — verify:", output, StringComparison.Ordinal);
+        Assert.Contains("**command approvals verified read-only** — verify:", output, StringComparison.Ordinal);
+        Assert.Contains("**trust screens for hooks the design thread itself installed** — verify:", output, StringComparison.Ordinal);
+        Assert.Contains("**operator-preauthorized mode changes** — verify:", output, StringComparison.Ordinal);
+
+        // AC: the MUST-ESCALATE list is the four categories.
+        Assert.Contains("#### MUST escalate to the operator", output, StringComparison.Ordinal);
+        Assert.Contains("**unreadable or unverifiable dialogs**", output, StringComparison.Ordinal);
+        Assert.Contains("**destructive or irreversible approvals**", output, StringComparison.Ordinal);
+        Assert.Contains("**choices that embed a product or design decision**", output, StringComparison.Ordinal);
+        Assert.Contains("**credential, security, and permission waits**", output, StringComparison.Ordinal);
+        // Credential/security/permission stays absolute, matching G549's boundary.
+        Assert.Contains("NEVER answerable by the design thread, with or without prior authorization", output, StringComparison.Ordinal);
+
+        // AC: the boundary sentence.
+        Assert.Contains("UNSTICKING A SESSION IS NOT DECIDING FOR IT", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Supervision_CrossReferencesResolve_G550()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        // AC: the cross-references point at sections that actually exist in the
+        // same rendered guide — provisioning (G549) and the watchdog safety rules.
+        Assert.Contains("see `Terminal-workspace provisioning`", output, StringComparison.Ordinal);
+        Assert.Contains("## Terminal-workspace provisioning (G549)", output, StringComparison.Ordinal);
+        Assert.Contains("See `Design-thread watchdog (recommended safety net)`", output, StringComparison.Ordinal);
+        Assert.Contains("## Design-thread watchdog (recommended safety net)", output, StringComparison.Ordinal);
+        // The safety rules are restated as applying verbatim to supervision.
+        Assert.Contains("no duplicate delegation, no clearing a permission prompt", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_DesignWorkspaceSupervision_HasStructuredShape_G550()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var supervision = doc.RootElement.GetProperty("design_workspace_supervision");
+
+        var authority = supervision.GetProperty("granted_authority");
+        Assert.NotEmpty(authority.GetProperty("design_operates_session_layer").EnumerateArray());
+        Assert.Contains("does not move", authority.GetProperty("workflow_state_ownership_unchanged").GetString(), StringComparison.Ordinal);
+
+        var lifecycle = supervision.GetProperty("session_lifecycle");
+        Assert.NotEmpty(lifecycle.GetProperty("unresponsive_session_investigation").EnumerateArray());
+        Assert.Contains("GRACEFUL DROP", lifecycle.GetProperty("graceful_drop_rule").GetString(), StringComparison.Ordinal);
+        Assert.True(lifecycle.GetProperty("operator_visible_confirmation").GetString()!.Length > 0);
+
+        // Exactly three layers, each carrying a purpose and a cadence.
+        var layers = supervision.GetProperty("supervision_layers").EnumerateArray()
+            .Select(l => (Layer: l.GetProperty("layer").GetString()!, Cadence: l.GetProperty("cadence").GetString()!, Purpose: l.GetProperty("purpose").GetString()!))
+            .ToArray();
+        Assert.Equal(3, layers.Length);
+        Assert.All(layers, l => Assert.NotEmpty(l.Purpose));
+        Assert.All(layers, l => Assert.NotEmpty(l.Cadence));
+        Assert.Contains(layers, l => l.Layer == "real-time message monitor");
+        Assert.Contains(layers, l => l.Layer == "blocking-UI pane scan" && l.Cadence.Contains("sub-minute", StringComparison.Ordinal));
+        Assert.Contains(layers, l => l.Layer == "periodic state watchdog" && l.Cadence.Contains("tens-of-minutes", StringComparison.Ordinal));
+
+        Assert.Contains("5.5 HOURS", supervision.GetProperty("rearm_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("actually read", supervision.GetProperty("verified_read_rule").GetString(), StringComparison.Ordinal);
+
+        // Both dialog lists are closed four-item sets; every MAY entry carries
+        // its verification condition.
+        var mayAnswer = supervision.GetProperty("may_answer").EnumerateArray()
+            .Select(m => (Dialog: m.GetProperty("dialog").GetString()!, Verification: m.GetProperty("verification").GetString()!))
+            .ToArray();
+        Assert.Equal(4, mayAnswer.Length);
+        Assert.All(mayAnswer, m => Assert.NotEmpty(m.Verification));
+        Assert.Contains(mayAnswer, m => m.Dialog.Contains("itself requested", StringComparison.Ordinal));
+        Assert.Contains(mayAnswer, m => m.Dialog.Contains("verified read-only", StringComparison.Ordinal));
+        Assert.Contains(mayAnswer, m => m.Dialog.Contains("hooks the design thread itself installed", StringComparison.Ordinal));
+        Assert.Contains(mayAnswer, m => m.Dialog.Contains("operator-preauthorized mode changes", StringComparison.Ordinal));
+
+        var mustEscalate = supervision.GetProperty("must_escalate").EnumerateArray()
+            .Select(m => (Category: m.GetProperty("category").GetString()!, Reason: m.GetProperty("reason").GetString()!))
+            .ToArray();
+        Assert.Equal(4, mustEscalate.Length);
+        Assert.All(mustEscalate, m => Assert.NotEmpty(m.Reason));
+        Assert.Contains(mustEscalate, m => m.Category.Contains("unreadable", StringComparison.Ordinal));
+        Assert.Contains(mustEscalate, m => m.Category.Contains("destructive or irreversible", StringComparison.Ordinal));
+        Assert.Contains(mustEscalate, m => m.Category.Contains("product or design decision", StringComparison.Ordinal));
+        Assert.Contains(mustEscalate, m => m.Category.Contains("credential, security, and permission waits", StringComparison.Ordinal));
+
+        Assert.Contains("UNSTICKING A SESSION IS NOT DECIDING FOR IT", supervision.GetProperty("boundary_sentence").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Terminal-workspace provisioning", supervision.GetProperty("provisioning_reference").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Design-thread watchdog", supervision.GetProperty("watchdog_safety_rules_reference").GetString(), StringComparison.Ordinal);
+    }
+
     private static string RunMarkdown(string[] args)
     {
         using var writer = new StringWriter();

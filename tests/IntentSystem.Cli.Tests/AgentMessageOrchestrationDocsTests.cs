@@ -145,6 +145,86 @@ public sealed class AgentMessageOrchestrationDocsTests
         }
     }
 
+    [Fact]
+    public void BothDocs_CarryTheDesignThreadWorkspaceSupervisionSection_G550()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        Assert.Contains("## Design-thread workspace supervision (keeping the team moving)", en, StringComparison.Ordinal);
+        Assert.Contains("## 設計スレッドによるワークスペース監督（チームを動かし続ける）", ja, StringComparison.Ordinal);
+
+        // Granted authority is session-layer only; workflow authority does not move.
+        Assert.Contains("**Granted authority — session layer only.**", en, StringComparison.Ordinal);
+        Assert.Contains("is not granted and never moves", en, StringComparison.Ordinal);
+        Assert.Contains("**granted, not assumed**", en, StringComparison.Ordinal);
+        Assert.Contains("**付与された権限 — セッション層のみ。**", ja, StringComparison.Ordinal);
+        Assert.Contains("付与対象ではなく、決して動きません", ja, StringComparison.Ordinal);
+
+        // Session lifecycle: graceful drop, one holder, operator-visible confirmation.
+        Assert.Contains("**graceful drop**", en, StringComparison.Ordinal);
+        Assert.Contains("**one holder per role**", en, StringComparison.Ordinal);
+        Assert.Contains("**operator-visible**", en, StringComparison.Ordinal);
+        Assert.Contains("**graceful drop**", ja, StringComparison.Ordinal);
+        Assert.Contains("**1 ロール 1 保持者**", ja, StringComparison.Ordinal);
+        Assert.Contains("**オペレーターに可視**", ja, StringComparison.Ordinal);
+
+        // Three layers with their cadences, and the re-arm rule with its cost.
+        foreach (var layer in new[] { "real-time message monitor", "blocking-UI pane scan", "periodic state watchdog" })
+        {
+            Assert.Contains(layer, en, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("sub-minute class", en, StringComparison.Ordinal);
+        Assert.Contains("tens-of-minutes class", en, StringComparison.Ordinal);
+        Assert.Contains("**5.5 hours**", en, StringComparison.Ordinal);
+        Assert.Contains("サブ分オーダー", ja, StringComparison.Ordinal);
+        Assert.Contains("数十分オーダー", ja, StringComparison.Ordinal);
+        Assert.Contains("**5.5 時間**", ja, StringComparison.Ordinal);
+        Assert.Contains("**Re-arm across restarts.**", en, StringComparison.Ordinal);
+        Assert.Contains("**再起動をまたいだ re-arm。**", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BothDocs_CarryBothDialogLists_AndTheBoundarySentence_G550()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        // The verified-read rule gates every answer.
+        Assert.Contains("**verified-read rule**", en, StringComparison.Ordinal);
+        Assert.Contains("only after reading its content from the pane**", en, StringComparison.Ordinal);
+        Assert.Contains("**verified-read ルール**", ja, StringComparison.Ordinal);
+
+        // MAY list — four items, each with its verification condition.
+        Assert.Contains("**Confirmations of work it itself requested**", en, StringComparison.Ordinal);
+        Assert.Contains("**Command approvals verified read-only**", en, StringComparison.Ordinal);
+        Assert.Contains("**Trust screens for hooks it itself installed**", en, StringComparison.Ordinal);
+        Assert.Contains("**Operator-preauthorized mode changes**", en, StringComparison.Ordinal);
+        Assert.Contains("**自分自身が要求した作業の確認**", ja, StringComparison.Ordinal);
+        Assert.Contains("**read-only であると検証済みのコマンド承認**", ja, StringComparison.Ordinal);
+        Assert.Contains("**自分自身がインストールした hook の trust 画面**", ja, StringComparison.Ordinal);
+        Assert.Contains("**オペレーターが事前承認した mode 変更**", ja, StringComparison.Ordinal);
+
+        // MUST-ESCALATE list — four categories, credential/security/permission absolute.
+        Assert.Contains("**unreadable or unverifiable**", en, StringComparison.Ordinal);
+        Assert.Contains("**destructive or irreversible**", en, StringComparison.Ordinal);
+        Assert.Contains("**embed a product or design decision**", en, StringComparison.Ordinal);
+        Assert.Contains("**credential, security, and permission waits** — never answerable", en, StringComparison.Ordinal);
+        Assert.Contains("**読めない・検証できない**", ja, StringComparison.Ordinal);
+        Assert.Contains("**破壊的・不可逆**", ja, StringComparison.Ordinal);
+        Assert.Contains("**プロダクト/設計の判断を 含む**", ja, StringComparison.Ordinal);
+        Assert.Contains("permission の待ち** — 事前承認の有無にかかわらず回答不可", ja, StringComparison.Ordinal);
+
+        // The boundary sentence, on both mirrors.
+        Assert.Contains("**Unsticking a session is not deciding for it.**", en, StringComparison.Ordinal);
+        Assert.Contains("**セッションの詰まりを解くことは、そのセッションの代わりに決定することではない。**", ja, StringComparison.Ordinal);
+
+        // Watchdog safety rules apply verbatim on both mirrors.
+        Assert.Contains("no duplicate delegation, no clearing a permission prompt", en, StringComparison.Ordinal);
+        Assert.Contains("委譲の重複禁止、permission プロンプトの自動クリア禁止", ja, StringComparison.Ordinal);
+    }
+
     private static string ReadDoc(string language)
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);
