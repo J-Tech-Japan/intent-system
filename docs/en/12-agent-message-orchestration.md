@@ -72,6 +72,64 @@ The full reference checklist follows the intake:
 > message, and clean up only through the agmsg scripts. Hand-editing agmsg state
 > corrupts delivery.
 
+## Terminal-workspace provisioning (building the team)
+
+The setup checklist above assumes each role **already** has its own folder and
+its own live terminal session. When it does not — a design thread asked to "set
+this team up" from nothing — `guide orchestrator-thread` renders a
+**terminal-workspace provisioning** section that creates both, executable with
+placeholders only (`<Project>`, host metadata repo `<owner/host-repo>`, target
+repo `<owner/repo>`, agmsg team `<team>`, `<workspace-root>`). Generate it with
+the same command and work down its checklist; the summary below is orientation,
+not a substitute.
+
+**1. Role folders — create them when absent.** Host-side roles (orchestrator,
+review) run from clones of the **host metadata repo**; the implementation role
+runs from a clone of the **target repo** (implementation is GitHub-contract-only
+and never reads host `.intent-cli/` state). Two roles must **never** share a
+folder: agmsg identity and the codex monitor bridge are `(project, type)`-scoped
+(G521), so two same-type roles in one folder resolve to the same identity and one
+of them silently stops receiving. A pane opened at a missing cwd falls back to
+the shell's default directory, which produces exactly that collision — so create
+the folder first, then verify each is distinct, has the expected `origin`, and is
+clean.
+
+**2. Workspace topology.** One workspace per team; one tab named after the team;
+one pane per role, each opened with that role's folder as its cwd (set at pane
+creation — do not `cd` after launching the agent). The **design thread stays
+outside** the workspace it is constructing.
+
+**3. Launch rules.** Launch every agent by **typing into the pane's interactive
+shell** (send-text + enter). For codex this is mandatory: the `codex()` shell
+shim is what arms the agmsg monitor bridge (G521), and a workspace manager that
+exec's the canonical executable directly bypasses it — the session looks healthy
+and messages are simply never delivered. claude is launched with the permission
+mode the **operator** chose. **Attend** each pane's first run: trust screens and
+permission prompts block the session until answered, and they must be answered so
+they produce **durable** allowlists rather than a per-invocation approval that
+re-prompts on the next wake.
+
+**4. Role initialization.** Type the actas form matching the pane's CLI —
+`/agmsg actas <role>` for claude, `$agmsg actas <role>` for codex — then **wait
+for readiness** (a pane still on a trust screen is not ready), then run the
+existing [ping test](#receiver-readiness). Readiness is a precondition for the
+ping test, not a replacement for it.
+
+**5. Exclusivity and handover.** Exactly one live session may hold a role; a
+second actas attempt is refused, and that refusal is correct. Replacing a
+session goes through the **graceful drop** — the current holder drops the role
+(with its operator confirmation) and only then does the successor claim it,
+followed by readiness + ping test again.
+
+**6. herdr is the reference workspace manager.** The surfaces a design thread
+drives are `workspace create`, `pane split`, `pane send-text` / `send-keys`,
+`agent prompt`, and `agent wait`. intent-cli does not own, ship, or wrap herdr —
+consult herdr's own documentation for internals, exactly as this guide links out
+for agmsg internals. **Any** equivalent workspace manager may be substituted
+provided the same rules hold: one dedicated folder per role as the pane cwd,
+shim-safe typed launch, attended first-run prompts, actas + readiness before the
+ping test, and one holder per role with a graceful drop on handover.
+
 ## Role boundary — design authors, orchestrator coordinates
 
 **Design creates packets; the orchestrator moves ready packets through the

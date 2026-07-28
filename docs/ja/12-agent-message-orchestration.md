@@ -68,6 +68,62 @@ intake の後に、完全なリファレンスチェックリストが続きま�
 > クリーンアップはすべて agmsg スクリプト経由で行います。agmsg state の手編集は delivery を
 > 壊します。
 
+## ターミナルワークスペースの provisioning（チームを構築する）
+
+上記のセットアップチェックリストは、各ロールが **すでに** 専用フォルダーと稼働中の
+ターミナルセッションを持っていることを前提にしています。そうでない場合 — 設計スレッドが
+何もない状態から「このチームをセットアップして」と依頼された場合 —
+`guide orchestrator-thread` は両方を作る **terminal-workspace provisioning**
+セクションをレンダリングします。プレースホルダーだけで実行可能です
+（`<Project>`、host メタデータリポジトリ `<owner/host-repo>`、target repo
+`<owner/repo>`、agmsg team `<team>`、`<workspace-root>`）。同じコマンドで生成し、
+そのチェックリストを上から実行してください。以下の要約はオリエンテーションであり、
+代替ではありません。
+
+**1. ロールフォルダー — 無ければ作る。** host 側のロール（orchestrator、review）は
+**host メタデータリポジトリ** のクローンから、implementation ロールは **target repo**
+のクローンから実行します（implementation は GitHub-contract-only であり、host の
+`.intent-cli/` state を読みません）。2 つのロールが 1 つのフォルダーを共有しては
+**いけません**: agmsg identity と codex monitor bridge は `(project, type)` スコープ
+（G521）であり、同じ型の 2 ロールが 1 フォルダーにいると同一 identity に解決され、
+片方が静かに受信を停止します。存在しない cwd で開かれた pane はシェルの既定
+ディレクトリにフォールバックし、まさにこの衝突を起こします — 先にフォルダーを作成し、
+その後で各フォルダーが別パスであること、`origin` が期待どおりであること、clean である
+ことを検証してください。
+
+**2. ワークスペーストポロジー。** team ごとに 1 ワークスペース、team 名を付けた
+タブ 1 つ、ロールごとに pane 1 つ（そのロールのフォルダーを cwd として pane 作成時に
+設定する — agent 起動後に `cd` しない）。**設計スレッドは** 自分が構築している
+ワークスペースの **外に留まります**。
+
+**3. 起動ルール。** すべての agent は pane の **対話シェルにタイプして**
+（send-text + enter）起動します。codex では必須です: `codex()` シェル shim が agmsg
+monitor bridge を arm する（G521）ため、canonical な実行ファイルを直接 exec する
+ワークスペースマネージャーはこれを bypass し、セッションは健全に見えるのにメッセージが
+一切配信されません。claude は **オペレーター** が選んだ permission mode で起動します。
+各 pane の初回起動には **必ず立ち会って** ください: trust 画面と permission プロンプトは
+回答されるまでセッションをブロックし、しかも次の wake で再プロンプトされる 1 回限りの
+承認ではなく **durable な** allowlist を生むように回答する必要があります。
+
+**4. ロール初期化。** pane の CLI に合った actas 形式をタイプします — claude は
+`/agmsg actas <role>`、codex は `$agmsg actas <role>` — その後 **readiness を待ち**
+（trust 画面のままの pane は ready ではありません）、既存の
+[ping テスト](#receiver-の準備状態readiness) を実行します。readiness は ping テストの
+前提条件であって、代替ではありません。
+
+**5. 排他性とハンドオーバー。** 1 つのロールを保持できる生きたセッションはちょうど 1 つで、
+2 番目の actas は拒否されます — その拒否が正しい挙動です。セッションの置き換えは
+**graceful drop** を通します: 現保持者が（オペレーター確認つきで）ロールを drop し、
+その後にはじめて後継が claim し、readiness + ping テストを再実行します。
+
+**6. 参照ワークスペースマネージャーは herdr。** 設計スレッドが駆動する surface は
+`workspace create`、`pane split`、`pane send-text` / `send-keys`、`agent prompt`、
+`agent wait` です。intent-cli は herdr を所有・同梱・ラップしません — internals は
+agmsg internals と同じくリンクアウトし、herdr 自身のドキュメントを参照します。同じルール
+（ロールごとの専用フォルダーを pane の cwd にする、shim-safe なタイプ起動、初回プロンプトに
+立ち会う、ping テスト前の actas + readiness、1 ロール 1 保持者と handover 時の graceful
+drop）が満たされるなら、**任意の** 同等なワークスペースマネージャーで置き換えられます。
+
 ## ロール境界 — design が authoring、orchestrator は coordinate
 
 **design が packet を作成し、orchestrator は ready な packet を workflow に通します。**

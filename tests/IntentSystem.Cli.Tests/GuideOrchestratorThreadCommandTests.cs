@@ -1811,6 +1811,136 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.True(verification.GetProperty("dead_address_example").GetString()!.Length > 0);
     }
 
+    [Fact]
+    public void Execute_Markdown_TerminalWorkspaceProvisioning_HasAllSixElements_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        // AC: the section exists with all six elements in paste-ready form.
+        Assert.Contains("## Terminal-workspace provisioning (G549)", output, StringComparison.Ordinal);
+        Assert.Contains("### Placeholders", output, StringComparison.Ordinal);
+        Assert.Contains("### 1. Role folders (create them when absent)", output, StringComparison.Ordinal);
+        Assert.Contains("### 2. Workspace topology", output, StringComparison.Ordinal);
+        Assert.Contains("### 3. Launch rules (and why)", output, StringComparison.Ordinal);
+        Assert.Contains("### 4. Role initialization (actas and readiness)", output, StringComparison.Ordinal);
+        Assert.Contains("### 5. Role exclusivity and handover", output, StringComparison.Ordinal);
+        Assert.Contains("### 6. Reference workspace manager — herdr", output, StringComparison.Ordinal);
+        Assert.Contains("### Provisioning checklist (paste-ready)", output, StringComparison.Ordinal);
+        // Placeholders the design thread fills in from its own context.
+        Assert.Contains("`<Project>`", output, StringComparison.Ordinal);
+        Assert.Contains("`<owner/host-repo>`", output, StringComparison.Ordinal);
+        Assert.Contains("`<workspace-root>`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Provisioning_FolderCommands_SplitHostSideFromImplementation_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        // AC: host-side roles clone the HOST metadata repo; the implementation
+        // role clones the TARGET repo — with runnable commands for each.
+        Assert.Contains("git clone https://github.com/<owner/host-repo>.git <workspace-root>/<Project>Orchestrator", output, StringComparison.Ordinal);
+        Assert.Contains("git clone https://github.com/<owner/host-repo>.git <workspace-root>/<Project>Review", output, StringComparison.Ordinal);
+        Assert.Contains("git clone https://github.com/J-Tech-Japan/intent-system.git <workspace-root>/<Project>Implementation", output, StringComparison.Ordinal);
+        // AC: the never-share rule appears WITH its (project, type)-scoping reason.
+        Assert.Contains("NEVER share a folder between two roles", output, StringComparison.Ordinal);
+        Assert.Contains("(project, type)-scoped", output, StringComparison.Ordinal);
+        Assert.Contains("G521", output, StringComparison.Ordinal);
+        // An absent folder is created, not worked around.
+        Assert.Contains("When a folder is absent, CREATE it", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Provisioning_TopologyAndLaunchRules_WarnAgainstDirectSpawn_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--team", "orch-team"]);
+
+        // AC: one workspace / one team-named tab / one pane per role, design outside.
+        Assert.Contains("One WORKSPACE per agmsg team", output, StringComparison.Ordinal);
+        Assert.Contains("One TAB named after the team (`orch-team`)", output, StringComparison.Ordinal);
+        Assert.Contains("One PANE per role", output, StringComparison.Ordinal);
+        Assert.Contains("The DESIGN thread stays OUTSIDE the workspace", output, StringComparison.Ordinal);
+        // AC: the shim-safe launch rule appears with its reason, and direct
+        // executable spawn is explicitly warned against.
+        Assert.Contains("typing into the pane's interactive shell", output, StringComparison.Ordinal);
+        Assert.Contains("`codex()` shell shim", output, StringComparison.Ordinal);
+        Assert.Contains("exec's the canonical `codex` executable directly BYPASSES the shim", output, StringComparison.Ordinal);
+        // Operator-chosen permission mode for claude; attended first-run screens.
+        Assert.Contains("permission mode the OPERATOR chose", output, StringComparison.Ordinal);
+        Assert.Contains("DURABLE allowlists", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Provisioning_ActasReadinessAndHandover_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        // AC: both actas forms, the readiness wait, and the ping-test reference.
+        Assert.Contains("`/agmsg actas <role>`", output, StringComparison.Ordinal);
+        Assert.Contains("`$agmsg actas <role>`", output, StringComparison.Ordinal);
+        Assert.Contains("**readiness wait**", output, StringComparison.Ordinal);
+        Assert.Contains("run the existing ping test before ANY delegation", output, StringComparison.Ordinal);
+        // AC: exclusivity + graceful drop with operator confirmation before the successor claims.
+        Assert.Contains("Exactly ONE live session may hold a role at a time", output, StringComparison.Ordinal);
+        Assert.Contains("GRACEFUL DROP", output, StringComparison.Ordinal);
+        Assert.Contains("OPERATOR CONFIRMATION", output, StringComparison.Ordinal);
+        Assert.Contains("only AFTER the drop is confirmed", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Provisioning_NamesHerdrSurfaces_AndLinksOutInternals_G549()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        // AC: herdr is named as the REFERENCE manager with its surfaces listed…
+        Assert.Contains("`workspace create`", output, StringComparison.Ordinal);
+        Assert.Contains("`pane split`", output, StringComparison.Ordinal);
+        Assert.Contains("`pane send-text` / `send-keys`", output, StringComparison.Ordinal);
+        Assert.Contains("`agent prompt`", output, StringComparison.Ordinal);
+        Assert.Contains("`agent wait`", output, StringComparison.Ordinal);
+        // …internals linked out, not restated, and any equivalent manager allowed.
+        Assert.Contains("intent-cli does not own, ship, or wrap herdr", output, StringComparison.Ordinal);
+        Assert.Contains("consult herdr's own", output, StringComparison.Ordinal);
+        Assert.Contains("ANY equivalent workspace manager may be substituted", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_TerminalWorkspaceProvisioning_HasStructuredShape_G549()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var provisioning = doc.RootElement.GetProperty("terminal_workspace_provisioning");
+
+        Assert.NotEmpty(provisioning.GetProperty("placeholders").EnumerateArray());
+        Assert.NotEmpty(provisioning.GetProperty("checklist").EnumerateArray());
+
+        var folders = provisioning.GetProperty("folder_provisioning");
+        Assert.Contains("(project, type)-scoped", folders.GetProperty("never_share_rule").GetString(), StringComparison.Ordinal);
+
+        var roles = folders.GetProperty("roles").EnumerateArray()
+            .Select(r => (Role: r.GetProperty("role").GetString()!, Command: r.GetProperty("create_command").GetString()!))
+            .ToArray();
+        Assert.Equal(3, roles.Length);
+        Assert.Contains(roles, r => r.Role == "orchestrator" && r.Command.Contains("<owner/host-repo>", StringComparison.Ordinal));
+        Assert.Contains(roles, r => r.Role == "review" && r.Command.Contains("<owner/host-repo>", StringComparison.Ordinal));
+        Assert.Contains(roles, r => r.Role == "implementation" && r.Command.Contains("owner/repo", StringComparison.Ordinal));
+
+        Assert.Contains("shim", provisioning.GetProperty("launch_rules").GetProperty("codex_shim_rule").GetString(), StringComparison.Ordinal);
+        Assert.NotEmpty(provisioning.GetProperty("role_initialization").GetProperty("actas_forms").EnumerateArray());
+        Assert.True(provisioning.GetProperty("exclusivity_handover").GetProperty("operator_confirmation_rule").GetString()!.Length > 0);
+
+        var referenceManager = provisioning.GetProperty("reference_manager");
+        Assert.Equal("herdr", referenceManager.GetProperty("name").GetString());
+        Assert.NotEmpty(referenceManager.GetProperty("surfaces").EnumerateArray());
+        Assert.True(referenceManager.GetProperty("substitution_rule").GetString()!.Length > 0);
+    }
+
     private static string RunMarkdown(string[] args)
     {
         using var writer = new StringWriter();
