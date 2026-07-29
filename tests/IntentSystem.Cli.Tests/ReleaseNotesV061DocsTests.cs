@@ -17,13 +17,13 @@ public sealed class ReleaseNotesV061DocsTests
     private static readonly string[] ReleasedSlices = ["G552", "G553"];
 
     [Fact]
-    public void VersionPolicy_RecordsTheV061ReleaseToBeCut_G554()
+    public void VersionPolicy_RecordsTheReleaseToBeCut_G554()
     {
-        var policy = VersionPolicy.TryReadFromRepo(RepoRoot());
-
-        Assert.NotNull(policy);
-        Assert.Equal("0.6.0", policy.StableVersion);
-        Assert.Equal("0.6.1", policy.NextVersion);
+        // G557: derived from eng/version.json rather than pinned by value —
+        // see RepoVersionPolicySource for why a literal pair is the wrong
+        // assertion for a field the post-release roll is required to change.
+        RepoVersionPolicySource.AssertReleaseToBeCutIsAheadOfPublishedStable(
+            RepoVersionPolicySource.Read());
     }
 
     [Theory]
@@ -247,6 +247,70 @@ public sealed class ReleaseNotesV061DocsTests
             language == "en" ? "Notify the operator to publish the `v0.6.1` GitHub Release" : "オペレーターに `v0.6.1` GitHub Release の publish を通知し",
             notes,
             StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void DeveloperReference_RollRuleRequiresStubsAndGreenCi_G557(string language)
+    {
+        var reference = ReadDeveloperReference(language);
+
+        // G557 step 4: the roll commit creates the next-version DRAFT stubs, or
+        // it turns main red the moment it lands.
+        Assert.Contains(
+            language == "en" ? "add DRAFT `docs/{en,ja}/release-notes-v<nextVersion>.md` stubs" : "DRAFT の\n`docs/{en,ja}/release-notes-v<nextVersion>.md` stub を追加する".Replace("\n", " "),
+            reference,
+            StringComparison.Ordinal);
+
+        // G557 step 5: the roll is not complete until child main CI is green.
+        Assert.Contains(
+            language == "en" ? "Verify child main CI is green after pushing the roll" : "push 後に child main の CI が green であることを検証する",
+            reference,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "the roll is not done until step 5" : "roll はステップ 5 まで終えて初めて完了",
+            reference,
+            StringComparison.Ordinal);
+
+        // The incident that produced the amendment is recorded with it.
+        Assert.Contains("00936844", reference, StringComparison.Ordinal);
+        Assert.Contains("G475", reference, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void NextVersionNotes_ExistAsClearlyMarkedDrafts_G557(string language)
+    {
+        var policy = RepoVersionPolicySource.Read();
+        var path = Path.Combine(
+            RepoVersionPolicySource.RepoRoot(), "docs", language, $"release-notes-v{policy.NextVersion}.md");
+
+        Assert.True(File.Exists(path), $"missing next-version notes: docs/{language}/release-notes-v{policy.NextVersion}.md");
+
+        var notes = ReadCollapsed(path);
+
+        // The stub must be unmistakably a draft — G475 checks existence, and a
+        // stub that reads like a changelog would be worse than a missing file.
+        Assert.Contains(language == "en" ? "DRAFT" : "DRAFT", notes, StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "**⚠️ DRAFT / UNRELEASED.**" : "**⚠️ DRAFT / 未リリース。**",
+            notes,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "release-prep packet authors the real content" : "release-prep パケットが author します",
+            notes,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "must not be treated as a changelog" : "changelog として扱ってはいけません",
+            notes,
+            StringComparison.Ordinal);
+
+        // And it still satisfies the G475 guard's own two requirements, so the
+        // guard's semantics are unchanged rather than relaxed.
+        Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.NextVersion}", notes, StringComparison.Ordinal);
+        Assert.Contains($"releases/tag/v{policy.NextVersion}", notes, StringComparison.Ordinal);
     }
 
     [Fact]

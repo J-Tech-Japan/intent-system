@@ -2131,18 +2131,33 @@ closeout の 1 ステップであり、飛ばすと preview チャンネルが�
 以外に手段がありませんでした。直ちに roll すれば次の preview は `0.6.2-preview.N` となり
 `0.6.1` より上にソートされるため、`dotnet tool update` が再び機能します。
 
-**リリース closeout チェックリスト**(roll はステップ 4 — ステップ 3 で止めないこと):
+**リリース closeout チェックリスト**(roll はステップ 4 — ステップ 3 で止めないこと。
+そして roll はステップ 5 まで終えて初めて完了です):
 
 1. 対象バージョンの GitHub Release を publish する(これが `release.yml` を発火させる)。
 2. publish された成果物を検証する: NuGet ページ、release assets、`.sha256` チェックサム、
    `dotnet tool update` 後の `intent-cli --version`。
 3. オペレーターと、待っている下流の利用者へ通知する。
 4. **follow-up commit で `eng/version.json` を roll する** — `stableVersion` = リリース
-   したバージョン、`nextVersion` = 次の patch — そして次の main CI preview がリリースより
-   上に build されることを確認する。
+   したバージョン、`nextVersion` = 次の patch — **さらに同じ commit で DRAFT の
+   `docs/{en,ja}/release-notes-v<nextVersion>.md` stub を追加する。** G475 のガードは
+   `nextVersion` が指すバージョンのノートの存在を要求するため、stub 無しでフィールドだけを
+   動かす roll は、着地した瞬間に main を red にします。stub に changelog の中身は不要で、
+   実際の内容は次の release-prep パケットが author します。
+5. **push 後に child main の CI が green であることを検証する。** roll は CI が green に
+   なって初めて完了です: red な main は、それを継承するすべての無関係な PR をブロックする
+   ため、roll した人は commit だけでなく結果まで責任を持ちます。
 
 既存の preview 成果物は **遡って番号を振り直しません**。このルールはチャンネルを今後に
 向けて修正するものです。
+
+> **ステップ 4-5 がこの形である理由(G557)。** roll の最初の実運用(commit `00936844`、
+> `nextVersion` 0.6.1 → 0.6.2)はフィールドだけを動かし、4 つのチェックで main を red に
+> しました: 3 つのテストがバージョンの組を値で固定しており、G475 のガードが
+> `release-notes-v0.6.2.md` を要求したためです。無関係な PR が red な main を継承して
+> 凍結され、hotfix が着地するまで解除されませんでした。assertion は `eng/version.json`
+> から導出するようになり、正しい roll がそれらを壊すことはなくなりました。残りを塞ぐのが
+> 上記 2 ステップです: roll と同時に stub を作り、green を確認してから完了とする。
 
 ### 次リリース準備(v0.6.1)
 

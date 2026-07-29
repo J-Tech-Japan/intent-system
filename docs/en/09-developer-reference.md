@@ -1993,18 +1993,35 @@ manual uninstall/install was the only way forward. Rolling immediately makes the
 next preview `0.6.2-preview.N`, which sorts above `0.6.1`, and `dotnet tool
 update` works again.
 
-**Release closeout checklist** (the roll is step 4 — do not stop at step 3):
+**Release closeout checklist** (the roll is step 4 — do not stop at step 3, and
+the roll is not done until step 5):
 
 1. Publish the GitHub Release for the version (this fires `release.yml`).
 2. Verify the published artifacts: NuGet page, release assets, `.sha256`
    checksums, and `intent-cli --version` after `dotnet tool update`.
 3. Notify the operator and any waiting downstream consumers.
 4. **Roll `eng/version.json` in a follow-up commit** — `stableVersion` = the
-   released version, `nextVersion` = the next patch — and confirm the next main
-   CI preview builds above the release.
+   released version, `nextVersion` = the next patch — **and, in the same
+   commit, add DRAFT `docs/{en,ja}/release-notes-v<nextVersion>.md` stubs.**
+   The G475 guard requires notes to exist for whatever `nextVersion` names, so
+   a roll that moves the field without the stubs turns main red the moment it
+   lands. The stubs carry no changelog content — the next release-prep packet
+   authors that.
+5. **Verify child main CI is green after pushing the roll.** The roll is
+   complete only when CI is: a red main blocks every unrelated PR that inherits
+   it, so the roller owns the result, not just the commit.
 
 Existing preview artifacts are **not** renumbered retroactively; the rule fixes
 the channel going forward.
+
+> **Why steps 4-5 read this way (G557).** The roll's first live execution
+> (commit `00936844`, `nextVersion` 0.6.1 → 0.6.2) moved the field alone and
+> turned main red on four checks: three tests pinned the version pair by value,
+> and the G475 guard demanded `release-notes-v0.6.2.md`. An unrelated PR
+> inherited the red main and was frozen until a hotfix landed. The assertions
+> are now derived from `eng/version.json` so a correct roll cannot break them,
+> and the two steps above close the rest: create the stubs with the roll, and
+> confirm green before calling it done.
 
 ### Next release readiness (v0.6.1)
 

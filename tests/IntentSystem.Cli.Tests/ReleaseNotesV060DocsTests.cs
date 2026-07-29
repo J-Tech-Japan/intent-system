@@ -26,14 +26,12 @@ public sealed class ReleaseNotesV060DocsTests
     [Fact]
     public void VersionPolicy_RecordsTheReleaseToBeCut_G551()
     {
-        // G554 rolled the line to 0.6.1 after v0.6.0 shipped; this test keeps
-        // pinning that the policy names a release-to-be-cut strictly ahead of
-        // the published stable, which is what the readiness gate depends on.
-        var policy = VersionPolicy.TryReadFromRepo(RepoRoot());
-
-        Assert.NotNull(policy);
-        Assert.Equal("0.6.0", policy.StableVersion);
-        Assert.Equal("0.6.1", policy.NextVersion);
+        // G557: derived from eng/version.json rather than pinned by value. The
+        // readiness gate depends on the PROPERTY (a release-to-be-cut strictly
+        // ahead of the published stable), and that property survives every
+        // post-release roll — a hardcoded pair does not.
+        RepoVersionPolicySource.AssertReleaseToBeCutIsAheadOfPublishedStable(
+            RepoVersionPolicySource.Read());
     }
 
     [Theory]
