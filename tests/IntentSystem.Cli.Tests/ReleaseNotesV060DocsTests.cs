@@ -24,13 +24,16 @@ public sealed class ReleaseNotesV060DocsTests
     ];
 
     [Fact]
-    public void VersionPolicy_RecordsTheV060ReleaseToBeCut_G551()
+    public void VersionPolicy_RecordsTheReleaseToBeCut_G551()
     {
+        // G554 rolled the line to 0.6.1 after v0.6.0 shipped; this test keeps
+        // pinning that the policy names a release-to-be-cut strictly ahead of
+        // the published stable, which is what the readiness gate depends on.
         var policy = VersionPolicy.TryReadFromRepo(RepoRoot());
 
         Assert.NotNull(policy);
-        Assert.Equal("0.5.0", policy.StableVersion);
-        Assert.Equal("0.6.0", policy.NextVersion);
+        Assert.Equal("0.6.0", policy.StableVersion);
+        Assert.Equal("0.6.1", policy.NextVersion);
     }
 
     [Theory]
