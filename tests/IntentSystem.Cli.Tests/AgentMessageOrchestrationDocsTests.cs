@@ -245,6 +245,20 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("**agmsg だけの hold は contract violation です。**", ja, StringComparison.Ordinal);
         Assert.Contains("待っているのではなく stall しています", ja, StringComparison.Ordinal);
 
+        // G552 repair: the paste-ready `clarify open` invocation that persists
+        // the real question and its recommendation/evidence in the OPEN
+        // artifact, and the explicit no-schema-change statement.
+        foreach (var flag in new[] { "--question", "--recommended-answer", "--evidence" })
+        {
+            Assert.Contains(flag, en, StringComparison.Ordinal);
+            Assert.Contains(flag, ja, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("can never substitute for the durable record", en, StringComparison.Ordinal);
+        Assert.Contains("**No clarification schema change.**", en, StringComparison.Ordinal);
+        Assert.Contains("durable な記録の代わりには決してなりません", ja, StringComparison.Ordinal);
+        Assert.Contains("**clarification の schema 変更はありません。**", ja, StringComparison.Ordinal);
+
         // The refined reviewer hold rule — no untracked third option.
         Assert.Contains("**Reviewer hold rule (refined).**", en, StringComparison.Ordinal);
         Assert.Contains("no third option in which the reviewer simply waits", en, StringComparison.Ordinal);
@@ -296,6 +310,18 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("**証拠がログされる**", ja, StringComparison.Ordinal);
         Assert.Contains("ログの無い解決は解決では なく違反", ja, StringComparison.Ordinal);
         Assert.Contains("買うのは レイテンシであって finality ではない", ja, StringComparison.Ordinal);
+
+        // G552 repair: the concrete durable evidence sink, its three sections,
+        // and the post-hoc amendment property — on both mirrors.
+        Assert.Contains("**The evidence sink is `clarify record --from-file`**", en, StringComparison.Ordinal);
+        Assert.Contains("`## Recently Resolved`", en, StringComparison.Ordinal);
+        Assert.Contains("intent-cli clarify record --domain <domain> --from-file", en, StringComparison.Ordinal);
+        Assert.Contains("adds to the trail rather than erasing what it amends", en, StringComparison.Ordinal);
+
+        Assert.Contains("**evidence の sink は `clarify record --from-file`**", ja, StringComparison.Ordinal);
+        Assert.Contains("`## Recently Resolved`", ja, StringComparison.Ordinal);
+        Assert.Contains("intent-cli clarify record --domain <domain> --from-file", ja, StringComparison.Ordinal);
+        Assert.Contains("trail に追加されるだけで、修正対象を消すことはありません", ja, StringComparison.Ordinal);
 
         // Semantic exclusion, with the double-check scope explicitly untouched.
         Assert.Contains("**Semantic and product decisions are excluded, absolutely.**", en, StringComparison.Ordinal);

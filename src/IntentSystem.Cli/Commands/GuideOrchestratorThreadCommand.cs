@@ -1897,6 +1897,11 @@ internal static class GuideOrchestratorThreadCommand
                     "answer it — `intent-cli clarify answer` (design, or the operator on escalation)",
                     Fill("confirm it is visible — `intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json` reports `design-decision-pending`"),
                 },
+                PasteReadyInvocation =
+                    "intent-cli clarify open <execution-unit> \\\n"
+                    + "  --question \"<the actual design-blocking question, answerable by someone outside the thread>\" \\\n"
+                    + "  --recommended-answer \"<what you believe the answer is, when you believe you know it>\" \\\n"
+                    + "  --evidence \"<the repository facts that support the recommendation>\"",
             },
             ReviewerHoldRule = new OrchestratorReviewerHoldRule
             {
@@ -1969,6 +1974,28 @@ internal static class GuideOrchestratorThreadCommand
                     + "trail with the facts that verify it — what was decided, which repository facts entail it, and "
                     + "which threads agreed. An unlogged resolution is not a granted-authority resolution; it is an "
                     + "undocumented decision, and it is a violation of this contract.",
+                EvidenceSink =
+                    "The sink is the CANONICAL `clarify record` surface: the entry lands under `## Recently Resolved` "
+                    + "in the domain's clarification return path (`intents/<domain>/clarifications/open.md`), where "
+                    + "`Question` identifies the pending item, `Decision` records the decided value, and `Rationale` "
+                    + "records the verified repository facts plus the reviewer/orchestrator agreement. The entry is "
+                    + "durable and stays readable there, which is exactly what makes design's post-hoc amendment "
+                    + "possible — design reads the recorded evidence and amends or reverses from it.",
+                EvidenceOperation =
+                    "# 1. write the decision artifact (## Question / ## Decision / ## Rationale)\n"
+                    + "cat > /tmp/authority-decision.md <<'EOF'\n"
+                    + "## Question\n"
+                    + "<the pending item, identified so design can find it later>\n"
+                    + "\n"
+                    + "## Decision\n"
+                    + "<the decided value>\n"
+                    + "\n"
+                    + "## Rationale\n"
+                    + "<the verified repository facts that entail it, and which threads agreed>\n"
+                    + "EOF\n"
+                    + "\n"
+                    + "# 2. record it in the durable trail (--dry-run first shows the intended update)\n"
+                    + "intent-cli clarify record --domain <domain> --from-file /tmp/authority-decision.md",
                 PostHocAmendmentRule =
                     "DESIGN MAY AMEND POST HOC. A granted-authority resolution is provisional in design's eyes: "
                     + "design can review the logged evidence afterwards and amend or reverse the decision. The "
@@ -2598,6 +2625,12 @@ internal static class GuideOrchestratorThreadCommand
             writer.WriteLine($"- {command}");
         }
         writer.WriteLine();
+        writer.WriteLine("Paste-ready — the OPEN artifact carries the real content, not a packet-derived synthesis:");
+        writer.WriteLine();
+        writer.WriteLine("```bash");
+        writer.WriteLine(holds.ClarificationBackedHold.PasteReadyInvocation);
+        writer.WriteLine("```");
+        writer.WriteLine();
 
         writer.WriteLine("### Reviewer hold rule (refined)");
         writer.WriteLine();
@@ -2623,7 +2656,14 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
         writer.WriteLine($"- **evidence logging** — {holds.BoundedDefaultAuthority.EvidenceLoggingRule}");
+        writer.WriteLine($"- **evidence sink** — {holds.BoundedDefaultAuthority.EvidenceSink}");
         writer.WriteLine($"- **post-hoc amendment** — {holds.BoundedDefaultAuthority.PostHocAmendmentRule}");
+        writer.WriteLine();
+        writer.WriteLine("Paste-ready evidence operation:");
+        writer.WriteLine();
+        writer.WriteLine("```bash");
+        writer.WriteLine(holds.BoundedDefaultAuthority.EvidenceOperation);
+        writer.WriteLine("```");
         writer.WriteLine();
         writer.WriteLine($"> **Semantic exclusion:** {holds.BoundedDefaultAuthority.SemanticExclusionRule}");
         writer.WriteLine();
@@ -3881,6 +3921,10 @@ internal sealed record OrchestratorClarificationBackedHold
 
     [JsonPropertyName("canonical_commands")]
     public required IReadOnlyList<string> CanonicalCommands { get; init; }
+
+    /// <summary>G552 repair: a paste-ready `clarify open` invocation that persists the REAL question and its recommendation/evidence in the OPEN artifact.</summary>
+    [JsonPropertyName("paste_ready_invocation")]
+    public required string PasteReadyInvocation { get; init; }
 }
 
 internal sealed record OrchestratorReviewerHoldRule
@@ -3911,6 +3955,14 @@ internal sealed record OrchestratorBoundedDefaultAuthority
 
     [JsonPropertyName("evidence_logging_rule")]
     public required string EvidenceLoggingRule { get; init; }
+
+    /// <summary>G552 repair: the concrete durable sink for a granted-authority resolution — `clarify record --from-file`, whose entry lands under `## Recently Resolved`.</summary>
+    [JsonPropertyName("evidence_sink")]
+    public required string EvidenceSink { get; init; }
+
+    /// <summary>G552 repair: the paste-ready operation that writes that evidence.</summary>
+    [JsonPropertyName("evidence_operation")]
+    public required string EvidenceOperation { get; init; }
 
     [JsonPropertyName("post_hoc_amendment_rule")]
     public required string PostHocAmendmentRule { get; init; }

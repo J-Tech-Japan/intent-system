@@ -2217,6 +2217,15 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("> **Contract violation:**", output, StringComparison.Ordinal);
         Assert.Contains("An agmsg-only hold is a CONTRACT VIOLATION", output, StringComparison.Ordinal);
         Assert.Contains("if the artifact does not exist, you are not waiting, you are stalled", output, StringComparison.Ordinal);
+
+        // G552 repair: a paste-ready invocation that actually persists the real
+        // question and its recommendation/evidence in the OPEN artifact —
+        // agmsg may notify, but it can never substitute for the artifact.
+        Assert.Contains("Paste-ready — the OPEN artifact carries the real content", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli clarify open <execution-unit>", output, StringComparison.Ordinal);
+        Assert.Contains("--question ", output, StringComparison.Ordinal);
+        Assert.Contains("--recommended-answer ", output, StringComparison.Ordinal);
+        Assert.Contains("--evidence ", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2255,6 +2264,15 @@ public sealed class GuideOrchestratorThreadCommandTests
         // AC element 4: post-hoc amendment right.
         Assert.Contains("DESIGN MAY AMEND POST HOC", output, StringComparison.Ordinal);
         Assert.Contains("buys latency, not finality", output, StringComparison.Ordinal);
+        // G552 repair: the evidence log has a CONCRETE durable sink and a
+        // paste-ready operation, not just prose.
+        Assert.Contains("**evidence sink**", output, StringComparison.Ordinal);
+        Assert.Contains("CANONICAL `clarify record` surface", output, StringComparison.Ordinal);
+        Assert.Contains("`## Recently Resolved`", output, StringComparison.Ordinal);
+        Assert.Contains("intents/<domain>/clarifications/open.md", output, StringComparison.Ordinal);
+        Assert.Contains("Paste-ready evidence operation:", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli clarify record --domain <domain> --from-file", output, StringComparison.Ordinal);
+        Assert.Contains("## Rationale", output, StringComparison.Ordinal);
         // AC element 5: semantic exclusion, with the double-check scope untouched.
         Assert.Contains("> **Semantic exclusion:**", output, StringComparison.Ordinal);
         Assert.Contains("SEMANTIC AND PRODUCT DECISIONS ARE EXCLUDED, absolutely", output, StringComparison.Ordinal);
@@ -2297,6 +2315,10 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Equal(4, hold.GetProperty("required_fields").GetArrayLength());
         Assert.Contains("CONTRACT VIOLATION", hold.GetProperty("contract_violation_rule").GetString(), StringComparison.Ordinal);
         Assert.NotEmpty(hold.GetProperty("canonical_commands").EnumerateArray());
+        var invocation = hold.GetProperty("paste_ready_invocation").GetString()!;
+        Assert.Contains("--question", invocation, StringComparison.Ordinal);
+        Assert.Contains("--recommended-answer", invocation, StringComparison.Ordinal);
+        Assert.Contains("--evidence", invocation, StringComparison.Ordinal);
 
         var reviewer = holds.GetProperty("reviewer_hold_rule");
         Assert.Contains("FACT-CHECKABLE", reviewer.GetProperty("resolve_under_authority_when").GetString(), StringComparison.Ordinal);
@@ -2314,6 +2336,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         // verification condition would silently widen it.
         Assert.All(classes, c => Assert.NotEmpty(c.Facts));
         Assert.Contains("MANDATORY EVIDENCE LOGGING", authority.GetProperty("evidence_logging_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Recently Resolved", authority.GetProperty("evidence_sink").GetString(), StringComparison.Ordinal);
+        Assert.Contains("clarify record --domain", authority.GetProperty("evidence_operation").GetString(), StringComparison.Ordinal);
         Assert.Contains("AMEND POST HOC", authority.GetProperty("post_hoc_amendment_rule").GetString(), StringComparison.Ordinal);
         Assert.Contains("EXCLUDED", authority.GetProperty("semantic_exclusion_rule").GetString(), StringComparison.Ordinal);
 

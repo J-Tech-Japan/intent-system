@@ -252,6 +252,21 @@ domain、ブロックされている execution unit、スレッドの外にい�
 > watchdog とオペレーターの目視からも見えません。design を待っているなら artifact が
 > 存在するはずで、artifact が無いならそれは待っているのではなく stall しています。
 
+その内容を運ぶのは OPEN artifact 自身です — agmsg メッセージは通知はできますが、
+durable な記録の代わりには決してなりません:
+
+```bash
+intent-cli clarify open <execution-unit> \
+  --question "<スレッドの外にいる人でも答えられる形の、実際にブロックしている設計質問>" \
+  --recommended-answer "<答えが分かっていると考える場合の推奨回答>" \
+  --evidence "<推奨回答を支えるリポジトリ上の事実>"
+```
+
+質問は artifact の `QuestionText` に、推奨回答と根拠は artifact の `Reason` に
+`Recommended answer:` / `Evidence:` ラベル付きで格納されます。3 つのフラグはすべて
+任意で、省略すれば G552 以前の packet 由来挙動のままです。**clarification の schema
+変更はありません。**
+
 **reviewer hold ルール(refined)。** 技術チェックが green で、保留項目が
 非セマンティックかつ機械的に事実確認可能 → bounded default authority のもとで
 解決し、検証事実をログに残して先へ進みます。それ以外 → clarification を記録し、
@@ -274,6 +289,29 @@ hold を **可視な pending state** として保ちます。reviewer が単に�
 それを entail するか・どのスレッドが合意したかを記録する。ログの無い解決は解決では
 なく違反)、**修正可能**(design は後から証拠を確認して覆せる。この権限が買うのは
 レイテンシであって finality ではない)。
+
+**evidence の sink は `clarify record --from-file`** です — エントリは domain の
+clarification return path(`intents/<domain>/clarifications/open.md`)の
+`## Recently Resolved` セクションに入り、**Question** が保留項目を特定し、
+**Decision** が決定値を記録し、**Rationale** が検証済みのリポジトリ事実と
+reviewer/orchestrator の合意を記録します。エントリはそこに読める形で残り続け、
+それが design による post-hoc amendment を可能にします。後からの amendment は
+trail に追加されるだけで、修正対象を消すことはありません:
+
+```bash
+cat > /tmp/authority-decision.md <<'EOF'
+## Question
+<後から design が見つけられる形で特定した保留項目>
+
+## Decision
+<決定値>
+
+## Rationale
+<それを entail する検証済みのリポジトリ事実と、合意したスレッド>
+EOF
+
+intent-cli clarify record --domain <domain> --from-file /tmp/authority-decision.md
+```
 
 > **セマンティック・プロダクトの判断は絶対に除外されます。** intent shaping、
 > packet 内容と受け入れ基準、リリーススコープ、優先度の裁定は、常に

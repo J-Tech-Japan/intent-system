@@ -266,6 +266,21 @@ makes the hold detectable; the message is only a notification.
 > artifact exists; if the artifact does not exist, you are not waiting, you are
 > stalled.
 
+The OPEN artifact itself carries that content — an agmsg message may notify,
+but it can never substitute for the durable record:
+
+```bash
+intent-cli clarify open <execution-unit> \
+  --question "<the actual design-blocking question, answerable by someone outside the thread>" \
+  --recommended-answer "<what you believe the answer is, when you believe you know it>" \
+  --evidence "<the repository facts that support the recommendation>"
+```
+
+The question lands in the artifact's `QuestionText`; the recommendation and its
+evidence land in the artifact's `Reason` under `Recommended answer:` and
+`Evidence:` labels. All three flags are optional — omit them and the pre-G552
+packet-derived behavior is unchanged. **No clarification schema change.**
+
 **Reviewer hold rule (refined).** Technical checks green and the only pending
 item non-semantic and mechanically fact-checkable → resolve it under bounded
 default authority, log the verifying facts, and proceed. Anything else →
@@ -291,6 +306,30 @@ records what was decided, which facts entail it, and which threads agreed — an
 unlogged resolution is a violation, not a resolution), and **amendable**
 (design may review the evidence afterwards and reverse it; the authority buys
 latency, not finality).
+
+**The evidence sink is `clarify record --from-file`** — the entry lands under
+`## Recently Resolved` in the domain's clarification return path
+(`intents/<domain>/clarifications/open.md`), where **Question** identifies the
+pending item, **Decision** records the decided value, and **Rationale** records
+the verified repository facts plus the reviewer/orchestrator agreement. The
+entry stays readable there, which is what makes design's post-hoc amendment
+possible — and a later amendment adds to the trail rather than erasing what it
+amends:
+
+```bash
+cat > /tmp/authority-decision.md <<'EOF'
+## Question
+<the pending item, identified so design can find it later>
+
+## Decision
+<the decided value>
+
+## Rationale
+<the verified repository facts that entail it, and which threads agreed>
+EOF
+
+intent-cli clarify record --domain <domain> --from-file /tmp/authority-decision.md
+```
 
 > **Semantic and product decisions are excluded, absolutely.** Intent shaping,
 > packet content and acceptance criteria, release scope, and prioritization
