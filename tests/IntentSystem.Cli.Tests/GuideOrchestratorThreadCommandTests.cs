@@ -2199,6 +2199,158 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("Design-thread watchdog", supervision.GetProperty("watchdog_safety_rules_reference").GetString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_Markdown_ClarificationBackedHold_MakesAgmsgOnlyHoldsAContractViolation_G552()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("## Design-decision holds and bounded authority (G552)", output, StringComparison.Ordinal);
+        Assert.Contains("### Clarification-backed holds", output, StringComparison.Ordinal);
+        // AC: the hold is recorded through the canonical clarify surface, with
+        // the four fields.
+        Assert.Contains("RECORDS A CLARIFICATION ARTIFACT through the canonical clarify surface", output, StringComparison.Ordinal);
+        Assert.Contains("blocking execution unit", output, StringComparison.Ordinal);
+        Assert.Contains("recommended answer", output, StringComparison.Ordinal);
+        Assert.Contains("`intent-cli clarify open`", output, StringComparison.Ordinal);
+        Assert.Contains("`intent-cli clarify answer`", output, StringComparison.Ordinal);
+        // AC: the contract-violation sentence.
+        Assert.Contains("> **Contract violation:**", output, StringComparison.Ordinal);
+        Assert.Contains("An agmsg-only hold is a CONTRACT VIOLATION", output, StringComparison.Ordinal);
+        Assert.Contains("if the artifact does not exist, you are not waiting, you are stalled", output, StringComparison.Ordinal);
+
+        // G552 repair: a paste-ready invocation that actually persists the real
+        // question and its recommendation/evidence in the OPEN artifact —
+        // agmsg may notify, but it can never substitute for the artifact.
+        Assert.Contains("Paste-ready — the OPEN artifact carries the real content", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli clarify open <execution-unit>", output, StringComparison.Ordinal);
+        Assert.Contains("--question ", output, StringComparison.Ordinal);
+        Assert.Contains("--recommended-answer ", output, StringComparison.Ordinal);
+        Assert.Contains("--evidence ", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_ReviewerHoldRule_NeverAnUntrackedWait_G552()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("### Reviewer hold rule (refined)", output, StringComparison.Ordinal);
+        // Green technical + fact-checkable non-semantic -> resolve under authority.
+        Assert.Contains("Technical checks are GREEN and the only pending item is NON-SEMANTIC and MECHANICALLY FACT-CHECKABLE", output, StringComparison.Ordinal);
+        // Otherwise -> recorded clarification and a visible pending state.
+        Assert.Contains("becomes a recorded clarification and a VISIBLE pending state", output, StringComparison.Ordinal);
+        // Never a third option.
+        Assert.Contains("> **Never an untracked wait:**", output, StringComparison.Ordinal);
+        Assert.Contains("there is no third option", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_BoundedDefaultAuthority_IsGrantedEnumeratedLoggedAmendableAndNonSemantic_G552()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("### Bounded default authority", output, StringComparison.Ordinal);
+        // AC element 1: operator grant requirement.
+        Assert.Contains("GRANTED, never assumed", output, StringComparison.Ordinal);
+        Assert.Contains("classes the OPERATOR has explicitly pre-delegated", output, StringComparison.Ordinal);
+        // AC element 2: the enumeration is the whole MAY scope, each with its facts.
+        Assert.Contains("#### Enumerated fact-checkable classes (the whole MAY scope)", output, StringComparison.Ordinal);
+        Assert.Contains("**count and enumeration corrections** — verify:", output, StringComparison.Ordinal);
+        Assert.Contains("**wording corrections that follow from a cited fact** — verify:", output, StringComparison.Ordinal);
+        Assert.Contains("**cross-reference and link corrections** — verify:", output, StringComparison.Ordinal);
+        Assert.Contains("**identifier and metadata mismatches against a canonical source** — verify:", output, StringComparison.Ordinal);
+        // AC element 3: mandatory evidence logging.
+        Assert.Contains("MANDATORY EVIDENCE LOGGING", output, StringComparison.Ordinal);
+        Assert.Contains("An unlogged resolution is not a granted-authority resolution", output, StringComparison.Ordinal);
+        // AC element 4: post-hoc amendment right.
+        Assert.Contains("DESIGN MAY AMEND POST HOC", output, StringComparison.Ordinal);
+        Assert.Contains("buys latency, not finality", output, StringComparison.Ordinal);
+        // G552 repair: the evidence log has a CONCRETE durable sink and a
+        // paste-ready operation, not just prose.
+        Assert.Contains("**evidence sink**", output, StringComparison.Ordinal);
+        Assert.Contains("CANONICAL `clarify record` surface", output, StringComparison.Ordinal);
+        Assert.Contains("`## Recently Resolved`", output, StringComparison.Ordinal);
+        Assert.Contains("intents/<domain>/clarifications/open.md", output, StringComparison.Ordinal);
+        Assert.Contains("Paste-ready evidence operation:", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli clarify record --domain <domain> --from-file", output, StringComparison.Ordinal);
+        Assert.Contains("## Rationale", output, StringComparison.Ordinal);
+        // AC element 5: semantic exclusion, with the double-check scope untouched.
+        Assert.Contains("> **Semantic exclusion:**", output, StringComparison.Ordinal);
+        Assert.Contains("SEMANTIC AND PRODUCT DECISIONS ARE EXCLUDED, absolutely", output, StringComparison.Ordinal);
+        Assert.Contains("double-check rule, whose scope this contract does not touch", output, StringComparison.Ordinal);
+        Assert.Contains("deciding what SHOULD be true rather than checking what IS true", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_DesignReminderLoop_HasIntervalCapAndStopCondition_G552()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("### Periodic design-reminder loop", output, StringComparison.Ordinal);
+        // AC: interval class, one-per-interval cap, stop-on-answer.
+        Assert.Contains("30–60 minute class", output, StringComparison.Ordinal);
+        Assert.Contains("AT MOST ONE reminder per interval PER OPEN CLARIFICATION", output, StringComparison.Ordinal);
+        Assert.Contains("STOP ON ANSWER", output, StringComparison.Ordinal);
+        // Sent by the orchestrator's existing long-interval automation — no new scheduler.
+        Assert.Contains("The ORCHESTRATOR sends the reminder from its long-interval automation", output, StringComparison.Ordinal);
+        // The operator-app reminder model, with no workspace-residency requirement.
+        Assert.Contains("OPERATOR APP", output, StringComparison.Ordinal);
+        Assert.Contains("finds it waiting in the inbox on resume", output, StringComparison.Ordinal);
+        Assert.Contains("no workspace-residency requirement", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_DesignDecisionHolds_HasStructuredShape_G552()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var holds = doc.RootElement.GetProperty("design_decision_holds");
+
+        var hold = holds.GetProperty("clarification_backed_hold");
+        Assert.Equal(4, hold.GetProperty("required_fields").GetArrayLength());
+        Assert.Contains("CONTRACT VIOLATION", hold.GetProperty("contract_violation_rule").GetString(), StringComparison.Ordinal);
+        Assert.NotEmpty(hold.GetProperty("canonical_commands").EnumerateArray());
+        var invocation = hold.GetProperty("paste_ready_invocation").GetString()!;
+        Assert.Contains("--question", invocation, StringComparison.Ordinal);
+        Assert.Contains("--recommended-answer", invocation, StringComparison.Ordinal);
+        Assert.Contains("--evidence", invocation, StringComparison.Ordinal);
+
+        var reviewer = holds.GetProperty("reviewer_hold_rule");
+        Assert.Contains("FACT-CHECKABLE", reviewer.GetProperty("resolve_under_authority_when").GetString(), StringComparison.Ordinal);
+        Assert.Contains("VISIBLE pending state", reviewer.GetProperty("record_clarification_otherwise").GetString(), StringComparison.Ordinal);
+        Assert.Contains("no third option", reviewer.GetProperty("never_untracked_wait").GetString(), StringComparison.Ordinal);
+
+        var authority = holds.GetProperty("bounded_default_authority");
+        Assert.Contains("GRANTED, never assumed", authority.GetProperty("operator_grant_requirement").GetString(), StringComparison.Ordinal);
+        var classes = authority.GetProperty("fact_checkable_classes").EnumerateArray()
+            .Select(c => (Class: c.GetProperty("decision_class").GetString()!, Facts: c.GetProperty("verifying_facts").GetString()!))
+            .ToArray();
+        Assert.Equal(4, classes.Length);
+        // Every enumerated class carries the facts that verify it — the
+        // enumeration is what bounds the authority, so an entry without a
+        // verification condition would silently widen it.
+        Assert.All(classes, c => Assert.NotEmpty(c.Facts));
+        Assert.Contains("MANDATORY EVIDENCE LOGGING", authority.GetProperty("evidence_logging_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Recently Resolved", authority.GetProperty("evidence_sink").GetString(), StringComparison.Ordinal);
+        Assert.Contains("clarify record --domain", authority.GetProperty("evidence_operation").GetString(), StringComparison.Ordinal);
+        Assert.Contains("AMEND POST HOC", authority.GetProperty("post_hoc_amendment_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("EXCLUDED", authority.GetProperty("semantic_exclusion_rule").GetString(), StringComparison.Ordinal);
+
+        var reminder = holds.GetProperty("design_reminder_loop");
+        Assert.Contains("30–60 minute class", reminder.GetProperty("interval_class").GetString(), StringComparison.Ordinal);
+        Assert.Contains("AT MOST ONE", reminder.GetProperty("one_per_interval_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("STOP ON ANSWER", reminder.GetProperty("stop_condition").GetString(), StringComparison.Ordinal);
+        Assert.Contains("OPERATOR APP", reminder.GetProperty("operator_app_note").GetString(), StringComparison.Ordinal);
+
+        // The guide points at the detector that reads what these rules write.
+        Assert.Contains("design-decision-pending", holds.GetProperty("detection_reference").GetString(), StringComparison.Ordinal);
+    }
+
     private static string RunMarkdown(string[] args)
     {
         using var writer = new StringWriter();

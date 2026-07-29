@@ -943,6 +943,7 @@ internal static class GuideOrchestratorThreadCommand
             },
             TerminalWorkspaceProvisioning = BuildTerminalWorkspaceProvisioning(repo, values["<team>"]),
             DesignWorkspaceSupervision = BuildDesignWorkspaceSupervision(domain, repo),
+            DesignDecisionHolds = BuildDesignDecisionHolds(domain, repo),
             DesignTrafficController = new OrchestratorDesignTrafficController
             {
                 Summary =
@@ -1849,6 +1850,203 @@ internal static class GuideOrchestratorThreadCommand
         };
     }
 
+    // G552: the design-decision hold contract. Everything here is guide-level
+    // — the only code half of this slice is the `design-decision-pending`
+    // detector, which reads what these rules put on disk. The MAY scope is
+    // deliberately narrow: enumerated, mechanically fact-checkable classes
+    // only, and the double-check rule's semantic scope is untouched.
+    private static OrchestratorDesignDecisionHolds BuildDesignDecisionHolds(string domain, string targetRepo)
+    {
+        string Fill(string template) => template
+            .Replace("<domain>", domain, StringComparison.Ordinal)
+            .Replace("<owner/repo>", targetRepo, StringComparison.Ordinal);
+
+        return new OrchestratorDesignDecisionHolds
+        {
+            Summary = Fill(
+                "A hold blocked on a DESIGN DECISION must be visible and bounded. Visible: it is recorded as a "
+                + "clarification artifact through the canonical clarify surface, so `automation stalled-work` and "
+                + "`automation heartbeat` can see it — an agmsg message alone is invisible to every supervision "
+                + "layer. Bounded: the operator may pre-delegate enumerated, mechanically fact-checkable decision "
+                + "classes so a correction both threads can verify from repository facts does not wait on design at "
+                + "all. Measured cost of getting this wrong: a nine-hour hold on a one-line wording ruling while "
+                + "every technical check was green and `stalled-work` reported `stalled=false` throughout."),
+            ClarificationBackedHold = new OrchestratorClarificationBackedHold
+            {
+                Summary = Fill(
+                    "When the orchestrator or the reviewer blocks on a design decision, it RECORDS A CLARIFICATION "
+                    + "ARTIFACT through the canonical clarify surface, in addition to whatever agmsg message it "
+                    + "sends. The artifact is what makes the hold detectable; the message is only a notification."),
+                RequiredFields = new[]
+                {
+                    Fill("domain — the blocked domain (`<domain>`), so the artifact is scoped to the right pipeline."),
+                    "blocking execution unit — the unit that cannot proceed until this is answered.",
+                    "question — what design must decide, stated so someone who was not in the thread can answer it.",
+                    "recommended answer — when the asking thread already believes it knows the answer, state it and cite the facts that support it; design then confirms or overrides rather than starting from scratch.",
+                },
+                ContractViolationRule =
+                    "An agmsg-only hold is a CONTRACT VIOLATION, not a shortcut. A block that exists only as messages "
+                    + "is invisible to `stalled-work`, to `heartbeat`, and therefore to every watchdog and every "
+                    + "operator glance — which is exactly how a nine-hour hold passed unnoticed with the pipeline "
+                    + "reporting healthy. If you are waiting on design, the artifact exists; if the artifact does not "
+                    + "exist, you are not waiting, you are stalled.",
+                CanonicalCommands = new[]
+                {
+                    "record the hold — `intent-cli clarify open` (the canonical clarify surface; never hand-write the artifact)",
+                    "see what is open — `intent-cli clarify list`",
+                    "answer it — `intent-cli clarify answer` (design, or the operator on escalation)",
+                    Fill("confirm it is visible — `intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json` reports `design-decision-pending`"),
+                },
+                PasteReadyInvocation =
+                    "intent-cli clarify open <execution-unit> \\\n"
+                    + "  --question \"<the actual design-blocking question, answerable by someone outside the thread>\" \\\n"
+                    + "  --recommended-answer \"<what you believe the answer is, when you believe you know it>\" \\\n"
+                    + "  --evidence \"<the repository facts that support the recommendation>\"",
+            },
+            ReviewerHoldRule = new OrchestratorReviewerHoldRule
+            {
+                Summary =
+                    "The reviewer's hold rule is refined so a green-technical review never becomes an untracked wait. "
+                    + "Evaluate what is actually pending before holding.",
+                ResolveUnderAuthorityWhen =
+                    "Technical checks are GREEN and the only pending item is NON-SEMANTIC and MECHANICALLY "
+                    + "FACT-CHECKABLE from repository facts — resolve it under bounded default authority (below), "
+                    + "log the resolution with the verifying facts, and proceed. Do not hold a green review on a "
+                    + "question whose answer both threads can derive and cite.",
+                RecordClarificationOtherwise =
+                    "Anything else — a semantic or product question, a fact you cannot verify, or a class the "
+                    + "operator has not delegated — becomes a recorded clarification and a VISIBLE pending state. The "
+                    + "review is still held; the difference is that the hold is now on disk and detectable.",
+                NeverUntrackedWait =
+                    "there is no third option where the reviewer simply waits and says so in "
+                    + "a message: either the item is resolved under granted authority with its evidence, or a "
+                    + "clarification artifact exists. Silence with a message attached is the failure mode this rule "
+                    + "exists to remove.",
+            },
+            BoundedDefaultAuthority = new OrchestratorBoundedDefaultAuthority
+            {
+                Summary =
+                    "BOUNDED DEFAULT AUTHORITY lets the operator pre-delegate a small, enumerated set of decision "
+                    + "classes that can be settled by checking repository facts rather than by judgment. It exists so "
+                    + "a count correction does not cost nine hours. It is bounded in every direction: granted, "
+                    + "enumerated, evidence-logged, amendable, and never semantic.",
+                OperatorGrantRequirement =
+                    "GRANTED, never assumed. The authority applies only to classes the OPERATOR has explicitly "
+                    + "pre-delegated for this domain. Absent a grant, every design decision goes to design as before "
+                    + "— the default is unchanged, and no thread may infer a delegation from the fact that an answer "
+                    + "seems obvious.",
+                FactCheckableClasses = new[]
+                {
+                    new OrchestratorFactCheckableClass
+                    {
+                        DecisionClass = "count and enumeration corrections",
+                        VerifyingFacts =
+                            "the count is derivable from repository facts both threads can read — e.g. a slice count "
+                            + "derived from the merged PR list and the issue's own enumeration. Cite the list and the "
+                            + "derivation.",
+                    },
+                    new OrchestratorFactCheckableClass
+                    {
+                        DecisionClass = "wording corrections that follow from a cited fact",
+                        VerifyingFacts =
+                            "the corrected wording is entailed by a fact in the repository (a merged PR title, a "
+                            + "label state, a retired unit's own record), and the reviewer and orchestrator AGREE on "
+                            + "both the fact and the correction. Disagreement is not fact-checkable — it escalates.",
+                    },
+                    new OrchestratorFactCheckableClass
+                    {
+                        DecisionClass = "cross-reference and link corrections",
+                        VerifyingFacts =
+                            "the target exists (or does not) in the repository as cited — verifiable by reading the "
+                            + "referenced file, heading, issue, or PR.",
+                    },
+                    new OrchestratorFactCheckableClass
+                    {
+                        DecisionClass = "identifier and metadata mismatches against a canonical source",
+                        VerifyingFacts =
+                            "the canonical source is named and read — e.g. a version in `eng/version.json`, a unit id "
+                            + "in a packet, a label in the canonical palette. The canonical source wins; the "
+                            + "resolution cites it.",
+                    },
+                },
+                EvidenceLoggingRule =
+                    "MANDATORY EVIDENCE LOGGING. A resolution taken under this authority is recorded in the durable "
+                    + "trail with the facts that verify it — what was decided, which repository facts entail it, and "
+                    + "which threads agreed. An unlogged resolution is not a granted-authority resolution; it is an "
+                    + "undocumented decision, and it is a violation of this contract.",
+                EvidenceSink =
+                    "The sink is the CANONICAL `clarify record` surface: the entry lands under `## Recently Resolved` "
+                    + "in the domain's clarification return path (`intents/<domain>/clarifications/open.md`), where "
+                    + "`Question` identifies the pending item, `Decision` records the decided value, and `Rationale` "
+                    + "records the verified repository facts plus the reviewer/orchestrator agreement. The entry is "
+                    + "durable and stays readable there, which is exactly what makes design's post-hoc amendment "
+                    + "possible — design reads the recorded evidence and amends or reverses from it.",
+                EvidenceOperation =
+                    "# 1. write the decision artifact (## Question / ## Decision / ## Rationale)\n"
+                    + "cat > /tmp/authority-decision.md <<'EOF'\n"
+                    + "## Question\n"
+                    + "<the pending item, identified so design can find it later>\n"
+                    + "\n"
+                    + "## Decision\n"
+                    + "<the decided value>\n"
+                    + "\n"
+                    + "## Rationale\n"
+                    + "<the verified repository facts that entail it, and which threads agreed>\n"
+                    + "EOF\n"
+                    + "\n"
+                    + "# 2. record it in the durable trail (--dry-run first shows the intended update)\n"
+                    + "intent-cli clarify record --domain <domain> --from-file /tmp/authority-decision.md",
+                PostHocAmendmentRule =
+                    "DESIGN MAY AMEND POST HOC. A granted-authority resolution is provisional in design's eyes: "
+                    + "design can review the logged evidence afterwards and amend or reverse the decision. The "
+                    + "authority buys latency, not finality — proceeding does not close the question against design.",
+                SemanticExclusionRule =
+                    "SEMANTIC AND PRODUCT DECISIONS ARE EXCLUDED, absolutely. Intent shaping, packet content and "
+                    + "acceptance criteria, release scope, prioritization rulings, and anything requiring product or "
+                    + "design judgment always go to design through the design↔orchestrator double-check rule, whose "
+                    + "scope this contract does not touch. If settling the question requires deciding what SHOULD be "
+                    + "true rather than checking what IS true, it is not fact-checkable and this authority does not "
+                    + "reach it.",
+            },
+            DesignReminderLoop = new OrchestratorDesignReminderLoop
+            {
+                Summary =
+                    "While a clarification stays open, the design thread is reminded on a fixed cadence. A recorded "
+                    + "hold that nobody re-surfaces is still a slow hold — the artifact makes it detectable, the "
+                    + "reminder makes it noticed.",
+                Sender =
+                    "The ORCHESTRATOR sends the reminder from its long-interval automation — the same wake that "
+                    + "already runs the heartbeat check. No new scheduler, and the receivers stay loopless.",
+                IntervalClass =
+                    "30–60 minute class — the same low-frequency band as the heartbeat and the design-thread "
+                    + "watchdog. Faster polling recreates the churn the message-driven model removes; slower lets a "
+                    + "hold sit past the point an operator would want to know.",
+                OnePerIntervalRule =
+                    "AT MOST ONE reminder per interval PER OPEN CLARIFICATION. Two open clarifications produce at "
+                    + "most two reminders in a wake; one clarification never produces two reminders in the same "
+                    + "interval no matter how many wakes fire. This is the same one-message discipline the watchdog "
+                    + "already follows.",
+                StopCondition =
+                    "STOP ON ANSWER. Once the clarification is answered (or applied, or cancelled) it is no longer "
+                    + "open, `design-decision-pending` clears on its own, and the reminders stop. Never keep "
+                    + "reminding against an answered clarification, and never re-open one to keep a thread's "
+                    + "attention.",
+                OperatorAppNote =
+                    "The design thread runs in the OPERATOR APP by preference, which is what makes a reminder land "
+                    + "either way: an OPEN design session receives the reminder immediately through its monitor, and "
+                    + "a CLOSED one finds it waiting in the inbox on resume. Neither case requires design to be "
+                    + "resident in the team workspace — there is no workspace-residency requirement here.",
+            },
+            DetectionReference = Fill(
+                "Detection is `design-decision-pending` in `automation stalled-work`: it reads the domain's OPEN "
+                + "clarification artifacts and reports each with its age, blocking execution unit, and question "
+                + "summary, and `automation heartbeat` carries it in `message_body` like any other kind. Confirm a "
+                + "hold is visible with `intent-cli automation stalled-work --domain <domain> --repo <owner/repo> "
+                + "--format json`; if the hold is real but the kind is absent, the clarification artifact was never "
+                + "recorded — which is the contract violation above, not a detector bug."),
+        };
+    }
+
     // G500: turn an orchestrator setup request into a concrete, operational
     // intake. The visible outcome is one of missing-inputs / setup-ready /
     // blocked. When inputs are complete the intake emits copy-paste agmsg
@@ -2399,6 +2597,92 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
     }
 
+    // G552: render the design-decision hold contract — the hold rule first
+    // (it is what makes everything else observable), then the reviewer
+    // refinement, the bounded authority, and the reminder cadence.
+    private static void WriteDesignDecisionHolds(TextWriter writer, OrchestratorDesignDecisionHolds holds)
+    {
+        writer.WriteLine("## Design-decision holds and bounded authority (G552)");
+        writer.WriteLine();
+        writer.WriteLine(holds.Summary);
+        writer.WriteLine();
+
+        writer.WriteLine("### Clarification-backed holds");
+        writer.WriteLine();
+        writer.WriteLine(holds.ClarificationBackedHold.Summary);
+        writer.WriteLine();
+        writer.WriteLine("Record these fields:");
+        writer.WriteLine();
+        foreach (var field in holds.ClarificationBackedHold.RequiredFields)
+        {
+            writer.WriteLine($"- {field}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"> **Contract violation:** {holds.ClarificationBackedHold.ContractViolationRule}");
+        writer.WriteLine();
+        foreach (var command in holds.ClarificationBackedHold.CanonicalCommands)
+        {
+            writer.WriteLine($"- {command}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("Paste-ready — the OPEN artifact carries the real content, not a packet-derived synthesis:");
+        writer.WriteLine();
+        writer.WriteLine("```bash");
+        writer.WriteLine(holds.ClarificationBackedHold.PasteReadyInvocation);
+        writer.WriteLine("```");
+        writer.WriteLine();
+
+        writer.WriteLine("### Reviewer hold rule (refined)");
+        writer.WriteLine();
+        writer.WriteLine(holds.ReviewerHoldRule.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- **resolve under granted authority when** — {holds.ReviewerHoldRule.ResolveUnderAuthorityWhen}");
+        writer.WriteLine($"- **record a clarification otherwise** — {holds.ReviewerHoldRule.RecordClarificationOtherwise}");
+        writer.WriteLine();
+        writer.WriteLine($"> **Never an untracked wait:** {holds.ReviewerHoldRule.NeverUntrackedWait}");
+        writer.WriteLine();
+
+        writer.WriteLine("### Bounded default authority");
+        writer.WriteLine();
+        writer.WriteLine(holds.BoundedDefaultAuthority.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- **operator grant required** — {holds.BoundedDefaultAuthority.OperatorGrantRequirement}");
+        writer.WriteLine();
+        writer.WriteLine("#### Enumerated fact-checkable classes (the whole MAY scope)");
+        writer.WriteLine();
+        foreach (var entry in holds.BoundedDefaultAuthority.FactCheckableClasses)
+        {
+            writer.WriteLine($"- **{entry.DecisionClass}** — verify: {entry.VerifyingFacts}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **evidence logging** — {holds.BoundedDefaultAuthority.EvidenceLoggingRule}");
+        writer.WriteLine($"- **evidence sink** — {holds.BoundedDefaultAuthority.EvidenceSink}");
+        writer.WriteLine($"- **post-hoc amendment** — {holds.BoundedDefaultAuthority.PostHocAmendmentRule}");
+        writer.WriteLine();
+        writer.WriteLine("Paste-ready evidence operation:");
+        writer.WriteLine();
+        writer.WriteLine("```bash");
+        writer.WriteLine(holds.BoundedDefaultAuthority.EvidenceOperation);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine($"> **Semantic exclusion:** {holds.BoundedDefaultAuthority.SemanticExclusionRule}");
+        writer.WriteLine();
+
+        writer.WriteLine("### Periodic design-reminder loop");
+        writer.WriteLine();
+        writer.WriteLine(holds.DesignReminderLoop.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- **sender** — {holds.DesignReminderLoop.Sender}");
+        writer.WriteLine($"- **interval** — {holds.DesignReminderLoop.IntervalClass}");
+        writer.WriteLine($"- **one per interval per clarification** — {holds.DesignReminderLoop.OnePerIntervalRule}");
+        writer.WriteLine($"- **stop on answer** — {holds.DesignReminderLoop.StopCondition}");
+        writer.WriteLine($"- **operator app** — {holds.DesignReminderLoop.OperatorAppNote}");
+        writer.WriteLine();
+
+        writer.WriteLine($"- **detection** — {holds.DetectionReference}");
+        writer.WriteLine();
+    }
+
     private static void WriteMarkdown(TextWriter writer, OrchestratorThreadGuide guide)
     {
         writer.WriteLine("# Guide — agmsg-backed orchestrator thread (G487)");
@@ -2516,6 +2800,8 @@ internal static class GuideOrchestratorThreadCommand
         WriteTerminalWorkspaceProvisioning(writer, guide.TerminalWorkspaceProvisioning);
 
         WriteDesignWorkspaceSupervision(writer, guide.DesignWorkspaceSupervision);
+
+        WriteDesignDecisionHolds(writer, guide.DesignDecisionHolds);
 
         writer.WriteLine("## Preflight (all three cwds)");
         writer.WriteLine();
@@ -3271,6 +3557,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("design_workspace_supervision")]
     public required OrchestratorDesignWorkspaceSupervision DesignWorkspaceSupervision { get; init; }
 
+    [JsonPropertyName("design_decision_holds")]
+    public required OrchestratorDesignDecisionHolds DesignDecisionHolds { get; init; }
+
     [JsonPropertyName("design_traffic_controller")]
     public required OrchestratorDesignTrafficController DesignTrafficController { get; init; }
 
@@ -3579,6 +3868,139 @@ internal sealed record OrchestratorDesignWorkspaceSupervision
 
     [JsonPropertyName("watchdog_safety_rules_reference")]
     public required string WatchdogSafetyRulesReference { get; init; }
+}
+
+/// <summary>
+/// G552: the design-decision half of the stall problem. G550 keeps the team's
+/// sessions alive; nothing kept a DESIGN DECISION from stalling the pipeline
+/// invisibly. Field incident (2026-07-28 16:11 → 07-29 01:29): the G551 review
+/// held its final verdict for nine hours on a one-line wording ruling while
+/// every technical check was green, the pending item was mechanically
+/// fact-checkable, both threads knew the answer — and the hold lived only in
+/// agmsg messages, so `automation stalled-work` reported `stalled=false`
+/// throughout. Fourth design-absence stall in the field record.
+///
+/// Three layers, all guide-level except the detector: a hold blocked on design
+/// MUST become a clarification artifact (agmsg-only is a contract violation);
+/// `design-decision-pending` reads those artifacts so watchdogs see them; and
+/// bounded default authority lets the operator pre-delegate enumerated,
+/// mechanically fact-checkable classes — never semantic ones.
+/// </summary>
+internal sealed record OrchestratorDesignDecisionHolds
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("clarification_backed_hold")]
+    public required OrchestratorClarificationBackedHold ClarificationBackedHold { get; init; }
+
+    [JsonPropertyName("reviewer_hold_rule")]
+    public required OrchestratorReviewerHoldRule ReviewerHoldRule { get; init; }
+
+    [JsonPropertyName("bounded_default_authority")]
+    public required OrchestratorBoundedDefaultAuthority BoundedDefaultAuthority { get; init; }
+
+    [JsonPropertyName("design_reminder_loop")]
+    public required OrchestratorDesignReminderLoop DesignReminderLoop { get; init; }
+
+    [JsonPropertyName("detection_reference")]
+    public required string DetectionReference { get; init; }
+}
+
+internal sealed record OrchestratorClarificationBackedHold
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("required_fields")]
+    public required IReadOnlyList<string> RequiredFields { get; init; }
+
+    /// <summary>G552: the sentence that makes an agmsg-only hold a contract violation rather than a style preference.</summary>
+    [JsonPropertyName("contract_violation_rule")]
+    public required string ContractViolationRule { get; init; }
+
+    [JsonPropertyName("canonical_commands")]
+    public required IReadOnlyList<string> CanonicalCommands { get; init; }
+
+    /// <summary>G552 repair: a paste-ready `clarify open` invocation that persists the REAL question and its recommendation/evidence in the OPEN artifact.</summary>
+    [JsonPropertyName("paste_ready_invocation")]
+    public required string PasteReadyInvocation { get; init; }
+}
+
+internal sealed record OrchestratorReviewerHoldRule
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("resolve_under_authority_when")]
+    public required string ResolveUnderAuthorityWhen { get; init; }
+
+    [JsonPropertyName("record_clarification_otherwise")]
+    public required string RecordClarificationOtherwise { get; init; }
+
+    [JsonPropertyName("never_untracked_wait")]
+    public required string NeverUntrackedWait { get; init; }
+}
+
+internal sealed record OrchestratorBoundedDefaultAuthority
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("operator_grant_requirement")]
+    public required string OperatorGrantRequirement { get; init; }
+
+    [JsonPropertyName("fact_checkable_classes")]
+    public required IReadOnlyList<OrchestratorFactCheckableClass> FactCheckableClasses { get; init; }
+
+    [JsonPropertyName("evidence_logging_rule")]
+    public required string EvidenceLoggingRule { get; init; }
+
+    /// <summary>G552 repair: the concrete durable sink for a granted-authority resolution — `clarify record --from-file`, whose entry lands under `## Recently Resolved`.</summary>
+    [JsonPropertyName("evidence_sink")]
+    public required string EvidenceSink { get; init; }
+
+    /// <summary>G552 repair: the paste-ready operation that writes that evidence.</summary>
+    [JsonPropertyName("evidence_operation")]
+    public required string EvidenceOperation { get; init; }
+
+    [JsonPropertyName("post_hoc_amendment_rule")]
+    public required string PostHocAmendmentRule { get; init; }
+
+    /// <summary>G552: semantic and product decisions are excluded outright — the double-check rule's scope is unchanged.</summary>
+    [JsonPropertyName("semantic_exclusion_rule")]
+    public required string SemanticExclusionRule { get; init; }
+}
+
+internal sealed record OrchestratorFactCheckableClass
+{
+    [JsonPropertyName("decision_class")]
+    public required string DecisionClass { get; init; }
+
+    [JsonPropertyName("verifying_facts")]
+    public required string VerifyingFacts { get; init; }
+}
+
+internal sealed record OrchestratorDesignReminderLoop
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("sender")]
+    public required string Sender { get; init; }
+
+    [JsonPropertyName("interval_class")]
+    public required string IntervalClass { get; init; }
+
+    [JsonPropertyName("one_per_interval_rule")]
+    public required string OnePerIntervalRule { get; init; }
+
+    [JsonPropertyName("stop_condition")]
+    public required string StopCondition { get; init; }
+
+    /// <summary>G552: the design thread runs in the operator app by preference — an open session gets the reminder live, a closed one finds it on resume.</summary>
+    [JsonPropertyName("operator_app_note")]
+    public required string OperatorAppNote { get; init; }
 }
 
 internal sealed record OrchestratorSupervisionAuthority

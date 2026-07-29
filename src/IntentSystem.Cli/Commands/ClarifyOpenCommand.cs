@@ -23,9 +23,9 @@ internal static class ClarifyOpenCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (args.Length != 1 || string.IsNullOrWhiteSpace(args[0]))
+        if (!TryParseArguments(args, out var parsed, out var parseError))
         {
-            writer.WriteLine("Clarify open command requires an execution unit.");
+            writer.WriteLine(parseError);
             return 1;
         }
 
@@ -35,7 +35,7 @@ internal static class ClarifyOpenCommand
             return 1;
         }
 
-        var executionUnit = args[0];
+        var executionUnit = parsed.ExecutionUnit;
         var queueItem = queueState.Items.FirstOrDefault(item =>
             string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
 
@@ -97,13 +97,18 @@ internal static class ClarifyOpenCommand
                 TransitionActor,
                 timestamp);
 
-            var clarification = BuildClarification(queueItem, packet, reviewContext, timestamp, reason);
+            var clarification = BuildClarification(queueItem, packet, reviewContext, timestamp, reason, parsed);
             var artifactPath = PersistClarification(context.RepoRoot, clarification);
             PersistTransition(context, queueState, transition);
 
             writer.WriteLine($"Clarification opened for {executionUnit}.");
             writer.WriteLine($"Artifact path: {artifactPath}");
-            writer.WriteLine($"Reason: {reason}");
+            // G552: echo what was actually PERSISTED (question, and the reason
+            // including any labeled recommendation/evidence), not the
+            // pre-composition reason — the operator needs to see the durable
+            // record, since that is what the detector and design will read.
+            writer.WriteLine($"Question: {clarification.QuestionText}");
+            writer.WriteLine($"Reason: {clarification.Reason}");
             writer.WriteLine($"Clarification return path: {clarification.ClarificationReturnPath}");
             return 0;
         }
@@ -119,15 +124,22 @@ internal static class ClarifyOpenCommand
         Projection.Models.ProjectionPacketContract packet,
         Review.Models.ReviewContextSnapshot reviewContext,
         DateTimeOffset timestamp,
-        string reason)
+        string reason,
+        ClarifyOpenInputs inputs)
     {
         return new ClarificationItem
         {
             ClarificationSource = ClarificationSource,
             QuestionId = QuestionId,
             ExecutionUnit = queueItem.ExecutionUnit,
-            QuestionText = BuildQuestionText(packet.ImplementationIssuePacket, reviewContext),
-            Reason = reason,
+            // G552: an explicitly supplied question is the REAL design-blocking
+            // question and always wins over the packet-derived synthesis. The
+            // OPEN artifact itself must carry it — an agmsg message may notify,
+            // but it can never substitute for the durable record.
+            QuestionText = string.IsNullOrWhiteSpace(inputs.Question)
+                ? BuildQuestionText(packet.ImplementationIssuePacket, reviewContext)
+                : inputs.Question!,
+            Reason = AppendRecommendation(reason, inputs),
             AffectedIntents = packet.ReviewContextPacket.IntentReferences,
             AffectedExecutionUnits = [queueItem.ExecutionUnit],
             BlockingOrNonblocking = BlockingValue,
@@ -135,6 +147,132 @@ internal static class ClarifyOpenCommand
             Status = ClarificationStatus.Open,
             CreatedAt = timestamp
         };
+    }
+
+    /// <summary>
+    /// G552: the explicit inputs that let a design-decision hold record its
+    /// REAL question (and, when the asking thread already believes it knows the
+    /// answer, its recommendation and the facts behind it) in the OPEN
+    /// clarification artifact. All optional — omitting them preserves the
+    /// pre-G552 packet-derived behavior byte for byte, so every existing caller
+    /// and fixture is unaffected. No clarification schema change: the question
+    /// lands in <c>QuestionText</c> and the recommendation/evidence land in the
+    /// already-serialized <c>Reason</c> field under explicit labels.
+    /// </summary>
+    private sealed record ClarifyOpenInputs
+    {
+        public required string ExecutionUnit { get; init; }
+
+        public string? Question { get; init; }
+
+        public string? RecommendedAnswer { get; init; }
+
+        public string? Evidence { get; init; }
+    }
+
+    private const string RecommendedAnswerLabel = "Recommended answer:";
+
+    private const string EvidenceLabel = "Evidence:";
+
+    private const string UsageLine =
+        "Usage: intent-cli clarify open <execution-unit> [--question <text>] [--recommended-answer <text>] [--evidence <text>]";
+
+    /// <summary>
+    /// G552: composes the durable <c>Reason</c> so the recommendation and its
+    /// evidence survive in the OPEN artifact under labels a reader (and a
+    /// reviewer) can find. The packet-derived reason always stays first, so the
+    /// existing content is never displaced — only extended.
+    /// </summary>
+    private static string AppendRecommendation(string reason, ClarifyOpenInputs inputs)
+    {
+        var builder = new System.Text.StringBuilder(reason);
+
+        if (!string.IsNullOrWhiteSpace(inputs.RecommendedAnswer))
+        {
+            builder.Append(' ').Append(RecommendedAnswerLabel).Append(' ').Append(inputs.RecommendedAnswer!.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(inputs.Evidence))
+        {
+            builder.Append(' ').Append(EvidenceLabel).Append(' ').Append(inputs.Evidence!.Trim());
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool TryParseArguments(string[] args, out ClarifyOpenInputs parsed, out string error)
+    {
+        parsed = new ClarifyOpenInputs { ExecutionUnit = string.Empty };
+        error = string.Empty;
+
+        string? executionUnit = null;
+        string? question = null;
+        string? recommendedAnswer = null;
+        string? evidence = null;
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            var argument = args[index];
+            switch (argument)
+            {
+                case "--question":
+                case "--recommended-answer":
+                case "--evidence":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = $"{argument} requires a value.";
+                        return false;
+                    }
+
+                    var value = args[index + 1];
+                    if (argument == "--question")
+                    {
+                        question = value;
+                    }
+                    else if (argument == "--recommended-answer")
+                    {
+                        recommendedAnswer = value;
+                    }
+                    else
+                    {
+                        evidence = value;
+                    }
+
+                    index++;
+                    break;
+
+                default:
+                    if (argument.StartsWith("--", StringComparison.Ordinal))
+                    {
+                        error = $"Unknown argument '{argument}'. {UsageLine}";
+                        return false;
+                    }
+
+                    if (executionUnit is not null)
+                    {
+                        error = $"Clarify open command accepts a single execution unit. {UsageLine}";
+                        return false;
+                    }
+
+                    executionUnit = argument;
+                    break;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(executionUnit))
+        {
+            error = "Clarify open command requires an execution unit.";
+            return false;
+        }
+
+        parsed = new ClarifyOpenInputs
+        {
+            ExecutionUnit = executionUnit,
+            Question = question,
+            RecommendedAnswer = recommendedAnswer,
+            Evidence = evidence,
+        };
+        return true;
     }
 
     private static string BuildQuestionText(

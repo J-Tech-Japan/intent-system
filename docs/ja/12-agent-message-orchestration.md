@@ -229,6 +229,113 @@ permission の待ち** — 事前承認の有無にかかわらず回答不可�
 適用されます: 委譲の重複禁止、permission プロンプトの自動クリア禁止、進行中作業の cancel/reset
 禁止、issue/PR の force-close 禁止、durable state の投機的な手編集禁止。
 
+## design 判断による hold と bounded authority
+
+**design の判断** で止まっている hold は、**可視** かつ **bounded** でなければ
+なりません。どちらも欠けた場合の実測コスト: G551 のレビューは、技術チェックが
+すべて green で、保留項目は機械的に事実確認可能で、両スレッドとも答えを知って
+いたにもかかわらず、1 行の wording 判断のために final verdict を **9 時間**
+保留しました。hold は agmsg メッセージ上にしか存在しなかったため、
+`automation stalled-work` はその間ずっと `stalled: false` を報告していました
+(field record で 4 件目の design 不在 stall)。
+
+**clarification-backed hold。** orchestrator または reviewer が design の判断で
+ブロックされたとき、agmsg メッセージに加えて canonical な clarify surface
+(`intent-cli clarify open`)を通じて **clarification artifact を記録** します:
+domain、ブロックされている execution unit、スレッドの外にいる人でも答えられる
+形に書いた質問、そして — 質問側が答えを分かっていると考える場合は — 根拠となる
+事実つきの推奨回答。artifact が hold を検出可能にするものであり、メッセージは
+通知にすぎません。
+
+> **agmsg だけの hold は contract violation です。** メッセージ上にしか存在しない
+> ブロックは `stalled-work` にも `heartbeat` にも見えず、したがってあらゆる
+> watchdog とオペレーターの目視からも見えません。design を待っているなら artifact が
+> 存在するはずで、artifact が無いならそれは待っているのではなく stall しています。
+
+その内容を運ぶのは OPEN artifact 自身です — agmsg メッセージは通知はできますが、
+durable な記録の代わりには決してなりません:
+
+```bash
+intent-cli clarify open <execution-unit> \
+  --question "<スレッドの外にいる人でも答えられる形の、実際にブロックしている設計質問>" \
+  --recommended-answer "<答えが分かっていると考える場合の推奨回答>" \
+  --evidence "<推奨回答を支えるリポジトリ上の事実>"
+```
+
+質問は artifact の `QuestionText` に、推奨回答と根拠は artifact の `Reason` に
+`Recommended answer:` / `Evidence:` ラベル付きで格納されます。3 つのフラグはすべて
+任意で、省略すれば G552 以前の packet 由来挙動のままです。**clarification の schema
+変更はありません。**
+
+**reviewer hold ルール(refined)。** 技術チェックが green で、保留項目が
+非セマンティックかつ機械的に事実確認可能 → bounded default authority のもとで
+解決し、検証事実をログに残して先へ進みます。それ以外 → clarification を記録し、
+hold を **可視な pending state** として保ちます。reviewer が単に待ち、それを
+メッセージで述べるだけ、という第 3 の選択肢はありません。
+
+**bounded default authority。** オペレーターは、判断ではなく *リポジトリの事実を
+確認する* ことで決着する、少数の列挙された判断クラスを事前委譲できます:
+
+| 判断クラス | 何が検証するか |
+| --- | --- |
+| 件数・列挙の訂正 | 両スレッドが読めるリポジトリの事実から件数が導出できる(例: マージ済み PR 一覧からのスライス数) |
+| 引用された事実から導かれる wording 訂正 | wording がリポジトリの事実から entail され、reviewer と orchestrator が事実と訂正の両方に合意している |
+| 相互参照・リンクの訂正 | 参照先が記載どおり存在する(しない)ことを、読んで検証できる |
+| canonical source との識別子・メタデータ不一致 | canonical source を名指しして読む。canonical source が勝ち、解決はそれを引用する |
+
+これはあらゆる方向に bounded です: **付与される**(前提ではない — オペレーターの
+付与が無ければ、すべての design 判断は従来どおり design へ)、**列挙されている**
+(上表が MAY のスコープのすべて)、**証拠がログされる**(何を決めたか・どの事実が
+それを entail するか・どのスレッドが合意したかを記録する。ログの無い解決は解決では
+なく違反)、**修正可能**(design は後から証拠を確認して覆せる。この権限が買うのは
+レイテンシであって finality ではない)。
+
+**evidence の sink は `clarify record --from-file`** です — エントリは domain の
+clarification return path(`intents/<domain>/clarifications/open.md`)の
+`## Recently Resolved` セクションに入り、**Question** が保留項目を特定し、
+**Decision** が決定値を記録し、**Rationale** が検証済みのリポジトリ事実と
+reviewer/orchestrator の合意を記録します。エントリはそこに読める形で残り続け、
+それが design による post-hoc amendment を可能にします。後からの amendment は
+trail に追加されるだけで、修正対象を消すことはありません:
+
+```bash
+cat > /tmp/authority-decision.md <<'EOF'
+## Question
+<後から design が見つけられる形で特定した保留項目>
+
+## Decision
+<決定値>
+
+## Rationale
+<それを entail する検証済みのリポジトリ事実と、合意したスレッド>
+EOF
+
+intent-cli clarify record --domain <domain> --from-file /tmp/authority-decision.md
+```
+
+> **セマンティック・プロダクトの判断は絶対に除外されます。** intent shaping、
+> packet 内容と受け入れ基準、リリーススコープ、優先度の裁定は、常に
+> [design↔orchestrator の double-check ルール](#ロール境界--design-が-authoringorchestrator-は-coordinate)
+> を通じて design へ行きます。本 contract はそのスコープに触れません。問いの決着に
+> 「何が *真である* かを確認する」のではなく「何が *真であるべきか* を決める」ことが
+> 必要なら、この権限は及びません。
+
+**定期的な design リマインダーループ。** clarification が open である間、
+**orchestrator** が既存の長間隔 automation からリマインダーを design に再送します
+— 新しいスケジューラーは不要で、receiver は loopless のまま。間隔は
+**30〜60 分オーダー**、**open な clarification 1 件につき 1 間隔あたり最大 1 通**、
+**回答されたら停止** します。design スレッドは既定で **オペレーターアプリ** 上で
+動くため、リマインダーはどちらの状態でも届きます: 開いているセッションは monitor
+経由で即座に受け取り、閉じているセッションは再開時に inbox で見つけます。design が
+チームのワークスペースに常駐している必要はありません。
+
+**検出。** `automation stalled-work` は open な clarification を
+`design-decision-pending` として age・ブロックされているユニット・質問サマリつきで
+報告し、`automation heartbeat` は他の kind と同様に `message_body` でそれを運びます
+— [09-developer-reference.md](09-developer-reference.md) を参照。hold が実在するのに
+この kind が出ないなら、artifact が記録されていないということです。それは上記の
+contract violation であって、detector のバグではありません。
+
 ## ロール境界 — design が authoring、orchestrator は coordinate
 
 **design が packet を作成し、orchestrator は ready な packet を workflow に通します。**

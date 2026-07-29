@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using IntentSystem.Clarify.Models;
+using IntentSystem.Clarify.Serialization;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 
@@ -277,6 +279,38 @@ internal static class AutomationStalledWorkCommand
     /// </summary>
     public const string ReasonActivityDataUnusable = "activity-data-unusable";
 
+    /// <summary>
+    /// G552: an open clarification artifact is on disk but cannot be read or
+    /// deserialized. The hold it represents is real — that is exactly why it
+    /// must never be dropped silently — so the artifact is reported here with
+    /// its path rather than skipped, and never guessed into
+    /// <see cref="StalledWorkItem"/>s on unusable evidence.
+    /// </summary>
+    public const string ReasonClarificationUnreadable = "clarification-unreadable";
+
+    /// <summary>
+    /// G552: a hold blocked on a DESIGN DECISION, recorded as an open
+    /// clarification artifact through the canonical clarify surface. Reports
+    /// the blocking execution unit, the clarification's age, and its question
+    /// summary; <c>recommended_action</c> names the exact clarification to
+    /// answer (design) or the escalation path (operator). ACTIONABLE — like
+    /// <see cref="KindRepairStalled"/>, the recommendation is a directed
+    /// request rather than a state transition this command could run itself:
+    /// the answer is human content, and nothing here ever auto-answers a
+    /// clarification.
+    ///
+    /// Field incident (2026-07-28 16:11 → 07-29 01:29): the G551 review held
+    /// its final verdict for NINE HOURS on a one-line wording ruling while
+    /// every technical check was green. The hold lived only in agmsg
+    /// messages, so <c>stalled-work</c> reported <c>stalled=false</c>
+    /// throughout and no supervision layer could see it — the fourth
+    /// design-absence stall in the field record. This kind is the detection
+    /// half of the fix; the guide's clarification-backed hold rule (an
+    /// agmsg-only hold is a contract violation) is what puts the artifact on
+    /// disk for it to read.
+    /// </summary>
+    public const string KindDesignDecisionPending = "design-decision-pending";
+
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
 
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
@@ -378,6 +412,7 @@ internal static class AutomationStalledWorkCommand
         CollectMergedNotClosedOut(context, domain, candidateDomains, repo, mergedPrs, now, items, excluded, warnings);
         CollectClaimedButSilent(context, domain, candidateDomains, openIssues, openPrs, repo, now, claimedSilentMinutes, items, excluded, warnings);
         CollectBacklogReadyIdle(context, domain, candidateDomains, openIssues, openPrs, repo, now, backlogIdleMinutes, items, excluded);
+        CollectDesignDecisionPending(context, domain, candidateDomains, repo, now, items, excluded);
 
         var filtered = items
             .Where(item => item.AgeMinutes >= staleMinutes)
@@ -1482,6 +1517,176 @@ internal static class AutomationStalledWorkCommand
             IsInformational = false,
             RecommendedAction = $"intent-cli issue publish-flow {executionUnit} --repo {repo} --write --format json",
         });
+    }
+
+    /// <summary>
+    /// G552: reads the domain's OPEN clarification artifacts and reports each
+    /// as <see cref="KindDesignDecisionPending"/> with its age, blocking
+    /// execution unit, and question summary.
+    ///
+    /// This collector is deliberately GitHub-free: a design-decision hold has
+    /// no GitHub entity of its own, which is precisely why the nine-hour G551
+    /// hold was invisible to every other kind here. Its evidence is the
+    /// clarification artifact the canonical clarify surface wrote, and its
+    /// age is that artifact's own <c>createdAt</c> — the moment the block was
+    /// recorded, which is the interval an operator actually cares about.
+    ///
+    /// Fail-closed, in the same direction as every other collector: an
+    /// artifact that cannot be read or deserialized goes to
+    /// <c>excluded[]</c> with its path (<see cref="ReasonClarificationUnreadable"/>),
+    /// and a clarification whose domain cannot be confirmed against its own
+    /// packet-declared domain is excluded rather than attributed to the
+    /// requested domain. An ANSWERED, applied, or cancelled clarification is
+    /// simply not open, so it produces nothing at all — answering is what
+    /// clears the item.
+    /// </summary>
+    private static void CollectDesignDecisionPending(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
+        string repo,
+        DateTimeOffset now,
+        List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded)
+    {
+        var clarificationsRoot = Path.Combine(context.RepoRoot, ".intent-cli", "clarifications");
+        if (!Directory.Exists(clarificationsRoot))
+        {
+            // No clarification surface in this checkout — nothing to report.
+            // Absence is never a stall signal on its own.
+            return;
+        }
+
+        string[] artifactPaths;
+        try
+        {
+            artifactPaths = Directory
+                .EnumerateFiles(clarificationsRoot, "request.json", SearchOption.AllDirectories)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            excluded.Add(new StalledWorkExcluded
+            {
+                Kind = KindDesignDecisionPending,
+                ExecutionUnit = string.Empty,
+                Issue = null,
+                Pr = null,
+                Reason = ReasonClarificationUnreadable,
+                Detail =
+                    $"could not enumerate clarification artifacts under `{clarificationsRoot}`: {exception.Message}. "
+                    + "A design-decision hold may be present but unreadable — resolve the read failure rather than "
+                    + "treating this as a healthy pipeline.",
+            });
+            return;
+        }
+
+        foreach (var artifactPath in artifactPaths)
+        {
+            ClarificationItem clarification;
+            try
+            {
+                clarification = ClarificationSerializer.Deserialize(File.ReadAllText(artifactPath));
+            }
+            catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException or NotSupportedException)
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindDesignDecisionPending,
+                    ExecutionUnit = string.Empty,
+                    Issue = null,
+                    Pr = null,
+                    Reason = ReasonClarificationUnreadable,
+                    Detail =
+                        $"clarification artifact `{artifactPath}` could not be read: {exception.Message}. "
+                        + "Excluded rather than assumed answered — an unreadable artifact is not evidence of an "
+                        + "unblocked pipeline.",
+                });
+                continue;
+            }
+
+            if (clarification.Status != ClarificationStatus.Open)
+            {
+                // Answered / applied / cancelled: the hold is over. This is
+                // the clearing path — no item, no exclusion, no noise.
+                continue;
+            }
+
+            // The artifact itself is the corroborating linkage: it was
+            // written by the canonical clarify surface against a named
+            // execution unit, not guessed from an issue/PR title. Domain
+            // confirmation still applies, so a clarification whose packet
+            // declares a different domain never leaks into this domain's
+            // report.
+            var resolution = new ExecutionUnitResolution(
+                clarification.ExecutionUnit, Corroborated: true, IsAmbiguous: false, CandidatePacketPaths: Array.Empty<string>());
+            var packetDeclaredDomain = ReadPacketDeclaredDomain(context, clarification.ExecutionUnit);
+            if (!TryConfirmDomain(domain, resolution, packetDeclaredDomain, candidateDomains, repo,
+                    out var reason, out var detail))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindDesignDecisionPending,
+                    ExecutionUnit = clarification.ExecutionUnit,
+                    Issue = null,
+                    Pr = null,
+                    Reason = reason,
+                    Detail = detail,
+                });
+                continue;
+            }
+
+            items.Add(new StalledWorkItem
+            {
+                Kind = KindDesignDecisionPending,
+                ExecutionUnit = clarification.ExecutionUnit,
+                Issue = null,
+                Pr = null,
+                AgeMinutes = ComputeAgeMinutesFromInstant(ClampToNow(clarification.CreatedAt, now), now),
+                IsInformational = false,
+                RecommendedAction = BuildDesignDecisionPendingAction(clarification, domain),
+            });
+        }
+    }
+
+    /// <summary>
+    /// G552: names the exact clarification to answer (design) and the
+    /// escalation path (operator). Never an auto-answer: the answer is human
+    /// content, and this command only ever emits text.
+    /// </summary>
+    private static string BuildDesignDecisionPendingAction(ClarificationItem clarification, string domain)
+    {
+        var summary = SummarizeQuestion(clarification.QuestionText);
+        return
+            $"answer clarification `{clarification.QuestionId}` on `{clarification.ExecutionUnit}` (\"{summary}\") — "
+            + $"design: `intent-cli clarify answer --execution-unit {clarification.ExecutionUnit} "
+            + $"--question-id {clarification.QuestionId} --answer \"<decision>\"`; "
+            + $"operator: escalate for domain `{domain}` if design is unavailable. "
+            + "Never auto-answer: the decision is design's, and a resolution taken under bounded default authority "
+            + "must cite its verifying facts and remain amendable by design.";
+    }
+
+    /// <summary>
+    /// G552: a one-line question summary for the report. Collapses whitespace
+    /// (a clarification question is often multi-line prose) and truncates so a
+    /// single long question cannot swamp a heartbeat message body.
+    /// </summary>
+    private static string SummarizeQuestion(string questionText)
+    {
+        const int MaxLength = 120;
+
+        var collapsed = string.Join(' ', (questionText ?? string.Empty)
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+        if (collapsed.Length == 0)
+        {
+            return "(no question text recorded)";
+        }
+
+        return collapsed.Length <= MaxLength
+            ? collapsed
+            : collapsed[..MaxLength].TrimEnd() + "…";
     }
 
     /// <summary>
