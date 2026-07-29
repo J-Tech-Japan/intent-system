@@ -21,6 +21,10 @@ namespace IntentSystem.Cli.Tests;
 /// command to prove the retry converges only what has not converged yet,
 /// without duplicating the audit event.
 /// </summary>
+// G553 repair: shares the same static command seams the host-review-preflight
+// suite drives when it executes the canonical clear end to end, so both run in
+// the serialized collection rather than racing each other's factories.
+[Collection("WorkerNextActionSharedState")]
 public sealed class AutomationIssueBlockCommandTests : IDisposable
 {
     private const string Repo = "sekiban-as-a-service/sekiban";

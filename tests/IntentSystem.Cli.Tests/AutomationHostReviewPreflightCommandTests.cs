@@ -2,6 +2,7 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -660,8 +661,19 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
         var warning = Assert.Single(result.Warnings);
         Assert.Contains("records blocked_by", warning, StringComparison.Ordinal);
         Assert.Contains("not `blocked`", warning, StringComparison.Ordinal);
-        Assert.Contains("intent-cli queue transition SKS-G818 blocked", warning, StringComparison.Ordinal);
-        Assert.Contains("intent-cli automation issue-block", warning, StringComparison.Ordinal);
+        // Both repairs name the ONE canonical converging surface, using the
+        // linkage the item already carries. The non-blocking `queue transition`
+        // alternative is deliberately absent: it preserves BlockedBy, so it
+        // would not clear the drift it was advertised to clear.
+        Assert.Contains(
+            "intent-cli automation issue-block SKS-G818 --repo J-Tech-Japan/intent-system --issue 1783 --reason \"SKS-G837\" --write",
+            warning,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "intent-cli automation issue-block SKS-G818 --repo J-Tech-Japan/intent-system --issue 1783 --clear --write",
+            warning,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("queue transition", warning, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -712,6 +724,129 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
         var output = writer.ToString();
         Assert.Contains("- action: skip-next-slice-due-to-wip", output, StringComparison.Ordinal);
         Assert.Contains("- warning: queue item `SKS-G818` is state=blocked with an empty blocked_by", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RecommendedClearOperation_EmptiesBlockedBy_AndRemovesTheReverseHalfWarning_G553()
+    {
+        // G553 round-2 repair: the reverse-half warning must recommend an
+        // operation that actually WORKS. A non-blocking `queue transition`
+        // preserves BlockedBy (QueueManager only rewrites the field when a
+        // reason is supplied), so it would leave the drift in place. This test
+        // EXECUTES the recommended canonical clear and proves the outcome
+        // rather than asserting over command text.
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        workspace.WriteQueueState(QueueStateJson(
+            "SKS-G818", 1783, state: "active", blockedBy: "\"SKS-G837\""));
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: in flight", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        // 1. The drift is reported, and the warning names the clear operation.
+        string recommendedClear;
+        using (var beforeWriter = new StringWriter())
+        {
+            Assert.Equal(0, AutomationHostReviewPreflightCommand.Execute(
+                workspace.Context,
+                ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "json"],
+                beforeWriter));
+
+            var before = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(beforeWriter.ToString())!;
+            Assert.Equal([1783], before.InFlightIssues);
+            var warning = Assert.Single(before.Warnings);
+            Assert.Contains(
+                "intent-cli automation issue-block SKS-G818 --repo J-Tech-Japan/intent-system --issue 1783 --clear --write",
+                warning,
+                StringComparison.Ordinal);
+            // The nonfunctional alternative is gone.
+            Assert.DoesNotContain("queue transition", warning, StringComparison.Ordinal);
+            recommendedClear = warning;
+        }
+
+        // 2. Run exactly what was recommended.
+        var originalMutatorFactory = AutomationIssueBlockCommand.MutatorFactory;
+        var originalUtcNow = AutomationIssueBlockCommand.UtcNowFactory;
+        try
+        {
+            var mutator = new PreflightRepairLabelMutator(["intent-target", "intent-issue-blocked"]);
+            AutomationIssueBlockCommand.MutatorFactory = () => mutator;
+            AutomationIssueBlockCommand.UtcNowFactory = () => new DateTimeOffset(2026, 7, 26, 21, 0, 0, TimeSpan.Zero);
+
+            Assert.Contains("--clear --write", recommendedClear, StringComparison.Ordinal);
+
+            using var clearWriter = new StringWriter();
+            var clearExit = AutomationIssueBlockCommand.Execute(
+                workspace.Context,
+                ["SKS-G818", "--repo", "J-Tech-Japan/intent-system", "--issue", "1783", "--clear", "--write"],
+                clearWriter);
+            Assert.True(clearExit == 0, clearWriter.ToString());
+        }
+        finally
+        {
+            AutomationIssueBlockCommand.MutatorFactory = originalMutatorFactory;
+            AutomationIssueBlockCommand.UtcNowFactory = originalUtcNow;
+        }
+
+        // 3. blocked_by is actually empty on disk.
+        var queueState = QueueStateSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(workspace.RootPath, ".intent-cli", "queue-state.json")));
+        var item = queueState.Items.Single(entry => entry.ExecutionUnit == "SKS-G818");
+        Assert.Empty(item.BlockedBy);
+
+        // 4. The reverse-half warning is gone on the very next preflight.
+        using var afterWriter = new StringWriter();
+        Assert.Equal(0, AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "json"],
+            afterWriter));
+
+        var after = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(afterWriter.ToString())!;
+        Assert.Empty(after.Warnings);
+        // Still counted — clearing releases the unit, it does not exempt it.
+        Assert.Equal([1783], after.InFlightIssues);
+        Assert.Empty(after.WipExemptBlockedUnits);
+    }
+
+    /// <summary>G553 repair: minimal label mutator so the recommended clear can be executed for real.</summary>
+    private sealed class PreflightRepairLabelMutator : IGitHubLabelMutator
+    {
+        private readonly List<string> labels;
+
+        public PreflightRepairLabelMutator(IEnumerable<string> initialLabels) => labels = initialLabels.ToList();
+
+        public IReadOnlyList<GitHubAutomationLabel> ReadLabels(string repo, string kind, int number) =>
+            labels.Select(name => new GitHubAutomationLabel { Name = name }).ToArray();
+
+        public void ApplyLabelTransitions(
+            string repo,
+            string kind,
+            int number,
+            IReadOnlyCollection<string> addLabels,
+            IReadOnlyCollection<string> removeLabels) =>
+            Apply(addLabels, removeLabels);
+
+        public void ApplyReconcileTransitions(
+            string repo,
+            string kind,
+            int number,
+            IReadOnlyCollection<string> addLabels,
+            IReadOnlyCollection<string> removeLabels) =>
+            Apply(addLabels, removeLabels);
+
+        private void Apply(IReadOnlyCollection<string> addLabels, IReadOnlyCollection<string> removeLabels)
+        {
+            foreach (var name in removeLabels)
+            {
+                labels.Remove(name);
+            }
+
+            foreach (var name in addLabels.Where(name => !labels.Contains(name)))
+            {
+                labels.Add(name);
+            }
+        }
     }
 
     [Fact]

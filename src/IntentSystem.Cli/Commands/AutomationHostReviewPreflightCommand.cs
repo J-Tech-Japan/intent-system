@@ -376,13 +376,23 @@ internal static class AutomationHostReviewPreflightCommand
                 // case below.
                 if (item.BlockedBy.Count > 0 && LinksToOpenIssue(item, repo, openIssueNumbers))
                 {
+                    // Both repairs name the ONE canonical surface that converges
+                    // queue-state and the GitHub label together, using the
+                    // linkage this item already carries. A non-blocking `queue
+                    // transition` is deliberately NOT offered as a clear: it
+                    // preserves BlockedBy (QueueManager only rewrites the field
+                    // when a reason is supplied), so it changes the state and
+                    // leaves the drift exactly where it was.
+                    var issueNumber = item.LinkedIssue!.Number!.Value
+                        .ToString(System.Globalization.CultureInfo.InvariantCulture);
                     collectedWarnings.Add(
                         $"queue item `{item.ExecutionUnit}` records blocked_by "
                         + $"({string.Join("; ", item.BlockedBy)}) but its state is `{FormatQueueState(item.State)}`, "
-                        + "not `blocked`; half-converged items still count toward WIP — repair with "
-                        + $"`intent-cli queue transition {item.ExecutionUnit} blocked --reason \"{string.Join("; ", item.BlockedBy)}\" --write` "
-                        + "(then reconcile the GitHub label with `intent-cli automation issue-block`), or clear the "
-                        + $"stale reason with `intent-cli queue transition {item.ExecutionUnit} <state> --write`.");
+                        + "not `blocked`; half-converged items still count toward WIP — converge it with "
+                        + $"`intent-cli automation issue-block {item.ExecutionUnit} --repo {repo} --issue {issueNumber} "
+                        + $"--reason \"{string.Join("; ", item.BlockedBy)}\" --write`, or clear the stale reason with "
+                        + $"`intent-cli automation issue-block {item.ExecutionUnit} --repo {repo} --issue {issueNumber} "
+                        + "--clear --write`.");
                 }
 
                 continue;
@@ -395,11 +405,15 @@ internal static class AutomationHostReviewPreflightCommand
                 // keep counting it, and to say so rather than exempt it quietly.
                 if (LinksToOpenIssue(item, repo, openIssueNumbers))
                 {
+                    var issueNumber = item.LinkedIssue!.Number!.Value
+                        .ToString(System.Globalization.CultureInfo.InvariantCulture);
                     collectedWarnings.Add(
                         $"queue item `{item.ExecutionUnit}` is state=blocked with an empty blocked_by; "
-                        + "half-converged items still count toward WIP — repair with "
-                        + $"`intent-cli queue transition {item.ExecutionUnit} blocked --reason \"<why>\" --write` "
-                        + "(then reconcile the GitHub label with `intent-cli automation issue-block`).");
+                        + "half-converged items still count toward WIP — record the reason with "
+                        + $"`intent-cli automation issue-block {item.ExecutionUnit} --repo {repo} --issue {issueNumber} "
+                        + $"--reason \"<why>\" --write`, or release the unit with "
+                        + $"`intent-cli automation issue-block {item.ExecutionUnit} --repo {repo} --issue {issueNumber} "
+                        + "--clear --write`.");
                 }
 
                 continue;
