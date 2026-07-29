@@ -211,6 +211,7 @@ publish 後の検証(GitHub Release が publish され `release.yml` が実行�
       preview は `0.6.2-preview.N` として build され、リリースより上にソートされます。これを
       飛ばすことが、本リリースが記録している 2026-07-29 の不具合そのものです。
       [バージョンフロー](09-developer-reference.md#バージョンフロー) を参照。
-- [ ] オペレーターに `v0.6.1` GitHub Release の publish を通知し、続いて
-      sekiban-as-a-service-orch に対して `#1783` クラスの WIP 枯渇が `v0.6.1` インストールで
-      解消されることを通知すること。
+- [ ] `v0.6.1` の publish **および** 検証が完了したことを、オペレーターと下流の利用者へ
+      通知すること — sekiban-as-a-service-orch を含み、同チームには `#1783` クラスの WIP
+      枯渇が `v0.6.1` インストールで解消されることを伝えます。(publish の依頼自体は上記の
+      リリース前フェーズに属します。この時点では Release は既に publish 済みです。)

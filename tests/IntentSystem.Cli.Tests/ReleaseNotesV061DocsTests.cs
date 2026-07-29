@@ -163,6 +163,92 @@ public sealed class ReleaseNotesV061DocsTests
         Assert.Contains("0.6.2-preview.<run>.<attempt>", reference, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void DeveloperReference_ActiveReadinessIsTheV061Section_NotAStaleV060One(string language)
+    {
+        var reference = ReadDeveloperReference(language);
+
+        Assert.Contains(
+            language == "en" ? "### Next release readiness (v0.6.1)" : "### 次リリース準備(v0.6.1)",
+            reference,
+            StringComparison.Ordinal);
+        // The superseded section is re-cut, not left standing beside the new one.
+        Assert.DoesNotContain(
+            language == "en" ? "### Next release readiness (v0.6.0)" : "### 次リリース準備(v0.6.0)",
+            reference,
+            StringComparison.Ordinal);
+
+        // It states what actually shipped and what is being cut.
+        Assert.Contains(
+            language == "en" ? "**`v0.6.0` shipped**" : "**`v0.6.0` は publish 済み**",
+            reference,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "a **patch** bump, not a minor" : "minor ではなく **patch** バンプ",
+            reference,
+            StringComparison.Ordinal);
+        Assert.Contains("release-notes-v0.6.1.md", reference, StringComparison.Ordinal);
+        foreach (var slice in ReleasedSlices)
+        {
+            Assert.Contains(slice, reference, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void DeveloperReference_CarriesNoStaleActiveVersionGuidance(string language)
+    {
+        var reference = ReadDeveloperReference(language);
+
+        // Negative coverage: the pre-roll policy values and the deferral that
+        // caused the 2026-07-29 preview-channel break must not reappear as
+        // active guidance.
+        Assert.DoesNotContain("\"stableVersion\": \"0.5.0\"", reference, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            language == "en" ? "stableVersion 0.5.0 (published)" : "stableVersion 0.5.0（公開済み）",
+            reference,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            language == "en" ? "deferred to the NEXT release-prep packet" : "次の release-prep パケットに委ねられます",
+            reference,
+            StringComparison.Ordinal);
+
+        // And the readiness checks name the current line.
+        Assert.Contains(
+            language == "en" ? "stableVersion 0.6.0 (published), nextVersion 0.6.1 (to release)" : "stableVersion 0.6.0（公開済み）, nextVersion 0.6.1（リリース対象）",
+            reference,
+            StringComparison.Ordinal);
+        Assert.Contains("JTechJapan.IntentSystem.Cli.0.6.1.nupkg", reference, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void ReleaseNotes_PostReleaseChecklistNotifiesCompletion_RatherThanRequestingPublication(string language)
+    {
+        var notes = ReadReleaseNotes(language);
+
+        // The checklist is defined as post-Release, so by the time it runs the
+        // Release is already published — the item reports completion.
+        Assert.Contains(
+            language == "en" ? "publication **and** verification of `v0.6.1` are complete" : "`v0.6.1` の publish **および** 検証が完了したことを",
+            notes,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "belongs to the pre-release phase" : "リリース前フェーズに属します",
+            notes,
+            StringComparison.Ordinal);
+
+        // The stale publish-request wording is gone from the post-release list.
+        Assert.DoesNotContain(
+            language == "en" ? "Notify the operator to publish the `v0.6.1` GitHub Release" : "オペレーターに `v0.6.1` GitHub Release の publish を通知し",
+            notes,
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public void PrepareOnlyDiff_AddsNoPublishAutomation_G554()
     {

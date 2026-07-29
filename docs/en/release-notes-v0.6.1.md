@@ -241,6 +241,8 @@ Post-release verification (after the GitHub Release is published and
       ABOVE the release. Skipping this is exactly the 2026-07-29 defect this
       release documents. See
       [Version flow](09-developer-reference.md#version-flow).
-- [ ] Notify the operator to publish the `v0.6.1` GitHub Release, then notify
-      sekiban-as-a-service-orch that the `#1783`-class WIP starvation is fixed
-      once `v0.6.1` is installed.
+- [ ] Notify the operator and downstream consumers that publication **and**
+      verification of `v0.6.1` are complete — including sekiban-as-a-service-orch,
+      for whom the `#1783`-class WIP starvation is fixed once `v0.6.1` is
+      installed. (The publish request itself belongs to the pre-release phase
+      above; by this point the Release is already published.)
