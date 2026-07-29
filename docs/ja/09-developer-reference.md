@@ -692,6 +692,45 @@ retired になった item は自動的に WIP gating から外れます:
 されて label が外れた issue は単にそこから消えるだけです — 別途コード
 パスは不要です。
 
+**queue で blocked のユニットは WIP gate から除外されます(G553)。**
+work が WIP から外れる経路は retirement だけではなく、*parked*(意図的に脇へ
+置く)ももう 1 つの経路です。queue item が **converged blocked state** —
+queue `state=blocked` **かつ** `blocked_by` が非空 — にある issue は
+`in_flight_issues` にカウントされなくなり、in-flight が blocked のものだけに
+なった時点で next-slice candidate は `skip-next-slice-due-to-wip` から
+`candidate-ready` に切り替わります。blocked のユニットは設計上 parked で
+あり、unblock されるまで進行できません。それをカウントすることは、
+オペレーターが意図的に work を脇に置いたまさにそのときに publish を
+枯渇させます。field finding(sekiban-as-a-service、2026-07-26、0.5.0 上):
+gate が issue #1783 を挙げて publish を抑止しましたが、そのユニット
+SKS-G818 は claim を保持したままの supported な block transition で
+parked されていました — G545 は blocked ユニットを `claimed-but-silent`
+から除外しましたが、この gate はカバーされていませんでした。
+
+- **convergence は必須で、かつ two-sided です。** `state=blocked` なのに
+  `blocked_by` が空、または `state=blocked` でない item に `blocked_by` の
+  理由がある状態は、G545 の言う **drift** であって exemption ではありません。
+  half-converged な item はカウントされ続け(fail-closed)、state/reason の
+  不一致は修復コマンドを名指しする warning として報告されます。
+- **exemption が silent になることはありません。** 除外された各ユニットは
+  新しい `wip_exempt_blocked_units` diagnostics フィールドに execution unit・
+  issue 番号・`blocked_by` の理由つきで現れます(JSON / text 両方の出力)。
+- **linkage は queue item 自身の `linked_issue`**(repo + number)です —
+  `issue publish-flow` が書く canonical な記録であり、title からの推測では
+  ありません。queue item に紐付けられない issue は exempt されず、別 repo を
+  指す `linked_issue` がこの repo の issue を免除することもありません。
+- **読めない host state では fail-closed。** queue-state が存在しない場合は
+  何も exempt せず(G553 以前の挙動そのまま)、パースできない場合も何も
+  exempt せず warning を出します。unblock した場合は次の呼び出しから即座に
+  カウントが戻ります。
+- **peer surface**: `intent next-slice` は元々 `active`/`review`/`fixing` の
+  item だけを WIP として数えており、blocked はカウントしていません — この
+  ルールの divergent copy は不要でしたし、追加もしていません。
+
+G553 で変更しないもの: block/clear の transition と convergence rule(G545 が
+所有)、非 blocked ユニットの WIP-cap セマンティクス、そして
+`automation stalled-work`(G545 が既に blocked ユニットを除外済み)。
+
 ---
 
 ### Queue の堅牢化: list parsing・retired backfill・lifecycle を考慮した selection (G534)
