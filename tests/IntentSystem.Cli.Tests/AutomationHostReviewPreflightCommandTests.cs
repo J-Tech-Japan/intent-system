@@ -2,6 +2,7 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -564,6 +565,471 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
             throw new InvalidOperationException("candidate listing should not run");
     }
 
+    // ─── G553: converged-blocked units are exempt from the WIP gate ─────────
+
+    [Fact]
+    public void Execute_ConvergedBlockedUnit_IsExemptFromWipGate_AndListedInDiagnostics_G553()
+    {
+        // G553 field shape (sekiban-as-a-service, 2026-07-26, on 0.5.0):
+        // host-review-preflight returned skip-next-slice-due-to-wip citing
+        // issue #1783, whose unit SKS-G818 had been parked through the
+        // supported claim-preserving block transition. With the only in-flight
+        // item blocked, the gate must flip to candidate-ready.
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        workspace.WriteQueueState(BlockedQueueStateJson(
+            "SKS-G818", 1783, blockedBy: "\"SKS-G837\""));
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: parked pending SKS-G837", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("candidate-ready", result.Action);
+        Assert.Empty(result.InFlightIssues);
+
+        // The exemption is visible, never silent.
+        var exemption = Assert.Single(result.WipExemptBlockedUnits);
+        Assert.Equal("SKS-G818", exemption.ExecutionUnit);
+        Assert.Equal(1783, exemption.Issue);
+        Assert.Equal(["SKS-G837"], exemption.BlockedBy);
+    }
+
+    [Fact]
+    public void Execute_BlockedWithoutReason_StillCountsTowardWip_FailClosed_G553()
+    {
+        // Half-converged: state=blocked with an empty blocked_by is DRIFT per
+        // G545, not a unit to excuse. It keeps counting, and the drift is
+        // reported rather than silently tolerated.
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        workspace.WriteQueueState(BlockedQueueStateJson("SKS-G818", 1783, blockedBy: null));
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: parked pending SKS-G837", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("skip-next-slice-due-to-wip", result.Action);
+        Assert.Equal([1783], result.InFlightIssues);
+        Assert.Empty(result.WipExemptBlockedUnits);
+        Assert.Contains(result.Warnings, warning => warning.Contains("half-converged", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_ReasonWithoutBlockedState_StillCountsTowardWip_FailClosed_G553()
+    {
+        // The reverse half-converged shape: a recorded blocked_by reason on an
+        // item that is NOT state=blocked. Convergence is two-sided, so this is
+        // not an exemption either.
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        workspace.WriteQueueState(QueueStateJson(
+            "SKS-G818", 1783, state: "active", blockedBy: "\"SKS-G837\""));
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: in flight", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("skip-next-slice-due-to-wip", result.Action);
+        Assert.Equal([1783], result.InFlightIssues);
+        Assert.Empty(result.WipExemptBlockedUnits);
+        // Both half-converged directions must be visibly repairable, not just
+        // silently counted.
+        var warning = Assert.Single(result.Warnings);
+        Assert.Contains("records blocked_by", warning, StringComparison.Ordinal);
+        Assert.Contains("not `blocked`", warning, StringComparison.Ordinal);
+        // Both repairs name the ONE canonical converging surface, using the
+        // linkage the item already carries. The non-blocking `queue transition`
+        // alternative is deliberately absent: it preserves BlockedBy, so it
+        // would not clear the drift it was advertised to clear.
+        Assert.Contains(
+            "intent-cli automation issue-block SKS-G818 --repo J-Tech-Japan/intent-system --issue 1783 --reason \"SKS-G837\" --write",
+            warning,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "intent-cli automation issue-block SKS-G818 --repo J-Tech-Japan/intent-system --issue 1783 --clear --write",
+            warning,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("queue transition", warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_BothHalfConvergedDirections_RenderTheirWarningInTextOutput_G553()
+    {
+        // The text rendering is what a host operator reads at the terminal —
+        // the diagnostic has to survive there too, not only in JSON.
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        workspace.WriteQueueState(QueueStateJson(
+            "SKS-G818", 1783, state: "active", blockedBy: "\"SKS-G837\""));
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: in flight", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "text"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("- action: skip-next-slice-due-to-wip", output, StringComparison.Ordinal);
+        Assert.Contains("- warning: queue item `SKS-G818` records blocked_by", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("wip_exempt_blocked_unit:", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ForwardHalfConvergence_RendersItsWarningInTextOutput_G553()
+    {
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        workspace.WriteQueueState(BlockedQueueStateJson("SKS-G818", 1783, blockedBy: null));
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: parked pending SKS-G837", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "text"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("- action: skip-next-slice-due-to-wip", output, StringComparison.Ordinal);
+        Assert.Contains("- warning: queue item `SKS-G818` is state=blocked with an empty blocked_by", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RecommendedClearOperation_EmptiesBlockedBy_AndRemovesTheReverseHalfWarning_G553()
+    {
+        // G553 round-2 repair: the reverse-half warning must recommend an
+        // operation that actually WORKS. A non-blocking `queue transition`
+        // preserves BlockedBy (QueueManager only rewrites the field when a
+        // reason is supplied), so it would leave the drift in place. This test
+        // EXECUTES the recommended canonical clear and proves the outcome
+        // rather than asserting over command text.
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        workspace.WriteQueueState(QueueStateJson(
+            "SKS-G818", 1783, state: "active", blockedBy: "\"SKS-G837\""));
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: in flight", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        // 1. The drift is reported, and the warning names the clear operation.
+        string recommendedClear;
+        using (var beforeWriter = new StringWriter())
+        {
+            Assert.Equal(0, AutomationHostReviewPreflightCommand.Execute(
+                workspace.Context,
+                ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "json"],
+                beforeWriter));
+
+            var before = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(beforeWriter.ToString())!;
+            Assert.Equal([1783], before.InFlightIssues);
+            var warning = Assert.Single(before.Warnings);
+            Assert.Contains(
+                "intent-cli automation issue-block SKS-G818 --repo J-Tech-Japan/intent-system --issue 1783 --clear --write",
+                warning,
+                StringComparison.Ordinal);
+            // The nonfunctional alternative is gone.
+            Assert.DoesNotContain("queue transition", warning, StringComparison.Ordinal);
+            recommendedClear = warning;
+        }
+
+        // 2. Run exactly what was recommended.
+        var originalMutatorFactory = AutomationIssueBlockCommand.MutatorFactory;
+        var originalUtcNow = AutomationIssueBlockCommand.UtcNowFactory;
+        try
+        {
+            var mutator = new PreflightRepairLabelMutator(["intent-target", "intent-issue-blocked"]);
+            AutomationIssueBlockCommand.MutatorFactory = () => mutator;
+            AutomationIssueBlockCommand.UtcNowFactory = () => new DateTimeOffset(2026, 7, 26, 21, 0, 0, TimeSpan.Zero);
+
+            Assert.Contains("--clear --write", recommendedClear, StringComparison.Ordinal);
+
+            using var clearWriter = new StringWriter();
+            var clearExit = AutomationIssueBlockCommand.Execute(
+                workspace.Context,
+                ["SKS-G818", "--repo", "J-Tech-Japan/intent-system", "--issue", "1783", "--clear", "--write"],
+                clearWriter);
+            Assert.True(clearExit == 0, clearWriter.ToString());
+        }
+        finally
+        {
+            AutomationIssueBlockCommand.MutatorFactory = originalMutatorFactory;
+            AutomationIssueBlockCommand.UtcNowFactory = originalUtcNow;
+        }
+
+        // 3. blocked_by is actually empty on disk.
+        var queueState = QueueStateSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(workspace.RootPath, ".intent-cli", "queue-state.json")));
+        var item = queueState.Items.Single(entry => entry.ExecutionUnit == "SKS-G818");
+        Assert.Empty(item.BlockedBy);
+
+        // 4. The reverse-half warning is gone on the very next preflight.
+        using var afterWriter = new StringWriter();
+        Assert.Equal(0, AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "json"],
+            afterWriter));
+
+        var after = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(afterWriter.ToString())!;
+        Assert.Empty(after.Warnings);
+        // Still counted — clearing releases the unit, it does not exempt it.
+        Assert.Equal([1783], after.InFlightIssues);
+        Assert.Empty(after.WipExemptBlockedUnits);
+    }
+
+    /// <summary>G553 repair: minimal label mutator so the recommended clear can be executed for real.</summary>
+    private sealed class PreflightRepairLabelMutator : IGitHubLabelMutator
+    {
+        private readonly List<string> labels;
+
+        public PreflightRepairLabelMutator(IEnumerable<string> initialLabels) => labels = initialLabels.ToList();
+
+        public IReadOnlyList<GitHubAutomationLabel> ReadLabels(string repo, string kind, int number) =>
+            labels.Select(name => new GitHubAutomationLabel { Name = name }).ToArray();
+
+        public void ApplyLabelTransitions(
+            string repo,
+            string kind,
+            int number,
+            IReadOnlyCollection<string> addLabels,
+            IReadOnlyCollection<string> removeLabels) =>
+            Apply(addLabels, removeLabels);
+
+        public void ApplyReconcileTransitions(
+            string repo,
+            string kind,
+            int number,
+            IReadOnlyCollection<string> addLabels,
+            IReadOnlyCollection<string> removeLabels) =>
+            Apply(addLabels, removeLabels);
+
+        private void Apply(IReadOnlyCollection<string> addLabels, IReadOnlyCollection<string> removeLabels)
+        {
+            foreach (var name in removeLabels)
+            {
+                labels.Remove(name);
+            }
+
+            foreach (var name in addLabels.Where(name => !labels.Contains(name)))
+            {
+                labels.Add(name);
+            }
+        }
+    }
+
+    [Fact]
+    public void Execute_ConvergedBlockedWithBlankLinkedIssueRepo_IsNotExempt_AndExplainsWhy_G553()
+    {
+        // G553 repair: canonical linkage is repo AND number. A blank repo is
+        // not a wildcard — issue numbers are unique only within a repository.
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        workspace.WriteQueueState(BlockedQueueStateJson(
+            "SKS-G818", 1783, blockedBy: "\"SKS-G837\"", repo: string.Empty));
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: parked pending SKS-G837", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("skip-next-slice-due-to-wip", result.Action);
+        Assert.Equal([1783], result.InFlightIssues);
+        Assert.Empty(result.WipExemptBlockedUnits);
+        var warning = Assert.Single(result.Warnings);
+        Assert.Contains("linked_issue records no repo", warning, StringComparison.Ordinal);
+        Assert.Contains("not canonical linkage", warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_UnblockingRestoresWipCountingImmediately_G553()
+    {
+        // Unblocked (back to active, no reason) — counts again on the very
+        // next call, with no exemption reported.
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        workspace.WriteQueueState(QueueStateJson("SKS-G818", 1783, state: "active", blockedBy: null));
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: resumed", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("skip-next-slice-due-to-wip", result.Action);
+        Assert.Equal([1783], result.InFlightIssues);
+        Assert.Empty(result.WipExemptBlockedUnits);
+    }
+
+    [Fact]
+    public void Execute_UnreadableQueueState_ExemptsNothing_AndWarns_G553()
+    {
+        // Fail-closed: an unparseable queue-state can establish nothing, so
+        // every open intent-target issue keeps counting and the read failure is
+        // surfaced rather than swallowed.
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        workspace.WriteQueueState("{ not valid json }");
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: parked pending SKS-G837", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("skip-next-slice-due-to-wip", result.Action);
+        Assert.Equal([1783], result.InFlightIssues);
+        Assert.Empty(result.WipExemptBlockedUnits);
+        Assert.Contains(result.Warnings, warning => warning.Contains("could not be parsed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_NoQueueState_KeepsPreG553Behavior_G553()
+    {
+        // A host with no queue-state at all behaves exactly as before G553:
+        // every open intent-target issue counts, and nothing is reported.
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: parked pending SKS-G837", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("skip-next-slice-due-to-wip", result.Action);
+        Assert.Equal([1783], result.InFlightIssues);
+        Assert.Empty(result.WipExemptBlockedUnits);
+        Assert.Empty(result.Warnings);
+    }
+
+    [Fact]
+    public void Execute_BlockedUnitLinkedToAnotherRepo_IsNotExempt_G553()
+    {
+        // Linkage is the queue item's own linked_issue. A blocked item whose
+        // linked issue belongs to a DIFFERENT repo cannot excuse this repo's
+        // issue number just because the numbers coincide.
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        workspace.WriteQueueState(BlockedQueueStateJson(
+            "SKS-G818", 1783, blockedBy: "\"SKS-G837\"", repo: "J-Tech-Japan/other-repo"));
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: parked pending SKS-G837", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("skip-next-slice-due-to-wip", result.Action);
+        Assert.Equal([1783], result.InFlightIssues);
+        Assert.Empty(result.WipExemptBlockedUnits);
+    }
+
+    private static string BlockedQueueStateJson(
+        string executionUnit,
+        int issueNumber,
+        string? blockedBy,
+        string repo = "J-Tech-Japan/intent-system") =>
+        QueueStateJson(executionUnit, issueNumber, "blocked", blockedBy, repo);
+
+    private static string QueueStateJson(
+        string executionUnit,
+        int issueNumber,
+        string state,
+        string? blockedBy,
+        string repo = "J-Tech-Japan/intent-system") =>
+        $$"""
+        {
+          "schema_version": "1",
+          "updated_at": "2026-07-26T20:50:00+00:00",
+          "items": [
+            {
+              "execution_unit": "{{executionUnit}}",
+              "title": "[{{executionUnit}}] Field-shape unit",
+              "state": "{{state}}",
+              "dependencies": [],
+              "blocked_by": [{{blockedBy ?? string.Empty}}],
+              "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+              "packet_paths": {
+                "implementation": ".intent-cli/issues/{{executionUnit}}/implementation.md",
+                "review_context": ".intent-cli/issues/{{executionUnit}}/review-context.md",
+                "yaml": ".intent-cli/issues/{{executionUnit}}/packet.yaml"
+              },
+              "linked_issue": {
+                "repo": "{{repo}}",
+                "number": {{issueNumber}},
+                "url": "https://github.com/{{repo}}/issues/{{issueNumber}}"
+              },
+              "worker_role": "coder",
+              "review_role": "reviewer",
+              "priority": "normal"
+            }
+          ]
+        }
+        """;
+
     private sealed class AutomationHostReviewPreflightWorkspace : IDisposable
     {
         public AutomationHostReviewPreflightWorkspace()
@@ -587,6 +1053,14 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
         public string RootPath { get; }
 
         public CliContext Context { get; }
+
+        /// <summary>G553: writes the legacy-root queue-state the WIP-exemption read falls back to.</summary>
+        public void WriteQueueState(string json)
+        {
+            var path = Path.Combine(RootPath, ".intent-cli", "queue-state.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, json);
+        }
 
         public void WriteInstalledCliScript(bool stalePrTransition)
         {

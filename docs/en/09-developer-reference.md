@@ -665,6 +665,41 @@ host-review-preflight`'s in-flight scan reads OPEN, `intent-target`-labeled
 GitHub issues/PRs live, so a closed, unlabeled issue simply disappears from
 it — no separate code path needed.
 
+**Queue-blocked units are exempt from the WIP gate (G553).** Retirement is one
+way work leaves WIP; being *parked* is the other. An issue whose queue item is
+in the **converged blocked state** — queue `state=blocked` **and** a non-empty
+`blocked_by` — no longer counts toward `in_flight_issues`, so a next-slice
+candidate flips from `skip-next-slice-due-to-wip` to `candidate-ready` when the
+only in-flight items are blocked. A blocked unit is parked by design and cannot
+progress until it is unblocked; counting it starves publication exactly when the
+operator deliberately set work aside. Field finding (sekiban-as-a-service,
+2026-07-26 on 0.5.0): the gate cited issue #1783 whose unit SKS-G818 had been
+parked through the supported claim-preserving block transition — G545 exempted
+blocked units from `claimed-but-silent`, but this gate was never covered.
+
+- **Convergence is required, and it is two-sided.** `state=blocked` with an
+  empty `blocked_by`, or a `blocked_by` reason on an item that is not
+  `state=blocked`, is **drift** per G545 — not an exemption. Half-converged
+  items keep counting (fail-closed), and the state/reason mismatch is reported
+  as a warning naming the repair commands.
+- **The exemption is never silent.** Each exempted unit appears in the new
+  `wip_exempt_blocked_units` diagnostics field with its execution unit, issue
+  number, and `blocked_by` reasons, in both the JSON and text renderings.
+- **Linkage is the queue item's own `linked_issue`** (repo + number) — the
+  canonical record `issue publish-flow` writes — never a title guess. An issue
+  that cannot be linked to a queue item is not exempt, and a `linked_issue`
+  naming a different repo never excuses this repo's issue.
+- **Fail-closed on unreadable host state.** A missing queue-state exempts
+  nothing silently (pre-G553 behavior exactly); an unparseable one exempts
+  nothing and warns. Unblocking restores counting on the very next call.
+- **Peer surfaces**: `intent next-slice` already counts only
+  `active`/`review`/`fixing` items as WIP, so blocked units were never counted
+  there — no divergent copy of this rule was needed or added.
+
+Unchanged by G553: the block/clear transitions and convergence rules (G545 owns
+them), WIP-cap semantics for non-blocked units, and `automation stalled-work`
+(G545 already exempts blocked units there).
+
 ---
 
 ### Queue robustness: list parsing, retired backfill, lifecycle-aware selection (G534)
