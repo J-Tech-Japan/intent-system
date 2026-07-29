@@ -2095,31 +2095,54 @@ truth です。G468 以降、ローカル `dotnet pack` のデフォルト `<Ver
 
 ```json
 {
-  "stableVersion": "0.5.0",
-  "nextVersion": "0.6.0"
-}
-```
-
-| ステージ | バージョン形式 | 導出方法 |
-| --- | --- | --- |
-| ローカル pack / install | `0.6.0-<sha>-<G-unit>` | `eng/version.json` の `nextVersion`（G468） |
-| Main CI preview | `0.6.0-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
-| リリース候補（任意） | `0.6.0-rc.N` | タグ `v0.6.0-rc.N` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する |
-| 安定版リリース | `0.6.0` | タグ `v0.6.0` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する（`-p:Version=<tag>` が優先） |
-| リリース後の main ビルド | `0.6.1-preview.<run>.<attempt>` | `nextVersion` を `0.6.1` にバンプ後 |
-
-**`v0.6.0` リリース後**、`eng/version.json` の両フィールドをバンプしてください:
-
-```json
-{
   "stableVersion": "0.6.0",
   "nextVersion": "0.6.1"
 }
 ```
 
-これにより次の main ブランチ CI ビルド（およびローカル pack）が
-`0.6.1-preview.<run>.<attempt>` / `0.6.1-<sha>-<G-unit>` を生成し、`0.6.0`（安定版
-リリースバージョンと衝突）の出力が継続されなくなります。
+| ステージ | バージョン形式 | 導出方法 |
+| --- | --- | --- |
+| ローカル pack / install | `0.6.1-<sha>-<G-unit>` | `eng/version.json` の `nextVersion`（G468） |
+| Main CI preview | `0.6.1-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
+| リリース候補（任意） | `0.6.1-rc.N` | タグ `v0.6.1-rc.N` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する |
+| 安定版リリース | `0.6.1` | タグ `v0.6.1` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する（`-p:Version=<tag>` が優先） |
+| リリース後の main ビルド | `0.6.2-preview.<run>.<attempt>` | `nextVersion` を `0.6.2` に roll した後 |
+
+### リリース後の version roll(G554) — 必須・即時
+
+**GitHub Release を publish して検証した直後に、follow-up commit で
+`eng/version.json` を roll してください**: `stableVersion` = 今リリースした
+バージョン、`nextVersion` = 次の patch。これは任意の後片付けではなく、リリース
+closeout の 1 ステップであり、飛ばすと preview チャンネルが壊れます。
+
+```json
+{
+  "stableVersion": "0.6.1",
+  "nextVersion": "0.6.2"
+}
+```
+
+**なぜ必須か。** preview とローカル pack の build は `nextVersion` から導出されます。
+`nextVersion` が今リリースしたばかりのバージョンを指したままだと、以降の preview は
+すべて `<released>-preview.N` として build され、prerelease は SemVer 上そのリリース
+バージョンより **下** にソートされます。field incident、2026-07-29: `v0.6.0` を publish
+した後に roll を飛ばしたため preview は `0.6.0-preview.N` のまま build され続け、
+`dotnet tool update` は新しい build を「より古い」として拒否し、手動 uninstall/install
+以外に手段がありませんでした。直ちに roll すれば次の preview は `0.6.2-preview.N` となり
+`0.6.1` より上にソートされるため、`dotnet tool update` が再び機能します。
+
+**リリース closeout チェックリスト**(roll はステップ 4 — ステップ 3 で止めないこと):
+
+1. 対象バージョンの GitHub Release を publish する(これが `release.yml` を発火させる)。
+2. publish された成果物を検証する: NuGet ページ、release assets、`.sha256` チェックサム、
+   `dotnet tool update` 後の `intent-cli --version`。
+3. オペレーターと、待っている下流の利用者へ通知する。
+4. **follow-up commit で `eng/version.json` を roll する** — `stableVersion` = リリース
+   したバージョン、`nextVersion` = 次の patch — そして次の main CI preview がリリースより
+   上に build されることを確認する。
+
+既存の preview 成果物は **遡って番号を振り直しません**。このルールはチャンネルを今後に
+向けて修正するものです。
 
 ### 次リリース準備(v0.6.0)
 

@@ -1956,31 +1956,55 @@ literal:
 
 ```json
 {
-  "stableVersion": "0.5.0",
-  "nextVersion": "0.6.0"
-}
-```
-
-| Stage | Version form | How it is derived |
-| --- | --- | --- |
-| Local pack / install | `0.6.0-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
-| Main CI preview | `0.6.0-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
-| Release candidate (optional) | `0.6.0-rc.N` | Publishing the GitHub Release for tag `v0.6.0-rc.N` triggers `release.yml` (`on: release: published`); the tag supplies the version |
-| Stable release | `0.6.0` | Publishing the GitHub Release for tag `v0.6.0` triggers `release.yml` (`on: release: published`); the tag supplies the version (`-p:Version=<tag>` wins) |
-| Post-release main builds | `0.6.1-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.6.1` |
-
-**After releasing `v0.6.0`**, bump both fields in `eng/version.json`:
-
-```json
-{
   "stableVersion": "0.6.0",
   "nextVersion": "0.6.1"
 }
 ```
 
-This ensures the next main-branch CI build (and local pack) immediately produces
-`0.6.1-preview.<run>.<attempt>` / `0.6.1-<sha>-<G-unit>` rather than continuing to
-emit `0.6.0` (which would collide with the stable release version).
+| Stage | Version form | How it is derived |
+| --- | --- | --- |
+| Local pack / install | `0.6.1-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
+| Main CI preview | `0.6.1-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
+| Release candidate (optional) | `0.6.1-rc.N` | Publishing the GitHub Release for tag `v0.6.1-rc.N` triggers `release.yml` (`on: release: published`); the tag supplies the version |
+| Stable release | `0.6.1` | Publishing the GitHub Release for tag `v0.6.1` triggers `release.yml` (`on: release: published`); the tag supplies the version (`-p:Version=<tag>` wins) |
+| Post-release main builds | `0.6.2-preview.<run>.<attempt>` | After rolling `nextVersion` to `0.6.2` |
+
+### Post-release version roll (G554) — required, immediate
+
+**The moment a GitHub Release is published and verified, roll `eng/version.json`
+in a follow-up commit**: `stableVersion` = the version just released,
+`nextVersion` = the next patch. This is not an optional tidy-up; it is a step of
+release closeout, and skipping it breaks the preview channel.
+
+```json
+{
+  "stableVersion": "0.6.1",
+  "nextVersion": "0.6.2"
+}
+```
+
+**Why it is required.** `nextVersion` is what preview and local-pack builds are
+derived from. If it still names the version that was just released, every
+subsequent preview builds as `<released>-preview.N` — and a prerelease sorts
+**below** its own release version in SemVer. Field incident, 2026-07-29: after
+`v0.6.0` was published the roll was skipped, so previews kept building as
+`0.6.0-preview.N`; `dotnet tool update` refused the newer build as older, and a
+manual uninstall/install was the only way forward. Rolling immediately makes the
+next preview `0.6.2-preview.N`, which sorts above `0.6.1`, and `dotnet tool
+update` works again.
+
+**Release closeout checklist** (the roll is step 4 — do not stop at step 3):
+
+1. Publish the GitHub Release for the version (this fires `release.yml`).
+2. Verify the published artifacts: NuGet page, release assets, `.sha256`
+   checksums, and `intent-cli --version` after `dotnet tool update`.
+3. Notify the operator and any waiting downstream consumers.
+4. **Roll `eng/version.json` in a follow-up commit** — `stableVersion` = the
+   released version, `nextVersion` = the next patch — and confirm the next main
+   CI preview builds above the release.
+
+Existing preview artifacts are **not** renumbered retroactively; the rule fixes
+the channel going forward.
 
 ### Next release readiness (v0.6.0)
 
