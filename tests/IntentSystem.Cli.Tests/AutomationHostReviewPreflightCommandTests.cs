@@ -655,6 +655,93 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
         Assert.Equal("skip-next-slice-due-to-wip", result.Action);
         Assert.Equal([1783], result.InFlightIssues);
         Assert.Empty(result.WipExemptBlockedUnits);
+        // Both half-converged directions must be visibly repairable, not just
+        // silently counted.
+        var warning = Assert.Single(result.Warnings);
+        Assert.Contains("records blocked_by", warning, StringComparison.Ordinal);
+        Assert.Contains("not `blocked`", warning, StringComparison.Ordinal);
+        Assert.Contains("intent-cli queue transition SKS-G818 blocked", warning, StringComparison.Ordinal);
+        Assert.Contains("intent-cli automation issue-block", warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_BothHalfConvergedDirections_RenderTheirWarningInTextOutput_G553()
+    {
+        // The text rendering is what a host operator reads at the terminal —
+        // the diagnostic has to survive there too, not only in JSON.
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        workspace.WriteQueueState(QueueStateJson(
+            "SKS-G818", 1783, state: "active", blockedBy: "\"SKS-G837\""));
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: in flight", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "text"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("- action: skip-next-slice-due-to-wip", output, StringComparison.Ordinal);
+        Assert.Contains("- warning: queue item `SKS-G818` records blocked_by", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("wip_exempt_blocked_unit:", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ForwardHalfConvergence_RendersItsWarningInTextOutput_G553()
+    {
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        workspace.WriteQueueState(BlockedQueueStateJson("SKS-G818", 1783, blockedBy: null));
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: parked pending SKS-G837", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "text"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("- action: skip-next-slice-due-to-wip", output, StringComparison.Ordinal);
+        Assert.Contains("- warning: queue item `SKS-G818` is state=blocked with an empty blocked_by", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ConvergedBlockedWithBlankLinkedIssueRepo_IsNotExempt_AndExplainsWhy_G553()
+    {
+        // G553 repair: canonical linkage is repo AND number. A blank repo is
+        // not a wildcard — issue numbers are unique only within a repository.
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        workspace.WriteQueueState(BlockedQueueStateJson(
+            "SKS-G818", 1783, blockedBy: "\"SKS-G837\"", repo: string.Empty));
+        var lister = new FakeLister
+        {
+            Issues = [BuildIssue(1783, "SKS-G818: parked pending SKS-G837", "https://github.com/J-Tech-Japan/intent-system/issues/1783", "2026-07-26T10:00:00Z", ["intent-target"])],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G900", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("skip-next-slice-due-to-wip", result.Action);
+        Assert.Equal([1783], result.InFlightIssues);
+        Assert.Empty(result.WipExemptBlockedUnits);
+        var warning = Assert.Single(result.Warnings);
+        Assert.Contains("linked_issue records no repo", warning, StringComparison.Ordinal);
+        Assert.Contains("not canonical linkage", warning, StringComparison.Ordinal);
     }
 
     [Fact]

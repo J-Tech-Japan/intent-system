@@ -369,18 +369,39 @@ internal static class AutomationHostReviewPreflightCommand
         {
             if (item.State != QueueItemState.Blocked)
             {
+                // REVERSE half-convergence: a recorded blocked_by reason on an
+                // item that is not state=blocked. Convergence is two-sided, so
+                // this is drift in the other direction — counted, and reported
+                // rather than passed over silently, exactly like the forward
+                // case below.
+                if (item.BlockedBy.Count > 0 && LinksToOpenIssue(item, repo, openIssueNumbers))
+                {
+                    collectedWarnings.Add(
+                        $"queue item `{item.ExecutionUnit}` records blocked_by "
+                        + $"({string.Join("; ", item.BlockedBy)}) but its state is `{FormatQueueState(item.State)}`, "
+                        + "not `blocked`; half-converged items still count toward WIP — repair with "
+                        + $"`intent-cli queue transition {item.ExecutionUnit} blocked --reason \"{string.Join("; ", item.BlockedBy)}\" --write` "
+                        + "(then reconcile the GitHub label with `intent-cli automation issue-block`), or clear the "
+                        + $"stale reason with `intent-cli queue transition {item.ExecutionUnit} <state> --write`.");
+                }
+
                 continue;
             }
 
             if (item.BlockedBy.Count == 0)
             {
-                // Half-converged: blocked state with no recorded reason. G545
-                // calls this drift; the fail-closed posture is to keep counting
-                // it, and to say so rather than exempt it quietly.
-                collectedWarnings.Add(
-                    $"queue item `{item.ExecutionUnit}` is state=blocked with an empty blocked_by; "
-                    + "half-converged items still count toward WIP (repair the blocked representation via "
-                    + "`intent-cli queue transition` / `intent-cli automation issue-block`).");
+                // FORWARD half-convergence: blocked state with no recorded
+                // reason. G545 calls this drift; the fail-closed posture is to
+                // keep counting it, and to say so rather than exempt it quietly.
+                if (LinksToOpenIssue(item, repo, openIssueNumbers))
+                {
+                    collectedWarnings.Add(
+                        $"queue item `{item.ExecutionUnit}` is state=blocked with an empty blocked_by; "
+                        + "half-converged items still count toward WIP — repair with "
+                        + $"`intent-cli queue transition {item.ExecutionUnit} blocked --reason \"<why>\" --write` "
+                        + "(then reconcile the GitHub label with `intent-cli automation issue-block`).");
+                }
+
                 continue;
             }
 
@@ -389,8 +410,27 @@ internal static class AutomationHostReviewPreflightCommand
                 continue;
             }
 
-            if (!string.IsNullOrWhiteSpace(linkedIssue.Repo)
-                && !string.Equals(linkedIssue.Repo, repo, StringComparison.OrdinalIgnoreCase))
+            // G553 repair: canonical linkage is repo AND number. A blank or
+            // missing repo is NOT a wildcard — issue numbers are only unique
+            // within a repository, so a same-numbered issue in another repo
+            // would otherwise be excused by an unattributed queue item. Skip
+            // the exemption and say why.
+            if (string.IsNullOrWhiteSpace(linkedIssue.Repo))
+            {
+                if (openIssueNumbers.Contains(linkedNumber))
+                {
+                    collectedWarnings.Add(
+                        $"queue item `{item.ExecutionUnit}` is converged-blocked but its linked_issue records no repo "
+                        + $"(number {linkedNumber.ToString(System.Globalization.CultureInfo.InvariantCulture)} only); "
+                        + "an issue number alone is not canonical linkage, so the WIP exemption was skipped and the "
+                        + "issue still counts. Repair the linkage by re-running the canonical publish/closeout surface "
+                        + "that records `linked_issue.repo`.");
+                }
+
+                continue;
+            }
+
+            if (!string.Equals(linkedIssue.Repo, repo, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -412,6 +452,21 @@ internal static class AutomationHostReviewPreflightCommand
             .OrderBy(exemption => exemption.Issue)
             .ToArray();
     }
+
+    /// <summary>
+    /// G553 repair: a half-converged item is only worth reporting when it
+    /// actually bears on THIS repo's gate — i.e. its linked issue is one of the
+    /// open <c>intent-target</c> issues being counted. Diagnostics about
+    /// unrelated queue rows would be noise, not visibility.
+    /// </summary>
+    private static bool LinksToOpenIssue(QueueItem item, string repo, IReadOnlySet<int> openIssueNumbers) =>
+        item.LinkedIssue is { Number: { } number }
+        && !string.IsNullOrWhiteSpace(item.LinkedIssue.Repo)
+        && string.Equals(item.LinkedIssue.Repo, repo, StringComparison.OrdinalIgnoreCase)
+        && openIssueNumbers.Contains(number);
+
+    private static string FormatQueueState(QueueItemState state) =>
+        state.ToString().ToLowerInvariant();
 
     /// <summary>
     /// G553: tolerant queue-state read for the WIP exemption, mirroring G545's
