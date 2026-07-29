@@ -2351,6 +2351,126 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("design-decision-pending", holds.GetProperty("detection_reference").GetString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_Markdown_CrossProjectIsolation_RequiresAttributionBeforeMutation_G555()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("## Cross-project isolation on a shared machine (G555)", output, StringComparison.Ordinal);
+        Assert.Contains("### Attribution before mutation", output, StringComparison.Ordinal);
+        // AC: the four gated mutations.
+        Assert.Contains("- injecting keys or text into a pane", output, StringComparison.Ordinal);
+        Assert.Contains("- killing a process", output, StringComparison.Ordinal);
+        Assert.Contains("- closing or restructuring a workspace", output, StringComparison.Ordinal);
+        Assert.Contains("- removing or rewriting a state file", output, StringComparison.Ordinal);
+        // AC: the four verification keys.
+        Assert.Contains("**workspace label**", output, StringComparison.Ordinal);
+        Assert.Contains("**pane cwd**", output, StringComparison.Ordinal);
+        Assert.Contains("**process cwd**", output, StringComparison.Ordinal);
+        Assert.Contains("**agmsg `(team, role)` file naming**", output, StringComparison.Ordinal);
+        // Attribution is positive, not the absence of counter-evidence.
+        Assert.Contains("not the absence of evidence that it belongs to someone else", output, StringComparison.Ordinal);
+        // AC: the read-only default.
+        Assert.Contains("> **Unverifiable = read-only:**", output, StringComparison.Ordinal);
+        Assert.Contains("you may not mutate", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_CrossProjectIsolation_HasWorkspaceAndFolderExclusivity_G555()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("### Workspace and folder exclusivity", output, StringComparison.Ordinal);
+        Assert.Contains("one workspace per team, labelled with the team/project name", output, StringComparison.Ordinal);
+        Assert.Contains("Never reuse, repurpose, or borrow", output, StringComparison.Ordinal);
+        // AC: the folder rule carries the G521 folder-scoping REASON, not just the rule.
+        Assert.Contains("one folder belongs to exactly ONE team", output, StringComparison.Ordinal);
+        Assert.Contains("(G521)", output, StringComparison.Ordinal);
+        Assert.Contains("takes over THEIR identity and delivery", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_CrossProjectIsolation_TableListsExactlyTheFourSubstrates_G555()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("### Shared substrates and who owns what", output, StringComparison.Ordinal);
+        Assert.Contains("| substrate | sharing unit | ownership rule |", output, StringComparison.Ordinal);
+        Assert.Contains("workspace-manager server (e.g. the herdr server)", output, StringComparison.Ordinal);
+        Assert.Contains("agmsg run directory (`~/.agents/skills/agmsg/run`)", output, StringComparison.Ordinal);
+        Assert.Contains("codex app-servers", output, StringComparison.Ordinal);
+        Assert.Contains("host repo", output, StringComparison.Ordinal);
+        // AC: the host-repo row references G548 rather than restating it.
+        Assert.Contains("(G548)", output, StringComparison.Ordinal);
+        Assert.Contains("not a licence to hand-edit another domain's state", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_CrossProjectIsolation_RecoveryPreservesTheirsAndRebuildsYours_G555()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("### Non-destructive recovery", output, StringComparison.Ordinal);
+        Assert.Contains("**preserve theirs**", output, StringComparison.Ordinal);
+        Assert.Contains("Never delete another team's workspace", output, StringComparison.Ordinal);
+        Assert.Contains("**rebuild yours**", output, StringComparison.Ordinal);
+        // The operator's own one-line form of the rule.
+        Assert.Contains("> **Recovery defaults to RECREATE, NOT CLEANUP.**", output, StringComparison.Ordinal);
+        // The slice narrows the OBJECT set, not the action set — G550's
+        // authority boundary is explicitly untouched.
+        Assert.Contains("it does not widen or narrow what you may DO", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_CrossProjectIsolation_HasStructuredShape_G555()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var isolation = doc.RootElement.GetProperty("cross_project_isolation");
+
+        var attribution = isolation.GetProperty("attribution_before_mutation");
+        Assert.Equal(4, attribution.GetProperty("gated_mutations").GetArrayLength());
+
+        var keys = attribution.GetProperty("verification_keys").EnumerateArray()
+            .Select(k => (Key: k.GetProperty("key").GetString()!, How: k.GetProperty("how_to_check").GetString()!))
+            .ToArray();
+        Assert.Equal(4, keys.Length);
+        Assert.All(keys, k => Assert.NotEmpty(k.How));
+        Assert.Contains(keys, k => k.Key == "workspace label");
+        Assert.Contains(keys, k => k.Key == "pane cwd");
+        Assert.Contains(keys, k => k.Key == "process cwd");
+        Assert.Contains(keys, k => k.Key.Contains("(team, role)", StringComparison.Ordinal));
+        Assert.Contains("read-only", attribution.GetProperty("unverifiable_is_read_only").GetString(), StringComparison.OrdinalIgnoreCase);
+
+        Assert.Contains("G521", isolation.GetProperty("team_exclusive_role_folders").GetString(), StringComparison.Ordinal);
+        Assert.NotEmpty(isolation.GetProperty("one_workspace_per_team").GetString());
+
+        // AC: EXACTLY four substrates, each with a sharing unit and an
+        // ownership rule — the table is the whole set, so a fifth row or a
+        // missing column would change the contract.
+        var substrates = isolation.GetProperty("shared_substrates").EnumerateArray()
+            .Select(x => (Name: x.GetProperty("substrate").GetString()!, Unit: x.GetProperty("sharing_unit").GetString()!, Rule: x.GetProperty("ownership_rule").GetString()!))
+            .ToArray();
+        Assert.Equal(4, substrates.Length);
+        Assert.All(substrates, x => Assert.NotEmpty(x.Unit));
+        Assert.All(substrates, x => Assert.NotEmpty(x.Rule));
+        Assert.Contains(substrates, x => x.Name.Contains("workspace-manager server", StringComparison.Ordinal));
+        Assert.Contains(substrates, x => x.Name.Contains("agmsg run directory", StringComparison.Ordinal));
+        Assert.Contains(substrates, x => x.Name.Contains("codex app-servers", StringComparison.Ordinal));
+        Assert.Contains(substrates, x => x.Name == "host repo" && x.Rule.Contains("G548", StringComparison.Ordinal));
+
+        var recovery = isolation.GetProperty("non_destructive_recovery");
+        Assert.Contains("Never delete", recovery.GetProperty("preserve_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("REBUILD YOUR OWN", recovery.GetProperty("rebuild_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("RECREATE, NOT CLEANUP", recovery.GetProperty("default_is_recreate_not_cleanup").GetString(), StringComparison.Ordinal);
+    }
+
     private static string RunMarkdown(string[] args)
     {
         using var writer = new StringWriter();

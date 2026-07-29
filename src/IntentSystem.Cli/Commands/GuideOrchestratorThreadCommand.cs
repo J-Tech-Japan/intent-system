@@ -944,6 +944,7 @@ internal static class GuideOrchestratorThreadCommand
             TerminalWorkspaceProvisioning = BuildTerminalWorkspaceProvisioning(repo, values["<team>"]),
             DesignWorkspaceSupervision = BuildDesignWorkspaceSupervision(domain, repo),
             DesignDecisionHolds = BuildDesignDecisionHolds(domain, repo),
+            CrossProjectIsolation = BuildCrossProjectIsolation(),
             DesignTrafficController = new OrchestratorDesignTrafficController
             {
                 Summary =
@@ -1850,6 +1851,145 @@ internal static class GuideOrchestratorThreadCommand
         };
     }
 
+    // G555: the cross-project isolation rules. This is the shared-machine
+    // reality G549/G550 left implicit: every substrate is shared, so a
+    // supervising thread that acts on an object it did not attribute is one
+    // careless keystroke away from another team's outage. The rules narrow
+    // WHICH objects may be acted on, never WHICH actions are allowed — G550's
+    // authority boundary is untouched.
+    private static OrchestratorCrossProjectIsolation BuildCrossProjectIsolation()
+    {
+        return new OrchestratorCrossProjectIsolation
+        {
+            Summary =
+                "Assume you are NOT alone on this machine. Several project teams run simultaneously, and every "
+                + "substrate below is shared across all of them — the workspace manager's server, the agmsg run "
+                + "directory, the codex app-servers, the host repo. `Terminal-workspace provisioning` and "
+                + "`Design-thread workspace supervision` describe how to build and keep ONE team; this section is "
+                + "what keeps that team from damaging another. It narrows the OBJECTS you may act on to your own "
+                + "team's; it does not widen or narrow what you may DO, so the supervision authority boundary "
+                + "applies unchanged. Operator incident (2026-07-29): with several teams live, one project's design "
+                + "thread damaged another project's resources and the operator had to intervene by hand.",
+            AttributionBeforeMutation = new OrchestratorAttributionRule
+            {
+                Summary =
+                    "Before you touch anything, establish that it belongs to YOUR team. "
+                    + "Attribution is a positive result from the keys below — not the absence of evidence that it "
+                    + "belongs to someone else, and not a name that merely looks familiar.",
+                GatedMutations = new[]
+                {
+                    "injecting keys or text into a pane",
+                    "killing a process",
+                    "closing or restructuring a workspace",
+                    "removing or rewriting a state file",
+                },
+                VerificationKeys = new[]
+                {
+                    new OrchestratorAttributionKey
+                    {
+                        Key = "workspace label",
+                        HowToCheck =
+                            "the workspace is labelled with YOUR team/project name. A workspace you did not create "
+                            + "and cannot name is not yours.",
+                    },
+                    new OrchestratorAttributionKey
+                    {
+                        Key = "pane cwd",
+                        HowToCheck =
+                            "the pane's working directory is one of YOUR team's dedicated role folders. A pane whose "
+                            + "cwd you do not recognize belongs to someone.",
+                    },
+                    new OrchestratorAttributionKey
+                    {
+                        Key = "process cwd",
+                        HowToCheck =
+                            "the process's own working directory — read it per pid before any kill, exactly as the "
+                            + "2026-07-27 migration did when it spared another project's processes. A pid list "
+                            + "filtered only by process NAME attributes nothing.",
+                    },
+                    new OrchestratorAttributionKey
+                    {
+                        Key = "agmsg `(team, role)` file naming",
+                        HowToCheck =
+                            "agmsg run-directory state files are named per `(team, role)`; a file whose team segment "
+                            + "is not yours is another team's bridge/watcher state, however broken it looks.",
+                    },
+                },
+                UnverifiableIsReadOnly =
+                    "if you cannot positively establish ownership, the object is READ-ONLY to you: you may "
+                    + "look and you may report — you may not mutate. Escalate to the operator instead of guessing: a "
+                    + "wrong guess here is another team's outage, and the cost is theirs rather than yours, which is "
+                    + "exactly why the default has to be refusal.",
+            },
+            OneWorkspacePerTeam =
+                "one workspace per team, labelled with the team/project name. Never reuse, repurpose, or borrow "
+                + "another team's workspace or its panes — not even an idle-looking one. A workspace is the unit an "
+                + "operator reads to know whose work is whose; sharing one collapses that.",
+            TeamExclusiveRoleFolders =
+                "one folder belongs to exactly ONE team. Never launch your agents in "
+                + "another team's folders. This is the same folder-scoping fact that forbids two roles sharing a "
+                + "folder within a team (G521) — agmsg identity and the codex bridge are folder-scoped, so an agent "
+                + "started in another team's folder takes over THEIR identity and delivery, not just its own.",
+            SharedSubstrates = new[]
+            {
+                new OrchestratorSharedSubstrate
+                {
+                    Substrate = "workspace-manager server (e.g. the herdr server)",
+                    SharingUnit = "one server process serving EVERY workspace on the machine",
+                    OwnershipRule =
+                        "ownership is per WORKSPACE, never the server. Act on your own workspace and its panes; "
+                        + "never restart, reconfigure, or kill the shared server — doing so takes down every other "
+                        + "team's workspace at once.",
+                },
+                new OrchestratorSharedSubstrate
+                {
+                    Substrate = "agmsg run directory (`~/.agents/skills/agmsg/run`)",
+                    SharingUnit = "one directory holding bridge / watcher / app-server state for ALL teams",
+                    OwnershipRule =
+                        "ownership is per `(team, role)` FILE. Touch only files whose team segment is yours; never "
+                        + "clear the directory wholesale to fix your own delivery — that is another team's bridge "
+                        + "state you are deleting.",
+                },
+                new OrchestratorSharedSubstrate
+                {
+                    Substrate = "codex app-servers",
+                    SharingUnit = "one app-server per FOLDER, and folders belong to teams",
+                    OwnershipRule =
+                        "ownership follows the folder. Verify the process's cwd before stopping an app-server; a "
+                        + "same-named process rooted in another team's folder is theirs.",
+                },
+                new OrchestratorSharedSubstrate
+                {
+                    Substrate = "host repo",
+                    SharingUnit = "one repo holding EVERY domain's metadata",
+                    OwnershipRule =
+                        "ownership is per DOMAIN path. Write only through the canonical commands for your own "
+                        + "domain; queue-state is protected against concurrent writers by the no-item-loss "
+                        + "invariant and stale-base re-application (G548), which is a safety net, not a licence to "
+                        + "hand-edit another domain's state.",
+                },
+            },
+            NonDestructiveRecovery = new OrchestratorNonDestructiveRecovery
+            {
+                Summary =
+                    "When you find damage — including damage you caused — recovery is NON-DESTRUCTIVE. The instinct "
+                    + "to tidy up is the failure mode: a broken artifact belonging to another team is still their "
+                    + "evidence, and deleting it destroys their ability to diagnose what happened.",
+                PreserveRule =
+                    "PRESERVE and SET ASIDE another project's damaged artifacts — rename, move aside, or simply "
+                    + "leave them in place and report. Never delete another team's workspace, panes, folders, "
+                    + "processes' state, or files, however broken they look. Tell the operator and the affected "
+                    + "team's thread what you found and what you set aside.",
+                RebuildRule =
+                    "REBUILD YOUR OWN fresh rather than repairing in place: create a new workspace, new panes, new "
+                    + "role folders as needed, and re-run provisioning. Your own damaged artifacts may also be set "
+                    + "aside rather than deleted when they carry evidence worth keeping.",
+                DefaultIsRecreateNotCleanup =
+                    "Recovery defaults to RECREATE, NOT CLEANUP.",
+            },
+        };
+    }
+
     // G552: the design-decision hold contract. Everything here is guide-level
     // — the only code half of this slice is the `design-decision-pending`
     // detector, which reads what these rules put on disk. The MAY scope is
@@ -2597,6 +2737,65 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
     }
 
+    // G555: render the cross-project isolation rules. Attribution comes first
+    // because everything after it is conditional on having established
+    // ownership; the substrate table is a table because the sharing UNIT is
+    // the fact a reader needs per substrate.
+    private static void WriteCrossProjectIsolation(TextWriter writer, OrchestratorCrossProjectIsolation isolation)
+    {
+        writer.WriteLine("## Cross-project isolation on a shared machine (G555)");
+        writer.WriteLine();
+        writer.WriteLine(isolation.Summary);
+        writer.WriteLine();
+
+        writer.WriteLine("### Attribution before mutation");
+        writer.WriteLine();
+        writer.WriteLine(isolation.AttributionBeforeMutation.Summary);
+        writer.WriteLine();
+        writer.WriteLine("Attribution is required before any of these:");
+        writer.WriteLine();
+        foreach (var mutation in isolation.AttributionBeforeMutation.GatedMutations)
+        {
+            writer.WriteLine($"- {mutation}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("Verify ownership with all four keys:");
+        writer.WriteLine();
+        foreach (var key in isolation.AttributionBeforeMutation.VerificationKeys)
+        {
+            writer.WriteLine($"- **{key.Key}** — {key.HowToCheck}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"> **Unverifiable = read-only:** {isolation.AttributionBeforeMutation.UnverifiableIsReadOnly}");
+        writer.WriteLine();
+
+        writer.WriteLine("### Workspace and folder exclusivity");
+        writer.WriteLine();
+        writer.WriteLine($"- **one workspace per team** — {isolation.OneWorkspacePerTeam}");
+        writer.WriteLine($"- **team-exclusive role folders** — {isolation.TeamExclusiveRoleFolders}");
+        writer.WriteLine();
+
+        writer.WriteLine("### Shared substrates and who owns what");
+        writer.WriteLine();
+        writer.WriteLine("| substrate | sharing unit | ownership rule |");
+        writer.WriteLine("| --- | --- | --- |");
+        foreach (var substrate in isolation.SharedSubstrates)
+        {
+            writer.WriteLine($"| {substrate.Substrate} | {substrate.SharingUnit} | {substrate.OwnershipRule} |");
+        }
+        writer.WriteLine();
+
+        writer.WriteLine("### Non-destructive recovery");
+        writer.WriteLine();
+        writer.WriteLine(isolation.NonDestructiveRecovery.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- **preserve theirs** — {isolation.NonDestructiveRecovery.PreserveRule}");
+        writer.WriteLine($"- **rebuild yours** — {isolation.NonDestructiveRecovery.RebuildRule}");
+        writer.WriteLine();
+        writer.WriteLine($"> **{isolation.NonDestructiveRecovery.DefaultIsRecreateNotCleanup}**");
+        writer.WriteLine();
+    }
+
     // G552: render the design-decision hold contract — the hold rule first
     // (it is what makes everything else observable), then the reviewer
     // refinement, the bounded authority, and the reminder cadence.
@@ -2802,6 +3001,8 @@ internal static class GuideOrchestratorThreadCommand
         WriteDesignWorkspaceSupervision(writer, guide.DesignWorkspaceSupervision);
 
         WriteDesignDecisionHolds(writer, guide.DesignDecisionHolds);
+
+        WriteCrossProjectIsolation(writer, guide.CrossProjectIsolation);
 
         writer.WriteLine("## Preflight (all three cwds)");
         writer.WriteLine();
@@ -3560,6 +3761,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("design_decision_holds")]
     public required OrchestratorDesignDecisionHolds DesignDecisionHolds { get; init; }
 
+    [JsonPropertyName("cross_project_isolation")]
+    public required OrchestratorCrossProjectIsolation CrossProjectIsolation { get; init; }
+
     [JsonPropertyName("design_traffic_controller")]
     public required OrchestratorDesignTrafficController DesignTrafficController { get; init; }
 
@@ -3833,6 +4037,95 @@ internal sealed record OrchestratorTerminalWorkspaceProvisioning
 /// claim lost in a design-session restart window stalled a published issue for
 /// 5.5 hours with no supervision layer running.
 /// </summary>
+/// <summary>
+/// G555: G549 provisions ONE team and G550 supervises ONE team; neither
+/// mentioned that other teams are running on the same machine. Operator
+/// incident (2026-07-29): with several project teams live at once, one
+/// project's design thread damaged another project's resources and the
+/// operator had to intervene by hand. A near-miss of the same class was
+/// avoided earlier that week only by ad-hoc discipline — verifying each pid's
+/// cwd before killing anything — discipline that lived in one session
+/// transcript rather than in the guide.
+///
+/// Every substrate on the machine is shared. This record narrows the OBJECT
+/// set a supervising thread may act on (only its own team's objects); it does
+/// not change the ACTION set, so G550's authority boundary applies unchanged.
+/// </summary>
+internal sealed record OrchestratorCrossProjectIsolation
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("attribution_before_mutation")]
+    public required OrchestratorAttributionRule AttributionBeforeMutation { get; init; }
+
+    [JsonPropertyName("one_workspace_per_team")]
+    public required string OneWorkspacePerTeam { get; init; }
+
+    [JsonPropertyName("team_exclusive_role_folders")]
+    public required string TeamExclusiveRoleFolders { get; init; }
+
+    [JsonPropertyName("shared_substrates")]
+    public required IReadOnlyList<OrchestratorSharedSubstrate> SharedSubstrates { get; init; }
+
+    [JsonPropertyName("non_destructive_recovery")]
+    public required OrchestratorNonDestructiveRecovery NonDestructiveRecovery { get; init; }
+}
+
+internal sealed record OrchestratorAttributionRule
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    /// <summary>G555: the mutations that require attribution first — nothing on this list is safe to do to an unattributed object.</summary>
+    [JsonPropertyName("gated_mutations")]
+    public required IReadOnlyList<string> GatedMutations { get; init; }
+
+    /// <summary>G555: the four keys ownership is verified with.</summary>
+    [JsonPropertyName("verification_keys")]
+    public required IReadOnlyList<OrchestratorAttributionKey> VerificationKeys { get; init; }
+
+    [JsonPropertyName("unverifiable_is_read_only")]
+    public required string UnverifiableIsReadOnly { get; init; }
+}
+
+internal sealed record OrchestratorAttributionKey
+{
+    [JsonPropertyName("key")]
+    public required string Key { get; init; }
+
+    [JsonPropertyName("how_to_check")]
+    public required string HowToCheck { get; init; }
+}
+
+internal sealed record OrchestratorSharedSubstrate
+{
+    [JsonPropertyName("substrate")]
+    public required string Substrate { get; init; }
+
+    [JsonPropertyName("sharing_unit")]
+    public required string SharingUnit { get; init; }
+
+    [JsonPropertyName("ownership_rule")]
+    public required string OwnershipRule { get; init; }
+}
+
+internal sealed record OrchestratorNonDestructiveRecovery
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("preserve_rule")]
+    public required string PreserveRule { get; init; }
+
+    [JsonPropertyName("rebuild_rule")]
+    public required string RebuildRule { get; init; }
+
+    /// <summary>G555: the operator's own instruction, kept as the rule's one-line form.</summary>
+    [JsonPropertyName("default_is_recreate_not_cleanup")]
+    public required string DefaultIsRecreateNotCleanup { get; init; }
+}
+
 internal sealed record OrchestratorDesignWorkspaceSupervision
 {
     [JsonPropertyName("summary")]
