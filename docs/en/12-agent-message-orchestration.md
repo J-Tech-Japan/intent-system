@@ -243,6 +243,79 @@ apply to all supervision verbatim: no duplicate delegation, no clearing a
 permission prompt, no cancelling or resetting in-flight work, no force-closing an
 issue/PR, and no speculative durable-state surgery.
 
+## Design-decision holds and bounded authority
+
+A hold blocked on a **design decision** must be **visible** and **bounded**.
+Measured cost of neither: the G551 review held its final verdict for **nine
+hours** on a one-line wording ruling while every technical check was green, the
+pending item was mechanically fact-checkable, both threads knew the answer — and
+the hold lived only in agmsg messages, so `automation stalled-work` reported
+`stalled: false` throughout. Fourth design-absence stall in the field record.
+
+**Clarification-backed holds.** When the orchestrator or reviewer blocks on a
+design decision it **records a clarification artifact** through the canonical
+clarify surface (`intent-cli clarify open`), in addition to any agmsg message:
+domain, blocking execution unit, the question stated so someone outside the
+thread can answer it, and — when the asking thread believes it knows the answer
+— the recommended answer with the facts supporting it. The artifact is what
+makes the hold detectable; the message is only a notification.
+
+> **An agmsg-only hold is a contract violation.** A block that exists only as
+> messages is invisible to `stalled-work`, to `heartbeat`, and therefore to
+> every watchdog and every operator glance. If you are waiting on design, the
+> artifact exists; if the artifact does not exist, you are not waiting, you are
+> stalled.
+
+**Reviewer hold rule (refined).** Technical checks green and the only pending
+item non-semantic and mechanically fact-checkable → resolve it under bounded
+default authority, log the verifying facts, and proceed. Anything else →
+record the clarification and keep the hold as a **visible pending state**.
+There is no third option in which the reviewer simply waits and says so in a
+message.
+
+**Bounded default authority.** The operator may pre-delegate a small
+enumerated set of decision classes that are settled by *checking repository
+facts* rather than by judgment:
+
+| decision class | what verifies it |
+| --- | --- |
+| count and enumeration corrections | the count is derivable from repository facts both threads can read (e.g. a slice count from the merged PR list) |
+| wording corrections that follow from a cited fact | the wording is entailed by a repository fact, and reviewer and orchestrator agree on both the fact and the correction |
+| cross-reference and link corrections | the target exists (or does not) as cited — verifiable by reading it |
+| identifier and metadata mismatches against a canonical source | the canonical source is named and read; it wins, and the resolution cites it |
+
+It is bounded in every direction: **granted** (never assumed — absent an
+operator grant every design decision goes to design as before), **enumerated**
+(the table above is the whole MAY scope), **evidence-logged** (a resolution
+records what was decided, which facts entail it, and which threads agreed — an
+unlogged resolution is a violation, not a resolution), and **amendable**
+(design may review the evidence afterwards and reverse it; the authority buys
+latency, not finality).
+
+> **Semantic and product decisions are excluded, absolutely.** Intent shaping,
+> packet content and acceptance criteria, release scope, and prioritization
+> rulings always go to design through the
+> [design↔orchestrator double-check rule](#role-boundary--design-authors-orchestrator-coordinates),
+> whose scope this contract does not touch. If settling the question requires
+> deciding what *should* be true rather than checking what *is* true, this
+> authority does not reach it.
+
+**Periodic design-reminder loop.** While a clarification stays open the
+**orchestrator** re-sends a reminder to design from its existing long-interval
+automation — no new scheduler, receivers stay loopless — at a **30–60 minute
+class** interval, **at most one reminder per interval per open clarification**,
+**stopping when it is answered**. The design thread runs in the **operator app**
+by preference, which makes the reminder land either way: an open session
+receives it immediately through its monitor, a closed one finds it in the inbox
+on resume. Nothing here requires design to be resident in the team workspace.
+
+**Detection.** `automation stalled-work` reports each open clarification as
+`design-decision-pending` with its age, blocking unit, and question summary,
+and `automation heartbeat` carries it in `message_body` like any other kind —
+see [09-developer-reference.md](09-developer-reference.md). If a hold is real
+but the kind is absent, the artifact was never recorded: that is the contract
+violation above, not a detector bug.
+
 ## Role boundary — design authors, orchestrator coordinates
 
 **Design creates packets; the orchestrator moves ready packets through the

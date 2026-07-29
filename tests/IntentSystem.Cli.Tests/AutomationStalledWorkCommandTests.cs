@@ -2,6 +2,8 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Clarify.Models;
+using IntentSystem.Clarify.Serialization;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 
@@ -1727,6 +1729,173 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         Assert.Equal(queueStateBefore, File.ReadAllText(queueStatePath));
     }
 
+    // ─── G552: design-decision-pending ──────────────────────────────────────
+
+    [Fact]
+    public void Execute_DesignDecisionPending_FiresForOpenClarification_WithAgeUnitAndQuestion()
+    {
+        // G552 field incident (2026-07-28 16:11 -> 07-29 01:29): a nine-hour
+        // hold on a one-line wording ruling reported stalled=false throughout
+        // because the block lived only in agmsg messages. Recorded as a
+        // clarification artifact, the same hold is visible.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G551", "intent-cli");
+        workspace.WriteClarification(
+            "G551",
+            "Does the release note say eleven or twelve slices?",
+            FixedNow.AddMinutes(-540));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.True(doc.RootElement.GetProperty("stalled").GetBoolean());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindDesignDecisionPending, item.GetProperty("kind").GetString());
+        Assert.Equal("G551", item.GetProperty("execution_unit").GetString());
+        Assert.Equal(540, item.GetProperty("age_minutes").GetInt32());
+        Assert.False(item.GetProperty("is_informational").GetBoolean());
+
+        var recommendedAction = item.GetProperty("recommended_action").GetString()!;
+        // Names the clarification to answer (design) and the escalation path
+        // (operator) — and never auto-answers.
+        Assert.Contains("Does the release note say eleven or twelve slices?", recommendedAction, StringComparison.Ordinal);
+        Assert.Contains("clarify answer", recommendedAction, StringComparison.Ordinal);
+        Assert.Contains("--execution-unit G551", recommendedAction, StringComparison.Ordinal);
+        Assert.Contains("escalate", recommendedAction, StringComparison.Ordinal);
+        Assert.Contains("Never auto-answer", recommendedAction, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_DesignDecisionPending_ClearsOnceTheClarificationIsAnswered()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G551", "intent-cli");
+        workspace.WriteClarification(
+            "G551",
+            "Does the release note say eleven or twelve slices?",
+            FixedNow.AddMinutes(-540),
+            ClarificationStatus.Answered);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.GetProperty("stalled").GetBoolean());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        // Answering clears it entirely — not into excluded[], which would be
+        // its own kind of noise.
+        Assert.Equal(0, doc.RootElement.GetProperty("excluded").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_DesignDecisionPending_NoClarificationSurface_ProducesNothing()
+    {
+        // The no-false-positive case: absence of a clarification is never a
+        // stall signal on its own.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G551", "intent-cli");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.GetProperty("stalled").GetBoolean());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        Assert.Equal(0, doc.RootElement.GetProperty("excluded").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_DesignDecisionPending_UnreadableArtifact_IsExcludedNeverAssumedAnswered()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(".intent-cli/clarifications/G551/request.json", "{ not valid json }");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.GetProperty("stalled").GetBoolean());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+
+        var excluded = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindDesignDecisionPending, excluded.GetProperty("kind").GetString());
+        Assert.Equal(AutomationStalledWorkCommand.ReasonClarificationUnreadable, excluded.GetProperty("reason").GetString());
+        var detail = excluded.GetProperty("detail").GetString()!;
+        Assert.Contains("request.json", detail, StringComparison.Ordinal);
+        Assert.Contains("not evidence of an unblocked pipeline", detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_DesignDecisionPending_OtherDomainClarification_IsExcludedNotAttributed()
+    {
+        // Domain isolation: a clarification whose packet declares a different
+        // domain never leaks into this domain's report.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("SKS-G900", "sekiban-as-a-service");
+        workspace.WriteClarification("SKS-G900", "Which aggregate owns this invariant?", FixedNow.AddMinutes(-300));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excluded = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindDesignDecisionPending, excluded.GetProperty("kind").GetString());
+        Assert.Equal("SKS-G900", excluded.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_DesignDecisionPending_ReportsEveryOpenClarification_Independently()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G551", "intent-cli");
+        workspace.WritePacketDomain("G552", "intent-cli");
+        workspace.WriteClarification("G551", "Eleven or twelve slices?", FixedNow.AddMinutes(-540));
+        workspace.WriteClarification("G552", "Does bounded authority cover wording?", FixedNow.AddMinutes(-60));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var items = doc.RootElement.GetProperty("items").EnumerateArray()
+            .Select(i => (Unit: i.GetProperty("execution_unit").GetString()!, Age: i.GetProperty("age_minutes").GetInt32()))
+            .ToArray();
+        Assert.Equal(2, items.Length);
+        Assert.Contains(items, i => i.Unit == "G551" && i.Age == 540);
+        Assert.Contains(items, i => i.Unit == "G552" && i.Age == 60);
+    }
+
     // ─── G544: backlog-ready-idle ───────────────────────────────────────────
 
     [Fact]
@@ -2574,6 +2743,42 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
             var dir = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit);
             Directory.CreateDirectory(dir);
             File.WriteAllText(Path.Combine(dir, "packet.yaml"), $"domain: {domain}\n");
+        }
+
+        /// <summary>
+        /// G552: writes a clarification artifact exactly where the canonical
+        /// clarify surface puts one
+        /// (<c>.intent-cli/clarifications/&lt;execution-unit&gt;/request.json</c>),
+        /// so <c>design-decision-pending</c> reads a real artifact shape
+        /// rather than a test-only stand-in.
+        /// </summary>
+        public void WriteClarification(
+            string executionUnit,
+            string questionText,
+            DateTimeOffset createdAt,
+            ClarificationStatus status = ClarificationStatus.Open,
+            string questionId = "request")
+        {
+            var item = new ClarificationItem
+            {
+                ClarificationSource = "execution",
+                QuestionId = questionId,
+                ExecutionUnit = executionUnit,
+                QuestionText = questionText,
+                Reason = "blocked on a design decision",
+                AffectedIntents = [],
+                AffectedExecutionUnits = [executionUnit],
+                BlockingOrNonblocking = "blocking",
+                ClarificationReturnPath = $".intent-cli/clarifications/{executionUnit}/",
+                Status = status,
+                CreatedAt = createdAt,
+                Answer = status == ClarificationStatus.Open ? null : "answered",
+                AnsweredAt = status == ClarificationStatus.Open ? null : createdAt.AddMinutes(1),
+            };
+
+            WriteFile(
+                $".intent-cli/clarifications/{executionUnit}/request.json",
+                ClarificationSerializer.Serialize(item));
         }
 
         /// <summary>

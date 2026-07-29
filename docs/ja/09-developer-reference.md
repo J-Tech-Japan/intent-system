@@ -330,6 +330,29 @@ queue-state、`runs.jsonl` を変更することは一切ありません — inf
   これを更新します)。`claimed-but-silent` と同様に fail closed です:
   `updatedAt` が欠落・不正な場合は沈黙を確立できないため、使えない証拠に
   基づいて flag するのではなく promotion **しません**。
+- `design-decision-pending` (G552) — **design の判断** で止まっている hold で、
+  canonical な clarify surface (`intent-cli clarify open`) を通じて OPEN な
+  clarification artifact として記録されたもの。ブロックされている execution
+  unit、clarification の age(artifact 自身の `createdAt` — ブロックが記録された
+  瞬間)、質問の 1 行サマリを報告します。`recommended_action` は、回答すべき
+  clarification を正確に名指しし(`intent-cli clarify answer --execution-unit
+  <unit> --question-id <id> --answer "<decision>"`)、オペレーターへの
+  エスカレーション経路も併記します。**自動回答は決してしません** — 回答は
+  design の content だからです。clarification に回答する(または applied /
+  cancelled にする)ことが item を消す唯一の方法で、閾値も別の transition も
+  ありません。これはここで唯一、自分自身の GitHub エンティティを持たない kind
+  であり、まさにそれが検出対象の stall が不可視だった理由です: field incident
+  2026-07-28 16:11 → 07-29 01:29 — G551 のレビューが、技術チェックがすべて
+  green のまま 1 行の wording 判断のために **9 時間** final verdict を保留し、
+  hold は agmsg メッセージ上にしか存在せず、`stalled-work` はその間ずっと
+  `stalled: false` を報告していました(field record で 4 件目の design 不在
+  stall)。両方向に fail closed です: 読めない・deserialize できない artifact は
+  「回答済み」として飛ばすのではなくパス付きで `excluded[]`
+  (`clarification-unreadable`)へ、packet が別 domain を宣言している
+  clarification は要求 domain に帰属させず除外します。この kind が読む artifact を
+  ディスク上に置くのは guide の clarification-backed hold ルールです — agmsg
+  だけの hold は contract violation であり、hold が実在するのにこの kind が
+  出ないなら、それは artifact が記録されなかったということです。
 
 **informational なカテゴリ (G533)** — `is_informational: true`、
 `recommended_action` は（transition コマンドではなく）説明的な prose、

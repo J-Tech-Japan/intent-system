@@ -329,6 +329,30 @@ is always a runnable `intent-cli` command):
   closed like `claimed-but-silent`: a missing or malformed `updatedAt` means
   silence cannot be established, so the PR is **not** promoted rather than
   flagged on unusable evidence.
+- `design-decision-pending` (G552) — a hold blocked on a **design decision**,
+  recorded as an OPEN clarification artifact through the canonical clarify
+  surface (`intent-cli clarify open`). Reports the blocking execution unit,
+  the clarification's age (from the artifact's own `createdAt` — the moment
+  the block was recorded), and a one-line question summary.
+  `recommended_action` names the exact clarification to answer
+  (`intent-cli clarify answer --execution-unit <unit> --question-id <id>
+  --answer "<decision>"`) plus the operator escalation path; it **never**
+  auto-answers, because the answer is design's content. Answering (or
+  applying, or cancelling) the clarification is what clears the item — no
+  threshold and no separate transition. This is the only kind here with no
+  GitHub entity of its own, which is exactly why the stall it detects was
+  invisible: field incident 2026-07-28 16:11 → 07-29 01:29, where the G551
+  review held its final verdict for **nine hours** on a one-line wording
+  ruling while every technical check was green, the hold lived only in agmsg
+  messages, and `stalled-work` reported `stalled: false` throughout — the
+  fourth design-absence stall in the field record. Fails closed in both
+  directions: an artifact that cannot be read or deserialized goes to
+  `excluded[]` with its path (`clarification-unreadable`) rather than being
+  skipped as answered, and a clarification whose packet declares a different
+  domain is excluded rather than attributed to the requested domain. The
+  guide's clarification-backed hold rule is what puts the artifact on disk
+  for this kind to read — an agmsg-only hold is a contract violation, and if
+  the hold is real but this kind is absent, the artifact was never recorded.
 
 **Informational categories (G533)** — `is_informational: true`,
 `recommended_action` is descriptive prose (never a transition command), age

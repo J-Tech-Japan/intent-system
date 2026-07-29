@@ -2,6 +2,8 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Clarify.Models;
+using IntentSystem.Clarify.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -352,6 +354,37 @@ public sealed class AutomationHeartbeatCommandTests : IDisposable
         public IReadOnlyList<GitHubAutomationPrCandidate> ListMergedPullRequests(string repo, IReadOnlyCollection<string> requiredLabels) => mergedPrs;
     }
 
+    [Fact]
+    public void Execute_DesignDecisionPending_IsCarriedInMessageBody_G552()
+    {
+        // G552 AC: the heartbeat carries the new kind, so a watchdog reading
+        // only `message_body` still sees a design-decision hold. The message
+        // builder is kind-agnostic by construction — this pins that it stays
+        // that way.
+        using var workspace = new HeartbeatWorkspace();
+        workspace.WritePacketDomain("G551", "intent-cli");
+        workspace.WriteOpenClarification("G551", "Eleven or twelve slices?", FixedNow.AddMinutes(-540));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHeartbeatCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.True(doc.RootElement.GetProperty("stale").GetBoolean());
+
+        var messageBody = doc.RootElement.GetProperty("message_body").GetString()!;
+        Assert.Contains(AutomationStalledWorkCommand.KindDesignDecisionPending, messageBody, StringComparison.Ordinal);
+        Assert.Contains("G551", messageBody, StringComparison.Ordinal);
+        Assert.Contains("540m", messageBody, StringComparison.Ordinal);
+        // Actionable, so it is counted as a pending transition rather than an
+        // informational note.
+        Assert.Contains("1 pending transition(s)", messageBody, StringComparison.Ordinal);
+    }
+
     private sealed class HeartbeatWorkspace : IDisposable
     {
         public HeartbeatWorkspace()
@@ -382,6 +415,32 @@ public sealed class AutomationHeartbeatCommandTests : IDisposable
             var dir = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit);
             Directory.CreateDirectory(dir);
             File.WriteAllText(Path.Combine(dir, "packet.yaml"), $"domain: {domain}\n");
+        }
+
+        /// <summary>
+        /// G552: writes an OPEN clarification artifact where the canonical
+        /// clarify surface puts one, so the heartbeat wrapper is exercised
+        /// against a real <c>design-decision-pending</c> item.
+        /// </summary>
+        public void WriteOpenClarification(string executionUnit, string questionText, DateTimeOffset createdAt)
+        {
+            var dir = Path.Combine(RootPath, ".intent-cli", "clarifications", executionUnit);
+            Directory.CreateDirectory(dir);
+            var item = new ClarificationItem
+            {
+                ClarificationSource = "execution",
+                QuestionId = "request",
+                ExecutionUnit = executionUnit,
+                QuestionText = questionText,
+                Reason = "blocked on a design decision",
+                AffectedIntents = [],
+                AffectedExecutionUnits = [executionUnit],
+                BlockingOrNonblocking = "blocking",
+                ClarificationReturnPath = $".intent-cli/clarifications/{executionUnit}/",
+                Status = ClarificationStatus.Open,
+                CreatedAt = createdAt,
+            };
+            File.WriteAllText(Path.Combine(dir, "request.json"), ClarificationSerializer.Serialize(item));
         }
 
         public void Dispose()

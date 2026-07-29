@@ -225,6 +225,110 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("委譲の重複禁止、permission プロンプトの自動クリア禁止", ja, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void BothDocs_CarryTheDesignDecisionHoldContract_G552()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        Assert.Contains("## Design-decision holds and bounded authority", en, StringComparison.Ordinal);
+        Assert.Contains("## design 判断による hold と bounded authority", ja, StringComparison.Ordinal);
+
+        // The clarification-backed hold rule, with the contract-violation
+        // sentence that makes an agmsg-only hold a violation rather than a
+        // style preference.
+        Assert.Contains("records a clarification artifact**", en, StringComparison.Ordinal);
+        Assert.Contains("`intent-cli clarify open`", en, StringComparison.Ordinal);
+        Assert.Contains("**An agmsg-only hold is a contract violation.**", en, StringComparison.Ordinal);
+        Assert.Contains("you are not waiting, you are stalled", en, StringComparison.Ordinal);
+        Assert.Contains("clarification artifact を記録**", ja, StringComparison.Ordinal);
+        Assert.Contains("**agmsg だけの hold は contract violation です。**", ja, StringComparison.Ordinal);
+        Assert.Contains("待っているのではなく stall しています", ja, StringComparison.Ordinal);
+
+        // The refined reviewer hold rule — no untracked third option.
+        Assert.Contains("**Reviewer hold rule (refined).**", en, StringComparison.Ordinal);
+        Assert.Contains("no third option in which the reviewer simply waits", en, StringComparison.Ordinal);
+        Assert.Contains("**reviewer hold ルール(refined)。**", ja, StringComparison.Ordinal);
+        Assert.Contains("第 3 の選択肢はありません", ja, StringComparison.Ordinal);
+
+        // The measured cost that motivates the slice is stated on both sides.
+        Assert.Contains("**nine hours**", en, StringComparison.Ordinal);
+        Assert.Contains("**9 時間**", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BothDocs_BoundTheDefaultAuthority_AndKeepSemanticDecisionsWithDesign_G552()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        // All four enumerated fact-checkable classes appear on both mirrors —
+        // the enumeration is what bounds the authority, so a missing row
+        // would silently widen it.
+        foreach (var row in new[]
+                 {
+                     "count and enumeration corrections",
+                     "wording corrections that follow from a cited fact",
+                     "cross-reference and link corrections",
+                     "identifier and metadata mismatches against a canonical source",
+                 })
+        {
+            Assert.Contains(row, en, StringComparison.Ordinal);
+        }
+
+        foreach (var row in new[]
+                 {
+                     "件数・列挙の訂正",
+                     "引用された事実から導かれる wording 訂正",
+                     "相互参照・リンクの訂正",
+                     "canonical source との識別子・メタデータ不一致",
+                 })
+        {
+            Assert.Contains(row, ja, StringComparison.Ordinal);
+        }
+
+        // Granted / enumerated / evidence-logged / amendable.
+        Assert.Contains("**granted** (never assumed", en, StringComparison.Ordinal);
+        Assert.Contains("**evidence-logged**", en, StringComparison.Ordinal);
+        Assert.Contains("an unlogged resolution is a violation, not a resolution", en, StringComparison.Ordinal);
+        Assert.Contains("buys latency, not finality", en, StringComparison.Ordinal);
+        Assert.Contains("**付与される**", ja, StringComparison.Ordinal);
+        Assert.Contains("**証拠がログされる**", ja, StringComparison.Ordinal);
+        Assert.Contains("ログの無い解決は解決では なく違反", ja, StringComparison.Ordinal);
+        Assert.Contains("買うのは レイテンシであって finality ではない", ja, StringComparison.Ordinal);
+
+        // Semantic exclusion, with the double-check scope explicitly untouched.
+        Assert.Contains("**Semantic and product decisions are excluded, absolutely.**", en, StringComparison.Ordinal);
+        Assert.Contains("whose scope this contract does not touch", en, StringComparison.Ordinal);
+        Assert.Contains("**セマンティック・プロダクトの判断は絶対に除外されます。**", ja, StringComparison.Ordinal);
+        Assert.Contains("本 contract はそのスコープに触れません", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BothDocs_DescribeTheDesignReminderLoop_AndTheDetector_G552()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        // Interval class, one-per-interval cap, stop-on-answer, and the
+        // operator-app reminder model.
+        Assert.Contains("**30–60 minute class**", en, StringComparison.Ordinal);
+        Assert.Contains("**at most one reminder per interval per open clarification**", en, StringComparison.Ordinal);
+        Assert.Contains("**stopping when it is answered**", en, StringComparison.Ordinal);
+        Assert.Contains("**operator app**", en, StringComparison.Ordinal);
+        Assert.Contains("finds it in the inbox on resume", en, StringComparison.Ordinal);
+
+        Assert.Contains("**30〜60 分オーダー**", ja, StringComparison.Ordinal);
+        Assert.Contains("**open な clarification 1 件につき 1 間隔あたり最大 1 通**", ja, StringComparison.Ordinal);
+        Assert.Contains("**回答されたら停止**", ja, StringComparison.Ordinal);
+        Assert.Contains("**オペレーターアプリ**", ja, StringComparison.Ordinal);
+        Assert.Contains("再開時に inbox で見つけます", ja, StringComparison.Ordinal);
+
+        // The detector both mirrors point at.
+        Assert.Contains("`design-decision-pending`", en, StringComparison.Ordinal);
+        Assert.Contains("`design-decision-pending`", ja, StringComparison.Ordinal);
+    }
+
     private static string ReadDoc(string language)
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);
