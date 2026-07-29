@@ -123,28 +123,72 @@ public sealed class VersionPolicyTests : IDisposable
     [Fact]
     public void EngVersionJson_InThisRepo_IsReadableAndHasExpectedNextVersion()
     {
-        // Smoke-test: the actual eng/version.json in the repository must
-        // be parseable and must point to 0.6.1 as the next development line
-        // (post-v0.6.0 release bump, see G554 — v0.6.0 was published to
-        // GitHub Releases + NuGet, so the policy moves the development line
-        // forward to 0.6.1 — a patch bump, since neither shipped slice adds a
-        // command surface: G553 is a WIP-gate bugfix and G552 extends the
-        // existing stalled-work/heartbeat detection surfaces and the
-        // orchestrator-thread guide — while recording 0.6.0 as the published
-        // stable. G554 also makes this roll a REQUIRED, immediate release
-        // closeout step: leaving nextVersion at the released version makes
-        // every preview sort below its own release.
-        var repoRoot = FindRepoRoot();
-        if (repoRoot is null)
+        // G557: this smoke test used to hardcode the stable/next pair. The
+        // first live execution of the G554 post-release roll (commit 00936844,
+        // nextVersion 0.6.1 -> 0.6.2) broke it — along with two peers — and
+        // turned child main red, freezing an unrelated PR that inherited it.
+        // A literal pair is the wrong assertion for a field a REQUIRED
+        // recurring step is supposed to change. What must hold across every
+        // roll is that the policy parses and names a release-to-be-cut
+        // strictly ahead of the published stable, so the expectation is
+        // derived from eng/version.json itself.
+        var policy = RepoVersionPolicySource.Read();
+
+        Assert.False(string.IsNullOrWhiteSpace(policy.StableVersion));
+        Assert.False(string.IsNullOrWhiteSpace(policy.NextVersion));
+        RepoVersionPolicySource.AssertReleaseToBeCutIsAheadOfPublishedStable(policy);
+    }
+
+    [Fact]
+    public void EngVersionJson_DerivedExpectations_SurviveASimulatedRoll_G557()
+    {
+        // Roll simulation: a bumped version.json must keep the derived
+        // assertions green. This is the regression the hardcoded literals
+        // could not express — it fails only if an expectation is baked in
+        // again.
+        using var temp = new TemporaryRepoRoot();
+        temp.WriteVersionPolicy(stableVersion: "0.6.1", nextVersion: "0.6.2");
+        RepoVersionPolicySource.AssertReleaseToBeCutIsAheadOfPublishedStable(
+            RepoVersionPolicySource.ReadFrom(temp.RootPath));
+
+        // …and again after the NEXT roll, and across a minor and a major line.
+        foreach (var (stable, next) in new[] { ("0.6.2", "0.6.3"), ("0.6.9", "0.7.0"), ("0.9.9", "1.0.0") })
         {
-            return; // Running outside a checkout — skip.
+            temp.WriteVersionPolicy(stable, next);
+            var rolled = RepoVersionPolicySource.ReadFrom(temp.RootPath);
+            Assert.Equal(stable, rolled.StableVersion);
+            Assert.Equal(next, rolled.NextVersion);
+            RepoVersionPolicySource.AssertReleaseToBeCutIsAheadOfPublishedStable(rolled);
+        }
+    }
+
+    private sealed class TemporaryRepoRoot : IDisposable
+    {
+        public TemporaryRepoRoot()
+        {
+            RootPath = Directory.CreateTempSubdirectory("version-policy-roll-simulation-").FullName;
+            Directory.CreateDirectory(Path.Combine(RootPath, "eng"));
         }
 
-        var policy = VersionPolicy.TryReadFromRepo(repoRoot);
+        public string RootPath { get; }
 
-        Assert.NotNull(policy);
-        Assert.Equal("0.6.1", policy.NextVersion);
-        Assert.Equal("0.6.0", policy.StableVersion);
+        public void WriteVersionPolicy(string stableVersion, string nextVersion) =>
+            File.WriteAllText(
+                Path.Combine(RootPath, "eng", "version.json"),
+                $$"""
+                {
+                  "stableVersion": "{{stableVersion}}",
+                  "nextVersion": "{{nextVersion}}"
+                }
+                """);
+
+        public void Dispose()
+        {
+            if (Directory.Exists(RootPath))
+            {
+                Directory.Delete(RootPath, recursive: true);
+            }
+        }
     }
 
     private static string? FindRepoRoot()
