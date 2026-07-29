@@ -355,6 +355,105 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("`design-decision-pending`", ja, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void BothDocs_CarryTheCrossProjectIsolationSection_G555()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        Assert.Contains("## Cross-project isolation on a shared machine", en, StringComparison.Ordinal);
+        Assert.Contains("## 共有マシン上での cross-project isolation", ja, StringComparison.Ordinal);
+
+        // The premise, and the fact that this narrows objects rather than actions.
+        Assert.Contains("**Assume you are not alone on this machine.**", en, StringComparison.Ordinal);
+        Assert.Contains("it does not change what you may **do**", en, StringComparison.Ordinal);
+        Assert.Contains("**このマシン上にいるのは自分だけではない、と前提してください。**", ja, StringComparison.Ordinal);
+        Assert.Contains("**何をして よいか** は変えない", ja, StringComparison.Ordinal);
+
+        // The operator incident that motivates it.
+        Assert.Contains("2026-07-29", en, StringComparison.Ordinal);
+        Assert.Contains("2026-07-29", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BothDocs_RequireAttributionBeforeMutation_WithAllFourKeys_G555()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        Assert.Contains("**Attribution before mutation.**", en, StringComparison.Ordinal);
+        Assert.Contains("**mutation の前に attribution。**", ja, StringComparison.Ordinal);
+
+        // The four gated mutations, on both mirrors.
+        // The four gated mutations, on both mirrors. ReadDoc collapses
+        // hard wraps, so these match across the wrap points.
+        foreach (var gated in new[]
+                 {
+                     "injecting keys into a pane",
+                     "killing a process",
+                     "closing or restructuring a workspace",
+                     "removing or rewriting a state file",
+                 })
+        {
+            Assert.Contains(gated, en, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("**pane へのキー入力**", ja, StringComparison.Ordinal);
+        Assert.Contains("**プロセスの kill**", ja, StringComparison.Ordinal);
+
+        // The four verification keys as table rows.
+        foreach (var key in new[] { "workspace label", "pane cwd", "process cwd", "agmsg `(team, role)` file naming" })
+        {
+            Assert.Contains(key, en, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("agmsg の `(team, role)` ファイル命名", ja, StringComparison.Ordinal);
+        Assert.Contains("pid ごとに", ja, StringComparison.Ordinal);
+
+        // The read-only default.
+        Assert.Contains("**Unverifiable attribution = read-only.**", en, StringComparison.Ordinal);
+        Assert.Contains("you may not mutate", en, StringComparison.Ordinal);
+        Assert.Contains("**attribution できない場合は read-only。**", ja, StringComparison.Ordinal);
+        Assert.Contains("mutate はできません", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BothDocs_ListTheFourSharedSubstrates_AndTheNonDestructiveRecoveryRule_G555()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        // All four substrates on both mirrors — the table is the whole set.
+        foreach (var substrate in new[] { "herdr server", "~/.agents/skills/agmsg/run", "codex app-servers", "host repo" })
+        {
+            Assert.Contains(substrate, en, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("herdr server", ja, StringComparison.Ordinal);
+        Assert.Contains("~/.agents/skills/agmsg/run", ja, StringComparison.Ordinal);
+        Assert.Contains("codex app-server", ja, StringComparison.Ordinal);
+        Assert.Contains("host repo", ja, StringComparison.Ordinal);
+
+        // The host-repo row references G548 rather than restating it.
+        Assert.Contains("G548", en, StringComparison.Ordinal);
+        Assert.Contains("G548", ja, StringComparison.Ordinal);
+
+        // Folder exclusivity carries the G521 reason.
+        Assert.Contains("(G521)", en, StringComparison.Ordinal);
+        Assert.Contains("(G521)", ja, StringComparison.Ordinal);
+
+        // Non-destructive recovery: preserve theirs, rebuild yours.
+        Assert.Contains("**Non-destructive recovery.**", en, StringComparison.Ordinal);
+        Assert.Contains("**preserve and set aside**", en, StringComparison.Ordinal);
+        Assert.Contains("**rebuild your own fresh**", en, StringComparison.Ordinal);
+        Assert.Contains("**Recovery defaults to recreate, not cleanup.**", en, StringComparison.Ordinal);
+
+        Assert.Contains("**非破壊的な復旧。**", ja, StringComparison.Ordinal);
+        Assert.Contains("**保全して脇に置きます**", ja, StringComparison.Ordinal);
+        Assert.Contains("**自分のものは作り直します**", ja, StringComparison.Ordinal);
+        Assert.Contains("**復旧の既定は cleanup ではなく recreate です。**", ja, StringComparison.Ordinal);
+    }
+
     private static string ReadDoc(string language)
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);

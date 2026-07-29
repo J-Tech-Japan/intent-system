@@ -243,6 +243,67 @@ apply to all supervision verbatim: no duplicate delegation, no clearing a
 permission prompt, no cancelling or resetting in-flight work, no force-closing an
 issue/PR, and no speculative durable-state surgery.
 
+## Cross-project isolation on a shared machine
+
+**Assume you are not alone on this machine.** Several project teams run
+simultaneously, and every substrate below is shared across all of them. The two
+sections above describe how to build and keep **one** team; this one keeps that
+team from damaging another. It narrows the **objects** you may act on to your
+own team's — it does not change what you may **do**, so the
+[supervision authority boundary](#design-thread-workspace-supervision-keeping-the-team-moving)
+applies unchanged.
+
+Operator incident (2026-07-29): with several teams live at once, one project's
+design thread damaged another project's resources and the operator had to
+intervene by hand. A near-miss of the same class was avoided earlier that week
+only by ad-hoc discipline — verifying each pid's cwd before killing anything —
+discipline that lived in one session transcript rather than in this guide.
+
+**Attribution before mutation.** Before **injecting keys into a pane**, **killing
+a process**, **closing or restructuring a workspace**, or **removing or rewriting
+a state file**, establish that the object belongs to *your* team. Attribution is
+a positive result from all four keys — not the absence of evidence that it
+belongs to someone else:
+
+| key | how to check |
+| --- | --- |
+| workspace label | the workspace carries **your** team/project name; one you did not create and cannot name is not yours |
+| pane cwd | the pane's working directory is one of **your** team's dedicated role folders |
+| process cwd | read the cwd **per pid** before any kill — a pid list filtered by process *name* attributes nothing |
+| agmsg `(team, role)` file naming | run-directory state files are named per `(team, role)`; a file whose team segment is not yours is another team's bridge/watcher state, however broken it looks |
+
+> **Unverifiable attribution = read-only.** If you cannot positively establish
+> ownership you may look and you may report — you may not mutate. Escalate to
+> the operator instead of guessing: a wrong guess here is another team's outage,
+> and the cost is theirs rather than yours.
+
+**Workspace and folder exclusivity.** **One workspace per team**, labelled with
+the team/project name — never reuse, repurpose, or borrow another team's
+workspace or panes, not even an idle-looking one. **One folder belongs to exactly
+one team** — never launch your agents in another team's folders. That is the same
+folder-scoping fact that forbids two roles sharing a folder *within* a team
+(G521): agmsg identity and the codex bridge are folder-scoped, so an agent
+started in another team's folder takes over **their** identity and delivery.
+
+**Shared substrates and who owns what:**
+
+| substrate | sharing unit | ownership rule |
+| --- | --- | --- |
+| workspace-manager server (e.g. the herdr server) | one server process serving **every** workspace on the machine | ownership is per **workspace**, never the server — never restart, reconfigure, or kill it |
+| agmsg run directory (`~/.agents/skills/agmsg/run`) | one directory holding bridge / watcher / app-server state for **all** teams | ownership is per `(team, role)` **file** — never clear the directory wholesale to fix your own delivery |
+| codex app-servers | one app-server per **folder**, and folders belong to teams | ownership follows the folder — verify the process's cwd before stopping one |
+| host repo | one repo holding **every** domain's metadata | ownership is per **domain path**; queue-state is protected against concurrent writers by G548's no-item-loss invariant, which is a safety net, not a licence to hand-edit another domain's state |
+
+**Non-destructive recovery.** When you find damage — including damage you caused
+— **preserve and set aside** the other project's artifacts. Rename them, move
+them aside, or leave them in place and report; never delete another team's
+workspace, panes, folders, process state, or files, however broken they look. A
+broken artifact is still its owner's evidence. Then **rebuild your own fresh**
+rather than repairing in place: new workspace, new panes, new role folders, and
+re-run provisioning.
+
+> **Recovery defaults to recreate, not cleanup.**
+
 ## Design-decision holds and bounded authority
 
 A hold blocked on a **design decision** must be **visible** and **bounded**.
