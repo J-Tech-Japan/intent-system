@@ -2081,6 +2081,16 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("continuous / real-time", output, StringComparison.Ordinal);
         Assert.Contains("**blocking-UI pane scan**", output, StringComparison.Ordinal);
         Assert.Contains("sub-minute class", output, StringComparison.Ordinal);
+        // G556 repair: the LAYER's own purpose/note must cover both stuck
+        // states, not just dialogs — the rendered layer is what a reader of the
+        // cadence table sees, so it cannot lag behind pane_scan_stuck_states.
+        Assert.Contains("TWO EQUAL stuck states", output, StringComparison.Ordinal);
+        Assert.Contains("shell prompt where an agent should be (`agent-absent`, G556)", output, StringComparison.Ordinal);
+        Assert.Contains("routes by STATE, not by one rule for everything", output, StringComparison.Ordinal);
+        // agent-absent is explicitly routed AWAY from dialog handling.
+        Assert.Contains("is NOT a dialog and must never be routed through dialog handling", output, StringComparison.Ordinal);
+        Assert.Contains("shim-safe relaunch recovery", output, StringComparison.Ordinal);
+        Assert.Contains("COMPLETE verified-liveness re-check", output, StringComparison.Ordinal);
         Assert.Contains("**periodic state watchdog**", output, StringComparison.Ordinal);
         Assert.Contains("tens-of-minutes class", output, StringComparison.Ordinal);
         // The watchdog layer resolves to the existing heartbeat command.
@@ -2160,13 +2170,28 @@ public sealed class GuideOrchestratorThreadCommandTests
 
         // Exactly three layers, each carrying a purpose and a cadence.
         var layers = supervision.GetProperty("supervision_layers").EnumerateArray()
-            .Select(l => (Layer: l.GetProperty("layer").GetString()!, Cadence: l.GetProperty("cadence").GetString()!, Purpose: l.GetProperty("purpose").GetString()!))
+            .Select(l => (
+                Layer: l.GetProperty("layer").GetString()!,
+                Cadence: l.GetProperty("cadence").GetString()!,
+                Purpose: l.GetProperty("purpose").GetString()!,
+                Note: l.GetProperty("note").GetString()!))
             .ToArray();
         Assert.Equal(3, layers.Length);
         Assert.All(layers, l => Assert.NotEmpty(l.Purpose));
         Assert.All(layers, l => Assert.NotEmpty(l.Cadence));
         Assert.Contains(layers, l => l.Layer == "real-time message monitor");
-        Assert.Contains(layers, l => l.Layer == "blocking-UI pane scan" && l.Cadence.Contains("sub-minute", StringComparison.Ordinal));
+        var blockingUi = Assert.Single(layers, l => l.Layer == "blocking-UI pane scan");
+        Assert.Contains("sub-minute", blockingUi.Cadence, StringComparison.Ordinal);
+        // G556 repair: the structured layer covers BOTH stuck states and routes
+        // them differently — dialogs to the dialog rules, agent-absent to the
+        // shim-safe relaunch plus the complete verified-liveness re-check.
+        Assert.Contains("TWO EQUAL stuck states", blockingUi.Purpose, StringComparison.Ordinal);
+        Assert.Contains("agent-absent", blockingUi.Purpose, StringComparison.Ordinal);
+        Assert.Contains("approval, selection, or trust prompt", blockingUi.Purpose, StringComparison.Ordinal);
+        Assert.Contains("routes by STATE", blockingUi.Note, StringComparison.Ordinal);
+        Assert.Contains("NOT a dialog and must never be routed through dialog handling", blockingUi.Note, StringComparison.Ordinal);
+        Assert.Contains("shim-safe relaunch recovery", blockingUi.Note, StringComparison.Ordinal);
+        Assert.Contains("COMPLETE verified-liveness re-check", blockingUi.Note, StringComparison.Ordinal);
         Assert.Contains(layers, l => l.Layer == "periodic state watchdog" && l.Cadence.Contains("tens-of-minutes", StringComparison.Ordinal));
 
         Assert.Contains("5.5 HOURS", supervision.GetProperty("rearm_rule").GetString(), StringComparison.Ordinal);

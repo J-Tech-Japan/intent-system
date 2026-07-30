@@ -1812,14 +1812,22 @@ internal static class GuideOrchestratorThreadCommand
                 {
                     Layer = "blocking-UI pane scan",
                     Purpose =
-                        "Notice panes blocked on approval, selection, or trust prompts — the failure mode that "
-                        + "produces no message at all, so no message-driven layer can ever detect it.",
+                        "Notice panes that are stuck with nothing to say. TWO EQUAL stuck states: a pane blocked on "
+                        + "an approval, selection, or trust prompt, AND a pane showing a shell prompt where an agent "
+                        + "should be (`agent-absent`, G556). Both produce no message at all — a blocked agent is "
+                        + "waiting and a dead one cannot speak — so no message-driven layer can ever detect either.",
                     Cadence =
-                        "sub-minute class (e.g. every few tens of seconds) — blocking dialogs stall a role for their "
-                        + "entire lifetime, so this layer is the fast one.",
+                        "sub-minute class (e.g. every few tens of seconds) — a blocking dialog stalls a role for its "
+                        + "entire lifetime, and an agent that died seconds after reporting stays dead until someone "
+                        + "looks, so this layer is the fast one.",
                     Note =
-                        "Scanning is READING. What the scan finds is then handled by the dialog rules below: answer "
-                        + "only what the MAY list covers after the verified read, and escalate the rest.",
+                        "Scanning is READING, and what the scan finds routes by STATE, not by one rule for "
+                        + "everything. A blocking dialog goes to the dialog rules below — answer only what the MAY "
+                        + "list covers after the verified read, and escalate the rest. An `agent-absent` shell "
+                        + "prompt is NOT a dialog and must never be routed through dialog handling: it goes to the "
+                        + "shim-safe relaunch recovery (recreating the app-server when that is what died), followed "
+                        + "by the COMPLETE verified-liveness re-check — report, settle delay, all three checks. See "
+                        + "`What the pane scan is looking for` for both recoveries.",
                 },
                 new OrchestratorSupervisionLayer
                 {
