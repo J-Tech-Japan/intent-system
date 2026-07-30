@@ -1956,18 +1956,24 @@ literal:
 
 ```json
 {
-  "stableVersion": "0.6.0",
-  "nextVersion": "0.6.1"
+  "stableVersion": "<stableVersion>",
+  "nextVersion": "<nextVersion>"
 }
 ```
 
+The shape is written with placeholders on purpose: **read the actual values from
+`eng/version.json`**, and see [Next release readiness](#next-release-readiness)
+for the line currently being cut. A worked example here would be a second copy
+of the version pair that goes stale on the next roll — the defect G557/G560
+exist to remove.
+
 | Stage | Version form | How it is derived |
 | --- | --- | --- |
-| Local pack / install | `0.6.1-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
-| Main CI preview | `0.6.1-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
-| Release candidate (optional) | `0.6.1-rc.N` | Publishing the GitHub Release for tag `v0.6.1-rc.N` triggers `release.yml` (`on: release: published`); the tag supplies the version |
-| Stable release | `0.6.1` | Publishing the GitHub Release for tag `v0.6.1` triggers `release.yml` (`on: release: published`); the tag supplies the version (`-p:Version=<tag>` wins) |
-| Post-release main builds | `0.6.2-preview.<run>.<attempt>` | After rolling `nextVersion` to `0.6.2` |
+| Local pack / install | `<nextVersion>-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
+| Main CI preview | `<nextVersion>-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
+| Release candidate (optional) | `<nextVersion>-rc.N` | Publishing the GitHub Release for tag `v<nextVersion>-rc.N` triggers `release.yml` (`on: release: published`); the tag supplies the version |
+| Stable release | `<nextVersion>` | Publishing the GitHub Release for tag `v<nextVersion>` triggers `release.yml` (`on: release: published`); the tag supplies the version (`-p:Version=<tag>` wins) |
+| Post-release main builds | `<nextPatch>-preview.<run>.<attempt>` | After rolling `nextVersion` to `<nextPatch>` |
 
 ### Post-release version roll (G554) — required, immediate
 
@@ -1978,8 +1984,8 @@ release closeout, and skipping it breaks the preview channel.
 
 ```json
 {
-  "stableVersion": "0.6.1",
-  "nextVersion": "0.6.2"
+  "stableVersion": "<the version just released>",
+  "nextVersion": "<the next patch>"
 }
 ```
 
@@ -1994,7 +2000,7 @@ next preview `0.6.2-preview.N`, which sorts above `0.6.1`, and `dotnet tool
 update` works again.
 
 **Release closeout checklist** (the roll is step 4 — do not stop at step 3, and
-the roll is not done until step 5):
+the roll is not done until step 6):
 
 1. Publish the GitHub Release for the version (this fires `release.yml`).
 2. Verify the published artifacts: NuGet page, release assets, `.sha256`
@@ -2007,14 +2013,18 @@ the roll is not done until step 5):
    a roll that moves the field without the stubs turns main red the moment it
    lands. The stubs carry no changelog content — the next release-prep packet
    authors that.
-5. **Verify child main CI is green after pushing the roll.** The roll is
+5. **Refresh the "Next release readiness" section to the new line** in the same
+   roll — it names the release being cut, so a roll that moves `nextVersion`
+   without it leaves the section describing the previous cycle. Update both
+   language mirrors.
+6. **Verify child main CI is green after pushing the roll.** The roll is
    complete only when CI is: a red main blocks every unrelated PR that inherits
    it, so the roller owns the result, not just the commit.
 
 Existing preview artifacts are **not** renumbered retroactively; the rule fixes
 the channel going forward.
 
-> **Why steps 4-5 read this way (G557).** The roll's first live execution
+> **Why steps 4-6 read this way (G557, G560).** The roll's first live execution
 > (commit `00936844`, `nextVersion` 0.6.1 → 0.6.2) moved the field alone and
 > turned main red on four checks: three tests pinned the version pair by value,
 > and the G475 guard demanded `release-notes-v0.6.2.md`. An unrelated PR
@@ -2022,6 +2032,28 @@ the channel going forward.
 > are now derived from `eng/version.json` so a correct roll cannot break them,
 > and the two steps above close the rest: create the stubs with the roll, and
 > confirm green before calling it done.
+>
+> **Second incident (G560), roll 0.6.2 → 0.6.3.** The amended rule worked — the
+> post-roll CI check caught that the readiness section still described the
+> previous line, which had been passing only incidentally because the new
+> version happened to appear in unrelated preview examples. Refreshing it then
+> flipped four transitional test theories that pinned the *previous* cycle's
+> readiness heading by literal. Hence step 5 above, and the rule below.
+
+**Release-prep guidance: never add a current-state version literal.** When a
+release-prep packet writes or updates a guard over the developer reference, the
+README, or any other file describing the repository *as it is now*, the expected
+version comes from `eng/version.json` — never from a typed-in string. Two live
+incidents came from breaking this rule, and both cost an unrelated PR its CI:
+the first pinned the version pair itself (G557), the second pinned the readiness
+section's heading (G560). A literal is only safe where the artifact is **frozen**:
+`release-notes-v<X>.md` for an already-released `X` will never change, so
+asserting its content is stable by construction — as are incident records like
+the paragraphs above, which describe what happened rather than what is.
+
+For the same reason the version-flow example above uses placeholders rather than
+a worked version pair: a second copy of the current versions is a second thing
+to keep in sync, and it goes stale on exactly the roll nobody is watching.
 
 ### Next release readiness (v0.6.3)
 

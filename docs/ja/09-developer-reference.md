@@ -2095,18 +2095,23 @@ truth です。G468 以降、ローカル `dotnet pack` のデフォルト `<Ver
 
 ```json
 {
-  "stableVersion": "0.6.0",
-  "nextVersion": "0.6.1"
+  "stableVersion": "<stableVersion>",
+  "nextVersion": "<nextVersion>"
 }
 ```
 
+形だけをプレースホルダーで示しているのは意図的です: **実際の値は `eng/version.json`
+から読んでください**。現在カット中のラインは下記の「次リリース準備」セクションを参照します。
+ここに具体値の例を置くと、バージョンの組の 2 つ目のコピーができ、次の roll で必ず stale に
+なります — それこそ G557/G560 が取り除こうとしている欠陥です。
+
 | ステージ | バージョン形式 | 導出方法 |
 | --- | --- | --- |
-| ローカル pack / install | `0.6.1-<sha>-<G-unit>` | `eng/version.json` の `nextVersion`（G468） |
-| Main CI preview | `0.6.1-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
-| リリース候補（任意） | `0.6.1-rc.N` | タグ `v0.6.1-rc.N` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する |
-| 安定版リリース | `0.6.1` | タグ `v0.6.1` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する（`-p:Version=<tag>` が優先） |
-| リリース後の main ビルド | `0.6.2-preview.<run>.<attempt>` | `nextVersion` を `0.6.2` に roll した後 |
+| ローカル pack / install | `<nextVersion>-<sha>-<G-unit>` | `eng/version.json` の `nextVersion`（G468） |
+| Main CI preview | `<nextVersion>-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
+| リリース候補（任意） | `<nextVersion>-rc.N` | タグ `v<nextVersion>-rc.N` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する |
+| 安定版リリース | `<nextVersion>` | タグ `v<nextVersion>` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する（`-p:Version=<tag>` が優先） |
+| リリース後の main ビルド | `<nextPatch>-preview.<run>.<attempt>` | `nextVersion` を `<nextPatch>` に roll した後 |
 
 ### リリース後の version roll(G554) — 必須・即時
 
@@ -2117,8 +2122,8 @@ closeout の 1 ステップであり、飛ばすと preview チャンネルが�
 
 ```json
 {
-  "stableVersion": "0.6.1",
-  "nextVersion": "0.6.2"
+  "stableVersion": "<今リリースしたバージョン>",
+  "nextVersion": "<次の patch>"
 }
 ```
 
@@ -2132,7 +2137,7 @@ closeout の 1 ステップであり、飛ばすと preview チャンネルが�
 `0.6.1` より上にソートされるため、`dotnet tool update` が再び機能します。
 
 **リリース closeout チェックリスト**(roll はステップ 4 — ステップ 3 で止めないこと。
-そして roll はステップ 5 まで終えて初めて完了です):
+そして roll はステップ 6 まで終えて初めて完了です):
 
 1. 対象バージョンの GitHub Release を publish する(これが `release.yml` を発火させる)。
 2. publish された成果物を検証する: NuGet ページ、release assets、`.sha256` チェックサム、
@@ -2144,20 +2149,45 @@ closeout の 1 ステップであり、飛ばすと preview チャンネルが�
    `nextVersion` が指すバージョンのノートの存在を要求するため、stub 無しでフィールドだけを
    動かす roll は、着地した瞬間に main を red にします。stub に changelog の中身は不要で、
    実際の内容は次の release-prep パケットが author します。
-5. **push 後に child main の CI が green であることを検証する。** roll は CI が green に
+5. **同じ roll で「次リリース準備」セクションを新しいラインへ更新する。** このセクションは
+   カット対象のリリースを名指しするため、`nextVersion` だけを動かす roll はセクションを
+   前サイクルの記述のまま残します。ja/en 両方のミラーを更新してください。
+6. **push 後に child main の CI が green であることを検証する。** roll は CI が green に
    なって初めて完了です: red な main は、それを継承するすべての無関係な PR をブロックする
    ため、roll した人は commit だけでなく結果まで責任を持ちます。
 
 既存の preview 成果物は **遡って番号を振り直しません**。このルールはチャンネルを今後に
 向けて修正するものです。
 
-> **ステップ 4-5 がこの形である理由(G557)。** roll の最初の実運用(commit `00936844`、
+> **ステップ 4-6 がこの形である理由(G557, G560)。** roll の最初の実運用(commit `00936844`、
 > `nextVersion` 0.6.1 → 0.6.2)はフィールドだけを動かし、4 つのチェックで main を red に
 > しました: 3 つのテストがバージョンの組を値で固定しており、G475 のガードが
 > `release-notes-v0.6.2.md` を要求したためです。無関係な PR が red な main を継承して
 > 凍結され、hotfix が着地するまで解除されませんでした。assertion は `eng/version.json`
 > から導出するようになり、正しい roll がそれらを壊すことはなくなりました。残りを塞ぐのが
 > 上記 2 ステップです: roll と同時に stub を作り、green を確認してから完了とする。
+>
+> **2 件目のインシデント(G560、roll 0.6.2 → 0.6.3)。** 改訂したルールは機能しました —
+> roll 後の CI チェックが、readiness セクションが前のラインを記述したままであることを
+> 検出したのです。それまで通っていたのは、新しいバージョンがたまたま無関係な preview の
+> 例に現れていたからにすぎませんでした。そこでセクションを更新すると、今度は *前サイクル* の
+> readiness 見出しをリテラルで固定していた 4 つの transitional な test theory が落ちました。
+> それが上記ステップ 5 と、下記のルールの理由です。
+
+**release-prep のガイダンス: current-state のバージョンリテラルを新たに書かない。**
+release-prep パケットが developer reference・README・その他「今のリポジトリの状態」を
+記述するファイルに対するガードを書く/更新するときは、期待するバージョンを
+`eng/version.json` から導出します — タイプした文字列からではありません。このルールを
+破ったことで実運用のインシデントが 2 件起き、いずれも無関係な PR の CI を落としました:
+1 件目はバージョンの組そのものを固定(G557)、2 件目は readiness セクションの見出しを
+固定(G560)。リテラルが安全なのは成果物が **凍結** されている場合だけです:
+リリース済みの `X` に対する `release-notes-v<X>.md` は今後変わらないため、その内容を
+assert するのは構造的に安定です — 上記のようなインシデント記録も同様で、「今どうであるか」
+ではなく「何が起きたか」を記述しています。
+
+同じ理由で、上の version flow の例は具体的なバージョンの組ではなくプレースホルダーを
+使っています: 現在のバージョンの 2 つ目のコピーは同期し続けるべき対象が 1 つ増えることを
+意味し、しかも誰も見ていない roll でこそ stale になります。
 
 ### 次リリース準備(v0.6.3)
 
