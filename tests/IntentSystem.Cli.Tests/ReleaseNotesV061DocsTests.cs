@@ -152,76 +152,211 @@ public sealed class ReleaseNotesV061DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void DeveloperReference_VersionFlowIsOnThe061Line(string language)
+    public void DeveloperReference_VersionFlowDoesNotReintroduceTheCurrentPair_G560(string language)
     {
+        // The placeholder shape itself is asserted by the shared invariant
+        // helper. What is unique here is the NEGATIVE: the example must not
+        // quietly regain a worked version pair, which would recreate the second
+        // copy of eng/version.json that goes stale on the next roll.
         var reference = ReadDeveloperReference(language);
+        var policy = RepoVersionPolicySource.Read();
 
-        Assert.Contains("\"stableVersion\": \"0.6.0\"", reference, StringComparison.Ordinal);
-        Assert.Contains("\"nextVersion\": \"0.6.1\"", reference, StringComparison.Ordinal);
-        // Post-release main builds are described on the NEXT line, above the
-        // release — the whole point of the rule.
-        Assert.Contains("0.6.2-preview.<run>.<attempt>", reference, StringComparison.Ordinal);
+        var flowStart = reference.IndexOf(
+            language == "en" ? "The repository version policy lives in" : "リポジトリのバージョンポリシーは",
+            StringComparison.Ordinal);
+        var flowEnd = reference.IndexOf(
+            language == "en" ? "Post-release version roll" : "リリース後の version roll",
+            StringComparison.Ordinal);
+        Assert.True(flowStart >= 0 && flowEnd > flowStart, "the developer reference must carry a version-flow section");
+
+        var flowSection = reference[flowStart..flowEnd];
+        Assert.DoesNotContain($"\"{policy.NextVersion}\"", flowSection, StringComparison.Ordinal);
+        Assert.DoesNotContain($"\"{policy.StableVersion}\"", flowSection, StringComparison.Ordinal);
     }
 
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void DeveloperReference_ActiveReadinessIsTheV061Section_NotAStaleV060One(string language)
+    public void DeveloperReference_SatisfiesTheCurrentStateInvariant_G560(string language)
     {
-        var reference = ReadDeveloperReference(language);
-
-        Assert.Contains(
-            language == "en" ? "### Next release readiness (v0.6.1)" : "### 次リリース準備(v0.6.1)",
-            reference,
-            StringComparison.Ordinal);
-        // The superseded section is re-cut, not left standing beside the new one.
-        Assert.DoesNotContain(
-            language == "en" ? "### Next release readiness (v0.6.0)" : "### 次リリース準備(v0.6.0)",
-            reference,
-            StringComparison.Ordinal);
-
-        // It states what actually shipped and what is being cut.
-        Assert.Contains(
-            language == "en" ? "**`v0.6.0` shipped**" : "**`v0.6.0` は publish 済み**",
-            reference,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            language == "en" ? "a **patch** bump, not a minor" : "minor ではなく **patch** バンプ",
-            reference,
-            StringComparison.Ordinal);
-        Assert.Contains("release-notes-v0.6.1.md", reference, StringComparison.Ordinal);
-        foreach (var slice in ReleasedSlices)
-        {
-            Assert.Contains(slice, reference, StringComparison.Ordinal);
-        }
+        // G560: the ONE current-state invariant, asserted against the real
+        // developer reference and the real eng/version.json. The identical
+        // helper runs in the roll simulation below, so "it holds now" and "it
+        // holds after a roll" are the same check rather than two drifting
+        // copies of one.
+        AssertCurrentStateInvariant(ReadDeveloperReference(language), language, RepoVersionPolicySource.Read());
     }
 
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void DeveloperReference_CarriesNoStaleActiveVersionGuidance(string language)
+    public void DeveloperReference_CarriesNoSupersededGuidance_G560(string language)
     {
+        // Version-free negative coverage: wording G554 removed must not return
+        // as active guidance, and the closeout cross-reference must name the
+        // full step range with what each step carries.
         var reference = ReadDeveloperReference(language);
 
-        // Negative coverage: the pre-roll policy values and the deferral that
-        // caused the 2026-07-29 preview-channel break must not reappear as
-        // active guidance.
-        Assert.DoesNotContain("\"stableVersion\": \"0.5.0\"", reference, StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            language == "en" ? "stableVersion 0.5.0 (published)" : "stableVersion 0.5.0（公開済み）",
-            reference,
-            StringComparison.Ordinal);
         Assert.DoesNotContain(
             language == "en" ? "deferred to the NEXT release-prep packet" : "次の release-prep パケットに委ねられます",
             reference,
             StringComparison.Ordinal);
 
-        // And the readiness checks name the current line.
-        Assert.Contains(
-            language == "en" ? "stableVersion 0.6.0 (published), nextVersion 0.6.1 (to release)" : "stableVersion 0.6.0（公開済み）, nextVersion 0.6.1（リリース対象）",
+        // Regression for the stale steps 4-5 cross-reference: the readiness
+        // closeout must point at steps 4-6 and spell out same-commit stubs, the
+        // readiness refresh, and the post-roll green-CI check.
+        Assert.DoesNotContain(
+            language == "en" ? "per steps 4–5 of the" : "のステップ 4–5 に従います",
             reference,
             StringComparison.Ordinal);
-        Assert.Contains("JTechJapan.IntentSystem.Cli.0.6.1.nupkg", reference, StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "**steps 4–6** of the" : "**ステップ 4–6** に従い",
+            reference,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "DRAFT note stubs in the same commit** (step 4)" : "同一コミットに DRAFT note スタブ**(ステップ 4)",
+            reference,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "refreshed to the new line in both language mirrors** (step" : "両ミラーで新しいラインへ更新**(ステップ 5)",
+            reference,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "post-roll green child-main CI check** before the roll counts as" : "roll 後の child main CI green 確認**(ステップ 6)",
+            reference,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void RollSimulation_BumpedPolicyPlusRefreshedReadiness_SatisfiesTheSameInvariant_G560(string language)
+    {
+        // The regression this slice closes is not "four theories were wrong
+        // once" — it is that current-state guards FLIP ON EVERY ROLL. So the
+        // proof is a roll, driven through the real policy reader against a
+        // temporary bumped eng/version.json, and checked with the SAME helper
+        // the current-state theory uses. A guard that regains a literal fails
+        // here even while it still passes against today's docs.
+        var reference = ReadDeveloperReference(language);
+        var policy = RepoVersionPolicySource.Read();
+
+        foreach (var (stable, next) in new[]
+                 {
+                     (policy.NextVersion, NextPatch(policy.NextVersion)),
+                     ("0.6.9", "0.7.0"),
+                     ("0.9.9", "1.0.0"),
+                 })
+        {
+            using var rolledRepo = new TemporaryVersionPolicyRoot(stable, next);
+            var rolledPolicy = RepoVersionPolicySource.ReadFrom(rolledRepo.RootPath);
+            Assert.Equal(stable, rolledPolicy.StableVersion);
+            Assert.Equal(next, rolledPolicy.NextVersion);
+
+            var refreshed = RefreshReadinessForRoll(reference, language, policy, rolledPolicy);
+
+            AssertCurrentStateInvariant(refreshed, language, rolledPolicy);
+        }
+    }
+
+    /// <summary>
+    /// G560: the single current-state invariant. Everything it asserts is
+    /// derived from <paramref name="policy"/>, and the version-bearing checks
+    /// are scoped to the active readiness section so they cannot be satisfied
+    /// incidentally by text elsewhere in the file — which is exactly how the
+    /// superseded guard passed until a roll exposed it.
+    /// </summary>
+    private static void AssertCurrentStateInvariant(
+        string reference, string language, IntentSystem.Cli.Infrastructure.VersionPolicy policy)
+    {
+        var headingPrefix = language == "en" ? "### Next release readiness (v" : "### 次リリース準備(v";
+
+        // Exactly ONE active readiness heading, naming the release being cut.
+        var headings = reference
+            .Split(headingPrefix)
+            .Skip(1)
+            .Select(chunk => chunk.Split(')')[0])
+            .ToArray();
+        Assert.Equal(policy.NextVersion, Assert.Single(headings));
+
+        var section = ReadinessSection(reference, language);
+
+        // Section-scoped: the line that just shipped, the notes for the release
+        // being cut, the policy pair, and the pack artifact.
+        Assert.Contains($"v{policy.StableVersion}", section, StringComparison.Ordinal);
+        Assert.Contains($"release-notes-v{policy.NextVersion}.md", section, StringComparison.Ordinal);
+        Assert.Contains($"stableVersion {policy.StableVersion}", section, StringComparison.Ordinal);
+        Assert.Contains($"nextVersion {policy.NextVersion}", section, StringComparison.Ordinal);
+        Assert.Contains($"JTechJapan.IntentSystem.Cli.{policy.NextVersion}.nupkg", section, StringComparison.Ordinal);
+
+        // The version-flow example stays placeholder-based: it is not something
+        // a roll has to rewrite, which is the point of the conversion.
+        Assert.Contains("\"stableVersion\": \"<stableVersion>\"", reference, StringComparison.Ordinal);
+        Assert.Contains("\"nextVersion\": \"<nextVersion>\"", reference, StringComparison.Ordinal);
+        Assert.Contains("<nextVersion>-preview.<run>.<attempt>", reference, StringComparison.Ordinal);
+        Assert.Contains("<nextPatch>-preview.<run>.<attempt>", reference, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G560: rewrites the developer reference the way the roller does at steps
+    /// 4-5 — the readiness heading and every current-state mention of the cycle
+    /// move to the new line. Deliberately blunt: anything this does not touch
+    /// is not current state, and must not be asserting a version.
+    /// </summary>
+    private static string RefreshReadinessForRoll(
+        string reference,
+        string language,
+        IntentSystem.Cli.Infrastructure.VersionPolicy from,
+        IntentSystem.Cli.Infrastructure.VersionPolicy to)
+    {
+        var oldHeading = language == "en"
+            ? $"### Next release readiness (v{from.NextVersion})"
+            : $"### 次リリース準備(v{from.NextVersion})";
+        var newHeading = language == "en"
+            ? $"### Next release readiness (v{to.NextVersion})"
+            : $"### 次リリース準備(v{to.NextVersion})";
+
+        return reference
+            .Replace(oldHeading, newHeading, StringComparison.Ordinal)
+            .Replace($"stableVersion {from.StableVersion}", $"stableVersion {to.StableVersion}", StringComparison.Ordinal)
+            .Replace($"nextVersion {from.NextVersion}", $"nextVersion {to.NextVersion}", StringComparison.Ordinal)
+            .Replace($"JTechJapan.IntentSystem.Cli.{from.NextVersion}.nupkg", $"JTechJapan.IntentSystem.Cli.{to.NextVersion}.nupkg", StringComparison.Ordinal)
+            .Replace($"release-notes-v{from.NextVersion}.md", $"release-notes-v{to.NextVersion}.md", StringComparison.Ordinal)
+            .Replace($"v{from.StableVersion}", $"v{to.StableVersion}", StringComparison.Ordinal);
+    }
+
+    private static string NextPatch(string version)
+    {
+        var parts = version.Split('.');
+        return $"{parts[0]}.{parts[1]}.{int.Parse(parts[2]) + 1}";
+    }
+
+    /// <summary>G560: a temporary repo root holding only a bumped eng/version.json, read through the real policy reader.</summary>
+    private sealed class TemporaryVersionPolicyRoot : IDisposable
+    {
+        public TemporaryVersionPolicyRoot(string stableVersion, string nextVersion)
+        {
+            RootPath = Directory.CreateTempSubdirectory("g560-roll-simulation-").FullName;
+            Directory.CreateDirectory(Path.Combine(RootPath, "eng"));
+            File.WriteAllText(
+                Path.Combine(RootPath, "eng", "version.json"),
+                $$"""
+                {
+                  "stableVersion": "{{stableVersion}}",
+                  "nextVersion": "{{nextVersion}}"
+                }
+                """);
+        }
+
+        public string RootPath { get; }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(RootPath))
+            {
+                Directory.Delete(RootPath, recursive: true);
+            }
+        }
     }
 
     [Theory]
@@ -269,7 +404,7 @@ public sealed class ReleaseNotesV061DocsTests
             reference,
             StringComparison.Ordinal);
         Assert.Contains(
-            language == "en" ? "the roll is not done until step 5" : "roll はステップ 5 まで終えて初めて完了",
+            language == "en" ? "the roll is not done until step 6" : "roll はステップ 6 まで終えて初めて完了",
             reference,
             StringComparison.Ordinal);
 
@@ -469,6 +604,22 @@ public sealed class ReleaseNotesV061DocsTests
         var workflow = File.ReadAllText(releaseWorkflow);
         Assert.Contains("release:", workflow, StringComparison.Ordinal);
         Assert.Contains("published", workflow, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G560: the slice of the developer reference under the ACTIVE readiness
+    /// heading, so assertions about that section cannot accidentally be
+    /// satisfied by text elsewhere in the file — which is exactly how the
+    /// previous guard passed incidentally until a roll exposed it.
+    /// </summary>
+    private static string ReadinessSection(string reference, string language)
+    {
+        var heading = language == "en" ? "### Next release readiness (v" : "### 次リリース準備(v";
+        var start = reference.IndexOf(heading, StringComparison.Ordinal);
+        Assert.True(start >= 0, "the developer reference must carry an active readiness section");
+
+        var end = reference.IndexOf("### ", start + heading.Length, StringComparison.Ordinal);
+        return end > start ? reference[start..end] : reference[start..];
     }
 
     private static string ReadReleaseNotes(string language) =>
