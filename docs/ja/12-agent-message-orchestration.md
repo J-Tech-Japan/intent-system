@@ -141,6 +141,43 @@ monitor bridge を arm する（G521）ため、canonical な実行ファイル�
    得られない場合は明示的にフォールバックし（`turn` delivery または手動 `inbox.sh`）、その旨を
    述べたうえで、それでも ack を必須にします。
 
+**verified liveness — startup report は readiness ではない。** provisioning は
+メッセージではなく verified liveness で完了します。ロールが provisioned となるのは、
+startup report が届き **かつ**、**settle delay** の後に次の 3 つがいずれもまだ通る
+場合です:
+
+1. **pane が依然として agent の TUI をホストしている** — pane を読みます。shell
+   プロンプトが出ていれば、どれほど直前に report していても agent は終了しています。
+   pane が ground truth であり、メッセージは過去についての主張にすぎません。
+2. **agmsg の ping-pong 往復が成功する** — 今 ping し、今 pong を要求します。先ほどの
+   readiness ack が証明するのは「その時点で」生きていたことだけです。
+3. **codex では bridge が armed で app-server attachment が安定している** — codex の
+   TUI は per-folder の app-server に `--remote` websocket で attach するため、pane も
+   bridge も直前まで正常に見えていたのに attachment だけが死ぬことがあります。
+
+> **startup report は readiness ではありません。** field incident(2026-07-29):
+> 2 体の codex agent が startup-complete を report した **数秒後** に、共有していた
+> app-server の喪失で死亡しました。それでも監督スレッドは「startup report を待っている」
+> と言い続け、その時点で全 agent は既に死んでいました。report だけで provisioning を
+> 完了と結論してはいけません。
+
+settle delay が重要です: この検査が捕まえる失敗は report の **数秒後** に起きるため、
+即座に検証しても report が述べたのと同じ瞬間を再観測するだけで、新しいことは何も
+証明できません。
+
+**early death は normal mode です。** そのシグネチャは、websocket の **transport
+reset** が app-server 接続を落とした結果、TUI が **shell プロンプトへ抜ける**(多くは
+resume ヒントを画面に残す)ことです。ただの端末に見える pane になるため、ダイアログだけを
+探すスキャンでは見逃します。チェックが失敗したら **再チェックして復旧します。次の report を
+待ってはいけません** — 死んだ agent は何も送らないので、待つことは永遠に待つことです。
+
+> **共有 app-server の death mode。** app-server を kill すると、**attach している
+> すべての TUI が一斉に落ちます** — kill の理由と無関係な、他チームの agent も含めて。
+> 2026-07-29 の 2 体同時死はまさにこれでした。予防策は下記の attribution ルールです:
+> app-server を停止する前にプロセス自身の cwd を確認し、attribute できないプロセスには
+> 手を出さないこと。これは attribution 違反の二次被害です — 被害者は kill したプロセス
+> ではなく、それに attach していたすべてです。
+
 **5. 排他性とハンドオーバー。** 1 つのロールを保持できる生きたセッションはちょうど 1 つで、
 2 番目の actas は拒否されます — その拒否が正しい挙動です。セッションの置き換えは
 **graceful drop** を通します: 現保持者が（オペレーター確認つきで）ロールを drop し、
@@ -188,8 +225,20 @@ drop の確認は **オペレーターに可視** です: 生きたセッショ�
 | レイヤー | 目的 | ケイデンス |
 | --- | --- | --- |
 | リアルタイム message monitor | 受信する agmsg の返信・blocker・エスカレーション | 継続的（attach された live stream） |
-| blocking-UI の pane スキャン | approval / selection / trust プロンプトで止まった pane — メッセージを一切出さない failure mode | サブ分オーダー |
+| blocking-UI の pane スキャン | approval / selection / trust プロンプトで止まった pane、**および agent がいるべき場所に shell プロンプトが出ている pane**(`agent-absent`)— メッセージを一切出さない failure mode | サブ分オーダー |
 | 定期 state watchdog | canonical な intent-cli/GitHub 状態と期待進捗の比較。既存の [design-thread watchdog](#design-thread-watchdog推奨されるセーフティネット) | 数十分オーダー |
+
+**pane スキャンが探しているもの。** 2 つの stuck state が同列に並びます:
+
+- **blocking dialog** — 入力待ちの approval / selection / trust プロンプト。下記の
+  ダイアログルールに従って扱います。
+- **`agent-absent`** — agent がいるべき場所に shell プロンプトが出ている状態。復旧は
+  **shim 経由の relaunch** です: pane の対話シェルにタイプして起動し(実行ファイルの
+  直接 spawn は禁止)、死んだのが app-server ならそれを先に再作成し、その後
+  **verified-liveness の全手順** をやり直します。permission mode は起動後に切り替えるのでは
+  なく **launch フラグ**(例: `--permission-mode`)で設定してください — ワークスペース
+  マネージャーの合成キー注入は mode 切り替えに使えません: 平文キーは届きますが、
+  shift+tab のような modifier chord は忠実に届きません(複数チームで観測)。
 
 > **再起動をまたいだ re-arm。** 監督スケジューラーはセッションスコープです: `/loop`・automation・
 > attach された monitor は、それをホストしている設計セッションと一緒に死に、しかも停止したことを

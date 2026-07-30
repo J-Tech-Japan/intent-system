@@ -1583,6 +1583,87 @@ internal static class GuideOrchestratorThreadCommand
                     "After readiness, run the existing ping test before ANY delegation: send one agmsg message to each "
                     + "role and require the ack (see `Receiver readiness` / `ping_test`). Readiness is a precondition "
                     + "for the ping test, not a replacement for it.",
+                VerifiedLiveness = new OrchestratorVerifiedLiveness
+                {
+                    Summary =
+                        "Provisioning concludes on VERIFIED LIVENESS, not on a message. A role is provisioned when its "
+                        + "startup report has arrived AND, after a settle delay, all three checks below still pass. "
+                        + "Until then the pane is a candidate, not a receiver.",
+                    ReportIsNotReadiness =
+                        "the report says the agent reached the point of sending a "
+                        + "message; it says nothing about whether the agent is still running now. Field incident "
+                        + "(2026-07-29): two codex agents reported startup-complete and died SECONDS later when their "
+                        + "shared app-server was lost — and the supervising thread went on \"waiting for startup "
+                        + "reports\" while every agent was already dead. Never conclude provisioning on the report "
+                        + "alone.",
+                    SettleDelay =
+                        "wait after the report before verifying — long enough for an early death to "
+                        + "have happened, since the failure this catches occurs seconds after the report, not at the "
+                        + "moment of it. Verifying instantly re-observes the same moment the report described and "
+                        + "proves nothing new.",
+                    PostReportChecks = new[]
+                    {
+                        new OrchestratorLivenessCheck
+                        {
+                            Check = "the pane still hosts the agent TUI",
+                            HowToVerify =
+                                "READ the pane. The agent's own interface must be there — a shell prompt means the "
+                                + "agent exited, however recently it reported. The pane is ground truth; a message is "
+                                + "a claim about the past.",
+                        },
+                        new OrchestratorLivenessCheck
+                        {
+                            Check = "an agmsg ping-pong round trip succeeds",
+                            HowToVerify =
+                                "send a ping NOW and require the pong NOW. A round trip completed after the settle "
+                                + "delay is the only evidence that the receiver is alive at THIS moment; the earlier "
+                                + "readiness ack proves only that it was alive then.",
+                        },
+                        new OrchestratorLivenessCheck
+                        {
+                            Check = "codex: the bridge is armed and the app-server attachment is stable",
+                            HowToVerify =
+                                "confirm the bridge-alive marker AND that the app-server attachment has not dropped "
+                                + "since the report — a codex TUI attaches to a per-folder app-server over a "
+                                + "`--remote` websocket, so the attachment is a separate thing that can die while the "
+                                + "pane and the bridge both looked fine a moment ago.",
+                        },
+                    },
+                    EarlyDeathIsNormal = new OrchestratorEarlyDeathMode
+                    {
+                        Summary =
+                            "an agent can die within "
+                            + "seconds of reporting, and the provisioning flow is expected to detect it rather than "
+                            + "assume it away — this is a normal mode, not an anomaly to be surprised by.",
+                        TransportResetSignature =
+                            "Signature: the TUI EXITS TO A SHELL PROMPT, typically leaving a resume hint on screen, "
+                            + "after a websocket TRANSPORT RESET dropped its app-server connection. The pane looks "
+                            + "like an ordinary terminal — which is exactly why a scan that only looks for dialogs "
+                            + "misses it.",
+                        RecheckObligation =
+                            "re-check; do not wait for another report. A dead agent sends nothing, so waiting for a "
+                            + "further message is waiting forever. When a check fails, treat the role as not "
+                            + "provisioned and recover (see the `agent-absent` stuck state) — then run the full "
+                            + "verified-liveness sequence again from the start.",
+                    },
+                    SharedAppServerDeathMode = new OrchestratorSharedAppServerDeath
+                    {
+                        Summary =
+                            "Codex TUIs attach to PER-FOLDER app-servers over `--remote` websockets, and an "
+                            + "app-server is shared by every TUI attached to it.",
+                        BlastRadius =
+                            "KILLING AN APP-SERVER TAKES DOWN EVERY ATTACHED TUI at once — including agents that "
+                            + "belong to other teams and had nothing to do with whatever prompted the kill. The "
+                            + "2026-07-29 double death was exactly this: a lost app-server, two dead agents, neither "
+                            + "of which was the intended target of anything.",
+                        PreventionReference =
+                            "Prevention is the cross-project attribution rule: verify the process's own cwd before "
+                            + "stopping any app-server, and never act on a process you cannot attribute (see "
+                            + "`Cross-project isolation on a shared machine`). This death mode is the second-order "
+                            + "cost of an attribution violation — the victim is not the process you killed, it is "
+                            + "every agent that was attached to it.",
+                    },
+                },
             },
             ExclusivityHandover = new OrchestratorProvisioningHandover
             {
@@ -1731,14 +1812,22 @@ internal static class GuideOrchestratorThreadCommand
                 {
                     Layer = "blocking-UI pane scan",
                     Purpose =
-                        "Notice panes blocked on approval, selection, or trust prompts — the failure mode that "
-                        + "produces no message at all, so no message-driven layer can ever detect it.",
+                        "Notice panes that are stuck with nothing to say. TWO EQUAL stuck states: a pane blocked on "
+                        + "an approval, selection, or trust prompt, AND a pane showing a shell prompt where an agent "
+                        + "should be (`agent-absent`, G556). Both produce no message at all — a blocked agent is "
+                        + "waiting and a dead one cannot speak — so no message-driven layer can ever detect either.",
                     Cadence =
-                        "sub-minute class (e.g. every few tens of seconds) — blocking dialogs stall a role for their "
-                        + "entire lifetime, so this layer is the fast one.",
+                        "sub-minute class (e.g. every few tens of seconds) — a blocking dialog stalls a role for its "
+                        + "entire lifetime, and an agent that died seconds after reporting stays dead until someone "
+                        + "looks, so this layer is the fast one.",
                     Note =
-                        "Scanning is READING. What the scan finds is then handled by the dialog rules below: answer "
-                        + "only what the MAY list covers after the verified read, and escalate the rest.",
+                        "Scanning is READING, and what the scan finds routes by STATE, not by one rule for "
+                        + "everything. A blocking dialog goes to the dialog rules below — answer only what the MAY "
+                        + "list covers after the verified read, and escalate the rest. An `agent-absent` shell "
+                        + "prompt is NOT a dialog and must never be routed through dialog handling: it goes to the "
+                        + "shim-safe relaunch recovery (recreating the app-server when that is what died), followed "
+                        + "by the COMPLETE verified-liveness re-check — report, settle delay, all three checks. See "
+                        + "`What the pane scan is looking for` for both recoveries.",
                 },
                 new OrchestratorSupervisionLayer
                 {
@@ -1753,6 +1842,33 @@ internal static class GuideOrchestratorThreadCommand
                     Note =
                         "This is the existing watchdog, not a second one: its safety rules apply verbatim (see the "
                         + "watchdog safety-rules reference below). One canonical nudge per wake, never a batch.",
+                },
+            },
+            PaneScanStuckStates = new[]
+            {
+                new OrchestratorPaneStuckState
+                {
+                    State = "blocking dialog",
+                    WhatTheScanSees = "an approval, selection, or trust prompt waiting for input.",
+                    Recovery =
+                        "handle it under the dialog rules — answer only what the MAY list covers after the verified "
+                        + "read, escalate the rest.",
+                },
+                new OrchestratorPaneStuckState
+                {
+                    State = "agent-absent",
+                    WhatTheScanSees =
+                        "a SHELL PROMPT where an agent should be — the pane looks like an ordinary terminal, often "
+                        + "with a resume hint left on screen. The agent exited; it may have reported startup "
+                        + "successfully seconds earlier.",
+                    Recovery =
+                        "RELAUNCH THROUGH THE SHIM: type the launch into the pane's interactive shell (never spawn "
+                        + "the executable), recreating the app-server first when it is the thing that died. Set the "
+                        + "permission mode with the LAUNCH FLAG (e.g. `--permission-mode`) rather than trying to "
+                        + "switch it afterwards: a workspace manager's synthetic key injection cannot be relied on "
+                        + "for mode switching — plain keys are delivered, but modifier chords such as shift+tab are "
+                        + "not delivered faithfully (observed across multiple teams). Then run the FULL "
+                        + "verified-liveness sequence again — report, settle delay, all three checks.",
                 },
             },
             RearmRule =
@@ -2629,6 +2745,29 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **ping test** — {provisioning.RoleInitialization.PingTestReference}");
         writer.WriteLine();
 
+        var liveness = provisioning.RoleInitialization.VerifiedLiveness;
+        writer.WriteLine("#### Verified liveness — a startup report is not readiness (G556)");
+        writer.WriteLine();
+        writer.WriteLine(liveness.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"> **A startup report is NOT readiness:** {liveness.ReportIsNotReadiness}");
+        writer.WriteLine();
+        writer.WriteLine($"- **settle delay** — {liveness.SettleDelay}");
+        writer.WriteLine();
+        writer.WriteLine("After the settle delay, ALL THREE must still pass:");
+        writer.WriteLine();
+        foreach (var check in liveness.PostReportChecks)
+        {
+            writer.WriteLine($"- **{check.Check}** — {check.HowToVerify}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **early death is normal** — {liveness.EarlyDeathIsNormal.Summary}");
+        writer.WriteLine($"- **transport-reset signature** — {liveness.EarlyDeathIsNormal.TransportResetSignature}");
+        writer.WriteLine($"- **re-check obligation** — {liveness.EarlyDeathIsNormal.RecheckObligation}");
+        writer.WriteLine();
+        writer.WriteLine($"> **Shared app-server death mode:** {liveness.SharedAppServerDeathMode.Summary} {liveness.SharedAppServerDeathMode.BlastRadius} {liveness.SharedAppServerDeathMode.PreventionReference}");
+        writer.WriteLine();
+
         writer.WriteLine("### 5. Role exclusivity and handover");
         writer.WriteLine();
         writer.WriteLine($"- **one holder per role** — {provisioning.ExclusivityHandover.OneHolderRule}");
@@ -2707,6 +2846,13 @@ internal static class GuideOrchestratorThreadCommand
             writer.WriteLine($"  - purpose — {layer.Purpose}");
             writer.WriteLine($"  - cadence — {layer.Cadence}");
             writer.WriteLine($"  - note — {layer.Note}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("#### What the pane scan is looking for");
+        writer.WriteLine();
+        foreach (var stuck in supervision.PaneScanStuckStates)
+        {
+            writer.WriteLine($"- **{stuck.State}** — the scan sees: {stuck.WhatTheScanSees} Recovery: {stuck.Recovery}");
         }
         writer.WriteLine();
         writer.WriteLine($"> **Re-arm across restarts:** {supervision.RearmRule}");
@@ -4140,6 +4286,10 @@ internal sealed record OrchestratorDesignWorkspaceSupervision
     [JsonPropertyName("supervision_layers")]
     public required IReadOnlyList<OrchestratorSupervisionLayer> SupervisionLayers { get; init; }
 
+    /// <summary>G556: what the blocking-UI pane scan is looking FOR — including a pane showing a shell prompt where an agent should be.</summary>
+    [JsonPropertyName("pane_scan_stuck_states")]
+    public required IReadOnlyList<OrchestratorPaneStuckState> PaneScanStuckStates { get; init; }
+
     /// <summary>G550: session-scoped supervision schedulers die with the design session — they must survive or be re-armed.</summary>
     [JsonPropertyName("rearm_rule")]
     public required string RearmRule { get; init; }
@@ -4330,6 +4480,18 @@ internal sealed record OrchestratorSupervisionSessionLifecycle
     public required string OperatorVisibleConfirmation { get; init; }
 }
 
+internal sealed record OrchestratorPaneStuckState
+{
+    [JsonPropertyName("state")]
+    public required string State { get; init; }
+
+    [JsonPropertyName("what_the_scan_sees")]
+    public required string WhatTheScanSees { get; init; }
+
+    [JsonPropertyName("recovery")]
+    public required string Recovery { get; init; }
+}
+
 internal sealed record OrchestratorSupervisionLayer
 {
     [JsonPropertyName("layer")]
@@ -4471,6 +4633,76 @@ internal sealed record OrchestratorProvisioningRoleInitialization
 
     [JsonPropertyName("ping_test_reference")]
     public required string PingTestReference { get; init; }
+
+    /// <summary>
+    /// G556: a self-reported startup is NOT liveness. Provisioning concludes
+    /// only after re-verification, at a settle delay past the report.
+    /// </summary>
+    [JsonPropertyName("verified_liveness")]
+    public required OrchestratorVerifiedLiveness VerifiedLiveness { get; init; }
+}
+
+/// <summary>
+/// G556: field incident (SekibanWasmRuntime team, 2026-07-29) — two codex
+/// agents sent startup-complete reports and died seconds later when their
+/// shared remote app-server was lost, dropping both TUIs to shell prompts. The
+/// supervising thread kept "waiting for startup reports" while every agent was
+/// already dead. The operator named the recurring pattern: threads claim to be
+/// waiting for startup while nothing is actually running.
+/// </summary>
+internal sealed record OrchestratorVerifiedLiveness
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    /// <summary>G556: the sentence that makes a report insufficient on its own.</summary>
+    [JsonPropertyName("report_is_not_readiness")]
+    public required string ReportIsNotReadiness { get; init; }
+
+    [JsonPropertyName("settle_delay")]
+    public required string SettleDelay { get; init; }
+
+    [JsonPropertyName("post_report_checks")]
+    public required IReadOnlyList<OrchestratorLivenessCheck> PostReportChecks { get; init; }
+
+    [JsonPropertyName("early_death_is_normal")]
+    public required OrchestratorEarlyDeathMode EarlyDeathIsNormal { get; init; }
+
+    [JsonPropertyName("shared_app_server_death_mode")]
+    public required OrchestratorSharedAppServerDeath SharedAppServerDeathMode { get; init; }
+}
+
+internal sealed record OrchestratorLivenessCheck
+{
+    [JsonPropertyName("check")]
+    public required string Check { get; init; }
+
+    [JsonPropertyName("how_to_verify")]
+    public required string HowToVerify { get; init; }
+}
+
+internal sealed record OrchestratorEarlyDeathMode
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("transport_reset_signature")]
+    public required string TransportResetSignature { get; init; }
+
+    [JsonPropertyName("recheck_obligation")]
+    public required string RecheckObligation { get; init; }
+}
+
+internal sealed record OrchestratorSharedAppServerDeath
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("blast_radius")]
+    public required string BlastRadius { get; init; }
+
+    [JsonPropertyName("prevention_reference")]
+    public required string PreventionReference { get; init; }
 }
 
 internal sealed record OrchestratorProvisioningLiveEvidence

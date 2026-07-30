@@ -454,6 +454,94 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("**復旧の既定は cleanup ではなく recreate です。**", ja, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void BothDocs_RequireVerifiedLiveness_AfterASettleDelay_G556()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        Assert.Contains("**Verified liveness — a startup report is not readiness.**", en, StringComparison.Ordinal);
+        Assert.Contains("**verified liveness — startup report は readiness ではない。**", ja, StringComparison.Ordinal);
+
+        // The load-bearing sentence, on both mirrors.
+        Assert.Contains("**A startup report is not readiness.**", en, StringComparison.Ordinal);
+        Assert.Contains("Never conclude provisioning on the report alone", en, StringComparison.Ordinal);
+        Assert.Contains("**startup report は readiness ではありません。**", ja, StringComparison.Ordinal);
+        Assert.Contains("report だけで provisioning を 完了と結論してはいけません", ja, StringComparison.Ordinal);
+
+        // The settle delay and all three post-report checks.
+        Assert.Contains("**settle delay**", en, StringComparison.Ordinal);
+        Assert.Contains("**The pane still hosts the agent TUI**", en, StringComparison.Ordinal);
+        Assert.Contains("**An agmsg ping-pong round trip succeeds**", en, StringComparison.Ordinal);
+        Assert.Contains("**For codex, the bridge is armed and the app-server attachment is stable**", en, StringComparison.Ordinal);
+
+        Assert.Contains("**settle delay**", ja, StringComparison.Ordinal);
+        Assert.Contains("**pane が依然として agent の TUI をホストしている**", ja, StringComparison.Ordinal);
+        Assert.Contains("**agmsg の ping-pong 往復が成功する**", ja, StringComparison.Ordinal);
+        Assert.Contains("**codex では bridge が armed で app-server attachment が安定している**", ja, StringComparison.Ordinal);
+
+        // The field incident that motivates it.
+        Assert.Contains("**seconds** later", en, StringComparison.Ordinal);
+        Assert.Contains("**数秒後**", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BothDocs_DocumentEarlyDeath_AndTheSharedAppServerDeathMode_G556()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        // Early death is a NORMAL mode with a named signature.
+        Assert.Contains("**Early death is a normal mode.**", en, StringComparison.Ordinal);
+        Assert.Contains("**exiting to a shell prompt**", en, StringComparison.Ordinal);
+        Assert.Contains("**transport reset**", en, StringComparison.Ordinal);
+        Assert.Contains("do not wait for another report", en, StringComparison.Ordinal);
+
+        Assert.Contains("**early death は normal mode です。**", ja, StringComparison.Ordinal);
+        Assert.Contains("**shell プロンプトへ抜ける**", ja, StringComparison.Ordinal);
+        Assert.Contains("**transport reset**", ja, StringComparison.Ordinal);
+        Assert.Contains("次の report を 待ってはいけません", ja, StringComparison.Ordinal);
+
+        // The shared app-server blast radius, with the attribution pointer.
+        Assert.Contains("**Shared app-server death mode.**", en, StringComparison.Ordinal);
+        Assert.Contains("**takes down every attached TUI at once**", en, StringComparison.Ordinal);
+        Assert.Contains("never act on a process you cannot attribute", en, StringComparison.Ordinal);
+
+        Assert.Contains("**共有 app-server の death mode。**", ja, StringComparison.Ordinal);
+        Assert.Contains("**attach している すべての TUI が一斉に落ちます**", ja, StringComparison.Ordinal);
+        Assert.Contains("attribute できないプロセスには 手を出さないこと", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BothDocs_PaneScanLists_AgentAbsent_WithShimRelaunchAndLaunchFlagMode_G556()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        // agent-absent is a named scan target alongside blocking dialogs, in
+        // the cadence table and in its own list.
+        Assert.Contains("(`agent-absent`)", en, StringComparison.Ordinal);
+        Assert.Contains("**What the pane scan is looking for.**", en, StringComparison.Ordinal);
+        Assert.Contains("**`agent-absent`** — a shell prompt where an agent should be", en, StringComparison.Ordinal);
+
+        Assert.Contains("(`agent-absent`)", ja, StringComparison.Ordinal);
+        Assert.Contains("**pane スキャンが探しているもの。**", ja, StringComparison.Ordinal);
+        Assert.Contains("**`agent-absent`** — agent がいるべき場所に shell プロンプトが出ている状態", ja, StringComparison.Ordinal);
+
+        // Recovery: shim relaunch, app-server recreation, full re-verification.
+        Assert.Contains("**shim-based relaunch**", en, StringComparison.Ordinal);
+        Assert.Contains("**full verified-liveness sequence**", en, StringComparison.Ordinal);
+        Assert.Contains("**shim 経由の relaunch**", ja, StringComparison.Ordinal);
+        Assert.Contains("**verified-liveness の全手順**", ja, StringComparison.Ordinal);
+
+        // The permission mode goes on the launch flag, because modifier chords
+        // are not delivered faithfully by synthetic key injection.
+        Assert.Contains("`--permission-mode`", en, StringComparison.Ordinal);
+        Assert.Contains("shift+tab are not delivered faithfully", en, StringComparison.Ordinal);
+        Assert.Contains("`--permission-mode`", ja, StringComparison.Ordinal);
+        Assert.Contains("shift+tab のような modifier chord は忠実に届きません", ja, StringComparison.Ordinal);
+    }
+
     private static string ReadDoc(string language)
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);
