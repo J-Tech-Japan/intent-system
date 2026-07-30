@@ -2471,6 +2471,122 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("RECREATE, NOT CLEANUP", recovery.GetProperty("default_is_recreate_not_cleanup").GetString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_Markdown_VerifiedLiveness_RequiresThreePostReportChecks_G556()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("#### Verified liveness — a startup report is not readiness (G556)", output, StringComparison.Ordinal);
+        // AC: the report-alone-is-not-readiness sentence.
+        Assert.Contains("> **A startup report is NOT readiness:**", output, StringComparison.Ordinal);
+        Assert.Contains("Never conclude provisioning on the report alone", output, StringComparison.Ordinal);
+        // AC: settle delay, and why an instant re-check proves nothing.
+        Assert.Contains("**settle delay**", output, StringComparison.Ordinal);
+        Assert.Contains("re-observes the same moment the report described", output, StringComparison.Ordinal);
+        // AC: the three post-report checks.
+        Assert.Contains("After the settle delay, ALL THREE must still pass:", output, StringComparison.Ordinal);
+        Assert.Contains("**the pane still hosts the agent TUI**", output, StringComparison.Ordinal);
+        Assert.Contains("**an agmsg ping-pong round trip succeeds**", output, StringComparison.Ordinal);
+        Assert.Contains("**codex: the bridge is armed and the app-server attachment is stable**", output, StringComparison.Ordinal);
+        // The pane is ground truth; a message is a claim about the past.
+        Assert.Contains("The pane is ground truth", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_EarlyDeath_IsANormalMode_WithTheTransportResetSignature_G556()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("**early death is normal**", output, StringComparison.Ordinal);
+        Assert.Contains("normal mode, not an anomaly", output, StringComparison.Ordinal);
+        // AC: the transport-reset signature is NAMED.
+        Assert.Contains("**transport-reset signature**", output, StringComparison.Ordinal);
+        Assert.Contains("EXITS TO A SHELL PROMPT", output, StringComparison.Ordinal);
+        Assert.Contains("resume hint", output, StringComparison.Ordinal);
+        Assert.Contains("TRANSPORT RESET", output, StringComparison.Ordinal);
+        // AC: the re-check obligation — waiting for another report is waiting forever.
+        Assert.Contains("**re-check obligation**", output, StringComparison.Ordinal);
+        Assert.Contains("A dead agent sends nothing", output, StringComparison.Ordinal);
+        // AC: the shared app-server death mode with its G555 prevention pointer.
+        Assert.Contains("> **Shared app-server death mode:**", output, StringComparison.Ordinal);
+        Assert.Contains("KILLING AN APP-SERVER TAKES DOWN EVERY ATTACHED TUI", output, StringComparison.Ordinal);
+        Assert.Contains("`Cross-project isolation on a shared machine`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_PaneScan_ListsAgentAbsent_WithShimRelaunchRecovery_G556()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("#### What the pane scan is looking for", output, StringComparison.Ordinal);
+        Assert.Contains("- **blocking dialog**", output, StringComparison.Ordinal);
+        // AC: agent-absent ranks with blocking dialogs.
+        Assert.Contains("- **agent-absent**", output, StringComparison.Ordinal);
+        Assert.Contains("a SHELL PROMPT where an agent should be", output, StringComparison.Ordinal);
+        // AC: shim-based relaunch, app-server recreation, full re-verification.
+        Assert.Contains("RELAUNCH THROUGH THE SHIM", output, StringComparison.Ordinal);
+        Assert.Contains("never spawn the executable", output, StringComparison.Ordinal);
+        Assert.Contains("recreating the app-server first", output, StringComparison.Ordinal);
+        Assert.Contains("run the FULL verified-liveness sequence again", output, StringComparison.Ordinal);
+        // The permission mode goes on the launch flag — synthetic key injection
+        // cannot be relied on for modifier chords.
+        Assert.Contains("`--permission-mode`", output, StringComparison.Ordinal);
+        Assert.Contains("modifier chords such as shift+tab are not delivered faithfully", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_VerifiedLivenessAndPaneStuckStates_HaveStructuredShape_G556()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+
+        var liveness = doc.RootElement
+            .GetProperty("terminal_workspace_provisioning")
+            .GetProperty("role_initialization")
+            .GetProperty("verified_liveness");
+
+        Assert.Contains("report alone", liveness.GetProperty("report_is_not_readiness").GetString(), StringComparison.Ordinal);
+        Assert.NotEmpty(liveness.GetProperty("settle_delay").GetString());
+
+        // EXACTLY three post-report checks, each with a verification method —
+        // the set is the contract, so a missing one would weaken readiness.
+        var checks = liveness.GetProperty("post_report_checks").EnumerateArray()
+            .Select(c => (Check: c.GetProperty("check").GetString()!, How: c.GetProperty("how_to_verify").GetString()!))
+            .ToArray();
+        Assert.Equal(3, checks.Length);
+        Assert.All(checks, c => Assert.NotEmpty(c.How));
+        Assert.Contains(checks, c => c.Check.Contains("agent TUI", StringComparison.Ordinal));
+        Assert.Contains(checks, c => c.Check.Contains("ping-pong", StringComparison.Ordinal));
+        Assert.Contains(checks, c => c.Check.Contains("app-server attachment is stable", StringComparison.Ordinal));
+
+        var earlyDeath = liveness.GetProperty("early_death_is_normal");
+        Assert.Contains("SHELL PROMPT", earlyDeath.GetProperty("transport_reset_signature").GetString(), StringComparison.Ordinal);
+        Assert.Contains("do not wait for another report", earlyDeath.GetProperty("recheck_obligation").GetString(), StringComparison.Ordinal);
+
+        var appServer = liveness.GetProperty("shared_app_server_death_mode");
+        Assert.Contains("EVERY ATTACHED TUI", appServer.GetProperty("blast_radius").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Cross-project isolation", appServer.GetProperty("prevention_reference").GetString(), StringComparison.Ordinal);
+
+        var stuckStates = doc.RootElement
+            .GetProperty("design_workspace_supervision")
+            .GetProperty("pane_scan_stuck_states")
+            .EnumerateArray()
+            .Select(x => (State: x.GetProperty("state").GetString()!, Sees: x.GetProperty("what_the_scan_sees").GetString()!, Recovery: x.GetProperty("recovery").GetString()!))
+            .ToArray();
+        Assert.Equal(2, stuckStates.Length);
+        Assert.All(stuckStates, x => Assert.NotEmpty(x.Recovery));
+        Assert.Contains(stuckStates, x => x.State == "blocking dialog");
+        var agentAbsent = Assert.Single(stuckStates, x => x.State == "agent-absent");
+        Assert.Contains("SHELL PROMPT", agentAbsent.Sees, StringComparison.Ordinal);
+        Assert.Contains("--permission-mode", agentAbsent.Recovery, StringComparison.Ordinal);
+    }
+
     private static string RunMarkdown(string[] args)
     {
         using var writer = new StringWriter();

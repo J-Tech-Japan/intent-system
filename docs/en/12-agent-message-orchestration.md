@@ -145,6 +145,46 @@ readiness in **three layers that must not be collapsed**:
    the live markers are unavailable, fall back explicitly (`turn` delivery or
    manual `inbox.sh`), say so, and still require the ack.
 
+**Verified liveness — a startup report is not readiness.** Provisioning
+concludes on verified liveness, not on a message. A role is provisioned when its
+startup report has arrived **and**, after a **settle delay**, all three of these
+still pass:
+
+1. **The pane still hosts the agent TUI** — read the pane. A shell prompt means
+   the agent exited, however recently it reported. The pane is ground truth; a
+   message is a claim about the past.
+2. **An agmsg ping-pong round trip succeeds** — ping now, require the pong now.
+   The earlier readiness ack proves only that the receiver was alive *then*.
+3. **For codex, the bridge is armed and the app-server attachment is stable** —
+   a codex TUI attaches to a per-folder app-server over a `--remote` websocket,
+   so the attachment can die while the pane and the bridge both looked fine a
+   moment ago.
+
+> **A startup report is not readiness.** Field incident (2026-07-29): two codex
+> agents reported startup-complete and died **seconds** later when their shared
+> app-server was lost — and the supervising thread went on *"waiting for startup
+> reports"* while every agent was already dead. Never conclude provisioning on
+> the report alone.
+
+The settle delay matters: the failure this catches happens seconds *after* the
+report, so verifying instantly re-observes the moment the report described and
+proves nothing new.
+
+**Early death is a normal mode.** Its signature is the TUI **exiting to a shell
+prompt**, typically leaving a resume hint on screen, after a websocket
+**transport reset** dropped its app-server connection — a pane that looks like
+an ordinary terminal, which is why a scan looking only for dialogs misses it.
+When a check fails, **re-check and recover; do not wait for another report** — a
+dead agent sends nothing, so waiting is waiting forever.
+
+> **Shared app-server death mode.** Killing an app-server **takes down every
+> attached TUI at once**, including agents belonging to other teams that had
+> nothing to do with whatever prompted the kill. The 2026-07-29 double death was
+> exactly this. Prevention is the attribution rule below: verify a process's own
+> cwd before stopping any app-server, and never act on a process you cannot
+> attribute. This is the second-order cost of an attribution violation — the
+> victim is not the process you killed, it is everything attached to it.
+
 **5. Exclusivity and handover.** Exactly one live session may hold a role; a
 second actas attempt is refused, and that refusal is correct. Replacing a
 session goes through the **graceful drop** — the current holder drops the role
@@ -197,8 +237,22 @@ decision, and the confirmation records it.
 | layer | purpose | cadence |
 | --- | --- | --- |
 | real-time message monitor | inbound agmsg replies, blockers, escalations | continuous (a live attached stream) |
-| blocking-UI pane scan | panes stuck on approval / selection / trust prompts — the failure mode that emits no message at all | sub-minute class |
+| blocking-UI pane scan | panes stuck on approval / selection / trust prompts, **and panes showing a shell prompt where an agent should be** (`agent-absent`) — the failure modes that emit no message at all | sub-minute class |
 | periodic state watchdog | canonical intent-cli/GitHub state vs expected progress; the existing [design-thread watchdog](#design-thread-watchdog-recommended-safety-net) | tens-of-minutes class |
+
+**What the pane scan is looking for.** Two stuck states rank together:
+
+- **blocking dialog** — an approval, selection, or trust prompt waiting for
+  input; handle it under the dialog rules below.
+- **`agent-absent`** — a shell prompt where an agent should be. Recovery is a
+  **shim-based relaunch**: type the launch into the pane's interactive shell
+  (never spawn the executable), recreating the app-server first when that is
+  what died, then run the **full verified-liveness sequence** again. Set the
+  permission mode with the **launch flag** (e.g. `--permission-mode`) rather
+  than switching it afterwards — a workspace manager's synthetic key injection
+  cannot be relied on for mode switching: plain keys are delivered, but modifier
+  chords such as shift+tab are not delivered faithfully (observed across
+  multiple teams).
 
 > **Re-arm across restarts.** Supervision schedulers are session-scoped: a
 > `/loop`, an automation, or an attached monitor dies with the design session
