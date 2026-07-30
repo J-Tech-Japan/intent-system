@@ -2097,9 +2097,12 @@ release automation) creates and publishes the GitHub Release for `v0.6.3`;
 publishing it triggers `release.yml` (`on: release: published`) to build and
 publish the NuGet package and the per-platform binary artifacts. **Then roll
 `eng/version.json` immediately** — `stableVersion → 0.6.3`, `nextVersion →
-0.6.4` — with the DRAFT note stubs in the same commit and a post-roll CI-green
-check, per steps 4–5 of the
-[post-release version roll](#post-release-version-roll-g554--required-immediate).
+0.6.4` — carrying, per **steps 4–6** of the
+[post-release version roll](#post-release-version-roll-g554--required-immediate):
+the **DRAFT note stubs in the same commit** (step 4), the **"Next release
+readiness" section refreshed to the new line in both language mirrors** (step
+5), and a **post-roll green child-main CI check** before the roll counts as
+complete (step 6).
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 

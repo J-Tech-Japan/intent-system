@@ -2230,9 +2230,11 @@ version バンプのマージが `main` に入った後、メンテナ/オペレ
 publish が `release.yml`(`on: release: published`)をトリガーし、NuGet package と
 プラットフォームバイナリ成果物を build・publish します。**その後すぐに
 `eng/version.json` を roll します** — `stableVersion → 0.6.3`、`nextVersion →
-0.6.4` — 同一コミットに DRAFT note スタブを含め、roll 後に CI green を確認する、
-[リリース後の version roll](#リリース後の-version-rollg554--必須即時) のステップ
-4–5 に従います。
+0.6.4` — [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
+**ステップ 4–6** に従い、**同一コミットに DRAFT note スタブ**(ステップ 4)、
+**「次リリース準備」セクションを ja/en 両ミラーで新しいラインへ更新**(ステップ 5)、
+そして roll を完了とみなす前の **roll 後の child main CI green 確認**(ステップ 6)を
+すべて含めます。
 
 ### 削除済みリリースタグ（`v0.3.3`）の再作成
 
