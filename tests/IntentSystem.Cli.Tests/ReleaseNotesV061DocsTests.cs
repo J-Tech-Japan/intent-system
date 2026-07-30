@@ -281,8 +281,17 @@ public sealed class ReleaseNotesV061DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void NextVersionNotes_ExistAsClearlyMarkedDrafts_G557(string language)
+    public void NextVersionNotes_AreEitherAClearlyMarkedDraftOrRealNotes_G558(string language)
     {
+        // G557 created DRAFT stubs at roll time; G558 (release-prep) replaces
+        // them with real notes. Both are legal states of the same file, so
+        // pinning either one by itself would break the moment the other
+        // arrives — the same trap the hardcoded version pair fell into.
+        //
+        // What must always hold is that the file is unambiguously ONE of them:
+        // a stub that says so loudly, or real notes carrying the readiness
+        // gate. A file with neither marker is the dangerous middle — it reads
+        // like a changelog while nobody authored it.
         var policy = RepoVersionPolicySource.Read();
         var path = Path.Combine(
             RepoVersionPolicySource.RepoRoot(), "docs", language, $"release-notes-v{policy.NextVersion}.md");
@@ -291,26 +300,161 @@ public sealed class ReleaseNotesV061DocsTests
 
         var notes = ReadCollapsed(path);
 
-        // The stub must be unmistakably a draft — G475 checks existence, and a
-        // stub that reads like a changelog would be worse than a missing file.
-        Assert.Contains(language == "en" ? "DRAFT" : "DRAFT", notes, StringComparison.Ordinal);
+        var draftBanner = language == "en" ? "**⚠️ DRAFT / UNRELEASED.**" : "**⚠️ DRAFT / 未リリース。**";
+        var isDraft = notes.Contains(draftBanner, StringComparison.Ordinal);
+
+        if (isDraft)
+        {
+            // Stub state: it must refuse to be mistaken for a changelog.
+            Assert.Contains(
+                language == "en" ? "release-prep packet authors the real content" : "release-prep パケットが author します",
+                notes,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                language == "en" ? "must not be treated as a changelog" : "changelog として扱ってはいけません",
+                notes,
+                StringComparison.Ordinal);
+        }
+        else
+        {
+            // Authored state: real notes carry the operator's readiness gate,
+            // which is what a release is cut from.
+            Assert.Contains(
+                language == "en" ? "Release-readiness gate" : "リリース準備ゲート",
+                notes,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                language == "en" ? "Publishing v" : " の publish",
+                notes,
+                StringComparison.Ordinal);
+        }
+
+        // Either way the G475 guard's own two requirements hold, so its
+        // semantics are unchanged across both states.
+        Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.NextVersion}", notes, StringComparison.Ordinal);
+        Assert.Contains($"releases/tag/v{policy.NextVersion}", notes, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void V062Notes_CoverExactlyG555G556G557_WithThePatchRationale_G558(string language)
+    {
+        var notes = ReadCollapsed(Path.Combine(
+            RepoVersionPolicySource.RepoRoot(), "docs", language, "release-notes-v0.6.2.md"));
+
+        // Exactly the three merged slices — no missing, no extra.
+        foreach (var slice in new[] { "G555", "G556", "G557" })
+        {
+            Assert.Contains(slice, notes, StringComparison.Ordinal);
+        }
+
+        foreach (var earlier in new[] { "(G552)", "(G553)", "(G554)" })
+        {
+            Assert.DoesNotContain(earlier, notes, StringComparison.Ordinal);
+        }
+
+        // The bump rationale is stated, not merely labelled.
+        Assert.Contains(language == "en" ? "**patch release**" : "**patch リリース**", notes, StringComparison.Ordinal);
         Assert.Contains(
-            language == "en" ? "**⚠️ DRAFT / UNRELEASED.**" : "**⚠️ DRAFT / 未リリース。**",
-            notes,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            language == "en" ? "release-prep packet authors the real content" : "release-prep パケットが author します",
-            notes,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            language == "en" ? "must not be treated as a changelog" : "changelog として扱ってはいけません",
+            language == "en" ? "nothing here changes a CLI surface" : "CLI サーフェスを 変えるものが何もない",
             notes,
             StringComparison.Ordinal);
 
-        // And it still satisfies the G475 guard's own two requirements, so the
-        // guard's semantics are unchanged rather than relaxed.
-        Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.NextVersion}", notes, StringComparison.Ordinal);
-        Assert.Contains($"releases/tag/v{policy.NextVersion}", notes, StringComparison.Ordinal);
+        // The draft banner is gone — this file is what lifts the stub's own
+        // release block.
+        Assert.DoesNotContain(
+            language == "en" ? "**⚠️ DRAFT / UNRELEASED.**" : "**⚠️ DRAFT / 未リリース。**",
+            notes,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void V062Notes_DescribeEachSliceAccurately_G558(string language)
+    {
+        var notes = ReadCollapsed(Path.Combine(
+            RepoVersionPolicySource.RepoRoot(), "docs", language, "release-notes-v0.6.2.md"));
+
+        if (language == "en")
+        {
+            // G555: the four attribution keys, workspace/folder exclusivity,
+            // the substrate table, and the recovery default.
+            Assert.Contains("workspace label", notes, StringComparison.Ordinal);
+            Assert.Contains("agmsg `(team, role)` file naming", notes, StringComparison.Ordinal);
+            Assert.Contains("unverifiable attribution is read-only", notes, StringComparison.Ordinal);
+            Assert.Contains("Recovery defaults to recreate, not cleanup.", notes, StringComparison.Ordinal);
+
+            // G556: settle delay + three checks, early death, agent-absent,
+            // shared app-server death mode.
+            Assert.Contains("settle delay", notes, StringComparison.Ordinal);
+            Assert.Contains("Early death is a normal mode", notes, StringComparison.Ordinal);
+            Assert.Contains("`agent-absent`", notes, StringComparison.Ordinal);
+            Assert.Contains("takes down **every attached TUI at once**", notes, StringComparison.Ordinal);
+
+            // G557: derived assertions, the stub mechanism, the amended rule.
+            Assert.Contains("Version-agnostic assertions", notes, StringComparison.Ordinal);
+            Assert.Contains("roll-simulation fixture", notes, StringComparison.Ordinal);
+            Assert.Contains("draft-stub mechanism", notes, StringComparison.Ordinal);
+            Assert.Contains("verify child main CI green after pushing", notes, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains("workspace label", notes, StringComparison.Ordinal);
+            Assert.Contains("agmsg の `(team, role)` ファイル命名", notes, StringComparison.Ordinal);
+            Assert.Contains("read-only", notes, StringComparison.Ordinal);
+            Assert.Contains("復旧の既定は cleanup ではなく recreate です。", notes, StringComparison.Ordinal);
+
+            Assert.Contains("settle delay", notes, StringComparison.Ordinal);
+            Assert.Contains("early death は normal mode", notes, StringComparison.Ordinal);
+            Assert.Contains("`agent-absent`", notes, StringComparison.Ordinal);
+            Assert.Contains("attach しているすべての TUI が一斉に落ちます", notes, StringComparison.Ordinal);
+
+            Assert.Contains("version-agnostic な assertion", notes, StringComparison.Ordinal);
+            Assert.Contains("roll シミュレーション fixture", notes, StringComparison.Ordinal);
+            Assert.Contains("DRAFT stub の仕組み", notes, StringComparison.Ordinal);
+            Assert.Contains("child main の CI が green であることを roller が検証", notes, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void V062Notes_KeepThePrepareOnlyContract_AndTheUpgradeSplit_G558(string language)
+    {
+        var notes = ReadCollapsed(Path.Combine(
+            RepoVersionPolicySource.RepoRoot(), "docs", language, "release-notes-v0.6.2.md"));
+
+        Assert.Contains("prepare-only", notes, StringComparison.Ordinal);
+        Assert.Contains("release.yml", notes, StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "## Release-readiness gate (G558)" : "## リリース準備ゲート(G558)",
+            notes,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "## Publishing v0.6.2" : "## v0.6.2 の publish",
+            notes,
+            StringComparison.Ordinal);
+
+        // The upgrade section separates additive guide surfaces from the
+        // corrective release-flow change, so a consumer can tell which applies.
+        Assert.Contains(
+            language == "en" ? "Additive — guidance only, no action needed" : "追加のみ — ガイダンスであり対応不要",
+            notes,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "Corrective — release-flow only" : "是正的 — リリースフローのみ",
+            notes,
+            StringComparison.Ordinal);
+
+        // The post-release roll reminder carries the G557 amendment, so the
+        // next roll does not repeat the incident this release documents.
+        Assert.Contains("0.6.3", notes, StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "in the same commit as" : "同じ commit で",
+            notes,
+            StringComparison.Ordinal);
     }
 
     [Fact]
