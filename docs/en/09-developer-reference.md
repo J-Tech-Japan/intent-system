@@ -2023,63 +2023,37 @@ the channel going forward.
 > and the two steps above close the rest: create the stubs with the roll, and
 > confirm green before calling it done.
 
-### Next release readiness (v0.6.1)
+### Next release readiness (v0.6.3)
 
-**`v0.6.0` shipped** (GitHub Release + NuGet) and the version policy was rolled
-to the `0.6.1` development line — a **patch** bump, not a minor: neither slice in
-this batch ships a new command surface. G553 is a WIP-gate bugfix
-(converged-blocked units no longer starve `host-review-preflight`), and G552
-extends the existing `automation stalled-work` / `automation heartbeat`
-detection surfaces and the orchestrator-thread guide (clarification-backed
-holds, the `design-decision-pending` kind, the periodic design-reminder loop,
-and bounded default authority). Minor stays reserved for new command surfaces
-and broad behavior changes.
+**`v0.6.2` shipped** (GitHub Release + NuGet) and the version policy was rolled
+to the `0.6.3` development line. The v0.6.2 batch was a **patch** bump covering
+G555 (cross-project isolation guide), G556 (verified liveness guide), and G557
+(release-flow hardening: version-agnostic assertions, the draft-stub mechanism,
+and the amended roll rule). Minor stays reserved for new command surfaces and
+broad behavior changes.
 
-The repository is now on the in-development **`0.6.1`** `nextVersion`; G554 is
-**prepare-only** — it bumps the version metadata and docs and adds no publish
-steps. The version-bump merge does **not** create a GitHub Release or tag. After
-it merges and the
-[release-readiness gate](release-notes-v0.6.1.md#release-readiness-gate-g554)
-holds, a **maintainer/operator (or external release automation) creates and
-publishes the GitHub Release** for `v0.6.1`; publishing that Release fires
-`.github/workflows/release.yml` (`on: release: published`), which builds and
-publishes the NuGet package and the per-platform binary artifacts. Full
-changelog and operator checklist:
-[release-notes-v0.6.1.md](release-notes-v0.6.1.md).
+The repository is now on the in-development **`0.6.3`** `nextVersion`. What
+ships in `v0.6.3` is not decided here: the next release-prep packet selects the
+merged slices, authors the real
+[release-notes-v0.6.3.md](release-notes-v0.6.3.md) content over the DRAFT
+stubs, and states the bump rationale. Until then the notes remain stubs and no
+`v0.6.3` GitHub Release may be published.
 
-**To ship in `v0.6.1` (changes since `v0.6.0`):**
-
-- **Design-decision holds are visible and bounded** (G552) — a hold blocked on a
-  design decision is recorded as a clarification artifact through the canonical
-  clarify surface, which now accepts the real question and an optional
-  recommended answer/evidence in the OPEN artifact (no schema change);
-  `automation stalled-work` reports each open clarification as
-  `design-decision-pending` and `automation heartbeat` carries it; and the guide
-  defines bounded default authority — operator-granted, enumerated,
-  evidence-logged, amendable, and never semantic — plus the periodic
-  design-reminder loop and the refined reviewer hold rule.
-- **Queue-blocked units no longer starve the WIP gate** (G553) — an issue whose
-  queue item is in the converged blocked state (`state=blocked` AND non-empty
-  `blocked_by`) is excluded from `in_flight_issues`, with two-sided convergence
-  required, half-converged items still counted and diagnosed, exempted units
-  listed in `wip_exempt_blocked_units`, repo-qualified `linked_issue` linkage,
-  and fail-closed behavior on unreadable host state.
-
-**Release-readiness verification (run before merging the `v0.6.1` version
+**Release-readiness verification (run before merging the `v0.6.3` version
 bump):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.6.0 (published), nextVersion 0.6.1 (to release)
+cat eng/version.json   # stableVersion 0.6.2 (published), nextVersion 0.6.3 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.6.1-<sha>-G55x   (NOT a stale literal)
+#   expected shape: intent-cli 0.6.3-<sha>-G56x   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.6.1.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.6.3.nupkg
 
 # 4. Confirm package metadata (id / command / license / project URL).
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
@@ -2087,15 +2061,13 @@ dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
 ```
 
 After the version-bump merge lands on `main`, a maintainer/operator (or external
-release automation) creates and publishes the GitHub Release for `v0.6.1`;
+release automation) creates and publishes the GitHub Release for `v0.6.3`;
 publishing it triggers `release.yml` (`on: release: published`) to build and
 publish the NuGet package and the per-platform binary artifacts. **Then roll
-`eng/version.json` immediately** — `stableVersion → 0.6.1`, `nextVersion →
-0.6.2` — per step 4 of the
+`eng/version.json` immediately** — `stableVersion → 0.6.3`, `nextVersion →
+0.6.4` — with the DRAFT note stubs in the same commit and a post-roll CI-green
+check, per steps 4–5 of the
 [post-release version roll](#post-release-version-roll-g554--required-immediate).
-The roll is no longer deferred to a later release-prep packet: deferring it is
-exactly the 2026-07-29 defect that broke the preview channel.
-
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 

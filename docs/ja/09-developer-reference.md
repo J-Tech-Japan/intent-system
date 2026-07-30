@@ -2159,76 +2159,50 @@ closeout の 1 ステップであり、飛ばすと preview チャンネルが�
 > から導出するようになり、正しい roll がそれらを壊すことはなくなりました。残りを塞ぐのが
 > 上記 2 ステップです: roll と同時に stub を作り、green を確認してから完了とする。
 
-### 次リリース準備(v0.6.1)
+### 次リリース準備(v0.6.3)
 
-**`v0.6.0` は publish 済み**(GitHub Release + NuGet)で、バージョンポリシーは
-`0.6.1` 開発ラインへ roll されました — これは minor ではなく **patch** バンプです:
-本バッチのどちらのスライスも新しいコマンドサーフェスを出荷しません。G553 は
-WIP-gate のバグ修正(converged-blocked のユニットが `host-review-preflight` を
-枯渇させなくなる)であり、G552 は既存の `automation stalled-work` /
-`automation heartbeat` の検出サーフェスと orchestrator-thread guide を拡張する
-もの(clarification-backed hold、`design-decision-pending` kind、定期 design
-リマインダーループ、bounded default authority)です。minor は新コマンド
-サーフェスと広範な挙動変更のために留保されています。
+**`v0.6.2` は出荷済み**(GitHub Release + NuGet)で、version policy は `0.6.3`
+開発ラインへ roll されました。v0.6.2 バッチは **patch** バンプで、G555
+(cross-project isolation guide)、G556(verified liveness guide)、G557
+(release-flow hardening: version-agnostic assertion・DRAFT スタブ機構・roll
+規則の改訂)をカバーします。minor バンプは新コマンドサーフェスと広範な挙動
+変更のために留保されています。
 
-リポジトリは in-development の **`0.6.1`** `nextVersion` 上にあり、G554 は
-**prepare-only** です — version メタデータと docs をバンプするだけで publish
-ステップを追加しません。version-bump マージは GitHub Release もタグも作成
-しません。マージ後に
-[リリース準備ゲート](release-notes-v0.6.1.md#リリース準備ゲートg554)が成り立った後、
-**メンテナ/オペレーター(または外部のリリース automation)が `v0.6.1` の GitHub
-Release を作成・publish** します。その publish が `.github/workflows/release.yml`
-(`on: release: published`)を発火させ、NuGet package とプラットフォーム別バイナリ
-成果物を build・publish します。完全な changelog とオペレーターチェックリスト:
-[release-notes-v0.6.1.md](release-notes-v0.6.1.md)。
+リポジトリは in-development の **`0.6.3`** `nextVersion` 上にあります。`v0.6.3`
+で何を出荷するかはここでは決めません: 次の release-prep パケットがマージ済み
+スライスを選定し、DRAFT スタブに代えて実際の
+[release-notes-v0.6.3.md](release-notes-v0.6.3.md) を執筆し、バンプ根拠を
+記述します。それまで notes はスタブのままであり、`v0.6.3` の GitHub Release を
+publish してはいけません。
 
-**`v0.6.1` で出荷予定(`v0.6.0` 以降の変更):**
-
-- **design 判断による hold が可視かつ bounded に**(G552) — design の判断で
-  ブロックされた hold は canonical な clarify surface を通じて clarification
-  artifact として記録され、その surface は実際の質問と任意の推奨回答/根拠を
-  OPEN artifact に受け取れるようになりました(schema 変更なし)。
-  `automation stalled-work` は open な clarification を `design-decision-pending`
-  として報告し、`automation heartbeat` がそれを運びます。さらに guide が
-  bounded default authority(オペレーター付与・列挙・証拠ログ・修正可能・
-  決してセマンティックでない)と、定期 design リマインダーループ、refined
-  reviewer hold ルールを定義します。
-- **queue で blocked のユニットが WIP gate を枯渇させない**(G553) — queue item が
-  converged blocked state(`state=blocked` かつ `blocked_by` 非空)にある issue は
-  `in_flight_issues` から除外されます。convergence は two-sided が必須で、
-  half-converged な item はカウントされ続けたうえで診断され、除外されたユニットは
-  `wip_exempt_blocked_units` に列挙され、linkage は repo 修飾された `linked_issue`、
-  読めない host state では fail-closed です。
-
-**リリース準備の検証(`v0.6.1` version bump のマージ前に実行):**
+**リリース準備検証(`v0.6.3` version バンプのマージ前に実行):**
 
 ```bash
-# 1. バージョンポリシーがカットするリリースを記録していることを確認。
-cat eng/version.json   # stableVersion 0.6.0（公開済み）, nextVersion 0.6.1（リリース対象）
+# 1. version policy が release-to-be-cut を記録していることを確認。
+cat eng/version.json   # stableVersion 0.6.2 (published), nextVersion 0.6.3 (to release)
 
-# 2. ビルドして表示バージョン識別子（version + git SHA + G-unit）を確認。
+# 2. build して表示バージョン識別(version + git SHA + G-unit)を確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待形: intent-cli 0.6.1-<sha>-G55x （stale なリテラルではない）
+#   期待される形: intent-cli 0.6.3-<sha>-G56x   (stale literal ではない)
 
-# 3. pack して NuGet package のバージョンがポリシーと一致することを確認。
+# 3. pack して NuGet package バージョンが policy と一致することを確認。
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.6.1.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.6.3.nupkg
 
-# 4. package メタデータ（id / command / license / project URL）を確認。
+# 4. package metadata(id / command / license / project URL)を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
 ```
 
-version-bump マージが `main` に着地した後、メンテナ/オペレーター(または外部の
-リリース automation)が `v0.6.1` の GitHub Release を作成・publish します。その
+version バンプのマージが `main` に入った後、メンテナ/オペレーター(または外部の
+リリース automation)が `v0.6.3` の GitHub Release を作成・publish します。
 publish が `release.yml`(`on: release: published`)をトリガーし、NuGet package と
-プラットフォーム別バイナリ成果物を build・publish します。**その後ただちに
-`eng/version.json` を roll します** — `stableVersion → 0.6.1`、`nextVersion →
-0.6.2` — [リリース後の version roll](#リリース後の-version-rollg554--必須即時)
-のステップ 4 に従います。roll を後続の release-prep パケットへ先送りすることは
-もうしません: 先送りこそが preview チャンネルを壊した 2026-07-29 の不具合です。
-
+プラットフォームバイナリ成果物を build・publish します。**その後すぐに
+`eng/version.json` を roll します** — `stableVersion → 0.6.3`、`nextVersion →
+0.6.4` — 同一コミットに DRAFT note スタブを含め、roll 後に CI green を確認する、
+[リリース後の version roll](#リリース後の-version-rollg554--必須即時) のステップ
+4–5 に従います。
 
 ### 削除済みリリースタグ（`v0.3.3`）の再作成
 
