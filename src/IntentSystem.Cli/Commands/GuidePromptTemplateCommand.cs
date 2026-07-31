@@ -32,7 +32,7 @@ internal static class GuidePromptTemplateCommand
             "Recurring child implementation loop",
             ["<domain>", "<agent>", "<frequency>", "<cwd>", "<owner/repo>"],
             "intent-cli guide workflow task implementation-loop --target-repo <owner/repo> --agent <agent> --frequency <frequency> [--implementation-base <branch>] --format markdown",
-            "Please ask intent-cli for the detailed implementation-loop conditions, then set up a current-thread child implementation loop for domain `<domain>` using `<agent>` every `<frequency>`. cwd is `<cwd>`. target repo is `<owner/repo>`. Do not read local rules or skill files; get exact rules from intent-cli. If the implementation repo cannot read host metadata and its effective PR base branch is not the default, supply it explicitly via `--implementation-base <branch>` (e.g. `develop-v2`) so the loop never falls back to `main`.",
+            "Please ask intent-cli for the detailed implementation-loop conditions, then set up a current-thread child implementation loop for domain `<domain>` using `<agent>` every `<frequency>`. cwd is `<cwd>`. target repo is `<owner/repo>`. Do not read local rules or workflow-restating skill files (the `intent-cli` dispatcher skill from `intent-cli skill install` is exempt); get exact rules from intent-cli. If the implementation repo cannot read host metadata and its effective PR base branch is not the default, supply it explicitly via `--implementation-base <branch>` (e.g. `develop-v2`) so the loop never falls back to `main`.",
             "intent-cli に詳細条件を確認してから、domain `<domain>` の implementation loop を `<agent>` で `<frequency>` 間隔に設定してください。cwd は `<cwd>`、target repo は `<owner/repo>` です。詳細な固定条件は intent-cli から取得してください。実装リポジトリが host metadata を読めず、実効 PR base branch が default でない場合は、`--implementation-base <branch>`（例 `develop-v2`）で明示し、`main` に fallback しないようにしてください。"),
         Template(
             "review-next-slice-loop",
@@ -158,7 +158,8 @@ internal static class GuidePromptTemplateCommand
             ApplyValues(spec.JapanesePrompt, values),
             [
                 "Keep the outer prompt short; detailed fixed conditions must be obtained from intent-cli during execution.",
-                "Do not read local rules, local skill files, or copied prompt files for routine workflow conditions.",
+                "Do not read local rules, local skill files that restate workflow, or copied prompt files for routine workflow conditions.",
+                DispatcherSkillCarveOut.Sentence,
                 "Do not ask intent-cli to launch Claude, Codex, Copilot, or any AI provider."
             ]);
     }
@@ -289,6 +290,14 @@ internal static class GuidePromptTemplateCommand
             writer.WriteLine("```text");
             writer.WriteLine(template.JapanesePrompt);
             writer.WriteLine("```");
+            writer.WriteLine();
+            // G563: notes carry the fixed conditions, including the
+            // dispatcher-skill carve-out. They were structured-output only,
+            // so a markdown reader saw the prohibition without the exemption.
+            foreach (var note in template.Guardrails)
+            {
+                writer.WriteLine($"- {note}");
+            }
         }
     }
 

@@ -153,7 +153,7 @@ internal static class GuideWorkflowTaskIntentInterviewCommand
         "Every question follows the background → question → options → pros/cons → recommendation structure. One focused question per turn. Recommendations are advisory; the operator is the source of truth.",
         "Generated questions are durable. Interview questions live under `intents/<domain>/interview/**`; clarification questions live under `intents/<domain>/clarifications/**`. Never hand-edit these files when a supported `intent-cli interview` or `intent-cli clarify` / `clarification` command exists.",
         "Prefer intent-cli-backed metadata mutation over hand-editing. Ask `intent-cli guide commands list --format json` or `intent-cli automation summary --domain <d> --format json` which command performs the transition, run that command, then validate the result.",
-        "Child implementation loops MUST NOT inspect or mutate parent host queue-state, runs logs, packet directories, intent tree, review-runtime state, local rules, or local skills (G300 / G330 / G333). Interview / clarification artifacts are host-owned.",
+        "Child implementation loops MUST NOT inspect or mutate parent host queue-state, runs logs, packet directories, intent tree, review-runtime state, local rules, or local skills (G300 / G330 / G333). Interview / clarification artifacts are host-owned." + " " + DispatcherSkillCarveOut.BoundaryClause,
         "Never launch AI providers (Claude / Codex / any LLM) from intent-cli. The chat-first model has the human agent driving the conversation."
     };
 

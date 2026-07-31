@@ -52,6 +52,12 @@ public sealed class GuideCoherenceG563Tests
         ("guide prompt-matrix", new[] { "guide", "prompt-matrix" }),
         ("guide workflow task packet-draft", new[] { "guide", "workflow", "task", "packet-draft" }),
         ("guide help", new[] { "guide", "help" }),
+        // G563 repair: the four families the first review found missing.
+        ("guide prompt-template", new[] { "guide", "prompt-template" }),
+        ("guide workflow task intent-interview", new[] { "guide", "workflow", "task", "intent-interview" }),
+        ("guide workflow task issue-publish", new[] { "guide", "workflow", "task", "issue-publish" }),
+        ("guide workflow task bug-to-intent-repair", new[] { "guide", "workflow", "task", "bug-to-intent-repair" }),
+        ("guide collaborate --kind feature-intake", new[] { "guide", "collaborate", "--kind", "feature-intake" }),
     };
 
     [Fact]
@@ -71,6 +77,63 @@ public sealed class GuideCoherenceG563Tests
                 + "that brought it here. Add DispatcherSkillCarveOut.Sentence (or the matching list/boundary form) to "
                 + "this surface.");
         }
+    }
+
+    /// <summary>
+    /// G563 repair: the curated <see cref="ProhibitionSurfaces"/> table proves
+    /// the carve-out actually RENDERS, but a curated list can only guard the
+    /// surfaces someone remembered to add — the first review of this slice
+    /// found four command families the table omitted while the contradiction
+    /// survived in their output.
+    ///
+    /// So the table is no longer the completeness guard. This test discovers
+    /// every command source that writes a blanket local-skill prohibition and
+    /// requires it to reference the shared carve-out. A NEW prohibition
+    /// surface fails here the moment it is added, with no table to update.
+    /// </summary>
+    [Fact]
+    public void EveryCommandSourceThatForbidsLocalSkills_ReferencesTheSharedCarveOut_G563()
+    {
+        var commandsDirectory = Path.Combine(FindRepoRoot(), "src", "IntentSystem.Cli", "Commands");
+        Assert.True(Directory.Exists(commandsDirectory), $"Command source directory not found: {commandsDirectory}");
+
+        // Substrings that constitute a blanket prohibition in rendered output.
+        var prohibitionMarkers = new[] { "local skill file", "local skills", "local skill/" };
+
+        var uncovered = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(commandsDirectory, "*.cs").OrderBy(f => f, StringComparer.Ordinal))
+        {
+            // The carve-out's own definition states the prohibition it exempts.
+            if (string.Equals(Path.GetFileName(file), "DispatcherSkillCarveOut.cs", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // `//` and `///` lines never reach a caller, so a prohibition
+            // described in a doc comment is not a rendered contradiction.
+            var body = string.Join(
+                '\n',
+                File.ReadAllLines(file).Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+
+            if (!prohibitionMarkers.Any(marker => body.Contains(marker, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            if (!body.Contains("DispatcherSkillCarveOut.", StringComparison.Ordinal))
+            {
+                uncovered.Add(Path.GetFileName(file));
+            }
+        }
+
+        Assert.True(
+            uncovered.Count == 0,
+            "These command sources forbid local skills in rendered output but never reference the shared carve-out, so "
+            + "an agent that arrived through the skill installed by `intent-cli skill install` is told to stop using "
+            + "it: "
+            + string.Join(", ", uncovered)
+            + ". Add DispatcherSkillCarveOut.Sentence (prose/rule lists) or .BoundaryClause (G300 / G330 / G333 lines) "
+            + "or the .ForbiddenSourceItem forms (structured forbidden-source lists).");
     }
 
     [Fact]
@@ -285,6 +348,18 @@ public sealed class GuideCoherenceG563Tests
             default:
                 return null;
         }
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = AppContext.BaseDirectory;
+        while (dir is not null && !Directory.Exists(Path.Combine(dir, "src")))
+        {
+            dir = Path.GetDirectoryName(dir);
+        }
+
+        Assert.NotNull(dir);
+        return dir!;
     }
 
     private static string Render(string[] args)
