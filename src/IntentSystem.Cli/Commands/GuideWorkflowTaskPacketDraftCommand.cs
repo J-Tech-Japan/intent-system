@@ -97,7 +97,11 @@ internal static class GuideWorkflowTaskPacketDraftCommand
         new IntentMaintenancePrompt { Id = "adr-candidate", Prompt = "Does this slice make an ADR-worthy decision (a hard-to-reverse choice, a rejected alternative, a new constraint)? If so, name the decision title and target ADR path; otherwise explicitly decline (`adr.required: false`). ADRs are not required for every packet." },
         new IntentMaintenancePrompt { Id = "diagram-candidate", Prompt = "Does a concept / workflow / topology / state diagram need to change because of this slice? Name the diagram type and target path, or decline (`diagram.required: false`)." },
         new IntentMaintenancePrompt { Id = "docs-update", Prompt = "Which user-facing docs must change so the documented behavior matches this slice once it lands? List target doc paths, or decline (`docs.required: false`)." },
-        new IntentMaintenancePrompt { Id = "closeout-learning", Prompt = "What knowledge should be written back AFTER this slice lands (intent tree, ADR, diagram, docs)? Set `closeout_learning.write_back_required` and name the write-back targets so review / closeout can verify it happened or open a follow-up packet." }
+        new IntentMaintenancePrompt { Id = "closeout-learning", Prompt = "What knowledge should be written back AFTER this slice lands (intent tree, ADR, diagram, docs)? Set `closeout_learning.write_back_required` and name the write-back targets so review / closeout can verify it happened or open a follow-up packet." },
+        // G564: the declarations above are only worth reading if they are
+        // honest — an undeclared obligation is invisible to closeout, to
+        // review, and to `automation stalled-work`.
+        new IntentMaintenancePrompt { Id = "co-evolution-duty", Prompt = IntentTreeCoEvolutionDuty.Duty + " " + IntentTreeCoEvolutionDuty.AuthoringRule + " Whatever you declare here is enforced after the slice lands: a closed-out unit with a declared-but-unrecorded write-back becomes an aging `knowledge-writeback-pending` item, cleared only by `intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --write`." }
     };
 
     /// <summary>

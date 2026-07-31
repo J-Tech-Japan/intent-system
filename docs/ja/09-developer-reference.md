@@ -353,6 +353,28 @@ queue-state、`runs.jsonl` を変更することは一切ありません — inf
   ディスク上に置くのは guide の clarification-backed hold ルールです — agmsg
   だけの hold は contract violation であり、hold が実在するのにこの kind が
   出ないなら、それは artifact が記録されなかったということです。
+- `knowledge-writeback-pending` (G564) — **closeout 済み**の unit
+  (`runs.jsonl` に `closeout-recorded` イベントがある)で、packet が knowledge
+  write-back を**宣言**しているのに(`knowledge_updates.*.required: true` —
+  `intent_tree` / `adr` / `diagram` / `docs` — または
+  `closeout_learning.write_back_required: true`)、
+  `.intent-cli/knowledge-writebacks/<unit>/record.json` に**記録が無い**もの。
+  item は closeout からの age(最も**早い** `closeout-recorded` を基準にするため、
+  closeout のリトライで age がリセットされることはありません)、宣言された facet、
+  `declared_write_back_targets` を持ち、`recommended_action` は
+  `intent-cli automation knowledge-writeback-record` を名指しします。何も required
+  と宣言していない unit は決して現れません — 辞退は正当な回答であり、この kind は
+  「破られた約束」を検出するものであって「熱意の不足」を検出するものではありません。
+  両方向に fail closed です: 読めない packet 宣言、読めない `runs.jsonl`、読めない
+  既存レコードはいずれも「保留なし」と解釈せず、**パス付き**で `excluded[]`
+  (`knowledge-metadata-unreadable`)に出ます。本機能の出荷前に closeout された
+  unit は既定で対象外です(floor: `2026-08-01T00:00:00Z`)。
+  `--knowledge-writeback-since <iso-8601>` で明示的に遡れます。ここでは intent の
+  content を書きません — tree を書くのは design です(G300)。この kind は記録されて
+  いない義務を可視化し、経過時間を刻むだけです。field evidence はリリース前監査
+  (2026-07-31): node 09 は実装前の設計を記述したまま、node 02 は docs が実装する 7 つの
+  リリースフロー規則を 1 つも記録しておらず、node 08 は wake contract に対して数
+  リリース分遅れていました — 構造的シグナルの無いまま数週間の drift です。
 
 **informational なカテゴリ (G533)** — `is_informational: true`、
 `recommended_action` は（transition コマンドではなく）説明的な prose、
@@ -611,6 +633,39 @@ actionable な kind では `— recommended:` コマンド ``、informational �
 kind では `— FYI:` prose `` で終わります — そのため読み手（人間でも
 orchestrator でも）が「transition は不要」を actionable な次コマンドと
 取り違えることはありません。
+
+### intent-tree の共進化: 実施した knowledge write-back を記録する (G564)
+
+`intent-cli automation knowledge-writeback-record --execution-unit <u> --commit <host-commit-sha> [--target <path>]... [--note <text>] [--dry-run|--write] [--format json|markdown]`
+
+は、packet が**宣言した** write-back を実施したことを、host commit を証跡として
+記録します。上記 `knowledge-writeback-pending` を消す側の半分です。
+
+- **記録するだけ。** write-back 自体は design の host 側の行為です。このコマンドは
+  intent の content を書かず、intent tree を変更しません(G300)。artifact の手編集は
+  正規の経路ではありません。
+- **artifact。** `.intent-cli/knowledge-writebacks/<unit>/record.json`(execution
+  unit ごとに 1 つ): `artifact_kind` / `execution_unit` / `host_commit` /
+  `recorded_at` / `targets` / `note`。
+- **冪等。** 同一 commit(大文字小文字は区別しない)の再記録は no-op success —
+  `already_recorded: true`、`applied: false`、ファイルはバイト単位で不変です。
+  closeout をリトライしても `recorded_at` が実際のイベントからずれることはありません。
+- **fail closed。** `.intent-cli/issues/<u>/packet.yaml` を持たない execution unit は
+  UNKNOWN として拒否。7〜40 文字の 16 進 SHA でない証跡は拒否。**異なる** commit を
+  持つ既存レコードは上書きせず拒否(証跡を黙って差し替えることは、監査証跡を監査
+  証跡でなくすことです)。読めない既存レコードも上書きせず拒否します。
+- **既定は `--dry-run`。** 永続化には `--write` が必要です。
+- 何も required と宣言していない unit への記録も成功しますが、結果に警告が付きます。
+  そこで tree が本当に何かを負っていたなら、packet の宣言が不誠実だったということで、
+  直すべき欠陥はそちらです。
+
+この責務は本リファレンスだけでなく guide 側にも書かれています: design thread の
+playbook(`guide orchestrator-thread`)、packet 作成時のプロンプト
+(`guide workflow task packet-draft`)、closeout プロンプト(`guide closeout run` の
+Stage 5b)がいずれも同じ文言を単一ソースから共有しており、互いに drift できません。
+orchestrator の closeout レポートは、packet が宣言した write-back と、その各々が
+recorded か pending かを列挙します — packet metadata の read-only な伝播であり、
+host の変更は行いません。
 
 ### 行き詰まった published issue を retire する (G525)
 
