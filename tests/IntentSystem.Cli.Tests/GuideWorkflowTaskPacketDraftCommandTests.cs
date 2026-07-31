@@ -112,8 +112,13 @@ public sealed class GuideWorkflowTaskPacketDraftCommandTests
         var root = document.RootElement;
         Assert.True(root.TryGetProperty("intent_maintenance_prompts", out var prompts));
         var ids = prompts.EnumerateArray().Select(p => p.GetProperty("id").GetString()).ToArray();
+        // G564 extends the G461 five with the co-evolution duty: the four
+        // declarations above are only worth reading if they are honest, so the
+        // duty and the authoring rule are asked at the same moment, in the same
+        // list, rather than living only in a separate guide an author may not
+        // open. The G461 five keep their ids and their order.
         Assert.Equal(
-            new[] { "intent-placement", "adr-candidate", "diagram-candidate", "docs-update", "closeout-learning" },
+            new[] { "intent-placement", "adr-candidate", "diagram-candidate", "docs-update", "closeout-learning", "co-evolution-duty" },
             ids);
         // Each prompt carries actionable text.
         foreach (var p in prompts.EnumerateArray())

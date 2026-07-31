@@ -962,6 +962,11 @@ internal static class GuideOrchestratorThreadCommand
                     "Send the orchestrator a state update or a nudge (start/resume); do not drive implementation/review yourself.",
                     "Do NOT directly mutate implementation/review work, labels, or host metadata — that is the orchestrator/receivers' job through intent-cli.",
                     "Summarize ONLY human-needed items to the human; keep routine progress internal.",
+                    // G564: the one design duty that is NOT delegable to the
+                    // orchestrator — the tree is written by design, and only
+                    // design can discharge it.
+                    IntentTreeCoEvolutionDuty.Duty,
+                    IntentTreeCoEvolutionDuty.CloseoutCheck,
                 },
                 IdleDiagnostic = new[]
                 {
@@ -1347,6 +1352,16 @@ internal static class GuideOrchestratorThreadCommand
                     + "\"design_alignment_checked\":true,\"design_alignment_sources_checked\":[\"packet\","
                     + "\"review-context\",\"intent-tree\",\"adr-decision-notes\",\"relevant-docs\"],"
                     + "\"managed_worktree_policy\":\"compliant — .intent-cli/worktrees/review-<unit>, removed after review\"}",
+                CloseoutKnowledgeWriteBackRule =
+                    "G564 — closeout reports NAME the packet's declared knowledge write-backs: for every "
+                    + "`knowledge_updates.*.required: true` facet and `closeout_learning.write_back_required: true`, "
+                    + "the report to the design thread lists the facet, its declared target paths, and whether it is "
+                    + "`recorded` (with the host commit) or `pending`. A closed-out unit whose declared write-back has "
+                    + "no record is an aging `knowledge-writeback-pending` item in `automation stalled-work` / "
+                    + "`automation heartbeat`, cleared only by `intent-cli automation knowledge-writeback-record "
+                    + "--execution-unit <unit> --commit <host-sha> --write`. This is read-only propagation of packet "
+                    + "metadata: the orchestrator reports the obligation, design performs the write-back, and no thread "
+                    + "here mutates host intent content.",
                 ReviewIncompleteRule =
                     "A review `completed` reply that omits `design_alignment_checked: true` and the checked-source list "
                     + "is INCOMPLETE — the orchestrator does not route merge/closeout on that reply alone. The only "
@@ -5191,4 +5206,14 @@ internal sealed record OrchestratorReplyContract
 
     [JsonPropertyName("review_incomplete_rule")]
     public required string ReviewIncompleteRule { get; init; }
+
+    /// <summary>
+    /// G564: the closeout report is the only place design reliably learns
+    /// that a packet promised a write-back, so it must NAME the declared
+    /// facets/targets and their recorded-or-pending state. Read-only
+    /// propagation of packet metadata — the orchestrator never mutates host
+    /// intent content.
+    /// </summary>
+    [JsonPropertyName("closeout_knowledge_write_back_rule")]
+    public required string CloseoutKnowledgeWriteBackRule { get; init; }
 }

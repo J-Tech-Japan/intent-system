@@ -105,16 +105,21 @@ Stage 5 — apply queue/runs state (write):
    - If the result has an `error` field, stop and report the error.
    - Confirm: mode is `write`, queue_state_after is `completed`.
 
-Stage 5b — knowledge writeback check (G461; read-only):
-1. If the packet carried optional `closeout_learning` metadata with `write_back_required: true`, confirm the expected intent-tree / ADR / diagram / docs writeback either landed in the merged PR or was captured as a follow-up packet.
-2. If the writeback was expected but neither landed nor captured, report `knowledge-writeback-pending` with the named `write_back_targets` so the design thread can open a follow-up packet. Do not block the closeout queue write on this.
-3. If the packet declined knowledge maintenance (or carried no such metadata — legacy packets), this stage is a no-op. Packet-time intent maintenance is the normal path; `improve` (G456 / G460) remains the later safety net.
+Stage 5b — knowledge writeback check (G461 / G564; SAME CADENCE as the closeout):
+{IntentTreeCoEvolutionDuty.Duty}
+1. Read the packet's declarations: any `knowledge_updates.*.required: true` (intent_tree / adr / diagram / docs) or `closeout_learning.write_back_required: true`. If every one is false or absent, this stage is a no-op — declining is a legitimate answer, and legacy packets carry no such block.
+2. If anything was declared, DESIGN performs the write-back in the host repo now — in this same closeout wake, not ""later"". intent-cli never writes intent content; the tree is written by design.
+3. Then RECORD it, with the host commit as evidence: `intent-cli automation knowledge-writeback-record --execution-unit <execution-unit> --commit <host-commit-sha> [--target <path>]... --write`. The command is idempotent for the same commit and fails closed on an unknown unit or non-SHA evidence.
+4. Until a record exists, the unit stays visible as a `knowledge-writeback-pending` item in `intent-cli automation stalled-work` / `automation heartbeat`, with its age measured from closeout and its declared target paths named. Merging and closing the PR do NOT clear it.
+5. Do not block the closeout queue write on this — but do not report the closeout as complete while the declared write-back is unrecorded either; a still-pending item is part of the closeout report (below).
+6. {IntentTreeCoEvolutionDuty.AuthoringRule}
 
 Stage 6 — parent commit/push checklist (required last step):
 1. Stage parent durable state: `git add .intent-cli/queue-state.json .intent-cli/runs.jsonl submodules/<child-repo-name>`.
 2. Commit: `git commit -m ""closeout: PR #{targetRepoPlaceholder}#<n> — <execution-unit>""`.
 3. Push: `git push`.
 4. Report continuation hint from the closeout result (`next-slice-ready`, `no-actionable-item`, or `clarification-required`).
+5. G564: the closeout report to the design thread NAMES the packet's declared write-backs — each declared facet and target path, and whether it is `recorded` (with the host commit) or `pending`. Design cannot act on an obligation it is never told about, so a closeout report that omits a declared-but-unrecorded write-back is incomplete.
 
 Hard rules:
 - Do not use the `intent-closeout` skill file or any local skill file.

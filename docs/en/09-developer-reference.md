@@ -353,6 +353,30 @@ is always a runnable `intent-cli` command):
   guide's clarification-backed hold rule is what puts the artifact on disk
   for this kind to read — an agmsg-only hold is a contract violation, and if
   the hold is real but this kind is absent, the artifact was never recorded.
+- `knowledge-writeback-pending` (G564) — a **closed-out** unit (a
+  `closeout-recorded` event in `runs.jsonl`) whose packet **declared** a
+  knowledge write-back — any `knowledge_updates.*.required: true`
+  (`intent_tree` / `adr` / `diagram` / `docs`) or
+  `closeout_learning.write_back_required: true` — with **no write-back
+  record** at `.intent-cli/knowledge-writebacks/<unit>/record.json`. The item
+  carries the age from closeout (the EARLIEST `closeout-recorded` event, so a
+  retried closeout cannot reset it), the declared facets, and
+  `declared_write_back_targets`; `recommended_action` names
+  `intent-cli automation knowledge-writeback-record`. A unit that declared
+  nothing required never appears — declining is a legitimate answer, and this
+  kind detects broken promises, not missing enthusiasm. Fails closed in both
+  directions: an unreadable packet declaration, an unreadable `runs.jsonl`, and
+  an unreadable existing record all go to `excluded[]` **with their path**
+  (`knowledge-metadata-unreadable`) rather than being read as "nothing
+  pending". Units closed out before this shipped are out of scope by default
+  (floor: `2026-08-01T00:00:00Z`); `--knowledge-writeback-since <iso-8601>`
+  opts into scanning further back. Nothing here writes intent content — the
+  tree is written by design (G300); this kind only makes an unrecorded
+  obligation visible and aging. Field evidence: the pre-v0.7.0 audit
+  (2026-07-31), where node 09 still described a pre-implementation design,
+  node 02 recorded none of the seven release-flow rules the docs implement,
+  and node 08 lagged the wake contract by releases — weeks of drift with no
+  structural signal.
 
 **Informational categories (G533)** — `is_informational: true`,
 `recommended_action` is descriptive prose (never a transition command), age
@@ -588,6 +612,60 @@ wake procedure and from an external heartbeat are separate follow-up slices.
 ` command `` for an actionable kind or `— FYI: ` prose `` for an
 informational one, so a reader (human or orchestrator) can never mistake
 "no transition needed" for an actionable next command.
+
+### Intent-tree co-evolution: recording a performed knowledge write-back (G564)
+
+`intent-cli automation knowledge-writeback-record --execution-unit <u> --commit <host-commit-sha> [--target <path>]... [--note <text>] [--dry-run|--write] [--format json|markdown]`
+
+records that the write-backs a packet **declared** were performed, with the
+host commit as evidence. It is the clearing half of
+`knowledge-writeback-pending` above.
+
+- **Records only.** The write-back itself is design's host-side act — this
+  command never writes intent content and never mutates the intent tree
+  (G300). Hand-editing the artifact is not the path.
+- **Artifact.** `.intent-cli/knowledge-writebacks/<unit>/record.json`, one per
+  execution unit: `artifact_kind`, `execution_unit`, `host_commit`,
+  `recorded_at`, `targets`, `note`.
+- **Idempotent.** Re-recording the SAME commit (case-insensitively) is a
+  no-op success — `already_recorded: true`, `applied: false`, and the file is
+  left byte-identical, so a retried closeout wake cannot move `recorded_at`
+  off the real event.
+- **Fails closed.** An execution unit with no `.intent-cli/issues/<u>/packet.yaml`
+  is UNKNOWN and refused; evidence that is not a 7–40 character hexadecimal
+  SHA is refused; an existing record with a DIFFERENT commit is refused rather
+  than overwritten (replacing evidence silently is how an audit trail stops
+  being one); an existing record that cannot be read is refused rather than
+  clobbered.
+- **The execution unit is a canonical identifier, validated before any
+  filesystem access.** ASCII letters, digits, `-`, `_` and `.`, never leading
+  with `.` and never containing `..` — which structurally excludes path
+  separators, rooted paths, drive/ADS colons, dot-segments, whitespace, and
+  control characters. Both derived paths (the packet and the record) are then
+  re-checked for containment beneath `.intent-cli/issues` and
+  `.intent-cli/knowledge-writebacks`. The same validation is applied to
+  execution units read out of `runs.jsonl` by the detector, since a runs log is
+  data rather than a trusted identifier; a non-canonical unit there is reported
+  in `excluded[]` and no path is derived from it.
+- **A record is evidence only for the unit it names.** On every consumption —
+  the detector's clearing path and the recorder's idempotency/refusal path
+  alike — the record's embedded `execution_unit` must equal the unit it is
+  stored under, and `host_commit` must be SHA-shaped. A record under
+  `…/G564/record.json` declaring `execution_unit: G999`, or carrying evidence
+  that is not a commit, is reported as unreadable-with-path rather than
+  clearing `knowledge-writeback-pending`.
+- **`--dry-run` is the default.** `--write` is required to persist.
+- Recording against a unit that declared nothing required still succeeds, but
+  the result carries a warning: if the tree genuinely owed something there,
+  the packet's declaration was dishonest, and that is the defect to fix.
+
+The duty this enforces is stated in the guides rather than only here: the
+design-thread playbook (`guide orchestrator-thread`), the packet-authoring
+prompts (`guide workflow task packet-draft`), and the closeout prompt
+(`guide closeout run`, Stage 5b) all carry it, single-sourced so they cannot
+drift apart. The orchestrator's closeout report to the design thread
+enumerates the packet's declared write-backs and whether each is recorded or
+pending — read-only propagation of packet metadata, no host mutation.
 
 ### Retiring a stuck published issue (G525)
 

@@ -11,21 +11,22 @@
 
 ## What's in v0.7.0
 
-v0.7.0 covers exactly the four slices merged after `v0.6.2`: **G559**,
-**G560**, **G561**, and **G563**.
+v0.7.0 covers exactly the five slices merged after `v0.6.2`: **G559**,
+**G560**, **G561**, **G563**, and **G564**.
 
 **Why minor, not patch.** The documented policy reserves a minor bump for a new
 command surface. G559 adds one: `intent-cli skill list | install | diff` is a
 new top-level command group, not an extension of an existing one. That alone
-decides it — G560, G561, and G563 would each have been a patch on their own. Nothing
+decides it — G560, G561, G563, and G564 would each have been a patch on their own. Nothing
 is removed or renamed, so the bump is minor rather than major: every v0.6.x
 command, argument, and flag keeps its shape. The package id remains
 `JTechJapan.IntentSystem.Cli`; there are no package id, license, or workflow-
 semantics changes.
 
-The headline is the skill surface. The other three close release-flow and
-publish-priority machinery gaps that each cost a real incident, and reconcile
-the guide corpus with the skill this release ships.
+The headline is the skill surface. The other four close release-flow and
+publish-priority machinery gaps that each cost a real incident, reconcile the
+guide corpus with the skill this release ships, and make intent-tree
+co-evolution enforceable instead of aspirational.
 
 ### Cross-platform agent skill, installed by one command (G559)
 
@@ -166,6 +167,53 @@ per-receiver delegation cap instead of the superseded "at most one message"
 rule; and the provisioning Authority-boundary sentence enumerates the same four
 MAY-answer classes the supervision section grants.
 
+### A stale intent tree is now visible work, not a silent fault (G564)
+
+The same pre-release audit that produced G563 is the evidence for this one: G559
+shipped while intent-tree node 09 still described a pre-implementation design,
+node 02 recorded none of the seven release-flow rules the docs implement, and
+node 08 lagged the wake contract by releases. Development moved for weeks with
+**no structural signal** that the tree was stale — a manual, operator-ordered
+audit was the only detector, and it cost a full review cycle immediately before
+a release.
+
+The ingredients already existed and nothing connected them: packets declare
+`knowledge_updates.*.required` and `closeout_learning.write_back_required`, and
+the write-back itself happens as a host commit the child repo never sees. No
+record said "done", so nothing could say "not done".
+
+**Recording.** A new subcommand states that a declared write-back was performed,
+with the host commit as evidence:
+
+```bash
+intent-cli automation knowledge-writeback-record \
+  --execution-unit G564 --commit <host-commit-sha> \
+  --target intents/<domain>/intent-tree/means/03-state-and-audit-strategy.md --write
+```
+
+It is idempotent for the same commit, refuses a *different* commit rather than
+overwriting evidence, and fails closed on an unknown execution unit or
+non-SHA evidence. `--dry-run` is the default. It records only — the tree is
+written by design, never by tooling.
+
+**Detection.** `automation stalled-work` gains a `knowledge-writeback-pending`
+kind, carried by `automation heartbeat`: a closed-out unit whose packet declared
+a write-back with no record becomes an actionable, aging item that names the
+declared facets and target paths and recommends the recording command. A unit
+that declared nothing required never appears; unreadable packet metadata or an
+unreadable record is reported in `excluded` **with its path**, never silently
+read as "nothing pending". Units closed out before this shipped are out of scope
+by default (`--knowledge-writeback-since <iso-8601>` opts into scanning further
+back).
+
+**Duty.** The guides now state the operator's 2026-07-31 ruling directly: the
+intent tree moves *with* development, and leaving it unupdated while
+implementation advances is a serious fault in its own right. Packet-authoring
+guidance requires honest declarations for slices that add a surface or change
+behavior; closeout guidance performs and records the write-back in the **same**
+wake; and the orchestrator's closeout report to the design thread enumerates the
+packet's declared write-backs and whether each is recorded or pending.
+
 ## Install
 
 ```bash
@@ -196,6 +244,12 @@ and release flows**. No command, argument, or flag was removed or renamed.
   `--clear --pre-publish`; the existing two-sided block/unblock path is
   unchanged. `clarify open` now succeeds on packets it previously rejected;
   packets it previously accepted are validated exactly as before.
+- **Additive — write-back recording and detection (G564).** `automation
+  knowledge-writeback-record` is a new subcommand, and `automation stalled-work`
+  / `automation heartbeat` gain the `knowledge-writeback-pending` kind. Existing
+  kinds, thresholds, and output fields are unchanged. Nothing is reported
+  retroactively: only units closed out after this release can produce the new
+  item, so an upgrade does not light up historical units.
 - **Corrective — release flow only.** G560 changes how the repository's own
   documentation guards are asserted and completes the post-release roll rule. It
   affects maintainers cutting a release, not consumers of the CLI.
@@ -208,8 +262,9 @@ These items must hold **before the GitHub Release for `v0.7.0` is published**.
 This gate fails closed — if any item is unmet, do not publish the Release yet.
 
 - [ ] Every release-bound packet is **complete and its PR merged to `main`**:
-      G559 (PR #1224), G560 (PR #1222), G561 (PR #1226), and G563
-      (PR #1230), plus the G562 release-prep (PR #1228). Confirm on the
+      G559 (PR #1224), G560 (PR #1222), G561 (PR #1226), G563
+      (PR #1230), and G564 (PR #1232), plus the G562 release-prep
+      (PR #1228). Confirm on the
       host/review side via the host queue-state /
       GitHub PR state — the child implementation loop must not read parent
       queue-state, so this is a host-owned precondition.
@@ -261,6 +316,10 @@ Post-release verification (after the GitHub Release is published and
 - [ ] **Skill smoke** (G559): `intent-cli skill list` names the `intent-cli`
       skill and every target/scope, and `intent-cli skill install --target all`
       places `SKILL.md` in each platform's own location.
+- [ ] **Write-back surface smoke** (G564): `intent-cli automation
+      knowledge-writeback-record --help` prints its usage, and
+      `intent-cli automation stalled-work --help` lists
+      `--knowledge-writeback-since`.
 - [ ] **ROLL `eng/version.json` NOW**, per the G554 rule as amended by G557 and
       completed by G560: `stableVersion → 0.7.0`, `nextVersion → 0.7.1`, **in
       the same commit as new DRAFT `release-notes-v0.7.1.md` stubs (EN/JA)**,

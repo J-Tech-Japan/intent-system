@@ -311,6 +311,55 @@ internal static class AutomationStalledWorkCommand
     /// </summary>
     public const string KindDesignDecisionPending = "design-decision-pending";
 
+    /// <summary>
+    /// G564: a CLOSED-OUT unit whose packet DECLARED a knowledge write-back
+    /// (<c>knowledge_updates.*.required</c> or
+    /// <c>closeout_learning.write_back_required</c>) with no
+    /// <see cref="KnowledgeWriteBackRecord"/> on disk — the promised intent-tree
+    /// / ADR / diagram / docs update either did not happen or was never
+    /// recorded, and until it is recorded the two are indistinguishable.
+    /// ACTIONABLE: <c>recommended_action</c> names the recording command and
+    /// the declared target paths. Nothing here writes intent content — the
+    /// write-back is design's host-side act (G300); this kind only makes its
+    /// absence visible and aging.
+    ///
+    /// Field evidence (pre-v0.7.0 audit, 2026-07-31): G559 shipped while node
+    /// 09 still described a pre-implementation design; node 02 recorded none of
+    /// the seven release-flow rules the docs implement; node 08 lagged the wake
+    /// contract by releases. Weeks of drift with NO structural signal — a
+    /// manual, operator-ordered audit was the only detector, and it cost a full
+    /// review cycle immediately before a release. The ingredients already
+    /// existed (packets declare the obligation; write-backs happen as host
+    /// commits) but nothing said "done", so nothing could say "not done".
+    /// </summary>
+    public const string KindKnowledgeWritebackPending = "knowledge-writeback-pending";
+
+    /// <summary>
+    /// G564: a closed-out unit's write-back metadata — its packet's G461
+    /// declaration, the runs log the closeout is read from, or an existing
+    /// write-back record — is present but unreadable. Reported here WITH the
+    /// path rather than skipped: unreadable evidence is not evidence of a
+    /// cleared obligation, and silently downgrading it to "nothing pending" is
+    /// exactly the false all-clear this kind exists to prevent.
+    /// </summary>
+    public const string ReasonKnowledgeMetadataUnreadable = "knowledge-metadata-unreadable";
+
+    /// <summary>
+    /// G564: units closed out BEFORE this detection shipped are out of scope
+    /// (the pre-v0.7.0 backlog was cleared by the 2026-07-31 operator audit),
+    /// so the scan has a floor: a closeout recorded before this instant never
+    /// produces an item. Override with
+    /// <c>--knowledge-writeback-since &lt;iso-8601&gt;</c> to scan further back
+    /// deliberately — retroactive detection is a choice the operator makes, not
+    /// a default that lights up every historical unit on the first wake after
+    /// an upgrade.
+    /// </summary>
+    public static readonly DateTimeOffset KnowledgeWriteBackActivationUtc =
+        new(2026, 8, 1, 0, 0, 0, TimeSpan.Zero);
+
+    /// <summary>G564: the closeout event this detection reads as "the unit is closed out".</summary>
+    private const string CloseoutRecordedEvent = "closeout-recorded";
+
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
 
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
@@ -322,7 +371,7 @@ internal static class AutomationStalledWorkCommand
     };
 
     private const string UsageLine =
-        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--format json|markdown]";
+        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--knowledge-writeback-since <iso-8601>] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -336,7 +385,7 @@ internal static class AutomationStalledWorkCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var domain, out var repo, out var staleMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var repairSilentMinutes, out var format, out var error))
+        if (!TryParseArguments(args, out var domain, out var repo, out var staleMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var repairSilentMinutes, out var knowledgeWriteBackSince, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -346,7 +395,7 @@ internal static class AutomationStalledWorkCommand
         AutomationStalledWorkResult result;
         try
         {
-            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes, repairSilentMinutes);
+            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes, repairSilentMinutes, knowledgeWriteBackSince);
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
@@ -389,7 +438,8 @@ internal static class AutomationStalledWorkCommand
         int staleMinutes,
         int claimedSilentMinutes = DefaultClaimedSilentMinutes,
         int backlogIdleMinutes = DefaultBacklogIdleMinutes,
-        int repairSilentMinutes = DefaultRepairSilentMinutes)
+        int repairSilentMinutes = DefaultRepairSilentMinutes,
+        DateTimeOffset? knowledgeWriteBackSince = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
@@ -413,6 +463,15 @@ internal static class AutomationStalledWorkCommand
         CollectClaimedButSilent(context, domain, candidateDomains, openIssues, openPrs, repo, now, claimedSilentMinutes, items, excluded, warnings);
         CollectBacklogReadyIdle(context, domain, candidateDomains, openIssues, openPrs, repo, now, backlogIdleMinutes, items, excluded);
         CollectDesignDecisionPending(context, domain, candidateDomains, repo, now, items, excluded);
+        CollectKnowledgeWritebackPending(
+            context,
+            domain,
+            candidateDomains,
+            repo,
+            now,
+            knowledgeWriteBackSince ?? KnowledgeWriteBackActivationUtc,
+            items,
+            excluded);
 
         var filtered = items
             .Where(item => item.AgeMinutes >= staleMinutes)
@@ -1651,6 +1710,218 @@ internal static class AutomationStalledWorkCommand
     }
 
     /// <summary>
+    /// G564: closed-out units whose DECLARED knowledge write-back has no
+    /// record. The closeout fact comes from the runs log
+    /// (<c>closeout-recorded</c>, written by <c>closeout pr --write</c>), the
+    /// obligation from the packet's own G461 declaration, and the clearance
+    /// from <see cref="KnowledgeWriteBackRecord"/>. A unit that declared
+    /// nothing required is silent — declining is a legitimate answer, and this
+    /// detects broken promises, not missing enthusiasm.
+    /// </summary>
+    private static void CollectKnowledgeWritebackPending(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
+        string repo,
+        DateTimeOffset now,
+        DateTimeOffset since,
+        List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded)
+    {
+        var runLogPath = context.GetRunLogPath();
+        if (!File.Exists(runLogPath))
+        {
+            // No runs log in this checkout — no closeout has been recorded
+            // here, so there is no obligation to have broken.
+            return;
+        }
+
+        IReadOnlyList<RunEvent> events;
+        try
+        {
+            events = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException or NotSupportedException)
+        {
+            excluded.Add(new StalledWorkExcluded
+            {
+                Kind = KindKnowledgeWritebackPending,
+                ExecutionUnit = string.Empty,
+                Issue = null,
+                Pr = null,
+                Reason = ReasonKnowledgeMetadataUnreadable,
+                Detail =
+                    $"the runs log `{runLogPath}` could not be read: {exception.Message}. Closed-out units cannot be "
+                    + "enumerated, so a pending knowledge write-back may exist and be invisible — repair the log "
+                    + "rather than reading this as a clean pipeline.",
+            });
+            return;
+        }
+
+        var closeouts = events
+            .Where(runEvent =>
+                string.Equals(runEvent.Event, CloseoutRecordedEvent, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(runEvent.ExecutionUnit))
+            .GroupBy(runEvent => runEvent.ExecutionUnit, StringComparer.Ordinal)
+            // The EARLIEST closeout is when the obligation started; a repeated
+            // closeout (retry, re-application) must not reset the item's age.
+            .Select(group => (Unit: group.Key, ClosedAt: group.Min(runEvent => runEvent.Ts)))
+            .OrderBy(entry => entry.Unit, StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var (executionUnit, closedAt) in closeouts)
+        {
+            if (closedAt < since)
+            {
+                // Closed out before this detection shipped: out of scope by
+                // contract (see KnowledgeWriteBackActivationUtc).
+                continue;
+            }
+
+            // G564 review repair: the unit here comes from the runs log, which
+            // is data, not a trusted identifier. Validate BEFORE any path is
+            // built from it — a traversal/rooted/malformed unit is reported
+            // with its own diagnostic rather than resolved and stat'ed.
+            if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out var unitError))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindKnowledgeWritebackPending,
+                    ExecutionUnit = executionUnit,
+                    Issue = null,
+                    Pr = null,
+                    Reason = ReasonKnowledgeMetadataUnreadable,
+                    Detail =
+                        $"a `{CloseoutRecordedEvent}` event in `{runLogPath}` names a non-canonical execution unit: "
+                        + $"{unitError} No packet or record path is derived from it — repair the runs log rather "
+                        + "than resolving an identifier that is not one.",
+                });
+                continue;
+            }
+
+            var packetYamlPath = KnowledgeWriteBackRecord.ResolvePacketPath(context.RepoRoot, executionUnit);
+            var resolution = new ExecutionUnitResolution(
+                executionUnit,
+                Corroborated: File.Exists(packetYamlPath),
+                IsAmbiguous: false,
+                CandidatePacketPaths: Array.Empty<string>());
+            if (!TryConfirmDomain(domain, resolution, ReadPacketDeclaredDomain(context, executionUnit), candidateDomains, repo,
+                    out var reason, out var detail))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindKnowledgeWritebackPending,
+                    ExecutionUnit = executionUnit,
+                    Issue = null,
+                    Pr = null,
+                    Reason = reason,
+                    Detail = detail,
+                });
+                continue;
+            }
+
+            KnowledgeWriteBackDeclaration declaration;
+            try
+            {
+                declaration = KnowledgeWriteBackDeclaration.Read(File.ReadAllText(packetYamlPath));
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindKnowledgeWritebackPending,
+                    ExecutionUnit = executionUnit,
+                    Issue = null,
+                    Pr = null,
+                    Reason = ReasonKnowledgeMetadataUnreadable,
+                    Detail =
+                        $"`{executionUnit}`: packet `{packetYamlPath}` could not be read for its knowledge write-back "
+                        + $"declaration: {exception.Message}. Excluded with its path rather than assumed to declare "
+                        + "nothing — an unreadable declaration establishes neither that a write-back is owed nor "
+                        + "that it is not.",
+                });
+                continue;
+            }
+
+            if (!declaration.IsRequired)
+            {
+                // Declared nothing (or declined every facet): no obligation,
+                // no item, no noise. This is the `required=false` silence the
+                // acceptance criteria require.
+                continue;
+            }
+
+            var recordPath = KnowledgeWriteBackRecord.ResolveFullPath(context.RepoRoot, executionUnit);
+            if (File.Exists(recordPath))
+            {
+                try
+                {
+                    // G564 review repair: the record must NAME this unit and
+                    // carry SHA-shaped evidence. Clearing on any deserializable
+                    // file let a record carrying a different unit's id — or a
+                    // host_commit that is not a commit — discharge this unit's
+                    // obligation.
+                    _ = KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(recordPath), executionUnit);
+                    // Recorded: the obligation is discharged. This is the
+                    // clearing path — no item, no exclusion.
+                    continue;
+                }
+                catch (Exception exception) when (exception is IOException or InvalidOperationException)
+                {
+                    excluded.Add(new StalledWorkExcluded
+                    {
+                        Kind = KindKnowledgeWritebackPending,
+                        ExecutionUnit = executionUnit,
+                        Issue = null,
+                        Pr = null,
+                        Reason = ReasonKnowledgeMetadataUnreadable,
+                        Detail =
+                            $"`{executionUnit}`: write-back record `{recordPath}` could not be read: "
+                            + $"{exception.Message}. Excluded with its path rather than counted as cleared — an "
+                            + "unreadable record is not evidence that the write-back happened.",
+                    });
+                    continue;
+                }
+            }
+
+            items.Add(new StalledWorkItem
+            {
+                Kind = KindKnowledgeWritebackPending,
+                ExecutionUnit = executionUnit,
+                Issue = null,
+                Pr = null,
+                AgeMinutes = ComputeAgeMinutesFromInstant(ClampToNow(closedAt, now), now),
+                IsInformational = false,
+                DeclaredWriteBackTargets = declaration.DeclaredTargets,
+                RecommendedAction = BuildKnowledgeWritebackPendingAction(executionUnit, declaration),
+            });
+        }
+    }
+
+    /// <summary>
+    /// G564: names the recording command and what the packet promised. The
+    /// write-back itself is design's act; the recommendation is to perform it
+    /// and then record it — never a state transition this command could run,
+    /// and never an auto-write of intent content.
+    /// </summary>
+    private static string BuildKnowledgeWritebackPendingAction(
+        string executionUnit,
+        KnowledgeWriteBackDeclaration declaration)
+    {
+        var facets = string.Join(", ", declaration.RequiredFacets);
+        var targets = declaration.DeclaredTargets.Count > 0
+            ? string.Join(", ", declaration.DeclaredTargets)
+            : "(no target paths named in the packet)";
+
+        return
+            $"perform and record the declared knowledge write-back for `{executionUnit}` "
+            + $"(declared: {facets}; targets: {targets}) — design writes the tree/ADR/diagram/docs in the host repo, "
+            + $"then: `{IntentTreeCoEvolutionDuty.RecordCommand(executionUnit)}`. "
+            + "This item stays visible until a record exists; closing the PR does not clear it, and nothing here "
+            + "writes intent content on design's behalf.";
+    }
+
+    /// <summary>
     /// G552: names the exact clarification to answer (design) and the
     /// escalation path (operator). Never an auto-answer: the answer is human
     /// content, and this command only ever emits text.
@@ -2144,6 +2415,7 @@ internal static class AutomationStalledWorkCommand
         out int claimedSilentMinutes,
         out int backlogIdleMinutes,
         out int repairSilentMinutes,
+        out DateTimeOffset? knowledgeWriteBackSince,
         out string format,
         out string error)
     {
@@ -2153,6 +2425,7 @@ internal static class AutomationStalledWorkCommand
         claimedSilentMinutes = DefaultClaimedSilentMinutes;
         backlogIdleMinutes = DefaultBacklogIdleMinutes;
         repairSilentMinutes = DefaultRepairSilentMinutes;
+        knowledgeWriteBackSince = null;
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -2224,6 +2497,20 @@ internal static class AutomationStalledWorkCommand
                     repairSilentMinutes = parsedRepairSilentMinutes;
                     index++;
                     break;
+                // G564: deliberate opt-in to scanning closeouts older than the
+                // activation floor. Retroactive detection is never a default.
+                case "--knowledge-writeback-since":
+                    if (index + 1 >= args.Length
+                        || !DateTimeOffset.TryParse(args[index + 1], System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                            out var parsedSince))
+                    {
+                        error = "--knowledge-writeback-since requires an ISO-8601 instant (e.g. 2026-08-01T00:00:00Z).";
+                        return false;
+                    }
+                    knowledgeWriteBackSince = parsedSince;
+                    index++;
+                    break;
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -2286,6 +2573,12 @@ internal static class AutomationStalledWorkCommand
                 if (item.Pr is { } pr)
                 {
                     writer.WriteLine($"- pr: #{pr.Number} — {pr.Url}");
+                }
+                // G564: the declared targets belong in the item itself, so a
+                // reader knows WHAT the packet promised without opening it.
+                if (item.DeclaredWriteBackTargets is { Count: > 0 } declaredTargets)
+                {
+                    writer.WriteLine($"- declared_write_back_targets: {string.Join(", ", declaredTargets)}");
                 }
                 // G533: informational kinds never recommend a transition —
                 // rendered as `status` (descriptive prose) rather than
@@ -2409,6 +2702,15 @@ internal sealed record StalledWorkItem
 
     [JsonPropertyName("recommended_action")]
     public required string RecommendedAction { get; init; }
+
+    /// <summary>
+    /// G564: for <see cref="AutomationStalledWorkCommand.KindKnowledgeWritebackPending"/>,
+    /// the target paths the packet DECLARED — so the report says what was
+    /// promised and where, not merely that something is outstanding. Null for
+    /// every other kind.
+    /// </summary>
+    [JsonPropertyName("declared_write_back_targets")]
+    public IReadOnlyList<string>? DeclaredWriteBackTargets { get; init; }
 }
 
 internal sealed record StalledWorkExcluded

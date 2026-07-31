@@ -11,21 +11,22 @@
 
 ## v0.7.0 の内容
 
-v0.7.0 は `v0.6.2` 以降にマージされた 4 スライス — **G559**、**G560**、**G561**、
-**G563** — を正確にカバーします。
+v0.7.0 は `v0.6.2` 以降にマージされた 5 スライス — **G559**、**G560**、**G561**、
+**G563**、**G564** — を正確にカバーします。
 
 **なぜ patch ではなく minor か。** 文書化されたポリシーは、新しいコマンドサーフェスに
 対して minor バンプを予約しています。G559 がまさにそれです。
 `intent-cli skill list | install | diff` は既存グループの拡張ではなく、新しい
-トップレベルのコマンドグループです。これだけで決まります — G560 / G561 / G563 は
-単独ならそれぞれ patch でした。削除も改名も無いため major ではなく minor です。v0.6.x の
+トップレベルのコマンドグループです。これだけで決まります — G560 / G561 / G563 /
+G564 は単独ならそれぞれ patch でした。削除も改名も無いため major ではなく minor です。v0.6.x の
 コマンド・引数・フラグはすべて形を保ちます。パッケージ ID は
 `JTechJapan.IntentSystem.Cli` のままで、パッケージ ID / ライセンス / workflow
 セマンティクスの変更はありません。
 
-見出しは skill サーフェスです。残る 3 つは、それぞれ実際のインシデントを 1 件ずつ
-生んだリリースフローと publish 優先順位の機構の穴を塞ぎ、さらに guide 群を本リリースが
-同梱する skill と整合させます。
+見出しは skill サーフェスです。残る 4 つは、それぞれ実際のインシデントを 1 件ずつ
+生んだリリースフローと publish 優先順位の機構の穴を塞ぎ、guide 群を本リリースが
+同梱する skill と整合させ、さらに intent-tree の共進化を「心がけ」ではなく
+強制可能なものにします。
 
 ### クロスプラットフォーム agent skill を 1 コマンドで install(G559)
 
@@ -161,6 +162,51 @@ packet だけです。
 Authority-boundary の一文が、supervision セクションが認める 4 つの MAY-answer クラスを
 同じ内容で列挙するようにしました。
 
+### 古びた intent-tree を「見える仕掛かり」にする(G564)
+
+G563 を生んだのと同じリリース前監査が、このスライスの根拠です。G559 が出荷された
+時点で intent-tree の node 09 はまだ実装前の設計を記述しており、node 02 は docs が
+実装している 7 つのリリースフロー規則を 1 つも記録しておらず、node 08 は wake
+contract に対して数リリース分遅れていました。開発は数週間動き続けたのに、tree が
+古びていることを示す**構造的なシグナルが一切ありませんでした**。検出手段は
+オペレーター指示による手作業監査だけで、しかもそれはリリース直前に review 1 サイクル
+分のコストを払わせました。
+
+材料はすでに揃っていて、繋がっていなかっただけです。packet は
+`knowledge_updates.*.required` と `closeout_learning.write_back_required` を宣言でき、
+write-back 自体は child repo からは見えない host commit として起こります。「やった」と
+言う記録が無いので、「やっていない」と言うこともできませんでした。
+
+**記録。** 宣言された write-back を実施したことを、host commit を証跡として記録する
+サブコマンドを追加しました。
+
+```bash
+intent-cli automation knowledge-writeback-record \
+  --execution-unit G564 --commit <host-commit-sha> \
+  --target intents/<domain>/intent-tree/means/03-state-and-audit-strategy.md --write
+```
+
+同一 commit に対しては冪等で、**異なる** commit での上書きは拒否し(証跡を黙って
+差し替えない)、未知の execution unit や SHA でない証跡には fail closed で応じます。
+既定は `--dry-run` です。記録するだけであり、tree を書くのは常に design であって
+ツールではありません。
+
+**検出。** `automation stalled-work` に `knowledge-writeback-pending` kind を追加し、
+`automation heartbeat` がそれを運びます。closeout 済みなのに packet が宣言した
+write-back の記録が無い unit は、宣言された facet と対象パスを挙げ、記録コマンドを
+recommended_action に持つ、経過時間つきの actionable な item になります。何も required
+と宣言していない unit は決して現れません。読めない packet metadata や読めない記録は
+**パスつきで `excluded`** に出て、「保留なし」と黙って解釈されることはありません。
+本機能の出荷前に closeout された unit は既定で対象外です
+(`--knowledge-writeback-since <iso-8601>` で明示的に遡れます)。
+
+**責務。** guide 群はオペレーターの 2026-07-31 の裁定をそのまま述べます。intent-tree
+は開発**と同時に**動くものであり、実装だけ進めて tree を更新しないことはそれ自体が
+重要な過失です。packet 作成時の guidance は、サーフェスを追加する / 挙動を変える
+スライスに対して正直な宣言を要求します。closeout の guidance は**同じ wake の中で**
+write-back を実施し記録することを求めます。そして orchestrator の closeout レポートは、
+packet が宣言した write-back と、その各々が recorded か pending かを列挙します。
+
 ## インストール
 
 ```bash
@@ -190,6 +236,13 @@ dotnet tool update -g JTechJapan.IntentSystem.Cli --version 0.7.0
   `--clear --pre-publish` が加わります。既存の two-sided な block/unblock 経路は
   不変です。`clarify open` は従来拒否していた packet で成功するようになりました。
   従来受け入れていた packet の検証は以前とまったく同じです。
+- **追加のみ — write-back の記録と検出(G564)。** `automation
+  knowledge-writeback-record` が新しいサブコマンドとして加わり、
+  `automation stalled-work` / `automation heartbeat` に
+  `knowledge-writeback-pending` kind が加わります。既存の kind / しきい値 / 出力
+  フィールドは不変です。遡及的な報告は行いません — 新しい item を生み得るのは本
+  リリース以降に closeout された unit だけなので、アップグレードが過去の unit を
+  一斉に点灯させることはありません。
 - **是正的 — リリースフローのみ。** G560 はリポジトリ自身のドキュメントガードの
   検査方法を変更し、リリース後の roll ルールを完成させます。影響するのはリリースを
   カットするメンテナであり、CLI の利用者ではありません。
@@ -204,7 +257,7 @@ dotnet tool update -g JTechJapan.IntentSystem.Cli --version 0.7.0
 
 - [ ] リリース対象のパケットがすべて**完了し、その PR が `main` にマージ済み**である:
       G559(PR #1224)、G560(PR #1222)、G561(PR #1226)、G563(PR #1230)、
-      および G562 release-prep(PR #1228)。
+      G564(PR #1232)、および G562 release-prep(PR #1228)。
       確認は host/review 側で host queue-state / GitHub PR state から行ってください —
       child implementation loop は parent queue-state を読んではならないため、これは
       host 側の前提条件です。
@@ -254,6 +307,10 @@ dotnet tool update -g JTechJapan.IntentSystem.Cli --version 0.7.0
 - [ ] **skill スモーク**(G559): `intent-cli skill list` が `intent-cli` skill と全
       target/scope を表示し、`intent-cli skill install --target all` が各プラット
       フォーム固有の場所に `SKILL.md` を配置する。
+- [ ] **write-back サーフェスのスモーク**(G564):
+      `intent-cli automation knowledge-writeback-record --help` が usage を表示し、
+      `intent-cli automation stalled-work --help` が
+      `--knowledge-writeback-since` を含む。
 - [ ] **今すぐ `eng/version.json` を ROLL する**。G554 のルール(G557 による改訂、
       G560 による完成)に従い、`stableVersion → 0.7.0`、`nextVersion → 0.7.1` を、
       **新しい DRAFT `release-notes-v0.7.1.md` スタブ(EN/JA)と同じ commit で**行い、
