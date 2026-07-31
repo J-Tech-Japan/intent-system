@@ -90,6 +90,19 @@
   </PropertyGroup>
 
   <!--
+    G559: the skill ships as ONE source. `skills/<name>/SKILL.md` in the
+    repository is embedded into the tool package so `intent-cli skill install`
+    writes the same bytes to every platform's own skill location. The logical
+    resource name keeps the repo-relative shape
+    (IntentSystem.Cli.skills.<name>.SKILL.md) so a second skill needs no
+    csproj change.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="$(MSBuildProjectDirectory)/../../skills/**/SKILL.md" LogicalName="IntentSystem.Cli.skills.%(RecursiveDir)SKILL.md" />
+  </ItemGroup>
+
+
+  <!--
     G378: derive the latest implemented intent-system execution unit from
     source-controlled git history at build time, replacing the previous
     stale hard-coded `G360` fallback. The latest merged unit is the

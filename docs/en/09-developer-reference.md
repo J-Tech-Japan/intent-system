@@ -1945,6 +1945,77 @@ anything reaches a commit.
 
 ---
 
+### Cross-platform agent skill: one embedded source, `intent-cli skill` (G559)
+
+Claude Code, Codex, and Copilot all read the **same** `SKILL.md` format. Only
+the **location** differs:
+
+| Target | Scope(s) | Path |
+| --- | --- | --- |
+| `claude` | `repo` (default), `user` | `<repo>/.claude/skills/<name>/SKILL.md`, `~/.claude/skills/<name>/SKILL.md` |
+| `codex` | `user` | `~/.codex/skills/<name>/SKILL.md` |
+| `copilot` | `repo` | `<repo>/.github/skills/<name>/SKILL.md` |
+
+Because only the location differs, hand-copying is what people actually do —
+and hand-copied skills drift. The evidence was in this project's own host: the
+`host-review-loop` skill existed as separate copies under `~/.claude/skills`
+and `~/.codex/skills`, and the copies had already diverged. Two files claiming
+to be the same skill, neither one authoritative, is a worse failure than no
+skill at all: an agent follows the stale one and reports a workflow the tool no
+longer runs.
+
+So the skill ships as **one source**: `skills/<name>/SKILL.md` in the
+repository, embedded into the tool package at build time. There is exactly one
+file to edit, it is versioned with the code it describes, and it travels with
+the released package.
+
+```bash
+intent-cli skill list                              # every target/scope, and its state
+intent-cli skill install --target all              # install into every platform's own location
+intent-cli skill install --target claude --scope user
+intent-cli skill diff --target claude              # what an edited copy changed
+```
+
+`list` and `diff` accept `--format text|json`; `install` accepts
+`--target claude|codex|copilot|all`, `--scope user|repo`, `--skill <name>`,
+`--force`, and `--format`.
+
+Four properties are the contract:
+
+1. **A scope the platform does not define is refused, not written.** `--scope
+   repo` for `codex` fails with the supported scopes named. Writing to a
+   plausible-looking directory the platform never reads would look like a
+   successful install and behave like no install at all.
+2. **An edited copy is never replaced silently.** Install compares the
+   installed file against the embedded source; on a difference it reports
+   `refused-drifted`, leaves the file byte-identical, and **exits non-zero** so
+   a script notices. `--force` is the explicit opt-in to replace it. Line-ending
+   differences are not drift, so a Windows checkout does not report every
+   install as edited.
+3. **The plan is validated before any write.** Under `--target all`, an
+   unsupported target/scope pair fails the whole run rather than installing two
+   platforms and reporting an error for the third — a partial install leaves the
+   operator guessing which platforms are current.
+4. **Nothing is written that is already current.** A matching copy reports
+   `already-current` and the file is not touched.
+
+**The skill itself is a dispatcher, not a manual.** It restates none of the
+workflow. It carries the rule *"installed guide output wins"* and a table
+mapping what the user wants to the `intent-cli guide ...` command that answers
+it. That is deliberate: a skill file that copies out the workflow is a second
+source of truth that ages against the tool, which is the drift problem one
+level up. The guide surfaces move with the CLI; a pointer to them does not go
+stale.
+
+`SkillCommandTests` proves the behaviour against real writes into a throwaway
+repo root and a throwaway user home — including that a refused install leaves
+the operator's edited file untouched, and that the embedded resource is
+byte-identical to `skills/intent-cli/SKILL.md` (a build that failed to package
+the asset fails the test rather than shipping an installer that writes
+nothing).
+
+---
+
 ## Version flow
 
 The repository version policy lives in `eng/version.json` — the single source of

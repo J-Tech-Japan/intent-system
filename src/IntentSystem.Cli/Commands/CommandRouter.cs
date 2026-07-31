@@ -28,7 +28,8 @@ internal static class CommandRouter
         "intent",
         "packet",
         "closeout",
-        "migrate"
+        "migrate",
+        "skill"
     ];
 
     /// <summary>
@@ -105,6 +106,13 @@ internal static class CommandRouter
                 ["next-question"] = InterviewNextQuestionCommand.Execute,
                 ["record-answer"] = InterviewRecordAnswerCommand.Execute,
                 ["compile"] = InterviewCompileCommand.Execute
+            },
+            // G559: cross-platform agent skill install surface.
+            ["skill"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["list"] = SkillCommand.ExecuteList,
+                ["install"] = SkillCommand.ExecuteInstall,
+                ["diff"] = SkillCommand.ExecuteDiff
             },
             ["clarify"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
@@ -550,7 +558,8 @@ internal static class CommandRouter
             ["tasking"] = "`intent-cli tasking handoff` / `task-packet` / `handoff-bundle` (cross-thread tasking; experimental).",
             ["safety"] = "`intent-cli safety nested-provider-handoff` (artifact-only nested-provider handoffs).",
             ["projection"] = "`intent-cli projection generate` / `regenerate` (internal tooling).",
-            ["project"] = "`intent-cli project status` (older surface; prefer `intent status`)."
+            ["project"] = "`intent-cli project status` (older surface; prefer `intent status`).",
+            ["skill"] = "`intent-cli skill list` / `install --target claude|codex|copilot|all [--scope user|repo] [--force]` / `diff` (installs the embedded SKILL.md into each platform's skill location)."
         };
 
     private static void WriteHelp(TextWriter writer) => WriteHelp(writer, includeAll: false);

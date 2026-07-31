@@ -2085,6 +2085,74 @@ writer 層に置く必要があります。
 
 ---
 
+### クロスプラットフォーム agent skill: 単一の埋め込みソースと `intent-cli skill` (G559)
+
+Claude Code / Codex / Copilot はいずれも**同じ** `SKILL.md` フォーマットを読みます。
+異なるのは**設置場所だけ**です:
+
+| Target | Scope | パス |
+| --- | --- | --- |
+| `claude` | `repo`(既定) / `user` | `<repo>/.claude/skills/<name>/SKILL.md`、`~/.claude/skills/<name>/SKILL.md` |
+| `codex` | `user` | `~/.codex/skills/<name>/SKILL.md` |
+| `copilot` | `repo` | `<repo>/.github/skills/<name>/SKILL.md` |
+
+場所しか違わないからこそ、実際には手でコピーされます。そして手コピーした skill は
+drift します。証拠はこのプロジェクト自身の host にありました。`host-review-loop`
+skill が `~/.claude/skills` と `~/.codex/skills` に別々のコピーとして存在し、
+すでに内容が乖離していたのです。同じ skill を名乗る 2 つのファイルがあり、
+どちらも権威ではない状態は、skill が無いことより悪い失敗です。agent は古い方に
+従い、ツールがもう実行しない workflow を報告します。
+
+そこで skill は**単一ソース**として出荷します。リポジトリの
+`skills/<name>/SKILL.md` を build 時に tool package へ埋め込みます。編集対象の
+ファイルはちょうど 1 つ、記述対象のコードと同じバージョン管理下にあり、
+リリースされた package と一緒に移動します。
+
+```bash
+intent-cli skill list                              # 全 target/scope とその状態
+intent-cli skill install --target all              # 各プラットフォーム固有の場所へ install
+intent-cli skill install --target claude --scope user
+intent-cli skill diff --target claude              # 編集済みコピーの差分
+```
+
+`list` と `diff` は `--format text|json` を受け取ります。`install` は
+`--target claude|codex|copilot|all`、`--scope user|repo`、`--skill <name>`、
+`--force`、`--format` を受け取ります。
+
+契約は次の 4 点です:
+
+1. **プラットフォームが定義していない scope は、書かずに拒否する。** `codex` に対する
+   `--scope repo` は、サポートされる scope を明示して失敗します。そのプラットフォームが
+   決して読まない、それらしいディレクトリへ書くことは、install 成功に見えて
+   install していないのと同じ挙動になります。
+2. **編集済みコピーを黙って置き換えない。** install は installed ファイルを埋め込み
+   ソースと比較し、差分があれば `refused-drifted` を報告し、ファイルを 1 バイトも
+   変えずに残し、**非ゼロで終了**します(script が検知できるように)。置き換えは
+   `--force` による明示的な opt-in です。改行コードの違いは drift 扱いしないため、
+   Windows checkout ですべての install が編集済みと報告されることはありません。
+3. **書き込み前に plan 全体を検証する。** `--target all` の下で不正な target/scope の
+   組み合わせがあれば、2 つだけ install して 3 つ目でエラーを出すのではなく、
+   実行全体を失敗させます。部分 install は、どのプラットフォームが最新なのかを
+   operator に推測させます。
+4. **すでに最新のものは書かない。** 一致するコピーは `already-current` を報告し、
+   ファイルには触れません。
+
+**skill 自体は dispatcher であって manual ではありません。** workflow を一切
+再記述しません。持っているのは *「installed guide output wins」* というルールと、
+ユーザーがやりたいことを、それに答える `intent-cli guide ...` コマンドへ対応づける
+表だけです。これは意図的です。workflow を書き写した skill ファイルは、ツールに対して
+古びていく 2 つ目の source of truth であり、それこそが一段上のレイヤーで起きる
+drift 問題そのものだからです。guide surface は CLI と一緒に動きますが、
+そこへのポインタは陳腐化しません。
+
+`SkillCommandTests` は、使い捨ての repo root と使い捨ての user home に対する実際の
+書き込みで挙動を証明します。拒否された install が operator の編集済みファイルを
+そのまま残すこと、および埋め込みリソースが `skills/intent-cli/SKILL.md` と
+バイト単位で一致すること(asset の同梱に失敗した build は、何も書かない installer を
+出荷するのではなくテストで落ちる)を含みます。
+
+---
+
 ## バージョンフロー
 
 リポジトリのバージョンポリシーは `eng/version.json` に記載されています。`stableVersion`
