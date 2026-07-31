@@ -47,6 +47,7 @@ internal static class Program
                 || IsNextCommand(args)
                 || IsInspectCommand(args)
                 || IsWorkerCommand(args)
+                || IsSkillCommand(args)
                 || IsHelpCommand(args))
             {
                 return CommandRouter.Execute(args, CreateBootstrapContext(currentDirectory, args), Console.Out);
@@ -119,6 +120,20 @@ internal static class Program
                 || string.Equals(args[1], "stalled-work", StringComparison.Ordinal)
                 || string.Equals(args[1], "summary", StringComparison.Ordinal)
                 || string.Equals(args[1], "workspace-guard", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// G559: the <c>skill</c> group is the on-ramp — a newcomer runs
+    /// <c>intent-cli skill install</c> in a fresh repository that has no
+    /// <c>.intent-cli/</c> at all, which is the entire point of shipping a
+    /// skill. It reads only the embedded asset and the platform skill
+    /// directories, never parent durable state, so it must bootstrap from any
+    /// cwd rather than fail the host-state gate and send a first-time user to
+    /// a recovery command.
+    /// </summary>
+    private static bool IsSkillCommand(string[] args)
+    {
+        return args.Length >= 1 && string.Equals(args[0], "skill", StringComparison.Ordinal);
     }
 
     private static bool IsGuideOneshotCommand(string[] args)
