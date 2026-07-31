@@ -2130,10 +2130,17 @@ intent-cli skill diff --target claude              # 編集済みコピーの差
    変えずに残し、**非ゼロで終了**します(script が検知できるように)。置き換えは
    `--force` による明示的な opt-in です。改行コードの違いは drift 扱いしないため、
    Windows checkout ですべての install が編集済みと報告されることはありません。
-3. **書き込み前に plan 全体を検証する。** `--target all` の下で不正な target/scope の
-   組み合わせがあれば、2 つだけ install して 3 つ目でエラーを出すのではなく、
-   実行全体を失敗させます。部分 install は、どのプラットフォームが最新なのかを
-   operator に推測させます。
+3. **最初の書き込み前に plan 全体を解決・検査する。** install は 2 フェーズで動きます。
+   まず全 target/scope の組み合わせを検証し、全 destination のパスを解決し、全
+   destination の状態を検査します。書き込みはその後です。不正な target/scope の
+   組み合わせ**または** drift した destination が plan の**どこかに**1 つでもあれば、
+   何も作らず何も変更せずに実行全体を中止します。書き込み可能だった destination は
+   `skipped-plan-aborted` として報告され、plan に含まれていたが意図的に書かれなかった
+   ことが分かるようになっています。検査と書き込みを 1 パスで行うのは「書き込み前の
+   検証」ではありません。`--target all` の下では、後続の drift が見つかった時点で
+   先行する未 install の target はすでにディスク上にあり、「何も起きていない」と主張する
+   exit code の裏で部分 install が残ります。同じ plan を最後まで成功させるのが
+   `--force` です。
 4. **すでに最新のものは書かない。** 一致するコピーは `already-current` を報告し、
    ファイルには触れません。
 

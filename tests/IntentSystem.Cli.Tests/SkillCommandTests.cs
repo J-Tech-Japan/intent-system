@@ -128,6 +128,71 @@ public sealed class SkillCommandTests
     }
 
     [Fact]
+    public void TargetAll_WithADriftedDestinationAnywhere_WritesNothingAtAll_G559()
+    {
+        using var workspace = new SkillWorkspace();
+
+        // The plan order is claude → codex → copilot, so this is the shape the
+        // per-item loop got wrong: an EARLIER missing target, a LATER drifted
+        // one, and another missing target after it. Inspecting and writing in
+        // one pass installed claude, refused codex, installed copilot, and then
+        // exited 1 — a partial install behind an exit code that claims nothing
+        // happened.
+        var claude = Path.Combine(workspace.RepoRoot, ".claude", "skills", "intent-cli", "SKILL.md");
+        var codex = Path.Combine(workspace.UserHome, ".codex", "skills", "intent-cli", "SKILL.md");
+        var copilot = Path.Combine(workspace.RepoRoot, ".github", "skills", "intent-cli", "SKILL.md");
+
+        var edited = "an operator's own copy, deliberately different\n";
+        Directory.CreateDirectory(Path.GetDirectoryName(codex)!);
+        File.WriteAllText(codex, edited);
+
+        var exit = workspace.Install(["--target", "all"], out var output);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("refused-drifted", output, StringComparison.Ordinal);
+        Assert.Contains("skipped-plan-aborted", output, StringComparison.Ordinal);
+
+        // The drifted file is byte-identical, and neither missing destination
+        // was created — not even its directory.
+        Assert.Equal(edited, File.ReadAllText(codex));
+        Assert.False(File.Exists(claude), $"claude must not have been written: {output}");
+        Assert.False(File.Exists(copilot), $"copilot must not have been written: {output}");
+        Assert.False(Directory.Exists(Path.GetDirectoryName(claude)!), output);
+        Assert.False(Directory.Exists(Path.GetDirectoryName(copilot)!), output);
+    }
+
+    [Fact]
+    public void TargetAllWithForce_InstallsEveryDestination_IncludingTheDriftedOne_G559()
+    {
+        using var workspace = new SkillWorkspace();
+
+        var codex = Path.Combine(workspace.UserHome, ".codex", "skills", "intent-cli", "SKILL.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(codex)!);
+        File.WriteAllText(codex, "an operator's own copy, deliberately different\n");
+
+        var exit = workspace.Install(["--target", "all", "--force"], out var output);
+
+        // --force is the opt-in that makes the same plan succeed end to end:
+        // the abort must not survive as a --force regression.
+        Assert.Equal(0, exit);
+        Assert.Contains("overwritten", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("refused-drifted", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("skipped-plan-aborted", output, StringComparison.Ordinal);
+
+        var embedded = Normalize(SkillAssets.ReadBody(SkillAssets.Find("intent-cli")!));
+        foreach (var path in new[]
+                 {
+                     Path.Combine(workspace.RepoRoot, ".claude", "skills", "intent-cli", "SKILL.md"),
+                     codex,
+                     Path.Combine(workspace.RepoRoot, ".github", "skills", "intent-cli", "SKILL.md"),
+                 })
+        {
+            Assert.True(File.Exists(path), $"expected {path}. Output:\n{output}");
+            Assert.Equal(embedded, Normalize(File.ReadAllText(path)));
+        }
+    }
+
+    [Fact]
     public void Force_ReplacesAnEditedCopy_G559()
     {
         using var workspace = new SkillWorkspace();

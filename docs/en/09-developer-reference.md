@@ -1992,10 +1992,18 @@ Four properties are the contract:
    a script notices. `--force` is the explicit opt-in to replace it. Line-ending
    differences are not drift, so a Windows checkout does not report every
    install as edited.
-3. **The plan is validated before any write.** Under `--target all`, an
-   unsupported target/scope pair fails the whole run rather than installing two
-   platforms and reporting an error for the third — a partial install leaves the
-   operator guessing which platforms are current.
+3. **The whole plan is resolved and inspected before the first write.**
+   Install runs in two phases: it validates every target/scope pair, resolves
+   every destination path, and inspects every destination's state — and only
+   then writes. An unsupported target/scope pair *or* a drifted destination
+   **anywhere** in the plan aborts the entire run with nothing created and
+   nothing changed; the writable destinations are reported
+   `skipped-plan-aborted` so it is clear they were part of the plan and were
+   deliberately not written. Inspecting and writing in one pass is not
+   "validated before any write" — under `--target all` an earlier missing
+   target would already be on disk by the time a later drifted one was found,
+   leaving a partial install behind an exit code that claims nothing happened.
+   `--force` is what makes that same plan succeed end to end.
 4. **Nothing is written that is already current.** A matching copy reports
    `already-current` and the file is not touched.
 

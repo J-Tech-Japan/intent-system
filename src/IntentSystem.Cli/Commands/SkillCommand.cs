@@ -105,9 +105,7 @@ internal static class SkillCommand
             ? SkillTargets.Installable
             : [target!];
 
-        // Validate every target/scope pair BEFORE writing anything: a partial
-        // install that stops halfway leaves the operator guessing which
-        // platforms are current.
+        // PHASE 1 (a): validate every target/scope pair.
         var plan = new List<(string Target, string Scope, EmbeddedSkill Skill)>();
         foreach (var candidate in targets)
         {
@@ -128,61 +126,89 @@ internal static class SkillCommand
 
         var repoRoot = context.RepoRoot;
         var userHome = SkillTargets.ResolveUserHome();
+
+        // PHASE 1 (b): resolve every destination, read every embedded body, and
+        // inspect every planned path — all BEFORE the first write. Inspecting
+        // and writing in the same loop is not "validated before any write": an
+        // earlier missing target would already be on disk by the time a later
+        // drifted one was discovered, leaving a partial install behind an
+        // exit-1 that claims nothing happened.
+        var inspected = plan
+            .Select(entry =>
+            {
+                var path = SkillTargets.ResolveSkillFilePath(entry.Target, entry.Scope, entry.Skill.Name, repoRoot, userHome);
+                var embedded = SkillAssets.ReadBody(entry.Skill);
+                return (entry.Target, entry.Scope, entry.Skill, Path: path, Embedded: embedded, State: InspectState(path, embedded));
+            })
+            .ToList();
+
         var results = new List<SkillInstallResult>();
-        var blocked = false;
 
-        foreach (var (candidateTarget, candidateScope, skill) in plan)
+        // PHASE 2: a drifted destination anywhere in the plan aborts the WHOLE
+        // run without touching the filesystem. --force is the opt-in that turns
+        // every drifted destination into an overwrite instead.
+        if (!force && inspected.Any(entry => entry.State == SkillState.Drifted))
         {
-            var path = SkillTargets.ResolveSkillFilePath(candidateTarget, candidateScope, skill.Name, repoRoot, userHome);
-            var embedded = SkillAssets.ReadBody(skill);
-            var state = InspectState(path, embedded);
-
-            if (state == SkillState.Drifted && !force)
+            foreach (var entry in inspected)
             {
                 results.Add(new SkillInstallResult
                 {
-                    Skill = skill.Name,
-                    Target = candidateTarget,
-                    Scope = candidateScope,
-                    Path = path,
-                    Outcome = "refused-drifted",
-                    Detail =
-                        "the installed copy differs from the embedded skill and was NOT overwritten. "
-                        + "Re-run with --force to replace it, or run `intent-cli skill diff` to see what differs.",
+                    Skill = entry.Skill.Name,
+                    Target = entry.Target,
+                    Scope = entry.Scope,
+                    Path = entry.Path,
+                    Outcome = entry.State == SkillState.Drifted ? "refused-drifted" : "skipped-plan-aborted",
+                    Detail = entry.State == SkillState.Drifted
+                        ? "the installed copy differs from the embedded skill and was NOT overwritten. "
+                          + "Re-run with --force to replace it, or run `intent-cli skill diff` to see what differs."
+                        : "not written: another destination in this plan has an edited copy, so the whole "
+                          + "install was abandoned before any file was created or changed.",
                 });
-                blocked = true;
-                continue;
             }
 
-            if (state == SkillState.Current)
+            WriteInstallResults(writer, format, results);
+            return 1;
+        }
+
+        // PHASE 3: every destination is now known to be writable, so the writes
+        // that follow cannot be interrupted by a refusal.
+        foreach (var entry in inspected)
+        {
+            if (entry.State == SkillState.Current)
             {
                 results.Add(new SkillInstallResult
                 {
-                    Skill = skill.Name,
-                    Target = candidateTarget,
-                    Scope = candidateScope,
-                    Path = path,
+                    Skill = entry.Skill.Name,
+                    Target = entry.Target,
+                    Scope = entry.Scope,
+                    Path = entry.Path,
                     Outcome = "already-current",
                     Detail = "the installed copy already matches the embedded skill; nothing was written.",
                 });
                 continue;
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, embedded);
+            Directory.CreateDirectory(Path.GetDirectoryName(entry.Path)!);
+            File.WriteAllText(entry.Path, entry.Embedded);
             results.Add(new SkillInstallResult
             {
-                Skill = skill.Name,
-                Target = candidateTarget,
-                Scope = candidateScope,
-                Path = path,
-                Outcome = state == SkillState.NotInstalled ? "installed" : "overwritten",
-                Detail = state == SkillState.NotInstalled
+                Skill = entry.Skill.Name,
+                Target = entry.Target,
+                Scope = entry.Scope,
+                Path = entry.Path,
+                Outcome = entry.State == SkillState.NotInstalled ? "installed" : "overwritten",
+                Detail = entry.State == SkillState.NotInstalled
                     ? "written for the first time."
                     : "an edited copy was replaced because --force was given.",
             });
         }
 
+        WriteInstallResults(writer, format, results);
+        return 0;
+    }
+
+    private static void WriteInstallResults(TextWriter writer, string format, IReadOnlyList<SkillInstallResult> results)
+    {
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
             writer.WriteLine(JsonSerializer.Serialize(new SkillInstallReport { Results = results }, JsonOptions));
@@ -195,10 +221,6 @@ internal static class SkillCommand
                 writer.WriteLine($"  {result.Detail}");
             }
         }
-
-        // A refusal is a non-zero exit: the caller asked for an install that
-        // did not fully happen, and a script must be able to notice.
-        return blocked ? 1 : 0;
     }
 
     public static int ExecuteDiff(CliContext context, string[] args, TextWriter writer)
@@ -592,7 +614,12 @@ internal sealed record SkillInstallResult
     [JsonPropertyName("path")]
     public required string Path { get; init; }
 
-    /// <summary>One of <c>installed</c>, <c>overwritten</c>, <c>already-current</c>, <c>refused-drifted</c>.</summary>
+    /// <summary>
+    /// One of <c>installed</c>, <c>overwritten</c>, <c>already-current</c>,
+    /// <c>refused-drifted</c>, or <c>skipped-plan-aborted</c> — the last one
+    /// meaning this destination was writable but a sibling in the same plan was
+    /// drifted, so nothing at all was written.
+    /// </summary>
     [JsonPropertyName("outcome")]
     public required string Outcome { get; init; }
 
