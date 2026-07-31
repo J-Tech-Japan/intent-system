@@ -118,6 +118,7 @@ Stage 6 — parent commit/push checklist (required last step):
 
 Hard rules:
 - Do not use the `intent-closeout` skill file or any local skill file.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not merge the PR from this loop; merging must have happened before closeout is triggered.
 - All label transitions go through installed `intent-cli automation pr-transition`. No manual `gh ... edit --add-label` / `--remove-label` fallback for workflow labels.
 - Do not call `intent-cli run`. `run` is for integration smoke/replay/dogfooding, not the host closeout path.
@@ -141,7 +142,7 @@ Hard rules:
             ForbiddenSources = new[]
             {
                 "intent-closeout skill file",
-                "local skill files",
+                DispatcherSkillCarveOut.ForbiddenSourceItem,
                 "copied prompt files",
                 "intents/rules/**"
             },

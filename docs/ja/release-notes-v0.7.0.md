@@ -11,20 +11,21 @@
 
 ## v0.7.0 の内容
 
-v0.7.0 は `v0.6.2` 以降にマージされた 3 スライス — **G559**、**G560**、**G561** —
-を正確にカバーします。
+v0.7.0 は `v0.6.2` 以降にマージされた 4 スライス — **G559**、**G560**、**G561**、
+**G563** — を正確にカバーします。
 
 **なぜ patch ではなく minor か。** 文書化されたポリシーは、新しいコマンドサーフェスに
 対して minor バンプを予約しています。G559 がまさにそれです。
 `intent-cli skill list | install | diff` は既存グループの拡張ではなく、新しい
-トップレベルのコマンドグループです。これだけで決まります — G560 と G561 は単独なら
-それぞれ patch でした。削除も改名も無いため major ではなく minor です。v0.6.x の
+トップレベルのコマンドグループです。これだけで決まります — G560 / G561 / G563 は
+単独ならそれぞれ patch でした。削除も改名も無いため major ではなく minor です。v0.6.x の
 コマンド・引数・フラグはすべて形を保ちます。パッケージ ID は
 `JTechJapan.IntentSystem.Cli` のままで、パッケージ ID / ライセンス / workflow
 セマンティクスの変更はありません。
 
-見出しは skill サーフェスです。残る 2 つは、それぞれ実際のインシデントを 1 件ずつ
-生んだリリースフローと publish 優先順位の機構の穴を塞ぎます。
+見出しは skill サーフェスです。残る 3 つは、それぞれ実際のインシデントを 1 件ずつ
+生んだリリースフローと publish 優先順位の機構の穴を塞ぎ、さらに guide 群を本リリースが
+同梱する skill と整合させます。
 
 ### クロスプラットフォーム agent skill を 1 コマンドで install(G559)
 
@@ -148,6 +149,18 @@ packet の execution unit は依然必須で queue item と一致しなければ
 メッセージ、失敗の仕方は同一)。許容が適用されるのは、完全性を主張したことがない
 packet だけです。
 
+### 本リリースが同梱する skill を guide が禁止しないようにする(G563)
+
+リリース前の guide↔intent-tree 突き合わせで見つかった 5 件の整合性欠陥をすべて修正
+しました。ローカル skill の禁止条項すべてに、CLI 所有の `intent-cli` dispatcher skill
+を明示的に除外する carve-out を追加(workflow を再記述するローカル skill は引き続き
+禁止)。`guide skill-pack` は `skill` グループへのポインタへ退役させ、`intent-cli` と
+いう名前の成果物をちょうど 1 つにしました。`guide commands list` に欠けていた `skill`
+行を追加。paste-ready な 5 分 fallback prompt 2 種の上限を、廃止された「1 wake につき
+最大 1 メッセージ」から receiver ごとの delegation 上限に置き換え。provisioning の
+Authority-boundary の一文が、supervision セクションが認める 4 つの MAY-answer クラスを
+同じ内容で列挙するようにしました。
+
 ## インストール
 
 ```bash
@@ -190,7 +203,8 @@ dotnet tool update -g JTechJapan.IntentSystem.Cli --version 0.7.0
 ください。
 
 - [ ] リリース対象のパケットがすべて**完了し、その PR が `main` にマージ済み**である:
-      G559(PR #1224)、G560(PR #1222)、G561(PR #1226)、および本 G562 release-prep。
+      G559(PR #1224)、G560(PR #1222)、G561(PR #1226)、G563(PR #<G563-PR>)、
+      および G562 release-prep(PR #1228)。
       確認は host/review 側で host queue-state / GitHub PR state から行ってください —
       child implementation loop は parent queue-state を読んではならないため、これは
       host 側の前提条件です。

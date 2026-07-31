@@ -122,6 +122,7 @@ This is the durable publish boundary. `intent-target` is applied only after pare
 Hard rules:
 - Do not use the `intent-next-slice` skill file, local skill files, or copied prompt files. Use `intent-cli guide ...` and `intent-cli intent ...` instead.
 - Do not read `intents/rules/**`.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not call `intent-cli run`. `run` is advanced runtime, not the intent-work path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -150,7 +151,7 @@ Hard rules:
             ForbiddenSources = new[]
             {
                 "intent-next-slice skill file",
-                "local skill files",
+                DispatcherSkillCarveOut.ForbiddenSourceItem,
                 "copied prompt files",
                 "intents/rules/**"
             },

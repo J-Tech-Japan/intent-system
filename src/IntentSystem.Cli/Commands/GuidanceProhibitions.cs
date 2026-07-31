@@ -57,7 +57,8 @@ internal static class GuidanceProhibitionCatalog
         new()
         {
             Id = SkillFallbackForbidden,
-            Description = "Do not dispatch local skill files (`gh-issue-to-pr`, `gh-fix-pr-comment`, etc.) for routine work; use `intent-cli` worker / automation commands instead."
+            Description = "Do not dispatch local skill files (`gh-issue-to-pr`, `gh-fix-pr-comment`, etc.) for routine work; use `intent-cli` worker / automation commands instead. "
+                + DispatcherSkillCarveOut.Sentence
         },
         new()
         {

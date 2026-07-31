@@ -289,12 +289,13 @@ internal static class GuideHelpCommand
             Purpose = "G487/G540 paste-ready prompts for the PRIMARY agmsg-backed four-thread orchestrator model (design/orchestrator/implementation/review) plus the implementation/review threads it delegates to. agmsg is a message/progress/completion signal layer only; intent-cli and GitHub stay authoritative. Distinguishes the primary orchestrator-message mode from the simpler timer-loop alternative (no mixed-mode timer races), pins the structured reply contract, the design-orchestrator double-check rule, an orchestrator first-wake, and safety boundaries. Timer-loop mode remains fully supported, not replaced.",
             Example = "intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --format markdown"
         },
-        // G488: thin, portable agent skill pack bootstrap (ADR-013 / spec-27).
+        // G563: G488's renderer is retired to a pointer — `intent-cli skill`
+        // ships and installs the one artifact named `intent-cli`.
         new GuideSubcommandEntry
         {
             Name = "skill-pack",
-            Purpose = "G488 renders a THIN, portable agent skill/prompt bootstrap: one generic `intent-cli` skill body with role sections (design, implement, review, orchestrator, generic). Teaches the Intent CLI mental model and the fixed cwd/worktree/domain/repo/branch safety boundaries, then points back at installed `intent-cli guide` / `automation` as authoritative — it is NOT a workflow source of truth or a runbook copy. Dry-run install plan only (writes no files); never launches a provider; never embeds raw label edits, queue-state hand edits, or hard-coded issue/PR numbers.",
-            Example = "intent-cli guide skill-pack --domain <name> --target-repo <owner/repo> --format markdown"
+            Purpose = "DEPRECATED (G563): renders only a pointer at the `skill` command group. The `intent-cli` agent skill is embedded in this CLI and installed by `intent-cli skill install`; `intent-cli skill list` / `diff` show what ships and whether an install has drifted. This command no longer renders a skill body or any copy-out instruction.",
+            Example = "intent-cli skill install --target claude --scope user"
         }
     };
 
@@ -307,7 +308,7 @@ internal static class GuideHelpCommand
     {
         "Prefer intent-cli-backed metadata mutation over hand-editing. Ask `intent-cli guide commands list --format json` (or `intent-cli automation summary --domain <d> --format json`) which command performs the transition, run that command, then validate the result.",
         "Routine automation MUST NOT directly edit queue-state, runs logs, publish artifacts, workflow labels, or runtime metadata by hand when a supported intent-cli command exists. Raw `gh ... edit --add-label` / `--remove-label` is forbidden for workflow labels.",
-        "Child implementation loops operate from GitHub issues / PRs / comments / labels / implementation-repo files only. They MUST NOT inspect or mutate parent host queue-state, runs logs, packet directories, intent tree, review-runtime state, local rules, or local skills. Host metadata gaps are host-owned blockers, not child implementation tasks (G300 / G330 / G333)."
+        "Child implementation loops operate from GitHub issues / PRs / comments / labels / implementation-repo files only. They MUST NOT inspect or mutate parent host queue-state, runs logs, packet directories, intent tree, review-runtime state, local rules, or local skills. Host metadata gaps are host-owned blockers, not child implementation tasks (G300 / G330 / G333). " + DispatcherSkillCarveOut.BoundaryClause
     };
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)

@@ -298,6 +298,7 @@ Loop body (single wake; the operator drives subsequent wakes if any):
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files (`gh-issue-to-pr`, `gh-fix-pr-comment`, etc.), or copied prompt files for routine collaboration. Use `intent-cli guide ...` instead.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not call `intent-cli run` from this loop. `run` is advanced runtime (integration smoke / replay / dogfooding), not the chat-first path.
 - If `intent-cli automation doctor` reports `stale-host-cli` or a missing required surface, **abort the wake** before any mutation and refresh the installed CLI. Never fall back to direct DLL invocation or `dotnet run`.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
@@ -348,7 +349,7 @@ Frequency policy (applies only when a recurring local loop is explicitly request
             ForbiddenSources = new[]
             {
                 "intents/rules/**",
-                "local skill files (gh-issue-to-pr, gh-fix-pr-comment, etc.)",
+                DispatcherSkillCarveOut.ForbiddenSourceItemWithExamples,
                 "copied prompt files"
             },
             LabelOwnership = "All label transitions delegated to installed intent-cli automation / worker commands. Manual `gh ... edit --label` fallback is forbidden.",
@@ -414,6 +415,7 @@ Loop body (single wake):
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files for routine review/closeout. Use `intent-cli guide ...` and `intent-cli automation ...` instead.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not call `intent-cli run`. `run` is advanced runtime, not the host review/closeout path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -466,7 +468,7 @@ Frequency policy (applies only when a recurring local loop is explicitly request
             ForbiddenSources = new[]
             {
                 "intents/rules/**",
-                "local skill files",
+                DispatcherSkillCarveOut.ForbiddenSourceItem,
                 "copied prompt files"
             },
             LabelOwnership = "All review-side and issue-side label transitions delegated to installed `intent-cli automation pr-transition` / `automation issue-publish` / `worker claim` / `worker complete`. Manual `gh ... edit --label` fallback is forbidden.",

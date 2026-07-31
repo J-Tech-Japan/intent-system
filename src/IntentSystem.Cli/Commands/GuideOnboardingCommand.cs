@@ -148,6 +148,7 @@ internal static class GuideOnboardingCommand
             {
                 "intent-cli must not launch Codex/Claude or any AI provider during onboarding.",
                 "No local skill files (`gh-issue-to-pr`, `gh-fix-pr-comment`, etc.) or copied prompts from `intents/rules/*.md` are required.",
+                DispatcherSkillCarveOut.Sentence,
                 "Operator acceptance is required before any mutating call (out of scope for this onboarding smoke).",
                 "`intent-target` and `intent-pr-created` label transitions stay behind explicit publish/closeout commands; onboarding never touches labels."
             }

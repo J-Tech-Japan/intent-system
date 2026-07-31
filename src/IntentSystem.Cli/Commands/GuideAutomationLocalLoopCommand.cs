@@ -88,7 +88,7 @@ internal static class GuideAutomationLocalLoopCommand
             ForbiddenSources = new[]
             {
                 "intents/rules/**",
-                "local skill files (gh-issue-to-pr, gh-fix-pr-comment, etc.)",
+                DispatcherSkillCarveOut.ForbiddenSourceItemWithExamples,
                 "copied prompt files",
                 "cloud or new-thread schedulers when the workflow depends on local paths or local .intent-cli packages"
             },
@@ -113,6 +113,7 @@ Task prompt construction:
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files. Use `intent-cli guide ...` instead.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not call `intent-cli run`; it is advanced runtime, not the chat-first path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -140,6 +141,7 @@ Task prompt construction:
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files. Use `intent-cli guide ...` instead.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not call `intent-cli run`; it is advanced runtime, not the chat-first path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -175,6 +177,7 @@ Task prompt construction:
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files. Use `intent-cli guide ...` instead.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not call `intent-cli run`.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -201,6 +204,7 @@ Hard rules:
 - Do not guess the agent type from environment variables alone.
 - Do not create any scheduler before the agent type is confirmed.
 - Do not read `intents/rules/**`, local skill files, or copied prompt files. Use `intent-cli guide ...` instead.
+- {DispatcherSkillCarveOut.Sentence}
 - Never create a cloud or new-thread scheduler for workflows that depend on local paths or local `.intent-cli` packages.";
 
         var schedulerGuidance = "Unknown agent: ask the operator for agent type (claude, codex, or generic) and frequency before scheduling.";

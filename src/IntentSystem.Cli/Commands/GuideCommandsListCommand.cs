@@ -130,6 +130,18 @@ internal static class GuideCommandsListCommand
             RecommendedCaller = CallerImplementationLoop,
             Purpose = "Child implementation loop selector: next-action / claim / complete / result-summary / issue-preflight / pr-comment-preflight. GitHub-contract-only with --github-only."
         },
+        // G563: the shipped SKILL.md routes agents to this catalog and then
+        // names `skill list/diff/install`, so the catalog has to know the
+        // group exists. Purpose stays consistent with CommandRouter's help.
+        new CommandGroupEntry
+        {
+            Name = "skill",
+            Role = RoleChildImplementation,
+            Classification = ClassificationSupport,
+            Mutability = MutabilityMixed,
+            RecommendedCaller = CallerOperator,
+            Purpose = "Agent-skill install surface (G559): `intent-cli skill list` / `install --target claude|codex|copilot|all [--scope user|repo] [--force]` / `diff` (installs the embedded SKILL.md into each platform's skill location). `list` / `diff` are read-only; `install` writes, and without `--force` it refuses the whole plan before any write when a destination has drifted."
+        },
         new CommandGroupEntry
         {
             Name = "automation",
@@ -314,9 +326,16 @@ internal static class GuideCommandsListCommand
         writer.WriteLine("|-------|------|----------------|------------|--------|---------|");
         foreach (var group in Groups)
         {
-            writer.WriteLine($"| {group.Name} | {group.Role} | {group.Classification} | {group.Mutability} | {group.RecommendedCaller} | {group.Purpose} |");
+            writer.WriteLine($"| {group.Name} | {group.Role} | {group.Classification} | {group.Mutability} | {group.RecommendedCaller} | {EscapeCell(group.Purpose)} |");
         }
     }
+
+    // G563: purposes may legitimately contain `|` (the `skill` group's
+    // `--target claude|codex|...` alternatives). An unescaped pipe silently
+    // splits the row into extra columns, so the cell is escaped at render
+    // time rather than the text being reworded to dodge the character. JSON
+    // output is unaffected — this is a markdown-table concern only.
+    private static string EscapeCell(string value) => value.Replace("|", "\\|", StringComparison.Ordinal);
 
     private static bool TryParseArguments(string[] args, out string format, out string error)
     {

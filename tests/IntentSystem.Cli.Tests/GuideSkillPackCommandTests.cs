@@ -6,109 +6,53 @@ using IntentSystem.Cli.Models;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G488: coverage for the thin agent skill pack guide surface — one generic
-/// `intent-cli` skill body with role sections. Asserts the authority boundary
-/// (installed guidance wins), the fixed-condition fields (cwd/worktree/domain/
-/// target-repo/base-branch/metadata-branch), the role sections (design,
-/// implement, review, orchestrator, generic), the dry-run install plan, and the
-/// ABSENCE of raw label / queue-state mutation recipes and hard-coded numbers —
-/// across both markdown and JSON output.
+/// G563: coverage for the RETIRED `guide skill-pack` surface. G488 rendered a
+/// skill body the operator copied out by hand; G559 shipped an embedded
+/// SKILL.md with a real installer, which left two artifacts named `intent-cli`
+/// disagreeing about how the skill is obtained. These tests pin the retirement:
+/// the command prints only a pointer at the `skill` group, no skill body, and
+/// — critically — no copy-out instruction of any kind.
 /// </summary>
 public sealed class GuideSkillPackCommandTests
 {
     [Fact]
-    public void Execute_Markdown_StatesInstalledGuidanceIsAuthoritativeOverThisSkill()
+    public void Execute_Markdown_IsADeprecationPointerAtTheSkillCommandGroup_G563()
     {
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo"]);
 
-        Assert.Contains("# Agent skill pack — `intent-cli` (G488)", output, StringComparison.Ordinal);
-        Assert.Contains("## Authority boundary", output, StringComparison.Ordinal);
-        Assert.Contains("installed guidance wins", output, StringComparison.Ordinal);
-        // It is explicitly NOT a workflow source of truth / runbook copy.
-        Assert.Contains("NOT a workflow source of truth", output, StringComparison.Ordinal);
+        Assert.Contains("# `guide skill-pack` — deprecated (G563)", output, StringComparison.Ordinal);
+        Assert.Contains("DEPRECATED (G563)", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli skill install", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli skill list", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli skill diff", output, StringComparison.Ordinal);
+        // The point of the retirement: exactly one artifact carries the name.
+        Assert.Contains("exactly one artifact named `intent-cli`", output, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Execute_Markdown_SurfacesFixedConditionSafetyFields()
+    public void Execute_Markdown_RendersNoSkillBodyAndNoCopyOutInstruction_G563()
     {
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo"]);
 
-        Assert.Contains("## Fixed conditions (safety boundaries)", output, StringComparison.Ordinal);
-        Assert.Contains("**cwd / worktree**", output, StringComparison.Ordinal);
-        Assert.Contains("**domain**", output, StringComparison.Ordinal);
-        Assert.Contains("**target repo**", output, StringComparison.Ordinal);
-        Assert.Contains("**implementation base branch**", output, StringComparison.Ordinal);
-        Assert.Contains("**PR base branch**", output, StringComparison.Ordinal);
-        Assert.Contains("**metadata branch**", output, StringComparison.Ordinal);
-        Assert.Contains("**same-repo topology**", output, StringComparison.Ordinal);
-        // Overrides are substituted into the surfaced values.
-        Assert.Contains("`owner/repo`", output, StringComparison.Ordinal);
+        // The rendered skill body is gone: no role sections, no concept model,
+        // no fixed-condition table, no guardrail list.
+        Assert.DoesNotContain("## Concept model", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("## Fixed conditions", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("## Roles", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("## Guardrails", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("## Fail closed", output, StringComparison.Ordinal);
+
+        // And the workflow `skill install` replaced is gone with it. This is
+        // the defect the retirement exists to remove: a live surface telling
+        // an agent to paste a skill body somewhere by hand.
+        Assert.DoesNotContain("copy the rendered body", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("This command writes NO files", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("dry-run", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("suggested destination", output, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Execute_Markdown_EmitsAllFiveRoleSections()
-    {
-        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo"]);
-
-        Assert.Contains("### design", output, StringComparison.Ordinal);
-        Assert.Contains("### implement", output, StringComparison.Ordinal);
-        Assert.Contains("### review", output, StringComparison.Ordinal);
-        Assert.Contains("### orchestrator", output, StringComparison.Ordinal);
-        Assert.Contains("### generic", output, StringComparison.Ordinal);
-        // Implement role still derives numbers from worker next-action, not memory.
-        Assert.Contains("worker next-action", output, StringComparison.Ordinal);
-        Assert.Contains("Closes #<issue>", output, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Execute_Markdown_InstallPlanIsDryRunAndWritesNoFiles()
-    {
-        var output = RunMarkdown([]);
-
-        Assert.Contains("## Install plan (dry-run — no files written)", output, StringComparison.Ordinal);
-        Assert.Contains("mode: dry-run", output, StringComparison.Ordinal);
-        Assert.Contains("suggested destination", output, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Execute_Markdown_ContainsNoRawLabelOrQueueStateMutationRecipes()
-    {
-        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo"]);
-
-        // No raw label-edit recipes leak into the portable skill body.
-        Assert.DoesNotContain("--add-label", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("--remove-label", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("gh issue edit", output, StringComparison.Ordinal);
-        // But it DOES warn against raw mutation as guardrails (naming queue-state
-        // files only to forbid hand-editing them — never as a how-to recipe).
-        Assert.Contains("## Guardrails", output, StringComparison.Ordinal);
-        Assert.Contains("No raw gh label-mutation flags", output, StringComparison.Ordinal);
-        Assert.Contains("No hand-editing queue-state", output, StringComparison.Ordinal);
-        Assert.Contains("No hard-coded issue/PR numbers", output, StringComparison.Ordinal);
-        Assert.Contains("No provider launch", output, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Execute_Markdown_ContainsNoHardCodedIssueOrPrNumbers()
-    {
-        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo"]);
-
-        // The only '#' usages are the placeholder Closes #<issue> / #<issue> forms.
-        foreach (var line in output.Split('\n'))
-        {
-            var hashIndex = line.IndexOf('#');
-            while (hashIndex >= 0 && hashIndex + 1 < line.Length)
-            {
-                Assert.False(
-                    char.IsDigit(line[hashIndex + 1]),
-                    $"Skill body must not hard-code issue/PR numbers; found one in: {line}");
-                hashIndex = line.IndexOf('#', hashIndex + 1);
-            }
-        }
-    }
-
-    [Fact]
-    public void Execute_Json_HasStableShape_WithRolesAndFixedConditionsAndGuardrails()
+    public void Execute_Json_HasDeprecationShape_PointingAtTheSkillGroup_G563()
     {
         using var writer = new StringWriter();
         var exitCode = GuideSkillPackCommand.Execute(
@@ -117,39 +61,42 @@ public sealed class GuideSkillPackCommandTests
             writer);
 
         Assert.Equal(0, exitCode);
-        using var doc = JsonDocument.Parse(writer.ToString());
-        var root = doc.RootElement;
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
 
-        Assert.Equal("intent-cli", root.GetProperty("skill_name").GetString());
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("authority_boundary").GetString()));
+        Assert.Equal("deprecated", root.GetProperty("status").GetString());
+        Assert.Equal("skill", root.GetProperty("superseded_by").GetString());
+        Assert.Contains("DEPRECATED", root.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("G559", root.GetProperty("reason").GetString()!, StringComparison.Ordinal);
 
-        var roleNames = root.GetProperty("roles").EnumerateArray()
-            .Select(r => r.GetProperty("name").GetString())
+        var useInstead = root.GetProperty("use_instead")
+            .EnumerateArray()
+            .Select(entry => entry.GetString()!)
             .ToArray();
-        Assert.Equal(new[] { "design", "implement", "review", "orchestrator", "generic" }, roleNames);
+        Assert.Equal(3, useInstead.Length);
+        Assert.Contains(useInstead, entry => entry.StartsWith("intent-cli skill list", StringComparison.Ordinal));
+        Assert.Contains(useInstead, entry => entry.StartsWith("intent-cli skill install", StringComparison.Ordinal));
+        Assert.Contains(useInstead, entry => entry.StartsWith("intent-cli skill diff", StringComparison.Ordinal));
 
-        var fields = root.GetProperty("fixed_conditions").EnumerateArray()
-            .Select(c => c.GetProperty("field").GetString())
-            .ToArray();
-        Assert.Contains("cwd / worktree", fields);
-        Assert.Contains("domain", fields);
-        Assert.Contains("target repo", fields);
-        Assert.Contains("implementation base branch", fields);
-
-        Assert.Equal("dry-run", root.GetProperty("install_plan").GetProperty("mode").GetString());
-        Assert.NotEmpty(root.GetProperty("guardrails").EnumerateArray());
-        Assert.NotEmpty(root.GetProperty("concept_model").EnumerateArray());
-        Assert.NotEmpty(root.GetProperty("first_call_sequence").EnumerateArray());
-        Assert.NotEmpty(root.GetProperty("fail_closed").EnumerateArray());
+        // The old skill-body shape is gone from JSON too, so a consumer that
+        // parsed it fails loudly instead of reading a stale body.
+        Assert.False(root.TryGetProperty("roles", out _));
+        Assert.False(root.TryGetProperty("fixed_conditions", out _));
+        Assert.False(root.TryGetProperty("install_plan", out _));
+        Assert.False(root.TryGetProperty("guardrails", out _));
     }
 
     [Fact]
-    public void Execute_UsesConfiguredDomain_WhenNoOverrideProvided()
+    public void Execute_StillAcceptsTheOldArguments_SoExistingInvocationsReachThePointer_G563()
     {
-        var output = RunMarkdown([]);
+        // A caller with the G488 invocation in a script should land on the
+        // pointer, not on an argument error that hides the redirection.
+        var output = RunMarkdown(["--domain", "some-domain", "--target-repo", "owner/repo"]);
 
-        // CreateContext configures domain = intent-cli; it is surfaced as the fixed condition value.
-        Assert.Contains("**domain** = `intent-cli`", output, StringComparison.Ordinal);
+        Assert.Contains("deprecated (G563)", output, StringComparison.Ordinal);
+        // …and the arguments no longer select any content.
+        Assert.DoesNotContain("some-domain", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("owner/repo", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -163,7 +110,7 @@ public sealed class GuideSkillPackCommandTests
     }
 
     [Fact]
-    public void Execute_Help_ExplainsThinAndDryRun()
+    public void Execute_Help_AnnouncesTheDeprecationAndTheReplacement_G563()
     {
         using var writer = new StringWriter();
         var exitCode = GuideSkillPackCommand.Execute(CreateContext(), ["--help"], writer);
@@ -171,8 +118,8 @@ public sealed class GuideSkillPackCommandTests
         Assert.Equal(0, exitCode);
         var output = writer.ToString();
         Assert.Contains("guide skill-pack", output, StringComparison.Ordinal);
-        Assert.Contains("thin", output, StringComparison.Ordinal);
-        Assert.Contains("writes no files", output, StringComparison.Ordinal);
+        Assert.Contains("DEPRECATED (G563)", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli skill install", output, StringComparison.Ordinal);
     }
 
     private static string RunMarkdown(string[] args)

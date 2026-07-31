@@ -124,6 +124,7 @@ Organization steps:
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files. Use `intent-cli guide ...` and `intent-cli intent ...` instead.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not call `intent-cli run`. `run` is advanced runtime, not the intent-work path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -150,7 +151,7 @@ Hard rules:
             ForbiddenSources = new[]
             {
                 "intents/rules/**",
-                "local skill files",
+                DispatcherSkillCarveOut.ForbiddenSourceItem,
                 "copied prompt files"
             },
             ClarificationFormat = "background, question, options, pros/cons, and recommendation",
@@ -186,6 +187,7 @@ Next-slice steps:
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files. Use `intent-cli guide ...` and `intent-cli intent ...` instead.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not call `intent-cli run`. `run` is advanced runtime, not the intent-work path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -213,7 +215,7 @@ Hard rules:
             ForbiddenSources = new[]
             {
                 "intents/rules/**",
-                "local skill files",
+                DispatcherSkillCarveOut.ForbiddenSourceItem,
                 "copied prompt files"
             },
             ClarificationFormat = "background, question, options, pros/cons, and recommendation",
@@ -248,6 +250,7 @@ Packet preload steps:
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files. Use `intent-cli guide ...` and `intent-cli intent ...` instead.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not call `intent-cli run`. `run` is advanced runtime, not the intent-work path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -275,7 +278,7 @@ Hard rules:
             ForbiddenSources = new[]
             {
                 "intents/rules/**",
-                "local skill files",
+                DispatcherSkillCarveOut.ForbiddenSourceItem,
                 "copied prompt files"
             },
             ClarificationFormat = "background, question, options, pros/cons, and recommendation",
@@ -314,6 +317,7 @@ Clarification steps:
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files. Use `intent-cli guide ...` and `intent-cli intent ...` instead.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not call `intent-cli run`. `run` is advanced runtime, not the intent-work path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -340,7 +344,7 @@ Hard rules:
             ForbiddenSources = new[]
             {
                 "intents/rules/**",
-                "local skill files",
+                DispatcherSkillCarveOut.ForbiddenSourceItem,
                 "copied prompt files"
             },
             ClarificationFormat = "background, question, options, pros/cons, and recommendation",
@@ -398,6 +402,7 @@ Issue publication (at most one per wake):
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files. Use `intent-cli guide ...`, `intent-cli intent ...`, and `intent-cli interview ...` instead.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not call `intent-cli run`. `run` is advanced runtime, not the intent-work path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -425,7 +430,7 @@ Hard rules:
             ForbiddenSources = new[]
             {
                 "intents/rules/**",
-                "local skill files",
+                DispatcherSkillCarveOut.ForbiddenSourceItem,
                 "copied prompt files"
             },
             ClarificationFormat = "background, question, options, pros/cons, and recommendation",
@@ -504,6 +509,7 @@ Tree-layout authoring steps:
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files. Use `intent-cli guide ...` and `intent-cli intent ...` instead.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not call `intent-cli run`. `run` is advanced runtime, not the intent-work path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -530,7 +536,7 @@ Hard rules:
             ForbiddenSources = new[]
             {
                 "intents/rules/**",
-                "local skill files",
+                DispatcherSkillCarveOut.ForbiddenSourceItem,
                 "copied prompt files"
             },
             ClarificationFormat = "background, question, options, pros/cons, and recommendation",
@@ -642,7 +648,7 @@ Hard rules:
             ForbiddenSources = new[]
             {
                 "intents/rules/**",
-                "local skill files",
+                DispatcherSkillCarveOut.ForbiddenSourceItem,
                 "copied prompt files"
             },
             ClarificationFormat = "background, question, options, pros/cons, and recommendation",

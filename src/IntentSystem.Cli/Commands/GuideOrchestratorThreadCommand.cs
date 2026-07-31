@@ -265,8 +265,10 @@ internal static class GuideOrchestratorThreadCommand
                     + "thread, domain `<domain>` against `<owner/repo>` using `<agent>`: on each run perform exactly "
                     + "ONE orchestrator wake — check design-side progress and agmsg replies, ask intent-cli for state "
                     + "(`intent status`, `worker next-action --github-only`, `automation host-review-preflight`), "
-                    + "verify the GitHub facts (CI/approval/merge/closeout), then send AT MOST ONE message (one "
-                    + "delegation, one repair, or one escalation) and exit. Prefer the message-driven steady state "
+                    + "verify the GitHub facts (CI/approval/merge/closeout), then send this wake's messages under the "
+                    + "G524 cap — AT MOST ONE DELEGATION PER RECEIVER (implementation, review), NOT at-most-one-message "
+                    + "overall, so a publish plus its same-wake delegation, one repair per stalled receiver, and one "
+                    + "operator escalation may all go out together — and exit. Prefer the message-driven steady state "
                     + "(implementation/review agmsg replies already wake the orchestrator); use this timer only when "
                     + "the operator explicitly wants scheduled fallback/legacy polling. Do not run implementation/"
                     + "review loops; they are loopless receivers."),
@@ -274,7 +276,8 @@ internal static class GuideOrchestratorThreadCommand
                     "OPTIONAL fallback/legacy polling — Claude same-thread setup for the ORCHESTRATOR thread, domain "
                     + "`<domain>` against `<owner/repo>`: in the orchestrator thread run `/loop 5m` with the "
                     + "orchestrator prompt so the same thread re-wakes every 5 minutes. Each wake does exactly one "
-                    + "orchestrator pass (read replies, check intent-cli / GitHub state, send AT MOST ONE message). "
+                    + "orchestrator pass (read replies, check intent-cli / GitHub state, send this wake's messages under "
+                    + "the G524 cap — AT MOST ONE DELEGATION PER RECEIVER, NOT at-most-one-message overall). "
                     + "Prefer the message-driven steady state (implementation/review agmsg replies already wake the "
                     + "orchestrator); use this timer only when the operator explicitly wants scheduled fallback/legacy "
                     + "polling. Do NOT also launch `/loop` in the implementation or review threads — those are "
@@ -763,7 +766,8 @@ internal static class GuideOrchestratorThreadCommand
                     + "minutes IN THE ORCHESTRATOR THREAD; each wake runs `intent-cli automation heartbeat --domain "
                     + "<domain> --repo <owner/repo> --format json` in addition to the normal orchestrator wake "
                     + "checks, and when `stale` is `true` treats the returned `message_body` as this wake's "
-                    + "repair/escalation signal (still AT MOST ONE message per wake, per the G524 wake contract)."),
+                    + "repair/escalation signal (still under the G524 wake contract's AT MOST ONE DELEGATION PER "
+                    + "RECEIVER cap, not an at-most-one-message cap)."),
                 RetiredCronNote =
                     "RETIRED (G539): the external cron/launchd OS-scheduler recommendation added by G526 is "
                     + "retired. Reasons: (1) credential-store access — the wrapper's `gh`/agmsg auth commonly "
@@ -1507,8 +1511,9 @@ internal static class GuideOrchestratorThreadCommand
                 AuthorityBoundary =
                     "attending a pane is not authority to decide for the operator. The design "
                     + "thread may act ONLY on pane contents it has actually READ (never on a blind keystroke into a "
-                    + "dialog it has not rendered). Operator authorization can extend ONLY to read-pane TRUST/ALLOWLIST "
-                    + "cases — such as the design thread's own hook-trust case, which it may accept for itself. "
+                    + "dialog it has not rendered). After that verified read, authorization extends ONLY to the four "
+                    + "MAY-answer classes the supervision section grants — " + SupervisionMayAnswerClasses.InlineList
+                    + " — and to nothing else. "
                     + "CREDENTIAL, SECURITY, and PERMISSION prompts are NEVER answerable by the design thread: they "
                     + "ALWAYS remain unanswered and are ALWAYS ESCALATED to the operator, with or without prior "
                     + "authorization — no authorization makes them answerable. Unsticking a pane is not deciding for "
@@ -1888,14 +1893,14 @@ internal static class GuideOrchestratorThreadCommand
             {
                 new OrchestratorSupervisionMayAnswer
                 {
-                    Dialog = "confirmations of work the design thread itself requested",
+                    Dialog = SupervisionMayAnswerClasses.RequestedConfirmations,
                     Verification =
                         "the read pane's prompt must match an action THIS design thread just initiated — same target, "
                         + "same operation. A confirmation it cannot trace to its own request is not its to answer.",
                 },
                 new OrchestratorSupervisionMayAnswer
                 {
-                    Dialog = "command approvals verified read-only",
+                    Dialog = SupervisionMayAnswerClasses.VerifiedReadOnlyCommandApprovals,
                     Verification =
                         "the exact command shown in the pane must be read and verified to be READ-ONLY. Anything that "
                         + "writes, deletes, installs, publishes, or mutates state fails this check and escalates — "
@@ -1903,7 +1908,7 @@ internal static class GuideOrchestratorThreadCommand
                 },
                 new OrchestratorSupervisionMayAnswer
                 {
-                    Dialog = "trust screens for hooks the design thread itself installed",
+                    Dialog = SupervisionMayAnswerClasses.OwnHookTrustScreens,
                     Verification =
                         "the trust screen must name a hook THIS design thread installed as part of this provisioning "
                         + "(its own hook-trust case). A trust screen for anything it did not install is not its to "
@@ -1911,7 +1916,7 @@ internal static class GuideOrchestratorThreadCommand
                 },
                 new OrchestratorSupervisionMayAnswer
                 {
-                    Dialog = "operator-preauthorized mode changes",
+                    Dialog = SupervisionMayAnswerClasses.PreauthorizedModeChanges,
                     Verification =
                         "the operator must have PREAUTHORIZED this specific mode change, and the read pane must show "
                         + "that same change. Preauthorization is specific and prior — it is never inferred from a "

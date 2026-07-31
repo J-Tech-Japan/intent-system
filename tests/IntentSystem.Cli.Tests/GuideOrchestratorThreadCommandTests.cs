@@ -1925,11 +1925,15 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("ONLY on pane contents it has actually READ", output, StringComparison.Ordinal);
         Assert.Contains("Unsticking a pane is not deciding for the operator", output, StringComparison.Ordinal);
 
-        // Round-2 repair: authorization reaches read-pane trust/allowlist cases
-        // ONLY — credential/security/permission prompts are absolutely never
+        // G563: authorization reaches the four MAY-answer classes the
+        // supervision section grants and nothing else. The earlier
+        // "read-pane TRUST/ALLOWLIST cases ONLY" framing was narrower than
+        // that list and silently forbade two of the granted classes.
+        Assert.Contains("the four MAY-answer classes the supervision section grants", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("ONLY to read-pane TRUST/ALLOWLIST", output, StringComparison.Ordinal);
+
+        // Credential/security/permission prompts are absolutely never
         // answerable by design, with or without prior authorization.
-        Assert.Contains("ONLY to read-pane TRUST/ALLOWLIST", output, StringComparison.Ordinal);
-        Assert.Contains("own hook-trust case, which it may accept for itself", output, StringComparison.Ordinal);
         Assert.Contains("CREDENTIAL, SECURITY, and PERMISSION prompts are NEVER answerable", output, StringComparison.Ordinal);
         Assert.Contains("ALWAYS remain unanswered and are ALWAYS ESCALATED to the operator", output, StringComparison.Ordinal);
         Assert.Contains("with or without prior authorization", output, StringComparison.Ordinal);
@@ -2003,7 +2007,10 @@ public sealed class GuideOrchestratorThreadCommandTests
         // folded into the attended-first-run rule.
         var authorityBoundary = launchRules.GetProperty("authority_boundary").GetString()!;
         Assert.Contains("READ", authorityBoundary, StringComparison.Ordinal);
-        Assert.Contains("read-pane TRUST/ALLOWLIST", authorityBoundary, StringComparison.Ordinal);
+        // G563: the JSON boundary field enumerates the same four MAY-answer
+        // classes the supervision section grants, not a narrower subset.
+        Assert.Contains("the four MAY-answer classes the supervision section grants", authorityBoundary, StringComparison.Ordinal);
+        Assert.DoesNotContain("read-pane TRUST/ALLOWLIST", authorityBoundary, StringComparison.Ordinal);
         // Round-2 repair: the escalation rule is absolute in JSON too.
         Assert.Contains("NEVER answerable", authorityBoundary, StringComparison.Ordinal);
         Assert.Contains("ALWAYS ESCALATED to the operator", authorityBoundary, StringComparison.Ordinal);

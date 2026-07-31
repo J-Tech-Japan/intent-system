@@ -162,7 +162,7 @@ internal static class GuideIntentWorkAuditCommand
             ForbiddenSources =
             [
                 "intents/rules/**",
-                "local skill files (gh-issue-to-pr, gh-fix-pr-comment, etc.)",
+                DispatcherSkillCarveOut.ForbiddenSourceItemWithExamples,
                 "copied prompt files"
             ],
             HardRules =

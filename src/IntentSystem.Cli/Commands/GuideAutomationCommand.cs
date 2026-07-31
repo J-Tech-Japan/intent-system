@@ -338,14 +338,15 @@ Final report must include:
     internal const string ChildImplementUpdateHeader = "# Automation: Child Implement & Update Loop";
 
     internal const string ChildImplementUpdateBody =
-"""
+$"""
 Run one wake of the child coding automation loop on a recurring schedule. Each wake handles at most one action.
 
 Assumptions:
 - Current working directory is the target repository worktree root.
 - `intent-cli` must be available on PATH.
 - Use `gh` CLI for GitHub operations.
-- Do not use `gh-issue-to-pr`, `gh-fix-pr-comment`, or any local skill file; use `intent-cli guide ...` instead.
+- Do not use `gh-issue-to-pr`, `gh-fix-pr-comment`, or any local skill file that restates workflow; use `intent-cli guide ...` instead.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not use GitHub MCP.
 - Do not call `intent-cli run`.
 - Do not run `dotnet run` as a fallback for `intent-cli`.

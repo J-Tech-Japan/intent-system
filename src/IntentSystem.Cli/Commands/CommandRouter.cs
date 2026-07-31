@@ -524,7 +524,7 @@ internal static class CommandRouter
         writer.WriteLine("Prefer intent-cli-backed metadata mutation over hand-editing:");
         writer.WriteLine("- Ask `intent-cli guide commands list --format json` (or `intent-cli automation summary --domain <d> --format json`) which command performs the transition.");
         writer.WriteLine("- Do not directly edit queue-state, runs logs, publish artifacts, workflow labels, or runtime metadata by hand when a supported intent-cli command exists.");
-        writer.WriteLine("- Child implementation loops MUST NOT inspect or mutate parent host queue-state, runs logs, packet directories, intent tree, review-runtime state, local rules, or local skills (G300 / G330 / G333).");
+        writer.WriteLine("- Child implementation loops MUST NOT inspect or mutate parent host queue-state, runs logs, packet directories, intent tree, review-runtime state, local rules, or local skills (G300 / G330 / G333). " + DispatcherSkillCarveOut.BoundaryClause);
     }
 
     /// <summary>

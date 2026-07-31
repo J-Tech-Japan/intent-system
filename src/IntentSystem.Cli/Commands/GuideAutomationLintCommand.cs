@@ -313,7 +313,7 @@ internal static class GuideAutomationContractLinter
             new[]
             {
                 "intents/rules/**",
-                "local skill files",
+                DispatcherSkillCarveOut.ForbiddenSourceItem,
                 "copied prompt"
             }),
         new Clause(
