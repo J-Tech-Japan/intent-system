@@ -209,7 +209,7 @@ This gate fails closed — if any item is unmet, do not publish the Release yet.
 
 - [ ] Every release-bound packet is **complete and its PR merged to `main`**:
       G559 (PR #1224), G560 (PR #1222), G561 (PR #1226), and G563
-      (PR #<G563-PR>), plus the G562 release-prep (PR #1228). Confirm on the
+      (PR #1230), plus the G562 release-prep (PR #1228). Confirm on the
       host/review side via the host queue-state /
       GitHub PR state — the child implementation loop must not read parent
       queue-state, so this is a host-owned precondition.

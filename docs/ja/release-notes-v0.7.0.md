@@ -203,7 +203,7 @@ dotnet tool update -g JTechJapan.IntentSystem.Cli --version 0.7.0
 ください。
 
 - [ ] リリース対象のパケットがすべて**完了し、その PR が `main` にマージ済み**である:
-      G559(PR #1224)、G560(PR #1222)、G561(PR #1226)、G563(PR #<G563-PR>)、
+      G559(PR #1224)、G560(PR #1222)、G561(PR #1226)、G563(PR #1230)、
       および G562 release-prep(PR #1228)。
       確認は host/review 側で host queue-state / GitHub PR state から行ってください —
       child implementation loop は parent queue-state を読んではならないため、これは
