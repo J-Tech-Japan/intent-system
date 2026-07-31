@@ -58,6 +58,25 @@ namespace IntentSystem.Cli.Commands;
 /// cref="IntentNextSliceCommand"/>'s dependency/blocked-by gate rejects any
 /// item with a non-empty <c>blocked_by</c> regardless of its state — i.e. a
 /// "cleared" unit that is still, in effect, blocked.
+///
+/// G561: <c>--clear --pre-publish</c> is the PRE-PUBLISH exit. Publish-priority
+/// ordering works by blocking a not-yet-published unit so the selector skips it
+/// and the priority unit is picked instead — but an unpublished unit has no
+/// GitHub issue, so its <c>linked_issue</c> is null and the two-sided path above
+/// cannot run: it requires a complete linkage before touching anything, and
+/// correctly so. Before this flag there was no canonical exit at all. A bare
+/// <c>queue transition</c> would strand <c>blocked_by</c> populated, leaving the
+/// unit selector-ineligible while claiming to be unblocked, and the design
+/// thread had to issue a one-off ruling to get a single unit moving (field
+/// incident 2026-07-31, G559 wake).
+///
+/// The pre-publish path converges the queue side ONLY — same run-log-first
+/// ordering, same guarded write, same idempotency — and performs no GitHub
+/// interaction whatsoever, because there is no issue to interact with. It fails
+/// closed when the unit HAS a <c>linked_issue</c> (the two-sided path applies
+/// and must not be bypassed) and when <c>--repo</c>/<c>--issue</c> are supplied
+/// (identifiers this path can neither verify nor act on: accepting them would
+/// let a caller believe a GitHub side was converged when none was touched).
 /// </summary>
 internal static class AutomationIssueBlockCommand
 {
@@ -87,7 +106,8 @@ internal static class AutomationIssueBlockCommand
 
     private const string UsageLine =
         "Usage: intent-cli automation issue-block <execution-unit> --repo <owner/repo> --issue <n> --reason <text> [--write] [--dry-run] [--format text|json]\n"
-        + "       intent-cli automation issue-block <execution-unit> --repo <owner/repo> --issue <n> --clear [--write] [--dry-run] [--format text|json]";
+        + "       intent-cli automation issue-block <execution-unit> --repo <owner/repo> --issue <n> --clear [--write] [--dry-run] [--format text|json]\n"
+        + "       intent-cli automation issue-block <execution-unit> --clear --pre-publish [--write] [--dry-run] [--format text|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -101,7 +121,7 @@ internal static class AutomationIssueBlockCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var executionUnit, out var repo, out var issue, out var reason, out var clear, out var write, out var format, out var error))
+        if (!TryParseArguments(args, out var executionUnit, out var repo, out var issue, out var reason, out var clear, out var prePublish, out var write, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -133,9 +153,20 @@ internal static class AutomationIssueBlockCommand
             return 1;
         }
 
-        if (!TryValidateLinkedIssue(queueItem, executionUnit!, repo!, issue!.Value, out var linkageError))
+        if (!prePublish && !TryValidateLinkedIssue(queueItem, executionUnit!, repo!, issue!.Value, out var linkageError))
         {
             writer.WriteLine(linkageError);
+            return 1;
+        }
+
+        // G561: the pre-publish path exists precisely BECAUSE there is no
+        // linkage. A unit that has one must go through the two-sided path, which
+        // converges the GitHub label as well — silently taking the queue-only
+        // shortcut for a published unit would recreate the exact label/queue
+        // drift G545 closed.
+        if (prePublish && !TryValidateNoLinkedIssue(queueItem, executionUnit!, out var prePublishLinkageError))
+        {
+            writer.WriteLine(prePublishLinkageError);
             return 1;
         }
 
@@ -155,6 +186,12 @@ internal static class AutomationIssueBlockCommand
         }
         var beforeState = queueItem.State;
         var beforeBlockedBy = queueItem.BlockedBy;
+
+        if (prePublish)
+        {
+            return ExecutePrePublishClear(
+                writer, queueStatePath, runLogPath, runEvents, queueState, queueItem, executionUnit!, beforeState, beforeBlockedBy, write, format, now);
+        }
 
         QueueQueueSideResult queueResult;
         try
@@ -293,6 +330,105 @@ internal static class AutomationIssueBlockCommand
         bool AlreadyConverged, bool Applied, QueueItemState AfterState, IReadOnlyList<string> AfterBlockedBy);
 
     /// <summary>
+    /// G561: the pre-publish exit. Converges the queue side ONLY — state to
+    /// <see cref="UnblockTargetState"/> and <c>blocked_by</c> to empty, in one
+    /// guarded write, through the SAME <see cref="ConvergeQueueSide"/> used by
+    /// the two-sided path (run-log event appended first, queue-state second,
+    /// idempotent retry reuse). No GitHub mutator is constructed and no labels
+    /// are read: an unpublished unit has no issue, and a command that reached
+    /// for one would fail on absent evidence rather than on a real problem.
+    ///
+    /// The durable event names WHAT was cleared, not merely that something was:
+    /// the wait reason is the whole content of a publish-priority block, and a
+    /// run log recording only "queued" would leave the priority decision
+    /// unauditable after the fact.
+    /// </summary>
+    private static int ExecutePrePublishClear(
+        TextWriter writer,
+        string queueStatePath,
+        string runLogPath,
+        IReadOnlyList<RunEvent> runEvents,
+        QueueState queueState,
+        QueueItem queueItem,
+        string executionUnit,
+        QueueItemState beforeState,
+        IReadOnlyList<string> beforeBlockedBy,
+        bool write,
+        string format,
+        DateTimeOffset now)
+    {
+        var clearedReason = beforeBlockedBy.Count == 0
+            ? null
+            : $"pre-publish unblock; cleared wait reason: {string.Join("; ", beforeBlockedBy)}";
+
+        QueueQueueSideResult queueResult;
+        try
+        {
+            queueResult = ConvergeQueueSide(
+                queueStatePath, runLogPath, runEvents, queueState, queueItem, executionUnit,
+                UnblockTargetState, reason: null, write, now, unblockEventReason: clearedReason);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or JsonException)
+        {
+            writer.WriteLine($"failed to converge queue-state for '{executionUnit}': {exception.Message}");
+            return 1;
+        }
+
+        // Converged means the queue side — the only side this path owns — now
+        // shows a selectable unit. Dry-run never claims it, since nothing was
+        // written.
+        var converged = write
+            && queueResult.AfterState != QueueItemState.Blocked
+            && queueResult.AfterBlockedBy.Count == 0;
+
+        var result = new AutomationIssueBlockPrePublishResult
+        {
+            ExecutionUnit = executionUnit,
+            Mode = write ? WorkerClaimCompleteConstants.Modes.Write : WorkerClaimCompleteConstants.Modes.DryRun,
+            ClearedBlockedBy = beforeBlockedBy,
+            Queue = new AutomationIssueBlockQueueResult
+            {
+                BeforeState = FormatState(beforeState),
+                BeforeBlockedBy = beforeBlockedBy,
+                TargetState = FormatState(UnblockTargetState),
+                AlreadyConverged = queueResult.AlreadyConverged,
+                Applied = queueResult.Applied,
+                AfterState = FormatState(queueResult.AfterState),
+                AfterBlockedBy = queueResult.AfterBlockedBy,
+            },
+            Converged = converged,
+            TransitionedAt = now,
+            Summary = queueResult.AlreadyConverged
+                ? $"Pre-publish unblock for '{executionUnit}': queue-state already converged (no linked issue; no GitHub side to converge)."
+                : $"Pre-publish unblock for '{executionUnit}': queue-state {(write ? "transitioned" : "would transition")} to "
+                  + $"{FormatState(queueResult.AfterState)} with blocked_by emptied (no linked issue; no GitHub side to converge).",
+        };
+
+        if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+        {
+            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+        }
+        else
+        {
+            writer.WriteLine(result.Summary);
+            writer.WriteLine($"mode: {result.Mode}");
+            writer.WriteLine($"execution_unit: {result.ExecutionUnit}");
+            writer.WriteLine("pre_publish: true");
+            writer.WriteLine($"cleared_blocked_by: {(result.ClearedBlockedBy.Count == 0 ? "(none)" : string.Join(", ", result.ClearedBlockedBy))}");
+            writer.WriteLine($"queue.before_state: {result.Queue.BeforeState}");
+            writer.WriteLine($"queue.target_state: {result.Queue.TargetState}");
+            writer.WriteLine($"queue.already_converged: {result.Queue.AlreadyConverged.ToString().ToLowerInvariant()}");
+            writer.WriteLine($"queue.applied: {result.Queue.Applied.ToString().ToLowerInvariant()}");
+            writer.WriteLine($"queue.after_state: {result.Queue.AfterState}");
+            writer.WriteLine($"queue.after_blocked_by: {(result.Queue.AfterBlockedBy.Count == 0 ? "(none)" : string.Join(", ", result.Queue.AfterBlockedBy))}");
+            writer.WriteLine($"converged: {result.Converged.ToString().ToLowerInvariant()}");
+            writer.WriteLine($"transitioned_at: {result.TransitionedAt:O}");
+        }
+
+        return 0;
+    }
+
+    /// <summary>
     /// Converges the queue-side state toward <paramref name="targetState"/>
     /// (Blocked with <paramref name="reason"/>, or the unblock target with no
     /// reason). Idempotent: a no-op when already converged. Dry-run reports
@@ -308,7 +444,8 @@ internal static class AutomationIssueBlockCommand
         QueueItemState targetState,
         string? reason,
         bool write,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        string? unblockEventReason = null)
     {
         // Convergence is judged on BOTH queue fields this command owns:
         // blocked means state=blocked AND blocked_by == [reason]; unblocked
@@ -367,6 +504,17 @@ internal static class AutomationIssueBlockCommand
                 ? QueueManager.TransitionBlocking(queueState, executionUnit, targetState, reason!, TransitionActor, now)
                 : QueueManager.TransitionNonBlocking(queueState, executionUnit, targetState, TransitionActor, now);
             runEvent = transitionResult.Event;
+
+            // G561: QueueManager's non-blocking transition deliberately records
+            // no reason (it is a general-purpose transition). The pre-publish
+            // exit supplies one so the audit trail says which wait was cleared
+            // — without changing QueueManager, whose published-unit semantics
+            // are out of scope here.
+            if (targetState != QueueItemState.Blocked && !string.IsNullOrWhiteSpace(unblockEventReason))
+            {
+                runEvent = runEvent with { Reason = unblockEventReason };
+            }
+
             updatedState = targetState == QueueItemState.Blocked
                 ? transitionResult.UpdatedState
                 : ClearQueueSideBlocking(transitionResult.UpdatedState, executionUnit, targetState);
@@ -498,6 +646,33 @@ internal static class AutomationIssueBlockCommand
         return true;
     }
 
+    /// <summary>
+    /// G561: the pre-publish path's own fail-closed guard — the exact inverse of
+    /// <see cref="TryValidateLinkedIssue"/>. ANY trace of linkage (a repo, a
+    /// number, or both) means this unit is or was published, so the two-sided
+    /// path owns it: that path also converges the GitHub label, and routing a
+    /// linked unit through the queue-only shortcut would leave the label behind
+    /// — the precise drift G545 exists to prevent. A partial linkage is refused
+    /// too: it is evidence of a publish attempt, not evidence of its absence.
+    /// </summary>
+    private static bool TryValidateNoLinkedIssue(QueueItem queueItem, string executionUnit, out string error)
+    {
+        var linked = queueItem.LinkedIssue;
+        if (linked is null || (string.IsNullOrWhiteSpace(linked.Repo) && linked.Number is null))
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        error =
+            $"'{executionUnit}' has a queue-state linked_issue ({DescribeLinkage(linked)}), so it is not a pre-publish "
+            + "unit; refusing the queue-only pre-publish clear. Use the two-sided form "
+            + $"(`intent-cli automation issue-block {executionUnit} --repo <owner/repo> --issue <n> --clear --write`), "
+            + "which also converges the GitHub blocked label — clearing only the queue side for a published unit is "
+            + "exactly the label/queue drift the two-sided command exists to prevent.";
+        return false;
+    }
+
     private static string DescribeLinkage(LinkedIssue? linked) => linked is null
         ? "no linked_issue at all"
         : $"repo '{(string.IsNullOrWhiteSpace(linked.Repo) ? "(none)" : linked.Repo)}', number {(linked.Number is null ? "(none)" : linked.Number.Value.ToString(System.Globalization.CultureInfo.InvariantCulture))}";
@@ -626,6 +801,7 @@ internal static class AutomationIssueBlockCommand
         out int? issue,
         out string? reason,
         out bool clear,
+        out bool prePublish,
         out bool write,
         out string format,
         out string error)
@@ -635,6 +811,7 @@ internal static class AutomationIssueBlockCommand
         issue = null;
         reason = null;
         clear = false;
+        prePublish = false;
         write = false;
         format = FormatText;
         error = string.Empty;
@@ -674,6 +851,9 @@ internal static class AutomationIssueBlockCommand
                 case "--clear":
                     clear = true;
                     break;
+                case "--pre-publish":
+                    prePublish = true;
+                    break;
                 case "--write":
                     write = true;
                     break;
@@ -692,18 +872,37 @@ internal static class AutomationIssueBlockCommand
                     format = requestedFormat;
                     break;
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: <execution-unit> --repo <owner/repo> --issue <n> [--reason <text>] [--clear] [--write] [--dry-run] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: <execution-unit> --repo <owner/repo> --issue <n> [--reason <text>] [--clear] [--pre-publish] [--write] [--dry-run] [--format text|json].";
                     return false;
             }
         }
 
-        if (string.IsNullOrWhiteSpace(repo))
+        // G561: --pre-publish is an unblock-only path. Blocking a unit already
+        // works before publish; what was missing was the exit.
+        if (prePublish && !clear)
+        {
+            error = "--pre-publish is only supported together with --clear — it is the pre-publish EXIT from a blocked state, not a way to block.";
+            return false;
+        }
+
+        // Refused rather than ignored: a caller who passes identifiers expects
+        // them to be acted on, and this path touches no GitHub side at all.
+        if (prePublish && (!string.IsNullOrWhiteSpace(repo) || issue is not null))
+        {
+            error =
+                "--pre-publish takes no --repo/--issue: a pre-publish unit has no GitHub issue, and this path converges "
+                + "the queue side only. If the unit does have a linked issue, use the two-sided form "
+                + "(--repo <owner/repo> --issue <n> --clear), which also converges the blocked label.";
+            return false;
+        }
+
+        if (!prePublish && string.IsNullOrWhiteSpace(repo))
         {
             error = "--repo is required.";
             return false;
         }
 
-        if (issue is null)
+        if (!prePublish && issue is null)
         {
             error = "--issue is required.";
             return false;
@@ -769,7 +968,48 @@ internal static class AutomationIssueBlockCommand
         writer.WriteLine("side is converged independently and idempotently, so re-running after a partial failure");
         writer.WriteLine("only retries whatever has not yet converged. Never uses raw gh label mutation or a direct");
         writer.WriteLine("queue-state hand-edit.");
+        writer.WriteLine();
+        writer.WriteLine("--clear --pre-publish (G561) is the exit for a unit blocked BEFORE publish to encode publish");
+        writer.WriteLine("priority. Such a unit has no linked issue, so there is no GitHub side to converge: the queue");
+        writer.WriteLine("side alone moves to queued with blocked_by emptied, in one guarded write, and the run-log");
+        writer.WriteLine("event names the wait reason that was cleared. It refuses a unit that HAS a linked issue (use");
+        writer.WriteLine("the two-sided form) and refuses --repo/--issue, which it can neither verify nor act on.");
     }
+}
+
+/// <summary>
+/// G561: the pre-publish clear's own result shape. Deliberately NOT the
+/// two-sided <see cref="AutomationIssueBlockResult"/>: that record requires a
+/// repo, an issue number, an issue URL, and a label block, and emitting
+/// placeholder values for a unit that has no issue would put a fabricated
+/// GitHub reference into a durable, machine-read output.
+/// </summary>
+internal sealed record AutomationIssueBlockPrePublishResult
+{
+    [JsonPropertyName("execution_unit")]
+    public required string ExecutionUnit { get; init; }
+
+    [JsonPropertyName("mode")]
+    public required string Mode { get; init; }
+
+    [JsonPropertyName("pre_publish")]
+    public bool PrePublish => true;
+
+    /// <summary>The wait reason(s) this clear removed — the content of the publish-priority decision being unwound.</summary>
+    [JsonPropertyName("cleared_blocked_by")]
+    public required IReadOnlyList<string> ClearedBlockedBy { get; init; }
+
+    [JsonPropertyName("queue")]
+    public required AutomationIssueBlockQueueResult Queue { get; init; }
+
+    [JsonPropertyName("converged")]
+    public required bool Converged { get; init; }
+
+    [JsonPropertyName("transitioned_at")]
+    public required DateTimeOffset TransitionedAt { get; init; }
+
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
 }
 
 internal sealed record AutomationIssueBlockResult

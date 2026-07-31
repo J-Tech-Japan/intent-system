@@ -61,26 +61,51 @@ internal static class ClarifyOpenCommand
 
         try
         {
-            var packet = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetPath));
-            if (!string.Equals(
-                    packet.ReviewContextPacket.SourceExecutionUnit,
-                    queueItem.ExecutionUnit,
-                    StringComparison.Ordinal))
+            // G561: read only the facts a clarification record needs. The full
+            // projection contract is NOT applied here — a packet freshly
+            // scaffolded by `packet draft` has no review_context_packet section
+            // and has not filled in most implementation fields, and refusing to
+            // record a blocking question because the packet is still a draft
+            // defeats the point of asking early. The identity check below is
+            // kept absolute; only the incidental fields became optional.
+            var packet = ClarifyPacketFacts.Read(File.ReadAllText(packetPath));
+
+            // A packet that DOES carry the review-context section is still
+            // validated exactly as strictly as before, in the same order and
+            // with the same messages — an existing artifact loses no guard and
+            // sees no changed diagnostic.
+            if (packet.HasReviewContextSection)
             {
-                throw new InvalidOperationException(
-                    $"Review context packet execution unit '{packet.ReviewContextPacket.SourceExecutionUnit}' must match queue item execution unit '{queueItem.ExecutionUnit}'.");
+                if (!string.Equals(
+                        packet.ReviewContextSourceExecutionUnit,
+                        queueItem.ExecutionUnit,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Review context packet execution unit '{packet.ReviewContextSourceExecutionUnit}' must match queue item execution unit '{queueItem.ExecutionUnit}'.");
+                }
+
+                if (!string.Equals(
+                        packet.ReviewContextClarificationReturnPath,
+                        queueItem.ClarificationReturnPath,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Review context packet clarification return path '{packet.ReviewContextClarificationReturnPath}' must match queue item clarification return path '{queueItem.ClarificationReturnPath}'.");
+                }
             }
 
-            if (!string.Equals(
-                    packet.ReviewContextPacket.ClarificationReturnPath,
-                    queueItem.ClarificationReturnPath,
-                    StringComparison.Ordinal))
+            // The strict serializer used to assert that the two sections named
+            // the SAME unit; checking each of them against the queue item is
+            // equivalent for a complete packet and is the only available guard
+            // for a scaffold, which has one section.
+            if (!string.Equals(packet.SourceExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
-                    $"Review context packet clarification return path '{packet.ReviewContextPacket.ClarificationReturnPath}' must match queue item clarification return path '{queueItem.ClarificationReturnPath}'.");
+                    $"Projection packet execution unit '{packet.SourceExecutionUnit}' must match queue item execution unit '{queueItem.ExecutionUnit}'.");
             }
 
-            var reviewContext = ReviewContextMarkdownParser.Parse(File.ReadAllText(reviewContextPath));
+            var reviewContext = ReadReviewContext(File.ReadAllText(reviewContextPath), queueItem.ExecutionUnit);
             if (!string.Equals(reviewContext.SourceExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
@@ -88,7 +113,7 @@ internal static class ClarifyOpenCommand
             }
 
             var timestamp = TimestampFactory();
-            var reason = BuildReason(packet.ImplementationIssuePacket);
+            var reason = BuildReason(packet);
             var transition = QueueManager.TransitionBlocking(
                 queueState,
                 executionUnit,
@@ -119,9 +144,44 @@ internal static class ClarifyOpenCommand
         }
     }
 
+    /// <summary>
+    /// G561: reads review-context.md for the two things a clarification needs —
+    /// the execution-unit identity and the first deterministic check (used only
+    /// to derive a question when the caller did not supply one).
+    ///
+    /// The canonical parser is still what reads it, so its execution-unit
+    /// semantics are unchanged, including the G373 rule that a PRESENT but
+    /// malformed <c># Execution Unit</c> section throws rather than silently
+    /// falling back. The one accommodation is the required
+    /// <c>## Deterministic Review Checks</c> section, which `packet draft`'s
+    /// scaffold does not yet contain: an empty one is supplied so the rest can
+    /// be read. An absent list of checks is a draft that has not been filled in,
+    /// not a malformed artifact — and it costs only the derived question text,
+    /// which <c>--question</c> overrides anyway.
+    /// </summary>
+    private static Review.Models.ReviewContextSnapshot ReadReviewContext(string markdown, string fallbackExecutionUnit)
+    {
+        const string requiredHeading = "Deterministic Review Checks";
+
+        // Detected with the canonical parser's OWN heading rule (a line
+        // starting with "# ", heading text after stripping '#'/' '), so this
+        // never disagrees with what the parser will find.
+        var hasChecksSection = markdown
+            .Split('\n')
+            .Select(line => line.TrimEnd('\r'))
+            .Any(line => line.StartsWith("# ", StringComparison.Ordinal)
+                && string.Equals(line.TrimStart('#', ' '), requiredHeading, StringComparison.Ordinal));
+
+        var readable = hasChecksSection
+            ? markdown
+            : markdown + Environment.NewLine + Environment.NewLine + "# " + requiredHeading + Environment.NewLine;
+
+        return ReviewContextMarkdownParser.Parse(readable, fallbackExecutionUnit);
+    }
+
     private static ClarificationItem BuildClarification(
         QueueItem queueItem,
-        Projection.Models.ProjectionPacketContract packet,
+        ClarifyPacketFacts packet,
         Review.Models.ReviewContextSnapshot reviewContext,
         DateTimeOffset timestamp,
         string reason,
@@ -137,10 +197,13 @@ internal static class ClarifyOpenCommand
             // OPEN artifact itself must carry it — an agmsg message may notify,
             // but it can never substitute for the durable record.
             QuestionText = string.IsNullOrWhiteSpace(inputs.Question)
-                ? BuildQuestionText(packet.ImplementationIssuePacket, reviewContext)
+                ? BuildQuestionText(packet, reviewContext)
                 : inputs.Question!,
             Reason = AppendRecommendation(reason, inputs),
-            AffectedIntents = packet.ReviewContextPacket.IntentReferences,
+            // The review-context section stays the source when the packet has
+            // one, so a complete packet produces the same record it always did;
+            // a scaffold falls back to the implementation section's own list.
+            AffectedIntents = packet.ReviewContextIntentReferences ?? packet.IntentReferences,
             AffectedExecutionUnits = [queueItem.ExecutionUnit],
             BlockingOrNonblocking = BlockingValue,
             ClarificationReturnPath = queueItem.ClarificationReturnPath,
@@ -275,20 +338,32 @@ internal static class ClarifyOpenCommand
         return true;
     }
 
+    /// <summary>
+    /// G561: the derived texts degrade field by field rather than refusing. A
+    /// scaffold has an execution unit and usually a title, and that is enough to
+    /// name what is blocked; the placeholders below make the gap visible in the
+    /// artifact instead of asserting detail the packet does not contain.
+    /// Supplying <c>--question</c> bypasses this entirely.
+    /// </summary>
     private static string BuildQuestionText(
-        Projection.Models.ImplementationIssuePacket issuePacket,
+        ClarifyPacketFacts packet,
         Review.Models.ReviewContextSnapshot reviewContext)
     {
+        var subject = Describe(packet.TargetPart, packet.SourceExecutionUnit);
         var firstCheck = reviewContext.DeterministicReviewChecks.FirstOrDefault();
         return string.IsNullOrWhiteSpace(firstCheck)
-            ? $"Clarify blocker for {issuePacket.TargetPart}: {issuePacket.Goal}"
-            : $"Clarify blocker for {issuePacket.TargetPart}: {firstCheck}";
+            ? $"Clarify blocker for {subject}: {Describe(packet.Goal, "(goal not yet recorded in the packet)")}"
+            : $"Clarify blocker for {subject}: {firstCheck}";
     }
 
-    private static string BuildReason(Projection.Models.ImplementationIssuePacket issuePacket)
+    private static string BuildReason(ClarifyPacketFacts packet)
     {
-        return $"Clarification requested for {issuePacket.IssueTitle}: {issuePacket.Goal}";
+        var title = Describe(packet.IssueTitle, packet.SourceExecutionUnit);
+        return $"Clarification requested for {title}: {Describe(packet.Goal, "(goal not yet recorded in the packet)")}";
     }
+
+    private static string Describe(string? value, string fallback) =>
+        string.IsNullOrWhiteSpace(value) ? fallback : value!;
 
     private static string PersistClarification(string repoRoot, ClarificationItem clarification)
     {
