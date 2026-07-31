@@ -74,7 +74,7 @@ internal static class GuideWorkflowTaskIssuePublishCommand
         "`issue publish-flow` without `--write` is the canonical preflight: it surfaces missing contract sections (Goal / Why / AC / OOS / Verification / Closes ref) BEFORE any GitHub mutation. Always run the dry-run first.",
         "WIP cap (G288) — only one `intent-target` issue/PR at a time per domain by default. If an issue/PR is already `intent-target` and the operator wants to publish another, pass `--allow-wip-cap-override` explicitly; the publish surface refuses silently otherwise.",
         "Prefer intent-cli-backed metadata mutation over hand-editing. Routine automation MUST NOT directly edit queue-state, runs logs, publish artifacts, workflow labels, or runtime metadata by hand when a supported intent-cli command exists.",
-        "Child implementation loops MUST NOT inspect or mutate parent host queue-state, runs logs, packet directories, intent tree, review-runtime state, local rules, or local skills (G300 / G330 / G333). The publish surfaces are host-owned; child agents only ever see the issue once `intent-target` is applied by the host.",
+        "Child implementation loops MUST NOT inspect or mutate parent host queue-state, runs logs, packet directories, intent tree, review-runtime state, local rules, or local skills (G300 / G330 / G333). The publish surfaces are host-owned; child agents only ever see the issue once `intent-target` is applied by the host." + " " + DispatcherSkillCarveOut.BoundaryClause,
         "Never launch AI providers (Claude / Codex / any LLM) from intent-cli. The chat-first model has the human agent driving the conversation."
     };
 

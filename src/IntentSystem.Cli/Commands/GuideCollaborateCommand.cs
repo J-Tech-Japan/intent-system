@@ -132,7 +132,8 @@ internal static class GuideCollaborateCommand
         "AI agent interviews and summarizes: asks clarifying questions, surfaces tradeoffs, drafts contract content for operator acceptance; never mutates canonical state without explicit operator decision.",
         "Operator decides: chooses scope, accepts drafts, authorizes the publish boundary; canonical source-of-truth mutation requires this decision.",
         "intent-cli must not launch AI providers; the AI agent runs separately and consumes intent-cli JSON/markdown.",
-        "Routine collaboration must not require reading `intents/rules` or local skill files; rely on the commands listed below."
+        "Routine collaboration must not require reading `intents/rules` or local skill files that restate workflow; rely on the commands listed below. "
+            + DispatcherSkillCarveOut.Sentence
     };
 
     private static IReadOnlyList<string> SuggestedCommandSequence(string domain) => new[]

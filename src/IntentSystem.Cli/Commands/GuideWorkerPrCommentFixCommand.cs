@@ -102,6 +102,7 @@ Hard rules:
 - Do not create a new branch. Check out and repair the existing PR branch.
 - Repair only the narrow change requested in review comments. Do not widen scope.
 - Do not read `intents/rules/**`, local skill files, or copied prompt files.
+- {DispatcherSkillCarveOut.Sentence}
 - All label transitions go through `intent-cli worker claim` / `intent-cli worker complete`. No manual `gh ... edit --add-label` / `--remove-label` fallback for workflow labels.
 - Do not call `intent-cli run`. `run` is for integration smoke/replay/dogfooding, not the chat-first repair path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
@@ -164,7 +165,7 @@ Repeated-stall recovery (G408: when the same PR has cycled without progress for 
             ForbiddenSources = new[]
             {
                 "gh-fix-pr-comment skill file",
-                "local skill files",
+                DispatcherSkillCarveOut.ForbiddenSourceItem,
                 "copied prompt files",
                 "intents/rules/**"
             },

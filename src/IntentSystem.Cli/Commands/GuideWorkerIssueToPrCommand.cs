@@ -106,7 +106,8 @@ Outcome classification:
 
 Hard rules:
 - Use the issue body as the standalone contract. Do not read parent host packet files, `intents/rules/**`, local skill files, or copied prompt files to fill contract gaps.
-- Do not use the `gh-issue-to-pr` skill file or any local skill file.
+- Do not use the `gh-issue-to-pr` skill file or any local skill file that restates workflow.
+- {DispatcherSkillCarveOut.Sentence}
 - Do not add `intent-target` to the PR; it is host-owned.
 - Do not add `intent-pr-created` to the PR; it is an issue-side completion marker applied by `worker complete`.
 - All label transitions go through `intent-cli worker claim` / `intent-cli worker complete`. No manual `gh ... edit --add-label` / `--remove-label` fallback for workflow labels.
@@ -178,7 +179,7 @@ Repeated-stall recovery (G408: when the same issue has stalled without progress 
             ForbiddenSources = new[]
             {
                 "gh-issue-to-pr skill file",
-                "local skill files",
+                DispatcherSkillCarveOut.ForbiddenSourceItem,
                 "copied prompt files",
                 "intents/rules/**",
                 "parent host packet files (for filling contract gaps)"

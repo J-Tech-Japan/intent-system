@@ -293,8 +293,9 @@ internal static class IntentInitCommand
         - All workflow label transitions go through installed `intent-cli automation`
           / `intent-cli worker` commands. Never edit GitHub labels by hand.
         - Routine collaboration uses `intent-cli guide ...`. Do NOT read
-          `intents/rules/**`, copied prompt files, or local skill files for routine
-          operation.
+          `intents/rules/**`, copied prompt files, or local skill files that restate
+          workflow for routine operation.
+        - {{DispatcherSkillCarveOut.Sentence}}
         - Do NOT call `intent-cli run` (advanced runtime) or `dotnet run` as a
           fallback. Do NOT ask `intent-cli` to launch Claude/Codex.
 
@@ -334,7 +335,9 @@ internal static class IntentInitCommand
         1. The current GitHub Issue body (when running an automation loop).
         2. `AGENTS.md` (host policy baseline).
         3. `intent-cli guide ...` (chat-first canonical guidance — never read
-           `intents/rules/**` or local skills for routine operation).
+           `intents/rules/**` or workflow-restating local skills for routine
+           operation; {{DispatcherSkillCarveOut.SkillName}} installed by
+           `{{DispatcherSkillCarveOut.InstallCommand}}` is exempt).
 
         ## Hard rules (host repo)
 

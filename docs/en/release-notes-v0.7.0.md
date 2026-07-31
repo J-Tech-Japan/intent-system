@@ -11,20 +11,21 @@
 
 ## What's in v0.7.0
 
-v0.7.0 covers exactly the three slices merged after `v0.6.2`: **G559**,
-**G560**, and **G561**.
+v0.7.0 covers exactly the four slices merged after `v0.6.2`: **G559**,
+**G560**, **G561**, and **G563**.
 
 **Why minor, not patch.** The documented policy reserves a minor bump for a new
 command surface. G559 adds one: `intent-cli skill list | install | diff` is a
 new top-level command group, not an extension of an existing one. That alone
-decides it — G560 and G561 would each have been a patch on their own. Nothing
+decides it — G560, G561, and G563 would each have been a patch on their own. Nothing
 is removed or renamed, so the bump is minor rather than major: every v0.6.x
 command, argument, and flag keeps its shape. The package id remains
 `JTechJapan.IntentSystem.Cli`; there are no package id, license, or workflow-
 semantics changes.
 
-The headline is the skill surface. The other two close release-flow and
-publish-priority machinery gaps that each cost a real incident.
+The headline is the skill surface. The other three close release-flow and
+publish-priority machinery gaps that each cost a real incident, and reconcile
+the guide corpus with the skill this release ships.
 
 ### Cross-platform agent skill, installed by one command (G559)
 
@@ -153,6 +154,18 @@ complete, so it still goes through the unchanged strict serializer — same
 required fields, same messages, same failures. Tolerance applies only to a
 packet that never claimed completeness.
 
+### Guides stop forbidding the skill this release ships (G563)
+
+A pre-release guide↔intent-tree reconciliation found five coherence defects, all
+fixed here: every local-skill prohibition now carries an explicit carve-out for
+the CLI-owned `intent-cli` dispatcher skill (workflow-restating local skills stay
+forbidden); `guide skill-pack` is retired to a pointer at the `skill` group so
+exactly one artifact is named `intent-cli`; `guide commands list` gains the
+missing `skill` row; both paste-ready 5-minute fallback prompts carry the
+per-receiver delegation cap instead of the superseded "at most one message"
+rule; and the provisioning Authority-boundary sentence enumerates the same four
+MAY-answer classes the supervision section grants.
+
 ## Install
 
 ```bash
@@ -195,8 +208,9 @@ These items must hold **before the GitHub Release for `v0.7.0` is published**.
 This gate fails closed — if any item is unmet, do not publish the Release yet.
 
 - [ ] Every release-bound packet is **complete and its PR merged to `main`**:
-      G559 (PR #1224), G560 (PR #1222), and G561 (PR #1226), plus this G562
-      release-prep. Confirm on the host/review side via the host queue-state /
+      G559 (PR #1224), G560 (PR #1222), G561 (PR #1226), and G563
+      (PR #1230), plus the G562 release-prep (PR #1228). Confirm on the
+      host/review side via the host queue-state /
       GitHub PR state — the child implementation loop must not read parent
       queue-state, so this is a host-owned precondition.
 - [ ] **No `v0.6.3` notes remain.** `0.6.3` is a version that will never be cut;
