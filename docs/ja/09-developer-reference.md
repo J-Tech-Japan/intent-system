@@ -2196,12 +2196,17 @@ queue 側**のみ**を収束させ(`state=queued` と `blocked_by` の空化を 
 
 fail closed するのは次の 2 ケースで、いずれも意図的です。
 
-- **unit に `linked_issue` がある場合。** それは publish 済みであり two-sided path が
-  所有します。two-sided path は label も収束させるため、publish 済み unit に
-  queue-only のショートカットを使うと label が取り残されます — これは two-sided
-  コマンドが防ぐために存在する、まさにその drift です。**部分的な** linkage も拒否
-  します。半分だけの linkage は publish 試行の証跡であって、publish していない証拠では
-  ありません。
+- **unit に `linked_issue` が少しでもある場合。** ルールは**完全な不在**です。
+  pre-publish unit と認めるのは `linked_issue: null` のみです。publish 済み unit は
+  two-sided path が所有し、そちらは label も収束させます。queue-only のショートカットを
+  使えば label が取り残されます — two-sided コマンドが防ぐために存在する、まさにその
+  drift です。**部分的な** linkage も同じ理由で拒否し、**空オブジェクト**
+  `{repo: "", number: null}` も拒否します。オブジェクトが存在すること自体が「何かが
+  linkage を記録した」証跡であり、「フィールドがたまたま空である」ことは
+  「この unit は publish されていない」という主張とは別物だからです。空オブジェクトは
+  two-sided path でも拒否されるため(完全な linkage を要求するため)、linkage を修復する
+  までその item に exit はありません — これは意図的です。壊れた linkage は迂回する状態では
+  なく修正すべきデータ欠陥であり、エラーメッセージがどちらの修復を行うべきかを示します。
 - **`--repo` / `--issue` が渡された場合。** 無視ではなく拒否します。identifier を渡す
   呼び出し側はそれが処理されることを期待しますが、この経路は GitHub 側に触れません。
   黙って受け取れば、何も触っていないのに GitHub 側が収束したと誤認させます。
@@ -2235,9 +2240,16 @@ strictness は意図的に非対称です。
   未記入の TODO は blocking question の記録を拒否する理由になりません。導出される
   question / reason のテキストはフィールド単位で degrade し、packet に存在しない
   詳細を断定するのではなく、欠落を明示します。
-- packet が `review_context_packet` を**持つ**場合、従来の cross-check はすべて、
-  同じ順序・同じメッセージで実行されます。完全な packet の検証は以前とまったく
-  同じ厳しさです。
+- 経路は**宣言**で決まります。宣言の中身がどうであるかでは決まりません。
+  `review_context_packet` セクションを宣言している packet は「完全な projection
+  packet である」と主張しているので、**変更していない** `ProjectionPacketSerializer`
+  でデシリアライズされます(必須フィールド、型チェック、検証順序とメッセージ、失敗の
+  仕方はすべて従来どおり)。その上で従来の cross-check もすべて実行されます。
+  宣言はしているが壊れている packet(必須フィールド欠落、型違い、スカラー本体で宣言された
+  セクション)は、従来とまったく同じ大きさで、mutation の前に失敗します。完全だと
+  主張する packet に許容は一切適用しません。
+- **その宣言が無い** packet — 完全性を主張したことがない `packet draft` の scaffold —
+  だけが許容経路を通ります。
 - `review-context.md` は同じ canonical parser が読むため、execution-unit の規則は
   不変です(`# Execution Unit` セクションが存在して不正な場合は従来どおり失敗します)。
   唯一の緩和は scaffold にまだ無い `# Deterministic Review Checks` セクションで、

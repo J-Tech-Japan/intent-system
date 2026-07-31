@@ -648,28 +648,41 @@ internal static class AutomationIssueBlockCommand
 
     /// <summary>
     /// G561: the pre-publish path's own fail-closed guard — the exact inverse of
-    /// <see cref="TryValidateLinkedIssue"/>. ANY trace of linkage (a repo, a
-    /// number, or both) means this unit is or was published, so the two-sided
-    /// path owns it: that path also converges the GitHub label, and routing a
-    /// linked unit through the queue-only shortcut would leave the label behind
-    /// — the precise drift G545 exists to prevent. A partial linkage is refused
-    /// too: it is evidence of a publish attempt, not evidence of its absence.
+    /// <see cref="TryValidateLinkedIssue"/>. The contract is ABSOLUTE ABSENCE:
+    /// only <c>linked_issue: null</c> qualifies. Any linked_issue OBJECT is
+    /// refused, including an empty <c>{repo:"", number:null}</c> — the presence
+    /// of the object is itself evidence that something recorded a linkage, and
+    /// "the fields inside happen to be blank" is not the same claim as "this
+    /// unit was never published". Treating a blank object as absence would let
+    /// the queue-only shortcut run for a unit whose GitHub label may still say
+    /// blocked, which is the precise drift G545 exists to prevent.
+    ///
+    /// A blank object is refused by the two-sided path too (it demands a
+    /// COMPLETE linkage), so such an item has no exit until the linkage is
+    /// repaired — deliberately. Malformed linkage is a data defect to fix, not
+    /// a state to route around, and the message says so.
     /// </summary>
     private static bool TryValidateNoLinkedIssue(QueueItem queueItem, string executionUnit, out string error)
     {
         var linked = queueItem.LinkedIssue;
-        if (linked is null || (string.IsNullOrWhiteSpace(linked.Repo) && linked.Number is null))
+        if (linked is null)
         {
             error = string.Empty;
             return true;
         }
 
-        error =
-            $"'{executionUnit}' has a queue-state linked_issue ({DescribeLinkage(linked)}), so it is not a pre-publish "
-            + "unit; refusing the queue-only pre-publish clear. Use the two-sided form "
-            + $"(`intent-cli automation issue-block {executionUnit} --repo <owner/repo> --issue <n> --clear --write`), "
-            + "which also converges the GitHub blocked label — clearing only the queue side for a published unit is "
-            + "exactly the label/queue drift the two-sided command exists to prevent.";
+        var isBlank = string.IsNullOrWhiteSpace(linked.Repo) && linked.Number is null;
+        error = isBlank
+            ? $"'{executionUnit}' carries a linked_issue OBJECT with no usable content ({DescribeLinkage(linked)}); "
+              + "refusing the pre-publish clear, which requires linked_issue to be absent (null) — not merely blank. "
+              + "The object's presence is evidence that something recorded a linkage, so this is a queue-state defect "
+              + "to repair (set linked_issue to null if the unit is genuinely unpublished, or record the real repo and "
+              + "number and use the two-sided form), not a state to route around."
+            : $"'{executionUnit}' has a queue-state linked_issue ({DescribeLinkage(linked)}), so it is not a pre-publish "
+              + "unit; refusing the queue-only pre-publish clear. Use the two-sided form "
+              + $"(`intent-cli automation issue-block {executionUnit} --repo <owner/repo> --issue <n> --clear --write`), "
+              + "which also converges the GitHub blocked label — clearing only the queue side for a published unit is "
+              + "exactly the label/queue drift the two-sided command exists to prevent.";
         return false;
     }
 

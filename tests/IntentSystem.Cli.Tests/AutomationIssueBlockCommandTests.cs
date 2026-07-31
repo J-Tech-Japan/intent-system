@@ -777,6 +777,45 @@ public sealed class AutomationIssueBlockCommandTests : IDisposable
     }
 
     [Fact]
+    public void PrePublishClear_OnAnEmptyLinkedIssueObject_FailsClosed_G561()
+    {
+        // The contract is ABSOLUTE ABSENCE — only `linked_issue: null` is a
+        // pre-publish unit. An empty object `{repo:"", number:null}` is NOT
+        // absence: its presence is evidence that something recorded a linkage,
+        // and treating "the fields happen to be blank" as "never published"
+        // would let the queue-only shortcut run for a unit whose GitHub label
+        // may still say blocked.
+        using var workspace = new Workspace(
+            QueueItemState.Blocked,
+            blockedBy: ["G560"],
+            linkedIssue: new LinkedIssue { Repo = string.Empty, Number = null, Url = null });
+
+        // Stronger than "did not read": the mutator is never CONSTRUCTED. The
+        // factory records every call, so a refusal that still reached for
+        // GitHub would fail here even if it read nothing.
+        var constructions = 0;
+        var mutator = new FakeMutator(["intent-issue-in-progress"]);
+        AutomationIssueBlockCommand.MutatorFactory = () =>
+        {
+            constructions++;
+            return mutator;
+        };
+
+        var queueBefore = workspace.ReadQueueStateBytes();
+        var runLogBefore = workspace.ReadRunLogBytes();
+
+        var (exitCode, output) = workspace.RunRaw(PrePublishClearArgs());
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("carries a linked_issue OBJECT with no usable content", output, StringComparison.Ordinal);
+        Assert.Equal(queueBefore, workspace.ReadQueueStateBytes());
+        Assert.Equal(runLogBefore, workspace.ReadRunLogBytes());
+        Assert.Equal(0, constructions);
+        Assert.Equal(0, mutator.ReadCount);
+        Assert.Empty(mutator.Transitions);
+    }
+
+    [Fact]
     public void PrePublishClear_WithRepoAndIssue_FailsClosed_G561()
     {
         // Fail-closed case 2: identifiers this path can neither verify nor act

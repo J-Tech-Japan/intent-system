@@ -1,3 +1,4 @@
+using IntentSystem.Projection.Serialization;
 using YamlDotNet.RepresentationModel;
 
 namespace IntentSystem.Cli.Commands;
@@ -19,21 +20,25 @@ namespace IntentSystem.Cli.Commands;
 /// whole point is to record a blocking question EARLY, was structurally
 /// unavailable at exactly the moment it is needed.
 ///
-/// The strict serializer is left untouched: publish-flow and review legitimately
-/// demand a complete contract, and loosening it there would let an incomplete
-/// packet through publication. This reader is scoped to what a clarification
-/// record contains, and it is deliberately asymmetric about strictness:
+/// The strict serializer is left untouched — publish-flow and review
+/// legitimately demand a complete contract — and, review repair, it remains the
+/// ONLY reader for any packet that DECLARES itself complete. Tolerance is not a
+/// property of this reader; it is a property of the scaffold shape:
 ///
-/// - the source execution unit is REQUIRED, because it is the identity the
-///   caller's queue item is checked against; guessing it would defeat the
-///   mismatch guard that keeps a clarification from being filed against the
-///   wrong unit;
-/// - everything else is optional, because a scaffold has not filled it in yet
-///   and a missing TODO is not a reason to refuse to record a blocking question;
-/// - when the optional <c>review_context_packet</c> section IS present, its
-///   values are surfaced so the caller can keep applying every cross-check it
-///   applied before — an existing complete packet is validated exactly as
-///   strictly as it always was.
+/// - a packet declaring a <c>review_context_packet</c> section is claiming to be
+///   a complete projection packet, and is deserialized by
+///   <c>ProjectionPacketSerializer</c> unchanged — same required fields, same
+///   type checks, same validation order and messages, same failures. A
+///   declared-but-broken packet fails exactly as loudly as it always did, and it
+///   fails before any mutation;
+/// - only a packet with NO such declaration takes the tolerant path below, and
+///   there the source execution unit is still REQUIRED, because it is the
+///   identity the caller's queue item is checked against; guessing it would
+///   defeat the mismatch guard that keeps a clarification from being filed
+///   against the wrong unit;
+/// - everything else on that path is optional, because a scaffold has not filled
+///   it in yet and an unfilled TODO is not a reason to refuse to record a
+///   blocking question.
 /// </summary>
 internal sealed record ClarifyPacketFacts
 {
@@ -57,15 +62,74 @@ internal sealed record ClarifyPacketFacts
     public IReadOnlyList<string>? ReviewContextIntentReferences { get; init; }
 
     /// <summary>
-    /// Reads <paramref name="yaml"/>. Throws <see cref="InvalidOperationException"/>
-    /// only for the two things that genuinely block recording a clarification:
-    /// YAML that does not parse at all, and a missing/blank
-    /// <c>implementation_issue_packet.source_execution_unit</c>.
+    /// Reads <paramref name="yaml"/>, routing on ONE question: does the packet
+    /// DECLARE a <c>review_context_packet</c> section?
+    ///
+    /// A packet that declares it is claiming to be a complete projection
+    /// packet, so it is deserialized by the unchanged
+    /// <see cref="ProjectionPacketSerializer"/> — same required fields, same
+    /// type and ordering checks, same validation sequence, same messages, same
+    /// failures. Tolerance must never be applied to a packet that says it is
+    /// complete: a declared-but-broken packet has to fail exactly as loudly as
+    /// it did before, and it fails before any mutation.
+    ///
+    /// Only a packet with NO such declaration takes the tolerant path — that
+    /// is the `packet draft` scaffold, which never claimed completeness.
+    ///
+    /// The routing decision is made by scanning for the top-level section line
+    /// itself, deliberately WITHOUT parsing: a complete packet must reach the
+    /// strict serializer through the same bytes it always did, so no second
+    /// parser can reject a packet the strict one would have accepted.
     /// </summary>
     public static ClarifyPacketFacts Read(string yaml)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(yaml);
 
+        if (DeclaresReviewContextSection(yaml))
+        {
+            var contract = ProjectionPacketSerializer.Deserialize(yaml);
+            return new ClarifyPacketFacts
+            {
+                SourceExecutionUnit = contract.ImplementationIssuePacket.SourceExecutionUnit,
+                IssueTitle = contract.ImplementationIssuePacket.IssueTitle,
+                Goal = contract.ImplementationIssuePacket.Goal,
+                TargetPart = contract.ImplementationIssuePacket.TargetPart,
+                IntentReferences = contract.ImplementationIssuePacket.IntentReferences,
+                HasReviewContextSection = true,
+                ReviewContextSourceExecutionUnit = contract.ReviewContextPacket.SourceExecutionUnit,
+                ReviewContextClarificationReturnPath = contract.ReviewContextPacket.ClarificationReturnPath,
+                ReviewContextIntentReferences = contract.ReviewContextPacket.IntentReferences,
+            };
+        }
+
+        return ReadScaffold(yaml);
+    }
+
+    /// <summary>
+    /// True when a top-level <c>review_context_packet:</c> section line is
+    /// present, using the strict parser's own rule for a section header (a line
+    /// that starts at column 0). Presence is judged on the DECLARATION, never on
+    /// what the value turns out to be — a section declared with a scalar or a
+    /// sequence body is present-and-wrong, and must reach the strict serializer
+    /// to fail there rather than being mistaken for an absent section and
+    /// silently tolerated.
+    /// </summary>
+    private static bool DeclaresReviewContextSection(string yaml) =>
+        yaml.Split('\n')
+            .Select(line => line.TrimEnd('\r'))
+            .Any(line => line.Length > 0
+                && !char.IsWhiteSpace(line[0])
+                && line.StartsWith("review_context_packet:", StringComparison.Ordinal));
+
+    /// <summary>
+    /// The tolerant path, for a packet that never declared a review-context
+    /// section. Throws <see cref="InvalidOperationException"/> only for the two
+    /// things that genuinely block recording a clarification: YAML that does not
+    /// parse at all, and a missing/blank
+    /// <c>implementation_issue_packet.source_execution_unit</c>.
+    /// </summary>
+    private static ClarifyPacketFacts ReadScaffold(string yaml)
+    {
         YamlMappingNode? root;
         try
         {
@@ -98,8 +162,9 @@ internal sealed record ClarifyPacketFacts
                 + "it is the identity a clarification is filed against and must never be guessed.");
         }
 
-        var reviewContext = GetMapping(root, "review_context_packet");
-
+        // No review-context values here by construction: this path only runs
+        // for a packet that declared no such section, so there is nothing to
+        // read and nothing to conflate.
         return new ClarifyPacketFacts
         {
             SourceExecutionUnit = sourceExecutionUnit!,
@@ -107,10 +172,7 @@ internal sealed record ClarifyPacketFacts
             Goal = GetScalar(implementation, "goal"),
             TargetPart = GetScalar(implementation, "target_part"),
             IntentReferences = GetList(implementation, "intent_references"),
-            HasReviewContextSection = reviewContext is not null,
-            ReviewContextSourceExecutionUnit = reviewContext is null ? null : GetScalar(reviewContext, "source_execution_unit"),
-            ReviewContextClarificationReturnPath = reviewContext is null ? null : GetScalar(reviewContext, "clarification_return_path"),
-            ReviewContextIntentReferences = reviewContext is null ? null : GetList(reviewContext, "intent_references"),
+            HasReviewContextSection = false,
         };
     }
 
