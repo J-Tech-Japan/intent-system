@@ -654,6 +654,21 @@ orchestrator でも）が「transition は不要」を actionable な次コマ�
   UNKNOWN として拒否。7〜40 文字の 16 進 SHA でない証跡は拒否。**異なる** commit を
   持つ既存レコードは上書きせず拒否(証跡を黙って差し替えることは、監査証跡を監査
   証跡でなくすことです)。読めない既存レコードも上書きせず拒否します。
+- **execution unit は canonical な識別子であり、ファイルシステムに触れる前に検証
+  します。** 使えるのは ASCII 英数字 / `-` / `_` / `.` のみで、先頭 `.` と `..` を
+  含むものは禁止です。これにより path separator、絶対パス、ドライブ文字や ADS の
+  コロン、dot-segment、空白、制御文字が構造的に排除されます。導出した 2 つのパス
+  (packet と record)は、その後さらに `.intent-cli/issues` と
+  `.intent-cli/knowledge-writebacks` の配下にあることを検査します。同じ検証は検出側が
+  `runs.jsonl` から読む execution unit にも適用されます — runs log は信頼済みの識別子
+  ではなくデータだからです。そこに canonical でない unit があれば `excluded[]` に
+  報告し、そこからパスを導出しません。
+- **レコードは、それが名指しする unit に対してのみ証跡です。** 消費のたびに(検出側の
+  クリア経路でも、記録側の冪等/拒否判定でも)、レコードに埋め込まれた
+  `execution_unit` が保存先の unit と一致し、`host_commit` が SHA 形状であることを
+  要求します。`…/G564/record.json` にありながら `execution_unit: G999` を宣言する
+  レコードや、commit でない証跡を持つレコードは、`knowledge-writeback-pending` を
+  消さず、パス付きで「読めない」として報告されます。
 - **既定は `--dry-run`。** 永続化には `--write` が必要です。
 - 何も required と宣言していない unit への記録も成功しますが、結果に警告が付きます。
   そこで tree が本当に何かを負っていたなら、packet の宣言が不誠実だったということで、

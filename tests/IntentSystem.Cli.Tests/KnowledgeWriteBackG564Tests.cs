@@ -383,13 +383,148 @@ public sealed class KnowledgeWriteBackG564Tests : IDisposable
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("intents/declared.md", result.Json.GetProperty("declared_targets").EnumerateArray().Select(t => t.GetString()));
 
-        var record = KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(workspace.RecordPath("G564")));
+        var record = KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(workspace.RecordPath("G564")), "G564");
         Assert.Equal(KnowledgeWriteBackRecord.ArtifactKindValue, record.ArtifactKind);
         Assert.Equal("G564", record.ExecutionUnit);
         Assert.Equal(HostCommit, record.HostCommit);
         Assert.Equal(FixedNow, record.RecordedAt);
         Assert.Contains("intents/declared.md", record.Targets);
         Assert.Equal("node 03 gains the audit-state machinery section", record.Note);
+    }
+
+    // ------------------------------------------- G564 review repair: identity
+
+    /// <summary>
+    /// Review finding 1: the execution unit was interpolated into the packet
+    /// and record paths with no canonical-identifier check. A dry run accepted
+    /// `../../.intent-cli/issues/G564` and resolved a record path OUTSIDE
+    /// `.intent-cli/knowledge-writebacks`; write mode could have escaped the
+    /// artifact root entirely.
+    /// </summary>
+    [Theory]
+    [InlineData("../../.intent-cli/issues/G564")]      // the reported traversal
+    [InlineData("..")]
+    [InlineData("../G564")]
+    [InlineData("G564/../../escape")]
+    [InlineData("/etc/passwd")]                         // rooted (POSIX)
+    [InlineData("C:\\Windows\\system32")]               // rooted (Windows) + separators + colon
+    [InlineData("\\\\server\\share")]                   // UNC
+    [InlineData("sub/dir")]                             // any separator at all
+    [InlineData(".hidden")]                             // leading dot segment
+    [InlineData("G564 with space")]
+    [InlineData("G564\nG999")]
+    public void Record_RejectsNoncanonicalExecutionUnits_BeforeTouchingTheFilesystem_G564(string executionUnit)
+    {
+        using var workspace = new WriteBackWorkspace();
+
+        using var writer = new StringWriter();
+        var exit = AutomationKnowledgeWriteBackRecordCommand.Execute(
+            workspace.Context, ["--execution-unit", executionUnit, "--commit", HostCommit, "--write"], writer);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("--execution-unit is invalid", writer.ToString(), StringComparison.Ordinal);
+
+        // Nothing anywhere under the workspace was created — not inside the
+        // artifact root, and (the actual defect) not outside it either.
+        Assert.False(Directory.Exists(Path.Combine(workspace.RootPath, ".intent-cli", "knowledge-writebacks")));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(workspace.RootPath, ".intent-cli")));
+    }
+
+    [Fact]
+    public void RecordPathResolution_ContainsEveryPathBeneathItsArtifactRoot_G564()
+    {
+        var repoRoot = Path.Combine(Path.GetTempPath(), "g564-containment");
+
+        // Canonical unit: contained, as expected.
+        var recordRoot = Path.GetFullPath(Path.Combine(repoRoot, ".intent-cli", "knowledge-writebacks"));
+        var packetRoot = Path.GetFullPath(Path.Combine(repoRoot, ".intent-cli", "issues"));
+        Assert.StartsWith(recordRoot + Path.DirectorySeparatorChar, KnowledgeWriteBackRecord.ResolveFullPath(repoRoot, "G564"), StringComparison.Ordinal);
+        Assert.StartsWith(packetRoot + Path.DirectorySeparatorChar, KnowledgeWriteBackRecord.ResolvePacketPath(repoRoot, "G564"), StringComparison.Ordinal);
+
+        // Non-canonical unit: refused at resolution, so no caller can be handed
+        // an escaping path even if it skipped the argument-boundary gate.
+        Assert.Throws<InvalidOperationException>(() => KnowledgeWriteBackRecord.ResolveFullPath(repoRoot, "../escape"));
+        Assert.Throws<InvalidOperationException>(() => KnowledgeWriteBackRecord.ResolvePacketPath(repoRoot, "../escape"));
+        Assert.Throws<InvalidOperationException>(() => KnowledgeWriteBackRecord.ResolveRelativePath("../escape"));
+    }
+
+    [Fact]
+    public void StalledWork_ExcludesANoncanonicalUnitFromTheRunsLog_WithoutDerivingAPathFromIt_G564()
+    {
+        // The runs log is DATA. A `closeout-recorded` event naming
+        // `../../etc` must not become a filesystem probe.
+        using var workspace = new WriteBackWorkspace();
+        workspace.WriteCloseout("../../etc", FixedNow.AddMinutes(-120));
+
+        var result = workspace.RunStalledWorkResult();
+
+        Assert.Equal(0, result.GetProperty("items").GetArrayLength());
+        var excluded = Assert.Single(result.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindKnowledgeWritebackPending, excluded.GetProperty("kind").GetString());
+        Assert.Equal(AutomationStalledWorkCommand.ReasonKnowledgeMetadataUnreadable, excluded.GetProperty("reason").GetString());
+        Assert.Contains("non-canonical execution unit", excluded.GetProperty("detail").GetString()!, StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------- G564 review repair: evidence
+
+    /// <summary>
+    /// Review finding 2: `Deserialize` checked only that `execution_unit` and
+    /// `host_commit` were non-blank, while stalled-work cleared the item for
+    /// ANY deserializable record. A record stored under `G564` naming `G999`
+    /// therefore discharged G564's obligation.
+    /// </summary>
+    [Fact]
+    public void ARecordNamingADifferentUnit_DoesNotClearThisUnit_G564()
+    {
+        using var workspace = new WriteBackWorkspace();
+        workspace.WriteDeclaringPacket("G564", requiredIntentTree: true, targets: ["intents/x.md"]);
+        workspace.WriteCloseout("G564", FixedNow.AddMinutes(-120));
+        workspace.WriteRawRecord("G564", executionUnit: "G999", hostCommit: HostCommit);
+
+        var result = workspace.RunStalledWorkResult();
+
+        Assert.Equal(0, result.GetProperty("items").GetArrayLength());
+        var excluded = Assert.Single(result.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.ReasonKnowledgeMetadataUnreadable, excluded.GetProperty("reason").GetString());
+        Assert.Contains("record.json", excluded.GetProperty("detail").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("G999", excluded.GetProperty("detail").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ARecordWithNonShaEvidence_DoesNotClearTheItem_G564()
+    {
+        using var workspace = new WriteBackWorkspace();
+        workspace.WriteDeclaringPacket("G564", requiredIntentTree: true, targets: ["intents/x.md"]);
+        workspace.WriteCloseout("G564", FixedNow.AddMinutes(-120));
+        workspace.WriteRawRecord("G564", executionUnit: "G564", hostCommit: "written-it-honest");
+
+        var result = workspace.RunStalledWorkResult();
+
+        Assert.Equal(0, result.GetProperty("items").GetArrayLength());
+        var excluded = Assert.Single(result.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.ReasonKnowledgeMetadataUnreadable, excluded.GetProperty("reason").GetString());
+        Assert.Contains("hexadecimal SHA", excluded.GetProperty("detail").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Record_RefusesToActOnAMisattributedExistingRecord_RatherThanTreatingItAsPriorEvidence_G564()
+    {
+        // The same validation on the WRITE side: a mis-attributed record must
+        // not silently satisfy the idempotency check, and must not be
+        // overwritten either — it is unreadable evidence, and repairing it is
+        // a deliberate act.
+        using var workspace = new WriteBackWorkspace();
+        workspace.WriteDeclaringPacket("G564", requiredIntentTree: true, targets: ["intents/x.md"]);
+        workspace.WriteRawRecord("G564", executionUnit: "G999", hostCommit: HostCommit);
+        var before = File.ReadAllBytes(workspace.RecordPath("G564"));
+
+        var result = workspace.RunRecord(["--execution-unit", "G564", "--commit", HostCommit, "--write", "--format", "json"]);
+
+        Assert.Equal(1, result.ExitCode);
+        var error = result.Json.GetProperty("error").GetString()!;
+        Assert.Contains("could not be read", error, StringComparison.Ordinal);
+        Assert.Contains("G999", error, StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllBytes(workspace.RecordPath("G564")));
     }
 
     // ---------------------------------------------------------------- router
@@ -647,6 +782,28 @@ public sealed class KnowledgeWriteBackG564Tests : IDisposable
                   expected: ""
                   write_back_required: false
                   write_back_targets: []
+                """);
+        }
+
+        /// <summary>
+        /// G564 review repair: writes a record artifact with hand-chosen
+        /// contents under <paramref name="storedUnder"/>, so a consumer can be
+        /// shown a record whose embedded identity or evidence does not match
+        /// the unit it is stored for.
+        /// </summary>
+        public void WriteRawRecord(string storedUnder, string executionUnit, string hostCommit)
+        {
+            var path = RecordPath(storedUnder);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, $$"""
+                {
+                  "artifact_kind": "knowledge-writeback-record",
+                  "execution_unit": "{{executionUnit}}",
+                  "host_commit": "{{hostCommit}}",
+                  "recorded_at": "2026-08-15T12:00:00+00:00",
+                  "targets": [],
+                  "note": null
+                }
                 """);
         }
 

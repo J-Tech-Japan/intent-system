@@ -637,6 +637,23 @@ host commit as evidence. It is the clearing half of
   than overwritten (replacing evidence silently is how an audit trail stops
   being one); an existing record that cannot be read is refused rather than
   clobbered.
+- **The execution unit is a canonical identifier, validated before any
+  filesystem access.** ASCII letters, digits, `-`, `_` and `.`, never leading
+  with `.` and never containing `..` — which structurally excludes path
+  separators, rooted paths, drive/ADS colons, dot-segments, whitespace, and
+  control characters. Both derived paths (the packet and the record) are then
+  re-checked for containment beneath `.intent-cli/issues` and
+  `.intent-cli/knowledge-writebacks`. The same validation is applied to
+  execution units read out of `runs.jsonl` by the detector, since a runs log is
+  data rather than a trusted identifier; a non-canonical unit there is reported
+  in `excluded[]` and no path is derived from it.
+- **A record is evidence only for the unit it names.** On every consumption —
+  the detector's clearing path and the recorder's idempotency/refusal path
+  alike — the record's embedded `execution_unit` must equal the unit it is
+  stored under, and `host_commit` must be SHA-shaped. A record under
+  `…/G564/record.json` declaring `execution_unit: G999`, or carrying evidence
+  that is not a commit, is reported as unreadable-with-path rather than
+  clearing `knowledge-writeback-pending`.
 - **`--dry-run` is the default.** `--write` is required to persist.
 - Recording against a unit that declared nothing required still succeeds, but
   the result carries a warning: if the tree genuinely owed something there,

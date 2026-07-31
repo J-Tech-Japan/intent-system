@@ -1778,7 +1778,28 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            var packetYamlPath = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit, "packet.yaml");
+            // G564 review repair: the unit here comes from the runs log, which
+            // is data, not a trusted identifier. Validate BEFORE any path is
+            // built from it — a traversal/rooted/malformed unit is reported
+            // with its own diagnostic rather than resolved and stat'ed.
+            if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out var unitError))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindKnowledgeWritebackPending,
+                    ExecutionUnit = executionUnit,
+                    Issue = null,
+                    Pr = null,
+                    Reason = ReasonKnowledgeMetadataUnreadable,
+                    Detail =
+                        $"a `{CloseoutRecordedEvent}` event in `{runLogPath}` names a non-canonical execution unit: "
+                        + $"{unitError} No packet or record path is derived from it — repair the runs log rather "
+                        + "than resolving an identifier that is not one.",
+                });
+                continue;
+            }
+
+            var packetYamlPath = KnowledgeWriteBackRecord.ResolvePacketPath(context.RepoRoot, executionUnit);
             var resolution = new ExecutionUnitResolution(
                 executionUnit,
                 Corroborated: File.Exists(packetYamlPath),
@@ -1835,7 +1856,12 @@ internal static class AutomationStalledWorkCommand
             {
                 try
                 {
-                    _ = KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(recordPath));
+                    // G564 review repair: the record must NAME this unit and
+                    // carry SHA-shaped evidence. Clearing on any deserializable
+                    // file let a record carrying a different unit's id — or a
+                    // host_commit that is not a commit — discharge this unit's
+                    // obligation.
+                    _ = KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(recordPath), executionUnit);
                     // Recorded: the obligation is discharged. This is the
                     // clearing path — no item, no exclusion.
                     continue;

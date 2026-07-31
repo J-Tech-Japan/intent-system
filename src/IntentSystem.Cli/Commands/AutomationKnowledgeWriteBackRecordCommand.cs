@@ -32,9 +32,6 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
 
-    private const int MinimumCommitLength = 7;
-    private const int MaximumCommitLength = 40;
-
     /// <summary>Test seam: deterministic <c>recorded_at</c>.</summary>
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
 
@@ -67,7 +64,23 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
             return 1;
         }
 
-        var packetPath = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit!, "packet.yaml");
+        // G564 review repair: both paths are resolved through the containment
+        // helpers, so a unit that somehow got past the argument-boundary
+        // identifier gate still cannot reach outside the artifact roots.
+        string packetPath;
+        string recordPath;
+        try
+        {
+            packetPath = KnowledgeWriteBackRecord.ResolvePacketPath(context.RepoRoot, executionUnit!);
+            recordPath = KnowledgeWriteBackRecord.ResolveFullPath(context.RepoRoot, executionUnit!);
+        }
+        catch (InvalidOperationException exception)
+        {
+            writer.WriteLine($"--execution-unit '{executionUnit}' is not usable: {exception.Message}");
+            writer.WriteLine(UsageLine);
+            return 1;
+        }
+
         if (!File.Exists(packetPath))
         {
             return Fail(
@@ -93,13 +106,16 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
                 $"packet `{packetPath}` could not be read for its knowledge write-back declaration: {exception.Message}");
         }
 
-        var recordPath = KnowledgeWriteBackRecord.ResolveFullPath(context.RepoRoot, executionUnit!);
         KnowledgeWriteBackRecord? existing = null;
         if (File.Exists(recordPath))
         {
             try
             {
-                existing = KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(recordPath));
+                // G564 review repair: the existing record is validated against
+                // THIS unit and against SHA-shaped evidence before it is allowed
+                // to short-circuit anything — an unreadable or mis-attributed
+                // record must never be silently accepted as prior evidence.
+                existing = KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(recordPath), executionUnit!);
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException)
             {
@@ -344,9 +360,12 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
             }
         }
 
-        if (string.IsNullOrWhiteSpace(executionUnit))
+        // G564 review repair: the identifier is validated HERE — before the
+        // command touches the filesystem at all — so a traversal/rooted/
+        // malformed unit is refused rather than resolved and inspected.
+        if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out var unitError))
         {
-            error = "--execution-unit is required.";
+            error = $"--execution-unit is invalid: {unitError}";
             return false;
         }
 
@@ -358,12 +377,15 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
             return false;
         }
 
-        if (!IsCommitShaped(commit!))
+        // G564 review repair: single-sourced with the shape the record reader
+        // enforces on consumption, so what this command accepts and what a
+        // consumer trusts can never drift apart.
+        if (!KnowledgeWriteBackRecord.IsCommitShaped(commit))
         {
             error =
-                $"--commit '{commit}' is not a commit SHA ({MinimumCommitLength}-{MaximumCommitLength} hexadecimal "
-                + "characters). Malformed evidence is refused rather than recorded — a reader must be able to go "
-                + "look at the commit.";
+                $"--commit '{commit}' is not a commit SHA ({KnowledgeWriteBackRecord.MinimumCommitLength}-"
+                + $"{KnowledgeWriteBackRecord.MaximumCommitLength} hexadecimal characters). Malformed evidence is "
+                + "refused rather than recorded — a reader must be able to go look at the commit.";
             return false;
         }
 
@@ -372,11 +394,6 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
         commit = commit!.ToLowerInvariant();
         return true;
     }
-
-    private static bool IsCommitShaped(string value) =>
-        value.Length >= MinimumCommitLength
-        && value.Length <= MaximumCommitLength
-        && value.All(Uri.IsHexDigit);
 
     private static void WriteHelp(TextWriter writer)
     {
