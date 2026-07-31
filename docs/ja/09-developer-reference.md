@@ -2160,6 +2160,108 @@ drift 問題そのものだからです。guide surface は CLI と一緒に動�
 
 ---
 
+### publish 優先順位を lifecycle として扱う (G561)
+
+あるスライスを優先して先に流したいとき、正規のやり方は次の unit を**手で選ぶこと
+でも**、先に流れるはずだった unit を**retire することでも**ありません。3 つの状態を
+持つ lifecycle であり、それぞれに canonical なコマンドがあります。
+
+1. **未 publish の unit を block する** — 待たせたい unit を `state=blocked` にし、
+   理由を `blocked_by` に記録します。理由は通常、待ち先の execution unit です。
+2. **block 中は selector がスキップする。** `intent next-slice` は blocked 状態の
+   item と、`blocked_by` が空でない item の**両方**を除外します。両方が重要です。
+   自分では unblock されたと主張しつつ古い理由を抱えたままの item は、事実上まだ
+   blocked であり、永久に選ばれません。
+3. **優先理由が消えたら clear する** — unit を再び選択可能にする exit です。
+
+壊れていたのは手順 3 でした。`automation issue-block --clear` は何かに触れる前に
+**完全な** `linked_issue` を要求します。これは正しい設計です(このコマンドは GitHub の
+`intent-issue-blocked` label も収束させますし、issue #818 はほぼどのリポジトリにも
+存在します)。しかし **publish 前**に block された unit には issue が存在せず、
+`linked_issue` は null なので、この経路は動きません。素の `queue transition` は state
+だけ動かして `blocked_by` を残すため、手順 2 が除外するまさに半収束状態の unit を
+作ります。canonical な exit が存在せず、たった 1 つの unit を動かすために design thread が
+one-off ruling を出す必要がありました(field incident 2026-07-31、G559 wake)。
+
+pre-publish exit がこれを閉じます:
+
+```bash
+intent-cli automation issue-block <execution-unit> --clear --pre-publish --write
+```
+
+queue 側**のみ**を収束させ(`state=queued` と `blocked_by` の空化を 1 回の guarded write
+で行い、run-log event に解除した wait reason を記録します)、GitHub とは一切やり取り
+しません。触る issue が存在しないからです。label の読み取りも行わず、mutator も
+生成しません。
+
+fail closed するのは次の 2 ケースで、いずれも意図的です。
+
+- **unit に `linked_issue` が少しでもある場合。** ルールは**完全な不在**です。
+  pre-publish unit と認めるのは `linked_issue: null` のみです。publish 済み unit は
+  two-sided path が所有し、そちらは label も収束させます。queue-only のショートカットを
+  使えば label が取り残されます — two-sided コマンドが防ぐために存在する、まさにその
+  drift です。**部分的な** linkage も同じ理由で拒否し、**空オブジェクト**
+  `{repo: "", number: null}` も拒否します。オブジェクトが存在すること自体が「何かが
+  linkage を記録した」証跡であり、「フィールドがたまたま空である」ことは
+  「この unit は publish されていない」という主張とは別物だからです。空オブジェクトは
+  two-sided path でも拒否されるため(完全な linkage を要求するため)、linkage を修復する
+  までその item に exit はありません — これは意図的です。壊れた linkage は迂回する状態では
+  なく修正すべきデータ欠陥であり、エラーメッセージがどちらの修復を行うべきかを示します。
+- **`--repo` / `--issue` が渡された場合。** 無視ではなく拒否します。identifier を渡す
+  呼び出し側はそれが処理されることを期待しますが、この経路は GitHub 側に触れません。
+  黙って受け取れば、何も触っていないのに GitHub 側が収束したと誤認させます。
+
+`--pre-publish` は **exit 専用**であり `--clear` を必須とします。publish 前に block する
+こと自体はすでに動いていました。欠けていたのは戻り道です。
+
+**このパターンの次回利用に design ruling は不要です。** block → selector のスキップ →
+pre-publish clear → publish の 4 手順がすべて canonical コマンドで揃いました。
+
+### `clarify open` が scaffold 済み packet で動く (G561)
+
+design 上の blocking question は、packet がまだ draft で、誤った答えをまだ実装して
+いない**早い段階**で記録するのが最も価値があります。G561 以前は、まさにその段階で
+それが不可能でした。`clarify open` は `packet.yaml` を projection の完全な契約で
+デシリアライズしており、`review_context_packet` セクションと 20 個の
+`implementation_issue_packet` 必須フィールドを要求していたからです。
+`intent-cli packet draft` が作る packet にはどちらもありません
+(`implementation_issue_packet` / `intent_placement` / `knowledge_updates` /
+`closeout_learning` を持ち、review context は packet ではなく `review-context.md` に
+あります)。scaffold 直後の packet は mutation 前にすべて拒否され、G552 の
+design-decision フローは、それが存在する理由そのものの瞬間に構造的に使えませんでした。
+
+`clarify open` は clarification レコードが実際に含む事実だけを読むようになり、
+strictness は意図的に非対称です。
+
+- packet の `source_execution_unit` は**必須**で、queue item と一致しなければ
+  なりません。誤った unit に対して clarification を記録することは記録しないことより
+  悪いため、identity は決して緩めません。
+- それ以外の packet フィールドは optional です。scaffold はまだ埋まっておらず、
+  未記入の TODO は blocking question の記録を拒否する理由になりません。導出される
+  question / reason のテキストはフィールド単位で degrade し、packet に存在しない
+  詳細を断定するのではなく、欠落を明示します。
+- 経路は**宣言**で決まります。宣言の中身がどうであるかでは決まりません。
+  `review_context_packet` セクションを宣言している packet は「完全な projection
+  packet である」と主張しているので、**変更していない** `ProjectionPacketSerializer`
+  でデシリアライズされます(必須フィールド、型チェック、検証順序とメッセージ、失敗の
+  仕方はすべて従来どおり)。その上で従来の cross-check もすべて実行されます。
+  宣言はしているが壊れている packet(必須フィールド欠落、型違い、スカラー本体で宣言された
+  セクション)は、従来とまったく同じ大きさで、mutation の前に失敗します。完全だと
+  主張する packet に許容は一切適用しません。
+- **その宣言が無い** packet — 完全性を主張したことがない `packet draft` の scaffold —
+  だけが許容経路を通ります。
+- `review-context.md` は同じ canonical parser が読むため、execution-unit の規則は
+  不変です(`# Execution Unit` セクションが存在して不正な場合は従来どおり失敗します)。
+  唯一の緩和は scaffold にまだ無い `# Deterministic Review Checks` セクションで、
+  その不在が影響するのは導出 question テキストだけです — そしてそれは `--question` で
+  上書きできます。
+
+strict な projection serializer は**変更していません**。publish-flow と review は
+完全な契約を要求して当然であり、そこを緩めれば不完全な packet が publish を通過して
+しまいます。許容は `clarify open` にスコープされています。
+
+---
+
 ## バージョンフロー
 
 リポジトリのバージョンポリシーは `eng/version.json` に記載されています。`stableVersion`

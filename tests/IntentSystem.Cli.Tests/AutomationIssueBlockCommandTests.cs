@@ -661,6 +661,217 @@ public sealed class AutomationIssueBlockCommandTests : IDisposable
     // Helpers.
     // ---------------------------------------------------------------
 
+    // ---------------------------------------------------------------
+    // G561: the PRE-PUBLISH exit — a unit blocked before publish to encode
+    // publish priority has no linked issue, so the two-sided path above
+    // cannot clear it. Before this flag there was no canonical exit at all.
+    // ---------------------------------------------------------------
+
+    [Fact]
+    public void PrePublishClear_OnALinkedIssueLessBlockedUnit_QueuesItAndEmptiesBlockedBy_G561()
+    {
+        using var workspace = new Workspace(QueueItemState.Blocked, blockedBy: ["G560"], omitLinkedIssue: true);
+
+        var (exitCode, output) = workspace.RunRaw(PrePublishClearArgs());
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationIssueBlockPrePublishResult>(output)!;
+
+        Assert.True(result.PrePublish);
+        Assert.True(result.Converged);
+        Assert.True(result.Queue.Applied);
+        Assert.False(result.Queue.AlreadyConverged);
+        Assert.Equal(["G560"], result.ClearedBlockedBy);
+
+        // Read back from disk: both fields the selector reads must move
+        // together. A cleared state with a stale blocked_by is a unit that is
+        // still, in effect, blocked.
+        var item = workspace.ReadQueueItem();
+        Assert.Equal(QueueItemState.Queued, item.State);
+        Assert.Empty(item.BlockedBy);
+
+        // The durable event names WHAT was cleared — a run log recording only
+        // "queued" would leave the publish-priority decision unauditable.
+        var appended = Assert.Single(workspace.ReadRunEvents());
+        Assert.Equal("queued", appended.Event);
+        Assert.Equal(Unit, appended.ExecutionUnit);
+        Assert.Equal("intent-cli automation issue-block", appended.By);
+        Assert.Contains("G560", appended.Reason ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PrePublishClear_NeverTouchesGitHub_BecauseThereIsNoIssue_G561()
+    {
+        using var workspace = new Workspace(QueueItemState.Blocked, blockedBy: ["G560"], omitLinkedIssue: true);
+        var mutator = workspace.UseMutator("whatever");
+
+        Assert.Equal(0, workspace.RunRaw(PrePublishClearArgs()).ExitCode);
+
+        // Not merely "did not mutate" — did not even READ. An unpublished unit
+        // has no issue to read, so reaching for one could only fail on absent
+        // evidence rather than on a real problem.
+        Assert.Equal(0, mutator.ReadCount);
+        Assert.Empty(mutator.Transitions);
+    }
+
+    [Fact]
+    public void PrePublishClear_DryRun_ReportsTheTransitionWithoutWritingAnything_G561()
+    {
+        using var workspace = new Workspace(QueueItemState.Blocked, blockedBy: ["G560"], omitLinkedIssue: true);
+        var queueBefore = workspace.ReadQueueStateBytes();
+        var runLogBefore = workspace.ReadRunLogBytes();
+
+        var (exitCode, output) = workspace.RunRaw([Unit, "--clear", "--pre-publish", "--dry-run", "--format", "json"]);
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationIssueBlockPrePublishResult>(output)!;
+
+        Assert.Equal("queued", result.Queue.AfterState);
+        Assert.Empty(result.Queue.AfterBlockedBy);
+        // Dry-run never claims convergence — nothing was written.
+        Assert.False(result.Converged);
+        Assert.Equal(queueBefore, workspace.ReadQueueStateBytes());
+        Assert.Equal(runLogBefore, workspace.ReadRunLogBytes());
+    }
+
+    [Fact]
+    public void PrePublishClear_IsIdempotent_OnAnAlreadyQueuedUnit_G561()
+    {
+        using var workspace = new Workspace(QueueItemState.Queued, blockedBy: [], omitLinkedIssue: true);
+
+        var (exitCode, output) = workspace.RunRaw(PrePublishClearArgs());
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationIssueBlockPrePublishResult>(output)!;
+
+        Assert.True(result.Queue.AlreadyConverged);
+        Assert.False(result.Queue.Applied);
+        Assert.Empty(workspace.ReadRunEvents());
+    }
+
+    [Fact]
+    public void PrePublishClear_OnAUnitThatHasALinkedIssue_FailsClosed_G561()
+    {
+        // Fail-closed case 1. The two-sided path also converges the GitHub
+        // label; taking the queue-only shortcut for a published unit would
+        // leave the label behind — the exact drift G545 exists to prevent.
+        using var workspace = new Workspace(QueueItemState.Blocked, blockedBy: ["G560"]);
+
+        AssertRefusedWithoutTouchingAnything(
+            workspace,
+            PrePublishClearArgs(),
+            "has a queue-state linked_issue");
+    }
+
+    [Fact]
+    public void PrePublishClear_OnAUnitWithPartialLinkage_FailsClosed_G561()
+    {
+        // A half-recorded linkage is evidence of a publish attempt, not
+        // evidence of its absence.
+        using var workspace = new Workspace(
+            QueueItemState.Blocked,
+            blockedBy: ["G560"],
+            linkedIssue: new LinkedIssue { Repo = Repo, Number = null, Url = null });
+
+        AssertRefusedWithoutTouchingAnything(
+            workspace,
+            PrePublishClearArgs(),
+            "has a queue-state linked_issue");
+    }
+
+    [Fact]
+    public void PrePublishClear_OnAnEmptyLinkedIssueObject_FailsClosed_G561()
+    {
+        // The contract is ABSOLUTE ABSENCE — only `linked_issue: null` is a
+        // pre-publish unit. An empty object `{repo:"", number:null}` is NOT
+        // absence: its presence is evidence that something recorded a linkage,
+        // and treating "the fields happen to be blank" as "never published"
+        // would let the queue-only shortcut run for a unit whose GitHub label
+        // may still say blocked.
+        using var workspace = new Workspace(
+            QueueItemState.Blocked,
+            blockedBy: ["G560"],
+            linkedIssue: new LinkedIssue { Repo = string.Empty, Number = null, Url = null });
+
+        // Stronger than "did not read": the mutator is never CONSTRUCTED. The
+        // factory records every call, so a refusal that still reached for
+        // GitHub would fail here even if it read nothing.
+        var constructions = 0;
+        var mutator = new FakeMutator(["intent-issue-in-progress"]);
+        AutomationIssueBlockCommand.MutatorFactory = () =>
+        {
+            constructions++;
+            return mutator;
+        };
+
+        var queueBefore = workspace.ReadQueueStateBytes();
+        var runLogBefore = workspace.ReadRunLogBytes();
+
+        var (exitCode, output) = workspace.RunRaw(PrePublishClearArgs());
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("carries a linked_issue OBJECT with no usable content", output, StringComparison.Ordinal);
+        Assert.Equal(queueBefore, workspace.ReadQueueStateBytes());
+        Assert.Equal(runLogBefore, workspace.ReadRunLogBytes());
+        Assert.Equal(0, constructions);
+        Assert.Equal(0, mutator.ReadCount);
+        Assert.Empty(mutator.Transitions);
+    }
+
+    [Fact]
+    public void PrePublishClear_WithRepoAndIssue_FailsClosed_G561()
+    {
+        // Fail-closed case 2: identifiers this path can neither verify nor act
+        // on. Ignoring them would let a caller believe a GitHub side was
+        // converged when none was touched.
+        using var workspace = new Workspace(QueueItemState.Blocked, blockedBy: ["G560"], omitLinkedIssue: true);
+
+        AssertRefusedWithoutTouchingAnything(
+            workspace,
+            [Unit, "--repo", Repo, "--issue", "818", "--clear", "--pre-publish", "--write", "--format", "json"],
+            "--pre-publish takes no --repo/--issue");
+    }
+
+    [Fact]
+    public void PrePublish_WithoutClear_IsRejected_G561()
+    {
+        using var workspace = new Workspace(QueueItemState.Blocked, blockedBy: ["G560"], omitLinkedIssue: true);
+
+        AssertRefusedWithoutTouchingAnything(
+            workspace,
+            [Unit, "--pre-publish", "--write", "--format", "json"],
+            "--pre-publish is only supported together with --clear");
+    }
+
+    [Fact]
+    public void PublishPriorityLifecycle_BlockPrePublish_ThenClear_MakesTheUnitSelectorEligible_G561()
+    {
+        // The demo sequence the slice exists for, end to end on real state:
+        // a unit blocked before publish is invisible to the selector, and the
+        // canonical pre-publish clear is what makes it selectable again.
+        using var workspace = new Workspace(QueueItemState.Blocked, blockedBy: ["G560"], omitLinkedIssue: true);
+
+        var blocked = workspace.ReadQueueItem();
+        Assert.False(IsSelectorEligible(blocked));
+
+        Assert.Equal(0, workspace.RunRaw(PrePublishClearArgs()).ExitCode);
+
+        var cleared = workspace.ReadQueueItem();
+        Assert.True(
+            IsSelectorEligible(cleared),
+            $"expected a selectable unit, got state={cleared.State} blocked_by=[{string.Join(", ", cleared.BlockedBy)}]");
+    }
+
+    /// <summary>
+    /// The two conditions <c>intent next-slice</c> applies before a queued item
+    /// is a candidate: it must not be in a blocked state, and its
+    /// <c>blocked_by</c> must be empty — the second is the one a bare queue
+    /// transition leaves behind, producing a unit that reports itself unblocked
+    /// while remaining unselectable.
+    /// </summary>
+    private static bool IsSelectorEligible(QueueItem item) =>
+        item.State == QueueItemState.Queued && item.BlockedBy.Count == 0;
+
+    private static string[] PrePublishClearArgs() =>
+        [Unit, "--clear", "--pre-publish", "--write", "--format", "json"];
+
     private static string[] BlockArgs() =>
         [Unit, "--repo", Repo, "--issue", "818", "--reason", Reason, "--write", "--format", "json"];
 

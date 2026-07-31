@@ -2024,6 +2024,117 @@ nothing).
 
 ---
 
+### Publish-priority ordering as a lifecycle (G561)
+
+When a slice must jump the queue, the sanctioned way to express that is **not**
+hand-picking the next unit and **not** retiring the one that would have gone
+first. It is a lifecycle with three states, and each one has a canonical
+command:
+
+1. **Block the unpublished unit** — the unit that should wait is set to
+   `state=blocked` with the reason recorded in `blocked_by`. The reason is
+   normally the execution unit it is waiting on.
+2. **The selector skips it while blocked.** `intent next-slice` excludes any
+   item in a blocked state *and* any item with a non-empty `blocked_by`. Both
+   conditions matter: an item that reports itself unblocked while still
+   carrying a stale reason is, in effect, still blocked, and will never be
+   picked.
+3. **Clear it once the priority reason is gone** — the exit that makes the unit
+   selectable again.
+
+Step 3 is where the pattern used to break. `automation issue-block --clear`
+requires a **complete** `linked_issue` before touching anything, and rightly so:
+it also converges the GitHub `intent-issue-blocked` label, and issue #818 exists
+in almost every repository. But a unit blocked *before publish* has no issue at
+all — `linked_issue` is null — so that path could not run. A bare
+`queue transition` would move the state and strand `blocked_by` populated,
+producing exactly the half-converged unit step 2 excludes. There was no
+canonical exit, and the design thread had to issue a one-off ruling to get a
+single unit moving (field incident, 2026-07-31, G559 wake).
+
+The pre-publish exit closes that:
+
+```bash
+intent-cli automation issue-block <execution-unit> --clear --pre-publish --write
+```
+
+It converges the queue side **only** — `state=queued` and `blocked_by` emptied
+in one guarded write, with the run-log event naming the wait reason it cleared —
+and performs no GitHub interaction at all, because there is no issue to
+interact with. It does not read labels, and it does not construct a mutator.
+
+It fails closed in two ways, both deliberately:
+
+- **The unit has a `linked_issue` at all.** The rule is **absolute absence**:
+  only `linked_issue: null` is a pre-publish unit. A published unit is owned by
+  the two-sided path, which also converges the label; taking the queue-only
+  shortcut for it would leave the label behind — the precise drift the
+  two-sided command exists to prevent. A *partial* linkage is refused for the
+  same reason, and so is an **empty object** `{repo: "", number: null}`: the
+  object's presence is evidence that something recorded a linkage, and "the
+  fields happen to be blank" is not the same claim as "this unit was never
+  published". An empty object is refused by the two-sided path too (it demands
+  a complete linkage), so such an item has no exit until the linkage is
+  repaired — deliberately. Malformed linkage is a data defect to fix, not a
+  state to route around, and the error message says which repair to make.
+- **`--repo` / `--issue` were supplied.** They are refused rather than ignored,
+  because a caller who passes identifiers expects them to be acted on, and this
+  path touches no GitHub side. Silently accepting them would let the caller
+  believe a GitHub side was converged when none was.
+
+`--pre-publish` is an *exit* only: it requires `--clear`. Blocking a unit before
+publish already worked; what was missing was the way back.
+
+**The next use of this pattern needs no design ruling.** Block, let the selector
+skip, clear pre-publish, publish — all four steps are canonical commands.
+
+### `clarify open` works on scaffolded packets (G561)
+
+Recording a blocking design question is most valuable **early** — while the
+packet is still a draft and the wrong answer has not yet been built. Until G561
+that was exactly when it was impossible: `clarify open` deserialized `packet.yaml`
+through the full projection contract, which requires a `review_context_packet`
+section and twenty populated `implementation_issue_packet` fields. A packet from
+`intent-cli packet draft` has neither — it carries
+`implementation_issue_packet` / `intent_placement` / `knowledge_updates` /
+`closeout_learning`, and review context lives in `review-context.md` rather than
+in the packet. Every freshly scaffolded packet was rejected before any mutation,
+so the G552 design-decision flow was structurally unavailable at the moment it
+exists for.
+
+`clarify open` now reads only the facts a clarification record actually
+contains, and the strictness is asymmetric on purpose:
+
+- the packet's `source_execution_unit` is **required** and must match the queue
+  item — a clarification filed against the wrong unit is worse than none, so
+  identity never degrades;
+- every other packet field is optional, because a scaffold has not filled it in
+  yet and an unfilled TODO is not a reason to refuse to record a blocking
+  question. Derived question/reason text degrades field by field and makes the
+  gap explicit rather than asserting detail the packet does not contain;
+- routing is decided by the **declaration**, not by what the declaration turns
+  out to contain. A packet that declares a `review_context_packet` section is
+  claiming to be a complete projection packet, so it is deserialized by the
+  **unchanged** `ProjectionPacketSerializer` — same required fields, same type
+  checks, same validation order and messages, same failures — and every
+  previous cross-check still runs on top. A declared-but-broken packet
+  (missing a required field, a wrong-typed field, or a section declared with a
+  scalar body) fails exactly as loudly as it always did, before any mutation.
+  Tolerance is never applied to a packet that says it is complete;
+- only a packet with **no such declaration** — the `packet draft` scaffold,
+  which never claimed completeness — takes the tolerant path;
+- `review-context.md` is read by the same canonical parser, so its
+  execution-unit rules are unchanged (a present-but-malformed `# Execution Unit`
+  section still fails). The one accommodation is the `# Deterministic Review
+  Checks` section the scaffold does not yet have, whose absence costs only the
+  derived question text — and `--question` overrides that anyway.
+
+The strict projection serializer is **unchanged**. Publish-flow and review
+legitimately require a complete contract; loosening it there would let an
+incomplete packet through publication. The tolerance is scoped to `clarify open`.
+
+---
+
 ## Version flow
 
 The repository version policy lives in `eng/version.json` — the single source of
