@@ -1,4 +1,5 @@
 using IntentSystem.Projection.Models;
+using YamlDotNet.RepresentationModel;
 
 namespace IntentSystem.Projection.Serialization;
 
@@ -101,107 +102,119 @@ public static class ProjectionPacketSerializer
         };
     }
 
+    /// <summary>
+    /// G565: reads the packet through YamlDotNet — the SAME YAML
+    /// implementation the packet schema surfaces (<c>packet draft</c>,
+    /// <c>queue-seed-from-packet</c>, <c>clarify open</c>, the facet checks) use
+    /// to read the same file.
+    ///
+    /// This replaces a hand-rolled line reader whose acceptance was an
+    /// approximation of YAML, so every legal construct it failed to anticipate
+    /// became a projection-only failure. The field report is the shape of the
+    /// whole class: a packet whose title contained an em-dash and a quoted
+    /// <c>": "</c> was authored and validated happily by the packet surfaces,
+    /// then rejected by projection with "contains invalid section header"
+    /// (<c>clarify open SKS-G837</c>, 2026-07-31, v0.6.2). G534 had already
+    /// patched one such gap (block-sequence indentation) and G561 another
+    /// (required-section rejection); parsing YAML with a YAML parser removes
+    /// the source rather than the next symptom.
+    ///
+    /// The projection CONTRACT is unchanged — the section/field requirements,
+    /// their validation order, and their messages all still come from the code
+    /// below this method. Only the question "what is valid YAML" moves, and it
+    /// moves to the same answer the rest of the toolchain already gives.
+    /// </summary>
     private static Dictionary<string, Dictionary<string, object>> ParseSections(string yaml)
     {
-        var sections = new Dictionary<string, Dictionary<string, object>>(StringComparer.Ordinal);
-        Dictionary<string, object>? currentSection = null;
-        string? currentListKey = null;
-
-        using var reader = new StringReader(yaml);
-        string? line;
-        while ((line = reader.ReadLine()) is not null)
+        YamlMappingNode? root;
+        try
         {
-            if (string.IsNullOrWhiteSpace(line))
+            var stream = new YamlStream();
+            using var reader = new StringReader(yaml);
+            stream.Load(reader);
+            root = stream.Documents.Count == 0 ? null : stream.Documents[0].RootNode as YamlMappingNode;
+        }
+        // YamlDotNet reports most malformed documents as a YamlException, but
+        // some — a flow sequence left unterminated across following lines, for
+        // one — surface as a bare InvalidOperationException from the node
+        // builder. Both are "this file is not YAML", and a caller must not have
+        // to tell a parse failure apart from a contract violation by exception
+        // type, so both are wrapped with the same diagnostic.
+        catch (Exception exception) when (exception is YamlDotNet.Core.YamlException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                $"Projection packet YAML could not be parsed: {exception.Message}");
+        }
+
+        if (root is null)
+        {
+            throw new InvalidOperationException("Projection packet YAML is empty or is not a mapping.");
+        }
+
+        var sections = new Dictionary<string, Dictionary<string, object>>(StringComparer.Ordinal);
+        foreach (var (keyNode, valueNode) in root.Children)
+        {
+            if (keyNode is not YamlScalarNode { Value: { } sectionName })
             {
                 continue;
             }
 
-            if (!char.IsWhiteSpace(line[0]))
+            // A top-level entry that is not a mapping is not a section. It is
+            // not an error either — the packet carries optional non-section
+            // metadata, and only the sections this contract REQUIRES are
+            // enforced, by GetRequiredSection below.
+            if (valueNode is YamlMappingNode sectionNode)
             {
-                if (!line.EndsWith(':'))
-                {
-                    throw new InvalidOperationException(
-                        $"Projection packet YAML contains invalid section header '{line}'.");
-                }
-
-                var sectionName = line[..^1];
-                currentSection = new Dictionary<string, object>(StringComparer.Ordinal);
-                sections[sectionName] = currentSection;
-                currentListKey = null;
-                continue;
+                sections[sectionName] = ReadSection(sectionNode);
             }
-
-            if (currentSection is null)
-            {
-                throw new InvalidOperationException(
-                    "Projection packet YAML must declare a section before its fields.");
-            }
-
-            // G534 review repair: a YAML block-sequence item may be
-            // indented at the SAME column as its parent key (the common
-            // convention, e.g. "  intent_references:\n  - foo") or nested
-            // one level deeper (this project's own renderer convention,
-            // "    - foo") — both are valid YAML. Detect a list item by
-            // its CONTENT ("- " once leading spaces are stripped), not by
-            // a fixed column count, so either convention — and any mix of
-            // the two across different fields in the same file — parses
-            // identically. Previously only the 4-space form was accepted;
-            // a 2-space list item fell through to the generic field-line
-            // branch below and failed with "field line is missing ':'"
-            // (no colon in "- foo"), rejecting every hand-authored packet
-            // using the more common convention.
-            var listItemCandidate = line.TrimStart(' ');
-            if (listItemCandidate.StartsWith("- ", StringComparison.Ordinal) || listItemCandidate == "-")
-            {
-                if (currentListKey is null
-                    || !currentSection.TryGetValue(currentListKey, out var listValue)
-                    || listValue is not List<string> list)
-                {
-                    throw new InvalidOperationException(
-                        $"Projection packet YAML contains list item without a list field: '{line.Trim()}'.");
-                }
-
-                var itemText = listItemCandidate.Length > 1 ? listItemCandidate[2..] : string.Empty;
-                list.Add(ParseScalar(itemText));
-                continue;
-            }
-
-            if (!line.StartsWith("  ", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"Projection packet YAML contains invalid indentation: '{line}'.");
-            }
-
-            var trimmed = line[2..];
-            var separatorIndex = trimmed.IndexOf(':');
-            if (separatorIndex < 0)
-            {
-                throw new InvalidOperationException(
-                    $"Projection packet YAML field line is missing ':': '{trimmed}'.");
-            }
-
-            var key = trimmed[..separatorIndex];
-            var value = trimmed[(separatorIndex + 1)..].TrimStart();
-
-            if (value.Length == 0)
-            {
-                currentSection[key] = new List<string>();
-                currentListKey = key;
-                continue;
-            }
-
-            currentListKey = null;
-
-            if (value == "[]")
-            {
-                currentSection[key] = Array.Empty<string>();
-                continue;
-            }
-
-            currentSection[key] = ParseScalar(value);
         }
 
         return sections;
+    }
+
+    /// <summary>
+    /// G565: maps one section's entries onto the value shapes the rest of this
+    /// contract already expects — a scalar becomes <see cref="string"/>, a
+    /// sequence becomes <c>List&lt;string&gt;</c>, and everything else (an
+    /// empty value, a nested mapping) becomes an empty list.
+    ///
+    /// That last case preserves the previous reader's behaviour exactly: it
+    /// turned a valueless <c>key:</c> into an empty list, so a REQUIRED SCALAR
+    /// left empty failed with "must be a scalar string" rather than passing as
+    /// an empty string. Keeping the mapping means the same packet produces the
+    /// same diagnostic it did before.
+    /// </summary>
+    private static Dictionary<string, object> ReadSection(YamlMappingNode section)
+    {
+        var values = new Dictionary<string, object>(StringComparer.Ordinal);
+
+        foreach (var (keyNode, valueNode) in section.Children)
+        {
+            if (keyNode is not YamlScalarNode { Value: { } key })
+            {
+                continue;
+            }
+
+            values[key] = valueNode switch
+            {
+                // A valueless `key:` is an empty PLAIN scalar. The previous
+                // reader turned it into an empty list, so a required scalar
+                // left blank failed with "must be a scalar string" — keep that,
+                // or a packet with a blank title would start passing. An
+                // explicitly quoted `key: ""` is a real empty string and stays
+                // a scalar, exactly as before.
+                YamlScalarNode { Style: YamlDotNet.Core.ScalarStyle.Plain } plain
+                    when string.IsNullOrEmpty(plain.Value) => new List<string>(),
+                YamlScalarNode scalar => scalar.Value!,
+                YamlSequenceNode sequence => sequence.Children
+                    .OfType<YamlScalarNode>()
+                    .Select(item => item.Value ?? string.Empty)
+                    .ToList(),
+                _ => new List<string>(),
+            };
+        }
+
+        return values;
     }
 
     private static Dictionary<string, object> GetRequiredSection(
@@ -259,51 +272,6 @@ public static class ProjectionPacketSerializer
             _ => throw new InvalidOperationException(
                 $"Projection packet YAML field '{key}' must be a list.")
         };
-    }
-
-    private static string ParseScalar(string value)
-    {
-        if (value.Length >= 2
-            && value[0] == '"'
-            && value[^1] == '"')
-        {
-            return Unescape(value[1..^1]);
-        }
-
-        return value;
-    }
-
-    private static string Unescape(string value)
-    {
-        var chars = new List<char>(value.Length);
-
-        for (var index = 0; index < value.Length; index++)
-        {
-            var current = value[index];
-            if (current != '\\')
-            {
-                chars.Add(current);
-                continue;
-            }
-
-            if (index == value.Length - 1)
-            {
-                throw new InvalidOperationException("Projection packet YAML contains an invalid escape sequence.");
-            }
-
-            index++;
-            chars.Add(value[index] switch
-            {
-                '\\' => '\\',
-                '"' => '"',
-                'n' => '\n',
-                'r' => '\r',
-                _ => throw new InvalidOperationException(
-                    "Projection packet YAML contains an unsupported escape sequence.")
-            });
-        }
-
-        return new string(chars.ToArray());
     }
 
     private static IssueKind ParseIssueKind(string issueKind)

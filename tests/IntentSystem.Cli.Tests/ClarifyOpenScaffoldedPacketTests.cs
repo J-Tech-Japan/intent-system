@@ -239,13 +239,18 @@ public sealed class ClarifyOpenScaffoldedPacketTests : IDisposable
               clarification_return_path: "intents/intent-cli/clarifications/open.md"
             """);
 
-        // It fails inside the strict serializer, which is the whole point. The
-        // exact stop is the scaffold's own top-level comment lines — the strict
-        // parser treats any column-0 line as a section header — which is a
-        // second, independent reason the scaffold could never have travelled
-        // this route. Either way: refused, before any mutation.
+        // It fails inside the strict serializer, which is the whole point.
+        //
+        // G565 changed WHERE it stops, and the new stop is the one this test
+        // always meant. The scaffold used to trip the hand-rolled reader on its
+        // own top-level comment lines ("invalid section header") — an accident
+        // of the parser, not a statement about the packet. Now that projection
+        // parses YAML with a YAML parser, comments are comments, and the
+        // scaffold is refused for the real reason: declaring the section is a
+        // claim of completeness, and the packet does not carry the required
+        // implementation fields. Either way: refused, before any mutation.
         workspace.AssertRefusedBeforeMutation(
-            [ScaffoldWorkspace.Unit], "Projection packet YAML contains invalid section header");
+            [ScaffoldWorkspace.Unit], "Implementation issue packet must contain required field");
     }
 }
 
