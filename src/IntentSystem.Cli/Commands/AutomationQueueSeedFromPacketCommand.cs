@@ -104,7 +104,7 @@ internal static class AutomationQueueSeedFromPacketCommand
         // surface upstream and on a mutation path — where the cost is a
         // malformed unit sitting in the queue and failing later at publish or
         // preflight, far from its cause.
-        if (!TryReadPacketFields(packetDirectoryAbsolute, out var packetFields, out var packetParseError))
+        if (!TryReadPacketDocument(packetDirectoryAbsolute, out var packetDocument, out var packetParseError))
         {
             var unparseable = new QueueSeedFromPacketResult
             {
@@ -121,6 +121,7 @@ internal static class AutomationQueueSeedFromPacketCommand
             return 1;
         }
 
+        var packetFields = packetDocument.Fields;
         var packetDeclaredDomain = LookupScalar(packetFields, "domain");
         var domainResolution = PacketDomainResolution.Resolve(
             domain,
@@ -217,7 +218,7 @@ internal static class AutomationQueueSeedFromPacketCommand
 
         var seed = BuildSeedItem(
             executionUnit,
-            packetFields,
+            packetDocument,
             defaultClarificationReturnPath,
             defaultWorkerRole,
             defaultReviewRole,
@@ -334,14 +335,15 @@ internal static class AutomationQueueSeedFromPacketCommand
     /// </summary>
     internal static QueueItem BuildSeedItem(
         string executionUnit,
-        IReadOnlyDictionary<string, string> packetFields,
+        PacketYamlDocument packet,
         string defaultClarificationReturnPath,
         string defaultWorkerRole,
         string defaultReviewRole,
         string defaultPriority)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
-        ArgumentNullException.ThrowIfNull(packetFields);
+        ArgumentNullException.ThrowIfNull(packet);
+        var packetFields = packet.Fields;
         ArgumentException.ThrowIfNullOrWhiteSpace(defaultClarificationReturnPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(defaultWorkerRole);
         ArgumentException.ThrowIfNullOrWhiteSpace(defaultReviewRole);
@@ -395,17 +397,22 @@ internal static class AutomationQueueSeedFromPacketCommand
         // blocked_by data when the packet declares them. Previously
         // these fields were hardcoded empty, which silently dropped
         // dependency metadata the operator already authored into
-        // the prepared packet. The G361 scalar parser stores
-        // bracketed inline-list values as raw strings (e.g.
-        // `dependencies: [G1, G2]` ends up keyed by
-        // `dependencies` with value `[G1, G2]`); we expand them
-        // here. Empty arrays remain the safe default when the
-        // packet truly carries no dependencies — never guess.
-        var dependencies = ParsePacketArrayField(packetFields,
+        // the prepared packet.
+        //
+        // G568: both come off the parsed document's structured
+        // sequences, so a FLOW (`[G1, G2]`) and a BLOCK (`- G1`)
+        // declaration seed identically. Until now a flow sequence
+        // survived as bracket text that had to be re-split here, and
+        // a block sequence was dropped entirely — which silently
+        // un-gated dependency-aware selection for exactly the units
+        // that declared their dependencies in the more common style.
+        // Empty stays the safe default when the packet truly carries
+        // none — absence is never guessed into content.
+        var dependencies = packet.LookupSequence(
             "implementation_issue_packet.dependencies",
             "implementation_issue.dependencies",
             "dependencies");
-        var blockedBy = ParsePacketArrayField(packetFields,
+        var blockedBy = packet.LookupSequence(
             "implementation_issue_packet.blocked_by",
             "implementation_issue.blocked_by",
             "blocked_by");
@@ -432,41 +439,6 @@ internal static class AutomationQueueSeedFromPacketCommand
     }
 
     /// <summary>
-    /// PR #830 review repair: parse a packet.yaml field whose value
-    /// is an inline list (<c>[G1, G2]</c>) or a comma-separated
-    /// scalar. The G361 PreparedPacketYamlScalarParser stores
-    /// list-shaped values as the raw bracketed text; this helper
-    /// strips brackets, splits on commas, and trims surrounding
-    /// whitespace / quotes. Returns an empty list when no key
-    /// resolves — packets carrying no dependencies legitimately
-    /// produce queue items with empty arrays (no guessing).
-    /// </summary>
-    internal static IReadOnlyList<string> ParsePacketArrayField(
-        IReadOnlyDictionary<string, string> packetFields,
-        params string[] keys)
-    {
-        var raw = LookupScalar(packetFields, keys);
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return Array.Empty<string>();
-        }
-        var trimmed = raw.Trim();
-        if (trimmed.StartsWith('[') && trimmed.EndsWith(']'))
-        {
-            trimmed = trimmed[1..^1];
-        }
-        if (string.IsNullOrWhiteSpace(trimmed))
-        {
-            return Array.Empty<string>();
-        }
-        return trimmed
-            .Split(',', StringSplitOptions.RemoveEmptyEntries)
-            .Select(token => token.Trim().Trim('"', '\''))
-            .Where(token => token.Length > 0)
-            .ToArray();
-    }
-
-    /// <summary>
     /// G567: reads the packet's fields THROUGH a whole-document YAML parse
     /// (<see cref="PacketYamlDocument"/>), the same acceptance G565 gave
     /// projection. Returns <see langword="false"/> with a named error when the
@@ -478,9 +450,9 @@ internal static class AutomationQueueSeedFromPacketCommand
     /// <see cref="PreparedPacketCommitReadyAnalyzer"/> produces its own
     /// missing-file diagnostic downstream, exactly as before.
     /// </summary>
-    private static bool TryReadPacketFields(
+    private static bool TryReadPacketDocument(
         string packetDirectoryAbsolute,
-        out IReadOnlyDictionary<string, string> fields,
+        out PacketYamlDocument document,
         out string error)
     {
         error = string.Empty;
@@ -488,18 +460,18 @@ internal static class AutomationQueueSeedFromPacketCommand
         var content = TryReadFile(packetYamlPath);
         if (string.IsNullOrEmpty(content))
         {
-            fields = new Dictionary<string, string>(StringComparer.Ordinal);
+            document = PacketYamlDocument.Empty;
             return true;
         }
 
-        if (!PacketYamlDocument.TryParse(content!, out var document, out var parseError))
+        if (!PacketYamlDocument.TryParse(content!, out var parsed, out var parseError))
         {
-            fields = new Dictionary<string, string>(StringComparer.Ordinal);
+            document = PacketYamlDocument.Empty;
             error = parseError;
             return false;
         }
 
-        fields = document!.Fields;
+        document = parsed!;
         return true;
     }
 

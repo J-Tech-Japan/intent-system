@@ -67,6 +67,7 @@ internal static class CommandRouter
         "automation host-sync-preflight",
         "automation intent-target-gap-recovery --repo <r> [--write]",
         "automation issue-publish --issue <n> --write",
+        "automation queue-dependency-reconcile [--execution-unit <u>] [--dry-run|--write]",
         "automation knowledge-writeback-record --execution-unit <u> --commit <host-sha> [--target <path>]... [--dry-run|--write]",
         "automation pr-transition --transition review-start --write",
         "automation pr-transition --transition request-update --write",
@@ -200,6 +201,8 @@ internal static class CommandRouter
                 ["pr-transition"] = AutomationPrTransitionCommand.Execute,
                 ["publish-lifecycle-repair"] = AutomationPublishLifecycleRepairCommand.Execute,
                 ["publish-recovery"] = AutomationPublishRecoveryCommand.Execute,
+                // G568: diagnose/repair packet-vs-queue dependency drift.
+                ["queue-dependency-reconcile"] = AutomationQueueDependencyReconcileCommand.Execute,
                 ["queue-seed-from-packet"] = AutomationQueueSeedFromPacketCommand.Execute,
                 ["reconcile"] = AutomationReconcileCommand.Execute,
                 ["runs-audit"] = AutomationRunsAuditCommand.Execute,

@@ -166,16 +166,22 @@ public sealed class QueueSeedPacketParsingG567Tests : IDisposable
         Assert.Equal("titled", fields["implementation_issue_packet.issue_title"]);
         // Bare-key alias, exactly as the previous reader produced.
         Assert.Equal("titled", fields["issue_title"]);
-        Assert.Equal("[A, B]", fields["implementation_issue_packet.dependencies"]);
 
-        // Deliberately unchanged from the previous reader: a BLOCK sequence and
-        // a valueless key record nothing. The block-sequence case is a
-        // pre-existing data-loss bug (block-style `dependencies` never reach the
-        // seed); this unit moves WHERE parsing happens, not what a packet means,
-        // so it is pinned as-is and listed for follow-up rather than changed in
-        // passing.
-        Assert.False(fields.ContainsKey("implementation_issue_packet.blocked_by"));
+        // G568 MOVED this pin rather than deleting it. G567 pinned the lossy
+        // behaviour it faithfully preserved: a FLOW sequence survived as the
+        // bracket TEXT `"[A, B]"` in Fields, and a BLOCK sequence recorded
+        // nothing at all. The follow-up this pin was flagging is now done, so it
+        // pins the faithful behaviour instead — sequences are structured, both
+        // styles are indistinguishable, and no bracket text remains.
+        Assert.False(fields.ContainsKey("implementation_issue_packet.dependencies"));
+        Assert.Equal(["A", "B"], document.Sequences["implementation_issue_packet.dependencies"]);
+        Assert.Equal(["C"], document.Sequences["implementation_issue_packet.blocked_by"]);
+        Assert.Equal(["A", "B"], document.LookupSequence("implementation_issue_packet.dependencies"));
+
+        // A valueless key still records nothing — unchanged, and still correct:
+        // an absent value is not an empty list, it is an absent declaration.
         Assert.False(fields.ContainsKey("implementation_issue_packet.empty_value"));
+        Assert.False(document.Sequences.ContainsKey("implementation_issue_packet.empty_value"));
     }
 
     [Fact]
