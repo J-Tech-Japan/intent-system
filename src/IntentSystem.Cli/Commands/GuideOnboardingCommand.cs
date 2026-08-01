@@ -75,51 +75,66 @@ internal static class GuideOnboardingCommand
                     Purpose = "G540: reach the full orchestrator-thread setup checklist directly from onboarding — the PRIMARY four-thread agmsg orchestration model's setup intake (missing-inputs / setup-ready / blocked), role prompts, mode separation, role boundary and design↔orchestrator double-check rule, and safety-net guidance. Not required for a single-thread/timer-loop setup (see `guide prompt-matrix` instead).",
                     NoMutation = "Pure read; emits a static description and never touches the file system or agmsg state."
                 },
+                // G570: a fresh agent must learn WHICH TRANSPORT this team runs
+                // before it reads transport-specific operating sections —
+                // otherwise it follows agmsg registration steps in a herdr-only
+                // team, or the reverse. This sits directly after the
+                // orchestrator-thread step because that is the surface the mode
+                // routes.
                 new GuideOnboardingStep
                 {
                     Order = 3,
+                    Command = "intent-cli session-layer show --domain <domain> [--team <team>] --format json",
+                    Purpose = "G570: learn which SESSION LAYER this team runs — `agmsg` (PRIMARY, the practiced transport) or `herdr-only` (PREVIEW, single-machine, herdr as terminal controller). "
+                        + SessionLayerMode.PreviewScopingSentence
+                        + " Absent a record the mode is `agmsg`. The recorded mode selects which operating sections `guide orchestrator-thread` renders, so read it before following any transport-specific setup. Change it with `intent-cli session-layer set --domain <domain> --mode agmsg|herdr-only --write` — reversible in both directions.",
+                    NoMutation = "Pure read; `show` never writes. Only `session-layer set --write` records a mode."
+                },
+                new GuideOnboardingStep
+                {
+                    Order = 4,
                     Command = "intent-cli guide rules list --format json",
                     Purpose = "Discover supported `guide rules --topic` ids and their categories (automation / issue-contract / interview / review).",
                     NoMutation = "Pure read; lists a static registry."
                 },
                 new GuideOnboardingStep
                 {
-                    Order = 4,
+                    Order = 5,
                     Command = "intent-cli guide commands list --format json",
                     Purpose = "Inspect every command group with its lifecycle classification (primary / support / advanced / experimental) so the agent does not misread legacy surfaces such as `run` as the default path.",
                     NoMutation = "Pure read; static classification table."
                 },
                 new GuideOnboardingStep
                 {
-                    Order = 5,
+                    Order = 6,
                     Command = "intent-cli guide workflow suggest --goal \"<operator goal>\" --format json",
                     Purpose = "Classify the operator's stated goal into one of the canonical workflows (feature-intake / next-slice-planning / review / child-implementation / clarification / orchestrator-setup) and receive the recommended command sequence.",
                     NoMutation = "Pure read; classification is keyword-based and emits no state. Default output excludes advanced-runtime suggestions; opt in with `--include-advanced-runtime`."
                 },
                 new GuideOnboardingStep
                 {
-                    Order = 6,
+                    Order = 7,
                     Command = "intent-cli intent status --domain <domain> --format json",
                     Purpose = "Surface current baseline, in-flight WIP, queued packets, and open clarification state for the target domain.",
                     NoMutation = "Pure read of `.intent-cli/queue-state.json` and `intents/<domain>/clarifications/open.md`."
                 },
                 new GuideOnboardingStep
                 {
-                    Order = 7,
+                    Order = 8,
                     Command = "intent-cli intent next-slice --dry-run --domain <domain> --target-repo <owner/repo> --format json",
                     Purpose = "Verify WIP cap, clarification gates, and candidate readiness before drafting or planning further state-mutating work.",
                     NoMutation = "Pure read; `--dry-run` is required and the command is implemented as read-only."
                 },
                 new GuideOnboardingStep
                 {
-                    Order = 8,
+                    Order = 9,
                     Command = "intent-cli interview next-question --session <id> --domain <domain> --format json",
                     Purpose = "Once an active interview session exists, surface the next pending question without recording any answer.",
                     NoMutation = "Pure read of `intents/<domain>/interviews/<session>.json`. `record-answer --write` is the only mutation in the chat-first flow and is excluded from onboarding."
                 },
                 new GuideOnboardingStep
                 {
-                    Order = 9,
+                    Order = 10,
                     Command = "intent-cli automation summary --format json",
                     Purpose = "Read the canonical label-driven automation contract and capability JSON for the host repo.",
                     NoMutation = "Pure read; the operator owns the runtime contract that this command surfaces."

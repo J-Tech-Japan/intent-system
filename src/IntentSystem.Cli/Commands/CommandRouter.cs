@@ -29,7 +29,9 @@ internal static class CommandRouter
         "packet",
         "closeout",
         "migrate",
-        "skill"
+        "skill",
+        // G570: session-layer transport selection (agmsg | herdr-only).
+        "session-layer"
     ];
 
     /// <summary>
@@ -108,6 +110,12 @@ internal static class CommandRouter
                 ["next-question"] = InterviewNextQuestionCommand.Execute,
                 ["record-answer"] = InterviewRecordAnswerCommand.Execute,
                 ["compile"] = InterviewCompileCommand.Execute
+            },
+            // G570: session-layer mode show/set.
+            ["session-layer"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["show"] = SessionLayerCommand.ExecuteShow,
+                ["set"] = SessionLayerCommand.ExecuteSet
             },
             // G559: cross-platform agent skill install surface.
             ["skill"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
@@ -548,6 +556,7 @@ internal static class CommandRouter
             ["packet"] = "`intent-cli packet draft --execution-unit <id> --target-repo <r> --format markdown`.",
             ["issue"] = "`intent-cli issue publish-flow <id> --repo <r> --write --format json` then `intent-cli automation issue-publish --write`.",
             ["automation"] = "`intent-cli automation summary --domain <d> --format json` (capability JSON), `intent-cli automation doctor --format json` (CLI freshness).",
+            ["session-layer"] = "`intent-cli session-layer show --domain <d> [--team <t>]` (which transport is in force), then `intent-cli session-layer set --domain <d> --mode agmsg|herdr-only --write` to change it.",
             ["bug"] = "`intent-cli guide worker pr-comment-fix --format json` (repair guidance), `intent-cli bug report`/`triage` for new-bug intake.",
             ["worker"] = "`intent-cli worker next-action --repo <r> --workdir <child> --format json` then claim / result-summary / complete.",
             ["metadata"] = "`intent-cli metadata validate --format json` (read-only); use `intent-cli metadata update --mode completed-closeout --write` for the bounded controlled writer instead of hand-editing.",

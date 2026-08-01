@@ -77,7 +77,16 @@ internal static class GuideOrchestratorThreadCommand
             return 1;
         }
 
-        var guide = BuildGuide(values);
+        // G570: the recorded session layer selects which operating sections
+        // this guide renders. Resolution is read-only and tolerant — a guide
+        // must always render — and under `agmsg` the projection below is the
+        // identity, so agmsg output is byte-identical to before this slice.
+        var sessionLayer = SessionLayerModeStore.Resolve(
+            context.RepoRoot,
+            values["<domain>"],
+            string.IsNullOrWhiteSpace(values["<team>"]) ? null : values["<team>"]);
+
+        var guide = ApplySessionLayer(BuildGuide(values), sessionLayer, values);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -88,6 +97,130 @@ internal static class GuideOrchestratorThreadCommand
 
         WriteMarkdown(writer, guide);
         return 0;
+    }
+
+    /// <summary>
+    /// G570: routes the guide by the recorded session layer.
+    ///
+    /// Under <c>agmsg</c> this returns the guide UNTOUCHED — the identity — so
+    /// every existing output stays byte-identical and the mode cannot regress
+    /// the practiced path by accident. That is why routing lives here as a
+    /// projection rather than as conditionals threaded through a 5,000-line
+    /// builder: the agmsg guarantee is visible in one line.
+    ///
+    /// Under <c>herdr-only</c> the agmsg-SPECIFIC OPERATIONAL sections — agmsg
+    /// registration/setup, receiver readiness (monitor/bridge), monitor
+    /// recovery and the monitor-vs-Monitor distinction, and the agmsg reply
+    /// contract — are replaced by pointers to the herdr-only operating sections,
+    /// which ship in G571. Everything mode-independent (supervision, isolation,
+    /// liveness, the wake contract, publish authority, the double-check rule,
+    /// dependency planning, escalation) renders unchanged in BOTH modes: those
+    /// are properties of the four-thread model, and the model does not change
+    /// with the transport.
+    /// </summary>
+    internal static OrchestratorThreadGuide ApplySessionLayer(
+        OrchestratorThreadGuide guide,
+        SessionLayerModeResolution sessionLayer,
+        IReadOnlyDictionary<string, string> values)
+    {
+        var block = new OrchestratorSessionLayer
+        {
+            Mode = sessionLayer.Mode,
+            Source = sessionLayer.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
+            Summary = sessionLayer.Source == SessionLayerModeSource.Recorded
+                ? $"Session layer: {SessionLayerMode.Describe(sessionLayer.Mode)} — recorded for this domain/team."
+                : $"Session layer: {SessionLayerMode.Describe(SessionLayerMode.Default)} — no selection recorded, so the default is in force.",
+            Exclusivity = SessionLayerMode.ExclusivitySentence,
+            PreviewScoping = SessionLayerMode.PreviewScopingSentence,
+            Selection =
+                $"`intent-cli session-layer show --domain {values["<domain>"]}` reports it; "
+                + $"`intent-cli session-layer set --domain {values["<domain>"]} --mode agmsg|herdr-only --write` changes it, "
+                + "reversibly, in both directions.",
+            ResidualAgmsgMechanics = sessionLayer.IsHerdrOnly
+                ? "HERDR-ONLY: the agmsg-specific OPERATIONAL sections below (setup/registration, receiver readiness, "
+                    + "monitor and bridge diagnostics, the agmsg reply contract, design-receiver registration) are "
+                    + "replaced by pointers. Some MIXED sections — terminal workspace provisioning, supervision, "
+                    + "preflight, troubleshooting — still quote agmsg mechanics such as `join.sh`, `delivery.sh` or "
+                    + "`actas` alongside canon that applies to BOTH modes. In herdr-only, treat every agmsg MECHANIC "
+                    + "in those sections as not applicable while the surrounding canon (isolation, supervision, "
+                    + "liveness, wake contract, publish authority) still binds. G571 restructures those sections; "
+                    + "until it lands, do not run an agmsg command because a mixed section mentions one."
+                : null,
+        };
+
+        var intakeNote =
+            $"Recorded session layer for this setup: {SessionLayerMode.Describe(sessionLayer.Mode)} "
+            + $"({(sessionLayer.Source == SessionLayerModeSource.Recorded ? "recorded" : "default — nothing recorded yet")}). "
+            + $"Record or change it with `intent-cli session-layer set --domain {values["<domain>"]} "
+            + (string.IsNullOrWhiteSpace(values["<team>"]) ? string.Empty : $"--team {values["<team>"]} ")
+            + "--mode agmsg|herdr-only --write`. A herdr-only request made at first setup is honoured from then on; "
+            + "the choice is reversible in both directions.";
+
+        if (!sessionLayer.IsHerdrOnly)
+        {
+            return guide with
+            {
+                SessionLayer = block,
+                SetupIntake = guide.SetupIntake with
+                {
+                    SessionLayerMode = sessionLayer.Mode,
+                    SessionLayerNote = intakeNote,
+                },
+            };
+        }
+
+        const string Pointer =
+            "HERDR-ONLY MODE — this section is agmsg-specific and does not apply. Its herdr-only counterpart ships in "
+            + "G571 (\"Session-layer switch checklist\" and the herdr-only operating sections of this guide). Until "
+            + "then, do NOT follow the agmsg steps: they would register a transport this team is not running, and a "
+            + "team runs exactly one mode.";
+
+        return guide with
+        {
+            SessionLayer = block,
+            Setup = guide.Setup with
+            {
+                Summary = Pointer,
+                Decisions = [Pointer],
+                Checklist = [Pointer],
+                AgmsgCommands = [Pointer],
+                PingTest = Pointer,
+                Cleanup = [Pointer],
+            },
+            ReceiverReadiness = guide.ReceiverReadiness with
+            {
+                Summary = Pointer,
+                StartupOrder = [Pointer],
+                SendBeforeReadyWarning = Pointer,
+                RecoveryMessageTemplate = Pointer,
+                PingAckRequired = Pointer,
+            },
+            MonitorToolDistinction = guide.MonitorToolDistinction with
+            {
+                Summary = Pointer,
+                DeliveryModeNote = Pointer,
+                SuccessMarkers = [Pointer],
+                FailureMarkers = [Pointer],
+                TrustRepair = [Pointer],
+                WindowsGuidance = [Pointer],
+            },
+            MonitorRecovery = Array.Empty<OrchestratorTroubleshooting>(),
+            AgmsgReplyContract = guide.AgmsgReplyContract with
+            {
+                Description = Pointer,
+            },
+            DesignReceiver = guide.DesignReceiver with
+            {
+                Setup = [Pointer],
+                ManualInboxTriggerPrompt = Pointer,
+            },
+            SetupIntake = guide.SetupIntake with
+            {
+                AgmsgCommands = [Pointer],
+                SessionLayerMode = sessionLayer.Mode,
+                SessionLayerNote = intakeNote,
+            },
+        };
     }
 
     private static OrchestratorThreadGuide BuildGuide(IReadOnlyDictionary<string, string> values)
@@ -2618,6 +2751,14 @@ internal static class GuideOrchestratorThreadCommand
     {
         writer.WriteLine("## Setup intake");
         writer.WriteLine();
+        // G570: the recorded session layer, stated before any transport-specific
+        // setup step so an operator never follows the wrong one.
+        if (intake.SessionLayerNote is { } sessionLayerNote)
+        {
+            writer.WriteLine($"- session layer: {sessionLayerNote}");
+            writer.WriteLine();
+        }
+
         writer.WriteLine($"- **status: `{intake.Status}`**");
         writer.WriteLine($"- {intake.Headline}");
         writer.WriteLine($"- {intake.LooplessReceiverNote}");
@@ -3052,6 +3193,24 @@ internal static class GuideOrchestratorThreadCommand
     {
         writer.WriteLine("# Guide — agmsg-backed orchestrator thread (G487)");
         writer.WriteLine();
+
+        // G570: which transport this rendering is for, before any
+        // transport-specific instruction the reader might otherwise follow.
+        if (guide.SessionLayer is { } sessionLayer)
+        {
+            writer.WriteLine("## Session layer");
+            writer.WriteLine();
+            writer.WriteLine(sessionLayer.Summary);
+            writer.WriteLine();
+            writer.WriteLine($"- {sessionLayer.Exclusivity}");
+            writer.WriteLine($"- {sessionLayer.PreviewScoping}");
+            writer.WriteLine($"- selection — {sessionLayer.Selection}");
+            if (sessionLayer.ResidualAgmsgMechanics is { } residual)
+            {
+                writer.WriteLine($"- {residual}");
+            }
+            writer.WriteLine();
+        }
 
         // G500: the setup intake comes FIRST — a design-thread agent must land on
         // an operational outcome (missing-inputs / setup-ready / blocked) before
@@ -3812,6 +3971,17 @@ internal sealed record OrchestratorSetupIntake
 
     [JsonPropertyName("loopless_receiver_note")]
     public required string LooplessReceiverNote { get; init; }
+
+    /// <summary>
+    /// G570: the session layer this setup is for, recorded at intake so a
+    /// "we want herdr only" asked for at first contact is honoured and
+    /// remembered rather than re-asked every wake.
+    /// </summary>
+    [JsonPropertyName("session_layer_mode")]
+    public string? SessionLayerMode { get; init; }
+
+    [JsonPropertyName("session_layer_note")]
+    public string? SessionLayerNote { get; init; }
 }
 
 internal sealed record OrchestratorSetupInputs
@@ -3852,6 +4022,10 @@ internal sealed record OrchestratorSetupInputs
 
 internal sealed record OrchestratorThreadGuide
 {
+    /// <summary>G570: which session-layer transport this guide is rendering for, and how that was decided.</summary>
+    [JsonPropertyName("session_layer")]
+    public OrchestratorSessionLayer? SessionLayer { get; init; }
+
     [JsonPropertyName("setup_intake")]
     public required OrchestratorSetupIntake SetupIntake { get; init; }
 
@@ -5216,4 +5390,41 @@ internal sealed record OrchestratorReplyContract
     /// </summary>
     [JsonPropertyName("closeout_knowledge_write_back_rule")]
     public required string CloseoutKnowledgeWriteBackRule { get; init; }
+}
+
+/// <summary>
+/// G570: the session-layer block every orchestrator-thread rendering carries.
+/// It answers "which transport am I reading about, and did somebody choose it
+/// or is this the default" before the reader reaches any transport-specific
+/// section.
+/// </summary>
+internal sealed record OrchestratorSessionLayer
+{
+    [JsonPropertyName("mode")]
+    public required string Mode { get; init; }
+
+    [JsonPropertyName("source")]
+    public required string Source { get; init; }
+
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("exclusivity")]
+    public required string Exclusivity { get; init; }
+
+    [JsonPropertyName("preview_scoping")]
+    public required string PreviewScoping { get; init; }
+
+    [JsonPropertyName("selection")]
+    public required string Selection { get; init; }
+
+    /// <summary>
+    /// G570: honest about the boundary of this slice. Wholly agmsg-specific
+    /// sections are replaced; MIXED sections that carry both canon and agmsg
+    /// mechanics are left intact (removing them would remove mode-independent
+    /// canon with them) and this sentence tells the reader how to read them
+    /// until G571 restructures them. Null under agmsg.
+    /// </summary>
+    [JsonPropertyName("residual_agmsg_mechanics")]
+    public string? ResidualAgmsgMechanics { get; init; }
 }

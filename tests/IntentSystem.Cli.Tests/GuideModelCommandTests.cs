@@ -51,9 +51,66 @@ public sealed class GuideModelCommandTests
         Assert.Contains("message-driven steady state", output, StringComparison.Ordinal);
         Assert.Contains("- **alternative** —", output, StringComparison.Ordinal);
         Assert.Contains("Timer-loop mode remains fully supported", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("opt-in", output, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("preview", output, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("experimental", output, StringComparison.OrdinalIgnoreCase);
+
+        // G570 scoped this assertion to the section it is about, and did not
+        // weaken it. G540 ruled that the four-thread MODEL carries no
+        // qualifier; the assertion was written document-wide because the
+        // document only discussed the model. It now also describes the SESSION
+        // TRANSPORT, where `herdr-only` is honestly a preview — so a
+        // document-wide ban would force the transport to be described
+        // inaccurately to keep a guard green, which is the wrong trade.
+        //
+        // What G540 ruled is asserted exactly: no qualifier appears anywhere in
+        // the execution-orchestration-model section.
+        var modelSection = SectionBetween(
+            output,
+            "## Execution orchestration model (PRIMARY for autonomous multi-thread execution)",
+            "## Session layer (transport for the four threads)");
+        Assert.DoesNotContain("opt-in", modelSection, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("preview", modelSection, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("experimental", modelSection, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// G570: the preview qualifier is allowed ONLY on the transport, and only
+    /// while it says so in its own words. Without this, scoping the assertion
+    /// above would have left the qualifier free to drift back onto the model.
+    /// </summary>
+    [Fact]
+    public void Execute_Markdown_PreviewQualifierAppearsOnlyInTheSessionLayerSection_G570()
+    {
+        using var writer = new StringWriter();
+        Assert.Equal(0, GuideModelCommand.Execute(CreateContext(), [], writer));
+        var output = writer.ToString();
+
+        var sessionLayerIndex = output.IndexOf("## Session layer (transport for the four threads)", StringComparison.Ordinal);
+        Assert.True(sessionLayerIndex > 0, "guide model must carry the session-layer section");
+
+        // Every occurrence of the qualifier is inside that section.
+        var index = output.IndexOf("preview", StringComparison.OrdinalIgnoreCase);
+        Assert.True(index >= 0, "the session-layer section must state the preview qualifier honestly");
+        while (index >= 0)
+        {
+            Assert.True(
+                index > sessionLayerIndex,
+                "a preview/PREVIEW qualifier appears before the session-layer section — G540 rules the four-thread "
+                + "model unqualified, so the qualifier must never attach to it.");
+            index = output.IndexOf("preview", index + 1, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // And the qualifier carries its own scoping sentence, so a reader can
+        // never take it as a statement about the model.
+        Assert.Contains("PREVIEW here scopes the SESSION TRANSPORT only", output, StringComparison.Ordinal);
+        Assert.Contains("PRIMARY and unqualified in both modes", output, StringComparison.Ordinal);
+    }
+
+    private static string SectionBetween(string output, string startHeading, string endHeading)
+    {
+        var start = output.IndexOf(startHeading, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"missing section heading: {startHeading}");
+        var end = output.IndexOf(endHeading, start, StringComparison.Ordinal);
+        Assert.True(end > start, $"missing section heading after {startHeading}: {endHeading}");
+        return output[start..end];
     }
 
     [Fact]

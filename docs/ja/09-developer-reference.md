@@ -634,6 +634,64 @@ kind では `— FYI:` prose `` で終わります — そのため読み手（�
 orchestrator でも）が「transition は不要」を actionable な次コマンドと
 取り違えることはありません。
 
+### session-layer モード: 4 スレッドがどの transport を使うか (G570)
+
+`intent-cli session-layer show --domain <d> [--team <t>] [--format markdown|json]`
+`intent-cli session-layer set --domain <d> [--team <t>] --mode agmsg|herdr-only [--dry-run|--write] [--format markdown|json]`
+
+4 スレッドモデル(design / orchestrator / implementation / review)と、そのスレッド群が
+会話する **session layer** は別の話です。2026-08-01 のオペレーター裁定により、後者は
+固定ではなく**選択可能**になりました。
+
+- **`agmsg` が PRIMARY** — 実運用され保守されている transport であり、記録が無いときの
+  既定値です。
+- **`herdr-only` は PREVIEW** — herdr が terminal controller となり、別立ての message
+  bridge を動かさない単一マシン向けの代替です。**PREVIEW という限定詞は transport のみ**
+  に掛かります。4 スレッドモデル自体は両モードで PRIMARY かつ無限定のままであり
+  (G540 の裁定どおり)、transport を選ぶことがモデルを暫定的にすることはありません。
+- **1 チーム 1 モード。** 1 つのチーム内で agmsg と herdr-only の配送を混在させることは
+  fallback ではなく contract violation です。transport が 2 つあるということは「誰に何を
+  伝えたか」の見え方が 2 つあるということです。
+
+セマンティクス:
+
+- **スコープ** — domain 単位で記録し、team が modeled されている場合は team 単位でも
+  記録します。team 単位の記録が domain 全体の記録に優先します(より狭い言明だからです)。
+- **既定** — 記録が無ければ `agmsg`。`show` は決して書きません。
+- **永続化** — `.intent-cli/session-layer-mode.json`。書き込むのは
+  `session-layer set --write` **のみ**です(G548 の系譜: durable state は canonical な
+  コマンド経由でのみ変更し、手編集はしない)。
+- **冪等** — 同一スコープで既に有効なモードを再記録しても no-op で、transition も
+  記録しません。セットアップスクリプトがモードを表明しても、trail が「決定の記録」から
+  「実行の記録」に変質しません。
+- **可逆＋trail** — 各エントリは全 transition(`from` / `to` / `at`)を保持します。
+  agmsg へ戻すことは herdr-only へ切り替えることと同じくらい普通の操作であり、記録は
+  その両方を示します。
+- **fail-closed** — 未知のモードは記録せず拒否し、読めない記録は上書きせず拒否します。
+
+**ルーティング。** 記録されたモードが `guide orchestrator-thread` の描画セクションを
+選びます。
+
+- `agmsg` では本スライス以前と**完全に同じ**描画になります(ルーティングは恒等写像で、
+  モード概念が増えたことで実運用パスが動くことはありません);
+- `herdr-only` では、完全に agmsg 固有の操作セクション(setup / 登録、receiver
+  readiness、monitor / bridge 診断、agmsg reply contract、design-receiver 登録)が
+  herdr-only 操作セクションへのポインタに置き換わります。その内容は **G571** で出荷され
+  ます;
+- モード非依存の canon は**両モードで**描画されます — supervision、isolation、liveness、
+  wake contract、publish 権限、design↔orchestrator double-check ルール、依存計画、
+  エスカレーション。これらはモデルの性質であり、transport では変わりません。
+
+**G571 までの既知の境界。** canon と agmsg mechanics が**混在する**セクション(terminal
+workspace provisioning、supervision、preflight、troubleshooting)には引き続き
+`join.sh` / `delivery.sh` / `actas` が現れます。これらを削るとモード非依存の canon まで
+削ってしまうため残しており、herdr-only ではその旨を明示して「これらの mechanics は
+適用外、ただし周囲の canon は依然として拘束する」と読者に指示します。
+
+`guide model` と `guide onboarding` は両モードを説明し、onboarding は transport 固有の
+手順より**前に**モードを読ませるので、新規 agent が誤ったセットアップに従うことは
+ありません。
+
 ### intent-tree の共進化: 実施した knowledge write-back を記録する (G564)
 
 `intent-cli automation knowledge-writeback-record --execution-unit <u> --commit <host-commit-sha> [--target <path>]... [--note <text>] [--dry-run|--write] [--format json|markdown]`

@@ -613,6 +613,69 @@ wake procedure and from an external heartbeat are separate follow-up slices.
 informational one, so a reader (human or orchestrator) can never mistake
 "no transition needed" for an actionable next command.
 
+### Session-layer mode: which transport the four threads use (G570)
+
+`intent-cli session-layer show --domain <d> [--team <t>] [--format markdown|json]`
+`intent-cli session-layer set --domain <d> [--team <t>] --mode agmsg|herdr-only [--dry-run|--write] [--format markdown|json]`
+
+The four-thread model (design / orchestrator / implementation / review) is one
+thing; the SESSION LAYER those threads talk over is another, and per the
+operator ruling of 2026-08-01 it is now selectable rather than fixed.
+
+- **`agmsg` is PRIMARY** — the practiced, maintained transport, and the default
+  when nothing is recorded.
+- **`herdr-only` is PREVIEW** — a single-machine alternative where herdr is the
+  terminal controller and no separate message bridge runs. **The preview
+  qualifier scopes the TRANSPORT only.** The four-thread model itself stays
+  PRIMARY and unqualified in both modes, exactly as G540 ruled; choosing a
+  transport never makes the model provisional.
+- **One mode per team.** Mixing agmsg and herdr-only delivery inside one team is
+  a contract violation, not a fallback: two transports mean two views of who was
+  told what.
+
+Semantics:
+
+- **Scope** — recorded per domain, and per team where teams are modeled. A
+  team-scoped record wins over a domain-wide one; the team is the narrower
+  statement.
+- **Default** — `agmsg` when no record exists. `show` never writes.
+- **Persistence** — `.intent-cli/session-layer-mode.json`, written ONLY by
+  `session-layer set --write` (G548 lineage: durable state changes through
+  canonical commands, never by hand).
+- **Idempotent** — re-recording the mode already in force at the same scope is a
+  no-op and records no transition, so a setup script can assert the mode without
+  filling the trail with runs instead of decisions.
+- **Reversible, with a trail** — each entry keeps every transition (`from`,
+  `to`, `at`). Going back to agmsg is as ordinary as going to herdr-only, and
+  the record shows both.
+- **Fail-closed** — an unknown mode is refused rather than recorded, and an
+  unreadable record is refused rather than overwritten.
+
+**Routing.** The recorded mode selects which operating sections
+`guide orchestrator-thread` renders:
+
+- under `agmsg`, the guide renders exactly as before this slice — the routing is
+  the identity, so the practiced path cannot shift because a mode concept exists;
+- under `herdr-only`, the wholly agmsg-specific operational sections (setup and
+  registration, receiver readiness, monitor/bridge diagnostics, the agmsg reply
+  contract, design-receiver registration) are replaced by pointers to the
+  herdr-only operating sections, which ship in **G571**;
+- mode-independent canon renders in BOTH modes — supervision, isolation,
+  liveness, the wake contract, publish authority, the design↔orchestrator
+  double-check rule, dependency planning, escalation. Those are properties of
+  the model, and the model does not change with the transport.
+
+**Known boundary until G571.** Sections that MIX canon with agmsg mechanics
+(terminal workspace provisioning, supervision, preflight, troubleshooting) still
+quote `join.sh` / `delivery.sh` / `actas`. They are left intact because removing
+them would remove mode-independent canon as well; under herdr-only the rendering
+says so explicitly and instructs the reader to treat those mechanics as not
+applicable while the surrounding canon still binds.
+
+`guide model` and `guide onboarding` describe both modes, and onboarding reads
+the mode before any transport-specific step so a fresh agent never follows the
+wrong setup.
+
 ### Intent-tree co-evolution: recording a performed knowledge write-back (G564)
 
 `intent-cli automation knowledge-writeback-record --execution-unit <u> --commit <host-commit-sha> [--target <path>]... [--note <text>] [--dry-run|--write] [--format json|markdown]`
