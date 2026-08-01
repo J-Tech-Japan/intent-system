@@ -2436,37 +2436,38 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 使っています: 現在のバージョンの 2 つ目のコピーは同期し続けるべき対象が 1 つ増えることを
 意味し、しかも誰も見ていない roll でこそ stale になります。
 
-### 次リリース準備(v0.7.1)
+### 次リリース準備(v0.7.2)
 
-**`v0.7.0` は出荷済み**(GitHub Release + NuGet)で、version policy は `0.7.1`
-開発ラインへ roll されました。v0.7.0 バッチは **minor** バンプで、G559
-(cross-platform `skill` コマンドサーフェス)、G560(version-agnostic な
-current-state guard と roll 規則の完成)、G561(pre-publish unblock と
-clarify open の scaffold 互換)、G563(リリース前 guide 整合性)、G564
-(intent-tree 共進化の強制)をカバーします。minor バンプは新コマンド
-サーフェスと広範な挙動変更のために留保されています。
+**`v0.7.1` は出荷済み**(GitHub Release + NuGet)で、version policy は `0.7.2`
+開発ラインへ roll されました。v0.7.1 バッチは **patch** バンプで、G565(projection/clarify の packet YAML
+パーサ統一)、G566(roll シミュレーション修正・テストのみ)、G567(queue-seed
+の統一パーサ化と malformed YAML の fail-closed)、G568(dependencies の忠実な
+seed と canonical diagnose/repair ユーティリティ)、G569(clock seam と
+mutable-static 監査によるテスト決定性)をカバーします。minor バンプは新コマンド
+サーフェスと広範な挙動変更のために留保されており、G568 の repair ユーティリティは
+バグ修正を完結させるものでこの留保に該当しません。
 
-リポジトリは in-development の **`0.7.1`** `nextVersion` 上にあります。`v0.7.1`
+リポジトリは in-development の **`0.7.2`** `nextVersion` 上にあります。`v0.7.2`
 で何を出荷するかはここでは決めません: 次の release-prep パケットがマージ済み
 スライスを選定し、DRAFT スタブに代えて実際の
-[release-notes-v0.7.1.md](release-notes-v0.7.1.md) を執筆し、バンプ根拠を
-記述します。それまで notes はスタブのままであり、`v0.7.1` の GitHub Release を
+[release-notes-v0.7.2.md](release-notes-v0.7.2.md) を執筆し、バンプ根拠を
+記述します。それまで notes はスタブのままであり、`v0.7.2` の GitHub Release を
 publish してはいけません。
 
-**リリース準備検証(`v0.7.1` version バンプのマージ前に実行):**
+**リリース準備検証(`v0.7.2` version バンプのマージ前に実行):**
 
 ```bash
 # 1. version policy が release-to-be-cut を記録していることを確認。
-cat eng/version.json   # stableVersion 0.7.0 (published), nextVersion 0.7.1 (to release)
+cat eng/version.json   # stableVersion 0.7.1 (published), nextVersion 0.7.2 (to release)
 
 # 2. build して表示バージョン識別(version + git SHA + G-unit)を確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待される形: intent-cli 0.7.1-<sha>-G56x   (stale literal ではない)
+#   期待される形: intent-cli 0.7.2-<sha>-G56x   (stale literal ではない)
 
 # 3. pack して NuGet package バージョンが policy と一致することを確認。
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.7.1.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.7.2.nupkg
 
 # 4. package metadata(id / command / license / project URL)を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
@@ -2477,11 +2478,11 @@ dotnet run --project src/IntentSystem.Cli -c Release --no-build -- skill list
 ```
 
 version バンプのマージが `main` に入った後、メンテナ/オペレーター(または外部の
-リリース automation)が `v0.7.1` の GitHub Release を作成・publish します。
+リリース automation)が `v0.7.2` の GitHub Release を作成・publish します。
 publish が `release.yml`(`on: release: published`)をトリガーし、NuGet package と
 プラットフォームバイナリ成果物を build・publish します。**その後すぐに
-`eng/version.json` を roll します** — `stableVersion → 0.7.1`、`nextVersion →
-0.7.2` — [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
+`eng/version.json` を roll します** — `stableVersion → 0.7.2`、`nextVersion →
+0.7.3` — [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
 **ステップ 4–6** に従い、**同一コミットに DRAFT note スタブ**(ステップ 4)、
 **「次リリース準備」セクションを ja/en 両ミラーで新しいラインへ更新**(ステップ 5)、
 そして roll を完了とみなす前の **roll 後の child main CI green 確認**(ステップ 6)を
