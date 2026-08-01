@@ -200,43 +200,48 @@ public sealed class SessionLayerModeG570Tests : IDisposable
     }
 
     /// <summary>
-    /// G570 review repair: the completeness guard. The first version of this
-    /// slice replaced the wholly agmsg-specific sections and left mixed ones
-    /// behind a disclaimer — but an imperative `agmsg join.sh ...` in a later
-    /// section is still an instruction an agent will follow, so a disclaimer is
-    /// not routing.
+    /// G570 rereview repair: the completeness guard, rewritten to assert the
+    /// PROPERTY rather than the mechanism.
     ///
-    /// This asserts the property directly: under herdr-only, NO agmsg mechanic
-    /// survives anywhere in the rendered markdown. It is deliberately a
-    /// property over the whole document rather than a per-section check, so a
-    /// section added later cannot leak an agmsg operation into herdr-only
-    /// output.
+    /// The previous version compared the output against the production token
+    /// list, so it could only ever prove the list was applied — never that it
+    /// was complete. These strings are chosen INDEPENDENTLY: they are the
+    /// agmsg instructions a reader would actually act on, written out here by
+    /// hand, including the bare-prose forms ("wait for an agmsg delegation")
+    /// that carry no mechanic token at all and which the substring approach
+    /// could not have caught.
     /// </summary>
-    [Fact]
-    public void UnderHerdrOnly_NoAgmsgMechanicSurvivesInMarkdown_G570()
+    public static TheoryData<string> OperativeAgmsgInstructions() => new()
+    {
+        "join.sh",
+        "delivery.sh",
+        "team.sh",
+        "inbox.sh",
+        "actas",
+        "ping/ack",
+        "agmsg delegation",
+        "agmsg replies",
+        "agmsg reply",
+        "assume the agmsg role",
+        "Register the design role",
+        "register a role / join the team",
+        "Codex bridge",
+        "delivery mode",
+    };
+
+    [Theory]
+    [MemberData(nameof(OperativeAgmsgInstructions))]
+    public void UnderHerdrOnly_NoOperativeAgmsgInstructionSurvivesInMarkdown_G570(string instruction)
     {
         Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
-        var output = workspace.RenderOrchestratorGuide();
+        var body = WithoutSessionLayerExemptions(workspace.RenderOrchestratorGuide());
 
-        Assert.Contains("HERDR-ONLY MODE", output, StringComparison.Ordinal);
-        Assert.Contains("G571", output, StringComparison.Ordinal);
-
-        // Mirrors the documented exemption: the session-layer section and the
-        // intake's session-layer line name agmsg ON PURPOSE — they are what
-        // tells the reader which transport is in force and how to change it.
-        var leaked = LeakedMechanics(WithoutSessionLayerExemptions(output));
-        Assert.True(
-            leaked.Length == 0,
-            "herdr-only markdown still carries operative agmsg mechanics: " + string.Join(", ", leaked)
-            + ". An agent reading this document would run them.");
+        Assert.DoesNotContain(instruction, body, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>
-    /// The same property over the JSON rendering — a consumer reading fields
-    /// rather than prose must not receive agmsg operations either.
-    /// </summary>
-    [Fact]
-    public void UnderHerdrOnly_NoAgmsgMechanicSurvivesInJson_G570()
+    [Theory]
+    [MemberData(nameof(OperativeAgmsgInstructions))]
+    public void UnderHerdrOnly_NoOperativeAgmsgInstructionSurvivesInJson_G570(string instruction)
     {
         Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
 
@@ -245,57 +250,98 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             ["guide", "orchestrator-thread", "--domain", ModeWorkspace.Domain, "--target-repo", ModeWorkspace.Repo, "--agent", "claude", "--format", "json"],
             workspace.Context,
             writer));
-        var json = writer.ToString();
 
-        using var document = JsonDocument.Parse(json);
-        var root = document.RootElement.Clone();
-
-        // VALUES only: a field NAME such as `actas_invocation` is a schema
-        // label, not an instruction — what must not survive is the operation a
-        // consumer could execute. The session_layer block and the intake's
-        // session-layer note are exempt for the same reason as in markdown.
+        using var document = JsonDocument.Parse(writer.ToString());
         var values = new List<string>();
-        CollectStringValues(root, path: string.Empty, values);
-        var leaked = LeakedMechanics(string.Join("\n", values));
-        Assert.True(
-            leaked.Length == 0,
-            "herdr-only JSON still carries operative agmsg mechanics: " + string.Join(", ", leaked));
+        CollectStringValues(document.RootElement.Clone(), path: string.Empty, values);
+
+        Assert.DoesNotContain(instruction, string.Join("\n", values), StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
-    /// The setup-ready path is the one an operator copy-pastes from, so it gets
-    /// its own guard: a herdr-only setup must never be handed agmsg commands or
-    /// agmsg role prompts, in either rendering.
+    /// The OVER-stripping direction, asserted from the declared
+    /// mode-independent list rather than from whatever the selection happens to
+    /// keep: every mode-independent section must still be there. An earlier
+    /// draft deleted the timer-loop canon because it mentioned agmsg, and only
+    /// a positive assertion like this catches that.
     /// </summary>
     [Fact]
-    public void UnderHerdrOnly_TheSetupReadyIntakeCarriesNoAgmsgOperation_G570()
+    public void UnderHerdrOnly_EveryModeIndependentSectionSurvives_G570()
     {
         Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        var output = workspace.RenderOrchestratorGuide();
 
-        var root = workspace.RenderSetupReadyJson();
-        var intake = root.GetProperty("setup_intake");
-        Assert.Equal(SessionLayerMode.HerdrOnly, intake.GetProperty("session_layer_mode").GetString());
-
-        var intakeValues = new List<string>();
-        CollectStringValues(intake, path: string.Empty, intakeValues);
-        var leaked = LeakedMechanics(string.Join("\n", intakeValues));
+        var missing = SessionLayerSections.ModeIndependentHeadings
+            .Where(heading => !output.Contains(heading, StringComparison.Ordinal))
+            .ToArray();
         Assert.True(
-            leaked.Length == 0,
-            "a setup-ready herdr-only intake still hands the operator agmsg operations: " + string.Join(", ", leaked));
-
-        // The same setup, in markdown, is what a human actually follows.
-        var markdown = workspace.RenderSetupReadyMarkdown();
-        var markdownLeaked = LeakedMechanics(WithoutSessionLayerExemptions(markdown));
-        Assert.True(markdownLeaked.Length == 0, "setup-ready markdown leaked: " + string.Join(", ", markdownLeaked));
+            missing.Length == 0,
+            "herdr-only routing removed mode-independent sections: " + string.Join(", ", missing));
     }
 
     [Fact]
-    public void UnderAgmsg_TheSetupReadyIntakeStillCarriesItsAgmsgOperations_G570()
+    public void UnderHerdrOnly_EveryAgmsgOnlySectionIsReplaced_G570()
     {
-        // The other direction: the projection must not have removed anything
-        // from the practiced path.
-        var markdown = workspace.RenderSetupReadyMarkdown();
-        Assert.Contains("join.sh", markdown, StringComparison.Ordinal);
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        var output = workspace.RenderOrchestratorGuide();
+
+        var surviving = SessionLayerSections.AgmsgOnlyHeadings
+            .Where(heading => output.Contains(heading, StringComparison.Ordinal))
+            .ToArray();
+        Assert.True(
+            surviving.Length == 0,
+            "agmsg-only sections still rendered under herdr-only: " + string.Join(", ", surviving));
+
+        Assert.Contains(SessionLayerSections.ReplacementHeading, output, StringComparison.Ordinal);
+        Assert.Contains("G571", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnderAgmsg_EveryAgmsgOnlySectionStillRenders_G570()
+    {
+        // The other direction: the practiced path keeps everything.
+        var output = workspace.RenderOrchestratorGuide();
+
+        var missing = SessionLayerSections.AgmsgOnlyHeadings
+            .Where(heading => !output.Contains(heading, StringComparison.Ordinal))
+            .ToArray();
+        Assert.True(missing.Length == 0, "agmsg mode lost sections: " + string.Join(", ", missing));
+        Assert.DoesNotContain(SessionLayerSections.ReplacementHeading, output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// End-to-end: a herdr-only setup must reach a usable outcome WITHOUT the
+    /// agmsg-only inputs. Requiring `--team` and `--delivery-mode` from a team
+    /// that runs neither is the structural version of handing them agmsg
+    /// instructions.
+    /// </summary>
+    [Fact]
+    public void UnderHerdrOnly_SetupSucceedsWithoutAgmsgOnlyInputs_G570()
+    {
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+
+        using var writer = new StringWriter();
+        var exitCode = CommandRouter.Execute(
+            [
+                "guide", "orchestrator-thread",
+                "--domain", ModeWorkspace.Domain, "--target-repo", ModeWorkspace.Repo, "--agent", "claude",
+                "--orchestrator-path", "/w/orchestrator", "--implementation-path", "/w/impl", "--review-path", "/w/review",
+                "--orchestrator-agent", "claude", "--implementer-agent", "claude", "--reviewer-agent", "codex",
+                "--existing-loop-policy", "none",
+                "--format", "json",
+            ],
+            workspace.Context,
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var intake = document.RootElement.GetProperty("setup_intake");
+
+        var missing = intake.GetProperty("missing_fields").EnumerateArray().Select(f => f.GetString()).ToArray();
+        Assert.True(
+            missing.Length == 0,
+            "a herdr-only setup was told it is missing agmsg-only inputs: " + string.Join(", ", missing!));
+        Assert.Equal(SessionLayerMode.HerdrOnly, intake.GetProperty("session_layer_mode").GetString());
     }
 
     [Fact]
@@ -520,11 +566,6 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         }
     }
 
-    private static string[] LeakedMechanics(string text) =>
-        GuideOrchestratorThreadCommand.AgmsgMechanicTokens
-            .Where(token => text.Contains(token, StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-
     private static string WithoutSessionLayerExemptions(string markdown)
     {
         var lines = markdown.Split('\n');
@@ -534,9 +575,14 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         {
             if (line.StartsWith("## ", StringComparison.Ordinal))
             {
-                inSessionLayerSection = line.StartsWith("## Session layer", StringComparison.Ordinal);
+                inSessionLayerSection =
+                    line.StartsWith("## Session layer", StringComparison.Ordinal)
+                    || line.StartsWith(SessionLayerSections.ReplacementHeading, StringComparison.Ordinal);
             }
 
+            // The switch-checklist section is exempt for the same reason as the
+            // session-layer block: it exists to NAME what no longer applies,
+            // which is routing metadata, not an instruction to use agmsg.
             if (inSessionLayerSection || line.StartsWith("- session layer: ", StringComparison.Ordinal))
             {
                 continue;

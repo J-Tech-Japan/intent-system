@@ -106,26 +106,25 @@ internal static class GuideOrchestratorThreadCommand
             return 1;
         }
 
-        var guide = ApplySessionLayer(BuildGuide(values), sessionLayer, values);
+        var guide = ApplySessionLayer(BuildGuide(values, sessionLayer.IsHerdrOnly), sessionLayer, values);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
-            writer.Write(JsonSerializer.Serialize(guide, JsonOptions));
+            var json = JsonSerializer.Serialize(guide, JsonOptions);
+            writer.Write(sessionLayer.IsHerdrOnly ? SelectJsonSections(json) : json);
             writer.WriteLine();
             return 0;
         }
 
-        // G570 review repair: a great deal of this document is written as
-        // LITERALS in the markdown writer rather than read back from the guide
-        // object, so projecting the object alone still left operative agmsg
-        // steps in the rendered text. The rendering boundary is therefore
-        // projected too, with the same token list — that is what makes the
-        // guarantee total rather than "total for the fields I remembered".
+        // G570 rereview repair: routing is SECTION-LEVEL and structural. Whole
+        // agmsg-only sections are replaced by one pointer section; every
+        // mode-independent section renders unchanged. See SessionLayerSections
+        // for why substring projection was the wrong mechanism.
         if (sessionLayer.IsHerdrOnly)
         {
             using var buffer = new StringWriter();
             WriteMarkdown(buffer, guide);
-            writer.Write(ProjectMarkdown(buffer.ToString()));
+            writer.Write(SelectMarkdownSections(buffer.ToString()));
             return 0;
         }
 
@@ -134,68 +133,11 @@ internal static class GuideOrchestratorThreadCommand
     }
 
     /// <summary>
-    /// G570 review repair: replaces every rendered LINE that carries an agmsg
-    /// mechanic with the herdr-only pointer, collapsing consecutive pointers so
-    /// a replaced ten-step checklist reads as one statement rather than ten.
-    ///
-    /// The session-layer section and the intake's session-layer line are
-    /// exempt: they name agmsg on purpose — they are what tells the reader
-    /// which transport is in force and how to change it — and removing them
-    /// would remove the only honest explanation of why the rest is missing.
-    /// </summary>
-    internal static string ProjectMarkdown(string markdown)
-    {
-        var lines = markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        var projected = new List<string>(lines.Length);
-        var inSessionLayerSection = false;
-
-        foreach (var line in lines)
-        {
-            if (line.StartsWith("## ", StringComparison.Ordinal))
-            {
-                inSessionLayerSection = line.StartsWith("## Session layer", StringComparison.Ordinal);
-            }
-
-            var exempt = inSessionLayerSection
-                || line.StartsWith("- session layer: ", StringComparison.Ordinal);
-
-            if (exempt || !CarriesAgmsgMechanic(line))
-            {
-                projected.Add(line);
-                continue;
-            }
-
-            if (projected.Count > 0 && string.Equals(projected[^1], HerdrOnlyPointerLine, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            projected.Add(HerdrOnlyPointerLine);
-        }
-
-        return string.Join('\n', projected);
-    }
-
-    private const string HerdrOnlyPointerLine = "- " + HerdrOnlyPointer;
-
-    /// <summary>
-    /// G570: routes the guide by the recorded session layer.
-    ///
-    /// Under <c>agmsg</c> this returns the guide UNTOUCHED — the identity — so
-    /// every existing output stays byte-identical and the mode cannot regress
-    /// the practiced path by accident. That is why routing lives here as a
-    /// projection rather than as conditionals threaded through a 5,000-line
-    /// builder: the agmsg guarantee is visible in one line.
-    ///
-    /// Under <c>herdr-only</c> the agmsg-SPECIFIC OPERATIONAL sections — agmsg
-    /// registration/setup, receiver readiness (monitor/bridge), monitor
-    /// recovery and the monitor-vs-Monitor distinction, and the agmsg reply
-    /// contract — are replaced by pointers to the herdr-only operating sections,
-    /// which ship in G571. Everything mode-independent (supervision, isolation,
-    /// liveness, the wake contract, publish authority, the double-check rule,
-    /// dependency planning, escalation) renders unchanged in BOTH modes: those
-    /// are properties of the four-thread model, and the model does not change
-    /// with the transport.
+    /// G570: attaches the session-layer block and the intake's mode note to the
+    /// built guide. It no longer TRANSFORMS any content — after the rereview,
+    /// which content applies is decided by declared section applicability at
+    /// the rendering boundaries (<see cref="SelectMarkdownSections"/> /
+    /// <see cref="SelectJsonSections"/>), not by rewriting strings here.
     /// </summary>
     internal static OrchestratorThreadGuide ApplySessionLayer(
         OrchestratorThreadGuide guide,
@@ -216,11 +158,9 @@ internal static class GuideOrchestratorThreadCommand
                 + $"`intent-cli session-layer set --domain {values["<domain>"]} --mode agmsg|herdr-only --write` changes it, "
                 + "reversibly, in both directions.",
             ResidualAgmsgMechanics = sessionLayer.IsHerdrOnly
-                ? "HERDR-ONLY: every agmsg OPERATION in this document — registration, delivery configuration, "
-                    + "monitor/bridge readiness, ping/ack, actas, inbox and team scripts, and the agmsg reply "
-                    + "contract — has been REPLACED by a G571 pointer, wherever it appeared. Nothing agmsg-operative "
-                    + "is left for you to follow. Statements about authority and boundaries that merely NAME agmsg "
-                    + "(for example that agmsg never replaces semantic review) are mode-independent canon and remain."
+                ? "HERDR-ONLY: the agmsg-only sections of this guide are REPLACED, whole, by the switch-checklist "
+                    + "section below — they are not rendered and not annotated. Every section that remains is "
+                    + "mode-independent and applies unchanged."
                 : null,
         };
 
@@ -232,48 +172,10 @@ internal static class GuideOrchestratorThreadCommand
             + "--mode agmsg|herdr-only --write`. A herdr-only request made at first setup is honoured from then on; "
             + "the choice is reversible in both directions.";
 
-        if (!sessionLayer.IsHerdrOnly)
-        {
-            return guide with
-            {
-                SessionLayer = block,
-                SetupIntake = guide.SetupIntake with
-                {
-                    SessionLayerMode = sessionLayer.Mode,
-                    SessionLayerNote = intakeNote,
-                },
-            };
-        }
-
-        // G570 review repair: a disclaimer is NOT routing. The first version of
-        // this projection replaced the wholly agmsg-specific sections and left
-        // mixed sections intact behind a "treat these as not applicable"
-        // sentence — but an imperative, copy-pasteable `agmsg join.sh ...` in a
-        // later section is still an operative instruction, and an agent
-        // following the document will run it. AC3 asks for the instructions to
-        // be gone, not annotated.
-        //
-        // So the projection is TOTAL and structural rather than a curated field
-        // list: it walks the whole built guide and replaces every string that
-        // carries an agmsg MECHANIC with the pointer. Completeness is then a
-        // property of the walk, not of my memory — a section added later cannot
-        // leak an agmsg operation into herdr-only output, which a hand-listed
-        // projection could never guarantee.
-        //
-        // Strings that mention agmsg CONCEPTUALLY without an operation (e.g.
-        // "agmsg never replaces semantic review") carry no mechanic token and
-        // survive: they are mode-independent canon about authority, and removing
-        // them would strip canon the packet requires both modes to keep.
-        // Project the guide, THEN attach the session-layer block and the intake
-        // note — those two deliberately name agmsg (they are what tells the
-        // reader which transport is in force and how to change it), so they
-        // must not be projected away by the walk that removes agmsg
-        // operations.
-        var projected = Project(guide);
-        return projected with
+        return guide with
         {
             SessionLayer = block,
-            SetupIntake = projected.SetupIntake with
+            SetupIntake = guide.SetupIntake with
             {
                 SessionLayerMode = sessionLayer.Mode,
                 SessionLayerNote = intakeNote,
@@ -282,149 +184,188 @@ internal static class GuideOrchestratorThreadCommand
     }
 
     /// <summary>
-    /// G570 review repair: the operative agmsg mechanics. A string containing
-    /// any of these is an instruction to drive agmsg, so under herdr-only it is
-    /// replaced rather than annotated. The completeness guards in
-    /// <c>SessionLayerModeG570Tests</c> assert that none of these survives in
-    /// herdr-only markdown OR json, so this list cannot silently fall behind.
+    /// G570 rereview repair: keeps whole sections whose declared applicability
+    /// includes herdr-only, and replaces the run of agmsg-only sections with a
+    /// single pointer section naming what was replaced.
+    ///
+    /// Section-level, not line-level: a section is either about the transport or
+    /// it is not, and that judgement lives in <see cref="SessionLayerSections"/>
+    /// where it can be reviewed — rather than being re-derived per line from a
+    /// substring rule that is both too weak (operative prose carries no
+    /// mechanic token) and too strong (canon that merely mentions agmsg gets
+    /// destroyed).
     /// </summary>
-    internal static readonly IReadOnlyList<string> AgmsgMechanicTokens =
-    [
-        "join.sh",
-        "delivery.sh",
-        "team.sh",
-        "inbox.sh",
-        "send.sh",
-        "watch.sh",
-        "spawn.sh",
-        "despawn.sh",
-        "reset.sh",
-        "history.sh",
-        "actas",
-        // NOT a bare "agmsg " — that matches canon prose that merely NAMES the
-        // transport ("agmsg carries delegation signals; intent-cli and GitHub
-        // remain authoritative"), which both modes must keep. Only invocations
-        // and script names are operations.
-        "/agmsg",
-        "agmsg join",
-        "agmsg send",
-        "agmsg team",
-        "agmsg inbox",
-        "agmsg delivery",
-        "agmsg actas",
-        "$agmsg",
-        "Codex bridge",
-        "codex bridge",
-        "ping/ack",
-        "ping-ack",
-        "delivery mode",
-        "delivery-mode",
-        "monitor mode",
-        "AGMSG-DIRECTIVE",
-    ];
-
-    internal static bool CarriesAgmsgMechanic(string value) =>
-        AgmsgMechanicTokens.Any(token => value.Contains(token, StringComparison.OrdinalIgnoreCase));
-
-    /// <summary>
-    /// Walks the guide and replaces every mechanic-bearing string with the
-    /// herdr-only pointer, de-duplicating consecutive pointers inside a list so
-    /// a replaced ten-step agmsg checklist renders as one pointer rather than
-    /// ten identical lines.
-    /// </summary>
-    private static T Project<T>(T value)
+    internal static string SelectMarkdownSections(string markdown)
     {
-        return (T)ProjectObject(value!)!;
+        var lines = markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var kept = new List<string>(lines.Length);
+        var replaced = new List<string>();
+        var dropping = false;
+        var inMixedSection = false;
+
+        foreach (var line in lines)
+        {
+            if (line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                dropping = SessionLayerSections.AgmsgOnlyHeadings.Contains(line, StringComparer.Ordinal);
+                inMixedSection = SessionLayerSections.MixedHeadings.Contains(line, StringComparer.Ordinal);
+                if (dropping)
+                {
+                    replaced.Add(line);
+                    continue;
+                }
+            }
+
+            if (dropping)
+            {
+                continue;
+            }
+
+            // Four-valued applicability (design ruling, host main fb1913c8):
+            // inside a section declared MODE-INDEPENDENT-WITH-TRANSPORT-
+            // MECHANICS, the canon stays and only the mechanic-bearing
+            // sentences become pointer-only text. The section's rule still
+            // binds; only the agmsg way of carrying it out is pointed away.
+            if (inMixedSection
+                && !line.StartsWith("## ", StringComparison.Ordinal)
+                && SessionLayerSections.CarriesTransportMechanic(line))
+            {
+                var pointerLine = PointerFor(line);
+                if (kept.Count == 0 || !string.Equals(kept[^1], pointerLine, StringComparison.Ordinal))
+                {
+                    kept.Add(pointerLine);
+                }
+
+                continue;
+            }
+
+            kept.Add(line);
+        }
+
+        if (replaced.Count == 0)
+        {
+            return string.Join('\n', kept);
+        }
+
+        // The replacement section goes where the reader will meet it before any
+        // operating instruction: immediately after the session-layer section.
+        var anchor = kept.FindIndex(line => line.StartsWith("## Session layer", StringComparison.Ordinal));
+        var insertAt = anchor < 0
+            ? kept.Count
+            : kept.FindIndex(anchor + 1, line => line.StartsWith("## ", StringComparison.Ordinal));
+        if (insertAt < 0)
+        {
+            insertAt = kept.Count;
+        }
+
+        kept.InsertRange(insertAt, SessionLayerSections.ReplacementSection(replaced).Split('\n'));
+        return string.Join('\n', kept);
     }
 
-    private static object? ProjectObject(object? value)
+    /// <summary>
+    /// Keeps the line's leading list/quote marker so a replaced bullet stays a
+    /// bullet — the surrounding canon is still a readable list.
+    /// </summary>
+    private static string PointerFor(string line)
     {
-        switch (value)
+        var trimmed = line.TrimStart();
+        var indent = line[..(line.Length - trimmed.Length)];
+
+        foreach (var marker in new[] { "- ", "* ", "> ", "1. " })
         {
-            case null:
-                return null;
+            if (trimmed.StartsWith(marker, StringComparison.Ordinal))
+            {
+                return indent + marker + SessionLayerSections.MechanicPointer;
+            }
+        }
 
-            case string text:
-                return CarriesAgmsgMechanic(text) ? HerdrOnlyPointer : text;
+        return indent + SessionLayerSections.MechanicPointer;
+    }
 
-            case bool or int or long or double or decimal or DateTimeOffset or DateTime or Enum:
-                return value;
+    /// <summary>
+    /// The same selection over the JSON rendering, so a consumer reading fields
+    /// sees exactly what a reader of the prose sees. The two renderings cannot
+    /// disagree about what applies.
+    /// </summary>
+    internal static string SelectJsonSections(string json)
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse(json)?.AsObject();
+        if (node is null)
+        {
+            return json;
+        }
 
-            case System.Collections.IDictionary:
-                return value;
+        var replaced = new List<string>();
+        foreach (var property in SessionLayerSections.AgmsgOnlyJsonProperties)
+        {
+            if (node.Remove(property))
+            {
+                replaced.Add(property);
+            }
+        }
 
-            case System.Collections.IEnumerable sequence when value is not string:
+        foreach (var property in SessionLayerSections.MixedJsonProperties)
+        {
+            if (node.TryGetPropertyValue(property, out var value) && value is not null)
+            {
+                node[property] = PointMechanics(value);
+            }
+        }
+
+        node["herdr_only_replaced_sections"] = new System.Text.Json.Nodes.JsonArray(
+            replaced.Select(name => (System.Text.Json.Nodes.JsonNode?)System.Text.Json.Nodes.JsonValue.Create(name)).ToArray());
+        node["herdr_only_replacement_note"] =
+            "Removed because this team runs the herdr-only session layer: these sections operate agmsg. Their "
+            + "herdr-only counterparts ship in G571. Every remaining field is mode-independent and applies unchanged.";
+
+        return node.ToJsonString(JsonOptions);
+    }
+
+    /// <summary>
+    /// JSON counterpart of the mixed-section rule: inside a declared mixed
+    /// property, every string VALUE carrying a transport mechanic becomes
+    /// pointer-only text, and everything else is untouched.
+    /// </summary>
+    private static System.Text.Json.Nodes.JsonNode? PointMechanics(System.Text.Json.Nodes.JsonNode? node)
+    {
+        switch (node)
+        {
+            case System.Text.Json.Nodes.JsonObject mapping:
                 {
-                    var elementType = value.GetType().IsArray
-                        ? value.GetType().GetElementType()!
-                        : value.GetType().GetGenericArguments().FirstOrDefault() ?? typeof(object);
-                    var projected = new List<object?>();
-                    foreach (var item in sequence)
+                    var result = new System.Text.Json.Nodes.JsonObject();
+                    foreach (var entry in mapping.ToArray())
                     {
-                        var next = ProjectObject(item);
-                        // Collapse a run of identical pointers into one.
-                        if (next is string s && projected.Count > 0 && projected[^1] is string previous && previous == s
-                            && s == HerdrOnlyPointer)
-                        {
-                            continue;
-                        }
-                        projected.Add(next);
+                        mapping.Remove(entry.Key);
+                        result[entry.Key] = entry.Key.StartsWith("session_layer", StringComparison.Ordinal)
+                            ? entry.Value
+                            : PointMechanics(entry.Value);
                     }
 
-                    var array = Array.CreateInstance(elementType, projected.Count);
-                    for (var index = 0; index < projected.Count; index++)
-                    {
-                        array.SetValue(projected[index], index);
-                    }
-                    return array;
+                    return result;
                 }
+
+            case System.Text.Json.Nodes.JsonArray array:
+                {
+                    var result = new System.Text.Json.Nodes.JsonArray();
+                    foreach (var item in array.ToArray())
+                    {
+                        array.Remove(item);
+                        result.Add(PointMechanics(item));
+                    }
+
+                    return result;
+                }
+
+            case System.Text.Json.Nodes.JsonValue value
+                when value.TryGetValue<string>(out var text) && SessionLayerSections.CarriesTransportMechanic(text):
+                return System.Text.Json.Nodes.JsonValue.Create(SessionLayerSections.MechanicPointer);
 
             default:
-                {
-                    var type = value.GetType();
-                    if (!type.IsClass || type.Namespace?.StartsWith("IntentSystem", StringComparison.Ordinal) != true)
-                    {
-                        return value;
-                    }
-
-                    // Records are immutable; rebuild through the primary
-                    // constructor-equivalent `with`-style clone by writing the
-                    // projected values into a fresh instance.
-                    var clone = type.GetMethod("<Clone>$", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)?.Invoke(value, null)
-                        ?? value;
-                    foreach (var property in type.GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public))
-                    {
-                        if (!property.CanRead)
-                        {
-                            continue;
-                        }
-
-                        var setter = property.GetSetMethod(nonPublic: true);
-                        if (setter is null)
-                        {
-                            continue;
-                        }
-
-                        var current = property.GetValue(clone);
-                        var projected = ProjectObject(current);
-                        if (!ReferenceEquals(current, projected))
-                        {
-                            setter.Invoke(clone, [projected]);
-                        }
-                    }
-
-                    return clone;
-                }
+                return node;
         }
     }
 
-    private const string HerdrOnlyPointer =
-        "HERDR-ONLY MODE — the agmsg operation that stood here does not apply. Its herdr-only counterpart ships "
-        + "in G571 (\"Session-layer switch checklist\" and the herdr-only operating sections of this guide). Do "
-        + "NOT substitute the agmsg step: it would drive a transport this team is not running, and a team runs "
-        + "exactly one mode.";
-
-    private static OrchestratorThreadGuide BuildGuide(IReadOnlyDictionary<string, string> values)
+    private static OrchestratorThreadGuide BuildGuide(IReadOnlyDictionary<string, string> values, bool herdrOnly)
     {
         var domain = values["<domain>"];
         var repo = values["<owner/repo>"];
@@ -458,7 +399,7 @@ internal static class GuideOrchestratorThreadCommand
 
         return new OrchestratorThreadGuide
         {
-            SetupIntake = BuildSetupIntake(values),
+            SetupIntake = BuildSetupIntake(values, herdrOnly),
             Summary =
                 "PRIMARY agmsg-backed four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / "
                 + "implementation / review coordinate over agmsg. agmsg carries natural-language delegation / "
@@ -2664,7 +2605,7 @@ internal static class GuideOrchestratorThreadCommand
     // missing it lists ONLY the missing fields; when an existing loop would
     // race it is blocked. The orchestrator is the only scheduled thread —
     // implementation/review are loopless receivers.
-    private static OrchestratorSetupIntake BuildSetupIntake(IReadOnlyDictionary<string, string> values)
+    private static OrchestratorSetupIntake BuildSetupIntake(IReadOnlyDictionary<string, string> values, bool herdrOnly)
     {
         var domain = values["<domain>"];
         var repo = values["<owner/repo>"];
@@ -2698,8 +2639,13 @@ internal static class GuideOrchestratorThreadCommand
             ("orchestrator agent", orchestratorAgent.Length > 0),
             ("implementer agent", implementerAgent.Length > 0),
             ("reviewer agent", reviewerAgent.Length > 0),
-            ("agmsg team name", Supplied(team, "<team>")),
-            ("delivery mode", Supplied(deliveryMode, "<delivery-mode>")),
+            // G570 (design ruling fb1913c8): the agmsg team name and delivery
+            // mode are agmsg-ONLY inputs. Demanding them from a team that runs
+            // herdr-only is the structural form of handing them agmsg
+            // instructions — the setup would report missing-inputs forever for
+            // fields its transport has no concept of.
+            ("agmsg team name", herdrOnly || Supplied(team, "<team>")),
+            ("delivery mode", herdrOnly || Supplied(deliveryMode, "<delivery-mode>")),
             ("existing-loop stop policy", loopPolicy.Length > 0),
         };
 

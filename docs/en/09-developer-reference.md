@@ -665,20 +665,36 @@ Semantics:
   double-check rule, dependency planning, escalation. Those are properties of
   the model, and the model does not change with the transport.
 
-**Routing is total, not annotated.** Under herdr-only, every string carrying an
-operative agmsg MECHANIC — `join.sh`, `delivery.sh`, `team.sh`, `inbox.sh`,
-`actas`, `/agmsg …` invocations, monitor/bridge readiness, ping/ack — is
-replaced by the G571 pointer, in the JSON object AND at the markdown rendering
-boundary (much of the document is written as literals in the renderer, so
-projecting the object alone would have left operative steps in the text). The
-replacement is a walk over the whole document rather than a curated field list,
-so a section added later cannot leak an agmsg operation into herdr-only output.
+**Applicability is declared per section, and it is four-valued** (design ruling,
+host main `fb1913c8`): `agmsg-only`, `herdr-only`, `mode-independent`, and
+`mode-independent-with-transport-mechanics`. The renderer selects whole sections
+from the recorded mode — in markdown and in JSON alike, so a field consumer and
+a prose reader never disagree about what applies.
 
-Prose that merely NAMES agmsg without an operation — "agmsg carries delegation
-signals; intent-cli and GitHub remain authoritative" — is mode-independent canon
-about authority and survives in both modes. The session-layer section and the
-intake's session-layer line are likewise exempt: they name the transport on
-purpose, because they are what tells the reader which mode is in force.
+- **agmsg-only** sections are replaced, whole, by one *Session-layer switch
+  checklist* section naming what it replaced. They are not annotated and not
+  rendered.
+- **mode-independent** sections render unchanged in both modes.
+- **mode-independent-with-transport-mechanics** sections carry canon that binds
+  in both modes but expresses it through an agmsg mechanic. The section is KEPT
+  and only its mechanic-bearing sentences become pointer-only text — the rule
+  still binds, only the agmsg way of carrying it out is pointed away.
+
+Pointer-only text is G570 routing metadata: it says what does not apply and
+where the counterpart ships. It never says what to run instead, because a
+concrete herdr procedure is G571 content and is forbidden here.
+
+Substring/token replacement was tried and rejected as the correctness
+mechanism: it is simultaneously too weak (operative prose such as "wait for an
+agmsg delegation" carries no mechanic token) and too strong (an earlier draft
+deleted the timer-loop canon because it mentioned agmsg). Applicability is a
+property of a section's subject, so it is declared once, in
+`SessionLayerSections`, where it can be reviewed.
+
+Setup intake is mode-aware for the same reason: the agmsg team name and
+delivery mode are agmsg-only inputs, so a herdr-only setup is never told it is
+missing fields its transport has no concept of.
+
 **Fail-closed state.** An invalid PRESENT record is not absence. A malformed
 file, an unknown mode, or a record whose current mode disagrees with its own
 transition trail (proof it was not written by `session-layer set --write`) makes

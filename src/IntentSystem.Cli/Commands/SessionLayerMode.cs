@@ -202,6 +202,21 @@ internal static class SessionLayerModeStore
                 + $"'{entry.Domain}'. Refusing to route on a mode nothing can act on.");
         }
 
+        // G570 rereview repair: an EMPTY trail is not "no history" — `set
+        // --write` always appends exactly one transition when it creates or
+        // changes an entry, so a record with a mode but no transitions cannot
+        // have come from the command. The previous version made the
+        // final-target check conditional on Count > 0, which let exactly that
+        // hand edit through and route every surface to a mode nothing recorded.
+        if (entry.Transitions.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"session-layer mode state at `{path}` records mode '{entry.Mode}' for domain '{entry.Domain}' with "
+                + "an EMPTY transition trail. `session-layer set --write` always records the transition that created "
+                + "the entry, so a trail-less record was not written by the command and is refused rather than "
+                + "trusted.");
+        }
+
         for (var index = 0; index < entry.Transitions.Count; index++)
         {
             var transition = entry.Transitions[index];
@@ -212,18 +227,21 @@ internal static class SessionLayerModeStore
                     + $"'{entry.Domain}' ('{transition.From}' → '{transition.To}').");
             }
 
-            var expectedFrom = index == 0 ? null : entry.Transitions[index - 1].To;
-            if (expectedFrom is not null && !string.Equals(transition.From, expectedFrom, StringComparison.Ordinal))
+            var expectedFrom = index == 0 ? SessionLayerMode.Default : entry.Transitions[index - 1].To;
+            if (!string.Equals(transition.From, expectedFrom, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
-                    $"session-layer mode state at `{path}` has a broken transition chain for domain "
-                    + $"'{entry.Domain}': transition {index} starts at '{transition.From}' but the previous one "
-                    + $"ended at '{expectedFrom}'. Only `session-layer set --write` may write this file.");
+                    index == 0
+                        ? $"session-layer mode state at `{path}` starts domain '{entry.Domain}' at "
+                            + $"'{transition.From}'. The first transition a command-written record can hold always "
+                            + $"starts from the default '{SessionLayerMode.Default}', so this record was hand-edited."
+                        : $"session-layer mode state at `{path}` has a broken transition chain for domain "
+                            + $"'{entry.Domain}': transition {index} starts at '{transition.From}' but the previous "
+                            + $"one ended at '{expectedFrom}'. Only `session-layer set --write` may write this file.");
             }
         }
 
-        if (entry.Transitions.Count > 0
-            && !string.Equals(entry.Mode, entry.Transitions[^1].To, StringComparison.Ordinal))
+        if (!string.Equals(entry.Mode, entry.Transitions[^1].To, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 $"session-layer mode state at `{path}` records mode '{entry.Mode}' for domain '{entry.Domain}' but "

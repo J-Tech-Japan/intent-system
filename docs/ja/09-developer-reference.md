@@ -682,19 +682,34 @@ orchestrator でも）が「transition は不要」を actionable な次コマ�
   wake contract、publish 権限、design↔orchestrator double-check ルール、依存計画、
   エスカレーション。これらはモデルの性質であり、transport では変わりません。
 
-**ルーティングは注記ではなく完全置換です。** herdr-only では、実行可能な agmsg
-**mechanic** を含む文字列 — `join.sh` / `delivery.sh` / `team.sh` / `inbox.sh` /
-`actas` / `/agmsg …` 呼び出し / monitor・bridge readiness / ping-ack — が
-すべて G571 ポインタに置き換わります。JSON オブジェクトだけでなく **markdown の描画境界
-でも**置換します(本ドキュメントの多くは renderer 内のリテラルとして書かれており、
-オブジェクトだけを projection しても実行可能な手順が本文に残るためです)。置換は
-手作業で列挙したフィールド集合ではなく**文書全体の走査**なので、後から追加された
-セクションが herdr-only 出力に agmsg 操作を漏らすことはありません。
+**適用範囲はセクション単位で宣言し、4 値です**(design 裁定、host main `fb1913c8`):
+`agmsg-only` / `herdr-only` / `mode-independent` /
+`mode-independent-with-transport-mechanics`。renderer は記録されたモードから
+**セクション単位で**選択します。markdown と JSON の双方で行うため、フィールド利用者と
+本文の読者が「何が適用されるか」で食い違うことはありません。
 
-操作を伴わずに agmsg を**名指しするだけ**の記述(「agmsg は delegation signal を運ぶが、
-intent-cli と GitHub が権威である」等)は権限に関するモード非依存の canon であり、両モードで
-残ります。session-layer セクションと intake の session-layer 行も同様に対象外です —
-どちらのモードが有効かを読者に伝えるという役割上、意図的に transport を名指しするからです。
+- **agmsg-only** セクションは、置換したものを列挙する *Session-layer switch checklist*
+  セクション 1 つに**丸ごと置き換え**られます。注記を添えて残すのではなく、描画しません。
+- **mode-independent** セクションは両モードでそのまま描画されます。
+- **mode-independent-with-transport-mechanics** セクションは、両モードで拘束する canon を
+  agmsg の mechanic で表現しているものです。セクションは**保持**し、mechanic を含む文
+  だけを pointer-only テキストに置き換えます — 規範は依然拘束し、agmsg 固有の実施方法
+  だけが「適用外」となります。
+
+pointer-only テキストは G570 の**ルーティングのメタデータ**です。「何が適用されないか」と
+「対応物がどこで出荷されるか」を述べ、**代わりに何を実行するかは述べません** — 具体的な
+herdr 手順は G571 の内容であり、ここでは禁止されているからです。
+
+部分文字列/トークン置換は正しさの機構としては採用せず**却下**されました。弱すぎ(「agmsg の
+delegation を待つ」のような実行指示は mechanic トークンを含まない)、かつ強すぎる(初期案は
+agmsg に言及しているという理由だけで timer-loop の canon を削除した)からです。適用範囲は
+セクションの**主題**の性質なので、`SessionLayerSections` で 1 度だけ宣言し、レビュー可能に
+しています。
+
+setup intake がモード対応なのも同じ理由です。agmsg team 名と delivery mode は agmsg 固有の
+入力なので、herdr-only のセットアップが「その transport に概念すら存在しない項目が足りない」
+と言われることはありません。
+
 **fail-closed な state。** **存在するが不正な**記録は「不在」ではありません。壊れた
 ファイル、未知のモード、あるいは現在のモードが自身の transition trail と食い違う記録
 (`session-layer set --write` が書いたものではない証拠)がある場合、モード依存の全
