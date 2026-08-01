@@ -153,7 +153,7 @@ schema の変更もありません。
 
 - [ ] リリース対象のパケットがすべて**完了し、その PR が `main` にマージ済み**である:
       G565(PR #1236)、G566(PR #1234)、G567(PR #1238)、G568(PR #1240)、
-      G569(PR #1242)、および G572 release-prep(PR #<G572-PR>)。
+      G569(PR #1242)、および G572 release-prep(PR #1244)。
       確認は host/review 側で host queue-state / GitHub PR state から行ってください —
       child implementation loop は parent queue-state を読んではならないため、これは
       host 側の前提条件です。
