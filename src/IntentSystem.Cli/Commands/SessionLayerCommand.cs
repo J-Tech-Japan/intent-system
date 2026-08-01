@@ -69,17 +69,11 @@ internal static class SessionLayerCommand
         SessionLayerModeResolution resolution;
         try
         {
-            // Deliberately NOT the tolerant Resolve() the guide surfaces use: the
-            // command exists to tell the operator the truth about the record, so
-            // an unreadable one is an error here even though guidance still
-            // renders under the default.
-            var state = SessionLayerModeStore.TryRead(context.RepoRoot);
             resolution = SessionLayerModeStore.Resolve(context.RepoRoot, domain!, team);
-            _ = state;
         }
         catch (InvalidOperationException exception)
         {
-            writer.WriteLine(exception.Message);
+            writer.WriteLine($"session-layer-mode-unreadable: {exception.Message}");
             return 1;
         }
 
@@ -117,7 +111,16 @@ internal static class SessionLayerCommand
             return 1;
         }
 
-        var before = SessionLayerModeStore.Resolve(context.RepoRoot, domain!, team);
+        SessionLayerModeResolution before;
+        try
+        {
+            before = SessionLayerModeStore.Resolve(context.RepoRoot, domain!, team);
+        }
+        catch (InvalidOperationException exception)
+        {
+            writer.WriteLine($"session-layer-mode-unreadable: {exception.Message} Refusing to overwrite it.");
+            return 1;
+        }
         var entries = state?.Entries.ToList() ?? [];
         var existingIndex = entries.FindIndex(entry =>
             string.Equals(entry.Domain, domain, StringComparison.Ordinal)

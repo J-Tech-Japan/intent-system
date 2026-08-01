@@ -78,13 +78,33 @@ internal static class GuideOrchestratorThreadCommand
         }
 
         // G570: the recorded session layer selects which operating sections
-        // this guide renders. Resolution is read-only and tolerant — a guide
-        // must always render — and under `agmsg` the projection below is the
+        // this guide renders. Under `agmsg` the projection below is the
         // identity, so agmsg output is byte-identical to before this slice.
-        var sessionLayer = SessionLayerModeStore.Resolve(
-            context.RepoRoot,
-            values["<domain>"],
-            string.IsNullOrWhiteSpace(values["<team>"]) ? null : values["<team>"]);
+        //
+        // G570 review repair: this used to fall back to agmsg when the record
+        // could not be read, so a corrupted or hand-edited record silently
+        // routed the whole guide through the wrong transport — the reader
+        // would follow agmsg instructions in a herdr-only team and never know
+        // the record was the reason. An invalid PRESENT record is not absence:
+        // it fails closed here, with no guidance rendered at all.
+        SessionLayerModeResolution sessionLayer;
+        try
+        {
+            sessionLayer = SessionLayerModeStore.Resolve(
+                context.RepoRoot,
+                values["<domain>"],
+                string.IsNullOrWhiteSpace(values["<team>"]) ? null : values["<team>"]);
+        }
+        catch (InvalidOperationException exception)
+        {
+            writer.WriteLine($"session-layer-mode-unreadable: {exception.Message}");
+            writer.WriteLine(
+                "Refusing to render orchestrator-thread guidance: which sections are operative depends on the "
+                + "session layer, and rendering the default would hand you instructions for a transport this team "
+                + "may not be running. Repair the record with `intent-cli session-layer set --domain "
+                + $"{values["<domain>"]} --mode agmsg|herdr-only --write`, or remove it to return to the default.");
+            return 1;
+        }
 
         var guide = ApplySessionLayer(BuildGuide(values), sessionLayer, values);
 
@@ -95,9 +115,68 @@ internal static class GuideOrchestratorThreadCommand
             return 0;
         }
 
+        // G570 review repair: a great deal of this document is written as
+        // LITERALS in the markdown writer rather than read back from the guide
+        // object, so projecting the object alone still left operative agmsg
+        // steps in the rendered text. The rendering boundary is therefore
+        // projected too, with the same token list — that is what makes the
+        // guarantee total rather than "total for the fields I remembered".
+        if (sessionLayer.IsHerdrOnly)
+        {
+            using var buffer = new StringWriter();
+            WriteMarkdown(buffer, guide);
+            writer.Write(ProjectMarkdown(buffer.ToString()));
+            return 0;
+        }
+
         WriteMarkdown(writer, guide);
         return 0;
     }
+
+    /// <summary>
+    /// G570 review repair: replaces every rendered LINE that carries an agmsg
+    /// mechanic with the herdr-only pointer, collapsing consecutive pointers so
+    /// a replaced ten-step checklist reads as one statement rather than ten.
+    ///
+    /// The session-layer section and the intake's session-layer line are
+    /// exempt: they name agmsg on purpose — they are what tells the reader
+    /// which transport is in force and how to change it — and removing them
+    /// would remove the only honest explanation of why the rest is missing.
+    /// </summary>
+    internal static string ProjectMarkdown(string markdown)
+    {
+        var lines = markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var projected = new List<string>(lines.Length);
+        var inSessionLayerSection = false;
+
+        foreach (var line in lines)
+        {
+            if (line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                inSessionLayerSection = line.StartsWith("## Session layer", StringComparison.Ordinal);
+            }
+
+            var exempt = inSessionLayerSection
+                || line.StartsWith("- session layer: ", StringComparison.Ordinal);
+
+            if (exempt || !CarriesAgmsgMechanic(line))
+            {
+                projected.Add(line);
+                continue;
+            }
+
+            if (projected.Count > 0 && string.Equals(projected[^1], HerdrOnlyPointerLine, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            projected.Add(HerdrOnlyPointerLine);
+        }
+
+        return string.Join('\n', projected);
+    }
+
+    private const string HerdrOnlyPointerLine = "- " + HerdrOnlyPointer;
 
     /// <summary>
     /// G570: routes the guide by the recorded session layer.
@@ -137,14 +216,11 @@ internal static class GuideOrchestratorThreadCommand
                 + $"`intent-cli session-layer set --domain {values["<domain>"]} --mode agmsg|herdr-only --write` changes it, "
                 + "reversibly, in both directions.",
             ResidualAgmsgMechanics = sessionLayer.IsHerdrOnly
-                ? "HERDR-ONLY: the agmsg-specific OPERATIONAL sections below (setup/registration, receiver readiness, "
-                    + "monitor and bridge diagnostics, the agmsg reply contract, design-receiver registration) are "
-                    + "replaced by pointers. Some MIXED sections — terminal workspace provisioning, supervision, "
-                    + "preflight, troubleshooting — still quote agmsg mechanics such as `join.sh`, `delivery.sh` or "
-                    + "`actas` alongside canon that applies to BOTH modes. In herdr-only, treat every agmsg MECHANIC "
-                    + "in those sections as not applicable while the surrounding canon (isolation, supervision, "
-                    + "liveness, wake contract, publish authority) still binds. G571 restructures those sections; "
-                    + "until it lands, do not run an agmsg command because a mixed section mentions one."
+                ? "HERDR-ONLY: every agmsg OPERATION in this document — registration, delivery configuration, "
+                    + "monitor/bridge readiness, ping/ack, actas, inbox and team scripts, and the agmsg reply "
+                    + "contract — has been REPLACED by a G571 pointer, wherever it appeared. Nothing agmsg-operative "
+                    + "is left for you to follow. Statements about authority and boundaries that merely NAME agmsg "
+                    + "(for example that agmsg never replaces semantic review) are mode-independent canon and remain."
                 : null,
         };
 
@@ -169,59 +245,184 @@ internal static class GuideOrchestratorThreadCommand
             };
         }
 
-        const string Pointer =
-            "HERDR-ONLY MODE — this section is agmsg-specific and does not apply. Its herdr-only counterpart ships in "
-            + "G571 (\"Session-layer switch checklist\" and the herdr-only operating sections of this guide). Until "
-            + "then, do NOT follow the agmsg steps: they would register a transport this team is not running, and a "
-            + "team runs exactly one mode.";
-
-        return guide with
+        // G570 review repair: a disclaimer is NOT routing. The first version of
+        // this projection replaced the wholly agmsg-specific sections and left
+        // mixed sections intact behind a "treat these as not applicable"
+        // sentence — but an imperative, copy-pasteable `agmsg join.sh ...` in a
+        // later section is still an operative instruction, and an agent
+        // following the document will run it. AC3 asks for the instructions to
+        // be gone, not annotated.
+        //
+        // So the projection is TOTAL and structural rather than a curated field
+        // list: it walks the whole built guide and replaces every string that
+        // carries an agmsg MECHANIC with the pointer. Completeness is then a
+        // property of the walk, not of my memory — a section added later cannot
+        // leak an agmsg operation into herdr-only output, which a hand-listed
+        // projection could never guarantee.
+        //
+        // Strings that mention agmsg CONCEPTUALLY without an operation (e.g.
+        // "agmsg never replaces semantic review") carry no mechanic token and
+        // survive: they are mode-independent canon about authority, and removing
+        // them would strip canon the packet requires both modes to keep.
+        // Project the guide, THEN attach the session-layer block and the intake
+        // note — those two deliberately name agmsg (they are what tells the
+        // reader which transport is in force and how to change it), so they
+        // must not be projected away by the walk that removes agmsg
+        // operations.
+        var projected = Project(guide);
+        return projected with
         {
             SessionLayer = block,
-            Setup = guide.Setup with
+            SetupIntake = projected.SetupIntake with
             {
-                Summary = Pointer,
-                Decisions = [Pointer],
-                Checklist = [Pointer],
-                AgmsgCommands = [Pointer],
-                PingTest = Pointer,
-                Cleanup = [Pointer],
-            },
-            ReceiverReadiness = guide.ReceiverReadiness with
-            {
-                Summary = Pointer,
-                StartupOrder = [Pointer],
-                SendBeforeReadyWarning = Pointer,
-                RecoveryMessageTemplate = Pointer,
-                PingAckRequired = Pointer,
-            },
-            MonitorToolDistinction = guide.MonitorToolDistinction with
-            {
-                Summary = Pointer,
-                DeliveryModeNote = Pointer,
-                SuccessMarkers = [Pointer],
-                FailureMarkers = [Pointer],
-                TrustRepair = [Pointer],
-                WindowsGuidance = [Pointer],
-            },
-            MonitorRecovery = Array.Empty<OrchestratorTroubleshooting>(),
-            AgmsgReplyContract = guide.AgmsgReplyContract with
-            {
-                Description = Pointer,
-            },
-            DesignReceiver = guide.DesignReceiver with
-            {
-                Setup = [Pointer],
-                ManualInboxTriggerPrompt = Pointer,
-            },
-            SetupIntake = guide.SetupIntake with
-            {
-                AgmsgCommands = [Pointer],
                 SessionLayerMode = sessionLayer.Mode,
                 SessionLayerNote = intakeNote,
             },
         };
     }
+
+    /// <summary>
+    /// G570 review repair: the operative agmsg mechanics. A string containing
+    /// any of these is an instruction to drive agmsg, so under herdr-only it is
+    /// replaced rather than annotated. The completeness guards in
+    /// <c>SessionLayerModeG570Tests</c> assert that none of these survives in
+    /// herdr-only markdown OR json, so this list cannot silently fall behind.
+    /// </summary>
+    internal static readonly IReadOnlyList<string> AgmsgMechanicTokens =
+    [
+        "join.sh",
+        "delivery.sh",
+        "team.sh",
+        "inbox.sh",
+        "send.sh",
+        "watch.sh",
+        "spawn.sh",
+        "despawn.sh",
+        "reset.sh",
+        "history.sh",
+        "actas",
+        // NOT a bare "agmsg " — that matches canon prose that merely NAMES the
+        // transport ("agmsg carries delegation signals; intent-cli and GitHub
+        // remain authoritative"), which both modes must keep. Only invocations
+        // and script names are operations.
+        "/agmsg",
+        "agmsg join",
+        "agmsg send",
+        "agmsg team",
+        "agmsg inbox",
+        "agmsg delivery",
+        "agmsg actas",
+        "$agmsg",
+        "Codex bridge",
+        "codex bridge",
+        "ping/ack",
+        "ping-ack",
+        "delivery mode",
+        "delivery-mode",
+        "monitor mode",
+        "AGMSG-DIRECTIVE",
+    ];
+
+    internal static bool CarriesAgmsgMechanic(string value) =>
+        AgmsgMechanicTokens.Any(token => value.Contains(token, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Walks the guide and replaces every mechanic-bearing string with the
+    /// herdr-only pointer, de-duplicating consecutive pointers inside a list so
+    /// a replaced ten-step agmsg checklist renders as one pointer rather than
+    /// ten identical lines.
+    /// </summary>
+    private static T Project<T>(T value)
+    {
+        return (T)ProjectObject(value!)!;
+    }
+
+    private static object? ProjectObject(object? value)
+    {
+        switch (value)
+        {
+            case null:
+                return null;
+
+            case string text:
+                return CarriesAgmsgMechanic(text) ? HerdrOnlyPointer : text;
+
+            case bool or int or long or double or decimal or DateTimeOffset or DateTime or Enum:
+                return value;
+
+            case System.Collections.IDictionary:
+                return value;
+
+            case System.Collections.IEnumerable sequence when value is not string:
+                {
+                    var elementType = value.GetType().IsArray
+                        ? value.GetType().GetElementType()!
+                        : value.GetType().GetGenericArguments().FirstOrDefault() ?? typeof(object);
+                    var projected = new List<object?>();
+                    foreach (var item in sequence)
+                    {
+                        var next = ProjectObject(item);
+                        // Collapse a run of identical pointers into one.
+                        if (next is string s && projected.Count > 0 && projected[^1] is string previous && previous == s
+                            && s == HerdrOnlyPointer)
+                        {
+                            continue;
+                        }
+                        projected.Add(next);
+                    }
+
+                    var array = Array.CreateInstance(elementType, projected.Count);
+                    for (var index = 0; index < projected.Count; index++)
+                    {
+                        array.SetValue(projected[index], index);
+                    }
+                    return array;
+                }
+
+            default:
+                {
+                    var type = value.GetType();
+                    if (!type.IsClass || type.Namespace?.StartsWith("IntentSystem", StringComparison.Ordinal) != true)
+                    {
+                        return value;
+                    }
+
+                    // Records are immutable; rebuild through the primary
+                    // constructor-equivalent `with`-style clone by writing the
+                    // projected values into a fresh instance.
+                    var clone = type.GetMethod("<Clone>$", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)?.Invoke(value, null)
+                        ?? value;
+                    foreach (var property in type.GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public))
+                    {
+                        if (!property.CanRead)
+                        {
+                            continue;
+                        }
+
+                        var setter = property.GetSetMethod(nonPublic: true);
+                        if (setter is null)
+                        {
+                            continue;
+                        }
+
+                        var current = property.GetValue(clone);
+                        var projected = ProjectObject(current);
+                        if (!ReferenceEquals(current, projected))
+                        {
+                            setter.Invoke(clone, [projected]);
+                        }
+                    }
+
+                    return clone;
+                }
+        }
+    }
+
+    private const string HerdrOnlyPointer =
+        "HERDR-ONLY MODE — the agmsg operation that stood here does not apply. Its herdr-only counterpart ships "
+        + "in G571 (\"Session-layer switch checklist\" and the herdr-only operating sections of this guide). Do "
+        + "NOT substitute the agmsg step: it would drive a transport this team is not running, and a team runs "
+        + "exactly one mode.";
 
     private static OrchestratorThreadGuide BuildGuide(IReadOnlyDictionary<string, string> values)
     {

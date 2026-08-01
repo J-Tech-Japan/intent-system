@@ -665,12 +665,27 @@ Semantics:
   double-check rule, dependency planning, escalation. Those are properties of
   the model, and the model does not change with the transport.
 
-**Known boundary until G571.** Sections that MIX canon with agmsg mechanics
-(terminal workspace provisioning, supervision, preflight, troubleshooting) still
-quote `join.sh` / `delivery.sh` / `actas`. They are left intact because removing
-them would remove mode-independent canon as well; under herdr-only the rendering
-says so explicitly and instructs the reader to treat those mechanics as not
-applicable while the surrounding canon still binds.
+**Routing is total, not annotated.** Under herdr-only, every string carrying an
+operative agmsg MECHANIC — `join.sh`, `delivery.sh`, `team.sh`, `inbox.sh`,
+`actas`, `/agmsg …` invocations, monitor/bridge readiness, ping/ack — is
+replaced by the G571 pointer, in the JSON object AND at the markdown rendering
+boundary (much of the document is written as literals in the renderer, so
+projecting the object alone would have left operative steps in the text). The
+replacement is a walk over the whole document rather than a curated field list,
+so a section added later cannot leak an agmsg operation into herdr-only output.
+
+Prose that merely NAMES agmsg without an operation — "agmsg carries delegation
+signals; intent-cli and GitHub remain authoritative" — is mode-independent canon
+about authority and survives in both modes. The session-layer section and the
+intake's session-layer line are likewise exempt: they name the transport on
+purpose, because they are what tells the reader which mode is in force.
+**Fail-closed state.** An invalid PRESENT record is not absence. A malformed
+file, an unknown mode, or a record whose current mode disagrees with its own
+transition trail (proof it was not written by `session-layer set --write`) makes
+every mode-dependent surface fail with a named `session-layer-mode-unreadable`
+error and render NO guidance — rendering the default would hand the reader
+instructions for a transport the team may not be running. `set` refuses to
+overwrite such a record rather than repairing it silently.
 
 `guide model` and `guide onboarding` describe both modes, and onboarding reads
 the mode before any transport-specific step so a fresh agent never follows the

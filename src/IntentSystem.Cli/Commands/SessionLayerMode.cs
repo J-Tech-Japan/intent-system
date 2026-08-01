@@ -170,11 +170,7 @@ internal static class SessionLayerModeStore
                 ?? throw new InvalidOperationException("session-layer mode state deserialized to null.");
             foreach (var entry in state.Entries)
             {
-                if (!SessionLayerMode.IsKnown(entry.Mode))
-                {
-                    throw new InvalidOperationException(
-                        $"session-layer mode state records unknown mode '{entry.Mode}' for domain '{entry.Domain}'.");
-                }
+                Validate(entry, path);
             }
 
             return state;
@@ -187,26 +183,72 @@ internal static class SessionLayerModeStore
     }
 
     /// <summary>
+    /// G570 review repair: validates one entry against the command-only
+    /// persistence contract. An unknown mode, or a trail that disagrees with
+    /// the current mode, means the file was hand-edited or corrupted — and a
+    /// record nobody can trust must never be read as a mode.
+    ///
+    /// The trail is the integrity check: <c>set --write</c> appends exactly one
+    /// transition per change and always leaves the last <c>to</c> equal to the
+    /// entry's mode, so a mismatch is proof the record did not come from the
+    /// command.
+    /// </summary>
+    private static void Validate(SessionLayerModeEntry entry, string path)
+    {
+        if (!SessionLayerMode.IsKnown(entry.Mode))
+        {
+            throw new InvalidOperationException(
+                $"session-layer mode state at `{path}` records unknown mode '{entry.Mode}' for domain "
+                + $"'{entry.Domain}'. Refusing to route on a mode nothing can act on.");
+        }
+
+        for (var index = 0; index < entry.Transitions.Count; index++)
+        {
+            var transition = entry.Transitions[index];
+            if (!SessionLayerMode.IsKnown(transition.From) || !SessionLayerMode.IsKnown(transition.To))
+            {
+                throw new InvalidOperationException(
+                    $"session-layer mode state at `{path}` has a transition to/from an unknown mode for domain "
+                    + $"'{entry.Domain}' ('{transition.From}' → '{transition.To}').");
+            }
+
+            var expectedFrom = index == 0 ? null : entry.Transitions[index - 1].To;
+            if (expectedFrom is not null && !string.Equals(transition.From, expectedFrom, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"session-layer mode state at `{path}` has a broken transition chain for domain "
+                    + $"'{entry.Domain}': transition {index} starts at '{transition.From}' but the previous one "
+                    + $"ended at '{expectedFrom}'. Only `session-layer set --write` may write this file.");
+            }
+        }
+
+        if (entry.Transitions.Count > 0
+            && !string.Equals(entry.Mode, entry.Transitions[^1].To, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"session-layer mode state at `{path}` records mode '{entry.Mode}' for domain '{entry.Domain}' but "
+                + $"its last transition ended at '{entry.Transitions[^1].To}'. The record was not written by "
+                + "`session-layer set --write`, so it is refused rather than trusted.");
+        }
+    }
+
+    /// <summary>
     /// Resolves the mode for a (domain, team) pair. A team-scoped entry wins
-    /// over a domain-wide one — a team is the narrower statement — and absence
+    /// over a domain-wide one — a team is the narrower statement — and ABSENCE
     /// resolves to <see cref="SessionLayerMode.Default"/>.
+    ///
+    /// G570 review repair: an INVALID present record is not absence. This used
+    /// to catch the read failure and return agmsg so guidance would always
+    /// render — which meant a corrupted or hand-edited record silently routed
+    /// every guide and setup surface through the wrong transport. It now
+    /// throws, and every mode-dependent surface fails closed with a named
+    /// error instead of rendering guidance for a mode nobody chose.
     /// </summary>
     public static SessionLayerModeResolution Resolve(string repoRoot, string domain, string? team)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
 
-        SessionLayerModeState? state;
-        try
-        {
-            state = TryRead(repoRoot);
-        }
-        catch (InvalidOperationException)
-        {
-            // A guidance surface must still render. The command surface is what
-            // reports an unreadable record loudly; here the safe reading is the
-            // primary transport, which is also what the reader sees today.
-            return new SessionLayerModeResolution { Mode = SessionLayerMode.Default, Source = SessionLayerModeSource.Default };
-        }
+        var state = TryRead(repoRoot);
 
         if (state is null)
         {
