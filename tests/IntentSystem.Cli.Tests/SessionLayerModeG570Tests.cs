@@ -605,8 +605,18 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         foreach (var heading in SessionLayerSections.DescriptiveAgmsgContextHeadings
                      .Where(h => h.StartsWith("## ", StringComparison.Ordinal)))
         {
-            var agmsgFragments = SectionText(underAgmsg, heading).Split('\n')
-                .Where(line => SessionLayerSections.ClassifyFragment(line) == SessionLayerSections.FragmentType.CanonDescriptive)
+            // G570 seventh repair: the fragments to check come from the
+            // hand-authored DECLARATION table, not from a classifier the
+            // production renderer also consults. The renderer and this guard no
+            // longer share a decision procedure — they share a decision.
+            var declaredKeep = SessionLayerFragments.Declarations
+                .Where(d => d.Section == heading
+                    && d.Type != SessionLayerSections.FragmentType.TransportOperative)
+                .Select(d => SessionLayerFragments.Expand(BareValues, d.Text))
+                .ToArray();
+            var agmsgSection = SectionText(underAgmsg, heading);
+            var agmsgFragments = declaredKeep
+                .Where(text => agmsgSection.Contains(text, StringComparison.Ordinal))
                 .ToArray();
             var herdrText = SectionText(underHerdr, heading);
 
@@ -618,6 +628,37 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// The values <see cref="ModeWorkspace.RenderOrchestratorGuide"/> renders with.
+    /// Declarations are stored in placeholder form, so the guards expand them
+    /// the same way the renderer does before comparing.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> BareValues =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["<domain>"] = ModeWorkspace.Domain,
+            ["<owner/repo>"] = ModeWorkspace.Repo,
+            ["<agent>"] = "claude",
+        };
+
+    /// <summary>The setup-ready invocation's values, which render a different
+    /// intake — supplied inputs instead of a missing-input list.</summary>
+    private static readonly IReadOnlyDictionary<string, string> SetupReadyValues =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["<domain>"] = ModeWorkspace.Domain,
+            ["<owner/repo>"] = ModeWorkspace.Repo,
+            ["<agent>"] = "claude",
+            ["<team>"] = "demo-team",
+            ["<orchestrator-path>"] = "/w/orchestrator",
+            ["<implementation-path>"] = "/w/impl",
+            ["<review-path>"] = "/w/review",
+            ["<orchestrator-agent>"] = "claude",
+            ["<implementer-agent>"] = "claude",
+            ["<reviewer-agent>"] = "codex",
+            ["<delivery-mode>"] = "monitor",
+        };
 
     private static string SectionText(string markdown, string heading)
     {
@@ -647,15 +688,304 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         Assert.DoesNotContain("before sending ANY agmsg message", output, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Theory]
-    [InlineData("| agmsg run directory | one per team |", SessionLayerSections.FragmentType.CanonDescriptive)]
-    [InlineData("|---|---|", SessionLayerSections.FragmentType.Structural)]
-    [InlineData("## Safety boundaries", SessionLayerSections.FragmentType.Structural)]
-    [InlineData("- Verify the recipient id against the team roster (`agmsg team.sh`) before every send.", SessionLayerSections.FragmentType.TransportOperative)]
-    [InlineData("- The orchestrator stays authoritative for closeout.", SessionLayerSections.FragmentType.CanonDescriptive)]
-    internal void FragmentTypingSeparatesDescriptionFromInstruction_G570(string fragment, SessionLayerSections.FragmentType expected)
+    /// <summary>
+    /// G570 seventh repair — the INDEPENDENT exhaustiveness proof. Review
+    /// rejected the sixth repair because the guards asked the production
+    /// classifier what a fragment was, so they could only confirm it agreed with
+    /// itself, and a sentence phrased outside its cue vocabulary silently
+    /// classified as description.
+    ///
+    /// This guard never calls the classifier. It re-derives the rendered
+    /// fragments from the agmsg-mode OUTPUT with its own markdown reading, and
+    /// requires each one to consume exactly one declaration — matched by
+    /// verbatim text, which is a fact rather than a judgement. A newly added or
+    /// reworded sentence therefore fails HERE, before it can reach herdr-only
+    /// output untyped.
+    /// </summary>
+    [Fact]
+    public void EveryRenderedFragmentInAMixedSectionConsumesExactlyOneDeclaration_G570()
     {
-        Assert.Equal(expected, SessionLayerSections.ClassifyFragment(fragment));
+        // Both invocation shapes: inputs missing and inputs supplied. They
+        // render different intake fragments, so proving either one alone would
+        // leave the other's fragments untyped.
+        var consumed = new List<(string Section, string Text)>();
+        var undeclared = new List<string>();
+
+        var shapes = new List<(string Rendered, IReadOnlyDictionary<string, string> Values)>
+        {
+            (workspace.RenderOrchestratorGuide(), BareValues),
+        };
+        foreach (var policy in new[] { "none", "will-stop", "keep" })
+        {
+            shapes.Add((workspace.RenderSetupReadyMarkdown(policy), SetupReadyValues));
+        }
+
+        // A RECORDED agmsg selection, which states the mode differently from the
+        // default, and the herdr-only renderings. Declaring only what the
+        // default happens to render would leave the other states untyped.
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.Agmsg, write: true).ExitCode);
+        shapes.Add((workspace.RenderOrchestratorGuide(), BareValues));
+        shapes.Add((workspace.RenderSetupReadyMarkdown(), SetupReadyValues));
+
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        shapes.Add((workspace.RenderOrchestratorGuide(), BareValues));
+        shapes.Add((workspace.RenderSetupReadyMarkdown(), SetupReadyValues));
+
+        foreach (var (rendered, values) in shapes)
+        {
+        string? section = null;
+        var inFence = false;
+
+        foreach (var raw in rendered.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            var trimmed = line.Trim();
+
+            if (trimmed.StartsWith("```", StringComparison.Ordinal))
+            {
+                inFence = !inFence;
+                continue;
+            }
+
+            if (!inFence && line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                section = SessionLayerFragments.IsDeclaredSection(line) ? line : null;
+                continue;
+            }
+
+            if (section is null || trimmed.Length == 0)
+            {
+                continue;
+            }
+
+            // This guard's OWN reading of what carries no semantics. It is
+            // deliberately re-implemented rather than borrowed, so a bug in the
+            // production notion of "structural" cannot hide a fragment here.
+            if (trimmed.StartsWith("#", StringComparison.Ordinal)
+                || (trimmed.StartsWith("|", StringComparison.Ordinal)
+                    && trimmed.Trim('|', '-', ':', ' ').Length == 0))
+            {
+                continue;
+            }
+
+            if (trimmed.Contains(SessionLayerSections.MechanicPointer, StringComparison.Ordinal)
+                || trimmed.Contains("descriptive, not an instruction", StringComparison.Ordinal))
+            {
+                // The pointer and the descriptive label are what routing
+                // PRODUCES, not fragments the document declares.
+                continue;
+            }
+
+            var matches = SessionLayerFragments.Declarations
+                .Where(d => d.Section == section
+                    && SessionLayerFragments.Expand(values, d.Text) == trimmed)
+                .ToArray();
+
+            if (matches.Length == 0)
+            {
+                undeclared.Add($"[{section}] {trimmed}");
+                continue;
+            }
+
+            Assert.True(
+                matches.Length == 1,
+                $"fragment matches {matches.Length} declarations in `{section}`: {trimmed}");
+            consumed.Add((section, trimmed));
+        }
+        }
+
+        Assert.True(
+            undeclared.Count == 0,
+            "rendered fragments with no declared type — each must be typed by hand in "
+            + "SessionLayerFragments.Declarations before it can be routed or retained on purpose:\n"
+            + string.Join("\n", undeclared));
+
+        // And no declaration is decorative: every row names a fragment that is
+        // actually rendered, so the table cannot drift ahead of the document.
+        var unconsumedRows = SessionLayerFragments.Declarations
+            .Where(d => !shapes.Any(shape =>
+                consumed.Contains((d.Section, SessionLayerFragments.Expand(shape.Values, d.Text)))))
+            .Select(d => $"[{d.Section}] {d.Text}")
+            .ToArray();
+        Assert.True(
+            unconsumedRows.Length == 0,
+            "declared fragments that no longer appear in the rendered guide:\n" + string.Join("\n", unconsumedRows));
+    }
+
+    /// <summary>
+    /// The same proof for the JSON surface, with its own independent walk of the
+    /// document. Markdown and JSON declare their fragments separately, so
+    /// neither surface can be proved exhaustive by the other.
+    /// </summary>
+    [Fact]
+    public void EveryRenderedJsonValueInAMixedPropertyConsumesExactlyOneDeclaration_G570()
+    {
+        var shapes = new List<(JsonElement Root, IReadOnlyDictionary<string, string> Values)>
+        {
+            (workspace.RenderOrchestratorGuideJson(), BareValues),
+        };
+        foreach (var policy in new[] { "none", "will-stop", "keep" })
+        {
+            shapes.Add((workspace.RenderSetupReadyJson(policy), SetupReadyValues));
+        }
+
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.Agmsg, write: true).ExitCode);
+        shapes.Add((workspace.RenderOrchestratorGuideJson(), BareValues));
+        shapes.Add((workspace.RenderSetupReadyJson(), SetupReadyValues));
+
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        shapes.Add((workspace.RenderOrchestratorGuideJson(), BareValues));
+        shapes.Add((workspace.RenderSetupReadyJson(), SetupReadyValues));
+
+        var undeclared = new List<string>();
+        var consumed = new HashSet<(string, string)>();
+        IReadOnlyDictionary<string, string> values = BareValues;
+
+        void Walk(string property, JsonElement element)
+        {
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    foreach (var child in element.EnumerateObject())
+                    {
+                        if (!child.Name.StartsWith("session_layer", StringComparison.Ordinal))
+                        {
+                            Walk(property, child.Value);
+                        }
+                    }
+
+                    break;
+                case JsonValueKind.Array:
+                    foreach (var item in element.EnumerateArray())
+                    {
+                        Walk(property, item);
+                    }
+
+                    break;
+                case JsonValueKind.String:
+                    var text = element.GetString()!;
+                    if (text.Contains(SessionLayerSections.MechanicPointer, StringComparison.Ordinal)
+                        || text.Contains("descriptive, not an instruction", StringComparison.Ordinal))
+                    {
+                        break;
+                    }
+
+                    var matches = SessionLayerFragments.JsonDeclarations
+                        .Where(d => d.Section == property
+                            && SessionLayerFragments.Expand(values, d.Text) == text)
+                        .ToArray();
+                    if (matches.Length == 0)
+                    {
+                        undeclared.Add($"[{property}] {text}");
+                    }
+                    else
+                    {
+                        consumed.Add((property, text));
+                    }
+
+                    break;
+            }
+        }
+
+        foreach (var shape in shapes)
+        {
+            values = shape.Values;
+            foreach (var property in SessionLayerSections.MixedJsonProperties)
+            {
+                if (shape.Root.TryGetProperty(property, out var value))
+                {
+                    Walk(property, value);
+                }
+            }
+        }
+
+        Assert.True(
+            undeclared.Count == 0,
+            "rendered JSON values with no declared type:\n" + string.Join("\n", undeclared));
+
+        var unconsumedRows = SessionLayerFragments.JsonDeclarations
+            .Where(d => !shapes.Any(shape =>
+                consumed.Contains((d.Section, SessionLayerFragments.Expand(shape.Values, d.Text)))))
+            .Select(d => $"[{d.Section}] {d.Text}")
+            .ToArray();
+        Assert.True(
+            unconsumedRows.Length == 0,
+            "declared JSON fragments no longer rendered:\n" + string.Join("\n", unconsumedRows));
+    }
+
+    /// <summary>
+    /// The reviewer's named survivors from the sixth repair. Each is asserted by
+    /// its own words, so this stays a statement about the DOCUMENT rather than
+    /// about the mechanism that produced it.
+    /// </summary>
+    [Theory]
+    [InlineData("re-runs readiness plus the ping test")]
+    [InlineData("real-time message monitor")]
+    [InlineData("Catch inbound agmsg traffic as it arrives")]
+    [InlineData("supervision schedulers are session-scoped")]
+    [InlineData("re-arm delivery, or restart the session")]
+    public void UnderHerdrOnly_TheSixthRepairSurvivorsAreRoutedAway_G570(string survivor)
+    {
+        var underAgmsg = workspace.RenderOrchestratorGuide();
+        Assert.Contains(survivor, underAgmsg, StringComparison.Ordinal);
+
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        Assert.DoesNotContain(survivor, workspace.RenderOrchestratorGuide(), StringComparison.Ordinal);
+        Assert.DoesNotContain(survivor, workspace.RenderOrchestratorGuideJson().GetRawText(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Run-directory and history canon stays byte-identical inside the
+    /// descriptive label — routing the mechanics must not cost the reader the
+    /// substrate identity they need to reason about a shared machine.
+    /// </summary>
+    [Theory]
+    [InlineData("agmsg run directory")]
+    [InlineData("agmsg `(team, role)` file naming")]
+    [InlineData("8 dispatches addressed to `review` were silently lost")]
+    public void UnderHerdrOnly_RunDirectoryAndHistoryCanonSurvivesByteIdentically_G570(string canon)
+    {
+        Assert.Contains(canon, workspace.RenderOrchestratorGuide(), StringComparison.Ordinal);
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        Assert.Contains(canon, workspace.RenderOrchestratorGuide(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G570 seventh repair: the title is ONE identity with a rendering per mode,
+    /// and BOTH renderings are proved consumed by an actual rendered title.
+    ///
+    /// The sixth repair declared two independent title rows, which is why review
+    /// could point out that nothing tied them to the same thing. This asserts
+    /// the identity survives in both renderings, that each rendering is the
+    /// literal first line of the document in its own mode, and that no rendering
+    /// is declared without a mode that produces it.
+    /// </summary>
+    [Fact]
+    public void TheTitleIsOneIdentityWithARenderingPerMode_BothConsumed_G570()
+    {
+        var agmsgTitle = workspace.RenderOrchestratorGuide().Split('\n')[0].TrimEnd('\r');
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        var herdrTitle = workspace.RenderOrchestratorGuide().Split('\n')[0].TrimEnd('\r');
+
+        Assert.Equal(SessionLayerSections.DocumentTitle.Agmsg, agmsgTitle);
+        Assert.Equal(SessionLayerSections.DocumentTitle.HerdrOnly, herdrTitle);
+
+        // The identity is what makes them the same document, so neither
+        // rendering may drop it.
+        foreach (var rendering in SessionLayerSections.DocumentTitle.Renderings)
+        {
+            foreach (var word in SessionLayerSections.DocumentTitle.Identity.Split(' '))
+            {
+                Assert.Contains(word, rendering, StringComparison.Ordinal);
+            }
+        }
+
+        // Every declared rendering is consumed by a mode that actually produces
+        // it — a rendering no mode emits would be a decorative declaration.
+        var actual = new[] { agmsgTitle, herdrTitle };
+        Assert.Equal(
+            SessionLayerSections.DocumentTitle.Renderings.OrderBy(r => r, StringComparer.Ordinal),
+            actual.OrderBy(r => r, StringComparer.Ordinal));
     }
 
     [Fact]
@@ -1116,21 +1446,22 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             Render(["guide", "orchestrator-thread", "--domain", Domain, "--target-repo", Repo, "--agent", "claude"]);
 
         /// <summary>A setup-ready invocation: every intake input supplied.</summary>
-        private static string[] SetupReadyArgs(string format) =>
+        private static string[] SetupReadyArgs(string format, string existingLoopPolicy = "none") =>
         [
             "guide", "orchestrator-thread",
             "--domain", Domain, "--target-repo", Repo, "--agent", "claude",
             "--team", "demo-team",
             "--orchestrator-path", "/w/orchestrator", "--implementation-path", "/w/impl", "--review-path", "/w/review",
             "--orchestrator-agent", "claude", "--implementer-agent", "claude", "--reviewer-agent", "codex",
-            "--delivery-mode", "monitor", "--existing-loop-policy", "none",
+            "--delivery-mode", "monitor", "--existing-loop-policy", existingLoopPolicy,
             "--format", format,
         ];
 
-        public string RenderSetupReadyMarkdown() => Render(SetupReadyArgs("markdown"));
+        public string RenderSetupReadyMarkdown(string existingLoopPolicy = "none") =>
+            Render(SetupReadyArgs("markdown", existingLoopPolicy));
 
-        public JsonElement RenderSetupReadyJson() =>
-            JsonDocument.Parse(Render(SetupReadyArgs("json"))).RootElement.Clone();
+        public JsonElement RenderSetupReadyJson(string existingLoopPolicy = "none") =>
+            JsonDocument.Parse(Render(SetupReadyArgs("json", existingLoopPolicy))).RootElement.Clone();
 
         public JsonElement RenderOrchestratorGuideJson()
         {

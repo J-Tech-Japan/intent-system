@@ -695,10 +695,33 @@ orchestrator でも）が「transition は不要」を actionable な次コマ�
   agmsg の mechanic で表現しているものです。セクションは**保持**し、**フラグメント単位で型付け**
   します(design 明確化 G570)。各フラグメントは `structural`(見出し・表の骨格・フェンス。
   決してルーティングしない)、`canon-descriptive`(仕組み・経緯・`agmsg run directory` の
-  ような基盤の識別子。両モードでバイト同一)、`transport-operative`(transport を操作する
-  指示。herdr-only では pointer 化)のいずれかです。セクション単位のフラグでは両方を含む
-  セクションを表現できず、ラベルの裏に命令が残るか、記述的 canon を削りすぎるかのどちらかに
-  なります。
+  ような基盤の識別子。両モードでバイト同一)、`mode-independent-operative`(**両モードで**
+  拘束する指示 — intent-cli / GitHub の手順や four-thread model の規則。これもバイト同一)、
+  `transport-operative`(transport を操作する指示。herdr-only では pointer 化)のいずれかです。
+  セクション単位のフラグでは両方を含むセクションを表現できず、ラベルの裏に命令が残るか、
+  記述的 canon を削りすぎるかのどちらかになります。
+
+  型付けは**導出ではなく宣言**です。guide が描画する非 structural なフラグメントはすべて、
+  markdown と JSON それぞれについて `SessionLayerFragments` に逐語で列挙され、人間が割り当てた
+  型を持ちます。参照は厳密一致で **fail closed** です — 宣言のないフラグメントが renderer に
+  到達すると例外になるため、文を追加・改稿すると必ずテストが落ち、型付けの判断を求められます。
+  以前の実装は命令語の手掛かり(cue)から型を推論していましたが、その失敗モードはスイート内部
+  からは見えませんでした。cue の語彙から外れた言い回しの指示は description に分類されて
+  herdr-only 出力に残り、テストは同じ分類器に答えを尋ねていたため「分類器が自分自身と一致する」
+  ことしか確認できなかったからです。網羅性の guard は現在、**出力側**から独自の markdown 解釈で
+  フラグメントを再導出し、production の分類器を参照せずに、各フラグメントがちょうど 1 つの宣言を
+  消費することを要求します。
+
+  宣言テキストは呼び出し側の入力を**衝突しない sentinel** として保持し、参照時に展開します。
+  これにより 1 つの宣言があらゆる呼び出し形態をカバーします。展開は**前方向のみ**です。逆方向の
+  正規化(描画済みの値を placeholder に書き戻す)は文書を壊します — `--delivery-mode` の値
+  `monitor` のような短い値は通常の散文にも現れ、また guide には読者が埋めるための
+  `<domain>` などの literal な placeholder がコマンド雛形として正当に含まれるからです。
+
+  文書タイトルは**1 つの宣言された identity** で、モードごとに明示的な rendering を持ちます
+  (`SessionLayerSections.DocumentTitle`)。renderer はどちらの文字列も自前で保持しません。
+  2 つの兄弟宣言では両タイトルが無関係な surface としてモデル化され、guard を緑のまま片方だけ
+  改稿できてしまいました。
 
 pointer-only テキストは G570 の**ルーティングのメタデータ**です。「何が適用されないか」と
 「対応物がどこで出荷されるか」を述べ、**代わりに何を実行するかは述べません** — 具体的な

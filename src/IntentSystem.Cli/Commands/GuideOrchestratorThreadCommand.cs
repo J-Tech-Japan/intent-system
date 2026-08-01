@@ -111,7 +111,7 @@ internal static class GuideOrchestratorThreadCommand
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
             var json = JsonSerializer.Serialize(guide, JsonOptions);
-            writer.Write(sessionLayer.IsHerdrOnly ? SelectJsonSections(json) : json);
+            writer.Write(sessionLayer.IsHerdrOnly ? SelectJsonSections(json, values) : json);
             writer.WriteLine();
             return 0;
         }
@@ -124,7 +124,7 @@ internal static class GuideOrchestratorThreadCommand
         {
             using var buffer = new StringWriter();
             WriteMarkdown(buffer, guide);
-            writer.Write(SelectMarkdownSections(buffer.ToString()));
+            writer.Write(SelectMarkdownSections(buffer.ToString(), values));
             return 0;
         }
 
@@ -195,13 +195,13 @@ internal static class GuideOrchestratorThreadCommand
     /// mechanic token) and too strong (canon that merely mentions agmsg gets
     /// destroyed).
     /// </summary>
-    internal static string SelectMarkdownSections(string markdown)
+    internal static string SelectMarkdownSections(string markdown, IReadOnlyDictionary<string, string> values)
     {
         var lines = markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
         var kept = new List<string>(lines.Length);
         var replaced = new List<string>();
         var dropping = false;
-        var inMixedSection = false;
+        string? currentMixedHeading = null;
 
         var inFencedBlock = false;
 
@@ -219,7 +219,9 @@ internal static class GuideOrchestratorThreadCommand
             if (!inFencedBlock && line.StartsWith("## ", StringComparison.Ordinal))
             {
                 dropping = SessionLayerSections.AgmsgOnlyHeadings.Contains(line, StringComparer.Ordinal);
-                inMixedSection = SessionLayerSections.MixedHeadings.Contains(line, StringComparer.Ordinal);
+                currentMixedHeading = SessionLayerSections.MixedHeadings.Contains(line, StringComparer.Ordinal)
+                    ? line
+                    : null;
                 if (dropping)
                 {
                     replaced.Add(line);
@@ -254,9 +256,13 @@ internal static class GuideOrchestratorThreadCommand
             // paste-ready prompt is the most operative thing in the document.
             // The fence only stops `##` inside it becoming a section boundary;
             // it does not exempt the lines from routing.
-            if (inMixedSection
-                && !line.TrimStart().StartsWith("```", StringComparison.Ordinal)
-                && SessionLayerSections.ClassifyFragment(line) == SessionLayerSections.FragmentType.TransportOperative)
+            //
+            // G570 seventh repair: the type comes from the hand-authored
+            // declaration table, not from a cue heuristic, and an undeclared
+            // fragment throws rather than defaulting to "keep".
+            if (currentMixedHeading is not null
+                && SessionLayerFragments.TypeOf(values, currentMixedHeading, line)
+                    == SessionLayerSections.FragmentType.TransportOperative)
             {
                 var pointerLine = PointerFor(line);
                 if (kept.Count == 0 || !string.Equals(kept[^1], pointerLine, StringComparison.Ordinal))
@@ -304,12 +310,17 @@ internal static class GuideOrchestratorThreadCommand
         // point away only inside its cells.
         if (trimmed.StartsWith("|", StringComparison.Ordinal) && trimmed.EndsWith("|", StringComparison.Ordinal))
         {
-            var cells = trimmed.Trim('|').Split('|');
-            var pointed = cells
-                .Select(cell => SessionLayerSections.ClassifyFragment(cell) == SessionLayerSections.FragmentType.TransportOperative
-                    ? " " + SessionLayerSections.MechanicPointer + " "
-                    : cell)
-                .ToArray();
+            // G570 seventh repair: typing is per ROW, so a routed row points
+            // away as a whole. The cell count is preserved so the table stays a
+            // table for every row after it.
+            var cellCount = trimmed.Trim('|').Split('|').Length;
+            var pointed = new string[cellCount];
+            pointed[0] = " " + SessionLayerSections.MechanicPointer + " ";
+            for (var i = 1; i < cellCount; i++)
+            {
+                pointed[i] = " ";
+            }
+
             return indent + "|" + string.Join('|', pointed) + "|";
         }
 
@@ -339,7 +350,7 @@ internal static class GuideOrchestratorThreadCommand
     /// sees exactly what a reader of the prose sees. The two renderings cannot
     /// disagree about what applies.
     /// </summary>
-    internal static string SelectJsonSections(string json)
+    internal static string SelectJsonSections(string json, IReadOnlyDictionary<string, string> values)
     {
         var node = System.Text.Json.Nodes.JsonNode.Parse(json)?.AsObject();
         if (node is null)
@@ -360,7 +371,7 @@ internal static class GuideOrchestratorThreadCommand
         {
             if (node.TryGetPropertyValue(property, out var value) && value is not null)
             {
-                node[property] = PointMechanics(value);
+                node[property] = PointMechanics(values, property, value);
             }
         }
 
@@ -391,7 +402,10 @@ internal static class GuideOrchestratorThreadCommand
     /// property, every string VALUE carrying a transport mechanic becomes
     /// pointer-only text, and everything else is untouched.
     /// </summary>
-    private static System.Text.Json.Nodes.JsonNode? PointMechanics(System.Text.Json.Nodes.JsonNode? node)
+    private static System.Text.Json.Nodes.JsonNode? PointMechanics(
+        IReadOnlyDictionary<string, string> values,
+        string property,
+        System.Text.Json.Nodes.JsonNode? node)
     {
         switch (node)
         {
@@ -403,7 +417,7 @@ internal static class GuideOrchestratorThreadCommand
                         mapping.Remove(entry.Key);
                         result[entry.Key] = entry.Key.StartsWith("session_layer", StringComparison.Ordinal)
                             ? entry.Value
-                            : PointMechanics(entry.Value);
+                            : PointMechanics(values, property, entry.Value);
                     }
 
                     return result;
@@ -415,7 +429,7 @@ internal static class GuideOrchestratorThreadCommand
                     foreach (var item in array.ToArray())
                     {
                         array.Remove(item);
-                        result.Add(PointMechanics(item));
+                        result.Add(PointMechanics(values, property, item));
                     }
 
                     return result;
@@ -423,7 +437,8 @@ internal static class GuideOrchestratorThreadCommand
 
             case System.Text.Json.Nodes.JsonValue value
                 when value.TryGetValue<string>(out var text)
-                    && SessionLayerSections.ClassifyFragment(text) == SessionLayerSections.FragmentType.TransportOperative:
+                    && SessionLayerFragments.JsonTypeOf(values, property, text)
+                        == SessionLayerSections.FragmentType.TransportOperative:
                 return System.Text.Json.Nodes.JsonValue.Create(SessionLayerSections.MechanicPointer);
 
             default:
@@ -3444,9 +3459,10 @@ internal static class GuideOrchestratorThreadCommand
 
     private static void WriteMarkdown(TextWriter writer, OrchestratorThreadGuide guide)
     {
-        writer.WriteLine(guide.SessionLayer?.Mode == SessionLayerMode.HerdrOnly
-            ? "# Guide — orchestrator thread (G487), herdr-only session layer"
-            : "# Guide — agmsg-backed orchestrator thread (G487)");
+        // One declared identity, rendered per mode. The renderer holds no copy
+        // of either title, so the declaration and the document cannot disagree.
+        writer.WriteLine(SessionLayerSections.DocumentTitle.For(
+            guide.SessionLayer?.Mode == SessionLayerMode.HerdrOnly));
         writer.WriteLine();
 
         // G570: which transport this rendering is for, before any

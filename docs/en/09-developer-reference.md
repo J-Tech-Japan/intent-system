@@ -680,10 +680,40 @@ a prose reader never disagree about what applies.
   and typed at FRAGMENT level (design clarification G570): each fragment is
   `structural` (headings, table scaffolding, fences — never routed),
   `canon-descriptive` (mechanism, history, a substrate identity such as `agmsg
-  run directory` — byte-identical in both modes), or `transport-operative` (an
-  instruction to drive the transport — pointed away under herdr-only). A
-  section-level flag could not express a section holding both kinds: it either
-  leaked imperative steps behind a label or over-stripped descriptive canon.
+  run directory` — byte-identical in both modes), `mode-independent-operative`
+  (an instruction that binds in BOTH modes — an intent-cli or GitHub step, or a
+  rule of the four-thread model — also byte-identical), or
+  `transport-operative` (an instruction to drive the transport — pointed away
+  under herdr-only). A section-level flag could not express a section holding
+  both kinds: it either leaked imperative steps behind a label or over-stripped
+  descriptive canon.
+
+  Typing is a DECLARATION, not a derivation. Every non-structural fragment the
+  guide renders is listed verbatim in `SessionLayerFragments`, with a type a
+  human assigned, for markdown and JSON separately. Lookup is exact and fails
+  closed: a fragment reaching a renderer without a declaration throws, so adding
+  or rewording a sentence is a test failure that demands a typing decision. An
+  earlier attempt inferred the type from instructional cue words, and its
+  failure mode was invisible from inside the suite — an instruction phrased
+  outside the cue vocabulary classified as description and survived into
+  herdr-only output, while the tests asked the same classifier what the answer
+  was and could only confirm it agreed with itself. The exhaustiveness guard now
+  re-derives the rendered fragments from the OUTPUT with its own markdown
+  reading and requires each to consume exactly one declaration, without
+  consulting the production classifier.
+
+  Declaration text stores the caller's inputs as collision-proof sentinels and
+  expands them at lookup, so one declaration serves every invocation shape. The
+  expansion is forward-only: canonicalising the other way (rewriting rendered
+  values back to placeholders) corrupts the document, because a short value such
+  as `monitor` for `--delivery-mode` also occurs in ordinary prose, and because
+  the guide legitimately contains literal `<domain>` placeholders inside command
+  templates a reader is meant to fill in.
+
+  The document title is ONE declared identity with an explicit rendering per
+  mode (`SessionLayerSections.DocumentTitle`), and the renderer holds no copy of
+  either string. Two sibling declarations modelled the titles as unrelated
+  surfaces, so either could be reworded alone with every guard still green.
 
 Pointer-only text is G570 routing metadata: it says what does not apply and
 where the counterpart ships. It never says what to run instead, because a

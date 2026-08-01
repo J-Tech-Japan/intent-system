@@ -114,8 +114,12 @@ internal static class SessionLayerSections
         // G570 sixth repair: a title is a per-mode RENDERING of one identity,
         // and the old single row matched neither actual title — invisible while
         // the surface guard enumerated only `##`.
-        new("# Guide — agmsg-backed orchestrator thread (G487)", null, Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
-        new("# Guide — orchestrator thread (G487), herdr-only session layer", null, Applicability.HerdrOnly),
+        // G570 seventh repair: two sibling rows still modelled the title as two
+        // unrelated surfaces, so nothing tied them to the same thing and either
+        // could drift alone. The title is now ONE declared identity
+        // (DocumentTitle) whose per-mode renderings these rows derive from.
+        new(DocumentTitle.Agmsg, null, Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
+        new(DocumentTitle.HerdrOnly, null, Applicability.HerdrOnly),
         new("(json) guide summary", "summary", Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
         new(ReplacementHeadingValue, "herdr_only_replaced_sections", Applicability.HerdrOnly),
         new("(json) herdr-only replacement note", "herdr_only_replacement_note", Applicability.HerdrOnly),
@@ -146,6 +150,36 @@ internal static class SessionLayerSections
     /// because it holds mechanism/history worth labelling. Excluding whole
     /// sections is what let imperative steps survive behind a label.
     /// </summary>
+    /// <summary>
+    /// G570 seventh repair: ONE declared identity for the document title, with
+    /// an explicit rendering per mode.
+    ///
+    /// The sixth repair declared the two titles as two independent rows. That
+    /// modelled them as unrelated surfaces: nothing said they were the same
+    /// thing said twice, so one could be reworded without the other and every
+    /// guard would stay green. Naming the identity once, and deriving both the
+    /// declaration rows and the renderer from it, makes drift impossible rather
+    /// than merely detectable — there is no second place to change.
+    /// </summary>
+    public static class DocumentTitle
+    {
+        /// <summary>What the document IS, independent of transport. Neither
+        /// rendering may drop it.</summary>
+        public const string Identity = "Guide — orchestrator thread (G487)";
+
+        public const string Agmsg = "# Guide — agmsg-backed orchestrator thread (G487)";
+
+        public const string HerdrOnly = "# Guide — orchestrator thread (G487), herdr-only session layer";
+
+        /// <summary>The rendering for a mode. The renderer calls this rather
+        /// than holding its own copy of either string.</summary>
+        public static string For(bool herdrOnly) => herdrOnly ? HerdrOnly : Agmsg;
+
+        /// <summary>Both renderings, so a guard can enumerate them without
+        /// knowing how many modes there are.</summary>
+        public static readonly IReadOnlyList<string> Renderings = [Agmsg, HerdrOnly];
+    }
+
     public static readonly IReadOnlyList<string> MixedHeadings =
         Declarations.Where(d => d.Applies == Applicability.ModeIndependentWithTransportMechanics)
             .Select(d => d.Heading).ToArray();
@@ -253,56 +287,14 @@ internal static class SessionLayerSections
         /// <summary>Mechanism, history, substrate identity. Byte-identical in both modes.</summary>
         CanonDescriptive,
 
+        /// <summary>An instruction that binds in BOTH modes — intent-cli, GitHub, or
+        /// four-thread-model rules. Kept byte-identically, and declared apart from
+        /// description so the guards can prove instructions were never filed as prose.</summary>
+        ModeIndependentOperative,
+
         /// <summary>An instruction to drive the transport. Pointed away under herdr-only.</summary>
         TransportOperative,
     }
-
-    /// <summary>
-    /// Instructional cues. A fragment is TRANSPORT-OPERATIVE when it both names
-    /// a transport mechanic AND tells the reader to do something with it —
-    /// "verify the recipient id against the team roster (agmsg team.sh)" is an
-    /// instruction; "| agmsg run directory |" is an identity in a table.
-    /// </summary>
-    private static readonly IReadOnlyList<string> ImperativeCues =
-    [
-        "verify", "run ", "register", "set ", "check", "confirm", "start", "restart", "stop",
-        "send", "sending", "paste", "join", "attach", "launch", "configure", "resend", "re-send",
-        "must ", "do not", "do NOT", "never ", "always ", "before ", "then ", "ensure",
-        "use `", "invoke", "call ", "wait for", "reply", "ack", "delegate", "escalate to",
-    ];
-
-    /// <summary>
-    /// Types one rendered fragment (a line). Structural lines are recognised
-    /// first so table scaffolding and fences are never mistaken for content.
-    /// </summary>
-    public static FragmentType ClassifyFragment(string line)
-    {
-        var trimmed = line.Trim();
-
-        if (trimmed.Length == 0
-            || trimmed.StartsWith("#", StringComparison.Ordinal)
-            || trimmed.StartsWith("```", StringComparison.Ordinal)
-            || IsTableScaffolding(trimmed))
-        {
-            return FragmentType.Structural;
-        }
-
-        if (!CarriesTransportMechanic(line))
-        {
-            return FragmentType.CanonDescriptive;
-        }
-
-        return ImperativeCues.Any(cue => line.Contains(cue, StringComparison.OrdinalIgnoreCase))
-            ? FragmentType.TransportOperative
-            : FragmentType.CanonDescriptive;
-    }
-
-    private static bool IsTableScaffolding(string trimmed) =>
-        trimmed.StartsWith("|", StringComparison.Ordinal)
-        && trimmed.Replace("|", string.Empty, StringComparison.Ordinal)
-            .Replace("-", string.Empty, StringComparison.Ordinal)
-            .Replace(":", string.Empty, StringComparison.Ordinal)
-            .Trim().Length == 0;
 
     public const string MechanicPointer =
         "(herdr-only: the session-layer step described here is agmsg-specific and does not apply; its herdr-only "
