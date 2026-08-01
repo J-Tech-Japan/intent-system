@@ -29,21 +29,25 @@ public sealed class PacketYamlParityG565Tests : IDisposable
 
     /// <summary>
     /// YAML constructs the packet surfaces accept. Each was a projection-only
-    /// failure before this slice, or would have become one.
+    /// failure before G565, or would have become one.
     ///
-    /// The set is deliberately what the surfaces ACTUALLY accept, not what they
-    /// ought to: writing these fixtures turned up two cases that do not belong
-    /// here and are documented on the rejection side instead — a plain
-    /// (unquoted) scalar containing <c>": "</c>, which is not legal YAML at
-    /// all, and a title with escaped quotes, which the queue-seed lane's own
-    /// legacy scalar reader refuses (<c>unsafe-prepared-packet</c>) even though
-    /// projection now reads it fine.
+    /// The set is what the surfaces ACTUALLY accept, not what they ought to. One
+    /// case documented here as an exception when these fixtures were written —
+    /// a plain (unquoted) scalar containing <c>": "</c> — stays out, because it
+    /// is not legal YAML at all and belongs on the rejection side.
+    ///
+    /// G567 moved the other one IN: a title with escaped quotes was refused by
+    /// the queue-seed lane's legacy scalar reader (its heuristic could not tell
+    /// an escaped quote from an unbalanced one) even though projection read it
+    /// fine. Now that queue-seed validates through the same whole-document
+    /// parse, all three surfaces agree on it.
     /// </summary>
     public static TheoryData<string, string> AcceptedByBothSurfaces() => new()
     {
         { "em-dash and a quoted colon-space title", "\"G565: parsing — one pathway, two readers: no more\"" },
         { "single-quoted title", "'G565 — single quoted'" },
         { "japanese title with a colon", "\"G565: 日本語 — コロン付き\"" },
+        { "escaped quotes (accepted by all three since G567)", "\"G565 \\\"quoted\\\" inside\"" },
     };
 
     [Theory]
@@ -85,22 +89,23 @@ public sealed class PacketYamlParityG565Tests : IDisposable
 
     /// <summary>
     /// The other direction. Parity is two-way — a parser that accepts
-    /// everything agrees with nothing — so malformed YAML must still be refused,
-    /// and refused as a PARSE failure rather than as a guess about section
-    /// headers.
+    /// everything agrees with nothing — so malformed YAML must be refused by
+    /// ALL THREE surfaces, and refused as a PARSE failure rather than as a
+    /// guess about section headers.
     ///
-    /// Note what is NOT asserted here: <c>queue-seed-from-packet</c> still
-    /// classifies both of these <c>queue-seed-ready</c>, because its own field
-    /// lookup is a regex scalar reader (G361) that never parses the document. So
-    /// the surfaces are not yet parsing-equivalent in this direction. That is a
-    /// pre-existing leniency in a different lane, outside this unit's scope
-    /// (which is projection conforming to the schema surfaces, not the reverse)
-    /// — recorded here rather than papered over, and worth its own packet.
+    /// G567 added the third column. When these fixtures were written for G565,
+    /// <c>queue-seed-from-packet</c> classified both of these
+    /// <c>queue-seed-ready</c> — its field lookup was a regex scalar reader
+    /// (G361) that never parsed the document, so a packet the other two
+    /// surfaces rejected could still seed the queue. That gap was recorded here
+    /// as out-of-scope, adjudicated to its own unit, and is now closed: the
+    /// assertion below is the proof, and it is deliberately in the SAME fixture
+    /// so the three surfaces can never again be checked one at a time.
     /// </summary>
     [Theory]
     [InlineData("unterminated flow sequence", "  dependencies: [G1, G2")]
     [InlineData("plain scalar containing a colon-space", "  dependencies: G565 — plain, unquoted: no")]
-    public void MalformedYaml_IsRejectedByProjectionAndByClarifyOpen_G565(string description, string replacement)
+    public void MalformedYaml_IsRejectedByAllThreeSurfaces_G565(string description, string replacement)
     {
         var yaml = ParityWorkspace.BuildPacket("\"G565\"").Replace(
             "  dependencies: []", replacement, StringComparison.Ordinal);
@@ -115,6 +120,8 @@ public sealed class PacketYamlParityG565Tests : IDisposable
         var exitCode = ClarifyOpenCommand.Execute(
             workspace.Context, [ParityWorkspace.Unit, "--question", "Which pathway parses this?"], writer);
         Assert.True(exitCode != 0, $"clarify open accepted malformed YAML ({description}): {writer}");
+
+        Assert.NotEqual(AutomationQueueSeedFromPacketCommand.ClassificationReady, workspace.RunQueueSeedDryRun());
     }
 
     [Fact]

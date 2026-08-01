@@ -91,7 +91,36 @@ internal static class AutomationQueueSeedFromPacketCommand
         // the underlying domain-binding regex check MUST ALWAYS RUN —
         // otherwise a wrong-domain packet could be seeded as long as
         // `target_repo` matches (fail-open).
-        var packetFields = ReadPacketFields(packetDirectoryAbsolute);
+        // G567: the WHOLE document is parsed before anything reads a field from
+        // it, and a packet that is not valid YAML fails closed here — in
+        // dry-run and in write alike, with the parse error named and before any
+        // queue-state or runs.jsonl mutation is even planned.
+        //
+        // Until now this lane read fields with the G361 regex scalar reader,
+        // which never parses the document, so a packet that the schema and
+        // projection surfaces both reject could still classify
+        // `queue-seed-ready` and seed the queue. That is the same
+        // acceptance-surface disagreement G565 closed for projection, one
+        // surface upstream and on a mutation path — where the cost is a
+        // malformed unit sitting in the queue and failing later at publish or
+        // preflight, far from its cause.
+        if (!TryReadPacketFields(packetDirectoryAbsolute, out var packetFields, out var packetParseError))
+        {
+            var unparseable = new QueueSeedFromPacketResult
+            {
+                Classification = ClassificationUnsafe,
+                ExecutionUnit = executionUnit,
+                PacketDirectory = packetDirectoryRelative,
+                Write = write,
+                UnsafeReason = PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable,
+                Summary = $"refusing to seed queue-state from `{packetDirectoryRelative}`: {packetParseError} "
+                    + "No queue-state or runs.jsonl mutation was planned or applied. Repair the packet and re-run — "
+                    + "this is the same acceptance the packet schema and projection surfaces apply.",
+            };
+            EmitResult(writer, format, unparseable);
+            return 1;
+        }
+
         var packetDeclaredDomain = LookupScalar(packetFields, "domain");
         var domainResolution = PacketDomainResolution.Resolve(
             domain,
@@ -437,25 +466,41 @@ internal static class AutomationQueueSeedFromPacketCommand
             .ToArray();
     }
 
-    private static IReadOnlyDictionary<string, string> ReadPacketFields(string packetDirectoryAbsolute)
+    /// <summary>
+    /// G567: reads the packet's fields THROUGH a whole-document YAML parse
+    /// (<see cref="PacketYamlDocument"/>), the same acceptance G565 gave
+    /// projection. Returns <see langword="false"/> with a named error when the
+    /// file is present but is not valid YAML — the caller fails closed on that
+    /// rather than seeding from a partial read.
+    ///
+    /// A MISSING or empty packet.yaml is not this method's failure to report:
+    /// it stays an empty map so
+    /// <see cref="PreparedPacketCommitReadyAnalyzer"/> produces its own
+    /// missing-file diagnostic downstream, exactly as before.
+    /// </summary>
+    private static bool TryReadPacketFields(
+        string packetDirectoryAbsolute,
+        out IReadOnlyDictionary<string, string> fields,
+        out string error)
     {
+        error = string.Empty;
         var packetYamlPath = Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNamePacketYaml);
         var content = TryReadFile(packetYamlPath);
         if (string.IsNullOrEmpty(content))
         {
-            return new Dictionary<string, string>(StringComparer.Ordinal);
+            fields = new Dictionary<string, string>(StringComparer.Ordinal);
+            return true;
         }
-        try
+
+        if (!PacketYamlDocument.TryParse(content!, out var document, out var parseError))
         {
-            return PreparedPacketYamlScalarParser.Parse(content);
+            fields = new Dictionary<string, string>(StringComparer.Ordinal);
+            error = parseError;
+            return false;
         }
-        catch (FormatException)
-        {
-            // Validation upstream already enforced parseable YAML;
-            // defensive fallback returns empty map so the seed uses
-            // the deterministic defaults.
-            return new Dictionary<string, string>(StringComparer.Ordinal);
-        }
+
+        fields = document!.Fields;
+        return true;
     }
 
     private static string? LookupScalar(IReadOnlyDictionary<string, string> fields, params string[] keys)

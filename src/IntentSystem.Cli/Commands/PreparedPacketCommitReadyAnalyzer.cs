@@ -237,12 +237,16 @@ internal static class PreparedPacketCommitReadyAnalyzer
         }
 
         // 3. packet.yaml parses -----------------------------------------
-        IReadOnlyDictionary<string, string> packetFields;
-        try
-        {
-            packetFields = PreparedPacketYamlScalarParser.Parse(input.PacketYaml!);
-        }
-        catch (FormatException exception)
+        // G567: this gate is on a MUTATION path (queue-seed seeds the queue
+        // from a packet this analyzer classified), so "parses" now means the
+        // whole document parses as YAML — the same acceptance G565 gave
+        // projection — rather than every line matching a scalar regex. The
+        // regex reader never parsed the document, so a packet the schema and
+        // projection surfaces both reject could reach `queue-seed-ready`.
+        //
+        // The fields used below come from that same parse, so the parsed
+        // document is authoritative for both the gate and the lookups.
+        if (!PacketYamlDocument.TryParse(input.PacketYaml!, out var packetDocument, out var packetParseError))
         {
             return new PreparedPacketCommitReadyResult
             {
@@ -251,9 +255,11 @@ internal static class PreparedPacketCommitReadyAnalyzer
                 ExecutionUnit = input.ExecutionUnit,
                 PacketDirectory = packetDirectory,
                 Summary = $"prepared packet `{packetDirectory}` packet.yaml does not parse "
-                    + $"as a scalar YAML map: {exception.Message}. Operator review required before auto-commit.",
+                    + $"as YAML: {packetParseError} Operator review required before auto-commit.",
             };
         }
+
+        IReadOnlyDictionary<string, string> packetFields = packetDocument!.Fields;
 
         // 4. Target repo check ------------------------------------------
         // PR #824 review repair #7: the prepared-packet lane MUST NOT
