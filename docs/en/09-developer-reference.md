@@ -676,9 +676,14 @@ a prose reader never disagree about what applies.
   rendered.
 - **mode-independent** sections render unchanged in both modes.
 - **mode-independent-with-transport-mechanics** sections carry canon that binds
-  in both modes but expresses it through an agmsg mechanic. The section is KEPT
-  and only its mechanic-bearing sentences become pointer-only text — the rule
-  still binds, only the agmsg way of carrying it out is pointed away.
+  in both modes but express it through an agmsg mechanic. The section is KEPT
+  and typed at FRAGMENT level (design clarification G570): each fragment is
+  `structural` (headings, table scaffolding, fences — never routed),
+  `canon-descriptive` (mechanism, history, a substrate identity such as `agmsg
+  run directory` — byte-identical in both modes), or `transport-operative` (an
+  instruction to drive the transport — pointed away under herdr-only). A
+  section-level flag could not express a section holding both kinds: it either
+  leaked imperative steps behind a label or over-stripped descriptive canon.
 
 Pointer-only text is G570 routing metadata: it says what does not apply and
 where the counterpart ships. It never says what to run instead, because a

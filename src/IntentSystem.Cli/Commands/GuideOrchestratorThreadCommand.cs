@@ -250,9 +250,13 @@ internal static class GuideOrchestratorThreadCommand
             // MECHANICS, the canon stays and only the mechanic-bearing
             // sentences become pointer-only text. The section's rule still
             // binds; only the agmsg way of carrying it out is pointed away.
+            // G570 sixth repair: fenced CONTENT is still content — a
+            // paste-ready prompt is the most operative thing in the document.
+            // The fence only stops `##` inside it becoming a section boundary;
+            // it does not exempt the lines from routing.
             if (inMixedSection
-                && !line.StartsWith("## ", StringComparison.Ordinal)
-                && SessionLayerSections.CarriesTransportMechanic(line))
+                && !line.TrimStart().StartsWith("```", StringComparison.Ordinal)
+                && SessionLayerSections.ClassifyFragment(line) == SessionLayerSections.FragmentType.TransportOperative)
             {
                 var pointerLine = PointerFor(line);
                 if (kept.Count == 0 || !string.Equals(kept[^1], pointerLine, StringComparison.Ordinal))
@@ -302,7 +306,7 @@ internal static class GuideOrchestratorThreadCommand
         {
             var cells = trimmed.Trim('|').Split('|');
             var pointed = cells
-                .Select(cell => SessionLayerSections.CarriesTransportMechanic(cell)
+                .Select(cell => SessionLayerSections.ClassifyFragment(cell) == SessionLayerSections.FragmentType.TransportOperative
                     ? " " + SessionLayerSections.MechanicPointer + " "
                     : cell)
                 .ToArray();
@@ -418,7 +422,8 @@ internal static class GuideOrchestratorThreadCommand
                 }
 
             case System.Text.Json.Nodes.JsonValue value
-                when value.TryGetValue<string>(out var text) && SessionLayerSections.CarriesTransportMechanic(text):
+                when value.TryGetValue<string>(out var text)
+                    && SessionLayerSections.ClassifyFragment(text) == SessionLayerSections.FragmentType.TransportOperative:
                 return System.Text.Json.Nodes.JsonValue.Create(SessionLayerSections.MechanicPointer);
 
             default:

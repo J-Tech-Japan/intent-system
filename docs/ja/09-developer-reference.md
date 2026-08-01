@@ -692,9 +692,13 @@ orchestrator でも）が「transition は不要」を actionable な次コマ�
   セクション 1 つに**丸ごと置き換え**られます。注記を添えて残すのではなく、描画しません。
 - **mode-independent** セクションは両モードでそのまま描画されます。
 - **mode-independent-with-transport-mechanics** セクションは、両モードで拘束する canon を
-  agmsg の mechanic で表現しているものです。セクションは**保持**し、mechanic を含む文
-  だけを pointer-only テキストに置き換えます — 規範は依然拘束し、agmsg 固有の実施方法
-  だけが「適用外」となります。
+  agmsg の mechanic で表現しているものです。セクションは**保持**し、**フラグメント単位で型付け**
+  します(design 明確化 G570)。各フラグメントは `structural`(見出し・表の骨格・フェンス。
+  決してルーティングしない)、`canon-descriptive`(仕組み・経緯・`agmsg run directory` の
+  ような基盤の識別子。両モードでバイト同一)、`transport-operative`(transport を操作する
+  指示。herdr-only では pointer 化)のいずれかです。セクション単位のフラグでは両方を含む
+  セクションを表現できず、ラベルの裏に命令が残るか、記述的 canon を削りすぎるかのどちらかに
+  なります。
 
 pointer-only テキストは G570 の**ルーティングのメタデータ**です。「何が適用されないか」と
 「対応物がどこで出荷されるか」を述べ、**代わりに何を実行するかは述べません** — 具体的な

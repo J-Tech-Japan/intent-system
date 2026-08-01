@@ -227,6 +227,11 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         "register a role / join the team",
         "Codex bridge",
         "delivery mode",
+        // The exact imperative fragments the fifth rereview found surviving
+        // behind a section-level descriptive label.
+        "before sending ANY agmsg message",
+        "Verify the recipient id against the team roster",
+        "agmsg team.sh",
     };
 
     [Theory]
@@ -234,10 +239,12 @@ public sealed class SessionLayerModeG570Tests : IDisposable
     public void UnderHerdrOnly_NoOperativeAgmsgInstructionSurvivesInMarkdown_G570(string instruction)
     {
         Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
-        // Outside labelled descriptive context: inside it the ruling requires
-        // mechanism/history to stay byte-identical, and the label is what makes
-        // it readable as description rather than instruction.
-        var body = WithoutDescriptiveContext(WithoutSessionLayerExemptions(workspace.RenderOrchestratorGuide()));
+        // G570 sixth repair: NO wholesale descriptive exclusion. Excluding
+        // labelled sections is exactly what hid imperative agmsg steps behind a
+        // label — the guard now looks at every fragment outside the
+        // session-layer metadata, and fragment typing is what keeps descriptive
+        // identities from being flagged.
+        var body = WithoutSessionLayerExemptions(workspace.RenderOrchestratorGuide());
 
         Assert.DoesNotContain(instruction, body, StringComparison.OrdinalIgnoreCase);
     }
@@ -258,13 +265,6 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         var values = new List<string>();
         foreach (var property in document.RootElement.Clone().EnumerateObject())
         {
-            // Same exemption as markdown: labelled descriptive properties keep
-            // their mechanism/history byte-identical by ruling.
-            if (SessionLayerSections.DescriptiveAgmsgContextJsonProperties.Contains(property.Name, StringComparer.Ordinal))
-            {
-                continue;
-            }
-
             CollectStringValues(property.Value, path: property.Name, values);
         }
 
@@ -499,7 +499,15 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             // Headings inside fenced blocks are quoted content (artifact
             // templates the guide shows), not sections of this document.
             var renderedHeadings = OutsideFencedBlocks(workspace.RenderOrchestratorGuide())
-                .Where(line => line.StartsWith("## ", StringComparison.Ordinal))
+                // G570 sixth repair: the TITLE ('# ') as well as sections
+                // ('## '). The title row matched neither actual title and went
+                // undetected while only sections were enumerated. Deeper
+                // headings are sub-parts OF a declared section, and the ruling
+                // puts granularity at section-plus-fragment, so they are not
+                // separately declared surfaces.
+                .Where(line => (line.StartsWith("# ", StringComparison.Ordinal)
+                    || line.StartsWith("## ", StringComparison.Ordinal))
+                    && !line.StartsWith("### ", StringComparison.Ordinal))
                 .Select(line => line.TrimEnd('\r'))
                 .ToArray();
 
@@ -581,8 +589,14 @@ public sealed class SessionLayerModeG570Tests : IDisposable
     /// label it stays BYTE-IDENTICAL. The isolation table's "agmsg run
     /// directory" row was being over-stripped.
     /// </summary>
+    /// <summary>
+    /// G570 sixth repair: byte-identity is now a property of the descriptive
+    /// FRAGMENT, not of the whole labelled section — a section holding both
+    /// kinds must keep one and route the other, which is the ambiguity the
+    /// fifth rereview exposed.
+    /// </summary>
     [Fact]
-    public void UnderHerdrOnly_LabelledDescriptiveTextIsByteIdentical_G570()
+    public void UnderHerdrOnly_DescriptiveFragmentsAreByteIdentical_G570()
     {
         var underAgmsg = workspace.RenderOrchestratorGuide();
         Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
@@ -591,16 +605,17 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         foreach (var heading in SessionLayerSections.DescriptiveAgmsgContextHeadings
                      .Where(h => h.StartsWith("## ", StringComparison.Ordinal)))
         {
-            var agmsgSection = SectionText(underAgmsg, heading);
-            var herdrSection = SectionText(underHerdr, heading);
+            var agmsgFragments = SectionText(underAgmsg, heading).Split('\n')
+                .Where(line => SessionLayerSections.ClassifyFragment(line) == SessionLayerSections.FragmentType.CanonDescriptive)
+                .ToArray();
+            var herdrText = SectionText(underHerdr, heading);
 
-            // The only permitted difference is the added example label.
-            var herdrWithoutLabel = string.Join(
-                '\n',
-                herdrSection.Split('\n').Where(line => line != SessionLayerSections.DescriptiveAgmsgContextLabel && line.Length > 0));
-            var agmsgCompact = string.Join('\n', agmsgSection.Split('\n').Where(line => line.Length > 0));
-
-            Assert.Equal(agmsgCompact, herdrWithoutLabel);
+            foreach (var fragment in agmsgFragments)
+            {
+                Assert.True(
+                    herdrText.Contains(fragment, StringComparison.Ordinal),
+                    $"descriptive fragment lost from `{heading}` under herdr-only: {fragment.Trim()}");
+            }
         }
     }
 
@@ -611,6 +626,36 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         Assert.True(start >= 0, $"missing section: {heading}");
         var end = Array.FindIndex(lines, start + 1, line => line.StartsWith("## ", StringComparison.Ordinal));
         return string.Join('\n', lines[(start + 1)..(end < 0 ? lines.Length : end)]);
+    }
+
+    /// <summary>
+    /// G570 sixth repair: the two clauses of the ruling now hold in the SAME
+    /// section. A descriptive identity inside a labelled section survives
+    /// byte-identically while an imperative fragment beside it is routed away —
+    /// which a whole-section flag could not express in either direction.
+    /// </summary>
+    [Fact]
+    public void UnderHerdrOnly_DescriptiveFragmentsSurviveBesideRoutedImperativeOnes_G570()
+    {
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        var output = workspace.RenderOrchestratorGuide();
+
+        // Descriptive substrate identity — kept.
+        Assert.Contains("agmsg run directory", output, StringComparison.Ordinal);
+        // Imperative instruction from a labelled section — routed away.
+        Assert.DoesNotContain("agmsg team.sh", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("before sending ANY agmsg message", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("| agmsg run directory | one per team |", SessionLayerSections.FragmentType.CanonDescriptive)]
+    [InlineData("|---|---|", SessionLayerSections.FragmentType.Structural)]
+    [InlineData("## Safety boundaries", SessionLayerSections.FragmentType.Structural)]
+    [InlineData("- Verify the recipient id against the team roster (`agmsg team.sh`) before every send.", SessionLayerSections.FragmentType.TransportOperative)]
+    [InlineData("- The orchestrator stays authoritative for closeout.", SessionLayerSections.FragmentType.CanonDescriptive)]
+    internal void FragmentTypingSeparatesDescriptionFromInstruction_G570(string fragment, SessionLayerSections.FragmentType expected)
+    {
+        Assert.Equal(expected, SessionLayerSections.ClassifyFragment(fragment));
     }
 
     [Fact]

@@ -111,7 +111,12 @@ internal static class SessionLayerSections
         // section builder were undeclared, so "one row drives every surface"
         // was not true of them. The document title and summary are declared
         // here, as is the synthetic herdr-only metadata.
-        new("# Guide — orchestrator thread", "summary", Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
+        // G570 sixth repair: a title is a per-mode RENDERING of one identity,
+        // and the old single row matched neither actual title — invisible while
+        // the surface guard enumerated only `##`.
+        new("# Guide — agmsg-backed orchestrator thread (G487)", null, Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
+        new("# Guide — orchestrator thread (G487), herdr-only session layer", null, Applicability.HerdrOnly),
+        new("(json) guide summary", "summary", Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
         new(ReplacementHeadingValue, "herdr_only_replaced_sections", Applicability.HerdrOnly),
         new("(json) herdr-only replacement note", "herdr_only_replacement_note", Applicability.HerdrOnly),
         new("(json) herdr-only descriptive context", "herdr_only_descriptive_agmsg_context", Applicability.HerdrOnly),
@@ -134,13 +139,20 @@ internal static class SessionLayerSections
         Declarations.Where(d => d.Applies == Applicability.AgmsgOnly && d.JsonProperty is not null)
             .Select(d => d.JsonProperty!).ToArray();
 
+    /// <summary>
+    /// G570 sixth repair: EVERY mixed section is fragment-typed, including the
+    /// labelled ones. `Descriptive` no longer excludes a section from routing —
+    /// it only marks that the section carries the explicit agmsg-example label,
+    /// because it holds mechanism/history worth labelling. Excluding whole
+    /// sections is what let imperative steps survive behind a label.
+    /// </summary>
     public static readonly IReadOnlyList<string> MixedHeadings =
-        Declarations.Where(d => d.Applies == Applicability.ModeIndependentWithTransportMechanics && !d.Descriptive)
+        Declarations.Where(d => d.Applies == Applicability.ModeIndependentWithTransportMechanics)
             .Select(d => d.Heading).ToArray();
 
     public static readonly IReadOnlyList<string> MixedJsonProperties =
         Declarations.Where(d => d.Applies == Applicability.ModeIndependentWithTransportMechanics
-                && !d.Descriptive && d.JsonProperty is not null)
+                && d.JsonProperty is not null)
             .Select(d => d.JsonProperty!).ToArray();
 
     public static readonly IReadOnlyList<string> ModeIndependentHeadings =
@@ -225,6 +237,73 @@ internal static class SessionLayerSections
     /// deliberately says nothing about what to run instead, because that would
     /// be G571 operating content.
     /// </summary>
+    /// <summary>
+    /// G570 sixth repair (design ruling, clarification G570 applied): inside a
+    /// mixed section, applicability is a property of the FRAGMENT, not of the
+    /// section. A whole-row descriptive flag could not express a section that
+    /// holds both — it either leaked imperative steps or over-stripped canon,
+    /// and the tests only passed because I excluded descriptive sections
+    /// wholesale from the guards.
+    /// </summary>
+    public enum FragmentType
+    {
+        /// <summary>Document structure — headings, table scaffolding, fences, blanks. Never routed.</summary>
+        Structural,
+
+        /// <summary>Mechanism, history, substrate identity. Byte-identical in both modes.</summary>
+        CanonDescriptive,
+
+        /// <summary>An instruction to drive the transport. Pointed away under herdr-only.</summary>
+        TransportOperative,
+    }
+
+    /// <summary>
+    /// Instructional cues. A fragment is TRANSPORT-OPERATIVE when it both names
+    /// a transport mechanic AND tells the reader to do something with it —
+    /// "verify the recipient id against the team roster (agmsg team.sh)" is an
+    /// instruction; "| agmsg run directory |" is an identity in a table.
+    /// </summary>
+    private static readonly IReadOnlyList<string> ImperativeCues =
+    [
+        "verify", "run ", "register", "set ", "check", "confirm", "start", "restart", "stop",
+        "send", "sending", "paste", "join", "attach", "launch", "configure", "resend", "re-send",
+        "must ", "do not", "do NOT", "never ", "always ", "before ", "then ", "ensure",
+        "use `", "invoke", "call ", "wait for", "reply", "ack", "delegate", "escalate to",
+    ];
+
+    /// <summary>
+    /// Types one rendered fragment (a line). Structural lines are recognised
+    /// first so table scaffolding and fences are never mistaken for content.
+    /// </summary>
+    public static FragmentType ClassifyFragment(string line)
+    {
+        var trimmed = line.Trim();
+
+        if (trimmed.Length == 0
+            || trimmed.StartsWith("#", StringComparison.Ordinal)
+            || trimmed.StartsWith("```", StringComparison.Ordinal)
+            || IsTableScaffolding(trimmed))
+        {
+            return FragmentType.Structural;
+        }
+
+        if (!CarriesTransportMechanic(line))
+        {
+            return FragmentType.CanonDescriptive;
+        }
+
+        return ImperativeCues.Any(cue => line.Contains(cue, StringComparison.OrdinalIgnoreCase))
+            ? FragmentType.TransportOperative
+            : FragmentType.CanonDescriptive;
+    }
+
+    private static bool IsTableScaffolding(string trimmed) =>
+        trimmed.StartsWith("|", StringComparison.Ordinal)
+        && trimmed.Replace("|", string.Empty, StringComparison.Ordinal)
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace(":", string.Empty, StringComparison.Ordinal)
+            .Trim().Length == 0;
+
     public const string MechanicPointer =
         "(herdr-only: the session-layer step described here is agmsg-specific and does not apply; its herdr-only "
         + "counterpart ships in G571. The rule stated by this section still binds.)";
