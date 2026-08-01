@@ -5,19 +5,16 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
-public sealed class IssuePrepareCommandTests : IDisposable
+/// <summary>
+/// G569: this class no longer saves and restores a process-global clock. It
+/// passes one to the call it is testing, so nothing it does is observable by
+/// another test class — and it needs no <c>IDisposable</c> to stay that way.
+/// </summary>
+public sealed class IssuePrepareCommandTests
 {
-    private readonly Func<DateTimeOffset> originalTimestampFactory;
-
-    public IssuePrepareCommandTests()
-    {
-        originalTimestampFactory = IssuePrepareCommand.TimestampFactory;
-    }
-
-    public void Dispose()
-    {
-        IssuePrepareCommand.TimestampFactory = originalTimestampFactory;
-    }
+    /// <summary>The clock these fixtures pin their expected timestamps to.</summary>
+    private static Func<DateTimeOffset> ClockAt(int hour, int minute, int second) =>
+        () => new DateTimeOffset(2026, 4, 28, hour, minute, second, TimeSpan.Zero);
 
     [Fact]
     public void Execute_GivenValidBody_WritesReviewedPacketAndReturnsZero()
@@ -26,13 +23,12 @@ public sealed class IssuePrepareCommandTests : IDisposable
         workspace.WriteFile("body.md", CompleteValidBody);
         var bodyPath = workspace.GetPath("body.md");
         var outPath = workspace.GetPath("packet.json");
-        IssuePrepareCommand.TimestampFactory = () => new DateTimeOffset(2026, 4, 28, 12, 34, 56, TimeSpan.Zero);
-
         using var writer = new StringWriter();
         var exitCode = IssuePrepareCommand.Execute(
             workspace.Context,
             ["--from-file", bodyPath, "--execution-unit", "G184", "--title", "G184 sample title", "--out", outPath],
-            writer);
+            writer,
+            ClockAt(12, 34, 56));
 
         Assert.Equal(0, exitCode);
         Assert.True(File.Exists(outPath));
@@ -117,13 +113,12 @@ public sealed class IssuePrepareCommandTests : IDisposable
         using var workspace = new IssuePrepareWorkspace();
         workspace.WriteFile("body.md", CompleteValidBody);
         var outPath = workspace.GetPath("packet.json");
-        IssuePrepareCommand.TimestampFactory = () => new DateTimeOffset(2026, 4, 28, 9, 0, 0, TimeSpan.Zero);
-
         using var writer = new StringWriter();
         var exitCode = IssuePrepareCommand.Execute(
             workspace.Context,
             ["--from-file", workspace.GetPath("body.md"), "--execution-unit", "G184", "--title", "G184 RT", "--out", outPath],
-            writer);
+            writer,
+            ClockAt(9, 0, 0));
 
         Assert.Equal(0, exitCode);
 
@@ -205,6 +200,53 @@ public sealed class IssuePrepareCommandTests : IDisposable
         Expected PR base branch: `main`
         Open all child PRs against `main` directly.
         """;
+
+    /// <summary>
+    /// G569: the direct proof. Many callers run <c>issue prepare</c>
+    /// CONCURRENTLY with DIFFERENT clocks, and every one must observe its own —
+    /// which is possible only because there is no shared cell left to observe.
+    ///
+    /// Against the removed static this fails deterministically rather than
+    /// occasionally: the last writer wins, so the recorded timestamps collapse
+    /// onto whichever clock was assigned last. That is the same interleaving
+    /// that turned one full-suite run red on 2026-08-01, reproduced on demand
+    /// instead of waited for.
+    /// </summary>
+    [Fact]
+    public void Execute_ConcurrentCallsWithDifferentClocks_EachObservesItsOwn_G569()
+    {
+        const int Callers = 32;
+        using var workspace = new IssuePrepareWorkspace();
+        workspace.WriteFile("body.md", CompleteValidBody);
+        var bodyPath = workspace.GetPath("body.md");
+
+        var recorded = new string?[Callers];
+        Parallel.For(0, Callers, index =>
+        {
+            var outPath = workspace.GetPath($"packet-{index}.json");
+            using var writer = new StringWriter();
+            var exitCode = IssuePrepareCommand.Execute(
+                workspace.Context,
+                ["--from-file", bodyPath, "--execution-unit", $"G{index}", "--title", $"title {index}", "--out", outPath],
+                writer,
+                // A distinct second per caller: any leakage between callers
+                // shows up as a duplicated or wrong timestamp.
+                () => new DateTimeOffset(2026, 4, 28, 0, 0, index, TimeSpan.Zero));
+
+            Assert.Equal(0, exitCode);
+            using var document = JsonDocument.Parse(File.ReadAllText(outPath));
+            recorded[index] = document.RootElement.GetProperty("prepared_at_utc").GetString();
+        });
+
+        for (var index = 0; index < Callers; index++)
+        {
+            Assert.Equal($"2026-04-28T00:00:{index:D2}.000Z", recorded[index]);
+        }
+
+        // And no two callers share a timestamp — the assertion above already
+        // implies it, but stating it separately is what a leak would trip first.
+        Assert.Equal(Callers, recorded.Distinct(StringComparer.Ordinal).Count());
+    }
 
     internal sealed class IssuePrepareWorkspace : IDisposable
     {

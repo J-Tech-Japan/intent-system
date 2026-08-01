@@ -10,20 +10,17 @@ public sealed class IssuePublishReviewedCommandTests : IDisposable
 {
     private readonly Func<IGhIssueCreator> originalCreatorFactory;
     private readonly Func<DateTimeOffset> originalTimestampFactory;
-    private readonly Func<DateTimeOffset> originalPrepareTimestampFactory;
 
     public IssuePublishReviewedCommandTests()
     {
         originalCreatorFactory = IssuePublishReviewedCommand.GhIssueCreatorFactory;
         originalTimestampFactory = IssuePublishReviewedCommand.TimestampFactory;
-        originalPrepareTimestampFactory = IssuePrepareCommand.TimestampFactory;
     }
 
     public void Dispose()
     {
         IssuePublishReviewedCommand.GhIssueCreatorFactory = originalCreatorFactory;
         IssuePublishReviewedCommand.TimestampFactory = originalTimestampFactory;
-        IssuePrepareCommand.TimestampFactory = originalPrepareTimestampFactory;
     }
 
     [Fact]
@@ -304,14 +301,15 @@ public sealed class IssuePublishReviewedCommandTests : IDisposable
             File.WriteAllText(bodyPath, IssuePrepareCommandTests.CompleteValidBody);
             var packetPath = GetPath("packet.json");
 
-            IssuePrepareCommand.TimestampFactory =
-                () => new DateTimeOffset(2026, 4, 28, 12, 0, 0, TimeSpan.Zero);
-
+            // G569: the prepare clock is an argument now, so this helper no
+            // longer reaches into a static that IssuePrepareCommandTests also
+            // writes — the two classes ran in parallel and reset each other.
             using var writer = new StringWriter();
             var exit = IssuePrepareCommand.Execute(
                 Context,
                 ["--from-file", bodyPath, "--execution-unit", "G184", "--title", "G184 sample title", "--out", packetPath],
-                writer);
+                writer,
+                static () => new DateTimeOffset(2026, 4, 28, 12, 0, 0, TimeSpan.Zero));
             if (exit != 0)
             {
                 throw new InvalidOperationException(

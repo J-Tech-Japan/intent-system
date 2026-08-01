@@ -21,13 +21,42 @@ internal static class IssuePrepareCommand
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never
     };
 
-    public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
+    /// <summary>
+    /// G569: the router entry point. Supplies the real clock; every caller that
+    /// needs a different one passes it explicitly to <see cref="Execute(CliContext, string[], TextWriter, Func{DateTimeOffset})"/>
+    /// rather than reaching into shared state.
+    ///
+    /// This replaced a <c>public static Func&lt;DateTimeOffset&gt;
+    /// TimestampFactory { get; set; }</c>. That property was process-global and
+    /// mutable, and TWO test classes assigned it while sharing no
+    /// non-parallel xUnit collection — so xUnit's default parallelism could
+    /// interleave their assignments and one test would read the other's clock.
+    /// It did: one full-suite run went red on 2026-08-01 with two clean reruns
+    /// and an isolated pass, the signature of an interleaving race rather than
+    /// a flaky assertion.
+    ///
+    /// Random red on unrelated PRs is the most corrosive CI failure class —
+    /// it teaches operators to rerun instead of read, and it degrades the
+    /// exact-head "CI SUCCESS" evidence the review and merge gates treat as
+    /// canonical. A parameter cannot be raced: there is no shared cell left to
+    /// interleave, so the fix is structural rather than a scheduling
+    /// constraint that a future test class can forget to join.
+    /// </summary>
+    public static int Execute(CliContext context, string[] args, TextWriter writer) =>
+        Execute(context, args, writer, static () => DateTimeOffset.UtcNow);
 
-    public static int Execute(CliContext context, string[] args, TextWriter writer)
+    /// <summary>
+    /// G569: <paramref name="utcNow"/> is the only time source. Runtime
+    /// behaviour is unchanged — the router's overload passes
+    /// <see cref="DateTimeOffset.UtcNow"/>, exactly what the removed static
+    /// defaulted to.
+    /// </summary>
+    public static int Execute(CliContext context, string[] args, TextWriter writer, Func<DateTimeOffset> utcNow)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(utcNow);
 
         if (!TryParseArguments(args, out var fromFile, out var executionUnit, out var title, out var outPath, out var error))
         {
@@ -76,7 +105,7 @@ internal static class IssuePrepareCommand
             Published = false,
             IssueNumber = null,
             IssueUrl = null,
-            PreparedAtUtc = FormatUtcTimestamp(TimestampFactory()),
+            PreparedAtUtc = FormatUtcTimestamp(utcNow()),
             PublishedAtUtc = null
         };
 
