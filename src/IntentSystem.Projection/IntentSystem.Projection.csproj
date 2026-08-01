@@ -6,4 +6,11 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- G565: packet.yaml is parsed by the same YAML implementation the packet
+         schema surfaces use, so projection cannot accept a different language
+         than the surfaces that author and validate the file. -->
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
+  </ItemGroup>
+
 </Project>
