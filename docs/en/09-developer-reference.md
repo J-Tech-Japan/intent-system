@@ -665,7 +665,7 @@ Semantics:
   double-check rule, dependency planning, escalation. Those are properties of
   the model, and the model does not change with the transport.
 
-**Applicability is declared per section, and it is four-valued** (design ruling,
+**Applicability is declared per section in ONE table carrying both renderings' identity, and it is four-valued** (design ruling,
 host main `fb1913c8`): `agmsg-only`, `herdr-only`, `mode-independent`, and
 `mode-independent-with-transport-mechanics`. The renderer selects whole sections
 from the recorded mode — in markdown and in JSON alike, so a field consumer and
@@ -691,9 +691,14 @@ deleted the timer-loop canon because it mentioned agmsg). Applicability is a
 property of a section's subject, so it is declared once, in
 `SessionLayerSections`, where it can be reviewed.
 
-Setup intake is mode-aware for the same reason: the agmsg team name and
-delivery mode are agmsg-only inputs, so a herdr-only setup is never told it is
-missing fields its transport has no concept of.
+The setup intake is mode-SPECIFIC, not token-replaced: under herdr-only the
+object carries no `agmsg_commands`, no agmsg-shaped `role_prompts`, and no
+`team` / `delivery_mode` inputs at all, and its headline instructs no
+registration. Descriptive agmsg content — the model's mechanism and history,
+byte-identical in both modes — is preceded by an explicit agmsg-example label
+so a reader distinguishes illustration from instruction at the point of
+reading. Replaced steps inside ordered lists keep their own number, so a
+playbook never reads 1, 2, 3, 5.
 
 **Fail-closed state.** An invalid PRESENT record is not absence. A malformed
 file, an unknown mode, or a record whose current mode disagrees with its own

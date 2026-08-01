@@ -221,6 +221,18 @@ internal static class GuideOrchestratorThreadCommand
                 continue;
             }
 
+            // Descriptive agmsg content is labelled as such, in place, so a
+            // reader distinguishes illustration from instruction at the point
+            // of reading rather than by inference.
+            if (line.StartsWith("## ", StringComparison.Ordinal)
+                && SessionLayerSections.DescriptiveAgmsgContextHeadings.Contains(line, StringComparer.Ordinal))
+            {
+                kept.Add(line);
+                kept.Add(string.Empty);
+                kept.Add(SessionLayerSections.DescriptiveAgmsgContextLabel);
+                continue;
+            }
+
             // Four-valued applicability (design ruling, host main fb1913c8):
             // inside a section declared MODE-INDEPENDENT-WITH-TRANSPORT-
             // MECHANICS, the canon stays and only the mechanic-bearing
@@ -271,12 +283,22 @@ internal static class GuideOrchestratorThreadCommand
         var trimmed = line.TrimStart();
         var indent = line[..(line.Length - trimmed.Length)];
 
-        foreach (var marker in new[] { "- ", "* ", "> ", "1. " })
+        foreach (var marker in new[] { "- ", "* ", "> " })
         {
             if (trimmed.StartsWith(marker, StringComparison.Ordinal))
             {
                 return indent + marker + SessionLayerSections.MechanicPointer;
             }
+        }
+
+        // G570 third repair: ordered lists keep their OWN number. Replacing
+        // "4. …" with an unnumbered pointer left playbooks reading 1, 2, 3, 5 —
+        // a reader cannot tell whether a step is missing or merely
+        // inapplicable.
+        var ordered = System.Text.RegularExpressions.Regex.Match(trimmed, @"^(\d+\.\s+)");
+        if (ordered.Success)
+        {
+            return indent + ordered.Groups[1].Value + SessionLayerSections.MechanicPointer;
         }
 
         return indent + SessionLayerSections.MechanicPointer;
@@ -400,13 +422,25 @@ internal static class GuideOrchestratorThreadCommand
         return new OrchestratorThreadGuide
         {
             SetupIntake = BuildSetupIntake(values, herdrOnly),
-            Summary =
-                "PRIMARY agmsg-backed four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / "
-                + "implementation / review coordinate over agmsg. agmsg carries natural-language delegation / "
-                + "progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli and "
-                + "GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, and "
-                + "closeout. Timer-loop mode remains fully supported as the simpler ALTERNATIVE for setups without "
-                + "an orchestrator thread (see Mode separation).",
+            // G570 third repair: the summary is CANON about authority, and it
+            // must survive in both modes — but its agmsg phrasing is an
+            // instruction in the practiced mode and a description in the other.
+            // So it is stated mode-specifically rather than token-replaced,
+            // which previously destroyed the authority sentence outright.
+            Summary = herdrOnly
+                ? "PRIMARY four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / "
+                    + "implementation / review coordinate over the session layer this team runs — herdr-only here. "
+                    + "The session layer carries natural-language delegation / progress / completion / blocker "
+                    + "signals between threads; it is NOT workflow state. intent-cli and GitHub remain authoritative "
+                    + "for domain status, queue-state, issue/PR facts, labels, CI, and closeout. Timer-loop mode "
+                    + "remains fully supported as the simpler ALTERNATIVE for setups without an orchestrator thread "
+                    + "(see Mode separation). The herdr-only operating steps ship in G571."
+                : "PRIMARY agmsg-backed four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / "
+                    + "implementation / review coordinate over agmsg. agmsg carries natural-language delegation / "
+                    + "progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli "
+                    + "and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, "
+                    + "and closeout. Timer-loop mode remains fully supported as the simpler ALTERNATIVE for setups "
+                    + "without an orchestrator thread (see Mode separation).",
             ModeSeparation = new OrchestratorModeSeparation
             {
                 TimerLoopMode =
@@ -2661,8 +2695,13 @@ internal static class GuideOrchestratorThreadCommand
             OrchestratorAgent = orchestratorAgent.Length > 0 ? orchestratorAgent : null,
             ImplementerAgent = implementerAgent.Length > 0 ? implementerAgent : null,
             ReviewerAgent = reviewerAgent.Length > 0 ? reviewerAgent : null,
-            Team = team,
-            DeliveryMode = deliveryMode,
+            // G570 third repair: the agmsg team name and delivery mode are
+            // agmsg-ONLY inputs. Under herdr-only they are not merely
+            // unrequired — they are not part of the object at all, so a
+            // consumer reading fields never sees an input its transport has no
+            // concept of.
+            Team = herdrOnly ? null : team,
+            DeliveryMode = herdrOnly ? null : deliveryMode,
             ExistingLoopPolicy = loopPolicy.Length > 0 ? loopPolicy : null,
         };
 
@@ -2726,6 +2765,29 @@ internal static class GuideOrchestratorThreadCommand
             new OrchestratorThreadPrompt { Role = "implementation", Purpose = "First prompt — paste into the loopless implementation receiver.", Prompt = RolePrompt("implementation", implementerAgent, implementationPath) },
             new OrchestratorThreadPrompt { Role = "review", Purpose = "First prompt — paste into the loopless review receiver.", Prompt = RolePrompt("review", reviewerAgent, reviewPath) },
         };
+
+        // G570 third repair: the setup-ready OBJECT is mode-specific, not a
+        // token-replaced agmsg object. Under herdr-only it emits no agmsg-only
+        // fields at all — no commands array, no agmsg-shaped role prompts, no
+        // agmsg validation steps — and its headline is pointer-only. A
+        // consumer reading fields must not have to know that some values are
+        // stand-ins; the fields simply are not there.
+        if (herdrOnly)
+        {
+            return new OrchestratorSetupIntake
+            {
+                Status = IntakeSetupReady,
+                Headline =
+                    "setup-ready (herdr-only) — the registration, delivery-configuration and role-prompt steps of "
+                    + "this intake are agmsg-only and do not apply. Their herdr-only counterparts ship in G571.",
+                MissingFields = Array.Empty<string>(),
+                Inputs = inputs,
+                AgmsgCommands = null,
+                RolePrompts = null,
+                FirstValidation = null,
+                LooplessReceiverNote = LooplessReceiverNote,
+            };
+        }
 
         return new OrchestratorSetupIntake
         {

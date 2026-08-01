@@ -168,6 +168,20 @@ internal static class SessionLayerModeStore
         {
             var state = JsonSerializer.Deserialize<SessionLayerModeState>(File.ReadAllText(path), Options)
                 ?? throw new InvalidOperationException("session-layer mode state deserialized to null.");
+            // G570 third repair: the ENVELOPE is command-produced state too.
+            // Validation stopped at entries, so changing only `schema_version`
+            // to something the writer never emits left the record accepted and
+            // still routing — a command-impossible record that changed
+            // behaviour. The writer emits exactly one schema version; anything
+            // else did not come from `set --write`.
+            if (!string.Equals(state.SchemaVersion, SchemaVersion, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"session-layer mode state at `{path}` declares schema_version '{state.SchemaVersion}', but "
+                    + $"`session-layer set --write` only ever writes '{SchemaVersion}'. The record was not produced "
+                    + "by the command, so it is refused rather than trusted.");
+            }
+
             foreach (var entry in state.Entries)
             {
                 Validate(entry, path);

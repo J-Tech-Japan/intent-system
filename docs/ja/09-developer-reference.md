@@ -682,7 +682,7 @@ orchestrator でも）が「transition は不要」を actionable な次コマ�
   wake contract、publish 権限、design↔orchestrator double-check ルール、依存計画、
   エスカレーション。これらはモデルの性質であり、transport では変わりません。
 
-**適用範囲はセクション単位で宣言し、4 値です**(design 裁定、host main `fb1913c8`):
+**適用範囲は、両描画の識別子を 1 行に持つ単一の表でセクション単位に宣言し、4 値です**(design 裁定、host main `fb1913c8`):
 `agmsg-only` / `herdr-only` / `mode-independent` /
 `mode-independent-with-transport-mechanics`。renderer は記録されたモードから
 **セクション単位で**選択します。markdown と JSON の双方で行うため、フィールド利用者と
@@ -706,9 +706,12 @@ agmsg に言及しているという理由だけで timer-loop の canon を削�
 セクションの**主題**の性質なので、`SessionLayerSections` で 1 度だけ宣言し、レビュー可能に
 しています。
 
-setup intake がモード対応なのも同じ理由です。agmsg team 名と delivery mode は agmsg 固有の
-入力なので、herdr-only のセットアップが「その transport に概念すら存在しない項目が足りない」
-と言われることはありません。
+setup intake は「トークン置換」ではなく**モード固有**です。herdr-only ではオブジェクトに
+`agmsg_commands` も agmsg 形状の `role_prompts` も `team` / `delivery_mode` 入力も**存在せず**、
+headline も登録手順を指示しません。両モードでバイト同一の**記述的**な agmsg 内容(モデルの
+仕組みや経緯)には、明示的な「agmsg 例」ラベルを直前に付し、読者が読んだその場で「例示」と
+「指示」を区別できるようにしています。順序付きリスト内で置換されたステップは**自身の番号を
+保持**するので、playbook が 1, 2, 3, 5 と読めることはありません。
 
 **fail-closed な state。** **存在するが不正な**記録は「不在」ではありません。壊れた
 ファイル、未知のモード、あるいは現在のモードが自身の transition trail と食い違う記録

@@ -377,6 +377,145 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// G570 third repair: the cross-render guards. Written from the surfaces
+    /// the review named and the phrases it found leaking — not from any
+    /// production list — so they can still fail if the declarations drift.
+    /// </summary>
+    [Fact]
+    public void UnderHerdrOnly_TheSetupObjectIsModeSpecific_NotTokenReplaced_G570()
+    {
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        var intake = workspace.RenderSetupReadyJson().GetProperty("setup_intake");
+
+        Assert.Equal("setup-ready", intake.GetProperty("status").GetString());
+        // No agmsg-only FIELDS at all — not fields holding pointer values.
+        Assert.False(intake.TryGetProperty("agmsg_commands", out _), "herdr-only setup still carries agmsg_commands");
+        Assert.False(intake.TryGetProperty("role_prompts", out _), "herdr-only setup still carries role_prompts");
+
+        var inputs = intake.GetProperty("inputs");
+        Assert.False(inputs.TryGetProperty("team", out _), "herdr-only setup still carries the agmsg team input");
+        Assert.False(inputs.TryGetProperty("delivery_mode", out _), "herdr-only setup still carries delivery_mode");
+
+        // And the headline does not instruct an agmsg registration.
+        var headline = intake.GetProperty("headline").GetString()!;
+        Assert.DoesNotContain("agmsg commands", headline, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("register the three roles", headline, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void UnderAgmsg_TheSetupObjectKeepsItsAgmsgFields_G570()
+    {
+        var intake = workspace.RenderSetupReadyJson().GetProperty("setup_intake");
+
+        Assert.True(intake.TryGetProperty("agmsg_commands", out _));
+        Assert.True(intake.TryGetProperty("role_prompts", out _));
+        Assert.True(intake.GetProperty("inputs").TryGetProperty("team", out _));
+        Assert.True(intake.GetProperty("inputs").TryGetProperty("delivery_mode", out _));
+    }
+
+    /// <summary>
+    /// Imperative prose the review found surviving. None of these carries a
+    /// script name, so a mechanic list alone would not have caught them.
+    /// </summary>
+    [Theory]
+    [InlineData("delegate implementation over agmsg")]
+    [InlineData("over agmsg")]
+    [InlineData("via agmsg")]
+    [InlineData("through agmsg")]
+    public void UnderHerdrOnly_NoImperativeAgmsgProseSurvivesOutsideLabelledContext_G570(string phrase)
+    {
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        var body = WithoutDescriptiveContext(WithoutSessionLayerExemptions(workspace.RenderOrchestratorGuide()));
+
+        Assert.DoesNotContain(phrase, body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void UnderHerdrOnly_DescriptiveAgmsgContentIsExplicitlyLabelled_G570()
+    {
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        var output = workspace.RenderOrchestratorGuide();
+
+        Assert.Contains(SessionLayerSections.DescriptiveAgmsgContextLabel, output, StringComparison.Ordinal);
+        // The label sits immediately under the heading it qualifies, so a
+        // reader meets it before the description.
+        var heading = output.IndexOf("## Mode separation", StringComparison.Ordinal);
+        var label = output.IndexOf(SessionLayerSections.DescriptiveAgmsgContextLabel, StringComparison.Ordinal);
+        Assert.True(label > heading && label - heading < 200, "the agmsg-example label must directly follow its heading");
+    }
+
+    [Fact]
+    public void UnderHerdrOnly_TheAuthorityCanonSurvivesInBothRenderings_G570()
+    {
+        // The over-stripping case the review named: this sentence was being
+        // destroyed because it mentioned agmsg.
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+
+        Assert.Contains(
+            "intent-cli and GitHub remain authoritative",
+            workspace.RenderOrchestratorGuide(),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "intent-cli and GitHub remain authoritative",
+            workspace.RenderOrchestratorGuideJson().GetProperty("summary").GetString()!,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheSectionTableClassifiesMarkdownAndJsonIdentically_G570()
+    {
+        // The asymmetry the review found (end-of-wake mixed in JSON but
+        // mode-independent in markdown; codex_bridge_guidance JSON-only) is
+        // structurally impossible now: both renderings derive from one row.
+        foreach (var declaration in SessionLayerSections.Declarations)
+        {
+            Assert.False(
+                string.IsNullOrWhiteSpace(declaration.Heading),
+                "every declaration names its markdown heading");
+        }
+
+        Assert.Equal(
+            SessionLayerSections.Declarations.Count,
+            SessionLayerSections.Declarations.Select(d => d.Heading).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(
+            SessionLayerSections.Declarations.Count(d => d.JsonProperty is not null),
+            SessionLayerSections.Declarations.Where(d => d.JsonProperty is not null)
+                .Select(d => d.JsonProperty).Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void UnderHerdrOnly_OrderedListsKeepTheirNumbering_G570()
+    {
+        // A replaced step must stay a numbered step, or a playbook reads
+        // 1, 2, 3, 5 and the reader cannot tell missing from inapplicable.
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        var output = workspace.RenderOrchestratorGuide();
+
+        Assert.Matches(@"(?m)^\d+\. \(herdr-only:", output);
+    }
+
+    private static string WithoutDescriptiveContext(string markdown)
+    {
+        var lines = markdown.Split('\n');
+        var kept = new List<string>(lines.Length);
+        var inDescriptive = false;
+        foreach (var line in lines)
+        {
+            if (line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                inDescriptive = SessionLayerSections.DescriptiveAgmsgContextHeadings.Contains(line, StringComparer.Ordinal);
+            }
+
+            if (!inDescriptive)
+            {
+                kept.Add(line);
+            }
+        }
+
+        return string.Join('\n', kept);
+    }
+
     // ------------------------------------------------- fail-closed mode state
 
     /// <summary>
@@ -389,6 +528,35 @@ public sealed class SessionLayerModeG570Tests : IDisposable
     public static TheoryData<string, string> InvalidRecords() => new()
     {
         { "malformed json", "{ not json" },
+        {
+            // G570 third repair: a VALID mode with an empty trail, so this case
+            // exercises the empty-trail rule itself. The previous fixture
+            // carried an unknown mode and therefore failed for that reason
+            // first — it never reached the trail check it was named for.
+            "valid mode, empty trail",
+            """
+            { "schema_version": "1", "entries": [ { "domain": "intent-cli", "mode": "herdr-only",
+              "updated_at": "2026-08-01T12:00:00+00:00", "transitions": [] } ] }
+            """
+        },
+        {
+            "valid mode, invalid initial transition",
+            """
+            { "schema_version": "1", "entries": [ { "domain": "intent-cli", "mode": "herdr-only",
+              "updated_at": "2026-08-01T12:00:00+00:00", "transitions": [
+                { "from": "herdr-only", "to": "herdr-only", "at": "2026-08-01T12:00:00+00:00" } ] } ] }
+            """
+        },
+        {
+            // The envelope, not just the entries: a schema version the writer
+            // never emits is command-impossible state.
+            "schema version the writer never emits",
+            """
+            { "schema_version": "not-command-produced", "entries": [ { "domain": "intent-cli", "mode": "herdr-only",
+              "updated_at": "2026-08-01T12:00:00+00:00", "transitions": [
+                { "from": "agmsg", "to": "herdr-only", "at": "2026-08-01T12:00:00+00:00" } ] } ] }
+            """
+        },
         {
             "unknown mode",
             """

@@ -20,141 +20,99 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal static class SessionLayerSections
 {
-    /// <summary>
-    /// Sections that exist only to operate agmsg. Under herdr-only they are
-    /// REPLACED — not annotated — by a pointer to the G571 herdr-only operating
-    /// sections. Every one of these is an instruction set for a transport the
-    /// team is not running.
-    /// </summary>
-    public static readonly IReadOnlyList<string> AgmsgOnlyHeadings =
-    [
-        "## Terminal-workspace provisioning (G549)",
-        "## Setup (starting orchestrator mode)",
-        "## Setup intake form",
-        "## Preflight (all three cwds)",
-        "## Receiver readiness",
-        "## Troubleshooting",
-        "## Monitor recovery",
-        "## Monitor tool vs delivery-mode (G511)",
-        "## Codex monitor (beta) failure modes (G521)",
-        "## Design / human receiver (optional)",
-        "## Design-thread watchdog (recommended safety net)",
-        "## Orchestrator-side long-interval automation (alternative safety net)",
-        "## Thread prompts",
-        "## agmsg reply contract",
-    ];
+    /// <summary>G570 third repair: the four applicability values, named.</summary>
+    internal enum Applicability
+    {
+        /// <summary>Exists only to operate agmsg; replaced whole under herdr-only.</summary>
+        AgmsgOnly,
+
+        /// <summary>Applies unchanged in both modes.</summary>
+        ModeIndependent,
+
+        /// <summary>
+        /// Canon that binds in both modes but is expressed through an agmsg
+        /// mechanic: kept, with mechanic-bearing sentences pointed away.
+        /// </summary>
+        ModeIndependentWithTransportMechanics,
+    }
 
     /// <summary>
-    /// The JSON properties those sections serialize to. Removed wholesale under
-    /// herdr-only, so a consumer reading fields sees the same selection a reader
-    /// of the prose does — the two renderings cannot disagree about what
-    /// applies.
-    /// </summary>
-    public static readonly IReadOnlyList<string> AgmsgOnlyJsonProperties =
-    [
-        "terminal_workspace_provisioning",
-        "setup",
-        "intake_form",
-        "preflight",
-        "receiver_readiness",
-        "troubleshooting",
-        "monitor_recovery",
-        "monitor_tool_distinction",
-        "codex_monitor_beta",
-        "design_receiver",
-        "design_watchdog",
-        "orchestrator_automation_alternative",
-        "threads",
-        "agmsg_reply_contract",
-        "codex_bridge_guidance",
-    ];
-
-    /// <summary>
-    /// Mode-independent sections, declared explicitly rather than left as
-    /// "everything else". Naming them is what makes the OVER-stripping failure
-    /// testable: a guard can assert each one survives under herdr-only, and it
-    /// does so without consulting any list the production selection uses to
-    /// decide what to remove.
-    /// </summary>
-    public static readonly IReadOnlyList<string> ModeIndependentHeadings =
-    [
-        "## Session layer",
-        "## Mode separation",
-        "## Role boundary (design authors; orchestrator coordinates)",
-        "## Design-thread workspace supervision (G550)",
-        "## Cross-project isolation on a shared machine (G555)",
-        "## Design-decision holds and bounded authority (G552)",
-        "## Domain routing — single-domain vs multi-domain",
-        "## Scheduled orchestrator cadence",
-        "## CI wait state",
-        "## Draft PR reviewability",
-        "## Next-slice publication",
-        "## End-of-wake check (G523/G524)",
-        "## Dispatch verification (G524)",
-        "## Dependency planning",
-        "## Stale-thread health check",
-        "## Design-thread escalation filter",
-        "## Design handoff (start / resume)",
-        "## Design traffic-controller playbook",
-        "## Managed worktree cleanup",
-        "## Review delegation — managed worktrees and design alignment",
-        "## Orchestrator first wake",
-        "## Safety boundaries",
-        "## Detailed guide commands",
-        "## Setup intake",
-    ];
-
-    /// <summary>
-    /// The fourth applicability value from design's ruling (host main
-    /// `fb1913c8`): MODE-INDEPENDENT-WITH-TRANSPORT-MECHANICS. These sections
-    /// carry canon that binds in both modes — supervision, isolation, wake
-    /// cadence, dispatch verification, safety boundaries — expressed through an
-    /// agmsg mechanic. Dropping the section would delete canon; keeping it
-    /// verbatim would hand a herdr-only reader an agmsg instruction.
+    /// One declaration per section, carrying BOTH renderings' identity.
     ///
-    /// So under herdr-only the section is KEPT and only its
-    /// mechanic-bearing sentences become POINTER-ONLY text. Per the ruling,
-    /// pointer-only text is G570 routing metadata; naming a concrete herdr
-    /// procedure would be G571 content and is forbidden here — which is exactly
-    /// why the replacement says what does not apply and where the counterpart
-    /// ships, and never what to run instead.
+    /// G570 third repair: markdown and JSON classifications used to live in
+    /// separate lists, and they drifted — end-of-wake was mixed in JSON but
+    /// mode-independent in markdown, and codex_bridge_guidance was dropped in
+    /// JSON with no markdown counterpart. A reader and a field consumer
+    /// disagreeing about what applies is the same defect as leaking an
+    /// instruction, so the two renderings are now derived from ONE row and
+    /// cannot diverge.
     /// </summary>
-    public static readonly IReadOnlyList<string> MixedHeadings =
+    internal sealed record SectionDeclaration(string Heading, string? JsonProperty, Applicability Applies);
+
+    public static readonly IReadOnlyList<SectionDeclaration> Declarations =
     [
-        "## Setup intake",
-        "## Design-thread workspace supervision (G550)",
-        "## Cross-project isolation on a shared machine (G555)",
-        "## Scheduled orchestrator cadence",
-        "## Dispatch verification (G524)",
-        "## Design handoff (start / resume)",
-        "## Design traffic-controller playbook",
-        "## Review delegation — managed worktrees and design alignment",
-        "## Orchestrator first wake",
-        "## Safety boundaries",
-        "## Session-layer switch checklist (herdr-only)",
+        // agmsg-only — replaced whole.
+        new("## Terminal-workspace provisioning (G549)", "terminal_workspace_provisioning", Applicability.AgmsgOnly),
+        new("## Setup (starting orchestrator mode)", "setup", Applicability.AgmsgOnly),
+        new("## Setup intake form", "intake_form", Applicability.AgmsgOnly),
+        new("## Preflight (all three cwds)", "preflight", Applicability.AgmsgOnly),
+        new("## Receiver readiness", "receiver_readiness", Applicability.AgmsgOnly),
+        new("## Troubleshooting", "troubleshooting", Applicability.AgmsgOnly),
+        new("## Monitor recovery", "monitor_recovery", Applicability.AgmsgOnly),
+        new("## Monitor tool vs delivery-mode (G511)", "monitor_tool_distinction", Applicability.AgmsgOnly),
+        new("## Codex monitor (beta) failure modes (G521)", "codex_bridge_guidance", Applicability.AgmsgOnly),
+        new("## Design / human receiver (optional)", "design_receiver", Applicability.AgmsgOnly),
+        new("## Design-thread watchdog (recommended safety net)", "design_watchdog", Applicability.AgmsgOnly),
+        new("## Orchestrator-side long-interval automation (alternative safety net)", "orchestrator_automation_alternative", Applicability.AgmsgOnly),
+        new("## Thread prompts", "threads", Applicability.AgmsgOnly),
+        new("## agmsg reply contract", "agmsg_reply_contract", Applicability.AgmsgOnly),
+
+        // mode-independent with transport mechanics — kept, sentences pointed away.
+        new("## Setup intake", "setup_intake", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Design-thread workspace supervision (G550)", "design_workspace_supervision", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Cross-project isolation on a shared machine (G555)", "cross_project_isolation", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Design-decision holds and bounded authority (G552)", "design_decision_holds", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Scheduled orchestrator cadence", "scheduling", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Dispatch verification (G524)", "dispatch_verification", Applicability.ModeIndependentWithTransportMechanics),
+        new("## End-of-wake check (G523/G524)", "end_of_wake_check", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Stale-thread health check", "stale_thread_health_check", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Design-thread escalation filter", "design_thread_escalation", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Design handoff (start / resume)", "design_handoff", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Design traffic-controller playbook", "design_traffic_controller", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Managed worktree cleanup", "worktree_management", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Review delegation — managed worktrees and design alignment", "review_delegation_contract", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Orchestrator first wake", "orchestrator_first_wake", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Safety boundaries", "safety_boundaries", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Next-slice publication", "next_slice_publication", Applicability.ModeIndependentWithTransportMechanics),
+
+        // mode-independent — unchanged in both.
+        new("## Session layer", "session_layer", Applicability.ModeIndependent),
+        new("## Mode separation", "mode_separation", Applicability.ModeIndependent),
+        new("## Role boundary (design authors; orchestrator coordinates)", "role_boundary", Applicability.ModeIndependent),
+        new("## Domain routing — single-domain vs multi-domain", "domain_routing", Applicability.ModeIndependent),
+        new("## CI wait state", "ci_wait_state", Applicability.ModeIndependent),
+        new("## Draft PR reviewability", "draft_pr_reviewability", Applicability.ModeIndependent),
+        new("## Dependency planning", "dependency_planning", Applicability.ModeIndependent),
+        new("## Detailed guide commands", "detailed_guide_commands", Applicability.ModeIndependent),
     ];
 
-    /// <summary>
-    /// The same sections as JSON properties, for the field rendering.
-    /// </summary>
+    public static readonly IReadOnlyList<string> AgmsgOnlyHeadings =
+        Declarations.Where(d => d.Applies == Applicability.AgmsgOnly).Select(d => d.Heading).ToArray();
+
+    public static readonly IReadOnlyList<string> AgmsgOnlyJsonProperties =
+        Declarations.Where(d => d.Applies == Applicability.AgmsgOnly && d.JsonProperty is not null)
+            .Select(d => d.JsonProperty!).ToArray();
+
+    public static readonly IReadOnlyList<string> MixedHeadings =
+        Declarations.Where(d => d.Applies == Applicability.ModeIndependentWithTransportMechanics)
+            .Select(d => d.Heading).Append(ReplacementHeadingValue).ToArray();
+
     public static readonly IReadOnlyList<string> MixedJsonProperties =
-    [
-        "setup_intake",
-        "design_workspace_supervision",
-        "cross_project_isolation",
-        "scheduling",
-        "dispatch_verification",
-        "design_handoff",
-        "design_traffic_controller",
-        "review_delegation_contract",
-        "orchestrator_first_wake",
-        "worktree_management",
-        "design_decision_holds",
-        "design_thread_escalation",
-        "stale_thread_health_check",
-        "end_of_wake_check",
-        "safety_boundaries",
-    ];
+        Declarations.Where(d => d.Applies == Applicability.ModeIndependentWithTransportMechanics && d.JsonProperty is not null)
+            .Select(d => d.JsonProperty!).ToArray();
+
+    public static readonly IReadOnlyList<string> ModeIndependentHeadings =
+        Declarations.Where(d => d.Applies != Applicability.AgmsgOnly).Select(d => d.Heading).ToArray();
 
     /// <summary>
     /// Transport mechanics, used ONLY to find mechanic-bearing sentences INSIDE
@@ -192,7 +150,32 @@ internal static class SessionLayerSections
         "delivery mode",
         "delivery-mode",
         "AGMSG-DIRECTIVE",
+        // G570 third repair: imperative forms carry no script name but are
+        // instructions all the same — "delegate implementation over agmsg" told
+        // a herdr-only reader to use a transport the team does not run.
+        "over agmsg",
+        "via agmsg",
+        "through agmsg",
+        "using agmsg",
     ];
+
+    /// <summary>
+    /// G570 third repair: sections whose agmsg content is DESCRIPTIVE — the
+    /// model's history and mechanism, byte-identical in both modes — rather
+    /// than instructions. Design's ruling requires them to be preceded by an
+    /// explicit agmsg-example label under herdr-only, so a reader can tell
+    /// description from instruction at the point of reading rather than by
+    /// inference.
+    /// </summary>
+    public static readonly IReadOnlyList<string> DescriptiveAgmsgContextHeadings =
+    [
+        "## Mode separation",
+    ];
+
+    public const string DescriptiveAgmsgContextLabel =
+        "> **agmsg example — descriptive, not an instruction.** This section explains the model using the agmsg "
+        + "transport because that is the practiced one. In herdr-only the rule it states still binds; the agmsg "
+        + "mechanics named here are illustration, and the herdr-only operating steps ship in G571.";
 
     public static bool CarriesTransportMechanic(string value) =>
         TransportMechanics.Any(token => value.Contains(token, StringComparison.OrdinalIgnoreCase));
@@ -207,7 +190,9 @@ internal static class SessionLayerSections
         "(herdr-only: the session-layer step described here is agmsg-specific and does not apply; its herdr-only "
         + "counterpart ships in G571. The rule stated by this section still binds.)";
 
-    public const string ReplacementHeading = "## Session-layer switch checklist (herdr-only)";
+    private const string ReplacementHeadingValue = "## Session-layer switch checklist (herdr-only)";
+
+    public const string ReplacementHeading = ReplacementHeadingValue;
 
     public static string ReplacementSection(IReadOnlyList<string> replacedHeadings)
     {
