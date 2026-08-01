@@ -15,17 +15,20 @@ v0.7.1 covers exactly the five slices merged after `v0.7.0`: **G565**, **G566**,
 **G567**, **G568**, and **G569**.
 
 **Why patch, not minor.** The documented policy reserves a minor bump for a new
-command surface. This release ships none: every slice is a bugfix or a
-determinism fix, and no command, argument, or flag was removed or renamed.
+command surface, and this release **does add one**: G568 ships
+`intent-cli automation queue-dependency-reconcile`. It is still a patch, and the
+reason is what that command is rather than that it does not exist.
 
-The one entry that deserves an explicit word is G568's
-`automation queue-dependency-reconcile`. It is a **repair utility that completes
-a bugfix**, not a new workflow capability: it exists solely to correct queue
-items that the same slice's fix stops producing, it participates in no
-workflow phase, nothing invokes it automatically, and once historical items are
-reconciled it has no recurring role. A repair path for data a bug already wrote
-is part of fixing that bug — the minor reservation is for surfaces that add
-something the workflow can now *do*, and this adds nothing to the workflow.
+It is a **narrowly bounded repair utility that completes a bugfix**, not a
+recurring workflow capability: it exists solely to correct queue items that the
+same slice's fix stops producing, it participates in no workflow phase, nothing
+invokes it automatically, and once historical items are reconciled it has no
+further role. A repair path for data a bug already wrote is part of fixing that
+bug — the minor reservation is for surfaces that add something the workflow can
+now *do* on an ongoing basis, and this adds nothing to the workflow.
+
+Everything else is a bugfix or a determinism fix, and no command, argument, or
+flag was removed or renamed.
 
 Three themes run through the batch.
 
@@ -92,8 +95,10 @@ automatically.
 
 ### CI evidence you can trust (G566, G569)
 
-Both slices are test-only, and both protect the same thing: the exact-head
-"CI green" evidence the review and merge gates treat as canonical.
+Neither slice changes what the CLI does, and both protect the same thing: the
+exact-head "CI green" evidence the review and merge gates treat as canonical.
+G566 is test-code only; G569 also adjusts a production seam, with runtime
+behaviour deliberately unchanged (below).
 
 **A random red is worse than a red (G569).** One full-suite run failed, two
 reruns passed, an isolated run passed — the signature of an interleaving race.
@@ -152,9 +157,13 @@ and in every case the new outcome is the one the other surfaces already gave:
   That is the intended gate doing its job; use
   `automation queue-dependency-reconcile` to bring already-seeded items in line.
 
-**Internal-only changes** — no observable difference for CLI users: G566 and
-G569 are test-code changes, and G568's parser plumbing is byte-compatible for
-packets that already seeded correctly.
+**Internal changes with no observable difference for CLI users.** G566 is
+test-code only. G569 is an internal and test-determinism **seam** change: it
+touches production source (`IssuePrepareCommand`, and a doc comment in
+`TaskingPublishReviewedBridgeCommand`) to replace a process-global clock with a
+per-call one, and runtime behaviour is intentionally byte-identical because the
+production path passes exactly what the removed static defaulted to. G568's
+parser plumbing is byte-compatible for packets that already seeded correctly.
 
 ## Release-readiness gate (G572)
 
