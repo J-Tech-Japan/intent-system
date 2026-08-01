@@ -2323,54 +2323,50 @@ For the same reason the version-flow example above uses placeholders rather than
 a worked version pair: a second copy of the current versions is a second thing
 to keep in sync, and it goes stale on exactly the roll nobody is watching.
 
-### Next release readiness (v0.7.0)
+### Next release readiness (v0.7.1)
 
-**`v0.6.2` shipped** (GitHub Release + NuGet). The release being prepared is
-**`v0.7.0`**, a **minor** bump covering G559 (cross-platform `skill` command
-surface), G560 (version-agnostic current-state guards and the completed roll
-rule), and G561 (pre-publish unblock and clarify-open scaffold compatibility).
+**`v0.7.0` shipped** (GitHub Release + NuGet) and the version policy was rolled
+to the `0.7.1` development line. The v0.7.0 batch was a **minor** bump covering G559 (the cross-platform
+`skill` command surface), G560 (version-agnostic current-state guards and the
+completed roll rule), G561 (pre-publish unblock and clarify-open scaffold
+compatibility), G563 (pre-release guide coherence), and G564 (intent-tree
+co-evolution enforcement). Minor stays reserved for new command surfaces and
+broad behavior changes.
 
-Minor rather than patch because the policy reserves a minor bump for a **new
-command surface**, and `intent-cli skill list | install | diff` is a new
-top-level command group. That decides it on its own; the other two slices would
-each have been a patch. Nothing is removed or renamed, so it is not a major.
+The repository is now on the in-development **`0.7.1`** `nextVersion`. What
+ships in `v0.7.1` is not decided here: the next release-prep packet selects the
+merged slices, authors the real
+[release-notes-v0.7.1.md](release-notes-v0.7.1.md) content over the DRAFT
+stubs, and states the bump rationale. Until then the notes remain stubs and no
+`v0.7.1` GitHub Release may be published.
 
-Note that the `0.6.3` line was **retargeted, not released**: `0.6.3` will never
-be cut, and its DRAFT notes stubs were removed with the retarget so no stale
-notes file can be mistaken for a pending release. The real
-[release-notes-v0.7.0.md](release-notes-v0.7.0.md) content is authored and no
-longer a draft, so the stub contract no longer blocks publication.
-
-**Release-readiness verification (run before merging the `v0.7.0` version
+**Release-readiness verification (run before merging the `v0.7.1` version
 bump):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.6.2 (published), nextVersion 0.7.0 (to release)
+cat eng/version.json   # stableVersion 0.7.0 (published), nextVersion 0.7.1 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.7.0-<sha>-G56x   (NOT a stale literal)
+#   expected shape: intent-cli 0.7.1-<sha>-G56x   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.7.0.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.7.1.nupkg
 
 # 4. Confirm package metadata (id / command / license / project URL).
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
-
-# 5. Skill surface smoke (the headline of this release).
-dotnet run --project src/IntentSystem.Cli -c Release --no-build -- skill list
 ```
 
 After the version-bump merge lands on `main`, a maintainer/operator (or external
-release automation) creates and publishes the GitHub Release for `v0.7.0`;
+release automation) creates and publishes the GitHub Release for `v0.7.1`;
 publishing it triggers `release.yml` (`on: release: published`) to build and
 publish the NuGet package and the per-platform binary artifacts. **Then roll
-`eng/version.json` immediately** — `stableVersion → 0.7.0`, `nextVersion →
-0.7.1` — carrying, per **steps 4–6** of the
+`eng/version.json` immediately** — `stableVersion → 0.7.1`, `nextVersion →
+0.7.2` — carrying, per **steps 4–6** of the
 [post-release version roll](#post-release-version-roll-g554--required-immediate):
 the **DRAFT note stubs in the same commit** (step 4), the **"Next release
 readiness" section refreshed to the new line in both language mirrors** (step
