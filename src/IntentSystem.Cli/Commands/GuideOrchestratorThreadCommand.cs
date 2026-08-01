@@ -372,10 +372,10 @@ internal static class GuideOrchestratorThreadCommand
             }
         }
 
-        node["herdr_only_descriptive_agmsg_context"] = descriptiveContext;
-        node["herdr_only_replaced_sections"] = new System.Text.Json.Nodes.JsonArray(
+        node[SessionLayerSections.DescriptiveContextProperty] = descriptiveContext;
+        node[SessionLayerSections.ReplacedSectionsProperty] = new System.Text.Json.Nodes.JsonArray(
             replaced.Select(name => (System.Text.Json.Nodes.JsonNode?)System.Text.Json.Nodes.JsonValue.Create(name)).ToArray());
-        node["herdr_only_replacement_note"] =
+        node[SessionLayerSections.ReplacementNoteProperty] =
             "Removed because this team runs the herdr-only session layer: these sections operate agmsg. Their "
             + "herdr-only counterparts ship in G571. Every remaining field is mode-independent and applies unchanged.";
 

@@ -234,7 +234,10 @@ public sealed class SessionLayerModeG570Tests : IDisposable
     public void UnderHerdrOnly_NoOperativeAgmsgInstructionSurvivesInMarkdown_G570(string instruction)
     {
         Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
-        var body = WithoutSessionLayerExemptions(workspace.RenderOrchestratorGuide());
+        // Outside labelled descriptive context: inside it the ruling requires
+        // mechanism/history to stay byte-identical, and the label is what makes
+        // it readable as description rather than instruction.
+        var body = WithoutDescriptiveContext(WithoutSessionLayerExemptions(workspace.RenderOrchestratorGuide()));
 
         Assert.DoesNotContain(instruction, body, StringComparison.OrdinalIgnoreCase);
     }
@@ -253,7 +256,17 @@ public sealed class SessionLayerModeG570Tests : IDisposable
 
         using var document = JsonDocument.Parse(writer.ToString());
         var values = new List<string>();
-        CollectStringValues(document.RootElement.Clone(), path: string.Empty, values);
+        foreach (var property in document.RootElement.Clone().EnumerateObject())
+        {
+            // Same exemption as markdown: labelled descriptive properties keep
+            // their mechanism/history byte-identical by ruling.
+            if (SessionLayerSections.DescriptiveAgmsgContextJsonProperties.Contains(property.Name, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
+            CollectStringValues(property.Value, path: property.Name, values);
+        }
 
         Assert.DoesNotContain(instruction, string.Join("\n", values), StringComparison.OrdinalIgnoreCase);
     }
@@ -504,17 +517,100 @@ public sealed class SessionLayerModeG570Tests : IDisposable
                 workspace.Render(["guide", "orchestrator-thread", "--domain", ModeWorkspace.Domain, "--target-repo", ModeWorkspace.Repo, "--agent", "claude", "--format", "json"]));
             var renderedProperties = document.RootElement.EnumerateObject().Select(p => p.Name).ToArray();
 
+            // G570 fifth repair: no exemptions. Every rendered property,
+            // synthetic ones included, must have a declaration row — an
+            // exemption is precisely how a surface escapes the table.
             var undeclaredProperties = renderedProperties
                 .Where(name => !declaredProperties.Contains(name))
-                // The descriptive-context map is itself herdr-only routing
-                // metadata about other declared properties.
-                .Where(name => name != "herdr_only_descriptive_agmsg_context")
                 .ToArray();
             Assert.True(
                 undeclaredProperties.Length == 0,
                 $"[{mode}] rendered JSON properties that no declaration row covers: "
                 + string.Join(", ", undeclaredProperties));
         }
+    }
+
+    /// <summary>
+    /// G570 fifth repair: a row that names nothing real, or names the same
+    /// surface twice, is as bad as a surface with no row — `session_layer` was
+    /// declared twice and the synthetic rows were decorative. The table is
+    /// authoritative only if every row is consumed exactly once.
+    /// </summary>
+    [Fact]
+    public void EveryDeclarationRowIsUniqueAndConsumed_G570()
+    {
+        var headings = SessionLayerSections.Declarations.Select(d => d.Heading).ToArray();
+        Assert.Equal(headings.Length, headings.Distinct(StringComparer.Ordinal).Count());
+
+        var properties = SessionLayerSections.Declarations
+            .Where(d => d.JsonProperty is not null).Select(d => d.JsonProperty!).ToArray();
+        var duplicated = properties.GroupBy(p => p, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1).Select(g => g.Key).ToArray();
+        Assert.True(duplicated.Length == 0, "declaration rows duplicate a JSON property: " + string.Join(", ", duplicated));
+
+        // Every declared surface is actually rendered in at least one mode.
+        var rendered = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var mode in new[] { SessionLayerMode.Agmsg, SessionLayerMode.HerdrOnly })
+        {
+            Assert.Equal(0, workspace.RunSet(mode, write: true).ExitCode);
+            using var document = JsonDocument.Parse(workspace.Render(
+                ["guide", "orchestrator-thread", "--domain", ModeWorkspace.Domain, "--target-repo", ModeWorkspace.Repo, "--agent", "claude", "--format", "json"]));
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                rendered.Add(property.Name);
+            }
+
+            foreach (var heading in OutsideFencedBlocks(workspace.RenderOrchestratorGuide())
+                         .Where(line => line.StartsWith("#", StringComparison.Ordinal)))
+            {
+                rendered.Add(heading.TrimEnd('\r'));
+            }
+        }
+
+        var unconsumed = SessionLayerSections.Declarations
+            .Where(d => (d.JsonProperty is null || !rendered.Contains(d.JsonProperty))
+                && !rendered.Contains(d.Heading))
+            .Select(d => d.Heading)
+            .ToArray();
+        Assert.True(unconsumed.Length == 0, "declaration rows that name no rendered surface: " + string.Join(", ", unconsumed));
+    }
+
+    /// <summary>
+    /// G570 fifth repair: descriptive agmsg content is mechanism/history — a
+    /// shared substrate identity, not an instruction — so inside its explicit
+    /// label it stays BYTE-IDENTICAL. The isolation table's "agmsg run
+    /// directory" row was being over-stripped.
+    /// </summary>
+    [Fact]
+    public void UnderHerdrOnly_LabelledDescriptiveTextIsByteIdentical_G570()
+    {
+        var underAgmsg = workspace.RenderOrchestratorGuide();
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        var underHerdr = workspace.RenderOrchestratorGuide();
+
+        foreach (var heading in SessionLayerSections.DescriptiveAgmsgContextHeadings
+                     .Where(h => h.StartsWith("## ", StringComparison.Ordinal)))
+        {
+            var agmsgSection = SectionText(underAgmsg, heading);
+            var herdrSection = SectionText(underHerdr, heading);
+
+            // The only permitted difference is the added example label.
+            var herdrWithoutLabel = string.Join(
+                '\n',
+                herdrSection.Split('\n').Where(line => line != SessionLayerSections.DescriptiveAgmsgContextLabel && line.Length > 0));
+            var agmsgCompact = string.Join('\n', agmsgSection.Split('\n').Where(line => line.Length > 0));
+
+            Assert.Equal(agmsgCompact, herdrWithoutLabel);
+        }
+    }
+
+    private static string SectionText(string markdown, string heading)
+    {
+        var lines = markdown.Split('\n');
+        var start = Array.FindIndex(lines, line => line.TrimEnd('\r') == heading);
+        Assert.True(start >= 0, $"missing section: {heading}");
+        var end = Array.FindIndex(lines, start + 1, line => line.StartsWith("## ", StringComparison.Ordinal));
+        return string.Join('\n', lines[(start + 1)..(end < 0 ? lines.Length : end)]);
     }
 
     [Fact]
@@ -683,6 +779,19 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             { "schema_version": "1", "entries": [ { "domain": "intent-cli", "mode": "herdr-only",
               "updated_at": "2026-08-02T09:00:00+00:00", "transitions": [
                 { "from": "agmsg", "to": "herdr-only", "at": "2026-08-01T12:00:00+00:00" } ] } ] }
+            """
+        },
+        {
+            // G570 fifth repair: `set` is a no-op when the mode is already
+            // recorded, so it never appends a same-mode step to an existing
+            // record — the reviewer's reproduction routed herdr-only and then
+            // let a later `set` append to it.
+            "same-mode transition after creation",
+            """
+            { "schema_version": "1", "entries": [ { "domain": "intent-cli", "mode": "herdr-only",
+              "updated_at": "2026-08-01T13:00:00+00:00", "transitions": [
+                { "from": "agmsg", "to": "herdr-only", "at": "2026-08-01T12:00:00+00:00" },
+                { "from": "herdr-only", "to": "herdr-only", "at": "2026-08-01T13:00:00+00:00" } ] } ] }
             """
         },
         {

@@ -55,7 +55,21 @@ internal static class SessionLayerSections
     /// instruction, so the two renderings are now derived from ONE row and
     /// cannot diverge.
     /// </summary>
-    internal sealed record SectionDeclaration(string Heading, string? JsonProperty, Applicability Applies);
+    /// <summary>
+    /// G570 fifth repair: <paramref name="Descriptive"/> is a property of the
+    /// ROW, not a parallel list. A descriptive section's agmsg content is
+    /// mechanism/history — a shared substrate identity such as "agmsg run
+    /// directory" — so it stays BYTE-IDENTICAL inside its explicit example
+    /// label; only non-descriptive mixed sections have operative sentences
+    /// pointed away. Keeping the two facts on one row is what stops them
+    /// disagreeing, which is how the isolation table's descriptive identity got
+    /// over-stripped.
+    /// </summary>
+    internal sealed record SectionDeclaration(
+        string Heading,
+        string? JsonProperty,
+        Applicability Applies,
+        bool Descriptive = false);
 
     public static readonly IReadOnlyList<SectionDeclaration> Declarations =
     [
@@ -77,11 +91,11 @@ internal static class SessionLayerSections
 
         // mode-independent with transport mechanics — kept, sentences pointed away.
         new("## Setup intake", "setup_intake", Applicability.ModeIndependentWithTransportMechanics),
-        new("## Design-thread workspace supervision (G550)", "design_workspace_supervision", Applicability.ModeIndependentWithTransportMechanics),
-        new("## Cross-project isolation on a shared machine (G555)", "cross_project_isolation", Applicability.ModeIndependentWithTransportMechanics),
-        new("## Design-decision holds and bounded authority (G552)", "design_decision_holds", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Design-thread workspace supervision (G550)", "design_workspace_supervision", Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
+        new("## Cross-project isolation on a shared machine (G555)", "cross_project_isolation", Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
+        new("## Design-decision holds and bounded authority (G552)", "design_decision_holds", Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
         new("## Scheduled orchestrator cadence", "scheduling", Applicability.ModeIndependentWithTransportMechanics),
-        new("## Dispatch verification (G524)", "dispatch_verification", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Dispatch verification (G524)", "dispatch_verification", Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
         new("## End-of-wake check (G523/G524)", "end_of_wake_check", Applicability.ModeIndependent),
         new("## Stale-thread health check", "stale_thread_health_check", Applicability.ModeIndependent),
         new("## Design-thread escalation filter", "design_thread_escalation", Applicability.ModeIndependent),
@@ -90,21 +104,21 @@ internal static class SessionLayerSections
         new("## Managed worktree cleanup", "worktree_management", Applicability.ModeIndependentWithTransportMechanics),
         new("## Review delegation — managed worktrees and design alignment", "review_delegation_contract", Applicability.ModeIndependentWithTransportMechanics),
         new("## Orchestrator first wake", "orchestrator_first_wake", Applicability.ModeIndependentWithTransportMechanics),
-        new("## Safety boundaries", "safety_boundaries", Applicability.ModeIndependentWithTransportMechanics),
+        new("## Safety boundaries", "safety_boundaries", Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
         new("## Next-slice publication", "next_slice_publication", Applicability.ModeIndependentWithTransportMechanics),
 
         // G570 fourth repair: surfaces the renderers produce OUTSIDE the
         // section builder were undeclared, so "one row drives every surface"
         // was not true of them. The document title and summary are declared
         // here, as is the synthetic herdr-only metadata.
-        new("# Guide — orchestrator thread", "summary", Applicability.ModeIndependentWithTransportMechanics),
+        new("# Guide — orchestrator thread", "summary", Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
         new(ReplacementHeadingValue, "herdr_only_replaced_sections", Applicability.HerdrOnly),
         new("(json) herdr-only replacement note", "herdr_only_replacement_note", Applicability.HerdrOnly),
-        new("(json) session-layer block", "session_layer", Applicability.ModeIndependent),
+        new("(json) herdr-only descriptive context", "herdr_only_descriptive_agmsg_context", Applicability.HerdrOnly),
 
         // mode-independent — unchanged in both.
         new("## Session layer", "session_layer", Applicability.ModeIndependent),
-        new("## Mode separation", "mode_separation", Applicability.ModeIndependent),
+        new("## Mode separation", "mode_separation", Applicability.ModeIndependent, Descriptive: true),
         new("## Role boundary (design authors; orchestrator coordinates)", "role_boundary", Applicability.ModeIndependent),
         new("## Domain routing — single-domain vs multi-domain", "domain_routing", Applicability.ModeIndependent),
         new("## CI wait state", "ci_wait_state", Applicability.ModeIndependent),
@@ -121,11 +135,12 @@ internal static class SessionLayerSections
             .Select(d => d.JsonProperty!).ToArray();
 
     public static readonly IReadOnlyList<string> MixedHeadings =
-        Declarations.Where(d => d.Applies == Applicability.ModeIndependentWithTransportMechanics)
+        Declarations.Where(d => d.Applies == Applicability.ModeIndependentWithTransportMechanics && !d.Descriptive)
             .Select(d => d.Heading).ToArray();
 
     public static readonly IReadOnlyList<string> MixedJsonProperties =
-        Declarations.Where(d => d.Applies == Applicability.ModeIndependentWithTransportMechanics && d.JsonProperty is not null)
+        Declarations.Where(d => d.Applies == Applicability.ModeIndependentWithTransportMechanics
+                && !d.Descriptive && d.JsonProperty is not null)
             .Select(d => d.JsonProperty!).ToArray();
 
     public static readonly IReadOnlyList<string> ModeIndependentHeadings =
@@ -185,14 +200,7 @@ internal static class SessionLayerSections
     /// inference.
     /// </summary>
     public static readonly IReadOnlyList<string> DescriptiveAgmsgContextHeadings =
-    [
-        "## Mode separation",
-        "## Design-thread workspace supervision (G550)",
-        "## Design-decision holds and bounded authority (G552)",
-        "## Cross-project isolation on a shared machine (G555)",
-        "## Dispatch verification (G524)",
-        "## Safety boundaries",
-    ];
+        Declarations.Where(d => d.Descriptive).Select(d => d.Heading).ToArray();
 
     /// <summary>
     /// The JSON properties those sections serialize to, so the field rendering
@@ -201,15 +209,7 @@ internal static class SessionLayerSections
     /// tell retained description from instruction.
     /// </summary>
     public static readonly IReadOnlyList<string> DescriptiveAgmsgContextJsonProperties =
-    [
-        "mode_separation",
-        "design_workspace_supervision",
-        "design_decision_holds",
-        "cross_project_isolation",
-        "dispatch_verification",
-        "safety_boundaries",
-        "summary",
-    ];
+        Declarations.Where(d => d.Descriptive && d.JsonProperty is not null).Select(d => d.JsonProperty!).ToArray();
 
     public const string DescriptiveAgmsgContextLabel =
         "> **agmsg example — descriptive, not an instruction.** This section explains the model using the agmsg "
@@ -232,6 +232,21 @@ internal static class SessionLayerSections
     private const string ReplacementHeadingValue = "## Session-layer switch checklist (herdr-only)";
 
     public const string ReplacementHeading = ReplacementHeadingValue;
+
+    /// <summary>
+    /// G570 fifth repair: the renderer reads these names from the table, so the
+    /// HerdrOnly rows are CONSUMED rather than decorative. A row and the
+    /// surface it names cannot drift apart if the surface is emitted under the
+    /// name the row carries.
+    /// </summary>
+    public static string ReplacedSectionsProperty =>
+        Declarations.Single(d => d.Heading == ReplacementHeadingValue).JsonProperty!;
+
+    public static string ReplacementNoteProperty =>
+        Declarations.Single(d => d.Heading == "(json) herdr-only replacement note").JsonProperty!;
+
+    public static string DescriptiveContextProperty =>
+        Declarations.Single(d => d.Heading == "(json) herdr-only descriptive context").JsonProperty!;
 
     public static string ReplacementSection(IReadOnlyList<string> replacedHeadings)
     {

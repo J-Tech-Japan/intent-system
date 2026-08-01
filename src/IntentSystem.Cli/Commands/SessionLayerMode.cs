@@ -286,8 +286,23 @@ internal static class SessionLayerModeStore
             }
         }
 
+        // G570 fifth repair: `set --write` is a no-op when the requested mode
+        // is already recorded at that scope, so it never appends a same-mode
+        // transition to an EXISTING record. (The first transition may be
+        // same-mode: creating a record for the default mode legitimately
+        // records agmsg → agmsg.) A later same-mode step is therefore
+        // command-impossible.
         for (var index = 1; index < entry.Transitions.Count; index++)
         {
+            if (string.Equals(entry.Transitions[index].From, entry.Transitions[index].To, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"session-layer mode state at `{path}` records a same-mode transition "
+                    + $"('{entry.Transitions[index].From}' → '{entry.Transitions[index].To}') at position {index} for "
+                    + $"domain '{entry.Domain}'. `session-layer set --write` is a no-op when the mode is already "
+                    + "recorded, so it never appends one — this record was hand-edited.");
+            }
+
             if (entry.Transitions[index].At < entry.Transitions[index - 1].At)
             {
                 throw new InvalidOperationException(
