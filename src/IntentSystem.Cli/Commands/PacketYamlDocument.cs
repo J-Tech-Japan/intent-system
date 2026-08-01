@@ -35,13 +35,59 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal sealed class PacketYamlDocument
 {
-    private PacketYamlDocument(IReadOnlyDictionary<string, string> fields)
+    private PacketYamlDocument(
+        IReadOnlyDictionary<string, string> fields,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> sequences)
     {
         Fields = fields;
+        Sequences = sequences;
     }
+
+    /// <summary>A packet that is absent or empty: no fields, no sequences.</summary>
+    public static readonly PacketYamlDocument Empty = new(
+        new Dictionary<string, string>(StringComparer.Ordinal),
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal));
 
     /// <summary>Dotted-path scalar map, with bare-key aliases.</summary>
     public IReadOnlyDictionary<string, string> Fields { get; }
+
+    /// <summary>
+    /// G568: dotted-path SEQUENCE map, with bare-key aliases — the same keying
+    /// as <see cref="Fields"/>, and the reason a sequence no longer appears
+    /// there at all.
+    ///
+    /// G567 kept a flow sequence as its bracketed TEXT and a block sequence as
+    /// nothing, faithfully reproducing the reader it replaced. That was correct
+    /// for a slice about where parsing happens, and it left real data loss in
+    /// place: <c>dependencies:</c> written in block style never reached the
+    /// queue at all. A dropped dependency is not cosmetic — dependency-aware
+    /// selection reads the seeded list, so a dependent unit looks publish-ready
+    /// while its root is still open, which is exactly what the ordering
+    /// taxonomy exists to prevent.
+    ///
+    /// Both YAML styles now produce the SAME structured list, so how an author
+    /// happened to write the sequence stops being a semantic difference.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> Sequences { get; }
+
+    /// <summary>
+    /// First non-empty sequence among <paramref name="keys"/>, in caller order.
+    /// Returns an empty list when none resolve — a packet that declares no
+    /// dependencies legitimately produces an empty list, and absence is never
+    /// guessed into content.
+    /// </summary>
+    public IReadOnlyList<string> LookupSequence(params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (Sequences.TryGetValue(key, out var value) && value.Count > 0)
+            {
+                return value;
+            }
+        }
+
+        return Array.Empty<string>();
+    }
 
     /// <summary>
     /// Parses <paramref name="yaml"/> as a whole document. Returns
@@ -85,12 +131,17 @@ internal sealed class PacketYamlDocument
         }
 
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
-        Flatten(root, prefix: null, fields);
-        document = new PacketYamlDocument(fields);
+        var sequences = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        Flatten(root, prefix: null, fields, sequences);
+        document = new PacketYamlDocument(fields, sequences);
         return true;
     }
 
-    private static void Flatten(YamlMappingNode mapping, string? prefix, Dictionary<string, string> fields)
+    private static void Flatten(
+        YamlMappingNode mapping,
+        string? prefix,
+        Dictionary<string, string> fields,
+        Dictionary<string, IReadOnlyList<string>> sequences)
     {
         foreach (var (keyNode, valueNode) in mapping.Children)
         {
@@ -104,20 +155,22 @@ internal sealed class PacketYamlDocument
             switch (valueNode)
             {
                 case YamlMappingNode nested:
-                    Flatten(nested, dottedPath, fields);
+                    Flatten(nested, dottedPath, fields, sequences);
                     break;
 
-                case YamlSequenceNode { Style: YamlDotNet.Core.Events.SequenceStyle.Flow } flow:
-                    Record(fields, dottedPath, key, RenderFlowSequence(flow));
+                // G568: EVERY sequence — flow or block — becomes a structured
+                // list under the same key. Style is a formatting choice, not a
+                // semantic one, so the two must be indistinguishable downstream.
+                case YamlSequenceNode sequence:
+                    RecordSequence(sequences, dottedPath, key, ReadSequence(sequence));
                     break;
 
                 case YamlScalarNode scalar when !string.IsNullOrEmpty(scalar.Value):
                     Record(fields, dottedPath, key, scalar.Value!);
                     break;
 
-                // A block sequence, an empty scalar, or anything else: the
-                // previous reader recorded nothing for these, and neither does
-                // this one.
+                // An empty scalar, or anything else: recorded as nothing, as
+                // the previous reader did.
                 default:
                     break;
             }
@@ -138,6 +191,24 @@ internal sealed class PacketYamlDocument
         }
     }
 
-    private static string RenderFlowSequence(YamlSequenceNode sequence) =>
-        "[" + string.Join(", ", sequence.Children.OfType<YamlScalarNode>().Select(item => item.Value ?? string.Empty)) + "]";
+    /// <summary>Same first-wins alias rule as <see cref="Record"/>.</summary>
+    private static void RecordSequence(
+        Dictionary<string, IReadOnlyList<string>> sequences,
+        string dottedPath,
+        string key,
+        IReadOnlyList<string> value)
+    {
+        sequences[dottedPath] = value;
+        if (!sequences.ContainsKey(key))
+        {
+            sequences[key] = value;
+        }
+    }
+
+    private static IReadOnlyList<string> ReadSequence(YamlSequenceNode sequence) =>
+        sequence.Children
+            .OfType<YamlScalarNode>()
+            .Select(item => (item.Value ?? string.Empty).Trim())
+            .Where(item => item.Length > 0)
+            .ToArray();
 }
