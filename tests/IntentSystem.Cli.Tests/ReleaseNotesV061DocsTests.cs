@@ -238,26 +238,77 @@ public sealed class ReleaseNotesV061DocsTests
         // temporary bumped eng/version.json, and checked with the SAME helper
         // the current-state theory uses. A guard that regains a literal fails
         // here even while it still passes against today's docs.
+        AssertRollSimulationHolds(ReadDeveloperReference(language), language, RepoVersionPolicySource.Read());
+    }
+
+    /// <summary>
+    /// G566: the same simulation, run from the POST-ROLL reality — the live
+    /// policy one roll ahead (0.6.2/0.7.0 → 0.7.0/0.7.1 as this lands) with the
+    /// readiness sections refreshed to match.
+    ///
+    /// This is the shape the roller's pre-push verification hit: with
+    /// <c>from.StableVersion</c> equal to the hardcoded <c>(0.6.9, 0.7.0)</c>
+    /// fixture's <c>nextVersion</c>, the helper's final plain-stable
+    /// substitution rewrote the freshly-updated readiness heading back down —
+    /// "Expected 0.7.0 / Actual 0.6.9" at the exactly-one-heading assertion.
+    /// The repository's own <c>eng/version.json</c> is NOT mutated: the
+    /// post-roll policy is derived from the live one and read through the real
+    /// reader, so this keeps proving itself after the roll actually lands.
+    /// </summary>
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void RollSimulation_HoldsFromThePostRollReality_G566(string language)
+    {
         var reference = ReadDeveloperReference(language);
         var policy = RepoVersionPolicySource.Read();
 
-        foreach (var (stable, next) in new[]
-                 {
-                     (policy.NextVersion, NextPatch(policy.NextVersion)),
-                     ("0.6.9", "0.7.0"),
-                     ("0.9.9", "1.0.0"),
-                 })
+        using var postRollRepo = new TemporaryVersionPolicyRoot(policy.NextVersion, NextPatch(policy.NextVersion));
+        var postRollPolicy = RepoVersionPolicySource.ReadFrom(postRollRepo.RootPath);
+        var postRollReference = RefreshReadinessForRoll(reference, language, policy, postRollPolicy);
+
+        // The docs as they will read once the roll lands still satisfy the
+        // current-state invariant...
+        AssertCurrentStateInvariant(postRollReference, language, postRollPolicy);
+
+        // ...and the simulation still holds when run FROM there, which is the
+        // theory that failed before this fix.
+        AssertRollSimulationHolds(postRollReference, language, postRollPolicy);
+    }
+
+    private static void AssertRollSimulationHolds(
+        string reference, string language, IntentSystem.Cli.Infrastructure.VersionPolicy from)
+    {
+        foreach (var (stable, next) in RollFixturePairs(from))
         {
             using var rolledRepo = new TemporaryVersionPolicyRoot(stable, next);
             var rolledPolicy = RepoVersionPolicySource.ReadFrom(rolledRepo.RootPath);
             Assert.Equal(stable, rolledPolicy.StableVersion);
             Assert.Equal(next, rolledPolicy.NextVersion);
 
-            var refreshed = RefreshReadinessForRoll(reference, language, policy, rolledPolicy);
+            var refreshed = RefreshReadinessForRoll(reference, language, from, rolledPolicy);
 
             AssertCurrentStateInvariant(refreshed, language, rolledPolicy);
         }
     }
+
+    /// <summary>
+    /// G560's pairs, plus the G566 collision pair. The collision is the one the
+    /// live policy walks into on a roll: a target whose <c>nextVersion</c>
+    /// EQUALS the live <c>stableVersion</c>, so a substitution keyed on
+    /// <c>v{from.StableVersion}</c> and one keyed on <c>v{to.NextVersion}</c>
+    /// address the same text. It is derived from <paramref name="from"/> rather
+    /// than hardcoded, so it keeps reproducing the collision after every future
+    /// roll instead of aging into an unrelated pair.
+    /// </summary>
+    private static IReadOnlyList<(string Stable, string Next)> RollFixturePairs(
+        IntentSystem.Cli.Infrastructure.VersionPolicy from) =>
+    [
+        (from.NextVersion, NextPatch(from.NextVersion)),
+        ("0.6.9", "0.7.0"),
+        ("0.9.9", "1.0.0"),
+        (PreviousVersion(from.StableVersion), from.StableVersion),
+    ];
 
     /// <summary>
     /// G560: the single current-state invariant. Everything it asserts is
@@ -302,6 +353,20 @@ public sealed class ReleaseNotesV061DocsTests
     /// 4-5 — the readiness heading and every current-state mention of the cycle
     /// move to the new line. Deliberately blunt: anything this does not touch
     /// is not current state, and must not be asserting a version.
+    ///
+    /// G566: the heading is now written LAST, into a slot no substitution can
+    /// reach. Previously it was rewritten first and the plain
+    /// <c>v{from.StableVersion}</c> substitution ran last, so whenever the live
+    /// <c>stableVersion</c> equalled a fixture's <c>nextVersion</c> that final
+    /// pass rewrote the fresh heading back down (the live 0.7.0/0.7.1 roll
+    /// against the hardcoded <c>(0.6.9, 0.7.0)</c> pair: "Expected 0.7.0 /
+    /// Actual 0.6.9"). Reordering alone would fix that one collision; removing
+    /// the heading from the string entirely fixes the CLASS, because a
+    /// substitution added later cannot reach text that is not there.
+    ///
+    /// The plain-stable substitution also moves ahead of the ones that
+    /// INTRODUCE <c>v{to.NextVersion}</c> text, so it can never re-rewrite a
+    /// value this same call just produced.
     /// </summary>
     private static string RefreshReadinessForRoll(
         string reference,
@@ -309,6 +374,10 @@ public sealed class ReleaseNotesV061DocsTests
         IntentSystem.Cli.Infrastructure.VersionPolicy from,
         IntentSystem.Cli.Infrastructure.VersionPolicy to)
     {
+        // Contains no digit, no '.', no 'v' — so it matches none of the
+        // substitutions below, whatever versions they are keyed on.
+        const string HeadingSlot = "￿_G566_READINESS_HEADING_SLOT_￿";
+
         var oldHeading = language == "en"
             ? $"### Next release readiness (v{from.NextVersion})"
             : $"### 次リリース準備(v{from.NextVersion})";
@@ -316,19 +385,48 @@ public sealed class ReleaseNotesV061DocsTests
             ? $"### Next release readiness (v{to.NextVersion})"
             : $"### 次リリース準備(v{to.NextVersion})";
 
+        Assert.Contains(oldHeading, reference, StringComparison.Ordinal);
+
         return reference
-            .Replace(oldHeading, newHeading, StringComparison.Ordinal)
+            .Replace(oldHeading, HeadingSlot, StringComparison.Ordinal)
+            // First: the shipped line moves up. Doing this BEFORE the pair
+            // substitutions means it cannot clobber a `v{to.NextVersion}`
+            // string that one of them is about to write.
+            .Replace($"v{from.StableVersion}", $"v{to.StableVersion}", StringComparison.Ordinal)
             .Replace($"stableVersion {from.StableVersion}", $"stableVersion {to.StableVersion}", StringComparison.Ordinal)
             .Replace($"nextVersion {from.NextVersion}", $"nextVersion {to.NextVersion}", StringComparison.Ordinal)
             .Replace($"JTechJapan.IntentSystem.Cli.{from.NextVersion}.nupkg", $"JTechJapan.IntentSystem.Cli.{to.NextVersion}.nupkg", StringComparison.Ordinal)
             .Replace($"release-notes-v{from.NextVersion}.md", $"release-notes-v{to.NextVersion}.md", StringComparison.Ordinal)
-            .Replace($"v{from.StableVersion}", $"v{to.StableVersion}", StringComparison.Ordinal);
+            // Last, and by construction unreachable from every line above.
+            .Replace(HeadingSlot, newHeading, StringComparison.Ordinal);
     }
 
     private static string NextPatch(string version)
     {
         var parts = version.Split('.');
         return $"{parts[0]}.{parts[1]}.{int.Parse(parts[2]) + 1}";
+    }
+
+    /// <summary>
+    /// G566: the strictly-lower version used to build the collision pair. Only
+    /// ever called on a real published <c>stableVersion</c>, which is never
+    /// 0.0.0, so the walk down always terminates on a valid version.
+    /// </summary>
+    private static string PreviousVersion(string version)
+    {
+        var parts = version.Split('.').Select(int.Parse).ToArray();
+        Assert.True(
+            parts[0] > 0 || parts[1] > 0 || parts[2] > 0,
+            $"cannot derive a lower version than '{version}'.");
+
+        if (parts[2] > 0)
+        {
+            return $"{parts[0]}.{parts[1]}.{parts[2] - 1}";
+        }
+
+        return parts[1] > 0
+            ? $"{parts[0]}.{parts[1] - 1}.9"
+            : $"{parts[0] - 1}.9.9";
     }
 
     /// <summary>G560: a temporary repo root holding only a bumped eng/version.json, read through the real policy reader.</summary>
