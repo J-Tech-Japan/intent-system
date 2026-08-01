@@ -272,6 +272,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         var output = workspace.RenderOrchestratorGuide();
 
         var missing = SessionLayerSections.ModeIndependentHeadings
+            .Where(heading => heading.StartsWith("## ", StringComparison.Ordinal))
             .Where(heading => !output.Contains(heading, StringComparison.Ordinal))
             .ToArray();
         Assert.True(
@@ -462,26 +463,104 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// G570 fourth repair: the guard that actually proves "one row drives every
+    /// surface". The previous version only checked the declarations against
+    /// themselves, so a rendered heading or JSON property that no row mentioned
+    /// went unnoticed — which is exactly how `summary` and the synthetic
+    /// replacement metadata escaped the table.
+    ///
+    /// This enumerates the RENDERED surfaces in both modes and requires each to
+    /// be declared.
+    /// </summary>
     [Fact]
-    public void TheSectionTableClassifiesMarkdownAndJsonIdentically_G570()
+    public void EveryRenderedSurfaceIsDeclared_InBothModes_G570()
     {
-        // The asymmetry the review found (end-of-wake mixed in JSON but
-        // mode-independent in markdown; codex_bridge_guidance JSON-only) is
-        // structurally impossible now: both renderings derive from one row.
-        foreach (var declaration in SessionLayerSections.Declarations)
+        foreach (var mode in new[] { SessionLayerMode.Agmsg, SessionLayerMode.HerdrOnly })
         {
-            Assert.False(
-                string.IsNullOrWhiteSpace(declaration.Heading),
-                "every declaration names its markdown heading");
-        }
+            Assert.Equal(0, workspace.RunSet(mode, write: true).ExitCode);
 
-        Assert.Equal(
-            SessionLayerSections.Declarations.Count,
-            SessionLayerSections.Declarations.Select(d => d.Heading).Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(
-            SessionLayerSections.Declarations.Count(d => d.JsonProperty is not null),
-            SessionLayerSections.Declarations.Where(d => d.JsonProperty is not null)
-                .Select(d => d.JsonProperty).Distinct(StringComparer.Ordinal).Count());
+            var declaredHeadings = SessionLayerSections.Declarations
+                .Select(d => d.Heading)
+                .ToHashSet(StringComparer.Ordinal);
+            // Headings inside fenced blocks are quoted content (artifact
+            // templates the guide shows), not sections of this document.
+            var renderedHeadings = OutsideFencedBlocks(workspace.RenderOrchestratorGuide())
+                .Where(line => line.StartsWith("## ", StringComparison.Ordinal))
+                .Select(line => line.TrimEnd('\r'))
+                .ToArray();
+
+            var undeclaredHeadings = renderedHeadings.Where(h => !declaredHeadings.Contains(h)).Distinct().ToArray();
+            Assert.True(
+                undeclaredHeadings.Length == 0,
+                $"[{mode}] rendered markdown sections that no declaration row covers: "
+                + string.Join(", ", undeclaredHeadings));
+
+            var declaredProperties = SessionLayerSections.Declarations
+                .Where(d => d.JsonProperty is not null)
+                .Select(d => d.JsonProperty!)
+                .ToHashSet(StringComparer.Ordinal);
+            using var document = JsonDocument.Parse(
+                workspace.Render(["guide", "orchestrator-thread", "--domain", ModeWorkspace.Domain, "--target-repo", ModeWorkspace.Repo, "--agent", "claude", "--format", "json"]));
+            var renderedProperties = document.RootElement.EnumerateObject().Select(p => p.Name).ToArray();
+
+            var undeclaredProperties = renderedProperties
+                .Where(name => !declaredProperties.Contains(name))
+                // The descriptive-context map is itself herdr-only routing
+                // metadata about other declared properties.
+                .Where(name => name != "herdr_only_descriptive_agmsg_context")
+                .ToArray();
+            Assert.True(
+                undeclaredProperties.Length == 0,
+                $"[{mode}] rendered JSON properties that no declaration row covers: "
+                + string.Join(", ", undeclaredProperties));
+        }
+    }
+
+    [Fact]
+    public void UnderHerdrOnly_TheTitleDoesNotClaimAgmsg_G570()
+    {
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        var first = workspace.RenderOrchestratorGuide().Split('\n')[0];
+
+        Assert.DoesNotContain("agmsg-backed", first, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("herdr-only", first, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnderHerdrOnly_DescriptiveContextIsPresentInJsonToo_G570()
+    {
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        var root = workspace.RenderOrchestratorGuideJson();
+
+        var context = root.GetProperty("herdr_only_descriptive_agmsg_context");
+        foreach (var property in SessionLayerSections.DescriptiveAgmsgContextJsonProperties)
+        {
+            if (root.TryGetProperty(property, out _))
+            {
+                Assert.True(
+                    context.TryGetProperty(property, out var label),
+                    $"retained descriptive property `{property}` has no explicit agmsg-example context in JSON");
+                Assert.Contains("descriptive, not an instruction", label.GetString()!, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public void UnderHerdrOnly_MarkdownTablesKeepTheirShape_G570()
+    {
+        // A table row replaced by a bare pointer line breaks every row after
+        // it. Pointing away happens inside the cells instead.
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+
+        foreach (var line in workspace.RenderOrchestratorGuide().Split('\n'))
+        {
+            if (line.Contains(SessionLayerSections.MechanicPointer, StringComparison.Ordinal)
+                && line.TrimStart().StartsWith("|", StringComparison.Ordinal))
+            {
+                Assert.EndsWith("|", line.TrimEnd());
+            }
+        }
     }
 
     [Fact]
@@ -493,6 +572,24 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         var output = workspace.RenderOrchestratorGuide();
 
         Assert.Matches(@"(?m)^\d+\. \(herdr-only:", output);
+    }
+
+    private static IEnumerable<string> OutsideFencedBlocks(string markdown)
+    {
+        var inFence = false;
+        foreach (var line in markdown.Split('\n'))
+        {
+            if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
+            {
+                inFence = !inFence;
+                continue;
+            }
+
+            if (!inFence)
+            {
+                yield return line;
+            }
+        }
     }
 
     private static string WithoutDescriptiveContext(string markdown)
@@ -554,6 +651,37 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             """
             { "schema_version": "not-command-produced", "entries": [ { "domain": "intent-cli", "mode": "herdr-only",
               "updated_at": "2026-08-01T12:00:00+00:00", "transitions": [
+                { "from": "agmsg", "to": "herdr-only", "at": "2026-08-01T12:00:00+00:00" } ] } ] }
+            """
+        },
+        {
+            // G570 fourth repair: the writer keeps exactly ONE record per
+            // scope, so duplicates are command-impossible — and "first one
+            // wins" would silently pick a mode nobody chose.
+            "duplicate scope records",
+            """
+            { "schema_version": "1", "entries": [
+              { "domain": "intent-cli", "mode": "herdr-only", "updated_at": "2026-08-01T12:00:00+00:00",
+                "transitions": [ { "from": "agmsg", "to": "herdr-only", "at": "2026-08-01T12:00:00+00:00" } ] },
+              { "domain": "intent-cli", "mode": "agmsg", "updated_at": "2026-08-01T13:00:00+00:00",
+                "transitions": [ { "from": "agmsg", "to": "agmsg", "at": "2026-08-01T13:00:00+00:00" } ] } ] }
+            """
+        },
+        {
+            "entries not in writer order",
+            """
+            { "schema_version": "1", "entries": [
+              { "domain": "zzz", "mode": "herdr-only", "updated_at": "2026-08-01T12:00:00+00:00",
+                "transitions": [ { "from": "agmsg", "to": "herdr-only", "at": "2026-08-01T12:00:00+00:00" } ] },
+              { "domain": "intent-cli", "mode": "herdr-only", "updated_at": "2026-08-01T12:00:00+00:00",
+                "transitions": [ { "from": "agmsg", "to": "herdr-only", "at": "2026-08-01T12:00:00+00:00" } ] } ] }
+            """
+        },
+        {
+            "updated_at disagrees with the last transition",
+            """
+            { "schema_version": "1", "entries": [ { "domain": "intent-cli", "mode": "herdr-only",
+              "updated_at": "2026-08-02T09:00:00+00:00", "transitions": [
                 { "from": "agmsg", "to": "herdr-only", "at": "2026-08-01T12:00:00+00:00" } ] } ] }
             """
         },

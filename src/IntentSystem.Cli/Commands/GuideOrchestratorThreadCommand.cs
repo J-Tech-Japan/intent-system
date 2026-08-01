@@ -203,9 +203,20 @@ internal static class GuideOrchestratorThreadCommand
         var dropping = false;
         var inMixedSection = false;
 
+        var inFencedBlock = false;
+
         foreach (var line in lines)
         {
-            if (line.StartsWith("## ", StringComparison.Ordinal))
+            // G570 fourth repair: a `## …` INSIDE a fenced block is quoted
+            // content — an artifact template the guide shows — not a section of
+            // this document. Treating it as one silently re-scoped routing from
+            // that point on, which the rendered-surface guard caught.
+            if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
+            {
+                inFencedBlock = !inFencedBlock;
+            }
+
+            if (!inFencedBlock && line.StartsWith("## ", StringComparison.Ordinal))
             {
                 dropping = SessionLayerSections.AgmsgOnlyHeadings.Contains(line, StringComparer.Ordinal);
                 inMixedSection = SessionLayerSections.MixedHeadings.Contains(line, StringComparer.Ordinal);
@@ -224,7 +235,8 @@ internal static class GuideOrchestratorThreadCommand
             // Descriptive agmsg content is labelled as such, in place, so a
             // reader distinguishes illustration from instruction at the point
             // of reading rather than by inference.
-            if (line.StartsWith("## ", StringComparison.Ordinal)
+            if (!inFencedBlock
+                && line.StartsWith("## ", StringComparison.Ordinal)
                 && SessionLayerSections.DescriptiveAgmsgContextHeadings.Contains(line, StringComparer.Ordinal))
             {
                 kept.Add(line);
@@ -283,6 +295,20 @@ internal static class GuideOrchestratorThreadCommand
         var trimmed = line.TrimStart();
         var indent = line[..(line.Length - trimmed.Length)];
 
+        // G570 fourth repair: a markdown TABLE row replaced by a bare pointer
+        // line breaks the table for every row after it. Keep the row, and
+        // point away only inside its cells.
+        if (trimmed.StartsWith("|", StringComparison.Ordinal) && trimmed.EndsWith("|", StringComparison.Ordinal))
+        {
+            var cells = trimmed.Trim('|').Split('|');
+            var pointed = cells
+                .Select(cell => SessionLayerSections.CarriesTransportMechanic(cell)
+                    ? " " + SessionLayerSections.MechanicPointer + " "
+                    : cell)
+                .ToArray();
+            return indent + "|" + string.Join('|', pointed) + "|";
+        }
+
         foreach (var marker in new[] { "- ", "* ", "> " })
         {
             if (trimmed.StartsWith(marker, StringComparison.Ordinal))
@@ -334,6 +360,19 @@ internal static class GuideOrchestratorThreadCommand
             }
         }
 
+        // G570 fourth repair: the explicit descriptive-agmsg context exists in
+        // BOTH renderers now. A field consumer previously had no way to tell a
+        // retained description from an instruction.
+        var descriptiveContext = new System.Text.Json.Nodes.JsonObject();
+        foreach (var property in SessionLayerSections.DescriptiveAgmsgContextJsonProperties)
+        {
+            if (node.ContainsKey(property))
+            {
+                descriptiveContext[property] = SessionLayerSections.DescriptiveAgmsgContextLabel;
+            }
+        }
+
+        node["herdr_only_descriptive_agmsg_context"] = descriptiveContext;
         node["herdr_only_replaced_sections"] = new System.Text.Json.Nodes.JsonArray(
             replaced.Select(name => (System.Text.Json.Nodes.JsonNode?)System.Text.Json.Nodes.JsonValue.Create(name)).ToArray());
         node["herdr_only_replacement_note"] =
@@ -3400,7 +3439,9 @@ internal static class GuideOrchestratorThreadCommand
 
     private static void WriteMarkdown(TextWriter writer, OrchestratorThreadGuide guide)
     {
-        writer.WriteLine("# Guide — agmsg-backed orchestrator thread (G487)");
+        writer.WriteLine(guide.SessionLayer?.Mode == SessionLayerMode.HerdrOnly
+            ? "# Guide — orchestrator thread (G487), herdr-only session layer"
+            : "# Guide — agmsg-backed orchestrator thread (G487)");
         writer.WriteLine();
 
         // G570: which transport this rendering is for, before any

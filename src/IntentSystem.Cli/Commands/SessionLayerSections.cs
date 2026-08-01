@@ -34,6 +34,14 @@ internal static class SessionLayerSections
         /// mechanic: kept, with mechanic-bearing sentences pointed away.
         /// </summary>
         ModeIndependentWithTransportMechanics,
+
+        /// <summary>
+        /// G570 fourth repair: the ruling's fourth value, previously missing.
+        /// Content that exists only under herdr-only — today the synthetic
+        /// switch-checklist section and its JSON replacement metadata, which
+        /// have no agmsg counterpart and are produced by the routing itself.
+        /// </summary>
+        HerdrOnly,
     }
 
     /// <summary>
@@ -74,9 +82,9 @@ internal static class SessionLayerSections
         new("## Design-decision holds and bounded authority (G552)", "design_decision_holds", Applicability.ModeIndependentWithTransportMechanics),
         new("## Scheduled orchestrator cadence", "scheduling", Applicability.ModeIndependentWithTransportMechanics),
         new("## Dispatch verification (G524)", "dispatch_verification", Applicability.ModeIndependentWithTransportMechanics),
-        new("## End-of-wake check (G523/G524)", "end_of_wake_check", Applicability.ModeIndependentWithTransportMechanics),
-        new("## Stale-thread health check", "stale_thread_health_check", Applicability.ModeIndependentWithTransportMechanics),
-        new("## Design-thread escalation filter", "design_thread_escalation", Applicability.ModeIndependentWithTransportMechanics),
+        new("## End-of-wake check (G523/G524)", "end_of_wake_check", Applicability.ModeIndependent),
+        new("## Stale-thread health check", "stale_thread_health_check", Applicability.ModeIndependent),
+        new("## Design-thread escalation filter", "design_thread_escalation", Applicability.ModeIndependent),
         new("## Design handoff (start / resume)", "design_handoff", Applicability.ModeIndependentWithTransportMechanics),
         new("## Design traffic-controller playbook", "design_traffic_controller", Applicability.ModeIndependentWithTransportMechanics),
         new("## Managed worktree cleanup", "worktree_management", Applicability.ModeIndependentWithTransportMechanics),
@@ -84,6 +92,15 @@ internal static class SessionLayerSections
         new("## Orchestrator first wake", "orchestrator_first_wake", Applicability.ModeIndependentWithTransportMechanics),
         new("## Safety boundaries", "safety_boundaries", Applicability.ModeIndependentWithTransportMechanics),
         new("## Next-slice publication", "next_slice_publication", Applicability.ModeIndependentWithTransportMechanics),
+
+        // G570 fourth repair: surfaces the renderers produce OUTSIDE the
+        // section builder were undeclared, so "one row drives every surface"
+        // was not true of them. The document title and summary are declared
+        // here, as is the synthetic herdr-only metadata.
+        new("# Guide — orchestrator thread", "summary", Applicability.ModeIndependentWithTransportMechanics),
+        new(ReplacementHeadingValue, "herdr_only_replaced_sections", Applicability.HerdrOnly),
+        new("(json) herdr-only replacement note", "herdr_only_replacement_note", Applicability.HerdrOnly),
+        new("(json) session-layer block", "session_layer", Applicability.ModeIndependent),
 
         // mode-independent — unchanged in both.
         new("## Session layer", "session_layer", Applicability.ModeIndependent),
@@ -105,7 +122,7 @@ internal static class SessionLayerSections
 
     public static readonly IReadOnlyList<string> MixedHeadings =
         Declarations.Where(d => d.Applies == Applicability.ModeIndependentWithTransportMechanics)
-            .Select(d => d.Heading).Append(ReplacementHeadingValue).ToArray();
+            .Select(d => d.Heading).ToArray();
 
     public static readonly IReadOnlyList<string> MixedJsonProperties =
         Declarations.Where(d => d.Applies == Applicability.ModeIndependentWithTransportMechanics && d.JsonProperty is not null)
@@ -170,6 +187,28 @@ internal static class SessionLayerSections
     public static readonly IReadOnlyList<string> DescriptiveAgmsgContextHeadings =
     [
         "## Mode separation",
+        "## Design-thread workspace supervision (G550)",
+        "## Design-decision holds and bounded authority (G552)",
+        "## Cross-project isolation on a shared machine (G555)",
+        "## Dispatch verification (G524)",
+        "## Safety boundaries",
+    ];
+
+    /// <summary>
+    /// The JSON properties those sections serialize to, so the field rendering
+    /// carries the same explicit context the prose does. G570 fourth repair:
+    /// the label existed only in markdown, so a field consumer had no way to
+    /// tell retained description from instruction.
+    /// </summary>
+    public static readonly IReadOnlyList<string> DescriptiveAgmsgContextJsonProperties =
+    [
+        "mode_separation",
+        "design_workspace_supervision",
+        "design_decision_holds",
+        "cross_project_isolation",
+        "dispatch_verification",
+        "safety_boundaries",
+        "summary",
     ];
 
     public const string DescriptiveAgmsgContextLabel =

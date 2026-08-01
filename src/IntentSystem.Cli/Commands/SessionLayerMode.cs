@@ -182,9 +182,40 @@ internal static class SessionLayerModeStore
                     + "by the command, so it is refused rather than trusted.");
             }
 
+            // G570 fourth repair: the reader now audits the ENVELOPE against
+            // every invariant the writer holds, not only the three named
+            // mutations. `set --write` emits entries sorted by (domain, team),
+            // one per scope, each with UpdatedAt equal to its last transition
+            // — so a file violating any of those is command-impossible, and a
+            // command-impossible record must never change routing.
+            var scopes = new HashSet<(string Domain, string? Team)>();
             foreach (var entry in state.Entries)
             {
+                if (!scopes.Add((entry.Domain, entry.Team)))
+                {
+                    throw new InvalidOperationException(
+                        $"session-layer mode state at `{path}` holds MORE THAN ONE record for domain "
+                        + $"'{entry.Domain}'{(entry.Team is null ? " (domain-wide)" : $" / team '{entry.Team}'")}. "
+                        + "`session-layer set --write` keeps exactly one record per scope, so duplicates are "
+                        + "command-impossible — and 'the first one wins' would silently pick a mode nobody chose.");
+                }
+
                 Validate(entry, path);
+            }
+
+            var sorted = state.Entries
+                .OrderBy(entry => entry.Domain, StringComparer.Ordinal)
+                .ThenBy(entry => entry.Team ?? string.Empty, StringComparer.Ordinal)
+                .ToArray();
+            for (var index = 0; index < sorted.Length; index++)
+            {
+                if (!ReferenceEquals(sorted[index], state.Entries[index]))
+                {
+                    throw new InvalidOperationException(
+                        $"session-layer mode state at `{path}` is not ordered by (domain, team). The writer always "
+                        + "emits sorted entries, so an out-of-order file was not produced by "
+                        + "`session-layer set --write`.");
+                }
             }
 
             return state;
@@ -253,6 +284,24 @@ internal static class SessionLayerModeStore
                             + $"'{entry.Domain}': transition {index} starts at '{transition.From}' but the previous "
                             + $"one ended at '{expectedFrom}'. Only `session-layer set --write` may write this file.");
             }
+        }
+
+        for (var index = 1; index < entry.Transitions.Count; index++)
+        {
+            if (entry.Transitions[index].At < entry.Transitions[index - 1].At)
+            {
+                throw new InvalidOperationException(
+                    $"session-layer mode state at `{path}` has transitions going backwards in time for domain "
+                    + $"'{entry.Domain}'. The writer appends in order, so this record was hand-edited.");
+            }
+        }
+
+        if (entry.UpdatedAt != entry.Transitions[^1].At)
+        {
+            throw new InvalidOperationException(
+                $"session-layer mode state at `{path}` records updated_at {entry.UpdatedAt:O} for domain "
+                + $"'{entry.Domain}' but its last transition happened at {entry.Transitions[^1].At:O}. The writer "
+                + "stamps both from the same instant, so they cannot legitimately differ.");
         }
 
         if (!string.Equals(entry.Mode, entry.Transitions[^1].To, StringComparison.Ordinal))
