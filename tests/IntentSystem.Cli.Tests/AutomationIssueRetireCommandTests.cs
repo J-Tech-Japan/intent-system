@@ -17,6 +17,10 @@ namespace IntentSystem.Cli.Tests;
 /// prefix alone must never create/mutate a queue entry), and a fail-closed
 /// refusal for already-Completed work.
 /// </summary>
+// G569 audit: joins the non-parallel collection that already owns the
+// process-global statics this class assigns, so it can no longer interleave
+// with the other class that assigns them.
+[Collection("WorkerNextActionSharedState")]
 public sealed class AutomationIssueRetireCommandTests : IDisposable
 {
     private static readonly DateTimeOffset FixedNow = new(2026, 7, 14, 16, 0, 0, TimeSpan.Zero);

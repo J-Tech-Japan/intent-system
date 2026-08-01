@@ -50,10 +50,18 @@ internal static class TaskingPublishReviewedBridgeCommand
     };
 
     /// <summary>
-    /// Test seam mirroring the timestamp pattern used by
-    /// <see cref="IssuePrepareCommand.TimestampFactory"/>. Defaults to
+    /// Test seam for the prepared-at timestamp. Defaults to
     /// <see cref="DateTimeOffset.UtcNow"/>; tests can pin a deterministic
     /// timestamp for round-trip and stability assertions.
+    ///
+    /// G569 review repair: this used to describe itself as mirroring
+    /// <c>IssuePrepareCommand.TimestampFactory</c>, which no longer exists —
+    /// that command now takes its clock per call
+    /// (<see cref="IssuePrepareCommand.Execute(CliContext, string[], TextWriter, Func{DateTimeOffset})"/>)
+    /// because a process-global mutable clock raced across parallel test
+    /// classes. This one is assigned by a single test class today, so it is not
+    /// that race; the per-call seam above is simply the shape that cannot
+    /// become one.
     /// </summary>
     public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
 

@@ -4,6 +4,10 @@ using IntentSystem.Supervisor.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+// G569 audit: joins the non-parallel collection that already owns the
+// process-global statics this class assigns, so it can no longer interleave
+// with the other class that assigns them.
+[Collection(RunSubmitCommandCollection.Name)]
 public sealed class IssueStatusCommandTests
 {
     [Fact]

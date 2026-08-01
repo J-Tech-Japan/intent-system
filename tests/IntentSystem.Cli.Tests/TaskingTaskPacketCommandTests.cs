@@ -12,6 +12,10 @@ namespace IntentSystem.Cli.Tests;
 /// contains <c>Tasking</c> and <c>TaskPacket</c> so reviewers can match the
 /// issue's recommended <c>~Tasking|~Handoff|~TaskPacket</c> filter.
 /// </summary>
+// G569 audit: joins the non-parallel collection that already owns the
+// process-global statics this class assigns, so it can no longer interleave
+// with the other class that assigns them.
+[Collection(RunSubmitCommandCollection.Name)]
 public sealed class TaskingTaskPacketCommandTests : IDisposable
 {
     private readonly Func<DateTimeOffset> originalTimestampFactory;
