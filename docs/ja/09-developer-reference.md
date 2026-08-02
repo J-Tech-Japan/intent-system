@@ -2609,35 +2609,36 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 使っています: 現在のバージョンの 2 つ目のコピーは同期し続けるべき対象が 1 つ増えることを
 意味し、しかも誰も見ていない roll でこそ stale になります。
 
-### 次リリース準備(v0.8.0)
+### 次リリース準備(v0.8.1)
 
-**`v0.7.1` は出荷済み**(GitHub Release + NuGet)です。リポジトリは **`0.8.0`** minor
-line の準備状態にあります: shipped 12 slices G570/G571/G573/G574/G575/G577/G578/G579/
-G580/G581/G582/G583 は merge 済み、superseded 0.7.2 notes copy は削除済みで、実際の
-[release-notes-v0.8.0.md](release-notes-v0.8.0.md) が release と operator gate を定義します。
-G576 は notes を prepare し G584 は refresh しますが、どちらの maintenance slice も shipped
-には数えません。minor の根拠は新 top-level `session-layer` / `notify` command group と広範な
-persisted dual-mode / transport-neutral workflow behavior です。両 session mode は first-class、
-selectable、reversible のままです。agmsg は PRIMARY で deprecated ではなく、PREVIEW が
-qualify するのは herdr-only session transport だけで、4 スレッドモデルでは決してありません。
+**`v0.8.0` は出荷済み**(GitHub Release + NuGet)で、version policy は `0.8.1`
+開発ラインへ roll されました。v0.8.0 バッチは **minor** バンプで、12 スライス(G570、G571、G573、G574、
+G575、G577、G578、G579、G580、G581、G582、G583)をカバーします。目玉は
+記録・可逆な session-layer dual mode と transport 非依存の `notify` サーフェス
+です。新コマンド群(`session-layer` / `notify`)を出荷するため patch ではなく
+minor です。両 session mode は対等なままで、agmsg は非推奨化しません。
 
-この notes maintenance は Release / tag / package publish / version roll / announcement を行いません。
-merge 後も `v0.8.0` GitHub Release 作成には operator の明示承認が必要です。
+リポジトリは in-development の **`0.8.1`** `nextVersion` 上にあります。`v0.8.1`
+で何を出荷するかはここでは決めません: 次の release-prep パケットがマージ済み
+スライスを選定し、DRAFT スタブに代えて実際の
+[release-notes-v0.8.1.md](release-notes-v0.8.1.md) を執筆し、バンプ根拠を
+記述します。それまで notes はスタブのままであり、`v0.8.1` の GitHub Release を
+publish してはいけません。
 
-**リリース準備検証(`v0.8.0` release-preparation のマージ前に実行):**
+**リリース準備検証(`v0.8.1` release-preparation のマージ前に実行):**
 
 ```bash
 # 1. version policy が release-to-be-cut を記録していることを確認。
-cat eng/version.json   # stableVersion 0.7.1 (published), nextVersion 0.8.0 (to release)
+cat eng/version.json   # stableVersion 0.8.0 (published), nextVersion 0.8.1 (to release)
 
 # 2. build して表示バージョン識別(version + git SHA + G-unit)を確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待される形: intent-cli 0.8.0-<sha>-G576   (stale literal ではない)
+#   期待される形: intent-cli 0.8.1-<sha>-G576   (stale literal ではない)
 
 # 3. pack して NuGet package バージョンが policy と一致することを確認。
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.8.0.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.8.1.nupkg
 
 # 4. package metadata(id / command / license / project URL)を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
@@ -2647,17 +2648,17 @@ dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- skill list
 ```
 
-preparation の merge が `main` に入り readiness evidence が揃った後も、Release 作成には
+**リリース準備検証(`v0.8.1` preparation の merge が `main` に入り readiness evidence が揃った後も、Release 作成には
 operator の明示承認が必要です。その後に限り maintainer/operator (または authorize された
-外部 release automation)が `v0.8.0` GitHub Release を作成・publish できます。publish が
+外部 release automation)が `v0.8.1` GitHub Release を作成・publish できます。publish が
 `release.yml` (`on: release: published`)を trigger し、NuGet package と platform binary
 artifact を build・publish します。**その後すぐに `eng/version.json` を roll します** —
-`stableVersion → 0.8.0`、`nextVersion → 0.8.1` —
+`stableVersion → 0.8.1`、`nextVersion → 0.8.2` —
 [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
 **ステップ 4–6** に従い、**同一コミットに DRAFT note スタブ**(ステップ 4)、
 **「次リリース準備」セクションを ja/en 両ミラーで新しいラインへ更新**(ステップ 5)、
 そして roll を完了とみなす前の **roll 後の child main CI green 確認**(ステップ 6)を
-すべて含めます。
+
 ### 削除済みリリースタグ（`v0.3.3`）の再作成
 
 `v0.3.3` は早すぎる段階でタグ付けされ、タグは削除されました。**`v0.3.3` タグ/リリースの再作成は、
