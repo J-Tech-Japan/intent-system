@@ -244,8 +244,14 @@ cwd/worktree）。インストール済みの `herdr ... --help` に従い、`he
 `workspace_created` result は top-level の `workspace`、`tab`、`root_pane` を返すため、
 `workspace.workspace_id`、`tab.tab_id`、`root_pane.pane_id` から mapping を seed し、
 `root_pane.cwd` を検証します。operator-visible な
-logical-role→pane-id/cwd mapping を記録し、毎操作前に解決します。workflow が pane id を
-hard-code してはいけません。herdr 外の design frontend は架空 pane ではなく reader type
+logical-role→pane-id/cwd mapping を記録し、workflow は pane/workspace id を hard-code
+しません。initial workspace creation が最初の id を返した後、すべての provisioning /
+mutation command は実行直前に記録済み mapping から明示的で空でない pane/workspace
+target id を解決し、command にその id を必ず指定します。解決結果が missing または
+empty なら fail closed とし、command を実行しません。そうしないと herdr が focus-default で
+他チームの currently focused pane を mutate する可能性があります。既存 G555 cross-project
+attribution rules が変わらず authoritative であり、別の attribution policy を再定義せず
+それを reference します。herdr 外の design frontend は架空 pane ではなく reader type
 として記録します。
 
 typed launch は次の surface です。
@@ -318,6 +324,9 @@ artifact、fresh な canonical intent-cli/GitHub facts を確認します。2 �
 notify report は最も情報量が多い一方で worker の協力に依存し、state change は herdr の観測
 だけに依存する一方で outcome を運びません。periodic な
 `intent-cli automation stalled-work ...` check が last net です。この実測 shape は、
+non-informational な `approved-not-merged` kind により、`intent-pr-approved` を持つ
+open かつ non-blocked な PR が configured stale threshold を超えたら、すべての immediate wake
+source が失敗しても age と canonical な merge → `closeout pr` path 付きで actionable にします。
 version-specific details について installed herdr help/schema を確認するという standing rule を
 置き換えません。
 
@@ -358,12 +367,25 @@ design-relevant な completion / blocked / question / escalation だけを書き
 mode-independent channel は design boundary のみで、inter-agent bus ではなく、
 `intent-cli notify`、GitHub、intent-cli workflow state の代替でもありません。
 
-- Claude app watcher: 解決済み path の完全な未読行だけを tail し、restart をまたいで offset
-  を保持します。
-- herdr pane の Codex CLI: `intent-cli notify delegate` / `report` を使い、通常 coordination で file poll しません。
-- Codex Desktop: one-minute-class（約 1 分）cadence で poll し、durable byte-offset watermark より後の
-  完全な行だけを処理し、成功後に watermark を進めます。truncate または malformed JSON は
-  fail closed とし operator recovery を要求します。
+すべての reader は watcher restart をまたいで durable watermark を永続化し、file identity、
+byte offset、complete-line count を保持します。各 read 前に同じ file identity であることと、
+byte / line count が backwards になっていないことを検証します。
+durable byte-offset watermark は必ず file identity と complete-line count と組にし、3 値のどれも
+restart-local にしません。
+rotation、truncation、backwards count、file replacement は operator recovery まで fail closed とします。replay が design
+decision を重複させるため、先頭から silent reset してはいけません。
+
+- Claude app watcher: durable な file-identity/byte-offset/complete-line-count watermark より後の
+  完全な未読行だけを tail し、成功後にのみ進め、watcher restart をまたいで保持します。
+  rotation、truncation、backwards byte/line count、file replacement で fail closed とし、先頭から再開しません。
+- herdr pane の Codex CLI: 通常 coordination では `intent-cli notify delegate` / `report` を使い
+  file poll しません。design-boundary reader として動く場合は同じ durable で restart-surviving
+  watermark を使い、rotation、truncation、backwards count、file replacement で fail closed とし、
+  先頭へ reset しません。
+- Codex Desktop: one-minute-class（約 1 分）cadence で poll し、durable で restart-surviving な
+  file-identity/byte-offset/complete-line-count watermark より後の完全な行だけを処理します。
+  rotation、truncation、backwards byte/line count、file replacement、malformed JSON で fail closed とし、
+  先頭から reset しません。
 
 ### Recovery と mode switch
 
@@ -371,15 +393,24 @@ mode-independent channel は design boundary のみで、inter-agent bus では�
   `agent start ... -- <permission-flags>` を使います。
 - reboot 後の dead pty wiring: undetected agent / shell-only pane では artifact を保全して
   re-provision、mapping 再構築、上記の自己完結した settle-and-re-check READY gate 再実行を行います。
+- focus-default cross-team mutation: 明示的な pane/workspace id が missing / empty だと、他チームの
+  currently focused pane を mutate する可能性があります。initial workspace creation 後の every
+  provisioning/mutation command で記録済み logical-role mapping から non-empty id を解決・明示し、
+  解決失敗時は実行しません。既存 G555 attribution rules を変更せず適用します。
 - long-wait turn death: bounded wait、re-entry、persist された deterministic loop を使います。
 - dispatch-echo false match: composed wait needle を task block に入れず、return 後に pane を
   inspect し、named artifact を独立に検証します。
 - idle と報告された approval/question pause: every wait 後に pane を inspect し、G550 の
   MAY/escalate 境界を適用して wake に re-enter します。
 
-**agmsg → herdr-only**: work を drain/park、role を graceful drop して watcher/bridge を停止、
-herdr・mapping・検証済み events path を provision、G556 と marker/artifact 検出を通し、最後に
-`intent-cli session-layer set --domain <domain> --team <team> --mode herdr-only --write`。
+### Session-layer switch checklist
+
+**agmsg → herdr-only**: work を drain/park、role を graceful drop して watcher/bridge を停止、outgoing
+transport の per-project agmsg hook configuration と delivery mode を turn off または remove し、delivery
+不可を検証します。これは cosmetic ではありません。残存 hook が next-launch hook-trust screen を
+発生させ、次の Codex launch を block した実測事象があります。herdr・mapping・検証済み events
+path を provision、G556 と marker/artifact 検出を通し、最後に `intent-cli session-layer set
+--domain <domain> --team <team> --mode herdr-only --write`。
 
 **herdr-only → agmsg**: work を drain/park して必要な final design event を append、operator
 policy に従って workspace を停止または retain/close し delivery を止め、agmsg role と承認済み

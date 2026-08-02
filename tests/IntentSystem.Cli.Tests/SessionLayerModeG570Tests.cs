@@ -147,9 +147,8 @@ public sealed class SessionLayerModeG570Tests : IDisposable
 
         var checklist = result.GetProperty("switch_checklist").GetString()!;
         Assert.Contains("guide orchestrator-thread", checklist, StringComparison.Ordinal);
-        Assert.Contains("Session-layer switch checklist", checklist, StringComparison.Ordinal);
-        // The pointer is honest about where the content lives: G571 ships it.
-        Assert.Contains("G571", checklist, StringComparison.Ordinal);
+        Assert.Contains(SessionLayerSwitchChecklist.Heading, checklist, StringComparison.Ordinal);
+        Assert.DoesNotContain("ships in G571", checklist, StringComparison.OrdinalIgnoreCase);
     }
 
     // ------------------------------------------------------------- the routing
@@ -274,6 +273,13 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         var values = new List<string>();
         foreach (var property in document.RootElement.Clone().EnumerateObject())
         {
+            // G582's mode-independent switch checklist intentionally names
+            // BOTH transports in both modes. It is the handover boundary,
+            // not an instruction to operate agmsg in herdr-only.
+            if (property.Name == SessionLayerSwitchChecklist.JsonProperty)
+            {
+                continue;
+            }
             CollectStringValues(property.Value, path: property.Name, values);
         }
 
@@ -1924,7 +1930,8 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             {
                 inSessionLayerSection =
                     line.StartsWith("## Session layer", StringComparison.Ordinal)
-                    || line.StartsWith(SessionLayerSections.ReplacementHeading, StringComparison.Ordinal);
+                    || line.StartsWith(SessionLayerSections.ReplacementHeading, StringComparison.Ordinal)
+                    || line.StartsWith(SessionLayerSwitchChecklist.Heading, StringComparison.Ordinal);
             }
 
             // The switch-checklist section is exempt for the same reason as the

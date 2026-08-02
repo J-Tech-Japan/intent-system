@@ -130,6 +130,7 @@ internal static class SessionLayerSections
 
         // mode-independent — unchanged in both.
         new("## Session layer", "session_layer", Applicability.ModeIndependent),
+        new(SessionLayerSwitchChecklist.Heading, SessionLayerSwitchChecklist.JsonProperty, Applicability.ModeIndependent),
         new("## Mode separation", "mode_separation", Applicability.ModeIndependent, Descriptive: true),
         new("## Role boundary (design authors; orchestrator coordinates)", "role_boundary", Applicability.ModeIndependent),
         new("## Domain routing — single-domain vs multi-domain", "domain_routing", Applicability.ModeIndependent),
@@ -336,7 +337,7 @@ internal static class SessionLayerSections
         "(herdr-only: the session-layer step described here is agmsg-specific and does not apply; its herdr-only "
         + "counterpart is in the herdr-only operating sections above. The rule stated by this section still binds.)";
 
-    private const string ReplacementHeadingValue = "## Session-layer switch checklist (herdr-only)";
+    private const string ReplacementHeadingValue = "## Herdr-only operating procedures";
 
     public const string ReplacementHeading = ReplacementHeadingValue;
 

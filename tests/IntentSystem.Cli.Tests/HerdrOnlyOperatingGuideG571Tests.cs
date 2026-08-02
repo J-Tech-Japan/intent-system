@@ -119,6 +119,8 @@ public sealed class HerdrOnlyOperatingGuideG571Tests : IDisposable
         }
 
         Assert.False(json.TryGetProperty(HerdrOnlyOperatingGuide.JsonProperty, out _));
+        Assert.Contains(SessionLayerSwitchChecklist.Heading, markdown, StringComparison.Ordinal);
+        Assert.True(json.TryGetProperty(SessionLayerSwitchChecklist.JsonProperty, out _));
         Assert.Contains("## Terminal-workspace provisioning (G549)", markdown, StringComparison.Ordinal);
         Assert.Contains("## agmsg reply contract", markdown, StringComparison.Ordinal);
     }

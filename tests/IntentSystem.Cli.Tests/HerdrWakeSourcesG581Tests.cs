@@ -133,14 +133,24 @@ public sealed class HerdrWakeSourcesG581Tests : IDisposable
     }
 
     [Fact]
-    public void AgmsgGuide_RemainsByteIdenticalToPreG581Baseline_G581()
+    public void AgmsgGuide_OutsideG582SwitchChecklist_RemainsByteIdenticalToPreG581Baseline_G581()
     {
         var markdown = Render(herdrOnly: false, format: "markdown");
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(markdown)));
+        var withoutG582Checklist = WithoutSection(markdown, SessionLayerSwitchChecklist.Heading);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(withoutG582Checklist)));
 
         Assert.Equal(PreG581AgmsgGuideSha256, hash);
         Assert.DoesNotContain("## Herdr-only wake sources", markdown, StringComparison.Ordinal);
         Assert.DoesNotContain("pane.agent_status_changed", markdown, StringComparison.Ordinal);
+    }
+
+    private static string WithoutSection(string markdown, string heading)
+    {
+        var start = markdown.IndexOf(heading, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"missing section {heading}");
+        var end = markdown.IndexOf("\n## ", start + heading.Length, StringComparison.Ordinal);
+        Assert.True(end > start, $"section {heading} must be followed by another section");
+        return markdown[..start] + markdown[(end + 1)..];
     }
 
     private string Render(bool herdrOnly, string format)

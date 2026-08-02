@@ -672,6 +672,7 @@ internal static class GuideOrchestratorThreadCommand
 
         return new OrchestratorThreadGuide
         {
+            SessionLayerSwitchChecklist = SessionLayerSwitchChecklist.Create(),
             SetupIntake = BuildSetupIntake(values, herdrOnly),
             // G570 third repair: the summary is CANON about authority, and it
             // must survive in both modes — but its agmsg phrasing is an
@@ -3682,6 +3683,8 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine(guide.Summary);
         writer.WriteLine();
 
+        SessionLayerSwitchChecklist.WriteMarkdown(writer, guide.SessionLayerSwitchChecklist);
+
         writer.WriteLine("## Mode separation");
         writer.WriteLine();
         writer.WriteLine($"- **timer-loop mode** — {guide.ModeSeparation.TimerLoopMode}");
@@ -4487,6 +4490,9 @@ internal sealed record OrchestratorThreadGuide
     /// <summary>G570: which session-layer transport this guide is rendering for, and how that was decided.</summary>
     [JsonPropertyName("session_layer")]
     public OrchestratorSessionLayer? SessionLayer { get; init; }
+
+    [JsonPropertyName("session_layer_switch_checklist")]
+    public required OrchestratorSessionLayerSwitchChecklist SessionLayerSwitchChecklist { get; init; }
 
     [JsonPropertyName("setup_intake")]
     public required OrchestratorSetupIntake SetupIntake { get; init; }
