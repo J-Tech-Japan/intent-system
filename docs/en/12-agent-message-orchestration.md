@@ -224,12 +224,16 @@ herdr agent start <logical-role> --kind <agent-kind> --pane <pane-id> -- <operat
 ```
 
 Permission flags belong to the launch, not injected modifier chords. Approvals
-are never auto-answered; G550's MAY/escalate boundary still governs. A role is
-READY only after G556 verified liveness: expected cwd/repo and agent kind,
-same-pane detection, then a bounded probe whose response is observed. Workspace
-existence, a shell prompt, or agent state alone is not READY. In herdr-only the
-verified logical-role→pane mapping is the role identity; there is no separate
-agmsg identity step.
+are never auto-answered; G550's MAY/escalate boundary still governs. Approvals
+are pane-visible and handled at the supervision boundary, explicitly unlike the
+agmsg Codex bridge's headless auto-decline. A role is READY only after the
+self-contained G556 verified-liveness gate: after the startup report, wait a
+settle delay, then re-check the expected cwd/repo and agent kind, same-pane
+detection, and a bounded probe whose response is observed. Repeat the entire
+settle-and-re-check sequence after re-provisioning. Workspace existence, a shell
+prompt, or agent state alone is not READY. In herdr-only the verified
+logical-role→pane mapping is the role identity; there is no separate agmsg
+identity step.
 
 ### Dispatch, wait, and verify the artifact
 
@@ -299,7 +303,7 @@ intent-cli workflow state.
   typed `agent start ... -- <permission-flags>` surface.
 - Post-reboot dead pty wiring: an undetected agent or shell-only pane requires
   preserving artifacts, re-provisioning, rebuilding the mapping, and repeating
-  the complete G556 gate.
+  the self-contained settle-and-re-check READY gate above.
 - Long-wait turn death: use bounded waits, re-entry, and deterministic persisted
   loops.
 

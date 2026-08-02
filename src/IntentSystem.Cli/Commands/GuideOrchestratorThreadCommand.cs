@@ -159,8 +159,9 @@ internal static class GuideOrchestratorThreadCommand
                 + "reversibly, in both directions.",
             ResidualAgmsgMechanics = sessionLayer.IsHerdrOnly
                 ? "HERDR-ONLY: the agmsg-only sections of this guide are REPLACED, whole, by the concrete herdr-only "
-                    + "operating sections below. Retained sections are mode-independent; any agmsg mechanics they "
-                    + "mention are explicitly scoped descriptive examples or pointed to their herdr counterpart."
+                    + "operating sections below. Retained sections carry mode-independent duties, but transport-specific "
+                    + "examples in them govern only their named transport; the concrete herdr-only counterparts below "
+                    + "govern this mode."
                 : null,
         };
 

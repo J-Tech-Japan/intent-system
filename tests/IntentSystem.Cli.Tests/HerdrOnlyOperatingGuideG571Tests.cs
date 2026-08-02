@@ -41,6 +41,8 @@ public sealed class HerdrOnlyOperatingGuideG571Tests : IDisposable
         Assert.Contains("O_APPEND", output, StringComparison.Ordinal);
         Assert.Contains("no embedded newline", output, StringComparison.Ordinal);
         Assert.Contains("leading dot", output, StringComparison.Ordinal);
+        Assert.Contains("`/` or `\\`, and any", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("`/` or `\\\\`, and any", output, StringComparison.Ordinal);
         Assert.Contains("any `..` sequence", output, StringComparison.Ordinal);
         Assert.Contains("Claude app watcher", output, StringComparison.Ordinal);
         Assert.Contains("Codex CLI", output, StringComparison.Ordinal);
@@ -55,6 +57,40 @@ public sealed class HerdrOnlyOperatingGuideG571Tests : IDisposable
         Assert.True(events.GetProperty("readers").TryGetProperty("claude_app", out _));
         Assert.True(events.GetProperty("readers").TryGetProperty("codex_cli", out _));
         Assert.True(events.GetProperty("readers").TryGetProperty("codex_desktop", out _));
+    }
+
+    [Fact]
+    public void ApprovalBoundary_IsPaneVisibleAndContrastsHeadlessAutoDecline_G571()
+    {
+        var output = Render(herdrOnly: true, format: "markdown");
+        var provisioning = JsonDocument.Parse(Render(herdrOnly: true, format: "json"))
+            .RootElement
+            .GetProperty(HerdrOnlyOperatingGuide.JsonProperty)
+            .GetProperty("provisioning");
+
+        Assert.Contains("Approvals surface visibly in the pane", output, StringComparison.Ordinal);
+        Assert.Contains("supervision boundary", output, StringComparison.Ordinal);
+        Assert.Contains("agmsg Codex bridge's headless auto-decline", output, StringComparison.Ordinal);
+        Assert.Contains("surface visibly in the pane", provisioning.GetProperty("approval_boundary").GetString());
+        Assert.Contains("headless auto-decline", provisioning.GetProperty("approval_boundary").GetString());
+    }
+
+    [Fact]
+    public void ReadyGate_IsSelfContainedAndResidualScopeIsTruthful_G571()
+    {
+        var section = HerdrOnlyOperatingGuide.RenderMarkdown([]);
+        var output = Render(herdrOnly: true, format: "markdown");
+        var provisioning = JsonDocument.Parse(Render(herdrOnly: true, format: "json"))
+            .RootElement
+            .GetProperty(HerdrOnlyOperatingGuide.JsonProperty)
+            .GetProperty("provisioning");
+
+        Assert.Contains("After the startup report, wait a settle delay, then re-check", section, StringComparison.Ordinal);
+        Assert.Contains("repeat this entire settle-and-re-check sequence", section, StringComparison.Ordinal);
+        Assert.DoesNotContain("complete G556", section, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("wait a settle delay, then re-check", provisioning.GetProperty("ready_gate").GetString());
+        Assert.Contains("transport-specific examples in them govern only their named transport", output, StringComparison.Ordinal);
+        Assert.Contains("the concrete herdr-only counterparts below govern this mode", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -106,6 +142,11 @@ public sealed class HerdrOnlyOperatingGuideG571Tests : IDisposable
                      "byte-offset watermark",
                      "agmsg → herdr-only",
                      "herdr-only → agmsg",
+                     "pane-visible",
+                     "supervision boundary",
+                     "headless auto-decline",
+                     "settle delay",
+                     "settle-and-re-check",
                  })
         {
             Assert.Contains(token, content, StringComparison.Ordinal);

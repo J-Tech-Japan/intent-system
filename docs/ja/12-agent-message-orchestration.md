@@ -215,11 +215,14 @@ herdr agent start <logical-role> --kind <agent-kind> --pane <pane-id> -- <operat
 ```
 
 permission flag は launch に渡し、modifier chord を注入しません。approval は自動回答せず、
-G550 の MAY/escalate 境界がそのまま支配します。READY は G556 verified liveness（期待する
-cwd/repo と agent kind、同一 pane での detection、bounded probe の応答観測）をすべて
-通った後だけです。workspace の存在、shell prompt、agent state だけでは READY では
-ありません。herdr-only の role identity は検証済み logical-role→pane mapping であり、
-別の agmsg identity step はありません。
+G550 の MAY/escalate 境界がそのまま支配します。approval は pane-visible で supervision boundary
+において処理し、agmsg Codex bridge の headless auto-decline とは明確に異なります。
+READY は自己完結した G556 verified-liveness gate、すなわち startup report 後に settle delay を
+置き、その後で期待する cwd/repo と agent kind、同一 pane での detection、bounded probe の
+応答観測を再確認して、すべて通った後だけです。re-provision 後は settle-and-re-check sequence
+全体を繰り返します。workspace の存在、shell prompt、agent state だけでは READY では
+ありません。herdr-only の role identity は検証済み logical-role→pane mapping であり、別の
+agmsg identity step はありません。
 
 ### Dispatch、wait、artifact 検証
 
@@ -283,7 +286,7 @@ dispatch、GitHub、intent-cli workflow state の代替でもありません。
 - modifier-chord launch corruption: shell へ戻すか再 provision し、typed な
   `agent start ... -- <permission-flags>` を使います。
 - reboot 後の dead pty wiring: undetected agent / shell-only pane では artifact を保全して
-  re-provision、mapping 再構築、完全な G556 gate 再実行を行います。
+  re-provision、mapping 再構築、上記の自己完結した settle-and-re-check READY gate 再実行を行います。
 - long-wait turn death: bounded wait、re-entry、persist された deterministic loop を使います。
 
 **agmsg → herdr-only**: work を drain/park、role を graceful drop して watcher/bridge を停止、

@@ -44,7 +44,7 @@ internal static class HerdrOnlyOperatingGuide
         2. Create a team workspace with `herdr workspace create --cwd <host-repo> --label <team> --no-focus`. Create role tabs/panes with the role cwd: design and orchestrator use `<host-repo>`, implementation uses `<implementation-repo>`, and review uses its isolated review cwd/worktree. `herdr tab create --workspace <workspace-id> --cwd <role-cwd> --label <logical-role> --no-focus` is the typed tab surface; `herdr pane split --pane <pane-id> --direction right|down --cwd <role-cwd> --no-focus` is available when a split is preferred.
         3. Record a durable operator-visible mapping of each herdr-resident logical role (`design`, `orchestrator`, `implementation`, `review`) to its current workspace/tab/pane id and cwd. Workflows address the logical role and resolve this mapping at dispatch time; they NEVER hard-code a pane id. A design frontend outside herdr is recorded as the design reader type, not fabricated as a pane.
         4. Launch the typed agent in the mapped pane with `herdr agent start <logical-role> --kind <claude|codex|...> --pane <pane-id> -- <operator-approved-permission-flags>`. Pass launch and permission flags after `--`; do not inject modifier chords into an interactive prompt. Approvals are NEVER auto-answered: only the G550 MAY-answer classes may be handled, and every other approval is escalated to the operator.
-        5. READY is a G556 verified-liveness result, not workspace existence. Check `herdr agent list`, inspect the mapped pane/agent, verify the expected cwd/repository and detected agent kind, then send a bounded ping and observe its ack in that same pane. An undetected agent, a shell prompt where the agent should be, a mismatched cwd, or no ack is NOT READY.
+        5. READY is a G556 verified-liveness result, not workspace existence. Approvals surface visibly in the pane and are handled at the supervision boundary, explicitly unlike the agmsg Codex bridge's headless auto-decline. After the startup report, wait a settle delay, then re-check `herdr agent list`, inspect the mapped pane/agent, verify the expected cwd/repository and detected agent kind, and send a bounded ping whose ack is observed in that same pane. An undetected agent, a shell prompt where the agent should be, a mismatched cwd, or no ack is NOT READY; after re-provisioning, repeat this entire settle-and-re-check sequence before declaring READY.
 
         Role identity in herdr-only is this verified logical-role→pane mapping. There is no agmsg identity or separate role-switching step.
 
@@ -78,7 +78,7 @@ internal static class HerdrOnlyOperatingGuide
         This is a normative, mode-independent design-boundary channel documented here because herdr-only has no separate message bridge. It is NEVER an inter-agent bus and never replaces direct herdr dispatch, GitHub, or intent-cli workflow state.
 
         - **Location:** resolve the host repository root at runtime, then use `<host-repo>/.intent-cli/events/<team>.jsonl`. The team name is the agmsg/herdr team name verbatim in one flat filename (example: `intent-cli-dev.jsonl`); there are no team subdirectories and readers never hard-code an absolute path.
-        - **Fail closed before path construction:** reject an empty team name, a leading dot, `/` or `\\`, and any `..` sequence. Do not sanitize or silently rewrite an invalid name.
+        - **Fail closed before path construction:** reject an empty team name, a leading dot, `/` or `\`, and any `..` sequence. Do not sanitize or silently rewrite an invalid name.
         - **Append contract:** the orchestrator is the only writer. Open with append semantics (`O_APPEND`), append exactly one complete JSON object per line, include no embedded newline, and normalize `summary` to one line.
         - **Schema:** `{"timestamp":"<RFC3339>","team":"<team>","kind":"completion|blocked|question|escalation","unit":"<execution-unit-or-task-id>","summary":"<one-line-summary>","artifact":"<repo-relative-path-or-URL>"}`. These six fields are required; `artifact` identifies the inspectable handoff or the decision input.
         - **Writer boundary:** append only design-relevant completion, blocked, question, and escalation events. Routine progress, dispatch traffic, pane output, acknowledgements, and workflow label changes do not belong here.
@@ -92,7 +92,7 @@ internal static class HerdrOnlyOperatingGuide
         ## Herdr-only failure modes and recovery
 
         - **Modifier-chord injection / launch corruption:** do not type launch control chords into a live prompt. Re-provision or return the pane to a shell, then use `herdr agent start ... -- <permission-flags>` so flags are part of the typed launch.
-        - **Post-reboot dead pty wiring:** a pane may still exist while `herdr agent list` cannot detect the agent or the pane is sitting at a shell. Treat it as `agent-undetected`, preserve artifacts, close/re-provision the affected workspace/panes, rebuild the logical-role mapping, and repeat the complete G556 verified-liveness gate before READY.
+        - **Post-reboot dead pty wiring:** a pane may still exist while `herdr agent list` cannot detect the agent or the pane is sitting at a shell. Treat it as `agent-undetected`, preserve artifacts, close/re-provision the affected workspace/panes, rebuild the logical-role mapping, and repeat the self-contained settle-and-re-check READY gate above before READY.
         - **Long-wait turn death:** replace unbounded `agent wait`/`pane wait-output` calls with bounded timeouts and re-entry. Use deterministic scripts with persisted task id, pane resolution, and watermark for long loops.
 
         ## Session-layer switch checklists
@@ -104,7 +104,7 @@ internal static class HerdrOnlyOperatingGuide
         1. Drain or explicitly park every in-flight delegation; record artifacts and unresolved blockers.
         2. Gracefully drop outgoing agmsg roles and stop their watchers/bridges. Verify no agmsg receiver can still deliver for this team.
         3. Provision the herdr workspace, role cwds, typed agents, and logical-role→pane mapping above; validate approvals and the events path.
-        4. Pass the complete G556 verified-liveness READY gate for every incoming role and verify bounded dispatch/marker/artifact detection.
+        4. Pass the self-contained settle-and-re-check READY gate above for every incoming role and verify bounded dispatch/marker/artifact detection.
         5. As the FINAL canonical step, run `intent-cli session-layer set --domain <domain> --team <team> --mode herdr-only --write`.
 
         **herdr-only → agmsg**
@@ -112,7 +112,7 @@ internal static class HerdrOnlyOperatingGuide
         1. Drain or explicitly park every in-flight delegation; append any final design-relevant event and record artifacts/blockers.
         2. Gracefully stop agents or retain/close the outgoing herdr workspace according to the operator's workspace policy; ensure it cannot keep delivering tasks for this team.
         3. Provision agmsg roles, transport configuration, and any approved watcher/bridge; do not reuse a stale role hold. Keep `events.jsonl` as the mode-independent design boundary, not as an agmsg bus.
-        4. Pass the complete G556 verified-liveness READY gate and end-to-end delivery ack for every incoming role.
+        4. Pass the applicable self-contained G556 settle-and-re-check READY gate and end-to-end delivery ack for every incoming role.
         5. As the FINAL canonical step, run `intent-cli session-layer set --domain <domain> --team <team> --mode agmsg --write`.
         """;
     }
@@ -126,8 +126,8 @@ internal static class HerdrOnlyOperatingGuide
             ["workspace"] = "Create the team workspace and role tabs/panes with role-specific cwds; consult installed herdr help for version-specific options.",
             ["mapping"] = "Record an operator-visible logical-role-to-current-pane-id-and-cwd mapping; resolve it at dispatch time and never hard-code pane ids.",
             ["typed_launch"] = "herdr agent start <logical-role> --kind <agent-kind> --pane <pane-id> -- <operator-approved-permission-flags>",
-            ["approval_boundary"] = "Approvals are never auto-answered; the G550 MAY/escalate boundary governs.",
-            ["ready_gate"] = "READY only after G556 verified liveness: expected agent/cwd/repo, detected same-pane process, and bounded probe response.",
+            ["approval_boundary"] = "Approvals surface visibly in the pane and are handled at the supervision boundary, unlike the agmsg Codex bridge's headless auto-decline; the G550 MAY/escalate boundary governs.",
+            ["ready_gate"] = "READY only after G556 verified liveness: after the startup report, wait a settle delay, then re-check the expected agent/cwd/repo and detected same-pane process before observing a bounded probe response; repeat after re-provisioning.",
         },
         ["dispatch"] = new JsonObject
         {
