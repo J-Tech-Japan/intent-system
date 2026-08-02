@@ -48,7 +48,7 @@ internal static class AutomationCompleteCommand
             return 1;
         }
 
-        var resolvedWorkdir = ResolveWorkdir(context, workdir);
+        var resolvedWorkdir = WorkdirResolver.Resolve(context, workdir);
         var repo = repoOverride;
         if (string.IsNullOrWhiteSpace(repo)
             && !AutomationCheckCommand.TryInferGitHubRepo(resolvedWorkdir, out repo, out error))
@@ -371,16 +371,6 @@ internal static class AutomationCompleteCommand
             return false;
         }
         return true;
-    }
-
-    private static string ResolveWorkdir(CliContext context, string? workdir)
-    {
-        if (string.IsNullOrWhiteSpace(workdir))
-        {
-            return context.RepoRoot;
-        }
-
-        return Path.GetFullPath(workdir);
     }
 
     private static bool TryMapCompletionTarget(

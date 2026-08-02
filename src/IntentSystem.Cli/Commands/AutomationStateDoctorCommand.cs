@@ -75,7 +75,7 @@ internal static class AutomationStateDoctorCommand
             return 2;
         }
 
-        var resolvedWorkdir = ResolveWorkdir(context, workdir);
+        var resolvedWorkdir = WorkdirResolver.Resolve(context, workdir);
 
         // G448 (review fix): --workdir must consistently drive the HOST context
         // used for every read/write — queue-state, publish artifacts, and the
@@ -561,18 +561,6 @@ internal static class AutomationStateDoctorCommand
         }
 
         return true;
-    }
-
-    private static string ResolveWorkdir(CliContext context, string? workdir)
-    {
-        if (string.IsNullOrWhiteSpace(workdir))
-        {
-            return context.RepoRoot;
-        }
-
-        return Path.IsPathRooted(workdir)
-            ? workdir
-            : Path.GetFullPath(Path.Combine(context.RepoRoot, workdir));
     }
 
     private static void Emit(TextWriter writer, AutomationStateDoctorResult result, string format)

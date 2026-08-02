@@ -61,7 +61,7 @@ internal static class AutomationPrTransitionCommand
             return 1;
         }
 
-        var resolvedWorkdir = ResolveWorkdir(context, workdir);
+        var resolvedWorkdir = WorkdirResolver.Resolve(context, workdir);
         if (string.IsNullOrWhiteSpace(repo)
             && !AutomationCheckCommand.TryInferGitHubRepo(resolvedWorkdir, out repo, out error))
         {
@@ -495,18 +495,6 @@ internal static class AutomationPrTransitionCommand
             return false;
         }
         return true;
-    }
-
-    private static string ResolveWorkdir(CliContext context, string? workdir)
-    {
-        if (string.IsNullOrWhiteSpace(workdir))
-        {
-            return context.RepoRoot;
-        }
-
-        return Path.IsPathRooted(workdir)
-            ? workdir
-            : Path.GetFullPath(Path.Combine(context.RepoRoot, workdir));
     }
 
     private static string BuildSummary(
