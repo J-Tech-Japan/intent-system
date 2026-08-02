@@ -181,6 +181,20 @@ packet の正規の publish 経路は **`automation queue-seed-from-packet` →
 アクティブなドメインの regex に一致しない unit は、参照した bindings ソースを明示する精密な
 診断とともに拒否されます。
 
+packet を push する、または queue seed に渡す前に、次の one-shot readiness check を
+実行します:
+
+```text
+intent-cli packet draft --execution-unit <unit> --domain <d> --target-repo <owner/repo> --dry-run --format json
+```
+
+これは現在 disk 上にある packet を検査し、妥当な planned scaffold を既存 file として
+数えません。green は、すべての canonical packet file が現在存在し、すべての required contract
+section が存在することを意味します（`contract_publishable: true`）。さらに、その他の publication
+check に refusal がないことも保証します。refusal は `missing_canonical_files`、
+`missing_contract_sections`、`refusal_reasons`、`recommended_actions` をまとめて返します。
+最初の 1 件だけ直して push せず、報告されたすべてを修正して同じ command を再実行します。
+
 ### execution-unit を解決するサーフェスの domain 解決順序 (G522)
 
 `--pr` や `--execution-unit` から execution unit を解決するサーフェス

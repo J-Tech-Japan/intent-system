@@ -32,10 +32,12 @@ namespace IntentSystem.Cli.Commands;
 ///   operator hand-editing.</item>
 /// </list>
 ///
-/// Anything else is <c>unsafe-prepared-packet</c> with a structured
-/// reason: <c>missing-canonical-file</c>, <c>packet-yaml-unparseable</c>,
-/// <c>wrong-domain</c>, <c>wrong-target-repo</c>, or
-/// <c>github-body-missing-section</c>.
+/// Anything else is <c>unsafe-prepared-packet</c> with every structured
+/// refusal discovered in the same analysis: <c>missing-canonical-file</c>,
+/// <c>packet-yaml-unparseable</c>, <c>wrong-domain</c>,
+/// <c>wrong-target-repo</c>, <c>github-body-missing-section</c>, and the
+/// domain-binding refusals below. The legacy singular reason remains the
+/// first item for compatibility.
 ///
 /// Pure data in / pure data out: callers (the durable-state preflight
 /// command's probe in particular) read the working-tree files, resolve
@@ -98,30 +100,13 @@ internal static class PreparedPacketCommitReadyAnalyzer
     };
 
     /// <summary>
-    /// PR #824 review repair #5: canonical github-body section
-    /// headings the analyzer requires for commit-ready
-    /// classification. The match is EXACT (case-insensitive after
-    /// trimming trailing punctuation), so non-standalone variants
-    /// (`## My Goal`, `## Goal - notes`) are rejected. The list
-    /// mirrors the IntentNextSliceCommand contract sections and the
-    /// canonical github-body shape produced by the packet draft
-    /// surface — including the full `Target Repo / Path / Part`
-    /// heading rather than the looser MetadataValidate substring
-    /// `Target Repo`.
+    /// Canonical github-body headings required for commit-ready
+    /// classification. G587 routes this through the existing publish-contract
+    /// source so packet draft and queue seed cannot drift. The match is exact
+    /// (case-insensitive after trimming trailing punctuation), so
+    /// non-standalone variants (`## My Goal`, `## Goal - notes`) are rejected.
     /// </summary>
-    public static readonly IReadOnlyList<string> RequiredGithubBodySections = new[]
-    {
-        "Goal",
-        "Why This Slice Exists Now",
-        "Current Observed State",
-        "Accepted Baseline You May Assume",
-        "Target Repo / Path / Part",
-        "In Scope",
-        "Out Of Scope",
-        "Acceptance Criteria",
-        "Verification",
-        "Related Links",
-    };
+    public static IReadOnlyList<string> RequiredGithubBodySections => PublishContractSections.Required;
 
     public static PreparedPacketCommitReadyResult Analyze(PreparedPacketCommitReadyInput input)
     {
@@ -129,6 +114,22 @@ internal static class PreparedPacketCommitReadyAnalyzer
         ArgumentException.ThrowIfNullOrWhiteSpace(input.ExecutionUnit);
 
         var packetDirectory = $".intent-cli/issues/{input.ExecutionUnit}/";
+        var refusalReasons = new List<string>();
+        var refusalDetails = new List<string>();
+        var recommendedActions = new List<string>();
+
+        void Refuse(string reason, string detail, string action)
+        {
+            if (!refusalReasons.Contains(reason, StringComparer.Ordinal))
+            {
+                refusalReasons.Add(reason);
+            }
+            refusalDetails.Add(detail);
+            if (!recommendedActions.Contains(action, StringComparer.Ordinal))
+            {
+                recommendedActions.Add(action);
+            }
+        }
 
         // 1. Missing canonical files -------------------------------------
         var missing = new List<string>();
@@ -150,17 +151,11 @@ internal static class PreparedPacketCommitReadyAnalyzer
         }
         if (missing.Count > 0)
         {
-            return new PreparedPacketCommitReadyResult
-            {
-                Classification = ClassificationUnsafe,
-                Reason = ReasonMissingCanonicalFile,
-                ExecutionUnit = input.ExecutionUnit,
-                PacketDirectory = packetDirectory,
-                MissingFiles = missing,
-                Summary = $"prepared packet `{packetDirectory}` is missing canonical file(s): "
-                    + string.Join(", ", missing)
-                    + ". A complete packet must carry packet.yaml, implementation.md, review-context.md, and github-body.md before host-loop auto-commit.",
-            };
+            Refuse(
+                ReasonMissingCanonicalFile,
+                "missing canonical file(s): " + string.Join(", ", missing),
+                "Author every missing canonical file, preserving the four-file packet contract: "
+                    + string.Join(", ", missing) + ".");
         }
 
         // 2. Domain binding regex check ---------------------------------
@@ -173,23 +168,15 @@ internal static class PreparedPacketCommitReadyAnalyzer
         // regex supplied) is the check skipped.
         if (input.RequireDomainBinding && string.IsNullOrWhiteSpace(input.ExecutionUnitRegex))
         {
-            return new PreparedPacketCommitReadyResult
-            {
-                Classification = ClassificationUnsafe,
-                Reason = ReasonMissingDomainBindingRegex,
-                ExecutionUnit = input.ExecutionUnit,
-                PacketDirectory = packetDirectory,
-                Summary = $"prepared packet `{packetDirectory}` cannot be classified commit-ready: "
-                    + "the active domain has no `execution_unit_regex` in its bindings.md "
-                    + "(either the bindings file is missing or the field is absent). Host-loop "
-                    + "auto-commit refuses to accept a prepared packet without verifying the "
-                    + "active domain boundary.",
-            };
+            Refuse(
+                ReasonMissingDomainBindingRegex,
+                "the active domain has no `execution_unit_regex` in its bindings.md, so the domain boundary cannot be verified",
+                "Add the active domain's top-level `execution_unit_regex` to bindings.md, then re-run readiness.");
         }
 
+        Regex? regex = null;
         if (!string.IsNullOrWhiteSpace(input.ExecutionUnitRegex))
         {
-            Regex regex;
             try
             {
                 regex = new Regex(input.ExecutionUnitRegex, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200));
@@ -202,37 +189,22 @@ internal static class PreparedPacketCommitReadyAnalyzer
                     // unparseable binding regex when the host requested
                     // the binding. A malformed bindings.md must never
                     // silently bypass the cross-domain check.
-                    return new PreparedPacketCommitReadyResult
-                    {
-                        Classification = ClassificationUnsafe,
-                        Reason = ReasonInvalidDomainBindingRegex,
-                        ExecutionUnit = input.ExecutionUnit,
-                        PacketDirectory = packetDirectory,
-                        DomainRegex = input.ExecutionUnitRegex,
-                        Summary = $"prepared packet `{packetDirectory}` cannot be classified commit-ready: "
-                            + $"the active domain's `execution_unit_regex` `{input.ExecutionUnitRegex}` does not "
-                            + $"compile ({exception.Message}). Fix the bindings.md pattern before "
-                            + "the host loop can verify the domain boundary.",
-                    };
+                    Refuse(
+                        ReasonInvalidDomainBindingRegex,
+                        $"the active domain's `execution_unit_regex` `{input.ExecutionUnitRegex}` does not compile ({exception.Message})",
+                        "Fix the active domain's `execution_unit_regex` in bindings.md, then re-run readiness.");
                 }
                 // Legacy fail-open path retained ONLY when the host did
                 // not require a binding (no --domain configured).
-                regex = null!;
+                regex = null;
             }
 
             if (regex is not null && !regex.IsMatch(input.ExecutionUnit))
             {
-                return new PreparedPacketCommitReadyResult
-                {
-                    Classification = ClassificationUnsafe,
-                    Reason = ReasonWrongDomain,
-                    ExecutionUnit = input.ExecutionUnit,
-                    PacketDirectory = packetDirectory,
-                    DomainRegex = input.ExecutionUnitRegex,
-                    Summary = $"prepared packet `{packetDirectory}` declares execution-unit `{input.ExecutionUnit}` "
-                        + $"which does not match the active domain binding regex `{input.ExecutionUnitRegex}`; "
-                        + "host-loop auto-commit must not publish cross-domain packet directories.",
-                };
+                Refuse(
+                    ReasonWrongDomain,
+                    $"execution-unit `{input.ExecutionUnit}` does not match the active domain binding regex `{input.ExecutionUnitRegex}`",
+                    "Move the packet to the correct domain or correct its execution-unit so it matches the active binding.");
             }
         }
 
@@ -246,20 +218,17 @@ internal static class PreparedPacketCommitReadyAnalyzer
         //
         // The fields used below come from that same parse, so the parsed
         // document is authoritative for both the gate and the lookups.
-        if (!PacketYamlDocument.TryParse(input.PacketYaml!, out var packetDocument, out var packetParseError))
+        PacketYamlDocument? packetDocument = null;
+        if (input.PacketYaml is not null
+            && !PacketYamlDocument.TryParse(input.PacketYaml, out packetDocument, out var packetParseError))
         {
-            return new PreparedPacketCommitReadyResult
-            {
-                Classification = ClassificationUnsafe,
-                Reason = ReasonPacketYamlUnparseable,
-                ExecutionUnit = input.ExecutionUnit,
-                PacketDirectory = packetDirectory,
-                Summary = $"prepared packet `{packetDirectory}` packet.yaml does not parse "
-                    + $"as YAML: {packetParseError} Operator review required before auto-commit.",
-            };
+            Refuse(
+                ReasonPacketYamlUnparseable,
+                $"packet.yaml does not parse as YAML: {packetParseError}",
+                "Repair packet.yaml so the complete document parses as YAML, then re-run readiness.");
         }
 
-        IReadOnlyDictionary<string, string> packetFields = packetDocument!.Fields;
+        IReadOnlyDictionary<string, string>? packetFields = packetDocument?.Fields;
 
         // 4. Target repo check ------------------------------------------
         // PR #824 review repair #7: the prepared-packet lane MUST NOT
@@ -271,56 +240,33 @@ internal static class PreparedPacketCommitReadyAnalyzer
         // bypass the child-repo binding check.
         if (string.IsNullOrWhiteSpace(input.RequestedTargetRepo))
         {
-            return new PreparedPacketCommitReadyResult
-            {
-                Classification = ClassificationUnsafe,
-                Reason = ReasonMissingTargetRepo,
-                ExecutionUnit = input.ExecutionUnit,
-                PacketDirectory = packetDirectory,
-                Summary = $"prepared packet `{packetDirectory}` cannot be classified commit-ready: "
-                    + "no `--target-repo` was supplied, so the analyzer cannot verify the packet's "
-                    + "declared `target_repo` matches the intended child repo. Re-run "
-                    + "`automation durable-state-preflight --target-repo <owner/repo>` "
-                    + "(and `--domain <name>` for cross-domain scoping).",
-            };
+            Refuse(
+                ReasonMissingTargetRepo,
+                "no `--target-repo` was supplied, so the packet's intended child repo cannot be verified",
+                "Re-run readiness with `--target-repo <owner/repo>` (and `--domain <name>` for cross-domain scoping).");
         }
 
-        if (!string.IsNullOrWhiteSpace(input.RequestedTargetRepo))
+        string? declaredRepo = null;
+        if (!string.IsNullOrWhiteSpace(input.RequestedTargetRepo) && packetFields is not null)
         {
-            var declaredRepo = LookupScalar(
+            declaredRepo = LookupScalar(
                 packetFields,
                 "implementation_issue.target_repo",
                 "target_repo",
                 "implementation_issue_packet.target_repo");
             if (string.IsNullOrWhiteSpace(declaredRepo))
             {
-                return new PreparedPacketCommitReadyResult
-                {
-                    Classification = ClassificationUnsafe,
-                    Reason = ReasonWrongTargetRepo,
-                    ExecutionUnit = input.ExecutionUnit,
-                    PacketDirectory = packetDirectory,
-                    RequestedTargetRepo = input.RequestedTargetRepo,
-                    DeclaredTargetRepo = null,
-                    Summary = $"prepared packet `{packetDirectory}` does not declare a target_repo "
-                        + $"while the host loop expects target_repo=`{input.RequestedTargetRepo}`; host-loop "
-                        + "auto-commit refuses ambiguous publication target.",
-                };
+                Refuse(
+                    ReasonWrongTargetRepo,
+                    $"packet.yaml does not declare target_repo while readiness expects `{input.RequestedTargetRepo}`",
+                    $"Declare target_repo `{input.RequestedTargetRepo}` in packet.yaml, then re-run readiness.");
             }
-            if (!string.Equals(declaredRepo, input.RequestedTargetRepo, StringComparison.Ordinal))
+            else if (!string.Equals(declaredRepo, input.RequestedTargetRepo, StringComparison.Ordinal))
             {
-                return new PreparedPacketCommitReadyResult
-                {
-                    Classification = ClassificationUnsafe,
-                    Reason = ReasonWrongTargetRepo,
-                    ExecutionUnit = input.ExecutionUnit,
-                    PacketDirectory = packetDirectory,
-                    RequestedTargetRepo = input.RequestedTargetRepo,
-                    DeclaredTargetRepo = declaredRepo,
-                    Summary = $"prepared packet `{packetDirectory}` declares target_repo=`{declaredRepo}` "
-                        + $"but host loop expects `{input.RequestedTargetRepo}`; host-loop auto-commit refuses "
-                        + "to publish a packet aimed at a different child repo.",
-                };
+                Refuse(
+                    ReasonWrongTargetRepo,
+                    $"packet.yaml declares target_repo=`{declaredRepo}` but readiness expects `{input.RequestedTargetRepo}`",
+                    "Correct packet.yaml target_repo or re-run with the intended `--target-repo` value.");
             }
         }
 
@@ -329,22 +275,39 @@ internal static class PreparedPacketCommitReadyAnalyzer
         // RequiredGithubBodySections (with the full canonical heading
         // names) plus the strict exact-match HasMatchingHeading helper
         // so non-standalone headings like `## My Goal` are rejected.
-        var headings = ExtractHeadings(input.GithubBodyMarkdown!);
-        foreach (var section in RequiredGithubBodySections)
+        var headings = input.GithubBodyMarkdown is null
+            ? Array.Empty<string>()
+            : ExtractHeadings(input.GithubBodyMarkdown);
+        var missingSections = RequiredGithubBodySections
+            .Where(section => !HasMatchingHeading(headings, section))
+            .ToArray();
+        if (missingSections.Length > 0)
         {
-            if (!HasMatchingHeading(headings, section))
+            Refuse(
+                ReasonGithubBodyMissingSection,
+                "github-body.md is missing required section(s): " + string.Join(", ", missingSections),
+                "Add every missing required section to github-body.md: " + string.Join(", ", missingSections) + ".");
+        }
+
+        if (refusalReasons.Count > 0)
+        {
+            return new PreparedPacketCommitReadyResult
             {
-                return new PreparedPacketCommitReadyResult
-                {
-                    Classification = ClassificationUnsafe,
-                    Reason = ReasonGithubBodyMissingSection,
-                    ExecutionUnit = input.ExecutionUnit,
-                    PacketDirectory = packetDirectory,
-                    MissingGithubBodySection = section,
-                    Summary = $"prepared packet `{packetDirectory}` github-body.md is missing required "
-                        + $"section `{section}`; host-loop auto-commit refuses an incomplete child issue contract.",
-                };
-            }
+                Classification = ClassificationUnsafe,
+                Reason = refusalReasons[0],
+                RefusalReasons = refusalReasons,
+                ExecutionUnit = input.ExecutionUnit,
+                PacketDirectory = packetDirectory,
+                MissingFiles = missing,
+                MissingGithubBodySection = missingSections.FirstOrDefault(),
+                MissingContractSections = missingSections,
+                DomainRegex = input.ExecutionUnitRegex,
+                RequestedTargetRepo = input.RequestedTargetRepo,
+                DeclaredTargetRepo = declaredRepo,
+                RecommendedActions = recommendedActions,
+                Summary = $"prepared packet `{packetDirectory}` is not publishable; "
+                    + string.Join("; ", refusalDetails) + ".",
+            };
         }
 
         // 6. Commit-ready -----------------------------------------------
@@ -353,13 +316,13 @@ internal static class PreparedPacketCommitReadyAnalyzer
             Classification = ClassificationCommitReady,
             ExecutionUnit = input.ExecutionUnit,
             PacketDirectory = packetDirectory,
+            RefusalReasons = Array.Empty<string>(),
+            MissingFiles = Array.Empty<string>(),
+            MissingContractSections = Array.Empty<string>(),
+            RecommendedActions = Array.Empty<string>(),
             VerifiedFiles = CanonicalFileNames.Select(name => packetDirectory + name).ToArray(),
             RequestedTargetRepo = input.RequestedTargetRepo,
-            DeclaredTargetRepo = LookupScalar(
-                packetFields,
-                "implementation_issue.target_repo",
-                "target_repo",
-                "implementation_issue_packet.target_repo"),
+            DeclaredTargetRepo = declaredRepo,
             DomainRegex = input.ExecutionUnitRegex,
             Summary = $"prepared packet `{packetDirectory}` has the four canonical files, packet.yaml parses, "
                 + "github-body.md carries the required standalone sections, and the domain/target-repo bindings match; "
@@ -508,11 +471,19 @@ internal sealed record PreparedPacketCommitReadyResult
     /// <summary>Structured unsafe reason; null when <see cref="Classification"/> is commit-ready.</summary>
     public string? Reason { get; init; }
 
-    public IReadOnlyList<string>? MissingFiles { get; init; }
+    /// <summary>
+    /// Every structured refusal reason discovered in one analysis. <see cref="Reason"/>
+    /// remains the first reason for compatibility with callers that predate G587.
+    /// </summary>
+    public IReadOnlyList<string> RefusalReasons { get; init; } = Array.Empty<string>();
+
+    public IReadOnlyList<string> MissingFiles { get; init; } = Array.Empty<string>();
     public string? MissingGithubBodySection { get; init; }
+    public IReadOnlyList<string> MissingContractSections { get; init; } = Array.Empty<string>();
     public string? DomainRegex { get; init; }
     public string? RequestedTargetRepo { get; init; }
     public string? DeclaredTargetRepo { get; init; }
+    public IReadOnlyList<string> RecommendedActions { get; init; } = Array.Empty<string>();
 
     /// <summary>Set on commit-ready: full relative paths the host loop should stage.</summary>
     public IReadOnlyList<string>? VerifiedFiles { get; init; }

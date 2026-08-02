@@ -42,6 +42,7 @@ internal static class AutomationQueueSeedFromPacketCommand
     public const string ClassificationApplied = "queue-seed-applied";
     public const string ClassificationUnsafe = "unsafe-prepared-packet";
     public const string ClassificationPacketDirectoryMissing = "packet-directory-missing";
+    public const string ReasonDomainResolutionFailed = "domain-resolution-failed";
 
     public const string SeedEventName = "queue_seeded_from_packet";
 
@@ -69,13 +70,30 @@ internal static class AutomationQueueSeedFromPacketCommand
         var packetDirectoryAbsolute = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit);
         if (!Directory.Exists(packetDirectoryAbsolute))
         {
+            var missingFiles = PreparedPacketCommitReadyAnalyzer.CanonicalFileNames
+                .Select(name => packetDirectoryRelative + name)
+                .ToArray();
             var missing = new QueueSeedFromPacketResult
             {
                 Classification = ClassificationPacketDirectoryMissing,
                 ExecutionUnit = executionUnit,
                 PacketDirectory = packetDirectoryRelative,
                 Write = write,
-                Summary = $"prepared packet directory `{packetDirectoryRelative}` does not exist on disk; nothing to seed.",
+                ContractPublishable = false,
+                UnsafeReason = PreparedPacketCommitReadyAnalyzer.ReasonMissingCanonicalFile,
+                RefusalReasons =
+                [
+                    PreparedPacketCommitReadyAnalyzer.ReasonMissingCanonicalFile,
+                    PreparedPacketCommitReadyAnalyzer.ReasonGithubBodyMissingSection,
+                ],
+                MissingCanonicalFiles = missingFiles,
+                MissingContractSections = PreparedPacketCommitReadyAnalyzer.RequiredGithubBodySections,
+                RecommendedActions =
+                [
+                    $"Create `{packetDirectoryRelative}` and author all four canonical packet files: {string.Join(", ", missingFiles)}.",
+                    BuildReadinessRerun(executionUnit, domain, targetRepo),
+                ],
+                Summary = $"prepared packet directory `{packetDirectoryRelative}` does not exist; all four canonical files and every required github-body.md section are missing.",
             };
             EmitResult(writer, format, missing);
             return 1;
@@ -104,25 +122,16 @@ internal static class AutomationQueueSeedFromPacketCommand
         // surface upstream and on a mutation path — where the cost is a
         // malformed unit sitting in the queue and failing later at publish or
         // preflight, far from its cause.
-        if (!TryReadPacketDocument(packetDirectoryAbsolute, out var packetDocument, out var packetParseError))
-        {
-            var unparseable = new QueueSeedFromPacketResult
-            {
-                Classification = ClassificationUnsafe,
-                ExecutionUnit = executionUnit,
-                PacketDirectory = packetDirectoryRelative,
-                Write = write,
-                UnsafeReason = PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable,
-                Summary = $"refusing to seed queue-state from `{packetDirectoryRelative}`: {packetParseError} "
-                    + "No queue-state or runs.jsonl mutation was planned or applied. Repair the packet and re-run — "
-                    + "this is the same acceptance the packet schema and projection surfaces apply.",
-            };
-            EmitResult(writer, format, unparseable);
-            return 1;
-        }
+        var packetYaml = TryReadFile(Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNamePacketYaml));
+        var implementationMarkdown = TryReadFile(Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNameImplementationMarkdown));
+        var reviewContextMarkdown = TryReadFile(Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNameReviewContextMarkdown));
+        var githubBodyMarkdown = TryReadFile(Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNameGithubBodyMarkdown));
 
-        var packetFields = packetDocument.Fields;
-        var packetDeclaredDomain = LookupScalar(packetFields, "domain");
+        PacketYamlDocument? packetDocument = null;
+        var packetDeclaredDomain = packetYaml is not null
+            && PacketYamlDocument.TryParse(packetYaml, out packetDocument, out _)
+                ? LookupScalar(packetDocument!.Fields, "domain")
+                : null;
         var domainResolution = PacketDomainResolution.Resolve(
             domain,
             packetDeclaredDomain,
@@ -131,7 +140,41 @@ internal static class AutomationQueueSeedFromPacketCommand
                 + (string.IsNullOrWhiteSpace(targetRepo) ? string.Empty : $" --target-repo {targetRepo}"));
         if (domainResolution.IsError)
         {
-            writer.WriteLine(domainResolution.ErrorMessage);
+            var contentValidation = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+            {
+                ExecutionUnit = executionUnit,
+                PacketYaml = packetYaml,
+                ImplementationMarkdown = implementationMarkdown,
+                ReviewContextMarkdown = reviewContextMarkdown,
+                GithubBodyMarkdown = githubBodyMarkdown,
+                RequestedTargetRepo = targetRepo,
+                RequireDomainBinding = false,
+            });
+            var refusalReasons = contentValidation.RefusalReasons
+                .Append(ReasonDomainResolutionFailed)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var domainFailure = new QueueSeedFromPacketResult
+            {
+                Classification = ClassificationUnsafe,
+                ExecutionUnit = executionUnit,
+                PacketDirectory = packetDirectoryRelative,
+                Write = write,
+                ContractPublishable = false,
+                UnsafeReason = contentValidation.Reason ?? ReasonDomainResolutionFailed,
+                RefusalReasons = refusalReasons,
+                MissingCanonicalFiles = contentValidation.MissingFiles,
+                MissingContractSections = contentValidation.MissingContractSections,
+                RecommendedActions =
+                [
+                    .. contentValidation.RecommendedActions,
+                    domainResolution.ErrorMessage ?? "Resolve the packet domain explicitly, then re-run readiness.",
+                    BuildReadinessRerun(executionUnit, domain, targetRepo),
+                ],
+                Summary = $"refusing to seed queue-state from `{packetDirectoryRelative}`: {contentValidation.Summary} "
+                    + (domainResolution.ErrorMessage ?? "The packet domain could not be resolved."),
+            };
+            EmitResult(writer, format, domainFailure);
             return 1;
         }
         var effectiveDomain = domainResolution.Domain!;
@@ -150,10 +193,10 @@ internal static class AutomationQueueSeedFromPacketCommand
         var validation = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
         {
             ExecutionUnit = executionUnit,
-            PacketYaml = TryReadFile(Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNamePacketYaml)),
-            ImplementationMarkdown = TryReadFile(Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNameImplementationMarkdown)),
-            ReviewContextMarkdown = TryReadFile(Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNameReviewContextMarkdown)),
-            GithubBodyMarkdown = TryReadFile(Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNameGithubBodyMarkdown)),
+            PacketYaml = packetYaml,
+            ImplementationMarkdown = implementationMarkdown,
+            ReviewContextMarkdown = reviewContextMarkdown,
+            GithubBodyMarkdown = githubBodyMarkdown,
             ExecutionUnitRegex = regexResolution.Pattern,
             RequestedTargetRepo = targetRepo,
             // Always require a domain binding now that `effectiveDomain`
@@ -171,10 +214,26 @@ internal static class AutomationQueueSeedFromPacketCommand
                 ExecutionUnit = executionUnit,
                 PacketDirectory = packetDirectoryRelative,
                 Write = write,
+                ContractPublishable = false,
                 UnsafeReason = validation.Reason,
+                RefusalReasons = validation.RefusalReasons,
+                MissingCanonicalFiles = validation.MissingFiles,
+                MissingContractSections = validation.MissingContractSections,
+                RecommendedActions =
+                [
+                    .. validation.RecommendedActions,
+                    BuildReadinessRerun(executionUnit, domain, targetRepo),
+                ],
                 Summary = $"refusing to seed queue-state from `{packetDirectoryRelative}`: "
                     + validation.Summary
-                    + DescribeBindingResolution(validation.Reason, effectiveDomain, regexResolution),
+                    + DescribeBindingResolution(
+                        validation.RefusalReasons.Contains(
+                            PreparedPacketCommitReadyAnalyzer.ReasonMissingDomainBindingRegex,
+                            StringComparer.Ordinal)
+                            ? PreparedPacketCommitReadyAnalyzer.ReasonMissingDomainBindingRegex
+                            : null,
+                        effectiveDomain,
+                        regexResolution),
             };
             EmitResult(writer, format, unsafeResult);
             return 1;
@@ -193,6 +252,7 @@ internal static class AutomationQueueSeedFromPacketCommand
         // `effectiveDomain` is already resolved above (G522: --domain >
         // packet-declared domain > fail-loud) so the clarification path
         // computation reuses the same value rather than re-deriving it.
+        var packetFields = packetDocument!.Fields;
         var defaultClarificationReturnPath = $"intents/{effectiveDomain}/clarifications/open.md";
 
         // PR #830 review repair #3 (08:27 comment): align role /
@@ -254,6 +314,7 @@ internal static class AutomationQueueSeedFromPacketCommand
                 ExecutionUnit = executionUnit,
                 PacketDirectory = packetDirectoryRelative,
                 Write = write,
+                ContractPublishable = true,
                 Summary = $"queue-state already contains an entry for `{executionUnit}`; nothing to seed.",
                 SeededItem = seed,
             };
@@ -269,6 +330,7 @@ internal static class AutomationQueueSeedFromPacketCommand
                 ExecutionUnit = executionUnit,
                 PacketDirectory = packetDirectoryRelative,
                 Write = false,
+                ContractPublishable = true,
                 SeededItem = seed,
                 Summary = $"prepared packet `{packetDirectoryRelative}` validated; queue-state would be seeded with a new queued item for `{executionUnit}`. "
                     + "Re-run with `--write` to persist.",
@@ -318,6 +380,7 @@ internal static class AutomationQueueSeedFromPacketCommand
             ExecutionUnit = executionUnit,
             PacketDirectory = packetDirectoryRelative,
             Write = true,
+            ContractPublishable = true,
             SeededItem = seed,
             Summary = $"seeded queue-state with a new queued item for `{executionUnit}` from validated packet `{packetDirectoryRelative}`. "
                 + $"Appended `{SeedEventName}` event to `.intent-cli/runs.jsonl`.",
@@ -438,43 +501,6 @@ internal static class AutomationQueueSeedFromPacketCommand
         return item;
     }
 
-    /// <summary>
-    /// G567: reads the packet's fields THROUGH a whole-document YAML parse
-    /// (<see cref="PacketYamlDocument"/>), the same acceptance G565 gave
-    /// projection. Returns <see langword="false"/> with a named error when the
-    /// file is present but is not valid YAML — the caller fails closed on that
-    /// rather than seeding from a partial read.
-    ///
-    /// A MISSING or empty packet.yaml is not this method's failure to report:
-    /// it stays an empty map so
-    /// <see cref="PreparedPacketCommitReadyAnalyzer"/> produces its own
-    /// missing-file diagnostic downstream, exactly as before.
-    /// </summary>
-    private static bool TryReadPacketDocument(
-        string packetDirectoryAbsolute,
-        out PacketYamlDocument document,
-        out string error)
-    {
-        error = string.Empty;
-        var packetYamlPath = Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNamePacketYaml);
-        var content = TryReadFile(packetYamlPath);
-        if (string.IsNullOrEmpty(content))
-        {
-            document = PacketYamlDocument.Empty;
-            return true;
-        }
-
-        if (!PacketYamlDocument.TryParse(content!, out var parsed, out var parseError))
-        {
-            document = PacketYamlDocument.Empty;
-            error = parseError;
-            return false;
-        }
-
-        document = parsed!;
-        return true;
-    }
-
     private static string? LookupScalar(IReadOnlyDictionary<string, string> fields, params string[] keys)
     {
         foreach (var key in keys)
@@ -501,6 +527,18 @@ internal static class AutomationQueueSeedFromPacketCommand
         {
             return null;
         }
+    }
+
+    private static string BuildReadinessRerun(
+        string executionUnit,
+        string? domain,
+        string? targetRepo)
+    {
+        var command = $"intent-cli automation queue-seed-from-packet --execution-unit {executionUnit}"
+            + (string.IsNullOrWhiteSpace(domain) ? " --domain <name>" : $" --domain {domain}")
+            + (string.IsNullOrWhiteSpace(targetRepo) ? " --target-repo <owner/repo>" : $" --target-repo {targetRepo}")
+            + " --format json";
+        return $"After repairing every reported item, re-run `{command}` and proceed only when `contract_publishable` is true.";
     }
 
     /// <summary>
@@ -547,9 +585,34 @@ internal static class AutomationQueueSeedFromPacketCommand
         writer.WriteLine($"- classification: **{result.Classification}**");
         writer.WriteLine($"- packet directory: `{result.PacketDirectory}`");
         writer.WriteLine($"- write: {(result.Write ? "yes" : "no (dry-run)")}");
+        writer.WriteLine($"- contract publishable: {(result.ContractPublishable ? "yes" : "no")}");
         if (!string.IsNullOrWhiteSpace(result.UnsafeReason))
         {
             writer.WriteLine($"- unsafe reason: `{result.UnsafeReason}`");
+        }
+        if (result.RefusalReasons.Count > 0)
+        {
+            writer.WriteLine("- refusal reasons:");
+            foreach (var reason in result.RefusalReasons)
+            {
+                writer.WriteLine($"  - {reason}");
+            }
+        }
+        if (result.MissingCanonicalFiles.Count > 0)
+        {
+            writer.WriteLine("- missing canonical files:");
+            foreach (var file in result.MissingCanonicalFiles)
+            {
+                writer.WriteLine($"  - {file}");
+            }
+        }
+        if (result.MissingContractSections.Count > 0)
+        {
+            writer.WriteLine("- missing contract sections:");
+            foreach (var section in result.MissingContractSections)
+            {
+                writer.WriteLine($"  - {section}");
+            }
         }
         writer.WriteLine();
         writer.WriteLine(result.Summary);
@@ -647,8 +710,12 @@ internal sealed record QueueSeedFromPacketResult
     public required string ExecutionUnit { get; init; }
     public required string PacketDirectory { get; init; }
     public required bool Write { get; init; }
+    public required bool ContractPublishable { get; init; }
     public required string Summary { get; init; }
     public string? UnsafeReason { get; init; }
+    public IReadOnlyList<string> RefusalReasons { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> MissingCanonicalFiles { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> MissingContractSections { get; init; } = Array.Empty<string>();
     public QueueItem? SeededItem { get; init; }
-    public IReadOnlyList<string>? RecommendedActions { get; init; }
+    public IReadOnlyList<string> RecommendedActions { get; init; } = Array.Empty<string>();
 }

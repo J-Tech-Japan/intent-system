@@ -310,7 +310,7 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
         File.WriteAllText(Path.Combine(dir, "implementation.md"), "# impl\n");
         File.WriteAllText(Path.Combine(dir, "review-context.md"), "# review\n");
         File.WriteAllText(Path.Combine(dir, "github-body.md"),
-            "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n");
+            "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n## Base Branch Policy\nx\n");
         workspace.WriteBindings("intent-cli", "^Z4R-G[0-9]+$");
 
         using var writer = new StringWriter();
@@ -415,7 +415,7 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
         File.WriteAllText(Path.Combine(dir, "implementation.md"), "# impl\n");
         File.WriteAllText(Path.Combine(dir, "review-context.md"), "# review\n");
         File.WriteAllText(Path.Combine(dir, "github-body.md"),
-            "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n");
+            "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n## Base Branch Policy\nx\n");
         workspace.WriteBindings("intent-cli", "^Z4R-G[0-9]+$");
 
         using var writer = new StringWriter();
@@ -464,7 +464,7 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
         File.WriteAllText(Path.Combine(dir, "implementation.md"), "# impl\n");
         File.WriteAllText(Path.Combine(dir, "review-context.md"), "# review\n");
         File.WriteAllText(Path.Combine(dir, "github-body.md"),
-            "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n");
+            "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n## Base Branch Policy\nx\n");
         workspace.WriteBindings("intent-cli", "^Z4R-G[0-9]+$");
 
         using var writer = new StringWriter();
@@ -629,9 +629,21 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
             writer);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("--domain could not be derived", writer.ToString(), StringComparison.Ordinal);
-        Assert.Contains("Candidate domains:", writer.ToString(), StringComparison.Ordinal);
-        Assert.Contains("--execution-unit Z4R-G10 --domain <name>", writer.ToString(), StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        var details = root.GetProperty("summary").GetString()
+            + string.Join(
+                ' ',
+                root.GetProperty("recommended_actions")
+                    .EnumerateArray()
+                    .Select(action => action.GetString()));
+        Assert.Contains("--domain could not be derived", details, StringComparison.Ordinal);
+        Assert.Contains("Candidate domains:", details, StringComparison.Ordinal);
+        Assert.Contains("--execution-unit Z4R-G10 --domain <name>", details, StringComparison.Ordinal);
+        Assert.Contains(
+            AutomationQueueSeedFromPacketCommand.ReasonDomainResolutionFailed,
+            root.GetProperty("refusal_reasons").EnumerateArray().Select(reason => reason.GetString()),
+            StringComparer.Ordinal);
     }
 
     [Fact]
@@ -857,7 +869,7 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
         File.WriteAllText(Path.Combine(dir, "implementation.md"), "# impl\n");
         File.WriteAllText(Path.Combine(dir, "review-context.md"), "# review\n");
         File.WriteAllText(Path.Combine(dir, "github-body.md"),
-            "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n");
+            "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n## Base Branch Policy\nx\n");
     }
 
     private sealed class TestWorkspace : IDisposable
@@ -896,7 +908,7 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
             File.WriteAllText(Path.Combine(dir, "implementation.md"), "# impl\n");
             File.WriteAllText(Path.Combine(dir, "review-context.md"), "# review\n");
             File.WriteAllText(Path.Combine(dir, "github-body.md"),
-                "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n");
+                "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n## Base Branch Policy\nx\n");
         }
 
         public void WriteBindings(string domain, string executionUnitRegex)
