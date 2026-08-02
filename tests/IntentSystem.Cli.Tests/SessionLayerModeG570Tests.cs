@@ -466,58 +466,124 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         // before any target is located, so the target has to exist on its own.
         var body = lines.Where((_, i) => !labelIndexes.Contains(i)).ToArray();
 
+        // G570 twelfth repair: OCCURRENCES, not distinct values, and a BIJECTION
+        // between labels and targets. Counting distinct strings let a duplicated
+        // target line collapse back to one and pass; counting per-label without
+        // consuming the target let a duplicated label pass too, because each
+        // iteration independently found the same target.
+        var quotes = labelIndexes.Select(i => QuotedClause(lines[i])).ToArray();
+
+        foreach (var quote in quotes.Distinct(StringComparer.Ordinal))
+        {
+            var labelOccurrences = quotes.Count(q => string.Equals(q, quote, StringComparison.Ordinal));
+            var targetOccurrences = body.Count(line => line.Contains(quote, StringComparison.Ordinal));
+
+            Assert.True(
+                targetOccurrences == 1,
+                $"a labelled sentence must be rendered exactly once outside the labels; found {targetOccurrences}: {quote}");
+            Assert.True(
+                labelOccurrences == 1,
+                $"a sentence must carry exactly one label; found {labelOccurrences}: {quote}");
+        }
+
+        // The mapping is total in both directions: every label consumes one
+        // target and every labelled target is consumed by one label.
+        Assert.Equal(labelIndexes.Length, quotes.Distinct(StringComparer.Ordinal).Count());
+
         foreach (var index in labelIndexes)
         {
             var label = lines[index];
-            var quoted = label[SessionLayerSections.DescriptiveAgmsgContextPrefix.Length..]
-                .Split(SessionLayerSections.DescriptiveAgmsgContextSuffix)[0]
-                .Trim('"');
-            Assert.Contains("agmsg", quoted, StringComparison.OrdinalIgnoreCase);
+            var quote = QuotedClause(label);
+            Assert.Contains("agmsg", quote, StringComparison.OrdinalIgnoreCase);
 
-            // EXACTLY ONE distinct rendered line outside the labels carries the
-            // quoted sentence, so the mapping is one-to-one in both directions.
-            var targets = body
-                .Where(line => line.Contains(quoted, StringComparison.Ordinal))
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
-            Assert.True(
-                targets.Length == 1,
-                $"a label must name exactly one rendered sentence; found {targets.Length} for: {quoted}");
+            var target = body.Single(line => line.Contains(quote, StringComparison.Ordinal));
 
             // The position claim must be true. A label deferred out of a table
             // says so; an inline one does not, and its target follows it.
             if (label.EndsWith(SessionLayerSections.DescriptiveAgmsgContextDeferredNote, StringComparison.Ordinal))
             {
-                var targetIndex = Array.FindIndex(lines, l => l == targets[0]);
+                var targetIndex = Array.FindIndex(lines, l => l == target);
                 Assert.True(
                     targetIndex >= 0 && targetIndex < index,
-                    "a label claiming its sentence is in the table ABOVE must be emitted after it: " + quoted);
-                Assert.StartsWith("|", targets[0].TrimStart(), StringComparison.Ordinal);
+                    "a label claiming its sentence is in the table ABOVE must be emitted after it: " + quote);
+                Assert.StartsWith("|", target.TrimStart(), StringComparison.Ordinal);
             }
             else
             {
-                var targetIndex = Array.FindIndex(lines, index, l => l == targets[0]);
-                Assert.True(targetIndex > index, "an inline label must precede the sentence it names: " + quoted);
+                var targetIndex = Array.FindIndex(lines, index, l => l == target);
+                Assert.True(targetIndex > index, "an inline label must precede the sentence it names: " + quote);
             }
         }
 
-        // Every label names a clause DECLARED descriptive — no operative
-        // fragment is covered by one.
-        foreach (var index in labelIndexes)
+        // G570 twelfth repair: the semantic check uses a TEST-OWNED fixture, not
+        // the production FragmentType. Asking the declaration table whether its
+        // own classification is right is the classifier-as-its-own-oracle
+        // problem again — a correlated misclassification would agree with
+        // itself. These sentences are adjudicated here, in the test, by reading
+        // them.
+        foreach (var quote in quotes)
         {
-            var quoted = lines[index][SessionLayerSections.DescriptiveAgmsgContextPrefix.Length..]
-                .Split(SessionLayerSections.DescriptiveAgmsgContextSuffix)[0]
-                .Trim('"');
-            var declared = SessionLayerFragments.Declarations
-                .SelectMany(d => d.Clauses!)
-                .Where(c => SessionLayerFragments.Expand(BareValues, c.Text).Trim() == quoted)
-                .ToArray();
-            Assert.NotEmpty(declared);
-            Assert.All(declared, c => Assert.Equal(
-                SessionLayerSections.FragmentType.CanonDescriptive,
-                c.Type));
+            Assert.True(
+                KnownDescriptiveAgmsgSentences.Any(known => quote.Contains(known, StringComparison.Ordinal)),
+                "a label quotes a sentence this test has not adjudicated as descriptive: " + quote);
+            Assert.DoesNotContain(
+                KnownOperativeSentences,
+                operative => quote.Contains(operative, StringComparison.Ordinal));
+        }
+
+        // And every sentence this test knows to be descriptive agmsg
+        // illustration, and that the document still renders, carries a label.
+        foreach (var known in KnownDescriptiveAgmsgSentences)
+        {
+            if (body.Any(line => line.Contains(known, StringComparison.Ordinal)))
+            {
+                Assert.True(
+                    quotes.Any(q => q.Contains(known, StringComparison.Ordinal)),
+                    "a rendered descriptive agmsg sentence carries no label: " + known);
+            }
         }
     }
+
+    private static string QuotedClause(string label) =>
+        label[SessionLayerSections.DescriptiveAgmsgContextPrefix.Length..]
+            .Split(SessionLayerSections.DescriptiveAgmsgContextSuffix)[0]
+            .Trim('"');
+
+    /// <summary>
+    /// Sentences this TEST adjudicates as descriptive agmsg illustration:
+    /// substrate identity and mechanism, stating what something IS. Owned here
+    /// so the semantic claim does not consult the production classification it
+    /// is meant to check.
+    /// </summary>
+    private static readonly IReadOnlyList<string> KnownDescriptiveAgmsgSentences =
+    [
+        "agmsg run directory (`~/.agents/skills/agmsg/run`)",
+        "agmsg `(team, role)` file naming",
+        "agmsg run-directory state files are named per `(team, role)`",
+        "8 dispatches addressed to `review` were silently lost",
+        "agmsg is a message/progress/completion signal layer only",
+        "coordinate over agmsg",
+        "agmsg carries natural-language delegation",
+        "agmsg identity and the codex bridge are folder-scoped",
+        "the agmsg run directory",
+    ];
+
+    /// <summary>
+    /// Sentences this TEST adjudicates as instructions — they bind, so a
+    /// descriptive label must never quote one. Negative fixture for the same
+    /// reason: the claim is the test's, not the table's.
+    /// </summary>
+    private static readonly IReadOnlyList<string> KnownOperativeSentences =
+    [
+        "Touch only files whose team segment is yours",
+        "never replaces semantic review or authorizes a merge",
+        "Verify the process's cwd before stopping an app-server",
+        "Write only through the canonical commands for your own domain",
+        "never restart, reconfigure, or kill the shared server",
+        "READ the pane first",
+        "Never delete another team's workspace",
+        "every label transition goes through intent-cli",
+    ];
 
     [Fact]
     public void UnderHerdrOnly_TheAuthorityCanonSurvivesInBothRenderings_G570()
