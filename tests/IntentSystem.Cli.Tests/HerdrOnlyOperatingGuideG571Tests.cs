@@ -22,10 +22,10 @@ public sealed class HerdrOnlyOperatingGuideG571Tests : IDisposable
         Assert.Contains("herdr agent start <logical-role>", output, StringComparison.Ordinal);
         Assert.Contains("logical-role→pane", output, StringComparison.Ordinal);
         Assert.Contains("G556 verified-liveness", output, StringComparison.Ordinal);
-        Assert.Contains("ORCH_RESULT <task-id> <status> <artifact>", output, StringComparison.Ordinal);
-        Assert.Contains("herdr agent wait <logical-role> --until done --until blocked --timeout", output, StringComparison.Ordinal);
+        Assert.Contains("result-nonce: <fresh-per-dispatch-nonce>", output, StringComparison.Ordinal);
+        Assert.Contains("herdr agent wait <logical-role> --until idle --until done --until blocked --timeout", output, StringComparison.Ordinal);
         Assert.Contains("Composite success is mandatory", output, StringComparison.Ordinal);
-        Assert.Contains("state alone NEVER means task success", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("State alone and marker alone NEVER mean task success", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Approvals are NEVER auto-answered", output, StringComparison.Ordinal);
         Assert.DoesNotContain("ship in G571", output, StringComparison.OrdinalIgnoreCase);
     }
@@ -137,7 +137,15 @@ public sealed class HerdrOnlyOperatingGuideG571Tests : IDisposable
                      "O_APPEND",
                      "timestamp",
                      "completion|blocked|question|escalation",
-                     "ORCH_RESULT <task-id> <status> <artifact>",
+                     "fresh-per-dispatch-nonce",
+                     "workspace.workspace_id",
+                     "tab.tab_id",
+                     "root_pane.pane_id",
+                     "root_pane.cwd",
+                     "--until idle --until done --until blocked",
+                     "pane read --source recent-unwrapped",
+                     "approval/question-paused",
+                     "final gate",
                      "one-minute-class",
                      "byte-offset watermark",
                      "agmsg → herdr-only",
@@ -151,6 +159,76 @@ public sealed class HerdrOnlyOperatingGuideG571Tests : IDisposable
         {
             Assert.Contains(token, content, StringComparison.Ordinal);
         }
+
+        Assert.Contains(
+            language == "en" ? "neither state nor marker" : "state 単独も marker 単独も",
+            content,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DispatchMarker_CannotMatchItsOwnPromptEcho_G575()
+    {
+        var output = Render(herdrOnly: true, format: "markdown");
+        var taskBlockStart = output.IndexOf("```text\nTASK <task-id>", StringComparison.Ordinal);
+        Assert.True(taskBlockStart >= 0);
+        var taskBlockEnd = output.IndexOf("```", taskBlockStart + "```text".Length, StringComparison.Ordinal);
+        Assert.True(taskBlockEnd > taskBlockStart);
+        var taskBlock = output[taskBlockStart..taskBlockEnd];
+        var dispatch = JsonDocument.Parse(Render(herdrOnly: true, format: "json"))
+            .RootElement.GetProperty(HerdrOnlyOperatingGuide.JsonProperty).GetProperty("dispatch");
+
+        Assert.Contains("result-prefix: ORCH_RESULT", taskBlock, StringComparison.Ordinal);
+        Assert.Contains("result-nonce: <fresh-per-dispatch-nonce>", taskBlock, StringComparison.Ordinal);
+        Assert.DoesNotContain("ORCH_RESULT <fresh-per-dispatch-nonce>", taskBlock, StringComparison.Ordinal);
+        Assert.Contains("searches existing pane output immediately", output, StringComparison.Ordinal);
+        Assert.Contains("falsely match before the agent does any work", output, StringComparison.Ordinal);
+        Assert.Contains("never embed the composed wait needle", dispatch.GetProperty("marker_construction").GetString());
+        Assert.Contains("falsely match", dispatch.GetProperty("echo_hazard").GetString());
+    }
+
+    [Fact]
+    public void Completion_RequiresArtifactAndPostWaitPaneInspection_G575()
+    {
+        var output = Render(herdrOnly: true, format: "markdown");
+        var json = JsonDocument.Parse(Render(herdrOnly: true, format: "json"))
+            .RootElement.GetProperty(HerdrOnlyOperatingGuide.JsonProperty);
+        var waiting = json.GetProperty("waiting");
+
+        Assert.Contains("--until idle --until done --until blocked", output, StringComparison.Ordinal);
+        Assert.Contains("After EVERY wait return", output, StringComparison.Ordinal);
+        Assert.Contains("herdr pane read --source recent-unwrapped <pane-id>", output, StringComparison.Ordinal);
+        Assert.Contains("`idle` can mean approval-paused", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("G550 MAY", output, StringComparison.Ordinal);
+        Assert.Contains("re-enter the wake and wait again", output, StringComparison.Ordinal);
+        Assert.Contains("marker alone NEVER mean task success", output, StringComparison.Ordinal);
+        Assert.Contains("named artifact verification is the final gate", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("idle can be approval-paused", waiting.GetProperty("post_wait_inspection").GetString());
+        Assert.Contains("G550 MAY/escalate", waiting.GetProperty("paused_reentry").GetString());
+        Assert.Contains("neither state nor marker alone", waiting.GetProperty("success").GetString());
+    }
+
+    [Fact]
+    public void WorkspaceCreate_UsesInstalledHerdr075ResultFields_G575()
+    {
+        var output = Render(herdrOnly: true, format: "markdown");
+        var provisioning = JsonDocument.Parse(Render(herdrOnly: true, format: "json"))
+            .RootElement.GetProperty(HerdrOnlyOperatingGuide.JsonProperty).GetProperty("provisioning");
+
+        foreach (var field in new[]
+                 {
+                     "workspace_created",
+                     "workspace.workspace_id",
+                     "tab.tab_id",
+                     "root_pane.pane_id",
+                     "root_pane.cwd",
+                 })
+        {
+            Assert.Contains(field, output, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("workspace.workspace_id", provisioning.GetProperty("workspace_result_mapping").GetString());
+        Assert.Contains("root_pane.cwd", provisioning.GetProperty("workspace_result_mapping").GetString());
     }
 
     private string Render(bool herdrOnly, string format)

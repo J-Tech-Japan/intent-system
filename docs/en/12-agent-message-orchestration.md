@@ -212,7 +212,10 @@ per team; mixed agmsg and herdr delivery is a contract violation.
 Create the team workspace and role tabs/panes with the role cwd (`<host-repo>`
 for design/orchestrator, the child checkout for implementation, and an isolated
 review cwd/worktree). Use `herdr workspace create`, `herdr tab create`, or
-`herdr pane split` as shown by the installed `herdr ... --help`. Record an
+`herdr pane split` as shown by the installed `herdr ... --help`. In herdr 0.7.5,
+the `workspace_created` result has top-level `workspace`, `tab`, and
+`root_pane`; seed the mapping from `workspace.workspace_id`, `tab.tab_id`, and
+`root_pane.pane_id`, and verify `root_pane.cwd`. Record an
 operator-visible logical-role→pane-id/cwd mapping and resolve it before every
 operation; workflows never hard-code pane ids. An external design frontend is
 recorded as a reader type rather than fabricated as a pane.
@@ -247,25 +250,38 @@ inputs:
   - <canonical issue/PR/path/reference>
 expected-artifacts:
   - <file, commit, PR, report, or other inspectable artifact>
-completion-marker: Print exactly `ORCH_RESULT <task-id> <status> <artifact>` when ready; status is completed, blocked, or question.
+result-prefix: ORCH_RESULT
+result-nonce: <fresh-per-dispatch-nonce>
+completion-marker: When ready, print one line by concatenating result-prefix, one space, result-nonce, one space, status, one space, and artifact; status is completed, blocked, or question. Do not copy a precomposed marker into this task block.
 ```
 
+Generate a fresh unpredictable nonce for each dispatch; never reuse one or use
+the task id alone. `pane wait-output` searches existing output immediately, so
+a precomposed wait needle in the task block can be echoed and falsely match
+before work starts. The split fields keep that literal out of the dispatch.
 Files, commits, PRs, and verification logs are the handoff; screen prose only
 points to them. Repairs return to the same logical role with the task id and
-concrete delta after resolving its current pane.
+concrete delta after resolving its current pane. A marker match from any buffer
+is never sufficient; the named artifact must exist and pass verification.
 
 Every wait is bounded:
 
 ```text
-herdr agent wait <logical-role> --until done --until blocked --timeout <milliseconds>
-herdr pane wait-output --match "ORCH_RESULT <task-id>" --source recent-unwrapped --timeout <milliseconds> <pane-id>
+herdr agent wait <logical-role> --until idle --until done --until blocked --timeout <milliseconds>
+herdr pane wait-output --match "ORCH_RESULT <fresh-per-dispatch-nonce>" --source recent-unwrapped --timeout <milliseconds> <pane-id>
 ```
 
-A timeout is a re-entry point: inspect and persist progress, return control,
-then resume on a later wake. Deterministic scripts with persisted cursors are
-preferred for long flows. Composite success requires settled state + the exact
-task marker + an existing verified artifact. herdr `done`/`idle` alone never
-means success.
+After every wait return—including `idle`, `done`, `blocked`, marker match, and
+timeout—run `herdr pane read --source recent-unwrapped <pane-id>` and inspect
+for a pending approval or question. `idle` can mean approval-paused. Classify
+the outcome as settled, approval/question-paused, or timeout. For a pause,
+answer only a pane-read G550 MAY class; escalate everything else, then re-enter
+the wake and wait again. A timeout is likewise a re-entry point: persist
+progress, return control, then resume on a later wake. Deterministic scripts
+with persisted cursors are preferred for long flows. Composite success requires
+dialog-free settled state + the exact fresh-nonce marker + an existing verified
+artifact. Artifact verification is the final gate; neither state nor marker
+alone means success.
 
 ### Normative `events.jsonl` design boundary
 
@@ -306,6 +322,11 @@ intent-cli workflow state.
   the self-contained settle-and-re-check READY gate above.
 - Long-wait turn death: use bounded waits, re-entry, and deterministic persisted
   loops.
+- Dispatch-echo false match: keep the composed wait needle out of the task
+  block, inspect the pane after the return, and independently verify the named
+  artifact.
+- Approval/question pause reported as idle: inspect the pane after every wait,
+  apply the G550 MAY/escalate boundary, and re-enter the wake.
 
 For **agmsg → herdr-only**: drain/park work; gracefully drop roles and stop
 watchers/bridges; provision herdr, its mapping, and the validated events path;
