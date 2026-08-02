@@ -2645,6 +2645,183 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_BlockedParked_ReproducesReleaseGateFieldShape_AndHeartbeatCarriesInformationalNote_G574()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G570/github-body.md", BuildCompleteContractBody());
+        workspace.WritePacketDomain("G570", "intent-cli");
+        workspace.WriteQueueState(BuildPrePublishQueueStateJson(
+            "G570", "blocked", ["v0.7.1-release-gate — publish only after release"]));
+        workspace.WriteFile(
+            ".intent-cli/runs.jsonl",
+            BuildRunsLogLine("G569", FixedNow.AddMinutes(-200))
+            + BuildRunsLogLine("G570", FixedNow.AddMinutes(-45), "blocked", "v0.7.1-release-gate — publish only after release"));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var stalledWriter = new StringWriter();
+        var stalledExit = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            stalledWriter);
+
+        Assert.Equal(0, stalledExit);
+        using var stalledDoc = JsonDocument.Parse(stalledWriter.ToString());
+        var item = Assert.Single(stalledDoc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindBlockedParked, item.GetProperty("kind").GetString());
+        Assert.Equal("G570", item.GetProperty("execution_unit").GetString());
+        Assert.Equal(45, item.GetProperty("age_minutes").GetInt32());
+        Assert.True(item.GetProperty("is_informational").GetBoolean());
+        Assert.Contains("v0.7.1-release-gate", item.GetProperty("recommended_action").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("publish-flow", item.GetProperty("recommended_action").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            stalledDoc.RootElement.GetProperty("items").EnumerateArray(),
+            candidate => candidate.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle);
+
+        using var heartbeatWriter = new StringWriter();
+        var heartbeatExit = AutomationHeartbeatCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            heartbeatWriter);
+
+        Assert.Equal(0, heartbeatExit);
+        using var heartbeatDoc = JsonDocument.Parse(heartbeatWriter.ToString());
+        var messageBody = heartbeatDoc.RootElement.GetProperty("message_body").GetString()!;
+        Assert.Contains("0 pending transition(s), 1 informational note(s)", messageBody, StringComparison.Ordinal);
+        Assert.Contains("blocked-parked", messageBody, StringComparison.Ordinal);
+        Assert.Contains("FYI:", messageBody, StringComparison.Ordinal);
+        Assert.Contains("v0.7.1-release-gate", messageBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("publish-flow", messageBody, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("blocked", false, "blocked")]
+    [InlineData("queued", true, "queued")]
+    public void Execute_HalfConvergedBlockedFields_ReportActionableStateDrift_NeverPublish_G574(
+        string state,
+        bool hasBlockedBy,
+        string transitionEvent)
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G570/github-body.md", BuildCompleteContractBody());
+        workspace.WritePacketDomain("G570", "intent-cli");
+        workspace.WriteQueueState(BuildPrePublishQueueStateJson(
+            "G570", state, hasBlockedBy ? ["v0.7.1-release-gate"] : []));
+        workspace.WriteFile(
+            ".intent-cli/runs.jsonl",
+            BuildRunsLogLine("G570", FixedNow.AddMinutes(-60), transitionEvent,
+                hasBlockedBy ? "v0.7.1-release-gate" : null));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindStateDrift, item.GetProperty("kind").GetString());
+        Assert.False(item.GetProperty("is_informational").GetBoolean());
+        Assert.Contains("automation issue-block", item.GetProperty("recommended_action").GetString(), StringComparison.Ordinal);
+        Assert.Contains("--clear --pre-publish", item.GetProperty("recommended_action").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("publish-flow", item.GetProperty("recommended_action").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            doc.RootElement.GetProperty("items").EnumerateArray(),
+            candidate => candidate.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle);
+    }
+
+    [Fact]
+    public void Execute_PrePublishUnblock_RestartsBacklogIdleAgeAtCanonicalTransition_G574()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G570/github-body.md", BuildCompleteContractBody());
+        workspace.WritePacketDomain("G570", "intent-cli");
+        workspace.WriteQueueState(BuildPrePublishQueueStateJson(
+            "G570", "blocked", ["v0.7.1-release-gate"]));
+        workspace.WriteFile(
+            ".intent-cli/runs.jsonl",
+            BuildRunsLogLine("G570", FixedNow.AddMinutes(-120), "blocked", "v0.7.1-release-gate"));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+        AutomationIssueBlockCommand.UtcNowFactory = () => FixedNow.AddMinutes(-10);
+
+        try
+        {
+            using var clearWriter = new StringWriter();
+            var clearExit = AutomationIssueBlockCommand.Execute(
+                workspace.Context,
+                ["G570", "--clear", "--pre-publish", "--write", "--format", "json"],
+                clearWriter);
+            Assert.True(clearExit == 0, clearWriter.ToString());
+
+            using var writer = new StringWriter();
+            var exitCode = AutomationStalledWorkCommand.Execute(
+                workspace.Context,
+                ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--stale-minutes", "0", "--backlog-idle-minutes", "0", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            using var doc = JsonDocument.Parse(writer.ToString());
+            var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal(AutomationStalledWorkCommand.KindBacklogReadyIdle, item.GetProperty("kind").GetString());
+            Assert.Equal(10, item.GetProperty("age_minutes").GetInt32());
+            Assert.DoesNotContain(
+                doc.RootElement.GetProperty("items").EnumerateArray(),
+                candidate => candidate.GetProperty("kind").GetString() is
+                    AutomationStalledWorkCommand.KindBlockedParked or AutomationStalledWorkCommand.KindStateDrift);
+        }
+        finally
+        {
+            AutomationIssueBlockCommand.UtcNowFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_GenuinelyQueuedUnit_RetainsExactJsonBytes_G574()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G600/github-body.md", BuildCompleteContractBody());
+        workspace.WritePacketDomain("G600", "intent-cli");
+        workspace.WriteQueueState(BuildReadyQueueStateJson("G600"));
+        workspace.WriteFile(".intent-cli/runs.jsonl", BuildRunsLogLine("G599", FixedNow.AddMinutes(-46)));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(
+            """
+            {
+              "domain": "intent-cli",
+              "repo": "J-Tech-Japan/intent-system",
+              "stale_minutes_threshold": 0,
+              "backlog_idle_minutes_threshold": 45,
+              "stalled": true,
+              "items": [
+                {
+                  "kind": "backlog-ready-idle",
+                  "execution_unit": "G600",
+                  "issue": null,
+                  "pr": null,
+                  "age_minutes": 46,
+                  "is_informational": false,
+                  "recommended_action": "intent-cli issue publish-flow G600 --repo J-Tech-Japan/intent-system --write --format json",
+                  "declared_write_back_targets": null
+                }
+              ],
+              "excluded": [],
+              "warnings": []
+            }
+
+            """,
+            writer.ToString());
+    }
+
+    [Fact]
     public void Execute_Heartbeat_SurfacesBacklogReadyIdleInMessageBody()
     {
         using var workspace = new StalledWorkWorkspace();
@@ -2808,14 +2985,49 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         }
         """;
 
-    private static string BuildRunsLogLine(string executionUnit, DateTimeOffset ts) =>
+    private static string BuildRunsLogLine(
+        string executionUnit,
+        DateTimeOffset ts,
+        string eventName = "pr-merged-closeout",
+        string? reason = null) =>
         RunLogSerializer.SerializeLine(new RunEvent
         {
             Ts = ts,
             ExecutionUnit = executionUnit,
-            Event = "pr-merged-closeout",
+            Event = eventName,
             By = "intent-cli closeout pr",
+            Reason = reason,
         }) + "\n";
+
+    private static string BuildPrePublishQueueStateJson(
+        string executionUnit,
+        string state,
+        IReadOnlyList<string> blockedBy)
+    {
+        var blockedByJson = JsonSerializer.Serialize(blockedBy);
+        return $$"""
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-01T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "{{executionUnit}}",
+                  "title": "{{executionUnit}} title",
+                  "state": "{{state}}",
+                  "dependencies": [],
+                  "blocked_by": {{blockedByJson}},
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_issue": null,
+                  "linked_pr": null,
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """;
+    }
 
     private static GitHubAutomationIssueCandidate BuildIssue(
         int number, string title, DateTimeOffset createdAt, params string[] labels) =>

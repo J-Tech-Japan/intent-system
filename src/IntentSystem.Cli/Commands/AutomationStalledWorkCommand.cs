@@ -206,6 +206,22 @@ internal static class AutomationStalledWorkCommand
     public const string KindBacklogReadyIdle = "backlog-ready-idle";
 
     /// <summary>
+    /// G574: a pre-publish queue item whose blocked representation is fully
+    /// converged (<c>state=blocked</c> and non-empty <c>blocked_by</c>).
+    /// Informational only: parking is intentional, so this kind names the
+    /// recorded reason and never recommends publishing or changing state.
+    /// </summary>
+    public const string KindBlockedParked = "blocked-parked";
+
+    /// <summary>
+    /// G574: a queue item whose two blocked fields disagree. This is
+    /// actionable drift rather than an intentional park; its recommendation
+    /// points at the canonical block/clear surface without choosing the
+    /// operator's intended direction.
+    /// </summary>
+    public const string KindStateDrift = "state-drift";
+
+    /// <summary>
     /// G544: default <c>--backlog-idle-minutes</c> threshold (45 minutes) —
     /// below G523's typical single-message recovery latency, matching
     /// <see cref="AutomationHeartbeatCommand.DefaultStaleMinutes"/>, so a
@@ -1477,6 +1493,15 @@ internal static class AutomationStalledWorkCommand
             return;
         }
 
+        // G574: inspect the two-field blocked representation before asking
+        // next-slice for a publishable candidate. The selector's fallback can
+        // surface state=blocked packets, while the reverse half-converged
+        // shape (non-blocked + blocked_by) is filtered out entirely. Reading
+        // queue-state directly here is therefore necessary both to suppress
+        // the unsafe publish recommendation and to keep reverse drift visible.
+        var nonPublishableUnits = CollectBacklogBlockedState(
+            context, domain, repo, now, items, excluded);
+
         IntentNextSliceResult nextSlice;
         try
         {
@@ -1506,6 +1531,13 @@ internal static class AutomationStalledWorkCommand
         }
 
         var executionUnit = nextSlice.Candidate.ExecutionUnit;
+        if (nonPublishableUnits.Contains(executionUnit))
+        {
+            // blocked-parked/state-drift already explains why this packet is
+            // not publishable. Never append the contradictory G544 action.
+            return;
+        }
+
         var runLogPath = context.GetRunLogPath();
         if (!File.Exists(runLogPath))
         {
@@ -1576,6 +1608,185 @@ internal static class AutomationStalledWorkCommand
             IsInformational = false,
             RecommendedAction = $"intent-cli issue publish-flow {executionUnit} --repo {repo} --write --format json",
         });
+    }
+
+    /// <summary>
+    /// G574: classifies queue items whose <c>state</c>/<c>blocked_by</c>
+    /// representation is either converged-blocked or half-converged. Only
+    /// packet-backed items belonging to the requested domain/repository are
+    /// considered, matching the backlog detector's own child-packet scope.
+    /// The returned set is an explicit publish-suppression set even when age
+    /// evidence is unusable: missing history must never turn a parked/drifted
+    /// unit back into a publish recommendation.
+    /// </summary>
+    private static HashSet<string> CollectBacklogBlockedState(
+        CliContext context,
+        string domain,
+        string repo,
+        DateTimeOffset now,
+        List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded)
+    {
+        var nonPublishableUnits = new HashSet<string>(StringComparer.Ordinal);
+        var queueStateLocation = RuntimeScopedStateResolver.ResolveQueueStatePathForRead(context.RepoRoot, domain, repo);
+        if (!File.Exists(queueStateLocation.Path))
+        {
+            return nonPublishableUnits;
+        }
+
+        QueueState queueState;
+        try
+        {
+            queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStateLocation.Path));
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException)
+        {
+            // Preserve the pre-G574 result for ordinary queued work. The
+            // canonical selector owns its existing queue-state diagnostics.
+            return nonPublishableUnits;
+        }
+
+        var candidates = queueState.Items
+            // This is the pre-publish backlog lane: queued and blocked are
+            // its only valid states. ClarifyBlocked legitimately carries a
+            // reason under a different state machine and must not be
+            // misclassified as G574 half-convergence.
+            .Where(item => item.State is QueueItemState.Queued or QueueItemState.Blocked
+                && (item.State == QueueItemState.Blocked || item.BlockedBy.Count > 0)
+                && QueueItemMatchesBacklogScope(context, item, domain, repo))
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            return nonPublishableUnits;
+        }
+
+        IReadOnlyList<RunEvent> runEvents;
+        var runLogPath = context.GetRunLogPath();
+        try
+        {
+            runEvents = File.Exists(runLogPath)
+                ? RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath))
+                : Array.Empty<RunEvent>();
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException)
+        {
+            runEvents = Array.Empty<RunEvent>();
+        }
+
+        foreach (var queueItem in candidates)
+        {
+            var stateBlocked = queueItem.State == QueueItemState.Blocked;
+            var hasBlockedBy = queueItem.BlockedBy.Count > 0;
+            var kind = stateBlocked && hasBlockedBy ? KindBlockedParked : KindStateDrift;
+            nonPublishableUnits.Add(queueItem.ExecutionUnit);
+
+            var transition = runEvents
+                .Where(runEvent => string.Equals(runEvent.ExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal)
+                    && (!stateBlocked || !hasBlockedBy || string.Equals(runEvent.Event, "blocked", StringComparison.Ordinal)))
+                .OrderByDescending(runEvent => runEvent.Ts)
+                .FirstOrDefault();
+
+            if (transition is null)
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = kind,
+                    ExecutionUnit = queueItem.ExecutionUnit,
+                    Issue = null,
+                    Pr = null,
+                    Reason = ReasonActivityDataUnusable,
+                    Detail = kind == KindBlockedParked
+                        ? "queue-state is converged blocked, but runs.jsonl has no blocked event for this unit; age-since-block cannot be established, and publishing remains suppressed."
+                        : "queue-state is half-converged, but runs.jsonl has no transition event for this unit; drift age cannot be established, and publishing remains suppressed.",
+                });
+                continue;
+            }
+
+            var ageMinutes = ComputeAgeMinutesFromInstant(ClampToNow(transition.Ts, now), now);
+            var blockedReason = hasBlockedBy
+                ? string.Join("; ", queueItem.BlockedBy)
+                : "(missing blocked_by reason)";
+
+            items.Add(new StalledWorkItem
+            {
+                Kind = kind,
+                ExecutionUnit = queueItem.ExecutionUnit,
+                Issue = null,
+                Pr = null,
+                AgeMinutes = ageMinutes,
+                IsInformational = kind == KindBlockedParked,
+                RecommendedAction = kind == KindBlockedParked
+                    ? $"parked by blocked_by: {blockedReason}; no publish action while the blocked state remains converged."
+                    : BuildBlockedStateDriftAction(queueItem, repo, blockedReason),
+            });
+        }
+
+        return nonPublishableUnits;
+    }
+
+    private static bool QueueItemMatchesBacklogScope(
+        CliContext context,
+        QueueItem item,
+        string domain,
+        string repo)
+    {
+        var packetPath = Path.Combine(context.RepoRoot, ".intent-cli", "issues", item.ExecutionUnit, "packet.yaml");
+        if (!File.Exists(packetPath))
+        {
+            return false;
+        }
+
+        var normalizedReturnPath = item.ClarificationReturnPath.Replace('\\', '/');
+        var returnPathParts = normalizedReturnPath.Split('/');
+        if (returnPathParts.Length >= 2
+            && string.Equals(returnPathParts[0], "intents", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(returnPathParts[1], domain, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        try
+        {
+            var fields = PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetPath));
+            var packetDomain = ReadFirstNonEmpty(fields, "implementation_issue_packet.domain", "domain");
+            if (!string.IsNullOrWhiteSpace(packetDomain)
+                && !string.Equals(packetDomain, domain, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var targetRepo = ReadFirstNonEmpty(fields, "implementation_issue_packet.target_repo", "target_repo");
+            return string.IsNullOrWhiteSpace(targetRepo)
+                || string.Equals(targetRepo, repo, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is IOException or FormatException)
+        {
+            return false;
+        }
+    }
+
+    private static string BuildBlockedStateDriftAction(QueueItem item, string repo, string blockedReason)
+    {
+        if (item.LinkedIssue is { Repo: { } linkedRepo, Number: { } linkedNumber }
+            && string.Equals(linkedRepo, repo, StringComparison.OrdinalIgnoreCase))
+        {
+            var issueNumber = linkedNumber.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return $"state and blocked_by disagree; choose the intended canonical convergence: "
+                + $"intent-cli automation issue-block {item.ExecutionUnit} --repo {repo} --issue {issueNumber} "
+                + $"--reason \"{blockedReason}\" --write --format json, or "
+                + $"intent-cli automation issue-block {item.ExecutionUnit} --repo {repo} --issue {issueNumber} "
+                + "--clear --write --format json; never publish while drifted.";
+        }
+
+        if (item.LinkedIssue is null)
+        {
+            return $"state and blocked_by disagree; choose the intended canonical block/unblock convergence; "
+                + $"to release this unpublished unit run intent-cli automation issue-block {item.ExecutionUnit} "
+                + "--clear --pre-publish --write --format json; never publish while drifted.";
+        }
+
+        return "state and blocked_by disagree and linked_issue is incomplete; repair linkage, then use the canonical "
+            + "intent-cli automation issue-block block/clear surface; never publish while drifted.";
     }
 
     /// <summary>
