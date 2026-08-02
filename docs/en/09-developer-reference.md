@@ -613,6 +613,186 @@ wake procedure and from an external heartbeat are separate follow-up slices.
 informational one, so a reader (human or orchestrator) can never mistake
 "no transition needed" for an actionable next command.
 
+### Session-layer mode: which transport the four threads use (G570)
+
+`intent-cli session-layer show --domain <d> [--team <t>] [--format markdown|json]`
+`intent-cli session-layer set --domain <d> [--team <t>] --mode agmsg|herdr-only [--dry-run|--write] [--format markdown|json]`
+
+The four-thread model (design / orchestrator / implementation / review) is one
+thing; the SESSION LAYER those threads talk over is another, and per the
+operator ruling of 2026-08-01 it is now selectable rather than fixed.
+
+- **`agmsg` is PRIMARY** — the practiced, maintained transport, and the default
+  when nothing is recorded.
+- **`herdr-only` is PREVIEW** — a single-machine alternative where herdr is the
+  terminal controller and no separate message bridge runs. **The preview
+  qualifier scopes the TRANSPORT only.** The four-thread model itself stays
+  PRIMARY and unqualified in both modes, exactly as G540 ruled; choosing a
+  transport never makes the model provisional.
+- **One mode per team.** Mixing agmsg and herdr-only delivery inside one team is
+  a contract violation, not a fallback: two transports mean two views of who was
+  told what.
+
+Semantics:
+
+- **Scope** — recorded per domain, and per team where teams are modeled. A
+  team-scoped record wins over a domain-wide one; the team is the narrower
+  statement.
+- **Default** — `agmsg` when no record exists. `show` never writes.
+- **Persistence** — `.intent-cli/session-layer-mode.json`, written ONLY by
+  `session-layer set --write` (G548 lineage: durable state changes through
+  canonical commands, never by hand).
+- **Idempotent** — re-recording the mode already in force at the same scope is a
+  no-op and records no transition, so a setup script can assert the mode without
+  filling the trail with runs instead of decisions.
+- **Reversible, with a trail** — each entry keeps every transition (`from`,
+  `to`, `at`). Going back to agmsg is as ordinary as going to herdr-only, and
+  the record shows both.
+- **Fail-closed** — an unknown mode is refused rather than recorded, and an
+  unreadable record is refused rather than overwritten.
+
+**Routing.** The recorded mode selects which operating sections
+`guide orchestrator-thread` renders:
+
+- under `agmsg`, the guide renders exactly as before this slice — the routing is
+  the identity, so the practiced path cannot shift because a mode concept exists;
+- under `herdr-only`, the wholly agmsg-specific operational sections (setup and
+  registration, receiver readiness, monitor/bridge diagnostics, the agmsg reply
+  contract, design-receiver registration) are replaced by pointers to the
+  herdr-only operating sections, which ship in **G571**;
+- mode-independent canon renders in BOTH modes — supervision, isolation,
+  liveness, the wake contract, publish authority, the design↔orchestrator
+  double-check rule, dependency planning, escalation. Those are properties of
+  the model, and the model does not change with the transport.
+
+**Applicability is declared per section in ONE table carrying both renderings' identity, and it is four-valued** (design ruling,
+host main `fb1913c8`): `agmsg-only`, `herdr-only`, `mode-independent`, and
+`mode-independent-with-transport-mechanics`. The renderer selects whole sections
+from the recorded mode — in markdown and in JSON alike, so a field consumer and
+a prose reader never disagree about what applies.
+
+- **agmsg-only** sections are replaced, whole, by one *Session-layer switch
+  checklist* section naming what it replaced. They are not annotated and not
+  rendered.
+- **mode-independent** sections render unchanged in both modes.
+- **mode-independent-with-transport-mechanics** sections carry canon that binds
+  in both modes but express it through an agmsg mechanic. The section is KEPT
+  and typed at FRAGMENT level (design clarification G570): each fragment is
+  `structural` (headings, table scaffolding, fences — never routed),
+  `canon-descriptive` (mechanism, history, a substrate identity such as `agmsg
+  run directory` — byte-identical in both modes), `mode-independent-operative`
+  (an instruction that binds in BOTH modes — an intent-cli or GitHub step, or a
+  rule of the four-thread model — also byte-identical), or
+  `transport-operative` (an instruction to drive the transport — pointed away
+  under herdr-only). A section-level flag could not express a section holding
+  both kinds: it either leaked imperative steps behind a label or over-stripped
+  descriptive canon.
+
+  Typing is a DECLARATION, not a derivation. Every non-structural fragment the
+  guide renders is listed verbatim in `SessionLayerFragments`, with a type a
+  human assigned, for markdown and JSON separately. Lookup is exact and fails
+  closed: a fragment reaching a renderer without a declaration throws, so adding
+  or rewording a sentence is a test failure that demands a typing decision. An
+  earlier attempt inferred the type from instructional cue words, and its
+  failure mode was invisible from inside the suite — an instruction phrased
+  outside the cue vocabulary classified as description and survived into
+  herdr-only output, while the tests asked the same classifier what the answer
+  was and could only confirm it agreed with itself. The exhaustiveness guard now
+  re-derives the rendered fragments from the OUTPUT with its own markdown
+  reading and requires each to consume exactly one declaration, without
+  consulting the production classifier.
+
+  Declaration text stores the caller's inputs as collision-proof sentinels and
+  expands them at lookup, so one declaration serves every invocation shape. The
+  expansion is forward-only: canonicalising the other way (rewriting rendered
+  values back to placeholders) corrupts the document, because a short value such
+  as `monitor` for `--delivery-mode` also occurs in ordinary prose, and because
+  the guide legitimately contains literal `<domain>` placeholders inside command
+  templates a reader is meant to fill in.
+
+  The document title is ONE declared identity with an explicit rendering per
+  mode (`SessionLayerSections.DocumentTitle`), and the renderer holds no copy of
+  either string. Two sibling declarations modelled the titles as unrelated
+  surfaces, so either could be reworded alone with every guard still green.
+
+  Declaring a fragment is not the same as typing it correctly. A first pass
+  assigned the types BY CONSTRUCTION — anything naming no transport mechanic
+  became `canon-descriptive` — which produced 454 descriptive declarations
+  against 14 mode-independent-operative ones and filed binding duties ("READ the
+  pane first", "never delete another team's workspace", "every label transition
+  goes through intent-cli") as prose. Every non-structural fragment is now
+  adjudicated on its own terms: a duty that binds regardless of transport is
+  `mode-independent-operative`, and only mechanism, history, and substrate
+  identity are `canon-descriptive`.
+
+  A fragment whose text mixes an independently applicable descriptive clause
+  with an operative one is declared as separately typed CLAUSES that concatenate
+  back to it exactly — the isolation table's rows carry a substrate identity and
+  a binding ownership rule in one line, and a single type for the row either
+  files the rule as prose or strips the identity.
+
+  Typing is TOTAL at SENTENCE granularity. Every declaration is a clause list;
+  every clause is one sentence, or the scaffolding between sentences and table
+  cells; and the clauses reconstruct the fragment's text exactly. Typing whole
+  fragments and splitting only a handful of table rows was not enough — a
+  multi-sentence fragment that mixed mechanism with a binding duty still carried
+  one verdict, and a substring fixture over a list of imperatives cannot prove
+  otherwise. Both renderers consume the clause list, so routing and labelling
+  act at the granularity the types were decided at: a line that mixes canon with
+  a transport step keeps its canon and points away only that step.
+
+  The agmsg-example label NAMES the descriptive clause it qualifies. Three
+  weaker scopings were tried and each over-reached: a section banner marked
+  every duty in the section as illustration; a run banner still spanned the
+  instruction after it; and a whole-line label still covered the operative
+  sentences beside the descriptive one. A label that quotes its own scope cannot
+  reach past it. The JSON context lists each descriptive clause the same way,
+  one for one, instead of marking a property.
+
+  The label's wording is POSITION-NEUTRAL, and a deferred one says where its
+  sentence went. It used to claim the sentence was "below", which deferral made
+  false — a direction the label cannot guarantee is a false instruction to the
+  reader, however exact the quote beside it is.
+
+  Inside a markdown TABLE the label is deferred and emitted once the table is
+  complete. A blockquote and a blank line between two rows terminate a GFM
+  table, so the rows after it stop being part of it — the label's placement has
+  to yield to the structure it sits in. It can move precisely because it quotes
+  its own scope: a self-scoping label is still exact when it is read away from
+  the row it covers.
+
+Pointer-only text is G570 routing metadata: it says what does not apply and
+where the counterpart ships. It never says what to run instead, because a
+concrete herdr procedure is G571 content and is forbidden here.
+
+Substring/token replacement was tried and rejected as the correctness
+mechanism: it is simultaneously too weak (operative prose such as "wait for an
+agmsg delegation" carries no mechanic token) and too strong (an earlier draft
+deleted the timer-loop canon because it mentioned agmsg). Applicability is a
+property of a section's subject, so it is declared once, in
+`SessionLayerSections`, where it can be reviewed.
+
+The setup intake is mode-SPECIFIC, not token-replaced: under herdr-only the
+object carries no `agmsg_commands`, no agmsg-shaped `role_prompts`, and no
+`team` / `delivery_mode` inputs at all, and its headline instructs no
+registration. Descriptive agmsg content — the model's mechanism and history,
+byte-identical in both modes — is preceded by an explicit agmsg-example label
+so a reader distinguishes illustration from instruction at the point of
+reading. Replaced steps inside ordered lists keep their own number, so a
+playbook never reads 1, 2, 3, 5.
+
+**Fail-closed state.** An invalid PRESENT record is not absence. A malformed
+file, an unknown mode, or a record whose current mode disagrees with its own
+transition trail (proof it was not written by `session-layer set --write`) makes
+every mode-dependent surface fail with a named `session-layer-mode-unreadable`
+error and render NO guidance — rendering the default would hand the reader
+instructions for a transport the team may not be running. `set` refuses to
+overwrite such a record rather than repairing it silently.
+
+`guide model` and `guide onboarding` describe both modes, and onboarding reads
+the mode before any transport-specific step so a fresh agent never follows the
+wrong setup.
+
 ### Intent-tree co-evolution: recording a performed knowledge write-back (G564)
 
 `intent-cli automation knowledge-writeback-record --execution-unit <u> --commit <host-commit-sha> [--target <path>]... [--note <text>] [--dry-run|--write] [--format json|markdown]`

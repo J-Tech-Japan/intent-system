@@ -144,6 +144,15 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "session-layer",
+            Role = RoleDesign,
+            Classification = ClassificationSupport,
+            Mutability = MutabilityMixed,
+            RecommendedCaller = CallerOperator,
+            Purpose = "Session-layer transport selection (G570): `intent-cli session-layer show --domain <d> [--team <t>]` and `session-layer set --domain <d> [--team <t>] --mode agmsg|herdr-only [--write]`. Records which transport a team's four threads use — `agmsg` is PRIMARY, `herdr-only` is PREVIEW and scopes that qualifier to the TRANSPORT, never to the four-thread model. Defaults to agmsg when unrecorded, is idempotent, keeps a transition trail, and is reversible in both directions; `show` is read-only and `set` writes only with `--write`. The recorded mode routes `guide orchestrator-thread`."
+        },
+        new CommandGroupEntry
+        {
             Name = "automation",
             Role = RoleHostReview,
             Classification = ClassificationSupport,

@@ -77,12 +77,54 @@ internal static class GuideOrchestratorThreadCommand
             return 1;
         }
 
-        var guide = BuildGuide(values);
+        // G570: the recorded session layer selects which operating sections
+        // this guide renders. Under `agmsg` the projection below is the
+        // identity, so agmsg output is byte-identical to before this slice.
+        //
+        // G570 review repair: this used to fall back to agmsg when the record
+        // could not be read, so a corrupted or hand-edited record silently
+        // routed the whole guide through the wrong transport — the reader
+        // would follow agmsg instructions in a herdr-only team and never know
+        // the record was the reason. An invalid PRESENT record is not absence:
+        // it fails closed here, with no guidance rendered at all.
+        SessionLayerModeResolution sessionLayer;
+        try
+        {
+            sessionLayer = SessionLayerModeStore.Resolve(
+                context.RepoRoot,
+                values["<domain>"],
+                string.IsNullOrWhiteSpace(values["<team>"]) ? null : values["<team>"]);
+        }
+        catch (InvalidOperationException exception)
+        {
+            writer.WriteLine($"session-layer-mode-unreadable: {exception.Message}");
+            writer.WriteLine(
+                "Refusing to render orchestrator-thread guidance: which sections are operative depends on the "
+                + "session layer, and rendering the default would hand you instructions for a transport this team "
+                + "may not be running. Repair the record with `intent-cli session-layer set --domain "
+                + $"{values["<domain>"]} --mode agmsg|herdr-only --write`, or remove it to return to the default.");
+            return 1;
+        }
+
+        var guide = ApplySessionLayer(BuildGuide(values, sessionLayer.IsHerdrOnly), sessionLayer, values);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
-            writer.Write(JsonSerializer.Serialize(guide, JsonOptions));
+            var json = JsonSerializer.Serialize(guide, JsonOptions);
+            writer.Write(sessionLayer.IsHerdrOnly ? SelectJsonSections(json, values) : json);
             writer.WriteLine();
+            return 0;
+        }
+
+        // G570 rereview repair: routing is SECTION-LEVEL and structural. Whole
+        // agmsg-only sections are replaced by one pointer section; every
+        // mode-independent section renders unchanged. See SessionLayerSections
+        // for why substring projection was the wrong mechanism.
+        if (sessionLayer.IsHerdrOnly)
+        {
+            using var buffer = new StringWriter();
+            WriteMarkdown(buffer, guide);
+            writer.Write(SelectMarkdownSections(buffer.ToString(), values));
             return 0;
         }
 
@@ -90,7 +132,510 @@ internal static class GuideOrchestratorThreadCommand
         return 0;
     }
 
-    private static OrchestratorThreadGuide BuildGuide(IReadOnlyDictionary<string, string> values)
+    /// <summary>
+    /// G570: attaches the session-layer block and the intake's mode note to the
+    /// built guide. It no longer TRANSFORMS any content — after the rereview,
+    /// which content applies is decided by declared section applicability at
+    /// the rendering boundaries (<see cref="SelectMarkdownSections"/> /
+    /// <see cref="SelectJsonSections"/>), not by rewriting strings here.
+    /// </summary>
+    internal static OrchestratorThreadGuide ApplySessionLayer(
+        OrchestratorThreadGuide guide,
+        SessionLayerModeResolution sessionLayer,
+        IReadOnlyDictionary<string, string> values)
+    {
+        var block = new OrchestratorSessionLayer
+        {
+            Mode = sessionLayer.Mode,
+            Source = sessionLayer.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
+            Summary = sessionLayer.Source == SessionLayerModeSource.Recorded
+                ? $"Session layer: {SessionLayerMode.Describe(sessionLayer.Mode)} — recorded for this domain/team."
+                : $"Session layer: {SessionLayerMode.Describe(SessionLayerMode.Default)} — no selection recorded, so the default is in force.",
+            Exclusivity = SessionLayerMode.ExclusivitySentence,
+            PreviewScoping = SessionLayerMode.PreviewScopingSentence,
+            Selection =
+                $"`intent-cli session-layer show --domain {values["<domain>"]}` reports it; "
+                + $"`intent-cli session-layer set --domain {values["<domain>"]} --mode agmsg|herdr-only --write` changes it, "
+                + "reversibly, in both directions.",
+            ResidualAgmsgMechanics = sessionLayer.IsHerdrOnly
+                ? "HERDR-ONLY: the agmsg-only sections of this guide are REPLACED, whole, by the switch-checklist "
+                    + "section below — they are not rendered and not annotated. Every section that remains is "
+                    + "mode-independent and applies unchanged."
+                : null,
+        };
+
+        var intakeNote =
+            $"Recorded session layer for this setup: {SessionLayerMode.Describe(sessionLayer.Mode)} "
+            + $"({(sessionLayer.Source == SessionLayerModeSource.Recorded ? "recorded" : "default — nothing recorded yet")}). "
+            + $"Record or change it with `intent-cli session-layer set --domain {values["<domain>"]} "
+            + (string.IsNullOrWhiteSpace(values["<team>"]) ? string.Empty : $"--team {values["<team>"]} ")
+            + "--mode agmsg|herdr-only --write`. A herdr-only request made at first setup is honoured from then on; "
+            + "the choice is reversible in both directions.";
+
+        return guide with
+        {
+            SessionLayer = block,
+            SetupIntake = guide.SetupIntake with
+            {
+                SessionLayerMode = sessionLayer.Mode,
+                SessionLayerNote = intakeNote,
+            },
+        };
+    }
+
+    /// <summary>
+    /// G570 rereview repair: keeps whole sections whose declared applicability
+    /// includes herdr-only, and replaces the run of agmsg-only sections with a
+    /// single pointer section naming what was replaced.
+    ///
+    /// Section-level, not line-level: a section is either about the transport or
+    /// it is not, and that judgement lives in <see cref="SessionLayerSections"/>
+    /// where it can be reviewed — rather than being re-derived per line from a
+    /// substring rule that is both too weak (operative prose carries no
+    /// mechanic token) and too strong (canon that merely mentions agmsg gets
+    /// destroyed).
+    /// </summary>
+    internal static string SelectMarkdownSections(string markdown, IReadOnlyDictionary<string, string> values)
+    {
+        var lines = markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var kept = new List<string>(lines.Length);
+        var replaced = new List<string>();
+        var dropping = false;
+        string? currentMixedHeading = null;
+        var deferredTableLabels = new List<string>();
+
+        var inFencedBlock = false;
+
+        foreach (var line in lines)
+        {
+            // G570 fourth repair: a `## …` INSIDE a fenced block is quoted
+            // content — an artifact template the guide shows — not a section of
+            // this document. Treating it as one silently re-scoped routing from
+            // that point on, which the rendered-surface guard caught.
+            if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
+            {
+                inFencedBlock = !inFencedBlock;
+            }
+
+            if (!inFencedBlock && line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                dropping = SessionLayerSections.AgmsgOnlyHeadings.Contains(line, StringComparer.Ordinal);
+                currentMixedHeading = SessionLayerSections.MixedHeadings.Contains(line, StringComparer.Ordinal)
+                    ? line
+                    : null;
+                if (dropping)
+                {
+                    replaced.Add(line);
+                    continue;
+                }
+            }
+
+            if (dropping)
+            {
+                continue;
+            }
+
+            // G570 eighth repair: the label is scoped to DESCRIPTIVE fragments,
+            // not to the section. Declaring a whole mixed section "descriptive,
+            // not an instruction" told the reader that the binding cross-mode
+            // duties inside it — read the pane first, verify before answering,
+            // never delete another team's artifacts — were illustration. The
+            // banner is emitted before a RUN of descriptive fragments and never
+            // before an operative one, so an operative fragment is never covered
+            // by it.
+            if (!inFencedBlock && line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                kept.Add(line);
+                continue;
+            }
+
+            // Four-valued applicability (design ruling, host main fb1913c8):
+            // inside a section declared MODE-INDEPENDENT-WITH-TRANSPORT-
+            // MECHANICS, the canon stays and only the mechanic-bearing
+            // sentences become pointer-only text. The section's rule still
+            // binds; only the agmsg way of carrying it out is pointed away.
+            // G570 sixth repair: fenced CONTENT is still content — a
+            // paste-ready prompt is the most operative thing in the document.
+            // The fence only stops `##` inside it becoming a section boundary;
+            // it does not exempt the lines from routing.
+            //
+            // G570 seventh repair: the type comes from the hand-authored
+            // declaration table, not from a cue heuristic, and an undeclared
+            // fragment throws rather than defaulting to "keep".
+            if (currentMixedHeading is not null)
+            {
+                // G570 ninth repair: routing and labelling read the declared
+                // CLAUSES, so both act at the sentence granularity the types
+                // were decided at. Typing a whole line meant a sentence of
+                // mechanism and a sentence of transport instruction shared one
+                // verdict, and the clause model the eighth repair added was
+                // never read here at all.
+                var clauses = SessionLayerFragments.ClausesOf(values, currentMixedHeading, line);
+                var trimmedLine = line.TrimStart();
+                var indent = line[..(line.Length - trimmedLine.Length)];
+
+                if (clauses.Any(c => c.Type == SessionLayerSections.FragmentType.TransportOperative))
+                {
+                    if (clauses.All(c => c.Type is SessionLayerSections.FragmentType.TransportOperative
+                            or SessionLayerSections.FragmentType.Structural))
+                    {
+                        var pointerLine = PointerFor(line);
+                        if (kept.Count == 0 || !string.Equals(kept[^1], pointerLine, StringComparison.Ordinal))
+                        {
+                            kept.Add(pointerLine);
+                        }
+
+                        continue;
+                    }
+
+                    // A mixed line keeps its canon and points away only the
+                    // transport sentences inside it.
+                    var rebuilt = string.Concat(clauses.Select(c =>
+                        c.Type == SessionLayerSections.FragmentType.TransportOperative
+                            ? SessionLayerSections.MechanicPointer
+                            : c.Text));
+                    kept.Add(indent + rebuilt.TrimStart());
+                    continue;
+                }
+
+                // The label NAMES the descriptive clause it qualifies, one for
+                // one. A section banner, a run banner, and a whole-line label
+                // were each tried and each over-reached: description and binding
+                // duties interleave inside a single line, so only a label that
+                // states its own scope cannot cover an instruction.
+                //
+                // G570 tenth repair: a blockquote plus a blank line between two
+                // table rows TERMINATES the GFM table, so the rows after it stop
+                // being part of it. Inside a table the labels are deferred and
+                // flushed once the table is complete. Placement can move because
+                // the label quotes its own scope — that is exactly what makes it
+                // readable away from the row it covers.
+                foreach (var clause in clauses.Where(SessionLayerFragments.IsAgmsgIllustration))
+                {
+                    var inTable = line.TrimStart().StartsWith("|", StringComparison.Ordinal);
+                    var label = SessionLayerSections.DescriptiveAgmsgContextFor(clause.Text, inTable);
+                    if (inTable)
+                    {
+                        deferredTableLabels.Add(label);
+                    }
+                    else
+                    {
+                        kept.Add(label);
+                        kept.Add(string.Empty);
+                    }
+                }
+            }
+
+            kept.Add(line);
+            FlushDeferredTableLabels(kept, deferredTableLabels, line);
+        }
+
+        FlushDeferredTableLabels(kept, deferredTableLabels, string.Empty);
+
+        if (replaced.Count == 0)
+        {
+            return string.Join('\n', kept);
+        }
+
+        // The replacement section goes where the reader will meet it before any
+        // operating instruction: immediately after the session-layer section.
+        var anchor = kept.FindIndex(line => line.StartsWith("## Session layer", StringComparison.Ordinal));
+        var insertAt = anchor < 0
+            ? kept.Count
+            : kept.FindIndex(anchor + 1, line => line.StartsWith("## ", StringComparison.Ordinal));
+        if (insertAt < 0)
+        {
+            insertAt = kept.Count;
+        }
+
+        kept.InsertRange(insertAt, SessionLayerSections.ReplacementSection(replaced).Split('\n'));
+        return string.Join('\n', kept);
+    }
+
+    /// <summary>
+    /// Emits labels that were deferred while inside a markdown table, once the
+    /// table is complete. A label emitted between rows ends the table; emitted
+    /// after it, the table stays one contiguous block and the label still names
+    /// the exact clause it covers.
+    /// </summary>
+    private static void FlushDeferredTableLabels(List<string> kept, List<string> deferred, string line)
+    {
+        if (deferred.Count == 0 || line.TrimStart().StartsWith("|", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var insertAt = kept.Count;
+        if (line.Length > 0 && string.Equals(kept[^1], line, StringComparison.Ordinal))
+        {
+            // The line that ended the table has already been added; the labels
+            // belong before it, immediately after the table's last row.
+            insertAt = kept.Count - 1;
+            while (insertAt > 0 && kept[insertAt - 1].Trim().Length == 0)
+            {
+                insertAt--;
+            }
+        }
+
+        var block = new List<string> { string.Empty };
+        foreach (var label in deferred)
+        {
+            block.Add(label);
+            block.Add(string.Empty);
+        }
+
+        kept.InsertRange(insertAt, block);
+        deferred.Clear();
+    }
+
+    /// <summary>
+    /// Keeps the line's leading list/quote marker so a replaced bullet stays a
+    /// bullet — the surrounding canon is still a readable list.
+    /// </summary>
+    private static string PointerFor(string line)
+    {
+        var trimmed = line.TrimStart();
+        var indent = line[..(line.Length - trimmed.Length)];
+
+        // G570 fourth repair: a markdown TABLE row replaced by a bare pointer
+        // line breaks the table for every row after it. Keep the row, and
+        // point away only inside its cells.
+        if (trimmed.StartsWith("|", StringComparison.Ordinal) && trimmed.EndsWith("|", StringComparison.Ordinal))
+        {
+            // G570 seventh repair: typing is per ROW, so a routed row points
+            // away as a whole. The cell count is preserved so the table stays a
+            // table for every row after it.
+            var cellCount = trimmed.Trim('|').Split('|').Length;
+            var pointed = new string[cellCount];
+            pointed[0] = " " + SessionLayerSections.MechanicPointer + " ";
+            for (var i = 1; i < cellCount; i++)
+            {
+                pointed[i] = " ";
+            }
+
+            return indent + "|" + string.Join('|', pointed) + "|";
+        }
+
+        foreach (var marker in new[] { "- ", "* ", "> " })
+        {
+            if (trimmed.StartsWith(marker, StringComparison.Ordinal))
+            {
+                return indent + marker + SessionLayerSections.MechanicPointer;
+            }
+        }
+
+        // G570 third repair: ordered lists keep their OWN number. Replacing
+        // "4. …" with an unnumbered pointer left playbooks reading 1, 2, 3, 5 —
+        // a reader cannot tell whether a step is missing or merely
+        // inapplicable.
+        var ordered = System.Text.RegularExpressions.Regex.Match(trimmed, @"^(\d+\.\s+)");
+        if (ordered.Success)
+        {
+            return indent + ordered.Groups[1].Value + SessionLayerSections.MechanicPointer;
+        }
+
+        return indent + SessionLayerSections.MechanicPointer;
+    }
+
+    /// <summary>
+    /// The same selection over the JSON rendering, so a consumer reading fields
+    /// sees exactly what a reader of the prose sees. The two renderings cannot
+    /// disagree about what applies.
+    /// </summary>
+    internal static string SelectJsonSections(string json, IReadOnlyDictionary<string, string> values)
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse(json)?.AsObject();
+        if (node is null)
+        {
+            return json;
+        }
+
+        var replaced = new List<string>();
+        foreach (var property in SessionLayerSections.AgmsgOnlyJsonProperties)
+        {
+            if (node.Remove(property))
+            {
+                replaced.Add(property);
+            }
+        }
+
+        foreach (var property in SessionLayerSections.MixedJsonProperties)
+        {
+            if (node.TryGetPropertyValue(property, out var value) && value is not null)
+            {
+                node[property] = PointMechanics(values, property, value);
+            }
+        }
+
+        // G570 fourth repair: the explicit descriptive-agmsg context exists in
+        // BOTH renderers now. A field consumer previously had no way to tell a
+        // retained description from an instruction.
+        //
+        // G570 eighth repair: the context now names the descriptive VALUES it
+        // covers instead of declaring a whole property "not an instruction".
+        // Marking a mixed property wholesale told a consumer that the binding
+        // duties inside it were illustration — the same over-reach the markdown
+        // banner made, in a form a machine reads.
+        var descriptiveContext = new System.Text.Json.Nodes.JsonObject();
+        foreach (var property in SessionLayerSections.MixedJsonProperties)
+        {
+            if (!node.TryGetPropertyValue(property, out var rendered) || rendered is null)
+            {
+                continue;
+            }
+
+            var illustrations = new System.Text.Json.Nodes.JsonArray();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var declaration in SessionLayerFragments.JsonDeclarations)
+            {
+                if (declaration.Section != property)
+                {
+                    continue;
+                }
+
+                // One entry per descriptive CLAUSE, so the context identifies
+                // exactly what it covers and can never reach an operative one.
+                foreach (var clause in declaration.Clauses!.Where(SessionLayerFragments.IsAgmsgIllustration))
+                {
+                    var expanded = SessionLayerFragments.Expand(values, clause.Text);
+                    if (rendered.ToJsonString().Contains(
+                            System.Text.Json.JsonEncodedText.Encode(expanded).ToString(),
+                            StringComparison.Ordinal)
+                        && seen.Add(expanded))
+                    {
+                        illustrations.Add(System.Text.Json.Nodes.JsonValue.Create(expanded));
+                    }
+                }
+            }
+
+            if (illustrations.Count == 0)
+            {
+                continue;
+            }
+
+            descriptiveContext[property] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["note"] = SessionLayerSections.DescriptiveAgmsgContextPrefix.TrimStart('>', ' ')
+                    + "each value listed here — every other sentence in this property is an instruction that applies "
+                    + "unchanged.",
+                ["descriptive_values"] = illustrations,
+            };
+        }
+
+        node[SessionLayerSections.DescriptiveContextProperty] = descriptiveContext;
+        node[SessionLayerSections.ReplacedSectionsProperty] = new System.Text.Json.Nodes.JsonArray(
+            replaced.Select(name => (System.Text.Json.Nodes.JsonNode?)System.Text.Json.Nodes.JsonValue.Create(name)).ToArray());
+        node[SessionLayerSections.ReplacementNoteProperty] =
+            "Removed because this team runs the herdr-only session layer: these sections operate agmsg. Their "
+            + "herdr-only counterparts ship in G571. Every remaining field is mode-independent and applies unchanged.";
+
+        return node.ToJsonString(JsonOptions);
+    }
+
+    /// <summary>
+    /// Every string value under a node, so the descriptive context can name the
+    /// exact values it covers rather than the property that holds them.
+    /// </summary>
+    private static IEnumerable<string> CollectStrings(System.Text.Json.Nodes.JsonNode? node)
+    {
+        switch (node)
+        {
+            case System.Text.Json.Nodes.JsonObject mapping:
+                foreach (var entry in mapping)
+                {
+                    if (!entry.Key.StartsWith("session_layer", StringComparison.Ordinal))
+                    {
+                        foreach (var text in CollectStrings(entry.Value))
+                        {
+                            yield return text;
+                        }
+                    }
+                }
+
+                break;
+            case System.Text.Json.Nodes.JsonArray array:
+                foreach (var item in array)
+                {
+                    foreach (var text in CollectStrings(item))
+                    {
+                        yield return text;
+                    }
+                }
+
+                break;
+            case System.Text.Json.Nodes.JsonValue value when value.TryGetValue<string>(out var text):
+                yield return text;
+                break;
+        }
+    }
+
+    /// <summary>
+    /// JSON counterpart of the mixed-section rule: inside a declared mixed
+    /// property, every string VALUE carrying a transport mechanic becomes
+    /// pointer-only text, and everything else is untouched.
+    /// </summary>
+    private static System.Text.Json.Nodes.JsonNode? PointMechanics(
+        IReadOnlyDictionary<string, string> values,
+        string property,
+        System.Text.Json.Nodes.JsonNode? node)
+    {
+        switch (node)
+        {
+            case System.Text.Json.Nodes.JsonObject mapping:
+                {
+                    var result = new System.Text.Json.Nodes.JsonObject();
+                    foreach (var entry in mapping.ToArray())
+                    {
+                        mapping.Remove(entry.Key);
+                        result[entry.Key] = entry.Key.StartsWith("session_layer", StringComparison.Ordinal)
+                            ? entry.Value
+                            : PointMechanics(values, property, entry.Value);
+                    }
+
+                    return result;
+                }
+
+            case System.Text.Json.Nodes.JsonArray array:
+                {
+                    var result = new System.Text.Json.Nodes.JsonArray();
+                    foreach (var item in array.ToArray())
+                    {
+                        array.Remove(item);
+                        result.Add(PointMechanics(values, property, item));
+                    }
+
+                    return result;
+                }
+
+            case System.Text.Json.Nodes.JsonValue value when value.TryGetValue<string>(out var text):
+                {
+                    // G570 ninth repair: the JSON renderer consumes the same
+                    // clause model as the markdown one, so a value that mixes
+                    // mechanism with a transport step keeps the mechanism.
+                    var clauses = SessionLayerFragments.JsonClausesOf(values, property, text);
+                    if (!clauses.Any(c => c.Type == SessionLayerSections.FragmentType.TransportOperative))
+                    {
+                        return node;
+                    }
+
+                    if (clauses.All(c => c.Type is SessionLayerSections.FragmentType.TransportOperative
+                            or SessionLayerSections.FragmentType.Structural))
+                    {
+                        return System.Text.Json.Nodes.JsonValue.Create(SessionLayerSections.MechanicPointer);
+                    }
+
+                    return System.Text.Json.Nodes.JsonValue.Create(string.Concat(clauses.Select(c =>
+                        c.Type == SessionLayerSections.FragmentType.TransportOperative
+                            ? SessionLayerSections.MechanicPointer
+                            : c.Text)));
+                }
+
+            default:
+                return node;
+        }
+    }
+
+    private static OrchestratorThreadGuide BuildGuide(IReadOnlyDictionary<string, string> values, bool herdrOnly)
     {
         var domain = values["<domain>"];
         var repo = values["<owner/repo>"];
@@ -124,14 +669,26 @@ internal static class GuideOrchestratorThreadCommand
 
         return new OrchestratorThreadGuide
         {
-            SetupIntake = BuildSetupIntake(values),
-            Summary =
-                "PRIMARY agmsg-backed four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / "
-                + "implementation / review coordinate over agmsg. agmsg carries natural-language delegation / "
-                + "progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli and "
-                + "GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, and "
-                + "closeout. Timer-loop mode remains fully supported as the simpler ALTERNATIVE for setups without "
-                + "an orchestrator thread (see Mode separation).",
+            SetupIntake = BuildSetupIntake(values, herdrOnly),
+            // G570 third repair: the summary is CANON about authority, and it
+            // must survive in both modes — but its agmsg phrasing is an
+            // instruction in the practiced mode and a description in the other.
+            // So it is stated mode-specifically rather than token-replaced,
+            // which previously destroyed the authority sentence outright.
+            Summary = herdrOnly
+                ? "PRIMARY four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / "
+                    + "implementation / review coordinate over the session layer this team runs — herdr-only here. "
+                    + "The session layer carries natural-language delegation / progress / completion / blocker "
+                    + "signals between threads; it is NOT workflow state. intent-cli and GitHub remain authoritative "
+                    + "for domain status, queue-state, issue/PR facts, labels, CI, and closeout. Timer-loop mode "
+                    + "remains fully supported as the simpler ALTERNATIVE for setups without an orchestrator thread "
+                    + "(see Mode separation). The herdr-only operating steps ship in G571."
+                : "PRIMARY agmsg-backed four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / "
+                    + "implementation / review coordinate over agmsg. agmsg carries natural-language delegation / "
+                    + "progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli "
+                    + "and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, "
+                    + "and closeout. Timer-loop mode remains fully supported as the simpler ALTERNATIVE for setups "
+                    + "without an orchestrator thread (see Mode separation).",
             ModeSeparation = new OrchestratorModeSeparation
             {
                 TimerLoopMode =
@@ -2330,7 +2887,7 @@ internal static class GuideOrchestratorThreadCommand
     // missing it lists ONLY the missing fields; when an existing loop would
     // race it is blocked. The orchestrator is the only scheduled thread —
     // implementation/review are loopless receivers.
-    private static OrchestratorSetupIntake BuildSetupIntake(IReadOnlyDictionary<string, string> values)
+    private static OrchestratorSetupIntake BuildSetupIntake(IReadOnlyDictionary<string, string> values, bool herdrOnly)
     {
         var domain = values["<domain>"];
         var repo = values["<owner/repo>"];
@@ -2364,8 +2921,13 @@ internal static class GuideOrchestratorThreadCommand
             ("orchestrator agent", orchestratorAgent.Length > 0),
             ("implementer agent", implementerAgent.Length > 0),
             ("reviewer agent", reviewerAgent.Length > 0),
-            ("agmsg team name", Supplied(team, "<team>")),
-            ("delivery mode", Supplied(deliveryMode, "<delivery-mode>")),
+            // G570 (design ruling fb1913c8): the agmsg team name and delivery
+            // mode are agmsg-ONLY inputs. Demanding them from a team that runs
+            // herdr-only is the structural form of handing them agmsg
+            // instructions — the setup would report missing-inputs forever for
+            // fields its transport has no concept of.
+            ("agmsg team name", herdrOnly || Supplied(team, "<team>")),
+            ("delivery mode", herdrOnly || Supplied(deliveryMode, "<delivery-mode>")),
             ("existing-loop stop policy", loopPolicy.Length > 0),
         };
 
@@ -2381,8 +2943,13 @@ internal static class GuideOrchestratorThreadCommand
             OrchestratorAgent = orchestratorAgent.Length > 0 ? orchestratorAgent : null,
             ImplementerAgent = implementerAgent.Length > 0 ? implementerAgent : null,
             ReviewerAgent = reviewerAgent.Length > 0 ? reviewerAgent : null,
-            Team = team,
-            DeliveryMode = deliveryMode,
+            // G570 third repair: the agmsg team name and delivery mode are
+            // agmsg-ONLY inputs. Under herdr-only they are not merely
+            // unrequired — they are not part of the object at all, so a
+            // consumer reading fields never sees an input its transport has no
+            // concept of.
+            Team = herdrOnly ? null : team,
+            DeliveryMode = herdrOnly ? null : deliveryMode,
             ExistingLoopPolicy = loopPolicy.Length > 0 ? loopPolicy : null,
         };
 
@@ -2446,6 +3013,29 @@ internal static class GuideOrchestratorThreadCommand
             new OrchestratorThreadPrompt { Role = "implementation", Purpose = "First prompt — paste into the loopless implementation receiver.", Prompt = RolePrompt("implementation", implementerAgent, implementationPath) },
             new OrchestratorThreadPrompt { Role = "review", Purpose = "First prompt — paste into the loopless review receiver.", Prompt = RolePrompt("review", reviewerAgent, reviewPath) },
         };
+
+        // G570 third repair: the setup-ready OBJECT is mode-specific, not a
+        // token-replaced agmsg object. Under herdr-only it emits no agmsg-only
+        // fields at all — no commands array, no agmsg-shaped role prompts, no
+        // agmsg validation steps — and its headline is pointer-only. A
+        // consumer reading fields must not have to know that some values are
+        // stand-ins; the fields simply are not there.
+        if (herdrOnly)
+        {
+            return new OrchestratorSetupIntake
+            {
+                Status = IntakeSetupReady,
+                Headline =
+                    "setup-ready (herdr-only) — the registration, delivery-configuration and role-prompt steps of "
+                    + "this intake are agmsg-only and do not apply. Their herdr-only counterparts ship in G571.",
+                MissingFields = Array.Empty<string>(),
+                Inputs = inputs,
+                AgmsgCommands = null,
+                RolePrompts = null,
+                FirstValidation = null,
+                LooplessReceiverNote = LooplessReceiverNote,
+            };
+        }
 
         return new OrchestratorSetupIntake
         {
@@ -2618,6 +3208,14 @@ internal static class GuideOrchestratorThreadCommand
     {
         writer.WriteLine("## Setup intake");
         writer.WriteLine();
+        // G570: the recorded session layer, stated before any transport-specific
+        // setup step so an operator never follows the wrong one.
+        if (intake.SessionLayerNote is { } sessionLayerNote)
+        {
+            writer.WriteLine($"- session layer: {sessionLayerNote}");
+            writer.WriteLine();
+        }
+
         writer.WriteLine($"- **status: `{intake.Status}`**");
         writer.WriteLine($"- {intake.Headline}");
         writer.WriteLine($"- {intake.LooplessReceiverNote}");
@@ -3050,8 +3648,29 @@ internal static class GuideOrchestratorThreadCommand
 
     private static void WriteMarkdown(TextWriter writer, OrchestratorThreadGuide guide)
     {
-        writer.WriteLine("# Guide — agmsg-backed orchestrator thread (G487)");
+        // One declared identity, rendered per mode. The renderer holds no copy
+        // of either title, so the declaration and the document cannot disagree.
+        writer.WriteLine(SessionLayerSections.DocumentTitle.For(
+            guide.SessionLayer?.Mode == SessionLayerMode.HerdrOnly));
         writer.WriteLine();
+
+        // G570: which transport this rendering is for, before any
+        // transport-specific instruction the reader might otherwise follow.
+        if (guide.SessionLayer is { } sessionLayer)
+        {
+            writer.WriteLine("## Session layer");
+            writer.WriteLine();
+            writer.WriteLine(sessionLayer.Summary);
+            writer.WriteLine();
+            writer.WriteLine($"- {sessionLayer.Exclusivity}");
+            writer.WriteLine($"- {sessionLayer.PreviewScoping}");
+            writer.WriteLine($"- selection — {sessionLayer.Selection}");
+            if (sessionLayer.ResidualAgmsgMechanics is { } residual)
+            {
+                writer.WriteLine($"- {residual}");
+            }
+            writer.WriteLine();
+        }
 
         // G500: the setup intake comes FIRST — a design-thread agent must land on
         // an operational outcome (missing-inputs / setup-ready / blocked) before
@@ -3812,6 +4431,17 @@ internal sealed record OrchestratorSetupIntake
 
     [JsonPropertyName("loopless_receiver_note")]
     public required string LooplessReceiverNote { get; init; }
+
+    /// <summary>
+    /// G570: the session layer this setup is for, recorded at intake so a
+    /// "we want herdr only" asked for at first contact is honoured and
+    /// remembered rather than re-asked every wake.
+    /// </summary>
+    [JsonPropertyName("session_layer_mode")]
+    public string? SessionLayerMode { get; init; }
+
+    [JsonPropertyName("session_layer_note")]
+    public string? SessionLayerNote { get; init; }
 }
 
 internal sealed record OrchestratorSetupInputs
@@ -3852,6 +4482,10 @@ internal sealed record OrchestratorSetupInputs
 
 internal sealed record OrchestratorThreadGuide
 {
+    /// <summary>G570: which session-layer transport this guide is rendering for, and how that was decided.</summary>
+    [JsonPropertyName("session_layer")]
+    public OrchestratorSessionLayer? SessionLayer { get; init; }
+
     [JsonPropertyName("setup_intake")]
     public required OrchestratorSetupIntake SetupIntake { get; init; }
 
@@ -5216,4 +5850,41 @@ internal sealed record OrchestratorReplyContract
     /// </summary>
     [JsonPropertyName("closeout_knowledge_write_back_rule")]
     public required string CloseoutKnowledgeWriteBackRule { get; init; }
+}
+
+/// <summary>
+/// G570: the session-layer block every orchestrator-thread rendering carries.
+/// It answers "which transport am I reading about, and did somebody choose it
+/// or is this the default" before the reader reaches any transport-specific
+/// section.
+/// </summary>
+internal sealed record OrchestratorSessionLayer
+{
+    [JsonPropertyName("mode")]
+    public required string Mode { get; init; }
+
+    [JsonPropertyName("source")]
+    public required string Source { get; init; }
+
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("exclusivity")]
+    public required string Exclusivity { get; init; }
+
+    [JsonPropertyName("preview_scoping")]
+    public required string PreviewScoping { get; init; }
+
+    [JsonPropertyName("selection")]
+    public required string Selection { get; init; }
+
+    /// <summary>
+    /// G570: honest about the boundary of this slice. Wholly agmsg-specific
+    /// sections are replaced; MIXED sections that carry both canon and agmsg
+    /// mechanics are left intact (removing them would remove mode-independent
+    /// canon with them) and this sentence tells the reader how to read them
+    /// until G571 restructures them. Null under agmsg.
+    /// </summary>
+    [JsonPropertyName("residual_agmsg_mechanics")]
+    public string? ResidualAgmsgMechanics { get; init; }
 }

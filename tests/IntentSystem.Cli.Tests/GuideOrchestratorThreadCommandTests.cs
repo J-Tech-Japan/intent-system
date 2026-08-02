@@ -28,7 +28,17 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("PRIMARY model", output, StringComparison.Ordinal);
         Assert.Contains("ALTERNATIVE — fully supported", output, StringComparison.Ordinal);
         Assert.DoesNotContain("Opt-in mode", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("preview", output, StringComparison.OrdinalIgnoreCase);
+
+        // G570 scoped this to the section it rules, and did not weaken it. G540
+        // forbids qualifying the four-thread MODEL and its timer-loop
+        // alternative; the assertion was document-wide only because the
+        // document discussed nothing else. It now also names the SESSION LAYER,
+        // where `herdr-only` is honestly a preview — so the ban applies to the
+        // mode-separation section, and the qualifier must carry its own scoping
+        // sentence wherever it does appear.
+        var modeSeparation = SectionFrom(output, "## Mode separation");
+        Assert.DoesNotContain("preview", modeSeparation, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("PREVIEW here scopes the SESSION TRANSPORT only", output, StringComparison.Ordinal);
         // Mixed-mode timer race is explicitly forbidden.
         Assert.Contains("do NOT launch the implementation/review recurring timer loops", output, StringComparison.Ordinal);
         // agmsg is signal-only; intent-cli/GitHub authoritative.
@@ -2617,6 +2627,18 @@ public sealed class GuideOrchestratorThreadCommandTests
         var agentAbsent = Assert.Single(stuckStates, x => x.State == "agent-absent");
         Assert.Contains("SHELL PROMPT", agentAbsent.Sees, StringComparison.Ordinal);
         Assert.Contains("--permission-mode", agentAbsent.Recovery, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G570: the text of one `##` section, so a section-scoped assertion cannot
+    /// be satisfied — or broken — by unrelated prose elsewhere in the document.
+    /// </summary>
+    private static string SectionFrom(string output, string heading)
+    {
+        var start = output.IndexOf(heading, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"missing section heading: {heading}");
+        var next = output.IndexOf("\n## ", start + heading.Length, StringComparison.Ordinal);
+        return next < 0 ? output[start..] : output[start..next];
     }
 
     private static string RunMarkdown(string[] args)

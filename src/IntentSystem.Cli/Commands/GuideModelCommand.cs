@@ -81,6 +81,7 @@ internal static class GuideModelCommand
                     + "recurring timers instead. Exactly one mode per domain/repo — the two must never run "
                     + "simultaneously for the same domain/repo. See `intent-cli guide prompt-matrix` for its setup.",
             },
+            SessionLayer = BuildSessionLayer(),
             Roles = new[]
             {
                 new GuideModelRole
@@ -153,6 +154,58 @@ internal static class GuideModelCommand
         };
     }
 
+    /// <summary>
+    /// G570: the session layer is the TRANSPORT the four threads talk over, and
+    /// it is now selectable. This section exists so an unfamiliar agent can tell
+    /// the two questions apart: "which model?" (answered above — four threads,
+    /// PRIMARY, unqualified) and "which transport?" (answered here).
+    ///
+    /// The preview qualifier lives ONLY in this section, and the section says so
+    /// in its own words, because G540 ruled the model itself unqualified.
+    /// </summary>
+    internal static GuideModelSessionLayer BuildSessionLayer() => new()
+    {
+        Summary =
+            "G570: the four threads above talk to each other over a SESSION LAYER, and that layer is selectable per "
+            + "domain (team-scoped where teams are modeled). It is a transport choice, not a change of model — the "
+            + "same four threads, the same authority boundaries, the same wake contract in either mode.",
+        Modes = new[]
+        {
+            "agmsg (PRIMARY) — the practiced, maintained transport: threads register as agmsg roles and exchange "
+                + "delegation / progress / completion / blocker messages. Use this unless you have a specific reason "
+                + "not to; every field-proven behaviour (wake contract, stalled-work, heartbeat) was built here.",
+            "herdr-only (PREVIEW) — a single-machine alternative in which herdr is the terminal controller and no "
+                + "separate message bridge runs. " + SessionLayerMode.PreviewScopingSentence,
+        },
+        WhenToChooseHerdrOnly =
+            "Consider herdr-only when every agent in the team is herdr-resident on ONE machine and you want fewer "
+            + "moving parts: no message-bridge process to keep alive, and the terminal controller you already run "
+            + "carries the delegations. Stay on agmsg when threads live on different machines or when you want the "
+            + "most exercised path.",
+        Exclusivity = SessionLayerMode.ExclusivitySentence,
+        Selection =
+            "`intent-cli session-layer show --domain <d> [--team <t>]` reports the mode in force; "
+            + "`intent-cli session-layer set --domain <d> [--team <t>] --mode agmsg|herdr-only --write` records it. "
+            + "Absent a record the mode is `agmsg`, and the choice is reversible in both directions at any time.",
+    };
+
+    private static void WriteSessionLayer(TextWriter writer, GuideModelSessionLayer sessionLayer)
+    {
+        writer.WriteLine("## Session layer (transport for the four threads)");
+        writer.WriteLine();
+        writer.WriteLine(sessionLayer.Summary);
+        writer.WriteLine();
+        foreach (var mode in sessionLayer.Modes)
+        {
+            writer.WriteLine($"- {mode}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **when to choose herdr-only** — {sessionLayer.WhenToChooseHerdrOnly}");
+        writer.WriteLine($"- **one mode per team** — {sessionLayer.Exclusivity}");
+        writer.WriteLine($"- **selecting** — {sessionLayer.Selection}");
+        writer.WriteLine();
+    }
+
     private static void WriteMarkdown(TextWriter writer)
     {
         var model = BuildModel();
@@ -177,6 +230,8 @@ internal static class GuideModelCommand
         writer.WriteLine($"- **message-driven steady state** — {model.ExecutionOrchestrationModel.MessageDrivenSteadyState}");
         writer.WriteLine($"- **alternative** — {model.ExecutionOrchestrationModel.Alternative}");
         writer.WriteLine();
+
+        WriteSessionLayer(writer, model.SessionLayer);
 
         writer.WriteLine("## Roles");
         foreach (var role in model.Roles)
@@ -273,6 +328,10 @@ internal sealed record GuideModelResult
     [JsonPropertyName("execution_orchestration_model")]
     public required GuideModelExecutionOrchestration ExecutionOrchestrationModel { get; init; }
 
+    /// <summary>G570: which session-layer transport the four threads use — a selectable, reversible choice that never re-qualifies the model above.</summary>
+    [JsonPropertyName("session_layer")]
+    public required GuideModelSessionLayer SessionLayer { get; init; }
+
     [JsonPropertyName("roles")]
     public required IReadOnlyList<GuideModelRole> Roles { get; init; }
 
@@ -308,4 +367,28 @@ internal sealed record GuideModelExecutionOrchestration
 
     [JsonPropertyName("alternative")]
     public required string Alternative { get; init; }
+}
+
+/// <summary>
+/// G570: the transport half of the collaboration model. Kept separate from
+/// <see cref="GuideModelExecutionOrchestration"/> on purpose — that record
+/// describes the MODEL, which G540 ruled primary and unqualified, and this one
+/// describes the TRANSPORT, where a preview qualifier legitimately applies.
+/// </summary>
+internal sealed record GuideModelSessionLayer
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("modes")]
+    public required IReadOnlyList<string> Modes { get; init; }
+
+    [JsonPropertyName("when_to_choose_herdr_only")]
+    public required string WhenToChooseHerdrOnly { get; init; }
+
+    [JsonPropertyName("exclusivity")]
+    public required string Exclusivity { get; init; }
+
+    [JsonPropertyName("selection")]
+    public required string Selection { get; init; }
 }

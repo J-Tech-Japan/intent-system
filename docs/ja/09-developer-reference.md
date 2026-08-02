@@ -634,6 +634,160 @@ kind では `— FYI:` prose `` で終わります — そのため読み手（�
 orchestrator でも）が「transition は不要」を actionable な次コマンドと
 取り違えることはありません。
 
+### session-layer モード: 4 スレッドがどの transport を使うか (G570)
+
+`intent-cli session-layer show --domain <d> [--team <t>] [--format markdown|json]`
+`intent-cli session-layer set --domain <d> [--team <t>] --mode agmsg|herdr-only [--dry-run|--write] [--format markdown|json]`
+
+4 スレッドモデル(design / orchestrator / implementation / review)と、そのスレッド群が
+会話する **session layer** は別の話です。2026-08-01 のオペレーター裁定により、後者は
+固定ではなく**選択可能**になりました。
+
+- **`agmsg` が PRIMARY** — 実運用され保守されている transport であり、記録が無いときの
+  既定値です。
+- **`herdr-only` は PREVIEW** — herdr が terminal controller となり、別立ての message
+  bridge を動かさない単一マシン向けの代替です。**PREVIEW という限定詞は transport のみ**
+  に掛かります。4 スレッドモデル自体は両モードで PRIMARY かつ無限定のままであり
+  (G540 の裁定どおり)、transport を選ぶことがモデルを暫定的にすることはありません。
+- **1 チーム 1 モード。** 1 つのチーム内で agmsg と herdr-only の配送を混在させることは
+  fallback ではなく contract violation です。transport が 2 つあるということは「誰に何を
+  伝えたか」の見え方が 2 つあるということです。
+
+セマンティクス:
+
+- **スコープ** — domain 単位で記録し、team が modeled されている場合は team 単位でも
+  記録します。team 単位の記録が domain 全体の記録に優先します(より狭い言明だからです)。
+- **既定** — 記録が無ければ `agmsg`。`show` は決して書きません。
+- **永続化** — `.intent-cli/session-layer-mode.json`。書き込むのは
+  `session-layer set --write` **のみ**です(G548 の系譜: durable state は canonical な
+  コマンド経由でのみ変更し、手編集はしない)。
+- **冪等** — 同一スコープで既に有効なモードを再記録しても no-op で、transition も
+  記録しません。セットアップスクリプトがモードを表明しても、trail が「決定の記録」から
+  「実行の記録」に変質しません。
+- **可逆＋trail** — 各エントリは全 transition(`from` / `to` / `at`)を保持します。
+  agmsg へ戻すことは herdr-only へ切り替えることと同じくらい普通の操作であり、記録は
+  その両方を示します。
+- **fail-closed** — 未知のモードは記録せず拒否し、読めない記録は上書きせず拒否します。
+
+**ルーティング。** 記録されたモードが `guide orchestrator-thread` の描画セクションを
+選びます。
+
+- `agmsg` では本スライス以前と**完全に同じ**描画になります(ルーティングは恒等写像で、
+  モード概念が増えたことで実運用パスが動くことはありません);
+- `herdr-only` では、完全に agmsg 固有の操作セクション(setup / 登録、receiver
+  readiness、monitor / bridge 診断、agmsg reply contract、design-receiver 登録)が
+  herdr-only 操作セクションへのポインタに置き換わります。その内容は **G571** で出荷され
+  ます;
+- モード非依存の canon は**両モードで**描画されます — supervision、isolation、liveness、
+  wake contract、publish 権限、design↔orchestrator double-check ルール、依存計画、
+  エスカレーション。これらはモデルの性質であり、transport では変わりません。
+
+**適用範囲は、両描画の識別子を 1 行に持つ単一の表でセクション単位に宣言し、4 値です**(design 裁定、host main `fb1913c8`):
+`agmsg-only` / `herdr-only` / `mode-independent` /
+`mode-independent-with-transport-mechanics`。renderer は記録されたモードから
+**セクション単位で**選択します。markdown と JSON の双方で行うため、フィールド利用者と
+本文の読者が「何が適用されるか」で食い違うことはありません。
+
+- **agmsg-only** セクションは、置換したものを列挙する *Session-layer switch checklist*
+  セクション 1 つに**丸ごと置き換え**られます。注記を添えて残すのではなく、描画しません。
+- **mode-independent** セクションは両モードでそのまま描画されます。
+- **mode-independent-with-transport-mechanics** セクションは、両モードで拘束する canon を
+  agmsg の mechanic で表現しているものです。セクションは**保持**し、**フラグメント単位で型付け**
+  します(design 明確化 G570)。各フラグメントは `structural`(見出し・表の骨格・フェンス。
+  決してルーティングしない)、`canon-descriptive`(仕組み・経緯・`agmsg run directory` の
+  ような基盤の識別子。両モードでバイト同一)、`mode-independent-operative`(**両モードで**
+  拘束する指示 — intent-cli / GitHub の手順や four-thread model の規則。これもバイト同一)、
+  `transport-operative`(transport を操作する指示。herdr-only では pointer 化)のいずれかです。
+  セクション単位のフラグでは両方を含むセクションを表現できず、ラベルの裏に命令が残るか、
+  記述的 canon を削りすぎるかのどちらかになります。
+
+  型付けは**導出ではなく宣言**です。guide が描画する非 structural なフラグメントはすべて、
+  markdown と JSON それぞれについて `SessionLayerFragments` に逐語で列挙され、人間が割り当てた
+  型を持ちます。参照は厳密一致で **fail closed** です — 宣言のないフラグメントが renderer に
+  到達すると例外になるため、文を追加・改稿すると必ずテストが落ち、型付けの判断を求められます。
+  以前の実装は命令語の手掛かり(cue)から型を推論していましたが、その失敗モードはスイート内部
+  からは見えませんでした。cue の語彙から外れた言い回しの指示は description に分類されて
+  herdr-only 出力に残り、テストは同じ分類器に答えを尋ねていたため「分類器が自分自身と一致する」
+  ことしか確認できなかったからです。網羅性の guard は現在、**出力側**から独自の markdown 解釈で
+  フラグメントを再導出し、production の分類器を参照せずに、各フラグメントがちょうど 1 つの宣言を
+  消費することを要求します。
+
+  宣言テキストは呼び出し側の入力を**衝突しない sentinel** として保持し、参照時に展開します。
+  これにより 1 つの宣言があらゆる呼び出し形態をカバーします。展開は**前方向のみ**です。逆方向の
+  正規化(描画済みの値を placeholder に書き戻す)は文書を壊します — `--delivery-mode` の値
+  `monitor` のような短い値は通常の散文にも現れ、また guide には読者が埋めるための
+  `<domain>` などの literal な placeholder がコマンド雛形として正当に含まれるからです。
+
+  文書タイトルは**1 つの宣言された identity** で、モードごとに明示的な rendering を持ちます
+  (`SessionLayerSections.DocumentTitle`)。renderer はどちらの文字列も自前で保持しません。
+  2 つの兄弟宣言では両タイトルが無関係な surface としてモデル化され、guard を緑のまま片方だけ
+  改稿できてしまいました。
+
+  **宣言すること**と**正しく型付けすること**は別です。最初の実装は型を**構成的に**割り当てて
+  いました(transport の mechanic を含まないものはすべて `canon-descriptive`)。その結果
+  `canon-descriptive` 454 件に対し `mode-independent-operative` は 14 件となり、「まず pane を
+  READ する」「他チームの workspace を決して削除しない」「label 遷移はすべて intent-cli 経由」と
+  いった**拘束力のある義務**が散文として分類されていました。現在は非 structural なフラグメントを
+  すべて個別に判定し、transport によらず拘束する義務は `mode-independent-operative`、
+  `canon-descriptive` は仕組み・経緯・基盤の識別子のみとしています。
+
+  記述的な節と operative な節が独立して適用される形で**混在**するフラグメントは、**個別に型付け
+  された clause** として宣言し、連結すると元の本文に厳密に一致します。isolation の表の行は 1 行に
+  基盤の識別子と拘束力のある所有ルールを併せ持つため、行単位の単一の型ではルールを散文として
+  扱うか、識別子を削り落とすかのどちらかになってしまいます。
+
+  型付けは**文(sentence)粒度で全称的**です。すべての宣言は clause のリストであり、各 clause は
+  1 つの文、または文間・表セル間の scaffolding であり、連結すると元の本文に厳密一致します。
+  フラグメント単位の型付けと数行の表分割だけでは不十分でした — 仕組みと拘束力ある義務が混在する
+  複数文フラグメントは依然として 1 つの判定を共有し、命令語リストによる部分一致 fixture では
+  それを証明できないからです。**両方の renderer が clause リストを consume** するため、routing も
+  ラベル付けも型を決めた粒度で作用します。canon と transport 手順が混在する行は canon を保持し、
+  その手順だけを pointer 化します。
+
+  agmsg example のラベルは、**修飾する記述的 clause を名指し(引用)します**。より弱い 3 つの
+  スコープをいずれも試し、いずれも過剰適用でした — セクション単位の banner はその中の義務すべてを
+  例示扱いにし、連続 run の banner は直後の指示まで覆い、行単位のラベルは同じ行の operative な文まで
+  覆いました。自らのスコープを引用するラベルだけが、その範囲を越えられません。JSON の context も
+  同様に、プロパティではなく**記述的 clause を 1 対 1 で列挙**します。
+
+  ラベルの文面は**位置に依存しない**表現とし、保留されたラベルは対象文の所在を明示します。以前は
+  対象文が「下にある」と述べていましたが、保留によりそれは偽になりました — 引用がどれほど厳密でも、
+  ラベルが保証できない方向を述べることは読者への誤った指示です。
+
+  markdown の**表の内部**では、ラベルを保留し、表が完結してから出力します。行と行の間に
+  blockquote と空行を挟むと GFM の表はそこで終端し、それ以降の行が表の一部でなくなるためです —
+  ラベルの配置は、それが置かれる構造に譲る必要があります。移動できるのは、ラベルが**自らのスコープを
+  引用している**からです。自己スコープ型のラベルは、覆う行から離れて読まれても厳密なままです。
+
+pointer-only テキストは G570 の**ルーティングのメタデータ**です。「何が適用されないか」と
+「対応物がどこで出荷されるか」を述べ、**代わりに何を実行するかは述べません** — 具体的な
+herdr 手順は G571 の内容であり、ここでは禁止されているからです。
+
+部分文字列/トークン置換は正しさの機構としては採用せず**却下**されました。弱すぎ(「agmsg の
+delegation を待つ」のような実行指示は mechanic トークンを含まない)、かつ強すぎる(初期案は
+agmsg に言及しているという理由だけで timer-loop の canon を削除した)からです。適用範囲は
+セクションの**主題**の性質なので、`SessionLayerSections` で 1 度だけ宣言し、レビュー可能に
+しています。
+
+setup intake は「トークン置換」ではなく**モード固有**です。herdr-only ではオブジェクトに
+`agmsg_commands` も agmsg 形状の `role_prompts` も `team` / `delivery_mode` 入力も**存在せず**、
+headline も登録手順を指示しません。両モードでバイト同一の**記述的**な agmsg 内容(モデルの
+仕組みや経緯)には、明示的な「agmsg 例」ラベルを直前に付し、読者が読んだその場で「例示」と
+「指示」を区別できるようにしています。順序付きリスト内で置換されたステップは**自身の番号を
+保持**するので、playbook が 1, 2, 3, 5 と読めることはありません。
+
+**fail-closed な state。** **存在するが不正な**記録は「不在」ではありません。壊れた
+ファイル、未知のモード、あるいは現在のモードが自身の transition trail と食い違う記録
+(`session-layer set --write` が書いたものではない証拠)がある場合、モード依存の全
+サーフェスは `session-layer-mode-unreadable` という名前付きエラーで失敗し、guidance を
+**一切描画しません**。既定値で描画すれば、そのチームが走らせていないかもしれない
+transport の手順を読者に渡すことになるからです。`set` はそのような記録を黙って修復せず、
+上書きを拒否します。
+
+`guide model` と `guide onboarding` は両モードを説明し、onboarding は transport 固有の
+手順より**前に**モードを読ませるので、新規 agent が誤ったセットアップに従うことは
+ありません。
+
 ### intent-tree の共進化: 実施した knowledge write-back を記録する (G564)
 
 `intent-cli automation knowledge-writeback-record --execution-unit <u> --commit <host-commit-sha> [--target <path>]... [--note <text>] [--dry-run|--write] [--format json|markdown]`
