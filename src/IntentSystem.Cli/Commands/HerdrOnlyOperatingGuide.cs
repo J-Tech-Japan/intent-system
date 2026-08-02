@@ -50,22 +50,26 @@ internal static class HerdrOnlyOperatingGuide
 
         ## Herdr-only dispatch and artifact handoff
 
-        Submit one structured task block with `herdr agent prompt <logical-role> <task-block>`. Every block has this shape:
+        Submit through the transport-neutral notify surface. The CLI resolves the recorded `herdr-only` mode, validates the logical-role mapping, and invokes the herdr adapter internally; workflow prompts never hand-write `herdr agent prompt`:
+
+        ```bash
+        intent-cli notify delegate --domain <domain> --team <team> --from <sender-role> \
+          --to <logical-role> --report-to <orchestrator-role> --task-id <task-id> \
+          --objective <one-bounded-outcome> --input <canonical-issue-or-reference> \
+          --expected-artifact <inspectable-artifact> --result-nonce <fresh-per-dispatch-nonce> \
+          --write --format json
+        ```
+
+        The command generates and delivers a task block containing these echo-safe marker fields (they are output data, not a hand-written transport invocation):
 
         ```text
         TASK <task-id>
-        role: <logical-role>
-        objective: <one bounded outcome>
-        inputs:
-          - <canonical issue/PR/path/reference>
-        expected-artifacts:
-          - <file, commit, PR, report, or other inspectable artifact>
         result-prefix: ORCH_RESULT
         result-nonce: <fresh-per-dispatch-nonce>
-        completion-marker: When the artifact is ready, print one line by concatenating result-prefix, one space, result-nonce, one space, status, one space, and artifact; use status completed, blocked, or question. Do not copy a precomposed marker into this task block.
+        completion-marker: Concatenate result-prefix, one space, result-nonce, one space, status, one space, and artifact; use completed, blocked, or question. Never include the precomposed wait needle.
         ```
 
-        Generate a fresh, unpredictable nonce for every dispatch; never reuse one or substitute the task id alone. `pane wait-output` searches existing pane output immediately, so a precomposed wait needle in the dispatched task can be echoed and falsely match before the agent does any work. Splitting the prefix and nonce above keeps the literal needle out of the task block. Files, commits, PRs, test logs, and other inspectable artifacts are the handoff; terminal prose is only a signal pointing at them. A repair or re-dispatch goes to the same logical role after resolving its current pane mapping and carries the same task id plus the concrete delta. A marker match from any pane buffer is NEVER sufficient: the named artifact must exist and pass its verification.
+        `notify delegate` generates the structured task block, keeps the result prefix and fresh unpredictable nonce separate, and embeds task id, expected artifact, plus the complete canonical `intent-cli notify report` command as the receiver's required final step. That command carries the transport-neutral `--routing-root`, so an isolated child checkout still resolves the recorded mode internally without learning a transport-specific send instruction. The receiver reports `completed`, `blocked`, or `question` only through that embedded command; it never hand-writes a transport call. Never reuse a nonce or substitute the task id alone. `pane wait-output` searches existing pane output immediately, so a precomposed wait needle in the dispatched task can be echoed and falsely match before the agent does any work. Files, commits, PRs, test logs, and other inspectable artifacts are the handoff; terminal prose is only a signal pointing at them. A repair or re-dispatch goes to the same logical role through `intent-cli notify delegate` and carries the same task id plus the concrete delta. A marker match from any pane buffer is NEVER sufficient: the named artifact must exist and pass its verification.
 
         ## Herdr-only bounded waiting and success detection
 
@@ -79,7 +83,7 @@ internal static class HerdrOnlyOperatingGuide
 
         ## events.jsonl design boundary
 
-        This is a normative, mode-independent design-boundary channel documented here because herdr-only has no separate message bridge. It is NEVER an inter-agent bus and never replaces direct herdr dispatch, GitHub, or intent-cli workflow state.
+        This is a normative, mode-independent design-boundary channel documented here because herdr-only has no separate message bridge. It is NEVER an inter-agent bus and never replaces `intent-cli notify delegate` / `report`, GitHub, or intent-cli workflow state.
 
         - **Location:** resolve the host repository root at runtime, then use `<host-repo>/.intent-cli/events/<team>.jsonl`. The team name is the agmsg/herdr team name verbatim in one flat filename (example: `intent-cli-dev.jsonl`); there are no team subdirectories and readers never hard-code an absolute path.
         - **Fail closed before path construction:** reject an empty team name, a leading dot, `/` or `\`, and any `..` sequence. Do not sanitize or silently rewrite an invalid name.
@@ -90,7 +94,7 @@ internal static class HerdrOnlyOperatingGuide
         Reader recipes:
 
         1. **Claude app watcher:** resolve the host root and validated team path, then tail complete lines from `<host-repo>/.intent-cli/events/<team>.jsonl`; surface only unseen design-relevant records and retain the read offset across watcher restarts.
-        2. **Codex CLI:** when Codex is a herdr pane, prompt that logical role directly with `herdr agent prompt`; it does not poll the file for ordinary coordination. The events file remains available only when that Codex role is acting as a design-boundary reader.
+        2. **Codex CLI:** when Codex is a herdr pane, address that logical role through `intent-cli notify delegate` / `report`; it does not poll the file for ordinary coordination. The events file remains available only when that Codex role is acting as a design-boundary reader.
         3. **Codex Desktop:** run a one-minute-class timer poll. Resolve the host root plus validated team filename on every resumed session, read only complete lines after a durable byte-offset watermark, surface the unseen records, then advance the watermark after successful handling. Rotation/truncation or malformed JSON fails closed and requires operator recovery; it never resets silently and replays decisions.
 
         ## Herdr-only failure modes and recovery
@@ -138,12 +142,13 @@ internal static class HerdrOnlyOperatingGuide
         },
         ["dispatch"] = new JsonObject
         {
-            ["command"] = "herdr agent prompt <logical-role> <task-block>",
-            ["required_fields"] = new JsonArray("task-id", "role", "objective", "inputs", "expected-artifacts", "result-prefix", "result-nonce", "completion-marker"),
+            ["command"] = "intent-cli notify delegate --domain <domain> --team <team> --from <sender-role> --to <logical-role> --report-to <orchestrator-role> --task-id <task-id> --objective <outcome> --input <reference> --expected-artifact <artifact> --result-nonce <nonce> --write --format json",
+            ["required_fields"] = new JsonArray("domain", "team", "from", "to", "report-to", "task-id", "objective", "inputs", "expected-artifacts", "result-prefix", "result-nonce", "completion-marker"),
+            ["reporting_contract"] = "The generated payload embeds task id, expected artifact, and the complete intent-cli notify report command (including transport-neutral --routing-root for isolated child checkouts) as the receiver's required final step; never hand-write a transport call.",
             ["marker_construction"] = "Concatenate result-prefix, space, fresh-per-dispatch result-nonce, space, status, space, artifact; never embed the composed wait needle in the task block.",
             ["echo_hazard"] = "pane wait-output searches existing output immediately, so an echoed precomposed marker can falsely match before work begins.",
             ["artifact_first"] = "Files, commits, PRs, and verification logs are the handoff; terminal text points to them.",
-            ["redispatch"] = "Resolve the same logical role's current pane and send the task id plus concrete repair delta.",
+            ["redispatch"] = "Use intent-cli notify delegate for the same logical role with the task id plus concrete repair delta.",
         },
         ["waiting"] = new JsonObject
         {
@@ -166,7 +171,7 @@ internal static class HerdrOnlyOperatingGuide
             ["readers"] = new JsonObject
             {
                 ["claude_app"] = "Tail complete unseen lines from the resolved host path and retain the read offset.",
-                ["codex_cli"] = "Prompt a herdr-resident Codex pane directly; no file poll for ordinary coordination.",
+                ["codex_cli"] = "Use intent-cli notify delegate/report for a herdr-resident Codex role; no file poll for ordinary coordination.",
                 ["codex_desktop"] = "One-minute-class timer poll using a durable byte-offset watermark; fail closed on truncation or malformed JSON.",
             },
         },

@@ -153,6 +153,15 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "notify",
+            Role = RoleDesign,
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityMixed,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "Transport-neutral role workflow (G578): `intent-cli notify delegate|report|escalate`. The CLI resolves the recorded session-layer mode internally, validates logical roles before delivery, embeds the canonical report command in delegated work, and appends escalation events to the existing design-boundary JSONL channel. Dry-run is read-only; delivery and event append require `--write`."
+        },
+        new CommandGroupEntry
+        {
             Name = "automation",
             Role = RoleHostReview,
             Classification = ClassificationSupport,

@@ -31,7 +31,9 @@ internal static class CommandRouter
         "migrate",
         "skill",
         // G570: session-layer transport selection (agmsg | herdr-only).
-        "session-layer"
+        "session-layer",
+        // G578: transport-neutral role notification surface.
+        "notify"
     ];
 
     /// <summary>
@@ -44,6 +46,7 @@ internal static class CommandRouter
     {
         "guide",
         "automation",
+        "notify",
         "worker",
         "review",
         "issue",
@@ -116,6 +119,13 @@ internal static class CommandRouter
             {
                 ["show"] = SessionLayerCommand.ExecuteShow,
                 ["set"] = SessionLayerCommand.ExecuteSet
+            },
+            // G578: one workflow contract over agmsg and herdr-only transports.
+            ["notify"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["delegate"] = NotifyCommand.ExecuteDelegate,
+                ["report"] = NotifyCommand.ExecuteReport,
+                ["escalate"] = NotifyCommand.ExecuteEscalate
             },
             // G559: cross-platform agent skill install surface.
             ["skill"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
@@ -571,6 +581,7 @@ internal static class CommandRouter
             ["issue"] = "`intent-cli issue publish-flow <id> --repo <r> --write --format json` then `intent-cli automation issue-publish --write`.",
             ["automation"] = "`intent-cli automation summary --domain <d> --format json` (capability JSON), `intent-cli automation doctor --format json` (CLI freshness).",
             ["session-layer"] = "`intent-cli session-layer show --domain <d> [--team <t>]` (which transport is in force), then `intent-cli session-layer set --domain <d> --mode agmsg|herdr-only --write` to change it.",
+            ["notify"] = "`intent-cli notify delegate|report|escalate --domain <d> --team <t> ...` (canonical role workflow; transport follows the recorded session-layer mode).",
             ["bug"] = "`intent-cli guide worker pr-comment-fix --format json` (repair guidance), `intent-cli bug report`/`triage` for new-bug intake.",
             ["worker"] = "`intent-cli worker next-action --repo <r> --workdir <child> --format json` then claim / result-summary / complete.",
             ["metadata"] = "`intent-cli metadata validate --format json` (read-only); use `intent-cli metadata update --mode completed-closeout --write` for the bounded controlled writer instead of hand-editing.",

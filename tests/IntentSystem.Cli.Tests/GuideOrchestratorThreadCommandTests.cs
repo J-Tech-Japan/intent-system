@@ -393,7 +393,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("is NEVER silent", output, StringComparison.Ordinal);
         Assert.Contains("state the failure explicitly in this wake's own turn output", output, StringComparison.Ordinal);
         Assert.Contains("visible to the operator watching this live session", output, StringComparison.Ordinal);
-        Assert.Contains("never fabricating or sending an agmsg nudge from broken input", output, StringComparison.Ordinal);
+        Assert.Contains("never fabricating or sending a notify nudge from broken input", output, StringComparison.Ordinal);
         Assert.DoesNotContain("stay silent this wake and retry next", output, StringComparison.Ordinal);
         Assert.Contains("### Watchdog checks", output, StringComparison.Ordinal);
         Assert.Contains("HITL", output, StringComparison.Ordinal);
@@ -530,7 +530,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("healthy `stale=false`", failureVisibility, StringComparison.Ordinal);
         Assert.Contains("surfaced VISIBLY", failureVisibility, StringComparison.Ordinal);
         Assert.Contains("never silently swallowed or silently retried", failureVisibility, StringComparison.Ordinal);
-        Assert.Contains("never fabricating or sending an agmsg nudge from broken input", failureVisibility, StringComparison.Ordinal);
+        Assert.Contains("never fabricating or sending a notify nudge from broken input", failureVisibility, StringComparison.Ordinal);
 
         Assert.Equal(
             "intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json",
@@ -1792,15 +1792,16 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
-    public void Execute_Markdown_DispatchVerification_RequiresRosterCheckBeforeSend()
+    public void Execute_Markdown_DispatchVerification_UsesCanonicalNotifyValidation()
     {
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
 
-        // AC: dispatch guidance requires team-roster verification of the
-        // recipient id before sending.
+        // G578 moves role verification inside the canonical notify surface.
         Assert.Contains("## Dispatch verification (G524)", output, StringComparison.Ordinal);
-        Assert.Contains("team roster", output, StringComparison.Ordinal);
-        Assert.Contains("team.sh", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli notify", output, StringComparison.Ordinal);
+        Assert.Contains("herdr logical-role mapping", output, StringComparison.Ordinal);
+        Assert.Contains("named failure", output, StringComparison.Ordinal);
+        Assert.Contains("handwritten transport call", output, StringComparison.Ordinal);
         Assert.Contains("`review`", output, StringComparison.Ordinal);
         Assert.Contains("`reviewer`", output, StringComparison.Ordinal);
     }
@@ -1817,7 +1818,9 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Equal(0, exitCode);
         using var doc = JsonDocument.Parse(writer.ToString());
         var verification = doc.RootElement.GetProperty("dispatch_verification");
-        Assert.Contains("team.sh", verification.GetProperty("rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("intent-cli notify", verification.GetProperty("rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("herdr logical-role mapping", verification.GetProperty("rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("named failure", verification.GetProperty("rule").GetString(), StringComparison.Ordinal);
         Assert.True(verification.GetProperty("dead_address_example").GetString()!.Length > 0);
     }
 

@@ -644,7 +644,7 @@ internal static class SessionLayerFragments
         Fragment(S4, Operative("- If intent-cli reports an `issue-cut-ready` candidate and all gates pass (same-domain or routed, complete contract, no open clarification, dependencies satisfied, under WIP, clean host-sync/preflight), publish ONE issue this wake via canonical publish-flow / issue-publish, verify it, THEN delegate that same issue to implementation in THIS SAME WAKE (G524) — do not ask the operator to create it, and do not stop after publishing to wait for a future wake to send the delegation.")),
         Fragment(S4, Operative("- If the candidate has unmet dependencies, plan the chain instead of pausing: act on the EARLIEST unmet resolvable dependency (publish or route it), keep the dependent held, and escalate only ambiguous/cycle/cross-domain-unrouted cases.")),
         Fragment(S4, Operative("- The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER (implementation, review) — NOT at-most-one-message overall (G524): this wake's actions may include a publish plus its same-wake delegation, one repair message per stalled receiver, one operator escalation, and handling any pending receiver reports, all together.")),
-        Fragment(S4, Transport("- Before sending any agmsg message this wake, verify the recipient id against the team roster (`agmsg team.sh`) — treat an id not on the roster as an error, never a guess (G524).")),
+        Fragment(S4, Operative("- Send workflow notifications only through `intent-cli notify`; it resolves the recorded session-layer mode and validates the recipient before delivery, failing closed on an unknown role (G524/G578).")),
         Fragment(
             S4,
             Operative("- Apply the design-thread escalation filter: keep routine progress / CI-wait / success / closeout / idle internal; surface to the design thread ONLY human-needed decisions, with structured evidence and the exact decision needed."),
@@ -697,9 +697,11 @@ internal static class SessionLayerFragments
             Transport("The implementation receiver still derives its target from `intent-cli worker next-action`, not the agmsg text.")),
         Fragment(
             S6,
-            Transport("G524: before sending ANY agmsg message, verify the recipient id is present in the team roster (agmsg `team.sh`). agmsg accepts an unknown recipient silently — there is no delivery error to notice."),
+            Operative("G524/G578: send workflow notifications only through `intent-cli notify`."),
             Scaffold(" "),
-            Transport("Treat a recipient id that is not on the roster as an error: fix the id or the roster registration before sending; never guess or approximate a role name.")),
+            Operative("It validates the agmsg roster or herdr logical-role mapping before delivery and returns a named failure instead of a silent no-op."),
+            Scaffold(" "),
+            Operative("Fix the active transport's role registration or mapping before retrying; never guess a role name or bypass notify with a handwritten transport call.")),
         Fragment(S6, Descriptive("- Field-observed loss: 8 dispatches addressed to `review` were silently lost when the registered role was `reviewer` — agmsg neither delivered nor reported the mismatch.")),
         Fragment(
             S7,
@@ -888,7 +890,7 @@ internal static class SessionLayerFragments
             S11,
             Descriptive("1."),
             Scaffold(" "),
-            Transport("Before sending any agmsg message, verify the recipient id against the team roster (`agmsg team.sh`); treat an id not on the roster as an error, never a guess (G524).")),
+            Operative("Send workflow notifications only through `intent-cli notify`; it resolves the recorded transport and validates the recipient before delivery, failing closed on an unknown role (G524/G578).")),
         Fragment(
             S11,
             Descriptive("1."),
@@ -904,7 +906,7 @@ internal static class SessionLayerFragments
         Fragment(S12, Operative("- No hand-editing queue-state, runs.jsonl, packets, or any host metadata (`.intent-cli/**`, `intents/**`).")),
         Fragment(S12, Operative("- agmsg never replaces semantic review or authorizes a merge; review/closeout decisions run through intent-cli review surfaces (G480).")),
         Fragment(S12, Operative("- Per-wake cap is AT MOST ONE DELEGATION PER RECEIVER (implementation, review) — NOT at-most-one-message: a publish's same-wake delegation, repair messages, an escalation, and receiver-report handling may all happen in one wake (G524); never defer a publish's delegation to an unscheduled future wake.")),
-        Fragment(S12, Transport("- Verify the recipient id against the team roster (`agmsg team.sh`) before every send; an id not on the roster is an error, not a guess (G524).")),
+        Fragment(S12, Operative("- Use `intent-cli notify` for every workflow send; it validates the active transport's role source and fails closed on unknown or unavailable recipients (G524/G578).")),
         Fragment(S12, Operative("- End every wake with a stalled-work check (`automation stalled-work`, G523) and process any actionable item before sleeping; escalate explicitly rather than deferring silently.")),
         Fragment(
             S12,
@@ -1538,7 +1540,7 @@ internal static class SessionLayerFragments
         Fragment("scheduling", Operative("If intent-cli reports an `issue-cut-ready` candidate and all gates pass (same-domain or routed, complete contract, no open clarification, dependencies satisfied, under WIP, clean host-sync/preflight), publish ONE issue this wake via canonical publish-flow / issue-publish, verify it, THEN delegate that same issue to implementation in THIS SAME WAKE (G524) — do not ask the operator to create it, and do not stop after publishing to wait for a future wake to send the delegation.")),
         Fragment("scheduling", Operative("If the candidate has unmet dependencies, plan the chain instead of pausing: act on the EARLIEST unmet resolvable dependency (publish or route it), keep the dependent held, and escalate only ambiguous/cycle/cross-domain-unrouted cases.")),
         Fragment("scheduling", Operative("The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER (implementation, review) — NOT at-most-one-message overall (G524): this wake's actions may include a publish plus its same-wake delegation, one repair message per stalled receiver, one operator escalation, and handling any pending receiver reports, all together.")),
-        Fragment("scheduling", Transport("Before sending any agmsg message this wake, verify the recipient id against the team roster (`agmsg team.sh`) — treat an id not on the roster as an error, never a guess (G524).")),
+        Fragment("scheduling", Operative("Send workflow notifications only through `intent-cli notify`; it resolves the recorded session-layer mode and validates the recipient before delivery, failing closed on an unknown role (G524/G578).")),
         Fragment(
             "scheduling",
             Operative("Apply the design-thread escalation filter: keep routine progress / CI-wait / success / closeout / idle internal; surface to the design thread ONLY human-needed decisions, with structured evidence and the exact decision needed."),
@@ -1561,9 +1563,11 @@ internal static class SessionLayerFragments
             Operative("Do not escalate states you can repair by message.")),
         Fragment(
             "dispatch_verification",
-            Transport("G524: before sending ANY agmsg message, verify the recipient id is present in the team roster (agmsg `team.sh`). agmsg accepts an unknown recipient silently — there is no delivery error to notice."),
+            Operative("G524/G578: send workflow notifications only through `intent-cli notify`."),
             Scaffold(" "),
-            Transport("Treat a recipient id that is not on the roster as an error: fix the id or the roster registration before sending; never guess or approximate a role name.")),
+            Operative("It validates the agmsg roster or herdr logical-role mapping before delivery and returns a named failure instead of a silent no-op."),
+            Scaffold(" "),
+            Operative("Fix the active transport's role registration or mapping before retrying; never guess a role name or bypass notify with a handwritten transport call.")),
         Fragment("dispatch_verification", Descriptive("Field-observed loss: 8 dispatches addressed to `review` were silently lost when the registered role was `reviewer` — agmsg neither delivered nor reported the mismatch.")),
         Fragment(
             "design_handoff",
@@ -1683,7 +1687,7 @@ internal static class SessionLayerFragments
         Fragment("orchestrator_first_wake", Operative("Ask intent-cli for the real state: `intent-cli intent status --domain __DOMAIN__ --format json` and `intent-cli worker next-action --repo __OWNER__/__REPO__ --github-only --format json`.")),
         Fragment("orchestrator_first_wake", Transport("Verify every GitHub fact an agmsg reply claims (PR merged, CI concluded, labels) before acting on it.")),
         Fragment("orchestrator_first_wake", Operative("The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER, not at-most-one-message overall (G524): a publish this wake must be delegated to implementation in this SAME wake — never defer that delegation to an unscheduled next wake — alongside any repair requests (one per stalled receiver) or one operator escalation.")),
-        Fragment("orchestrator_first_wake", Transport("Before sending any agmsg message, verify the recipient id against the team roster (`agmsg team.sh`); treat an id not on the roster as an error, never a guess (G524).")),
+        Fragment("orchestrator_first_wake", Operative("Send workflow notifications only through `intent-cli notify`; it resolves the recorded transport and validates the recipient before delivery, failing closed on an unknown role (G524/G578).")),
         Fragment("orchestrator_first_wake", Operative("Do not launch implement/review recurring timers for this domain/repo while orchestrating.")),
         Fragment("orchestrator_first_wake", Operative("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain __DOMAIN__ --repo __OWNER__/__REPO__ --format json`, and process every actionable item before sleeping — never leave one for an unscheduled next wake; escalate explicitly if it is genuinely blocked on an operator decision.")),
         Fragment("safety_boundaries", Descriptive("agmsg is a message/progress/completion signal layer only; intent-cli and GitHub are authoritative for all workflow state.")),
@@ -1691,7 +1695,7 @@ internal static class SessionLayerFragments
         Fragment("safety_boundaries", Operative("No hand-editing queue-state, runs.jsonl, packets, or any host metadata (`.intent-cli/**`, `intents/**`).")),
         Fragment("safety_boundaries", Operative("agmsg never replaces semantic review or authorizes a merge; review/closeout decisions run through intent-cli review surfaces (G480).")),
         Fragment("safety_boundaries", Operative("Per-wake cap is AT MOST ONE DELEGATION PER RECEIVER (implementation, review) — NOT at-most-one-message: a publish's same-wake delegation, repair messages, an escalation, and receiver-report handling may all happen in one wake (G524); never defer a publish's delegation to an unscheduled future wake.")),
-        Fragment("safety_boundaries", Transport("Verify the recipient id against the team roster (`agmsg team.sh`) before every send; an id not on the roster is an error, not a guess (G524).")),
+        Fragment("safety_boundaries", Operative("Use `intent-cli notify` for every workflow send; it validates the active transport's role source and fails closed on unknown or unavailable recipients (G524/G578).")),
         Fragment("safety_boundaries", Operative("End every wake with a stalled-work check (`automation stalled-work`, G523) and process any actionable item before sleeping; escalate explicitly rather than deferring silently.")),
         Fragment(
             "safety_boundaries",

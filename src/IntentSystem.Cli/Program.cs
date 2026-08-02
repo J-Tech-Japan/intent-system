@@ -48,6 +48,7 @@ internal static class Program
                 || IsInspectCommand(args)
                 || IsWorkerCommand(args)
                 || IsSkillCommand(args)
+                || IsNotifyCommand(args)
                 || IsHelpCommand(args))
             {
                 return CommandRouter.Execute(args, CreateBootstrapContext(currentDirectory, args), Console.Out);
@@ -134,6 +135,17 @@ internal static class Program
     private static bool IsSkillCommand(string[] args)
     {
         return args.Length >= 1 && string.Equals(args[0], "skill", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G578: a receiver runs the canonical report command from its isolated
+    /// child checkout. The delegate payload supplies the host routing root as
+    /// data, so notify must reach its bounded resolver without requiring the
+    /// child cwd itself to contain host metadata.
+    /// </summary>
+    private static bool IsNotifyCommand(string[] args)
+    {
+        return args.Length >= 1 && string.Equals(args[0], "notify", StringComparison.Ordinal);
     }
 
     private static bool IsGuideOneshotCommand(string[] args)
