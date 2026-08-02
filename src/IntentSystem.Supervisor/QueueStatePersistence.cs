@@ -32,7 +32,7 @@ namespace IntentSystem.Supervisor;
 /// recovery gate into a circular deadlock. Restoration took three canonical
 /// surfaces plus an operator (host commit <c>c0897649</c>).
 ///
-/// Three guarantees, all enforced here rather than re-implemented per
+/// Four guarantees, all enforced here rather than re-implemented per
 /// command:
 /// <list type="number">
 /// <item><b>Stale-base detection and re-application.</b> The state the caller
@@ -51,6 +51,10 @@ namespace IntentSystem.Supervisor;
 ///   only the units its delta actually covers, plus <c>updated_at</c>. Every
 ///   unrelated item is carried through byte-identically from the fresh
 ///   on-disk state.</item>
+/// <item><b>Atomic publication.</b> The complete serialized document is
+///   flushed to a uniquely named sibling in the target directory, then
+///   published with one overwrite-move. An interruption before that move
+///   leaves the previous canonical document intact and parseable.</item>
 /// </list>
 ///
 /// Deliberately NOT in this layer (out of scope, and recorded as such): a
@@ -375,15 +379,7 @@ public static class QueueStatePersistence
     }
 
     private static void WriteText(string queueStatePath, string text)
-    {
-        var directory = Path.GetDirectoryName(queueStatePath);
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        File.WriteAllText(queueStatePath, text);
-    }
+        => AtomicFileWriter.WriteAllText(queueStatePath, text);
 
     /// <summary>
     /// Persists <paramref name="outgoingState"/>, enforcing every guarantee
@@ -573,15 +569,7 @@ public static class QueueStatePersistence
     };
 
     private static void Write(string queueStatePath, QueueState state)
-    {
-        var directory = Path.GetDirectoryName(queueStatePath);
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(state));
-    }
+        => AtomicFileWriter.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(state));
 }
 
 /// <summary>
