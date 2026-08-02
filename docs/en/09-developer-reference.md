@@ -749,6 +749,13 @@ a prose reader never disagree about what applies.
   reach past it. The JSON context lists each descriptive clause the same way,
   one for one, instead of marking a property.
 
+  Inside a markdown TABLE the label is deferred and emitted once the table is
+  complete. A blockquote and a blank line between two rows terminate a GFM
+  table, so the rows after it stop being part of it — the label's placement has
+  to yield to the structure it sits in. It can move precisely because it quotes
+  its own scope: a self-scoping label is still exact when it is read away from
+  the row it covers.
+
 Pointer-only text is G570 routing metadata: it says what does not apply and
 where the counterpart ships. It never says what to run instead, because a
 concrete herdr procedure is G571 content and is forbidden here.

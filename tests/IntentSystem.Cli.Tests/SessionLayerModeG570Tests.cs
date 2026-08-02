@@ -477,14 +477,12 @@ public sealed class SessionLayerModeG570Tests : IDisposable
                 .Trim('"');
             Assert.Contains("agmsg", quoted, StringComparison.OrdinalIgnoreCase);
 
-            var next = i + 1;
-            while (next < lines.Length && lines[next].Trim().Length == 0)
-            {
-                next++;
-            }
-
-            Assert.True(next < lines.Length, "the agmsg-example label must qualify a fragment, not trail the document");
-            Assert.Contains(quoted, lines[next], StringComparison.Ordinal);
+            // G570 tenth repair: the label no longer has to ADJOIN its clause —
+            // inside a markdown table it is emitted after the table, because a
+            // blockquote between rows terminates the table. What must hold is
+            // that the clause it names is actually rendered, and that the label
+            // is the only thing that scopes it.
+            Assert.Contains(quoted, output, StringComparison.Ordinal);
         }
 
         Assert.True(occurrences > 0, "descriptive agmsg illustration must carry its label");
@@ -1341,6 +1339,81 @@ public sealed class SessionLayerModeG570Tests : IDisposable
                 Assert.All(declared, c => Assert.Equal(
                     SessionLayerSections.FragmentType.CanonDescriptive,
                     c.Type));
+            }
+        }
+    }
+
+    /// <summary>
+    /// G570 tenth repair: every declared table row stays inside ONE contiguous
+    /// GFM table.
+    ///
+    /// The one-for-one label was emitted as a blockquote plus a blank line
+    /// between two rows, which terminates the table — the rows after it stopped
+    /// being part of it. The existing shape guard only checked that a
+    /// pointer-bearing row still ends with `|`, so it could not see this.
+    ///
+    /// This reads the rendered document and requires each table's rows to be
+    /// contiguous, with no interruption between the first and last row.
+    /// </summary>
+    [Fact]
+    public void UnderHerdrOnly_DeclaredTableRowsStayInOneContiguousTable_G570()
+    {
+        foreach (var mode in new[] { SessionLayerMode.Agmsg, SessionLayerMode.HerdrOnly })
+        {
+            Assert.Equal(0, workspace.RunSet(mode, write: true).ExitCode);
+            var lines = workspace.RenderOrchestratorGuide().Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
+
+            var rowIndexes = Enumerable.Range(0, lines.Length)
+                .Where(i => lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                .ToArray();
+            Assert.NotEmpty(rowIndexes);
+
+            // Group the rows into tables by adjacency, then require every group
+            // to be a run with nothing between its first and last row.
+            var groups = new List<List<int>>();
+            foreach (var index in rowIndexes)
+            {
+                if (groups.Count > 0 && index == groups[^1][^1] + 1)
+                {
+                    groups[^1].Add(index);
+                }
+                else
+                {
+                    groups.Add([index]);
+                }
+            }
+
+            foreach (var group in groups)
+            {
+                for (var i = group[0]; i <= group[^1]; i++)
+                {
+                    Assert.True(
+                        lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal),
+                        $"[{mode}] a non-row line interrupts a markdown table at line {i + 1}: {lines[i]}");
+                }
+            }
+
+            // And the isolation table specifically keeps every declared row —
+            // the case the review found broken.
+            var isolationRows = SessionLayerFragments.Declarations
+                .Where(d => d.Section.Contains("Cross-project isolation", StringComparison.Ordinal))
+                .Select(d => SessionLayerFragments.Expand(BareValues, d.Text))
+                .Where(t => t.StartsWith("|", StringComparison.Ordinal))
+                .ToArray();
+            Assert.NotEmpty(isolationRows);
+
+            var present = isolationRows
+                .Select(row => Array.FindIndex(lines, l => l.TrimEnd() == row))
+                .Where(i => i >= 0)
+                .ToArray();
+            Assert.NotEmpty(present);
+
+            var table = groups.Single(g => g.Contains(present[0]));
+            foreach (var index in present)
+            {
+                Assert.True(
+                    table.Contains(index),
+                    $"[{mode}] a declared isolation-table row fell out of the table: {lines[index]}");
             }
         }
     }

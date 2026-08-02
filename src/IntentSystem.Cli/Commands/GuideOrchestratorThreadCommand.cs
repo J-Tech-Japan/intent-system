@@ -202,6 +202,7 @@ internal static class GuideOrchestratorThreadCommand
         var replaced = new List<string>();
         var dropping = false;
         string? currentMixedHeading = null;
+        var deferredTableLabels = new List<string>();
 
         var inFencedBlock = false;
 
@@ -302,15 +303,33 @@ internal static class GuideOrchestratorThreadCommand
                 // were each tried and each over-reached: description and binding
                 // duties interleave inside a single line, so only a label that
                 // states its own scope cannot cover an instruction.
+                //
+                // G570 tenth repair: a blockquote plus a blank line between two
+                // table rows TERMINATES the GFM table, so the rows after it stop
+                // being part of it. Inside a table the labels are deferred and
+                // flushed once the table is complete. Placement can move because
+                // the label quotes its own scope — that is exactly what makes it
+                // readable away from the row it covers.
                 foreach (var clause in clauses.Where(SessionLayerFragments.IsAgmsgIllustration))
                 {
-                    kept.Add(SessionLayerSections.DescriptiveAgmsgContextFor(clause.Text));
-                    kept.Add(string.Empty);
+                    var label = SessionLayerSections.DescriptiveAgmsgContextFor(clause.Text);
+                    if (line.TrimStart().StartsWith("|", StringComparison.Ordinal))
+                    {
+                        deferredTableLabels.Add(label);
+                    }
+                    else
+                    {
+                        kept.Add(label);
+                        kept.Add(string.Empty);
+                    }
                 }
             }
 
             kept.Add(line);
+            FlushDeferredTableLabels(kept, deferredTableLabels, line);
         }
+
+        FlushDeferredTableLabels(kept, deferredTableLabels, string.Empty);
 
         if (replaced.Count == 0)
         {
@@ -330,6 +349,42 @@ internal static class GuideOrchestratorThreadCommand
 
         kept.InsertRange(insertAt, SessionLayerSections.ReplacementSection(replaced).Split('\n'));
         return string.Join('\n', kept);
+    }
+
+    /// <summary>
+    /// Emits labels that were deferred while inside a markdown table, once the
+    /// table is complete. A label emitted between rows ends the table; emitted
+    /// after it, the table stays one contiguous block and the label still names
+    /// the exact clause it covers.
+    /// </summary>
+    private static void FlushDeferredTableLabels(List<string> kept, List<string> deferred, string line)
+    {
+        if (deferred.Count == 0 || line.TrimStart().StartsWith("|", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var insertAt = kept.Count;
+        if (line.Length > 0 && string.Equals(kept[^1], line, StringComparison.Ordinal))
+        {
+            // The line that ended the table has already been added; the labels
+            // belong before it, immediately after the table's last row.
+            insertAt = kept.Count - 1;
+            while (insertAt > 0 && kept[insertAt - 1].Trim().Length == 0)
+            {
+                insertAt--;
+            }
+        }
+
+        var block = new List<string> { string.Empty };
+        foreach (var label in deferred)
+        {
+            block.Add(label);
+            block.Add(string.Empty);
+        }
+
+        kept.InsertRange(insertAt, block);
+        deferred.Clear();
     }
 
     /// <summary>
