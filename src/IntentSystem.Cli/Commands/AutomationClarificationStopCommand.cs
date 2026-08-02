@@ -48,7 +48,7 @@ internal static class AutomationClarificationStopCommand
         var repo = repoOverride;
         if (string.IsNullOrWhiteSpace(targetUrl) && string.IsNullOrWhiteSpace(repo))
         {
-            var resolvedWorkdir = ResolveWorkdir(context, workdir);
+            var resolvedWorkdir = WorkdirResolver.Resolve(context, workdir);
             if (!AutomationCheckCommand.TryInferGitHubRepo(resolvedWorkdir, out repo, out error))
             {
                 writer.WriteLine(error);
@@ -258,16 +258,6 @@ internal static class AutomationClarificationStopCommand
             return false;
         }
         return true;
-    }
-
-    private static string ResolveWorkdir(CliContext context, string? workdir)
-    {
-        if (string.IsNullOrWhiteSpace(workdir))
-        {
-            return context.RepoRoot;
-        }
-
-        return Path.GetFullPath(workdir);
     }
 
     private static string BuildTargetUrl(string repo, string kind, int number)
