@@ -2541,37 +2541,37 @@ For the same reason the version-flow example above uses placeholders rather than
 a worked version pair: a second copy of the current versions is a second thing
 to keep in sync, and it goes stale on exactly the roll nobody is watching.
 
-### Next release readiness (v0.8.1)
+### Next release readiness (v0.8.2)
 
-**`v0.8.0` shipped** (GitHub Release + NuGet), and the version policy remains
-`stableVersion: 0.8.0` with `nextVersion: 0.8.1`. The prepare-only `v0.8.1`
-notes cover exactly G585, G586, G587, G588, and G589; see
-[release-notes-v0.8.1.md](release-notes-v0.8.1.md) for the merged PR and commit
-evidence.
+**`v0.8.1` shipped** (GitHub Release + NuGet) and the version policy was rolled
+to the `0.8.2` development line. The v0.8.1 batch was a **patch** bump covering
+five slices — G585, G586, G587, G588 and G589 — whose headline is wake
+reliability under the herdr-only session layer: correct mode and topology
+guidance, fail-closed packet readiness, canonical delivery to every recorded
+role, and an observable end to CI waits. Patch rather than minor because no
+slice added a command surface; every one corrected an existing surface. See
+[release-notes-v0.8.1.md](release-notes-v0.8.1.md) for the shipped scope.
 
-`v0.8.1` is a **PATCH** under the version policy: all five slices are
-correctness fixes, with no new command surface or broad behavior change. The
-two documented additive output-shape changes remain non-breaking: external-
-resident `notify delegate` / `notify report` delivery can append the team event
-and set `event_appended=true`, and `automation stalled-work` can return new
-finding kinds. This preparation does not create a Release, tag, or package and
-does not roll the version file.
+**Nothing is decided for `v0.8.2` yet.** What ships is chosen by the v0.8.2
+release-prep packet, not by this section, and
+[release-notes-v0.8.2.md](release-notes-v0.8.2.md) is a DRAFT stub until that
+packet fills it in.
 
-**Release-readiness verification (run before merging the `v0.8.1`
+**Release-readiness verification (run before merging the `v0.8.2`
 release-preparation PR):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.8.0 (published), nextVersion 0.8.1 (to release)
+cat eng/version.json   # stableVersion 0.8.1 (published), nextVersion 0.8.2 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.8.1-<sha>-G590   (NOT a stale literal)
+#   expected shape: intent-cli 0.8.2-<sha>-G<unit>   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.8.1.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.8.2.nupkg
 
 # 4. Confirm the G475 package/release guard and the release/version guards.
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
@@ -2585,10 +2585,10 @@ dotnet test IntentSystem.sln -c Release
 After the preparation merge lands on `main` and the readiness evidence holds,
 the operator must explicitly approve Release creation. Only then may a
 maintainer/operator (or authorized external release automation) create and
-publish the GitHub Release for `v0.8.1`; publishing it triggers `release.yml`
+publish the GitHub Release for `v0.8.2`; publishing it triggers `release.yml`
 (`on: release: published`) to build and publish the NuGet package and the
 per-platform binary artifacts. **Then roll `eng/version.json` immediately** —
-`stableVersion → 0.8.1`, `nextVersion → 0.8.2` — carrying, per **steps 4–6** of the
+`stableVersion → 0.8.2`, `nextVersion → 0.8.3` — carrying, per **steps 4–6** of the
 [post-release version roll](#post-release-version-roll-g554--required-immediate):
 the **DRAFT note stubs in the same commit** (step 4), the **"Next release
 readiness" section refreshed to the new line in both language mirrors** (step

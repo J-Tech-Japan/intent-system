@@ -2623,56 +2623,56 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 使っています: 現在のバージョンの 2 つ目のコピーは同期し続けるべき対象が 1 つ増えることを
 意味し、しかも誰も見ていない roll でこそ stale になります。
 
-### 次リリース準備(v0.8.1)
+### 次リリース準備(v0.8.2)
 
-**`v0.8.0` は出荷済み**(GitHub Release + NuGet)で、version policy は
-`stableVersion: 0.8.0`、`nextVersion: 0.8.1` のままです。prepare-only の
-`v0.8.1` notes は G585、G586、G587、G588、G589 の 5 件だけを対象にします。
-マージ済み PR と commit の証跡は
+**`v0.8.1` は出荷済み**(GitHub Release + NuGet)で、version policy は
+`0.8.2` 開発ラインへ roll 済みです。v0.8.1 は **patch** bump で、G585、G586、
+G587、G588、G589 の 5 件を対象としました。見出しは herdr-only セッションレイヤに
+おける wake の信頼性です —— mode と topology のガイダンス修正、fail-closed な
+packet readiness、記録済みロール全員への canonical 配送、そして CI 待ちの終了を
+観測可能にすること。minor ではなく patch なのは、どの slice も command surface を
+追加せず、すべて既存 surface の correctness fix だったためです。出荷範囲は
 [release-notes-v0.8.1.md](release-notes-v0.8.1.md) を参照してください。
 
-`v0.8.1` は version policy 上の **PATCH** です。5 件すべてが correctness fix で、
-新しい command surface や広範な behavior change はありません。文書化する 2 件の
-additive な output-shape 変更も非破壊です: external resident への
-`notify delegate` / `notify report` delivery は team event を append して
-`event_appended=true` を返せるようになり、`automation stalled-work` は新しい
-finding kind を返せるようになります。この準備では Release、tag、package の作成も、
-version file の roll も行いません。
+**`v0.8.2` の内容はまだ何も決まっていません。** 何を出荷するかを決めるのは
+v0.8.2 の release-prep パケットであってこのセクションではなく、
+[release-notes-v0.8.2.md](release-notes-v0.8.2.md) はそのパケットが埋めるまで
+DRAFT stub のままです。
 
-**リリース準備検証(`v0.8.1` release-preparation PR のマージ前に実行):**
+**リリース準備検証(`v0.8.2` release-preparation PR のマージ前に実行):**
 
 ```bash
 # 1. version policy が release-to-be-cut を記録していることを確認。
-cat eng/version.json   # stableVersion 0.8.0 (published), nextVersion 0.8.1 (to release)
+cat eng/version.json   # stableVersion 0.8.1 (published), nextVersion 0.8.2 (to release)
 
 # 2. build して表示バージョン識別(version + git SHA + G-unit)を確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待される形: intent-cli 0.8.1-<sha>-G590   (stale literal ではない)
+#   期待する形: intent-cli 0.8.2-<sha>-G<unit>   (古いリテラルではない)
 
-# 3. pack して NuGet package バージョンが policy と一致することを確認。
+# 3. pack して NuGet package version が policy と一致することを確認。
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.8.1.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.8.2.nupkg
 
 # 4. G475 package/release guard と release/version guard を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
   "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 
-# 5. Release full suite を実行。
+# 5. Release suite を完全実行。
 dotnet test IntentSystem.sln -c Release
 ```
 
-`v0.8.1` preparation の merge が `main` に入り readiness evidence が揃った後も、
-Release 作成には operator の明示承認が必要です。その後に限り maintainer/operator (または authorize された
-外部 release automation)が `v0.8.1` GitHub Release を作成・publish できます。publish が
-`release.yml` (`on: release: published`)を trigger し、NuGet package と platform binary
-artifact を build・publish します。**その後すぐに `eng/version.json` を roll します** —
-`stableVersion → 0.8.1`、`nextVersion → 0.8.2` —
-[リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
-**ステップ 4–6** に従い、**同一コミットに DRAFT note スタブ**(ステップ 4)、
+準備コミットが `main` に入り readiness の証跡が揃ったら、operator が Release 作成を
+明示的に承認しなければなりません。そのうえで初めて maintainer/operator(または承認済みの
+外部リリース自動化)が `v0.8.2` の GitHub Release を作成・公開できます。公開すると
+`release.yml`(`on: release: published`)が起動し、NuGet package とプラットフォーム別
+バイナリを build/publish します。**その直後に `eng/version.json` を roll します** ——
+`stableVersion → 0.8.2`、`nextVersion → 0.8.3` —— [post-release version roll](#post-release-version-roll-g554--required-immediate)
+の **ステップ 4–6** に従い、**同一コミットに DRAFT note スタブ**(ステップ 4)、
 **「次リリース準備」セクションを ja/en 両ミラーで新しいラインへ更新**(ステップ 5)、
 そして roll を完了とみなす前の **roll 後の child main CI green 確認**(ステップ 6)を
+伴います。
 
 ### 削除済みリリースタグ（`v0.3.3`）の再作成
 
