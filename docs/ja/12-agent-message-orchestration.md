@@ -13,6 +13,43 @@ host リポジトリが **複数の intent ドメイン** を保持する場合�
 intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --mode single-domain|multi-domain --format markdown
 ```
 
+## canonical notify workflow
+
+role 間の workflow message はすべて `intent-cli notify` を使い、agent 自身は
+agmsg/herdr の配信方法を選択・直接実行しません。CLI が team に記録された session-layer
+mode（未記録時は `agmsg`）を内部で解決し、送信前に logical role を検証するため、team が
+transport を切り替えても command shape は変わりません。
+
+```bash
+# 1 件の bounded task を委譲。--input / --expected-artifact は必要に応じて反復する。
+intent-cli notify delegate --domain <domain> --team <team> --from <sender-role> \
+  --to <receiver-role> --report-to <orchestrator-role> --task-id <task-id> \
+  --objective <one-bounded-outcome> --input <canonical-reference> \
+  --expected-artifact <inspectable-artifact> --result-nonce <fresh-nonce> \
+  --write --format json
+
+# receiver の final step（delegate payload がこの command を供給する）。
+intent-cli notify report --domain <domain> --team <team> --from <receiver-role> \
+  --to <orchestrator-role> --task-id <task-id> \
+  --status completed|blocked|question --artifact <artifact> \
+  --summary <one-line-summary> --write --format json
+
+# design decision を既存 events.jsonl boundary へ送る。
+intent-cli notify escalate --domain <domain> --team <team> --from <sender-role> \
+  --task-id <task-id> --artifact <decision-input> \
+  --summary <one-line-summary> --write --format json
+```
+
+`notify delegate` は task id、expected artifact、fresh marker nonce、isolated child
+checkout から必要な transport-neutral `--routing-root` を含む完全な canonical report
+command を配信 task に埋め込みます。receiver は他のすべての作業後、その report
+command を final step として実行するため、herdr-only の完了が receiver pane に表示される
+だけで終わらず orchestration role を能動的に wake します。unknown role と delivery failure
+は named cause と non-zero で fail closed します。`notify escalate` は変更していない 6-field
+event schema を append します。いずれも merge / label / publish / queue mutation を行いません。
+direct transport command は provisioning/readiness diagnostics に限り、workflow send instruction
+には使いません。
+
 ## orchestrator モードの開始（設計スレッドのセットアップ）
 
 オーケストレーションを動かしたい設計スレッドは intent-cli に直接尋ねられます —
@@ -64,9 +101,9 @@ intake の後に、完全なリファレンスチェックリストが続きま�
 8. **クリーンアップ** — 終了時は agmsg スクリプト（`leave.sh` / `despawn.sh`）でロールを
    leave/despawn し、inbox watcher を停止する。
 
-> **警告:** agmsg のデータベースや team ファイルを直接編集しないでください — 登録・送信・
-> クリーンアップはすべて agmsg スクリプト経由で行います。agmsg state の手編集は delivery を
-> 壊します。
+> **警告:** agmsg のデータベースや team ファイルを直接編集しないでください — provision・
+> diagnose・cleanup は agmsg script を使い、workflow notification は adapter を呼ぶ
+> `intent-cli notify` で送ります。agmsg state の手編集は delivery を壊します。
 
 ## ターミナルワークスペースの provisioning（チームを構築する）
 
@@ -229,28 +266,19 @@ agmsg identity step はありません。
 
 ### Dispatch、wait、artifact 検証
 
-`herdr agent prompt <logical-role> <task-block>` で次の structured block を 1 つ送ります。
-
-```text
-TASK <task-id>
-role: <logical-role>
-objective: <one bounded outcome>
-inputs:
-  - <canonical issue/PR/path/reference>
-expected-artifacts:
-  - <file, commit, PR, report, or other inspectable artifact>
-result-prefix: ORCH_RESULT
-result-nonce: <fresh-per-dispatch-nonce>
-completion-marker: Ready になったら result-prefix、1 space、result-nonce、1 space、status、1 space、artifact を連結した 1 行を出力する。status は completed、blocked、question。precomposed marker をこの task block にコピーしない。
-```
+[canonical notify workflow](#canonical-notify-workflow) の
+`intent-cli notify delegate ...` を target logical role に対して実行します。CLI が
+herdr-only を内部解決し、role mapping を検証して structured task block を生成します。
+`herdr agent prompt` を手書きしてはいけません。
 
 dispatch ごとに fresh で予測不能な nonce を生成し、再利用や task id 単独での代用をしません。
 `pane wait-output` は既存 output を即座に検索するため、task block 内の precomposed wait needle
 が echo され、作業開始前に false match することがあります。split field により、その literal を
-dispatch から除外します。handoff は file、commit、PR、verification log などの inspectable
+生成された split field により、その literal を dispatch から除外します。handoff は file、commit、PR、verification log などの inspectable
 artifact です。screen prose はそれを指す signal にすぎません。repair は現在の pane mapping を
 解決した後、同じ logical role に task id と具体的 delta を添えて戻します。どの buffer 由来でも
-marker match だけでは不十分で、named artifact の存在と verification が必要です。
+marker match だけでは不十分で、named artifact の存在と verification が必要です。repair も
+`intent-cli notify delegate` で同じ logical role に戻します。
 
 wait は必ず bounded にします。
 
@@ -285,12 +313,12 @@ append し、embedded newline を許さず、`summary` を 1 行へ normalize �
 ```
 
 design-relevant な completion / blocked / question / escalation だけを書きます。この
-mode-independent channel は design boundary のみで、inter-agent bus ではなく、herdr
-dispatch、GitHub、intent-cli workflow state の代替でもありません。
+mode-independent channel は design boundary のみで、inter-agent bus ではなく、
+`intent-cli notify`、GitHub、intent-cli workflow state の代替でもありません。
 
 - Claude app watcher: 解決済み path の完全な未読行だけを tail し、restart をまたいで offset
   を保持します。
-- herdr pane の Codex CLI: role を直接 prompt し、通常 coordination で file poll しません。
+- herdr pane の Codex CLI: `intent-cli notify delegate` / `report` を使い、通常 coordination で file poll しません。
 - Codex Desktop: one-minute-class（約 1 分）cadence で poll し、durable byte-offset watermark より後の
   完全な行だけを処理し、成功後に watermark を進めます。truncate または malformed JSON は
   fail closed とし operator recovery を要求します。
@@ -668,11 +696,11 @@ orchestrator がメッセージ駆動で動作する場合でも fallback/legacy
   同一 wake 内 delegation、停滞している receiver ごとに 1 通の repair メッセージ、
   1 件のオペレーターエスカレーション、保留中の receiver report への対応が
   すべて含まれてよい。
-- **送信前に受信者ロースターを検証する（G524）。** どの agmsg メッセージを送る前にも、
-  受信者 id が team roster（`agmsg team.sh`）に存在することを確認する — agmsg は
-  未知の受信者を黙って受け付けてしまうため、roster に無い id は推測せず、
-  エラーとして扱う（フィールドでは、登録済みロール `reviewer` に対して `review` と
-  誤指定し、メッセージが静かに失われた例があります）。
+- **notify が受信者を検証する（G524/G578）。** workflow message は
+  `intent-cli notify` だけで送り、active transport の role source に無い id や
+  unavailable receiver は named cause と non-zero で fail closed にする。role 名を
+  推測したり、handwritten transport call で検証を迂回したりしない（旧経路では、登録済み
+  `reviewer` に対して `review` と誤指定したメッセージが静かに失われました）。
 - **stalled-work チェックで wake を終える（G523/G524）。**
   `intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json`
   を実行し、報告されたすべての actionable item を眠りにつく前に処理する — wake が
@@ -764,11 +792,11 @@ intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --forma
 
 ## dispatch 検証（G524）
 
-どの agmsg メッセージを送る前にも、受信者 id が team roster（agmsg `team.sh`）に
-存在することを確認してください。agmsg は未知の受信者を黙って受け付けてしまいます —
-配信エラーとして気づく手段がありません。roster に無い受信者 id はエラーとして扱い、
-送信前に id か roster 登録を修正してください。ロール名を推測したり近似したり
-しないでください。
+workflow message は `intent-cli notify` だけで送ります。agmsg adapter は team roster を、
+herdr-only adapter は logical-role mapping と running agent/pane を検証してから配信します。
+unknown role / unavailable receiver は named cause と non-zero を返し、配信済みとは決して
+報告しません。再試行前に role registration/mapping を直し、role 名を推測・近似したり、
+handwritten transport invocation で検証を迂回したりしてはいけません。
 
 フィールドで観測された損失: 登録済みロールが `reviewer` であったにもかかわらず
 `review` 宛に送られた 8 件の dispatch が、静かに失われました — agmsg は配信もせず、
@@ -1102,13 +1130,14 @@ authenticate します)、壊れた瞬間にオペレーターの画面上で可
   実行します。プロンプトは各 wake で
   `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
   を実行し、結果の `stale` フィールドが `true` であれば `message_body` をそのまま
-  agmsg send スクリプト経由で orchestrator に送ります(正確に **1 通**)。`stale` が
+  `intent-cli notify report`（`--from design --to orchestrator --status question`、fresh な
+  heartbeat task id、heartbeat evidence artifact）で orchestrator に送ります（正確に **1 通**）。`stale` が
   `false` であれば何も送らず静かに終了します — 沈黙は **この健全なケースにのみ**
   許されます。heartbeat コマンドの実行失敗や不正な/オブジェクトでない出力は
   **決して沈黙しません**: この wake 自身の turn 出力で、生きたこのセッションを
   監視しているオペレーターに見える形で、失敗を明示的に述べます — これこそが、
   retire された見えない外部スケジューラに対して in-session の watchdog が持つ
-  正確な優位性です(下記 Retired を参照)— その一方で、壊れた入力から agmsg の
+  正確な優位性です(下記 Retired を参照)— その一方で、壊れた入力から notify の
   nudge を捏造・送信することは決してありません。実際に送信されるメッセージは、
   本物の `stale=true` 結果の場合だけです。
 - **failure visibility** — 沈黙は健全な `stale=false` の heartbeat 結果にのみ
@@ -1116,7 +1145,7 @@ authenticate します)、壊れた瞬間にオペレーターの画面上で可
   この wake の watchdog 自身の turn 出力で **可視的に** 表面化させなければ
   なりません — 決して黙って飲み込んだり、黙ってリトライしたりしません。沈黙した
   失敗こそが、このスライスが外部 OS スケジューラを retire する理由そのものだから
-  です — その一方で、壊れた入力から agmsg の nudge を捏造・送信することは決して
+  です — その一方で、壊れた入力から notify の nudge を捏造・送信することは決して
   ありません。実際に送信されるメッセージは、本物の `stale=true` 結果の場合だけです。
 - **チェック内容** — design/HITL inbox で未読の人間向けエスカレーションを確認
   (design ロールの `inbox.sh`)、read-only な intent-cli/GitHub の事実
@@ -1464,8 +1493,8 @@ required-final-step のルールは review スレッドにも適用され、そ�
   メッセージ、1 件のエスカレーション、receiver report への対応は 1 回の wake に
   すべて含まれてよい（G524）。publish の delegation をスケジュールされていない
   将来の wake に先送りしない。
-- 送信の前に必ず受信者 id を team roster（`agmsg team.sh`）と照合する。roster に
-  無い id は推測ではなくエラーとして扱う（G524）。
+- workflow send は必ず `intent-cli notify` を使う。active transport の role source を
+  検証し、unknown / unavailable recipient は fail closed にする（G524/G578）。
 - すべての wake を stalled-work チェック（`automation stalled-work`、G523）で終え、
   眠りにつく前に actionable な item を処理する。黙って先送りせず、明示的に
   エスカレーションする。

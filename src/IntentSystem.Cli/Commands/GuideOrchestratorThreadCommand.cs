@@ -857,7 +857,7 @@ internal static class GuideOrchestratorThreadCommand
                     "If intent-cli reports an `issue-cut-ready` candidate and all gates pass (same-domain or routed, complete contract, no open clarification, dependencies satisfied, under WIP, clean host-sync/preflight), publish ONE issue this wake via canonical publish-flow / issue-publish, verify it, THEN delegate that same issue to implementation in THIS SAME WAKE (G524) — do not ask the operator to create it, and do not stop after publishing to wait for a future wake to send the delegation.",
                     "If the candidate has unmet dependencies, plan the chain instead of pausing: act on the EARLIEST unmet resolvable dependency (publish or route it), keep the dependent held, and escalate only ambiguous/cycle/cross-domain-unrouted cases.",
                     "The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER (implementation, review) — NOT at-most-one-message overall (G524): this wake's actions may include a publish plus its same-wake delegation, one repair message per stalled receiver, one operator escalation, and handling any pending receiver reports, all together.",
-                    "Before sending any agmsg message this wake, verify the recipient id against the team roster (`agmsg team.sh`) — treat an id not on the roster as an error, never a guess (G524).",
+                    "Send workflow notifications only through `intent-cli notify`; it resolves the recorded session-layer mode and validates the recipient before delivery, failing closed on an unknown role (G524/G578).",
                     "Apply the design-thread escalation filter: keep routine progress / CI-wait / success / closeout / idle internal; surface to the design thread ONLY human-needed decisions, with structured evidence and the exact decision needed. Never hide a failure that needs a human.",
                     Apply("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json`, and process every actionable item it reports before sleeping — never leave one for an unscheduled next wake; escalate explicitly if it is genuinely blocked on an operator decision. This includes a `backlog-ready-idle` item (G544, empty WIP + a ready packet + no activity past the idle threshold) — publish and delegate it in THIS wake, the same as any other issue-cut-ready candidate; only announce a following wake will handle it when that wake is actually scheduled."),
                 },
@@ -992,10 +992,10 @@ internal static class GuideOrchestratorThreadCommand
             DispatchVerification = new OrchestratorDispatchVerification
             {
                 Rule =
-                    "G524: before sending ANY agmsg message, verify the recipient id is present in the team roster "
-                    + "(agmsg `team.sh`). agmsg accepts an unknown recipient silently — there is no delivery error to "
-                    + "notice. Treat a recipient id that is not on the roster as an error: fix the id or the roster "
-                    + "registration before sending; never guess or approximate a role name.",
+                    "G524/G578: send workflow notifications only through `intent-cli notify`. It validates the agmsg "
+                    + "roster or herdr logical-role mapping before delivery and returns a named failure instead of a "
+                    + "silent no-op. Fix the active transport's role registration or mapping before retrying; never "
+                    + "guess a role name or bypass notify with a handwritten transport call.",
                 DeadAddressExample =
                     "Field-observed loss: 8 dispatches addressed to `review` were silently lost when the registered "
                     + "role was `reviewer` — agmsg neither delivered nor reported the mismatch.",
@@ -1235,20 +1235,21 @@ internal static class GuideOrchestratorThreadCommand
                     + "the DESIGN thread, run `/loop 30m` (Claude same-thread) or a Codex automation firing every "
                     + "30 minutes, with a prompt that on each wake runs `intent-cli automation heartbeat --domain "
                     + "<domain> --repo <owner/repo> --format json`; when the result's `stale` field is `true`, send "
-                    + "its `message_body` verbatim to the orchestrator via the agmsg send script (exactly ONE "
-                    + "message); when `stale` is `false`, send nothing and exit quietly — silence is reserved for "
+                    + "its `message_body` to the orchestrator with exactly ONE canonical `intent-cli notify report` "
+                    + "call (`--from design --to orchestrator --status question`, plus a fresh heartbeat task id and "
+                    + "the heartbeat evidence artifact); when `stale` is `false`, send nothing and exit quietly — silence is reserved for "
                     + "this healthy case ONLY. A heartbeat command execution failure or malformed/non-object output "
                     + "is NEVER silent: state the failure explicitly in this wake's own turn output, visible to the "
                     + "operator watching this live session — the exact advantage an in-session watchdog has over "
                     + "the retired invisible external scheduler (see the fallback timer / retired-cron notes) — "
-                    + "while still never fabricating or sending an agmsg nudge from broken input; only a genuine "
+                    + "while still never fabricating or sending a notify nudge from broken input; only a genuine "
                     + "`stale=true` heartbeat result ever produces a sent message."),
                 FailureVisibilityRule =
                     "Silence is reserved for a healthy `stale=false` heartbeat result ONLY. A heartbeat command "
                     + "execution failure or malformed/non-object output must be surfaced VISIBLY in the watchdog's "
                     + "own turn output this wake — never silently swallowed or silently retried, since silent "
                     + "failure is exactly the defect this slice retires the external OS scheduler for — while "
-                    + "still never fabricating or sending an agmsg nudge from broken input; only a genuine "
+                    + "still never fabricating or sending a notify nudge from broken input; only a genuine "
                     + "`stale=true` result ever produces a sent message.",
                 HeartbeatCommandExample =
                     "intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json",
@@ -1803,10 +1804,9 @@ internal static class GuideOrchestratorThreadCommand
                         + "(implementation, review), NOT at-most-one-message overall: alongside a publish+delegation you "
                         + "may also send one repair request per stalled receiver (pointing it back to the official "
                         + "intent-cli workflow), escalate one operator decision, and handle any pending receiver "
-                        + "reports. Before sending ANY agmsg message, verify the recipient id is present in the team "
-                        + "roster (agmsg `team.sh`) — agmsg accepts an unknown recipient silently, so treat an "
-                        + "off-roster id as an error, never a guess (a legacy `review` vs the registered `reviewer` has "
-                        + "silently lost messages in the field). Unmet dependencies are normal work, not a stop: if the "
+                        + "reports. Send every workflow notification through `intent-cli notify`; it resolves the "
+                        + "recorded transport and validates recipients before delivery, so an unknown role fails "
+                        + "closed instead of becoming a silent no-op (G578). Unmet dependencies are normal work, not a stop: if the "
                         + "next candidate depends on incomplete work, act on the EARLIEST unmet resolvable dependency "
                         + "(publish or route it) and keep the dependent held, rather than pausing for the operator. For a "
                         + "no-reply receiver past the threshold (default 30m), run the SAFE stale-thread health check — "
@@ -1835,14 +1835,14 @@ internal static class GuideOrchestratorThreadCommand
                 {
                     Role = "implementation",
                     Purpose =
-                        "Implement exactly one delegated item, then report a structured agmsg reply.",
+                        "Implement exactly one delegated item, then run the canonical notify report command embedded in it.",
                     Prompt = Apply(
                         "You are the IMPLEMENTATION thread for domain `<domain>` against `<owner/repo>` using `<agent>`, "
-                        + "driven by orchestrator agmsg delegations. You are a LOOPLESS receiver: do NOT start your own "
+                        + "driven by canonical `intent-cli notify delegate` calls. You are a LOOPLESS receiver: do NOT start your own "
                         + "recurring timer/loop for this domain/repo — wait for a delegation, act once, reply once, then "
                         + "wait again (receivers are never scheduled; the orchestrator is message-driven by default, with an explicit fallback/legacy timer as the only case where it is scheduled). When delegated an item, run "
                         + "the normal child implementation workflow: the issue/PR number comes from `intent-cli worker "
-                        + "next-action --repo <owner/repo> --github-only`, NOT from the agmsg text. Before claiming, "
+                        + "next-action --repo <owner/repo> --github-only`, NOT from the notification text. Before claiming, "
                         + "verify your local checkout context matches the delegation: your cwd/worktree, the git remote "
                         + "repo, and the delegated domain must line up with the routing you were handed. If the checkout "
                         + "does not match the delegated repo/domain, STOP and reply blocked instead of claiming. An "
@@ -1850,31 +1850,30 @@ internal static class GuideOrchestratorThreadCommand
                         + "signal — confirm via packet/domain metadata and the routing context, not the prefix. Then "
                         + "claim, implement, open the PR with a `Closes #<issue>` reference, and `worker complete` — all "
                         + "label transitions through intent-cli worker/automation only. intent-cli and GitHub remain "
-                        + "authoritative; agmsg is only how you receive the delegation and send back your reply. "
+                        + "authoritative; notify is only how you receive the delegation and send back your report. "
                         + "Reporting completion or blocked status to the orchestrator is a REQUIRED FINAL STEP of "
                         + "EVERY delegation (G524) — it is not optional and the orchestrator cannot discover a silent "
                         + "completion on its own (a PR opened with no report reaching the orchestrator is LOST WORK "
                         + "from the orchestrator's perspective, observed in the field for 88 minutes before a manual "
-                        + "check found it). When done or blocked, send ONE structured agmsg reply (accepted / progress "
-                        + "/ completed / blocked) in the exact shape "
-                        + "`{\"status\":\"completed\",\"thread\":\"implementation\",\"ref\":\"pr#<n>\",\"note\":\"PR "
-                        + "opened, Closes #<n>, CI green\"}` (or the `blocked` shape naming one operator action), "
-                        + "citing the GitHub facts (PR number, CI) — do not consider the delegation finished until this "
-                        + "reply is sent. Do NOT read host metadata (`.intent-cli/**`, "
+                        + "check found it). After ALL other work, run the complete canonical `intent-cli notify report` "
+                        + "command embedded in the delegation, supplying `completed`, `blocked`, or `question`, the "
+                        + "inspectable artifact, and a one-line summary citing GitHub facts (PR number, CI). Never "
+                        + "hand-write an agmsg/herdr transport call, and do not consider the delegation finished until "
+                        + "the canonical report command succeeds. Do NOT read host metadata (`.intent-cli/**`, "
                         + "`intents/**`)."),
                 },
                 new OrchestratorThreadPrompt
                 {
                     Role = "review",
                     Purpose =
-                        "Review/closeout exactly one delegated PR through intent-cli, then report a structured agmsg reply.",
+                        "Review/closeout exactly one delegated PR through intent-cli, then run the embedded canonical notify report command.",
                     Prompt = Apply(
                         "You are the REVIEW thread for domain `<domain>` against `<owner/repo>` using `<agent>`, driven "
-                        + "by orchestrator agmsg delegations. You are a LOOPLESS receiver: do NOT start your own "
+                        + "by canonical `intent-cli notify delegate` calls. You are a LOOPLESS receiver: do NOT start your own "
                         + "recurring timer/loop for this domain/repo — wait for a delegation, act once, reply once, then "
                         + "wait again (receivers are never scheduled; the orchestrator is message-driven by default, with an explicit fallback/legacy timer as the only case where it is scheduled). When delegated a PR, run the "
                         + "official host review/closeout through intent-cli surfaces (`review closeout-plan`, `guide "
-                        + "review`, `automation pr-transition`, `closeout pr`) — agmsg never replaces semantic review or "
+                        + "review`, `automation pr-transition`, `closeout pr`) — notify never replaces semantic review or "
                         + "authorizes a merge. Perform semantic review only when you are the packet `review_role` or "
                         + "explicitly assigned (G480); otherwise orchestrate the merge/closeout of an already-approved "
                         + "PR. If you need a review worktree, allocate it under the MANAGED root "
@@ -1888,20 +1887,19 @@ internal static class GuideOrchestratorThreadCommand
                         + "of those sources you checked — the orchestrator treats a reply missing that evidence as an "
                         + "INCOMPLETE review unless an authoritative prior approval state already proves equivalent "
                         + "review. Reporting completion or blocked status to the orchestrator is a REQUIRED FINAL STEP "
-                        + "of EVERY delegation (G524) — report ONE structured agmsg reply (accepted / progress / "
-                        + "completed / blocked) in the exact shape "
-                        + "`{\"status\":\"completed\",\"thread\":\"review\",\"ref\":\"pr#<n>\",\"note\":\"approved; "
-                        + "closeout done\",\"design_alignment_checked\":true,\"design_alignment_sources_checked\":"
-                        + "[\"packet\",\"review-context\",\"intent-tree\",\"adr-decision-notes\",\"relevant-docs\"]}` "
-                        + "(or the `blocked` shape naming one operator action), citing the intent-cli/GitHub facts — do "
-                        + "not consider the delegation finished until this reply is sent. intent-cli and GitHub stay "
+                        + "of EVERY delegation (G524) — after ALL other work, run the complete canonical "
+                        + "`intent-cli notify report` command embedded in the delegation with `completed`, `blocked`, "
+                        + "or `question`, the inspectable artifact, and a one-line summary citing intent-cli/GitHub "
+                        + "facts and the design-alignment sources checked. Never hand-write an agmsg/herdr transport "
+                        + "call, and do not consider the delegation finished until the canonical report command "
+                        + "succeeds. intent-cli and GitHub stay "
                         + "authoritative."),
                 },
             },
             AgmsgReplyContract = new OrchestratorReplyContract
             {
                 Description =
-                    "Implementation/review threads reply to a delegation with exactly one structured agmsg message. "
+                    "Implementation/review threads finish a delegation with exactly one canonical `intent-cli notify report` call using the command embedded by `notify delegate`. "
                     + "The reply is a SIGNAL; the orchestrator re-verifies every claim against intent-cli / GitHub "
                     + "before acting on it.",
                 Accepted = "{\"status\":\"accepted\",\"thread\":\"implementation\",\"ref\":\"issue#<n>\",\"note\":\"claimed; starting\"}",
@@ -1937,7 +1935,7 @@ internal static class GuideOrchestratorThreadCommand
                 Apply("Ask intent-cli for the real state: `intent-cli intent status --domain <domain> --format json` and `intent-cli worker next-action --repo <owner/repo> --github-only --format json`."),
                 "Verify every GitHub fact an agmsg reply claims (PR merged, CI concluded, labels) before acting on it.",
                 "The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER, not at-most-one-message overall (G524): a publish this wake must be delegated to implementation in this SAME wake — never defer that delegation to an unscheduled next wake — alongside any repair requests (one per stalled receiver) or one operator escalation.",
-                "Before sending any agmsg message, verify the recipient id against the team roster (`agmsg team.sh`); treat an id not on the roster as an error, never a guess (G524).",
+                "Send workflow notifications only through `intent-cli notify`; it resolves the recorded transport and validates the recipient before delivery, failing closed on an unknown role (G524/G578).",
                 "Do not launch implement/review recurring timers for this domain/repo while orchestrating.",
                 Apply("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json`, and process every actionable item before sleeping — never leave one for an unscheduled next wake; escalate explicitly if it is genuinely blocked on an operator decision."),
             },
@@ -1948,7 +1946,7 @@ internal static class GuideOrchestratorThreadCommand
                 "No hand-editing queue-state, runs.jsonl, packets, or any host metadata (`.intent-cli/**`, `intents/**`).",
                 "agmsg never replaces semantic review or authorizes a merge; review/closeout decisions run through intent-cli review surfaces (G480).",
                 "Per-wake cap is AT MOST ONE DELEGATION PER RECEIVER (implementation, review) — NOT at-most-one-message: a publish's same-wake delegation, repair messages, an escalation, and receiver-report handling may all happen in one wake (G524); never defer a publish's delegation to an unscheduled future wake.",
-                "Verify the recipient id against the team roster (`agmsg team.sh`) before every send; an id not on the roster is an error, not a guess (G524).",
+                "Use `intent-cli notify` for every workflow send; it validates the active transport's role source and fails closed on unknown or unavailable recipients (G524/G578).",
                 "End every wake with a stalled-work check (`automation stalled-work`, G523) and process any actionable item before sleeping; escalate explicitly rather than deferring silently.",
                 "Domain isolation: a host repo can hold several domains and one repo can serve several domains, so visibility is not authorization. Single-domain orchestrators ignore/escalate other-domain items; multi-domain orchestrators require explicit per-delegation routing. An execution-unit prefix mismatch alone is not a wrong-repo signal.",
                 "Fail closed on duplicate orchestrators for the same domain/repo, or when an agmsg reply conflicts with intent-cli/GitHub facts — STOP and escalate, never guess.",

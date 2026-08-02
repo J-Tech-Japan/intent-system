@@ -13,6 +13,45 @@ current prompts with:
 intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --mode single-domain|multi-domain --format markdown
 ```
 
+## Canonical notify workflow
+
+All role-to-role workflow messages use `intent-cli notify`; agents never choose
+or invoke agmsg/herdr delivery themselves. The CLI resolves the team's recorded
+session-layer mode internally (`agmsg` when unrecorded), validates the logical
+roles before delivery, and keeps the command shape unchanged when a team
+switches transport.
+
+```bash
+# Delegate one bounded task. Repeat --input and --expected-artifact as needed.
+intent-cli notify delegate --domain <domain> --team <team> --from <sender-role> \
+  --to <receiver-role> --report-to <orchestrator-role> --task-id <task-id> \
+  --objective <one-bounded-outcome> --input <canonical-reference> \
+  --expected-artifact <inspectable-artifact> --result-nonce <fresh-nonce> \
+  --write --format json
+
+# The receiver's final step (the delegate payload supplies this command).
+intent-cli notify report --domain <domain> --team <team> --from <receiver-role> \
+  --to <orchestrator-role> --task-id <task-id> \
+  --status completed|blocked|question --artifact <artifact> \
+  --summary <one-line-summary> --write --format json
+
+# Route a design decision to the existing events.jsonl boundary.
+intent-cli notify escalate --domain <domain> --team <team> --from <sender-role> \
+  --task-id <task-id> --artifact <decision-input> \
+  --summary <one-line-summary> --write --format json
+```
+
+`notify delegate` embeds the task id, expected artifacts, fresh marker nonce,
+and complete canonical report command (including the transport-neutral
+`--routing-root` needed from an isolated child checkout) in the delivered task. Running that
+report command is the receiver's required final step after all other work, so a
+herdr-only completion actively wakes the orchestration role instead of merely
+printing into the receiver pane. Unknown roles and delivery failures fail
+closed with a named cause. `notify escalate` appends the unchanged six-field
+event schema; none of these commands merges, labels, publishes, or mutates queue
+state. Direct transport commands remain provisioning/readiness diagnostics,
+not workflow send instructions.
+
 ## Starting orchestrator mode (design-thread setup)
 
 A design thread that wants to run orchestration can ask intent-cli directly —
@@ -68,9 +107,10 @@ The full reference checklist follows the intake:
 8. **Cleanup** — on teardown, leave/despawn the roles through the agmsg scripts
    (`leave.sh` / `despawn.sh`) and stop any inbox watchers.
 
-> **Warning:** never edit the agmsg database or team files directly — register,
-> message, and clean up only through the agmsg scripts. Hand-editing agmsg state
-> corrupts delivery.
+> **Warning:** never edit the agmsg database or team files directly — provision,
+> diagnose, and clean up only through the agmsg scripts; send workflow
+> notifications through `intent-cli notify`, which invokes the adapter. Hand-editing
+> agmsg state corrupts delivery.
 
 ## Terminal-workspace provisioning (building the team)
 
@@ -240,28 +280,18 @@ identity step.
 
 ### Dispatch, wait, and verify the artifact
 
-Send one structured block with `herdr agent prompt <logical-role> <task-block>`:
-
-```text
-TASK <task-id>
-role: <logical-role>
-objective: <one bounded outcome>
-inputs:
-  - <canonical issue/PR/path/reference>
-expected-artifacts:
-  - <file, commit, PR, report, or other inspectable artifact>
-result-prefix: ORCH_RESULT
-result-nonce: <fresh-per-dispatch-nonce>
-completion-marker: When ready, print one line by concatenating result-prefix, one space, result-nonce, one space, status, one space, and artifact; status is completed, blocked, or question. Do not copy a precomposed marker into this task block.
-```
+Use the [canonical notify workflow](#canonical-notify-workflow): run
+`intent-cli notify delegate ...` with the target logical role. The CLI resolves
+herdr-only internally, validates the role mapping, and generates the structured
+task block; do not hand-write `herdr agent prompt`.
 
 Generate a fresh unpredictable nonce for each dispatch; never reuse one or use
 the task id alone. `pane wait-output` searches existing output immediately, so
 a precomposed wait needle in the task block can be echoed and falsely match
-before work starts. The split fields keep that literal out of the dispatch.
+before work starts. The generated split fields keep that literal out of the dispatch.
 Files, commits, PRs, and verification logs are the handoff; screen prose only
 points to them. Repairs return to the same logical role with the task id and
-concrete delta after resolving its current pane. A marker match from any buffer
+concrete delta through `intent-cli notify delegate`. A marker match from any buffer
 is never sufficient; the named artifact must exist and pass verification.
 
 Every wait is bounded:
@@ -302,12 +332,12 @@ line. The required schema is:
 
 Write only design-relevant completion, blocked, question, and escalation
 events. This mode-independent channel is the design boundary only—never an
-inter-agent bus and never a replacement for herdr dispatch, GitHub, or
+inter-agent bus and never a replacement for `intent-cli notify`, GitHub, or
 intent-cli workflow state.
 
 - Claude app watcher: tail complete unseen lines from the resolved path and
   retain its offset across restarts.
-- Codex CLI in a herdr pane: prompt the role directly; do not poll this file for
+- Codex CLI in a herdr pane: use `intent-cli notify delegate` / `report`; do not poll this file for
   ordinary coordination.
 - Codex Desktop: poll at a one-minute-class cadence, consume only complete lines
   after a durable byte-offset watermark, and advance after successful handling.
@@ -716,10 +746,10 @@ either trigger runs exactly one pass:
   operator escalation, and handling of any pending receiver reports — all
   together.
 - **Verify the recipient roster before dispatch (G524).** Before sending any
-  agmsg message, confirm the recipient id is on the team roster
-  (`agmsg team.sh`); agmsg accepts an unknown recipient silently, so treat an
-  off-roster id as an error, never a guess (a legacy `review` vs the
-  registered `reviewer` has silently lost messages in the field).
+  notification, use `intent-cli notify`; it validates the recipient against the
+  active transport's role source before delivery and fails closed with
+  `unknown-role` rather than guessing (a legacy `review` vs the registered
+  `reviewer` silently lost messages before this surface existed).
 - **End the wake with a stalled-work check (G523/G524).** Run
   `intent-cli automation stalled-work --domain <domain> --repo <owner/repo>
   --format json` and process every actionable item it reports before
@@ -787,9 +817,9 @@ and `intent-cli automation issue-publish` — never raw `gh issue create` or
 `gh ... --add-label`. After publishing, verify via intent-cli / GitHub (not
 chat) that the issue exists with the expected body and the `intent-target`
 label and that durable state reflects it, then, **in this same wake**,
-delegate implementation over agmsg (G524) — do not stop after publishing to
+delegate implementation through `intent-cli notify delegate` (G524) — do not stop after publishing to
 wait for a future wake. The implementation receiver still derives its target
-from `intent-cli worker next-action`, not the agmsg text.
+from `intent-cli worker next-action`, not the notification text.
 
 ## End-of-wake check (G523/G524)
 
@@ -815,11 +845,13 @@ intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --forma
 
 ## Dispatch verification (G524)
 
-Before sending ANY agmsg message, verify the recipient id is present in the
-team roster (agmsg `team.sh`). agmsg accepts an unknown recipient silently —
-there is no delivery error to notice. Treat a recipient id that is not on
-the roster as an error: fix the id or the roster registration before
-sending; never guess or approximate a role name.
+Send workflow messages only with `intent-cli notify`. It validates every
+recipient before delivery: the agmsg adapter checks the team roster and the
+herdr-only adapter resolves the logical-role mapping plus running agent/pane.
+An unknown role or unavailable receiver returns non-zero with a named cause and
+never claims delivery. Fix the role registration/mapping before retrying; never
+guess or approximate a role name, and never bypass this check with a handwritten
+transport invocation.
 
 Field-observed loss: 8 dispatches addressed to `review` were silently lost
 when the registered role was `reviewer` — agmsg neither delivered nor
@@ -1189,22 +1221,24 @@ visible on the operator's screen the moment it breaks.
   (Claude same-thread) or a Codex automation firing every 30 minutes, with a
   prompt that on each wake runs
   `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`;
-  when the result's `stale` field is `true`, send its `message_body` verbatim
-  to the orchestrator via the agmsg send script (exactly **one** message);
+  when the result's `stale` field is `true`, send its `message_body` to the
+  orchestrator with exactly **one** `intent-cli notify report` call (`--from
+  design --to orchestrator --status question`, a fresh heartbeat task id, and
+  the heartbeat evidence artifact);
   when `stale` is `false`, send nothing and exit quietly — silence is
   reserved for this healthy case **only**. A heartbeat command execution
   failure or malformed/non-object output is **never** silent: state the
   failure explicitly in this wake's own turn output, visible to the operator
   watching this live session — the exact advantage an in-session watchdog
   has over the retired invisible external scheduler (see Retired below) —
-  while still never fabricating or sending an agmsg nudge from broken input;
+  while still never fabricating or sending a notify nudge from broken input;
   only a genuine `stale=true` result ever produces a sent message.
 - **Failure visibility** — silence is reserved for a healthy `stale=false`
   heartbeat result ONLY. A heartbeat command execution failure or
   malformed/non-object output must be surfaced **visibly** in the watchdog's
   own turn output this wake — never silently swallowed or silently retried,
   since silent failure is exactly the defect this slice retires the external
-  OS scheduler for — while still never fabricating or sending an agmsg nudge
+  OS scheduler for — while still never fabricating or sending a notify nudge
   from broken input; only a genuine `stale=true` result ever produces a sent
   message.
 - **Checks** — the design/HITL inbox for unread human-facing escalations
@@ -1579,8 +1613,9 @@ carries `design_alignment_checked` and the checked-source list:
   messages, an escalation, and receiver-report handling may all happen in one
   wake (G524); never defer a publish's delegation to an unscheduled future
   wake.
-- Verify the recipient id against the team roster (`agmsg team.sh`) before
-  every send; an id not on the roster is an error, not a guess (G524).
+- Use `intent-cli notify` for every workflow send; it validates the active
+  transport's role source and fails closed on unknown or unavailable recipients
+  (G524/G578).
 - End every wake with a stalled-work check (`automation stalled-work`, G523)
   and process any actionable item before sleeping; escalate explicitly
   rather than deferring silently.
