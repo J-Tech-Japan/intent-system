@@ -262,19 +262,38 @@ internal static class SessionLayerSections
     /// before a whole line still covered the operative sentences in that line —
     /// the same over-reach as the section banner, one level down. Naming its
     /// scope makes the coverage exact and checkable.
+    ///
+    /// G570 eleventh repair: the wording is POSITION-NEUTRAL. It used to say the
+    /// sentence was "below", which the tenth repair made false — a label
+    /// deferred out of a markdown table is emitted AFTER the sentence it covers.
+    /// A label that quotes its scope does not need to point at a direction, and
+    /// a direction it cannot guarantee is a false instruction to the reader.
     /// </summary>
     public const string DescriptiveAgmsgContextPrefix =
-        "> **agmsg example — descriptive, not an instruction.** This applies to exactly one sentence below — ";
+        "> **agmsg example — descriptive, not an instruction.** This applies to exactly one sentence in this "
+        + "section, quoted here in full — ";
 
     public const string DescriptiveAgmsgContextSuffix =
         " — which explains the model using the agmsg transport because that is the practiced one. In herdr-only the "
         + "rule it states still binds; the agmsg mechanics it names are illustration, and the herdr-only operating "
         + "steps ship in G571. Every other sentence here is an instruction that applies unchanged.";
 
+    /// <summary>
+    /// Names the table a deferred label's sentence lives in, so a reader who
+    /// meets the label after the table can still locate what it covers. The
+    /// tenth repair moved these labels out of the table to keep the table
+    /// contiguous; this tells the truth about where the sentence went.
+    /// </summary>
+    public const string DescriptiveAgmsgContextDeferredNote =
+        " The quoted sentence appears in the completed table above.";
+
     /// <summary>The label for one descriptive clause, quoting the clause so its
     /// scope is unambiguous to a reader and to a guard.</summary>
-    public static string DescriptiveAgmsgContextFor(string clause) =>
-        DescriptiveAgmsgContextPrefix + "\"" + clause.Trim() + "\"" + DescriptiveAgmsgContextSuffix;
+    public static string DescriptiveAgmsgContextFor(string clause, bool deferredAfterTable = false) =>
+        DescriptiveAgmsgContextPrefix
+        + "\"" + clause.Trim() + "\""
+        + DescriptiveAgmsgContextSuffix
+        + (deferredAfterTable ? DescriptiveAgmsgContextDeferredNote : string.Empty);
 
     public static bool CarriesTransportMechanic(string value) =>
         TransportMechanics.Any(token => value.Contains(token, StringComparison.OrdinalIgnoreCase));

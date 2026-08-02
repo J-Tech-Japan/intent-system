@@ -312,8 +312,9 @@ internal static class GuideOrchestratorThreadCommand
                 // readable away from the row it covers.
                 foreach (var clause in clauses.Where(SessionLayerFragments.IsAgmsgIllustration))
                 {
-                    var label = SessionLayerSections.DescriptiveAgmsgContextFor(clause.Text);
-                    if (line.TrimStart().StartsWith("|", StringComparison.Ordinal))
+                    var inTable = line.TrimStart().StartsWith("|", StringComparison.Ordinal);
+                    var label = SessionLayerSections.DescriptiveAgmsgContextFor(clause.Text, inTable);
+                    if (inTable)
                     {
                         deferredTableLabels.Add(label);
                     }

@@ -749,6 +749,11 @@ a prose reader never disagree about what applies.
   reach past it. The JSON context lists each descriptive clause the same way,
   one for one, instead of marking a property.
 
+  The label's wording is POSITION-NEUTRAL, and a deferred one says where its
+  sentence went. It used to claim the sentence was "below", which deferral made
+  false — a direction the label cannot guarantee is a false instruction to the
+  reader, however exact the quote beside it is.
+
   Inside a markdown TABLE the label is deferred and emitted once the table is
   complete. A blockquote and a blank line between two rows terminate a GFM
   table, so the rows after it stop being part of it — the label's placement has

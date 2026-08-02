@@ -453,39 +453,70 @@ public sealed class SessionLayerModeG570Tests : IDisposable
 
         Assert.Contains(SessionLayerSections.DescriptiveAgmsgContextPrefix, output, StringComparison.Ordinal);
 
-        // G570 eighth repair: the label is scoped to the DESCRIPTIVE fragments
-        // it qualifies, not to a whole section. Every occurrence is immediately
-        // followed (after one blank line) by a descriptive fragment that
-        // actually illustrates the model with agmsg mechanics — never by a
-        // binding instruction.
         var lines = output.Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
-        var occurrences = 0;
-        for (var i = 0; i < lines.Length; i++)
+        var labelIndexes = Enumerable.Range(0, lines.Length)
+            .Where(i => lines[i].StartsWith(SessionLayerSections.DescriptiveAgmsgContextPrefix, StringComparison.Ordinal))
+            .ToArray();
+        Assert.NotEmpty(labelIndexes);
+
+        // G570 eleventh repair: the previous version extracted the quote FROM the
+        // label and then asserted the quote appeared in the output — necessarily
+        // true, since the label is part of the output. It would have passed with
+        // the described sentence deleted entirely. The label text is removed
+        // before any target is located, so the target has to exist on its own.
+        var body = lines.Where((_, i) => !labelIndexes.Contains(i)).ToArray();
+
+        foreach (var index in labelIndexes)
         {
-            if (!lines[i].StartsWith(SessionLayerSections.DescriptiveAgmsgContextPrefix, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            occurrences++;
-
-            // G570 ninth repair: the label NAMES the clause it covers, so its
-            // scope is exact rather than "whatever follows".
-            var quoted = lines[i]
-                [SessionLayerSections.DescriptiveAgmsgContextPrefix.Length..]
+            var label = lines[index];
+            var quoted = label[SessionLayerSections.DescriptiveAgmsgContextPrefix.Length..]
                 .Split(SessionLayerSections.DescriptiveAgmsgContextSuffix)[0]
                 .Trim('"');
             Assert.Contains("agmsg", quoted, StringComparison.OrdinalIgnoreCase);
 
-            // G570 tenth repair: the label no longer has to ADJOIN its clause —
-            // inside a markdown table it is emitted after the table, because a
-            // blockquote between rows terminates the table. What must hold is
-            // that the clause it names is actually rendered, and that the label
-            // is the only thing that scopes it.
-            Assert.Contains(quoted, output, StringComparison.Ordinal);
+            // EXACTLY ONE distinct rendered line outside the labels carries the
+            // quoted sentence, so the mapping is one-to-one in both directions.
+            var targets = body
+                .Where(line => line.Contains(quoted, StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            Assert.True(
+                targets.Length == 1,
+                $"a label must name exactly one rendered sentence; found {targets.Length} for: {quoted}");
+
+            // The position claim must be true. A label deferred out of a table
+            // says so; an inline one does not, and its target follows it.
+            if (label.EndsWith(SessionLayerSections.DescriptiveAgmsgContextDeferredNote, StringComparison.Ordinal))
+            {
+                var targetIndex = Array.FindIndex(lines, l => l == targets[0]);
+                Assert.True(
+                    targetIndex >= 0 && targetIndex < index,
+                    "a label claiming its sentence is in the table ABOVE must be emitted after it: " + quoted);
+                Assert.StartsWith("|", targets[0].TrimStart(), StringComparison.Ordinal);
+            }
+            else
+            {
+                var targetIndex = Array.FindIndex(lines, index, l => l == targets[0]);
+                Assert.True(targetIndex > index, "an inline label must precede the sentence it names: " + quoted);
+            }
         }
 
-        Assert.True(occurrences > 0, "descriptive agmsg illustration must carry its label");
+        // Every label names a clause DECLARED descriptive — no operative
+        // fragment is covered by one.
+        foreach (var index in labelIndexes)
+        {
+            var quoted = lines[index][SessionLayerSections.DescriptiveAgmsgContextPrefix.Length..]
+                .Split(SessionLayerSections.DescriptiveAgmsgContextSuffix)[0]
+                .Trim('"');
+            var declared = SessionLayerFragments.Declarations
+                .SelectMany(d => d.Clauses!)
+                .Where(c => SessionLayerFragments.Expand(BareValues, c.Text).Trim() == quoted)
+                .ToArray();
+            Assert.NotEmpty(declared);
+            Assert.All(declared, c => Assert.Equal(
+                SessionLayerSections.FragmentType.CanonDescriptive,
+                c.Type));
+        }
     }
 
     [Fact]
