@@ -138,16 +138,17 @@ internal static class SkillCommand
             {
                 var path = SkillTargets.ResolveSkillFilePath(entry.Target, entry.Scope, entry.Skill.Name, repoRoot, userHome);
                 var embedded = SkillAssets.ReadBody(entry.Skill);
-                return (entry.Target, entry.Scope, entry.Skill, Path: path, Embedded: embedded, State: InspectState(path, embedded));
+                return (entry.Target, entry.Scope, entry.Skill, Path: path, Embedded: embedded, State: InspectState(path, embedded, entry.Skill));
             })
             .ToList();
 
         var results = new List<SkillInstallResult>();
 
-        // PHASE 2: a drifted destination anywhere in the plan aborts the WHOLE
-        // run without touching the filesystem. --force is the opt-in that turns
-        // every drifted destination into an overwrite instead.
-        if (!force && inspected.Any(entry => entry.State == SkillState.Drifted))
+        // PHASE 2: a locally-modified destination anywhere in the plan aborts
+        // the WHOLE run without touching the filesystem. A known stale shipped
+        // version is safe to update without --force; only content outside the
+        // lineage retains the edited-copy protection.
+        if (!force && inspected.Any(entry => entry.State == SkillState.LocallyModified))
         {
             foreach (var entry in inspected)
             {
@@ -157,9 +158,9 @@ internal static class SkillCommand
                     Target = entry.Target,
                     Scope = entry.Scope,
                     Path = entry.Path,
-                    Outcome = entry.State == SkillState.Drifted ? "refused-drifted" : "skipped-plan-aborted",
-                    Detail = entry.State == SkillState.Drifted
-                        ? "the installed copy differs from the embedded skill and was NOT overwritten. "
+                    Outcome = entry.State == SkillState.LocallyModified ? "refused-drifted" : "skipped-plan-aborted",
+                    Detail = entry.State == SkillState.LocallyModified
+                        ? "the installed copy is locally modified and was NOT overwritten. "
                           + "Re-run with --force to replace it, or run `intent-cli skill diff` to see what differs."
                         : "not written: another destination in this plan has an edited copy, so the whole "
                           + "install was abandoned before any file was created or changed.",
@@ -196,9 +197,16 @@ internal static class SkillCommand
                 Target = entry.Target,
                 Scope = entry.Scope,
                 Path = entry.Path,
-                Outcome = entry.State == SkillState.NotInstalled ? "installed" : "overwritten",
+                Outcome = entry.State switch
+                {
+                    SkillState.NotInstalled => "installed",
+                    SkillState.StaleShipped => "updated-stale",
+                    _ => "overwritten",
+                },
                 Detail = entry.State == SkillState.NotInstalled
                     ? "written for the first time."
+                    : entry.State == SkillState.StaleShipped
+                        ? "a previous shipped version was updated to the current embedded skill without requiring --force."
                     : "an edited copy was replaced because --force was given.",
             });
         }
@@ -261,6 +269,8 @@ internal static class SkillCommand
             {
                 writer.WriteLine($"## {skill.Name} → {installation.Target} ({installation.Scope}) — {installation.State}");
                 writer.WriteLine($"- path: {installation.Path}");
+                writer.WriteLine($"- comparison: {installation.Comparison}");
+                writer.WriteLine($"- update available: {(installation.UpdateAvailable ? "yes" : "no")}");
                 if (installation.Diff is { Count: > 0 })
                 {
                     foreach (var line in installation.Diff)
@@ -318,14 +328,18 @@ internal static class SkillCommand
                 foreach (var candidateScope in scopes)
                 {
                     var path = SkillTargets.ResolveSkillFilePath(candidate, candidateScope, skill.Name, repoRoot, userHome);
-                    var state = InspectState(path, embedded);
+                    var state = InspectState(path, embedded, skill);
                     installations.Add(new SkillInstallationState
                     {
                         Target = candidate,
                         Scope = candidateScope,
                         Path = path,
                         State = Describe(state),
-                        Diff = state == SkillState.Drifted ? BuildDiff(embedded, File.ReadAllText(path)) : null,
+                        UpdateAvailable = state == SkillState.StaleShipped,
+                        Comparison = DescribeComparison(state),
+                        Diff = state is SkillState.StaleShipped or SkillState.LocallyModified
+                            ? BuildDiff(embedded, File.ReadAllText(path))
+                            : null,
                     });
                 }
             }
@@ -360,7 +374,7 @@ internal static class SkillCommand
         return [skill];
     }
 
-    private static SkillState InspectState(string path, string embedded)
+    private static SkillState InspectState(string path, string embedded, EmbeddedSkill skill)
     {
         if (!File.Exists(path))
         {
@@ -368,21 +382,32 @@ internal static class SkillCommand
         }
 
         var installed = File.ReadAllText(path);
-        return Normalize(installed) == Normalize(embedded) ? SkillState.Current : SkillState.Drifted;
-    }
+        if (SkillAssets.Normalize(installed) == SkillAssets.Normalize(embedded))
+        {
+            return SkillState.Current;
+        }
 
-    /// <summary>
-    /// Line-ending differences are not drift — a checkout on Windows would
-    /// otherwise report every install as edited.
-    /// </summary>
-    private static string Normalize(string content) =>
-        content.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd('\n');
+        var installedHash = SkillAssets.ComputeNormalizedHash(installed);
+        return SkillAssets.ReadLineage(skill)
+            .Contains(installedHash, StringComparer.Ordinal)
+            ? SkillState.StaleShipped
+            : SkillState.LocallyModified;
+    }
 
     private static string Describe(SkillState state) => state switch
     {
         SkillState.NotInstalled => "not-installed",
-        SkillState.Current => "installed",
-        _ => "drifted",
+        SkillState.Current => "current",
+        SkillState.StaleShipped => "stale-shipped",
+        _ => "locally-modified",
+    };
+
+    private static string DescribeComparison(SkillState state) => state switch
+    {
+        SkillState.NotInstalled => "not installed; no comparison",
+        SkillState.Current => "installed copy matches the current embedded version",
+        SkillState.StaleShipped => "previous shipped version → current embedded version",
+        _ => "locally modified copy → current embedded version",
     };
 
     /// <summary>
@@ -391,8 +416,8 @@ internal static class SkillCommand
     /// </summary>
     private static IReadOnlyList<string> BuildDiff(string embedded, string installed)
     {
-        var embeddedLines = Normalize(embedded).Split('\n');
-        var installedLines = Normalize(installed).Split('\n');
+        var embeddedLines = SkillAssets.Normalize(embedded).Split('\n');
+        var installedLines = SkillAssets.Normalize(installed).Split('\n');
         var lines = new List<string>();
 
         for (var index = 0; index < Math.Max(embeddedLines.Length, installedLines.Length); index++)
@@ -428,6 +453,10 @@ internal static class SkillCommand
             foreach (var installation in skill.Installations)
             {
                 writer.WriteLine($"- {installation.Target} ({installation.Scope}): {installation.State} — {installation.Path}");
+                if (installation.UpdateAvailable)
+                {
+                    writer.WriteLine("  update available: yes (previous shipped version)");
+                }
             }
 
             writer.WriteLine();
@@ -553,9 +582,55 @@ internal static class SkillCommand
     {
         NotInstalled,
         Current,
-        Drifted,
+        StaleShipped,
+        LocallyModified,
+    }
+
+    internal static SkillUpdateLocation? FindStaleShippedInstall(CliContext context)
+    {
+        try
+        {
+            var userHome = SkillTargets.ResolveUserHome();
+            foreach (var skill in SkillAssets.All)
+            {
+                var embedded = SkillAssets.ReadBody(skill);
+                foreach (var target in SkillTargets.Installable)
+                {
+                    foreach (var scope in SkillTargets.SupportedScopes(target))
+                    {
+                        var path = SkillTargets.ResolveSkillFilePath(
+                            target, scope, skill.Name, context.RepoRoot, userHome);
+                        try
+                        {
+                            if (InspectState(path, embedded, skill) == SkillState.StaleShipped)
+                            {
+                                return new SkillUpdateLocation(skill.Name, target, scope, path);
+                            }
+                        }
+                        catch (Exception exception) when (
+                            exception is IOException or UnauthorizedAccessException)
+                        {
+                            // One unreadable known location does not prevent
+                            // checking the remaining local locations.
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or UnauthorizedAccessException
+            or InvalidOperationException)
+        {
+            // Guide output is authoritative and must never fail or block on
+            // this best-effort local-only check.
+        }
+
+        return null;
     }
 }
+
+internal sealed record SkillUpdateLocation(string Skill, string Target, string Scope, string Path);
 
 internal sealed record SkillReport
 {
@@ -586,9 +661,15 @@ internal sealed record SkillInstallationState
     [JsonPropertyName("path")]
     public required string Path { get; init; }
 
-    /// <summary>One of <c>not-installed</c>, <c>installed</c>, <c>drifted</c>.</summary>
+    /// <summary>One of <c>not-installed</c>, <c>current</c>, <c>stale-shipped</c>, <c>locally-modified</c>.</summary>
     [JsonPropertyName("state")]
     public required string State { get; init; }
+
+    [JsonPropertyName("update_available")]
+    public required bool UpdateAvailable { get; init; }
+
+    [JsonPropertyName("comparison")]
+    public required string Comparison { get; init; }
 
     [JsonPropertyName("diff")]
     public IReadOnlyList<string>? Diff { get; init; }
@@ -615,7 +696,7 @@ internal sealed record SkillInstallResult
     public required string Path { get; init; }
 
     /// <summary>
-    /// One of <c>installed</c>, <c>overwritten</c>, <c>already-current</c>,
+    /// One of <c>installed</c>, <c>updated-stale</c>, <c>overwritten</c>, <c>already-current</c>,
     /// <c>refused-drifted</c>, or <c>skipped-plan-aborted</c> — the last one
     /// meaning this destination was writable but a sibling in the same plan was
     /// drifted, so nothing at all was written.

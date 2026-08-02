@@ -2238,28 +2238,50 @@ intent-cli skill diff --target claude              # what an edited copy changed
 `--target claude|codex|copilot|all`, `--scope user|repo`, `--skill <name>`,
 `--force`, and `--format`.
 
-Four properties are the contract:
+The installed copy has four observable states: `not-installed`, `current`,
+`stale-shipped`, and `locally-modified`. `stale-shipped` means its normalized
+content hash matches an earlier entry in the package's shipped-version lineage;
+`skill list` marks it `update_available`, and `skill diff` labels the comparison
+as previous-shipped → current. `skill install` updates that state without
+`--force` and reports `updated-stale`. Content outside the lineage is
+`locally-modified` and retains the refusal described below.
+
+Every change to `skills/<name>/SKILL.md` must append the old and new normalized
+SHA-256 identities to the embedded lineage. A guard fails when the current
+embedded content is missing, so a skill-content change cannot ship without its
+lineage duty. Guide-group commands perform only a bounded local-filesystem check
+of known install locations. If a stale-shipped copy exists, Markdown receives
+one footer and JSON one `skill_update_nudge` field naming an exact `skill install`
+command. Not-installed and locally-modified copies are never nudged;
+probe failures are silently ignored and never block or alter guide output.
+
+Modifying the installed official skill is unsupported. `locally-modified` is a
+data-safety state, not a customization feature: the installed-guide-wins rule
+makes such edits semantically inert. Create a separate, own-named skill for
+local behavior or send upstream feedback instead.
+
+Four installation properties remain the contract:
 
 1. **A scope the platform does not define is refused, not written.** `--scope
    repo` for `codex` fails with the supported scopes named. Writing to a
    plausible-looking directory the platform never reads would look like a
    successful install and behave like no install at all.
 2. **An edited copy is never replaced silently.** Install compares the
-   installed file against the embedded source; on a difference it reports
-   `refused-drifted`, leaves the file byte-identical, and **exits non-zero** so
-   a script notices. `--force` is the explicit opt-in to replace it. Line-ending
-   differences are not drift, so a Windows checkout does not report every
-   install as edited.
+   normalized installed hash with the shipped lineage. Content outside that
+   lineage is locally modified: it reports `refused-drifted`, leaves the file
+   byte-identical, and **exits non-zero** so a script notices. `--force` is the
+   explicit opt-in to replace it. Line-ending differences are not drift, so a
+   Windows checkout does not report every install as edited.
 3. **The whole plan is resolved and inspected before the first write.**
    Install runs in two phases: it validates every target/scope pair, resolves
    every destination path, and inspects every destination's state — and only
-   then writes. An unsupported target/scope pair *or* a drifted destination
-   **anywhere** in the plan aborts the entire run with nothing created and
-   nothing changed; the writable destinations are reported
+   then writes. An unsupported target/scope pair *or* a locally-modified
+   destination **anywhere** in the plan aborts the entire run with nothing
+   created and nothing changed; the other destinations are reported
    `skipped-plan-aborted` so it is clear they were part of the plan and were
    deliberately not written. Inspecting and writing in one pass is not
    "validated before any write" — under `--target all` an earlier missing
-   target would already be on disk by the time a later drifted one was found,
+   target would already be on disk by the time a later local edit was found,
    leaving a partial install behind an exit code that claims nothing happened.
    `--force` is what makes that same plan succeed end to end.
 4. **Nothing is written that is already current.** A matching copy reports

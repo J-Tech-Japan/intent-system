@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -15,6 +17,15 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal static class SkillAssets
 {
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> ShippedContentHashes =
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+        {
+            // G573: append the normalized SHA-256 before changing the shipped
+            // content. Never replace older entries: they are what lets a
+            // forceless install distinguish stale shipped content from edits.
+            ["intent-cli"] = ["af071a2882b65d17955e690f7936d1b7d4895e1bce02d4a3cabe03f838ffaaff"],
+        };
+
     /// <summary>The single embedded skill. A list rather than a constant so a second skill needs no structural change.</summary>
     public static IReadOnlyList<EmbeddedSkill> All { get; } =
     [
@@ -25,6 +36,11 @@ internal static class SkillAssets
 
     public static EmbeddedSkill? Find(string name) =>
         All.FirstOrDefault(skill => string.Equals(skill.Name, name, StringComparison.Ordinal));
+
+    /// <summary>G573 test seams for walking a future embedded version without changing the shipped skill.</summary>
+    internal static Func<EmbeddedSkill, string>? BodyReader { get; set; }
+
+    internal static Func<EmbeddedSkill, IReadOnlyList<string>>? LineageReader { get; set; }
 
     /// <summary>
     /// Reads the embedded SKILL.md body. Throws
@@ -42,6 +58,44 @@ internal static class SkillAssets
     {
         ArgumentNullException.ThrowIfNull(skill);
 
+        var body = BodyReader?.Invoke(skill) ?? ReadEmbeddedBody(skill);
+        EnsureCurrentBodyIsInLineage(skill, body);
+        return body;
+    }
+
+    public static IReadOnlyList<string> ReadLineage(EmbeddedSkill skill)
+    {
+        ArgumentNullException.ThrowIfNull(skill);
+        if (LineageReader is not null)
+        {
+            return LineageReader(skill);
+        }
+
+        return ShippedContentHashes.TryGetValue(skill.Name, out var hashes) ? hashes : [];
+    }
+
+    internal static void EnsureCurrentBodyIsInLineage(EmbeddedSkill skill, string body)
+    {
+        var currentHash = ComputeNormalizedHash(body);
+        if (!ReadLineage(skill).Contains(currentHash, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"embedded skill '{skill.Name}' is absent from its shipped-version lineage; "
+                + $"add normalized SHA-256 {currentHash} before shipping the content change.");
+        }
+    }
+
+    internal static string ComputeNormalizedHash(string content)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(Normalize(content)));
+        return Convert.ToHexStringLower(bytes);
+    }
+
+    internal static string Normalize(string content) =>
+        content.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd('\n');
+
+    private static string ReadEmbeddedBody(EmbeddedSkill skill)
+    {
         var assembly = typeof(SkillAssets).Assembly;
         var resourceName = ResolveResourceName(assembly, skill.Name)
             ?? throw new InvalidOperationException(
