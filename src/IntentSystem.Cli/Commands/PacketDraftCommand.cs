@@ -199,26 +199,38 @@ internal static class PacketDraftCommand
         // four-file layout regardless of the dedicated handling below.
         files.Insert(2, WriteOrUpdateReviewContext(packetDirectory, executionUnit, facetSelection, dryRun));
 
-        // Validate contract sections against whatever github-body.md ends up on disk
-        // (skeleton if newly written, existing content if previously authored).
-        var githubBodyPath = Path.Combine(packetDirectory, "github-body.md");
-        IReadOnlyList<string> missingSections = Array.Empty<string>();
-        if (File.Exists(githubBodyPath))
+        // G587: readiness describes what exists NOW, not the valid skeleton a
+        // dry-run could create. Feed the same four on-disk files, domain binding,
+        // target repo, and publish-section source into the analyzer used by
+        // queue-seed-from-packet. This eliminates the old vacuous green where an
+        // absent github-body.md yielded zero missing sections merely because the
+        // planned scaffold would contain them.
+        string? ReadPacketFile(string name)
         {
-            var content = File.ReadAllText(githubBodyPath);
-            missingSections = RequiredContractSections
-                .Where(section => !ContainsSectionHeading(content, section))
-                .ToArray();
+            var path = Path.Combine(packetDirectory, name);
+            return File.Exists(path) ? File.ReadAllText(path) : null;
         }
-        else if (dryRun)
+
+        var regexResolution = NextSliceDomainBindingsExecutionUnitRegex.Resolve(context, domain);
+        var readiness = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
         {
-            // Dry-run did not write the skeleton, but the planned content satisfies all
-            // required headings, so the validation result mirrors that intent.
-            missingSections = Array.Empty<string>();
-        }
-        else
+            ExecutionUnit = executionUnit,
+            PacketYaml = ReadPacketFile(PreparedPacketCommitReadyAnalyzer.FileNamePacketYaml),
+            ImplementationMarkdown = ReadPacketFile(PreparedPacketCommitReadyAnalyzer.FileNameImplementationMarkdown),
+            ReviewContextMarkdown = ReadPacketFile(PreparedPacketCommitReadyAnalyzer.FileNameReviewContextMarkdown),
+            GithubBodyMarkdown = ReadPacketFile(PreparedPacketCommitReadyAnalyzer.FileNameGithubBodyMarkdown),
+            ExecutionUnitRegex = regexResolution.Pattern,
+            RequestedTargetRepo = targetRepo,
+            RequireDomainBinding = true,
+        });
+
+        IReadOnlyList<string> recommendedActions = readiness.RecommendedActions;
+        if (readiness.Classification != PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady)
         {
-            missingSections = RequiredContractSections;
+            var rerun = $"intent-cli packet draft --execution-unit {executionUnit} --domain {domain}"
+                + (string.IsNullOrWhiteSpace(targetRepo) ? string.Empty : $" --target-repo {targetRepo}")
+                + " --dry-run --format json";
+            recommendedActions = [.. recommendedActions, $"After repairing every reported item, re-run `{rerun}` and proceed only when `contract_publishable` is true."];
         }
 
         return new PacketDraftResult
@@ -229,13 +241,11 @@ internal static class PacketDraftCommand
             PacketDirectory = packetDirectory,
             Mode = mode,
             Files = files,
-            MissingContractSections = missingSections,
-            // G449: derive the packet's publish-readiness verdict through the
-            // SHARED NextSliceReadinessEvaluator so packet-draft validation
-            // agrees with next-slice / publish-flow / diagnostics on contract
-            // completeness (no missing required sections → publishable).
-            ContractPublishable = NextSliceReadinessEvaluator.IsPublishable(
-                executionUnit, contractComplete: missingSections.Count == 0)
+            MissingCanonicalFiles = readiness.MissingFiles,
+            MissingContractSections = readiness.MissingContractSections,
+            RefusalReasons = readiness.RefusalReasons,
+            RecommendedActions = recommendedActions,
+            ContractPublishable = readiness.Classification == PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady,
         };
     }
 
@@ -730,27 +740,6 @@ internal static class PacketDraftCommand
             """;
     }
 
-    private static bool ContainsSectionHeading(string content, string section)
-    {
-        var lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        foreach (var rawLine in lines)
-        {
-            var line = rawLine.Trim();
-            if (!line.StartsWith("##", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            var heading = line.TrimStart('#').Trim();
-            if (string.Equals(heading, section, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private static void WriteMarkdown(TextWriter writer, PacketDraftResult result)
     {
         writer.WriteLine($"# Packet draft — {result.ExecutionUnit}");
@@ -773,6 +762,19 @@ internal static class PacketDraftCommand
         writer.WriteLine();
 
         writer.WriteLine("## Contract validation");
+        writer.WriteLine($"- contract publishable: {(result.ContractPublishable ? "yes" : "no")}");
+        if (result.MissingCanonicalFiles.Count == 0)
+        {
+            writer.WriteLine("- missing canonical files: none");
+        }
+        else
+        {
+            writer.WriteLine("- missing canonical files:");
+            foreach (var file in result.MissingCanonicalFiles)
+            {
+                writer.WriteLine($"  - {file}");
+            }
+        }
         if (result.MissingContractSections.Count == 0)
         {
             writer.WriteLine("- missing sections: none");
@@ -783,6 +785,23 @@ internal static class PacketDraftCommand
             foreach (var section in result.MissingContractSections)
             {
                 writer.WriteLine($"  - {section}");
+            }
+        }
+        if (result.RefusalReasons.Count > 0)
+        {
+            writer.WriteLine("- refusal reasons:");
+            foreach (var reason in result.RefusalReasons)
+            {
+                writer.WriteLine($"  - {reason}");
+            }
+        }
+        if (result.RecommendedActions.Count > 0)
+        {
+            writer.WriteLine();
+            writer.WriteLine("## Recommended actions");
+            foreach (var action in result.RecommendedActions)
+            {
+                writer.WriteLine($"- {action}");
             }
         }
     }
@@ -914,15 +933,22 @@ internal sealed record PacketDraftResult
     [JsonPropertyName("files")]
     public required IReadOnlyList<PacketDraftFile> Files { get; init; }
 
+    [JsonPropertyName("missing_canonical_files")]
+    public required IReadOnlyList<string> MissingCanonicalFiles { get; init; }
+
     [JsonPropertyName("missing_contract_sections")]
     public required IReadOnlyList<string> MissingContractSections { get; init; }
 
+    [JsonPropertyName("refusal_reasons")]
+    public required IReadOnlyList<string> RefusalReasons { get; init; }
+
+    [JsonPropertyName("recommended_actions")]
+    public required IReadOnlyList<string> RecommendedActions { get; init; }
+
     /// <summary>
-    /// G449: the packet's publish-readiness verdict from the shared
-    /// <see cref="NextSliceReadinessEvaluator"/> — true only when the contract
-    /// is complete (no missing required sections). Routes packet-draft
-    /// validation through the same engine as next-slice / publish-flow /
-    /// diagnostics so the surfaces never contradict on contract completeness.
+    /// G587: true only when the same complete packet readiness analyzer used by
+    /// queue-seed-from-packet finds no missing files, sections, binding mismatch,
+    /// malformed packet.yaml, or other publication refusal.
     /// </summary>
     [JsonPropertyName("contract_publishable")]
     public bool ContractPublishable { get; init; }

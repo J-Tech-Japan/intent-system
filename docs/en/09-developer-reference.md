@@ -192,6 +192,22 @@ resolved from one shared source, so `automation summary --domain <d>` and
 valid. A unit that does not match the active domain's regex is refused with a
 precise diagnostic that names the consulted bindings source.
 
+Before pushing a packet or handing it to queue seeding, run the one-shot
+readiness check:
+
+```text
+intent-cli packet draft --execution-unit <unit> --domain <d> --target-repo <owner/repo> --dry-run --format json
+```
+
+This checks the current on-disk packet; a valid planned scaffold does not count
+as an existing file. In this check, green means every canonical packet file
+currently exists and every required contract section is present
+(`contract_publishable: true`), and that the other publication checks reported
+no refusal. A refusal returns `missing_canonical_files`,
+`missing_contract_sections`, `refusal_reasons`, and `recommended_actions`
+together. Repair every reported item, then rerun the same command; do not push
+after fixing only the first item.
+
 ### Domain resolution order for execution-unit-resolving surfaces (G522)
 
 Surfaces that resolve an execution unit from `--pr` or `--execution-unit`

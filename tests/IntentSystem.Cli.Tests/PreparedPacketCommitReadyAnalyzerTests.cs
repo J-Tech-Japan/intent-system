@@ -43,6 +43,10 @@ Demo.
 
 ## Related Links
 Demo.
+
+## Base Branch Policy
+Policy: direct-main
+Expected PR base branch: main
 """;
 
     private const string CanonicalReviewContext = """
@@ -410,6 +414,9 @@ Demo.
 
             ## Related Links
             x
+
+            ## Base Branch Policy
+            x
             """;
         var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
         {
@@ -464,6 +471,9 @@ Demo.
             x
 
             ## Related Links
+            x
+
+            ## Base Branch Policy
             x
             """;
         var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
@@ -523,6 +533,9 @@ Demo.
             x
 
             ## Related Links
+            x
+
+            ## Base Branch Policy
             x
             """;
         var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput

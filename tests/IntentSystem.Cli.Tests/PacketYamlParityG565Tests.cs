@@ -192,7 +192,7 @@ public sealed class PacketYamlParityG565Tests : IDisposable
             File.WriteAllText(Path.Combine(PacketDirectory, "github-body.md"),
                 "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n"
                 + "## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n"
-                + "## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n");
+                + "## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n## Base Branch Policy\nx\n");
             WriteReviewContextMarkdown();
         }
 
