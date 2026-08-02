@@ -90,10 +90,13 @@ internal static class GuideOrchestratorThreadCommand
         SessionLayerModeResolution sessionLayer;
         try
         {
+            var requestedTeam = string.Equals(values["<team>"], "<team>", StringComparison.Ordinal)
+                ? null
+                : values["<team>"];
             sessionLayer = SessionLayerModeStore.Resolve(
                 context.RepoRoot,
                 values["<domain>"],
-                string.IsNullOrWhiteSpace(values["<team>"]) ? null : values["<team>"]);
+                requestedTeam);
         }
         catch (InvalidOperationException exception)
         {
@@ -144,13 +147,22 @@ internal static class GuideOrchestratorThreadCommand
         SessionLayerModeResolution sessionLayer,
         IReadOnlyDictionary<string, string> values)
     {
+        var teamOmission = SessionLayerTeamOmissionDisclosure.Create(
+            sessionLayer,
+            values["<domain>"],
+            entry =>
+                $"intent-cli guide orchestrator-thread --domain {values["<domain>"]} "
+                + $"--target-repo {values["<owner/repo>"]} --agent {values["<agent>"]} --team {entry.Team}");
         var block = new OrchestratorSessionLayer
         {
             Mode = sessionLayer.Mode,
             Source = sessionLayer.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
-            Summary = sessionLayer.Source == SessionLayerModeSource.Recorded
-                ? $"Session layer: {SessionLayerMode.Describe(sessionLayer.Mode)} — recorded for this domain/team."
-                : $"Session layer: {SessionLayerMode.Describe(SessionLayerMode.Default)} — no selection recorded, so the default is in force.",
+            Summary = teamOmission is not null
+                ? $"Session layer: {SessionLayerMode.Describe(sessionLayer.Mode)} — in force for this invocation "
+                    + "because no team scope was supplied; team-scoped records are disclosed below."
+                : sessionLayer.Source == SessionLayerModeSource.Recorded
+                    ? $"Session layer: {SessionLayerMode.Describe(sessionLayer.Mode)} — recorded for this domain/team."
+                    : $"Session layer: {SessionLayerMode.Describe(SessionLayerMode.Default)} — no selection recorded, so the default is in force.",
             Exclusivity = SessionLayerMode.ExclusivitySentence,
             PreviewScoping = SessionLayerMode.PreviewScopingSentence,
             Selection =
@@ -163,15 +175,19 @@ internal static class GuideOrchestratorThreadCommand
                     + "examples in them govern only their named transport; the concrete herdr-only counterparts below "
                     + "govern this mode."
                 : null,
+            TeamOmission = teamOmission,
         };
 
-        var intakeNote =
-            $"Recorded session layer for this setup: {SessionLayerMode.Describe(sessionLayer.Mode)} "
-            + $"({(sessionLayer.Source == SessionLayerModeSource.Recorded ? "recorded" : "default — nothing recorded yet")}). "
-            + $"Record or change it with `intent-cli session-layer set --domain {values["<domain>"]} "
-            + (string.IsNullOrWhiteSpace(values["<team>"]) ? string.Empty : $"--team {values["<team>"]} ")
-            + "--mode agmsg|herdr-only --write`. A herdr-only request made at first setup is honoured from then on; "
-            + "the choice is reversible in both directions.";
+        var intakeNote = teamOmission is not null
+            ? teamOmission.Summary + " " + string.Join(
+                " ",
+                teamOmission.CorrectiveCommands.Select(correction => $"`{correction.Command}`"))
+            : $"Recorded session layer for this setup: {SessionLayerMode.Describe(sessionLayer.Mode)} "
+                + $"({(sessionLayer.Source == SessionLayerModeSource.Recorded ? "recorded" : "default — nothing recorded yet")}). "
+                + $"Record or change it with `intent-cli session-layer set --domain {values["<domain>"]} "
+                + (string.IsNullOrWhiteSpace(values["<team>"]) ? string.Empty : $"--team {values["<team>"]} ")
+                + "--mode agmsg|herdr-only --write`. A herdr-only request made at first setup is honoured from then on; "
+                + "the choice is reversible in both directions.";
 
         return guide with
         {
@@ -3664,6 +3680,15 @@ internal static class GuideOrchestratorThreadCommand
             writer.WriteLine("## Session layer");
             writer.WriteLine();
             writer.WriteLine(sessionLayer.Summary);
+            if (sessionLayer.TeamOmission is { } teamOmission)
+            {
+                writer.WriteLine();
+                writer.WriteLine($"**{SessionLayerTeamOmissionDisclosure.MarkdownHeading}:** {teamOmission.Summary}");
+                foreach (var correction in teamOmission.CorrectiveCommands)
+                {
+                    writer.WriteLine($"- correct for `{correction.Team}`: `{correction.Command}`");
+                }
+            }
             writer.WriteLine();
             writer.WriteLine($"- {sessionLayer.Exclusivity}");
             writer.WriteLine($"- {sessionLayer.PreviewScoping}");
@@ -5885,6 +5910,9 @@ internal sealed record OrchestratorSessionLayer
 
     [JsonPropertyName("selection")]
     public required string Selection { get; init; }
+
+    [JsonPropertyName("team_omission")]
+    public SessionLayerTeamOmissionDisclosure? TeamOmission { get; init; }
 
     /// <summary>
     /// G570: honest about the boundary of this slice. Wholly agmsg-specific

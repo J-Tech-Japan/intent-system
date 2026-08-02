@@ -77,7 +77,24 @@ internal static class SessionLayerCommand
             return 1;
         }
 
-        Emit(writer, format, BuildResult(domain!, team, resolution, mode: "show", applied: false, changed: false));
+        var result = BuildResult(domain!, team, resolution, mode: "show", applied: false, changed: false);
+        var teamOmission = SessionLayerTeamOmissionDisclosure.Create(
+            resolution,
+            domain!,
+            entry => $"intent-cli session-layer show --domain {domain} --team {entry.Team}");
+        if (teamOmission is not null)
+        {
+            result = result with
+            {
+                TeamOmission = teamOmission,
+                Summary = resolution.Source == SessionLayerModeSource.Recorded
+                    ? result.Summary
+                    : $"domain `{domain}`: no domain-wide session layer is recorded, so the default "
+                        + $"{SessionLayerMode.Describe(SessionLayerMode.Default)} is in force.",
+            };
+        }
+
+        Emit(writer, format, result);
         return 0;
     }
 
@@ -250,6 +267,15 @@ internal static class SessionLayerCommand
 
         writer.WriteLine();
         writer.WriteLine(result.Summary);
+        if (result.TeamOmission is { } teamOmission)
+        {
+            writer.WriteLine();
+            writer.WriteLine($"**{SessionLayerTeamOmissionDisclosure.MarkdownHeading}:** {teamOmission.Summary}");
+            foreach (var correction in teamOmission.CorrectiveCommands)
+            {
+                writer.WriteLine($"- correct for `{correction.Team}`: `{correction.Command}`");
+            }
+        }
         writer.WriteLine();
         writer.WriteLine($"- {result.Exclusivity}");
         writer.WriteLine($"- {result.PreviewScoping}");
@@ -424,4 +450,7 @@ internal sealed record SessionLayerResult
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    [JsonPropertyName("team_omission")]
+    public SessionLayerTeamOmissionDisclosure? TeamOmission { get; init; }
 }
