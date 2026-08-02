@@ -161,8 +161,8 @@ public sealed class GuideCoherenceG563Tests
         // planners, so the carve-out has to live on the entry itself rather
         // than on each consumer.
         var entry = Assert.Single(
-            GuidanceProhibitionCatalog.All.Where(p =>
-                string.Equals(p.Id, GuidanceProhibitionCatalog.SkillFallbackForbidden, StringComparison.Ordinal)));
+            GuidanceProhibitionCatalog.All,
+            p => string.Equals(p.Id, GuidanceProhibitionCatalog.SkillFallbackForbidden, StringComparison.Ordinal));
 
         Assert.Contains(DispatcherSkillCarveOut.Sentence, entry.Description, StringComparison.Ordinal);
     }
@@ -179,9 +179,8 @@ public sealed class GuideCoherenceG563Tests
 
         using var document = JsonDocument.Parse(writer.ToString());
         var skill = Assert.Single(
-            document.RootElement.GetProperty("groups")
-                .EnumerateArray()
-                .Where(g => string.Equals(g.GetProperty("name").GetString(), "skill", StringComparison.Ordinal)));
+            document.RootElement.GetProperty("groups").EnumerateArray(),
+            g => string.Equals(g.GetProperty("name").GetString(), "skill", StringComparison.Ordinal));
 
         var purpose = skill.GetProperty("purpose").GetString()!;
         Assert.Contains("intent-cli skill list", purpose, StringComparison.Ordinal);
@@ -197,9 +196,9 @@ public sealed class GuideCoherenceG563Tests
         // The skill row is the first purpose containing `|` (the --target
         // alternatives). Unescaped, it silently splits into extra columns.
         var output = Render(["guide", "commands", "list"]);
-        var row = Assert.Single(output
-            .Split('\n')
-            .Where(line => line.StartsWith("| skill ", StringComparison.Ordinal)));
+        var row = Assert.Single(
+            output.Split('\n'),
+            line => line.StartsWith("| skill ", StringComparison.Ordinal));
 
         // A well-formed 6-column row is `|`+6 cells+`|`, so splitting on
         // UNESCAPED pipes yields 8 parts (two empties at the ends). Before the

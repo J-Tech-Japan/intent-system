@@ -101,10 +101,10 @@ public sealed class QueueSeedDependenciesG568Tests : IDisposable
         var (exitCode, result) = workspace.RunSeed(write: false);
 
         Assert.Equal(0, exitCode);
-        Assert.Equal(
-            ["G999"],
+        Assert.Collection(
             result.GetProperty("seeded_item").GetProperty("blocked_by")
-                .EnumerateArray().Select(entry => entry.GetString()).ToArray());
+                .EnumerateArray().Select(entry => entry.GetString()),
+            dependency => Assert.Equal("G999", dependency));
     }
 
     // ------------------------------------------------------- selection gating
@@ -153,9 +153,9 @@ public sealed class QueueSeedDependenciesG568Tests : IDisposable
         Assert.Equal(0, exitCode);
         var finding = Assert.Single(result.GetProperty("items").EnumerateArray());
         Assert.Equal(AutomationQueueDependencyReconcileCommand.StatusDrifted, finding.GetProperty("status").GetString());
-        Assert.Equal(
-            ["G565"],
-            finding.GetProperty("packet_dependencies").EnumerateArray().Select(e => e.GetString()).ToArray());
+        Assert.Collection(
+            finding.GetProperty("packet_dependencies").EnumerateArray().Select(e => e.GetString()),
+            dependency => Assert.Equal("G565", dependency));
         Assert.Empty(finding.GetProperty("queue_dependencies").EnumerateArray());
 
         // Read-only really means read-only.
@@ -314,8 +314,8 @@ public sealed class QueueSeedDependenciesG568Tests : IDisposable
         Assert.Equal(0, workspace.RunReconcile(write: true).ExitCode);
 
         var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsPath));
-        var reconciled = Assert.Single(events.Where(e =>
-            e.Event == AutomationQueueDependencyReconcileCommand.ReconcileEventName));
+        var reconciled = Assert.Single(events, e =>
+            e.Event == AutomationQueueDependencyReconcileCommand.ReconcileEventName);
         Assert.Equal(SeedWorkspace.Unit, reconciled.ExecutionUnit);
         Assert.Contains("G565", reconciled.Reason!, StringComparison.Ordinal);
     }

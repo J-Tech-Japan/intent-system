@@ -118,9 +118,10 @@ public sealed class QueueSeedPacketParsingG567Tests : IDisposable
 
         var seeded = result.GetProperty("seeded_item");
         Assert.Equal("Queue seed parity", seeded.GetProperty("title").GetString());
-        Assert.Equal(
-            ["G565", "G566"],
-            seeded.GetProperty("dependencies").EnumerateArray().Select(d => d.GetString()).ToArray());
+        Assert.Collection(
+            seeded.GetProperty("dependencies").EnumerateArray().Select(d => d.GetString()),
+            dependency => Assert.Equal("G565", dependency),
+            dependency => Assert.Equal("G566", dependency));
     }
 
     [Fact]

@@ -38,7 +38,7 @@ public sealed class InterviewSessionCommandsTests
     public void NextQuestion_GivenAllAnswered_ReportsHasPendingFalse()
     {
         using var workspace = new InterviewSessionWorkspace();
-        workspace.SeedSession("intent-cli", "alpha", new[]
+        workspace.SeedSession("intent-cli", "alpha", new (string Id, string Prompt, string? Answer)[]
         {
             (Id: "q1", Prompt: "Done?", Answer: "yes")
         });

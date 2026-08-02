@@ -4476,10 +4476,10 @@ internal sealed record OrchestratorSetupInputs
     public string? ReviewerAgent { get; init; }
 
     [JsonPropertyName("team")]
-    public required string Team { get; init; }
+    public required string? Team { get; init; }
 
     [JsonPropertyName("delivery_mode")]
-    public required string DeliveryMode { get; init; }
+    public required string? DeliveryMode { get; init; }
 
     [JsonPropertyName("existing_loop_policy")]
     public string? ExistingLoopPolicy { get; init; }

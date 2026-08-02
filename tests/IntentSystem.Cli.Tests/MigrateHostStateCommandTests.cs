@@ -31,8 +31,8 @@ public sealed class MigrateHostStateCommandTests : IDisposable
     {
         using var workspace = new MigrateWorkspace();
         workspace.WriteLegacyQueueState(BuildQueueState(
-            ("G331", "review", linkedIssue: ("J-Tech-Japan/intent-system", 765)),
-            ("OTHER", "queued", linkedIssue: ("J-Tech-Japan/Sekiban", 1))));
+            ("G331", "review", LinkedIssue: ("J-Tech-Japan/intent-system", 765)),
+            ("OTHER", "queued", LinkedIssue: ("J-Tech-Japan/Sekiban", 1))));
         workspace.WriteLegacyRuns(new[]
         {
             BuildRunLine("G331", "pr-merged", "J-Tech-Japan/intent-system")
@@ -76,8 +76,8 @@ public sealed class MigrateHostStateCommandTests : IDisposable
         // host owns J-Tech-Japan/intent-system review runtime state.
         using var workspace = new MigrateWorkspace();
         workspace.WriteLegacyQueueState(BuildQueueState(
-            ("G331", "review", linkedIssue: ("J-Tech-Japan/intent-system", 765)),
-            ("OTHER", "queued", linkedIssue: ("J-Tech-Japan/Sekiban", 1))));
+            ("G331", "review", LinkedIssue: ("J-Tech-Japan/intent-system", 765)),
+            ("OTHER", "queued", LinkedIssue: ("J-Tech-Japan/Sekiban", 1))));
         workspace.WriteLegacyRuns(new[]
         {
             BuildRunLine("G331", "pr-merged", "J-Tech-Japan/intent-system"),
@@ -130,8 +130,8 @@ public sealed class MigrateHostStateCommandTests : IDisposable
         // Sekiban items in the legacy file.
         using var workspace = new MigrateWorkspace();
         workspace.WriteLegacyQueueState(BuildQueueState(
-            ("G331", "queued", linkedIssue: ("J-Tech-Japan/intent-system", 765)),
-            ("SEKI-1", "queued", linkedIssue: ("J-Tech-Japan/SekibanAsAService", 99))));
+            ("G331", "queued", LinkedIssue: ("J-Tech-Japan/intent-system", 765)),
+            ("SEKI-1", "queued", LinkedIssue: ("J-Tech-Japan/SekibanAsAService", 99))));
         var legacyBefore = File.ReadAllText(workspace.LegacyQueuePath);
 
         using var writer = new StringWriter();
@@ -176,7 +176,7 @@ public sealed class MigrateHostStateCommandTests : IDisposable
         // not duplicate them.
         using var workspace = new MigrateWorkspace();
         workspace.WriteLegacyQueueState(BuildQueueState(
-            ("G331", "review", linkedIssue: ("J-Tech-Japan/intent-system", 765))));
+            ("G331", "review", LinkedIssue: ("J-Tech-Japan/intent-system", 765))));
         workspace.WriteLegacyRuns(new[]
         {
             BuildRunLine("G331", "pr-merged", "J-Tech-Japan/intent-system")
@@ -244,7 +244,7 @@ public sealed class MigrateHostStateCommandTests : IDisposable
         // authoring out of scope).
         using var workspace = new MigrateWorkspace();
         workspace.WriteLegacyQueueState(BuildQueueState(
-            ("G331", "review", linkedIssue: ("J-Tech-Japan/intent-system", 765))));
+            ("G331", "review", LinkedIssue: ("J-Tech-Japan/intent-system", 765))));
         var packetPath = Path.Combine(workspace.Context.RepoRoot,
             ".intent-cli", "issues", "G331", "packet.yaml");
         Directory.CreateDirectory(Path.GetDirectoryName(packetPath)!);

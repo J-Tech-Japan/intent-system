@@ -111,7 +111,7 @@ public sealed class InterviewCompileAndDraftCommandsTests
     public void DraftFromInterview_Write_CreatesDraftFile()
     {
         using var workspace = new InterviewSessionWorkspace();
-        workspace.SeedSession("intent-cli", "alpha", new[]
+        workspace.SeedSession("intent-cli", "alpha", new (string Id, string Prompt, string? Answer)[]
         {
             (Id: "q1", Prompt: "Goal?", Answer: "deterministic CLI")
         });
