@@ -263,27 +263,48 @@ internal static class GuideOrchestratorThreadCommand
             // fragment throws rather than defaulting to "keep".
             if (currentMixedHeading is not null)
             {
-                var type = SessionLayerFragments.TypeOf(values, currentMixedHeading, line);
-                if (type == SessionLayerSections.FragmentType.TransportOperative)
+                // G570 ninth repair: routing and labelling read the declared
+                // CLAUSES, so both act at the sentence granularity the types
+                // were decided at. Typing a whole line meant a sentence of
+                // mechanism and a sentence of transport instruction shared one
+                // verdict, and the clause model the eighth repair added was
+                // never read here at all.
+                var clauses = SessionLayerFragments.ClausesOf(values, currentMixedHeading, line);
+                var trimmedLine = line.TrimStart();
+                var indent = line[..(line.Length - trimmedLine.Length)];
+
+                if (clauses.Any(c => c.Type == SessionLayerSections.FragmentType.TransportOperative))
                 {
-                    var pointerLine = PointerFor(line);
-                    if (kept.Count == 0 || !string.Equals(kept[^1], pointerLine, StringComparison.Ordinal))
+                    if (clauses.All(c => c.Type is SessionLayerSections.FragmentType.TransportOperative
+                            or SessionLayerSections.FragmentType.Structural))
                     {
-                        kept.Add(pointerLine);
+                        var pointerLine = PointerFor(line);
+                        if (kept.Count == 0 || !string.Equals(kept[^1], pointerLine, StringComparison.Ordinal))
+                        {
+                            kept.Add(pointerLine);
+                        }
+
+                        continue;
                     }
 
+                    // A mixed line keeps its canon and points away only the
+                    // transport sentences inside it.
+                    var rebuilt = string.Concat(clauses.Select(c =>
+                        c.Type == SessionLayerSections.FragmentType.TransportOperative
+                            ? SessionLayerSections.MechanicPointer
+                            : c.Text));
+                    kept.Add(indent + rebuilt.TrimStart());
                     continue;
                 }
 
-                // The label is attached to the fragment it qualifies, one for
-                // one. A run banner was tried first and is wrong: descriptive
-                // illustration and binding duties interleave, so a banner still
-                // visually spans the instruction that follows it, which is the
-                // same false cue at smaller scale.
-                if (type == SessionLayerSections.FragmentType.CanonDescriptive
-                    && SessionLayerFragments.CarriesAgmsgIllustration(values, currentMixedHeading, line))
+                // The label NAMES the descriptive clause it qualifies, one for
+                // one. A section banner, a run banner, and a whole-line label
+                // were each tried and each over-reached: description and binding
+                // duties interleave inside a single line, so only a label that
+                // states its own scope cannot cover an instruction.
+                foreach (var clause in clauses.Where(SessionLayerFragments.IsAgmsgIllustration))
                 {
-                    kept.Add(SessionLayerSections.DescriptiveAgmsgContextLabel);
+                    kept.Add(SessionLayerSections.DescriptiveAgmsgContextFor(clause.Text));
                     kept.Add(string.Empty);
                 }
             }
@@ -408,11 +429,26 @@ internal static class GuideOrchestratorThreadCommand
             }
 
             var illustrations = new System.Text.Json.Nodes.JsonArray();
-            foreach (var text in CollectStrings(rendered))
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var declaration in SessionLayerFragments.JsonDeclarations)
             {
-                if (SessionLayerFragments.JsonCarriesAgmsgIllustration(values, property, text))
+                if (declaration.Section != property)
                 {
-                    illustrations.Add(System.Text.Json.Nodes.JsonValue.Create(text));
+                    continue;
+                }
+
+                // One entry per descriptive CLAUSE, so the context identifies
+                // exactly what it covers and can never reach an operative one.
+                foreach (var clause in declaration.Clauses!.Where(SessionLayerFragments.IsAgmsgIllustration))
+                {
+                    var expanded = SessionLayerFragments.Expand(values, clause.Text);
+                    if (rendered.ToJsonString().Contains(
+                            System.Text.Json.JsonEncodedText.Encode(expanded).ToString(),
+                            StringComparison.Ordinal)
+                        && seen.Add(expanded))
+                    {
+                        illustrations.Add(System.Text.Json.Nodes.JsonValue.Create(expanded));
+                    }
                 }
             }
 
@@ -423,7 +459,9 @@ internal static class GuideOrchestratorThreadCommand
 
             descriptiveContext[property] = new System.Text.Json.Nodes.JsonObject
             {
-                ["note"] = SessionLayerSections.DescriptiveAgmsgContextLabel,
+                ["note"] = SessionLayerSections.DescriptiveAgmsgContextPrefix.TrimStart('>', ' ')
+                    + "each value listed here — every other sentence in this property is an instruction that applies "
+                    + "unchanged.",
                 ["descriptive_values"] = illustrations,
             };
         }
@@ -513,11 +551,28 @@ internal static class GuideOrchestratorThreadCommand
                     return result;
                 }
 
-            case System.Text.Json.Nodes.JsonValue value
-                when value.TryGetValue<string>(out var text)
-                    && SessionLayerFragments.JsonTypeOf(values, property, text)
-                        == SessionLayerSections.FragmentType.TransportOperative:
-                return System.Text.Json.Nodes.JsonValue.Create(SessionLayerSections.MechanicPointer);
+            case System.Text.Json.Nodes.JsonValue value when value.TryGetValue<string>(out var text):
+                {
+                    // G570 ninth repair: the JSON renderer consumes the same
+                    // clause model as the markdown one, so a value that mixes
+                    // mechanism with a transport step keeps the mechanism.
+                    var clauses = SessionLayerFragments.JsonClausesOf(values, property, text);
+                    if (!clauses.Any(c => c.Type == SessionLayerSections.FragmentType.TransportOperative))
+                    {
+                        return node;
+                    }
+
+                    if (clauses.All(c => c.Type is SessionLayerSections.FragmentType.TransportOperative
+                            or SessionLayerSections.FragmentType.Structural))
+                    {
+                        return System.Text.Json.Nodes.JsonValue.Create(SessionLayerSections.MechanicPointer);
+                    }
+
+                    return System.Text.Json.Nodes.JsonValue.Create(string.Concat(clauses.Select(c =>
+                        c.Type == SessionLayerSections.FragmentType.TransportOperative
+                            ? SessionLayerSections.MechanicPointer
+                            : c.Text)));
+                }
 
             default:
                 return node;

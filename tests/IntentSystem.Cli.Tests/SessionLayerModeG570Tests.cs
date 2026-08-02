@@ -451,7 +451,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
         var output = workspace.RenderOrchestratorGuide();
 
-        Assert.Contains(SessionLayerSections.DescriptiveAgmsgContextLabel, output, StringComparison.Ordinal);
+        Assert.Contains(SessionLayerSections.DescriptiveAgmsgContextPrefix, output, StringComparison.Ordinal);
 
         // G570 eighth repair: the label is scoped to the DESCRIPTIVE fragments
         // it qualifies, not to a whole section. Every occurrence is immediately
@@ -462,12 +462,21 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         var occurrences = 0;
         for (var i = 0; i < lines.Length; i++)
         {
-            if (!string.Equals(lines[i], SessionLayerSections.DescriptiveAgmsgContextLabel, StringComparison.Ordinal))
+            if (!lines[i].StartsWith(SessionLayerSections.DescriptiveAgmsgContextPrefix, StringComparison.Ordinal))
             {
                 continue;
             }
 
             occurrences++;
+
+            // G570 ninth repair: the label NAMES the clause it covers, so its
+            // scope is exact rather than "whatever follows".
+            var quoted = lines[i]
+                [SessionLayerSections.DescriptiveAgmsgContextPrefix.Length..]
+                .Split(SessionLayerSections.DescriptiveAgmsgContextSuffix)[0]
+                .Trim('"');
+            Assert.Contains("agmsg", quoted, StringComparison.OrdinalIgnoreCase);
+
             var next = i + 1;
             while (next < lines.Length && lines[next].Trim().Length == 0)
             {
@@ -475,10 +484,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             }
 
             Assert.True(next < lines.Length, "the agmsg-example label must qualify a fragment, not trail the document");
-            Assert.Contains("agmsg", lines[next], StringComparison.OrdinalIgnoreCase);
-            Assert.False(
-                lines[next].StartsWith("## ", StringComparison.Ordinal),
-                "the label must sit against the description it qualifies, not against a heading");
+            Assert.Contains(quoted, lines[next], StringComparison.Ordinal);
         }
 
         Assert.True(occurrences > 0, "descriptive agmsg illustration must carry its label");
@@ -684,6 +690,40 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             ["<reviewer-agent>"] = "codex",
             ["<delivery-mode>"] = "monitor",
         };
+
+    /// <summary>Every string value under a rendered JSON node.</summary>
+    private static IEnumerable<string> RenderedStrings(JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var child in element.EnumerateObject())
+                {
+                    if (!child.Name.StartsWith("session_layer", StringComparison.Ordinal))
+                    {
+                        foreach (var text in RenderedStrings(child.Value))
+                        {
+                            yield return text;
+                        }
+                    }
+                }
+
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                {
+                    foreach (var text in RenderedStrings(item))
+                    {
+                        yield return text;
+                    }
+                }
+
+                break;
+            case JsonValueKind.String:
+                yield return element.GetString()!;
+                break;
+        }
+    }
 
     private static string SectionText(string markdown, string heading)
     {
@@ -1087,119 +1127,128 @@ public sealed class SessionLayerModeG570Tests : IDisposable
 
         var lines = workspace.RenderOrchestratorGuide().Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
         string? section = null;
-        var labelled = false;
-        var covered = new List<string>();
+        var labelledClauses = new List<(string Section, string Clause)>();
 
         foreach (var line in lines)
         {
             if (line.StartsWith("## ", StringComparison.Ordinal))
             {
                 section = SessionLayerFragments.IsDeclaredSection(line) ? line : null;
-                labelled = false;
                 continue;
             }
 
-            if (string.Equals(line, SessionLayerSections.DescriptiveAgmsgContextLabel, StringComparison.Ordinal))
+            if (section is not null
+                && line.StartsWith(SessionLayerSections.DescriptiveAgmsgContextPrefix, StringComparison.Ordinal))
             {
-                labelled = true;
-                continue;
+                // The label NAMES its clause, so its coverage is that clause —
+                // not the line, and never the instructions beside it.
+                var quoted = line[SessionLayerSections.DescriptiveAgmsgContextPrefix.Length..]
+                    .Split(SessionLayerSections.DescriptiveAgmsgContextSuffix)[0].Trim('"');
+                labelledClauses.Add((section, quoted));
             }
+        }
 
-            if (section is null || line.Trim().Length == 0 || !labelled)
-            {
-                continue;
-            }
+        Assert.NotEmpty(labelledClauses);
 
-            // The label qualifies exactly the next fragment, so its coverage
-            // ends there. Anything it covers must be descriptive.
-            labelled = false;
-            if (line.Contains(SessionLayerSections.MechanicPointer, StringComparison.Ordinal))
-            {
-                continue;
-            }
+        // Every clause a label names is declared descriptive. A label can no
+        // longer reach an instruction, because it does not reach past its quote.
+        var offenders = new List<string>();
+        foreach (var (heading, clause) in labelledClauses)
+        {
+            var declared = SessionLayerFragments.Declarations
+                .Where(d => d.Section == heading)
+                .SelectMany(d => d.Clauses!)
+                .Where(c => SessionLayerFragments.Expand(BareValues, c.Text).Trim() == clause)
+                .ToArray();
 
-            if (SessionLayerFragments.TypeOf(BareValues, section, line)
-                != SessionLayerSections.FragmentType.CanonDescriptive)
+            if (declared.Length == 0
+                || declared.Any(c => c.Type != SessionLayerSections.FragmentType.CanonDescriptive))
             {
-                covered.Add(line.Trim());
+                offenders.Add($"[{heading}] {clause}");
             }
         }
 
         Assert.True(
-            covered.Count == 0,
-            "binding instructions rendered under a \"descriptive, not an instruction\" label:\n"
-            + string.Join("\n", covered));
+            offenders.Count == 0,
+            "clauses labelled \"descriptive, not an instruction\" that are not declared descriptive:\n"
+            + string.Join("\n", offenders));
 
-        // The walk above can only catch a case the document happens to contain.
-        // This states the contract TOTALLY: no declared operative fragment is
-        // ever eligible for the label, whether or not one is rendered today.
+        // Total statement: no operative CLAUSE anywhere is eligible for the
+        // label, whether or not one is rendered today.
         var eligible = SessionLayerFragments.Declarations
-            .Where(d => d.Type != SessionLayerSections.FragmentType.CanonDescriptive
-                && SessionLayerFragments.CarriesAgmsgIllustration(
-                    BareValues,
-                    d.Section,
-                    SessionLayerFragments.Expand(BareValues, d.Text)))
-            .Select(d => $"[{d.Section}] {d.Text}")
+            .Concat(SessionLayerFragments.JsonDeclarations)
+            .SelectMany(d => d.Clauses!.Select(c => (d.Section, Clause: c)))
+            .Where(x => x.Clause.Type != SessionLayerSections.FragmentType.CanonDescriptive
+                && SessionLayerFragments.IsAgmsgIllustration(x.Clause))
+            .Select(x => $"[{x.Section}] {x.Clause.Text}")
             .ToArray();
         Assert.True(
             eligible.Length == 0,
-            "operative fragments the renderer would label \"descriptive, not an instruction\":\n"
-            + string.Join("\n", eligible));
-
-        var jsonEligible = SessionLayerFragments.JsonDeclarations
-            .Where(d => d.Type != SessionLayerSections.FragmentType.CanonDescriptive
-                && SessionLayerFragments.JsonCarriesAgmsgIllustration(
-                    BareValues,
-                    d.Section,
-                    SessionLayerFragments.Expand(BareValues, d.Text)))
-            .Select(d => $"[{d.Section}] {d.Text}")
-            .ToArray();
-        Assert.True(
-            jsonEligible.Length == 0,
-            "operative JSON values the renderer would list as descriptive context:\n"
-            + string.Join("\n", jsonEligible));
-
-        // JSON: same contract, stated over the values the context actually names.
-        var context = workspace.RenderOrchestratorGuideJson()
-            .GetProperty("herdr_only_descriptive_agmsg_context");
-        foreach (var entry in context.EnumerateObject())
-        {
-            foreach (var value in entry.Value.GetProperty("descriptive_values").EnumerateArray())
-            {
-                Assert.Equal(
-                    SessionLayerSections.FragmentType.CanonDescriptive,
-                    SessionLayerFragments.JsonTypeOf(BareValues, entry.Name, value.GetString()!));
-            }
-        }
+            "operative clauses the renderer would label descriptive:\n" + string.Join("\n", eligible));
     }
 
     /// <summary>
-    /// G570 eighth repair: a fragment that mixes an independently applicable
-    /// descriptive clause with an operative one is declared as separately typed
-    /// CLAUSES, and the clauses reconstruct the fragment exactly — the document
-    /// is made addressable, not restructured.
+    /// G570 ninth repair — the TOTAL guard over the clause/sentence inventory.
+    ///
+    /// Review found the eighth repair typed whole fragments and split only five
+    /// table rows, so multi-sentence fragments that mixed mechanism with a
+    /// binding duty still carried one verdict, and a substring fixture over 19
+    /// imperatives could not prove otherwise. This states the contract over the
+    /// WHOLE inventory: every declaration is a clause list, every clause is one
+    /// sentence or the scaffolding between sentences, and the clauses
+    /// reconstruct the fragment exactly.
+    ///
+    /// The sentence split is re-derived here independently of the production
+    /// tables, so a clause that silently swallowed a second sentence — the exact
+    /// defect under repair — fails.
+    /// </summary>
+    [Fact]
+    public void EveryDeclaredFragmentIsTypedAtSentenceGranularity_G570()
+    {
+        var offenders = new List<string>();
+
+        foreach (var declaration in SessionLayerFragments.Declarations
+                     .Concat(SessionLayerFragments.JsonDeclarations))
+        {
+            Assert.NotNull(declaration.Clauses);
+            Assert.Equal(declaration.Text, string.Concat(declaration.Clauses!.Select(c => c.Text)));
+
+            foreach (var clause in declaration.Clauses!)
+            {
+                if (clause.Type == SessionLayerSections.FragmentType.Structural)
+                {
+                    continue;
+                }
+
+                // A content clause must be ONE sentence. Independently counted:
+                // a sentence ends at .!? followed by whitespace and an opener.
+                var sentenceBreaks = System.Text.RegularExpressions.Regex.Matches(
+                    clause.Text,
+                    @"(?<=[.!?])\s+(?=[A-Z`\""'(\u201C])").Count;
+                if (sentenceBreaks > 0)
+                {
+                    offenders.Add($"[{declaration.Section}] {clause.Text}");
+                }
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "clauses spanning more than one sentence — each sentence must carry its own type:\n"
+            + string.Join("\n", offenders));
+    }
+
+    /// <summary>
+    /// The reviewer's named cases: a row/value that mixes descriptive substrate
+    /// identity with a binding rule must type them apart, and the review/merge
+    /// prohibition is an instruction, not description.
     /// </summary>
     [Fact]
     public void MixedSemanticsFragmentsAreDeclaredAsSeparatelyTypedClauses_G570()
     {
-        var mixed = SessionLayerFragments.Declarations
-            .Concat(SessionLayerFragments.JsonDeclarations)
-            .Where(d => d.Clauses is not null)
-            .ToArray();
+        var all = SessionLayerFragments.Declarations.Concat(SessionLayerFragments.JsonDeclarations).ToArray();
 
-        Assert.True(mixed.Length > 0, "the isolation table mixes descriptive identity with binding ownership rules");
-
-        foreach (var declaration in mixed)
-        {
-            Assert.Equal(declaration.Text, string.Concat(declaration.Clauses!.Select(c => c.Text)));
-            Assert.True(
-                declaration.Clauses!.Select(c => c.Type).Distinct().Count() > 1,
-                $"a clause split that types every clause the same is not a split: {declaration.Text}");
-        }
-
-        // The reviewer's named case: substrate identity kept, ownership rule
-        // declared operative, in the same row.
-        var runDirectory = mixed.Single(d =>
+        var runDirectory = all.First(d =>
             d.Text.Contains("agmsg run directory (`~/.agents/skills/agmsg/run`)", StringComparison.Ordinal));
         Assert.Contains(
             runDirectory.Clauses!,
@@ -1209,6 +1258,91 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             runDirectory.Clauses!,
             c => c.Text.Contains("Touch only files whose team segment is yours", StringComparison.Ordinal)
                 && c.Type == SessionLayerSections.FragmentType.ModeIndependentOperative);
+
+        // The review/merge prohibition the ninth review named: a normative rule,
+        // never "descriptive, not an instruction".
+        foreach (var declaration in all.Where(d =>
+                     d.Text.Contains("never replaces semantic review or authorizes a merge", StringComparison.Ordinal)))
+        {
+            var clause = declaration.Clauses!.First(c =>
+                c.Text.Contains("never replaces semantic review or authorizes a merge", StringComparison.Ordinal));
+            Assert.True(
+                clause.Type is SessionLayerSections.FragmentType.ModeIndependentOperative
+                    or SessionLayerSections.FragmentType.TransportOperative,
+                "the review/merge prohibition is declared " + clause.Type + ", which files a normative rule as prose");
+        }
+
+        // Supervision mechanism and the duty inside the same sentence run are
+        // typed apart rather than sharing the fragment's verdict.
+        var supervision = all.First(d =>
+            d.Text.Contains("It answers a blocking dialog only inside an explicit boundary", StringComparison.Ordinal));
+        Assert.Contains(
+            supervision.Clauses!,
+            c => c.Text.Contains("It answers a blocking dialog only inside an explicit boundary", StringComparison.Ordinal)
+                && c.Type == SessionLayerSections.FragmentType.ModeIndependentOperative);
+    }
+
+    /// <summary>
+    /// G570 ninth repair: the render guard the review asked for — each declared
+    /// descriptive agmsg CLAUSE that survives into herdr-only output is actually
+    /// covered by the context, one for one. The eighth repair only proved the
+    /// converse (that covered values were descriptive), which a renderer that
+    /// labelled nothing at all would also satisfy.
+    /// </summary>
+    [Fact]
+    public void EveryDescriptiveAgmsgClauseIsContextCovered_G570()
+    {
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        var context = workspace.RenderOrchestratorGuideJson()
+            .GetProperty("herdr_only_descriptive_agmsg_context");
+
+        var covered = context.EnumerateObject()
+            .SelectMany(e => e.Value.GetProperty("descriptive_values").EnumerateArray())
+            .Select(v => v.GetString()!)
+            .ToHashSet(StringComparer.Ordinal);
+
+        // Expected coverage: every declared descriptive agmsg CLAUSE whose text
+        // still appears in the herdr-only rendering. Derived from the
+        // declarations and confirmed against the rendered document, so a clause
+        // this mode never emits is not demanded, and one that does survive
+        // cannot go uncovered.
+        var herdrJson = workspace.RenderOrchestratorGuideJson().GetRawText();
+        var expected = SessionLayerFragments.JsonDeclarations
+            .Where(d => SessionLayerSections.MixedJsonProperties.Contains(d.Section, StringComparer.Ordinal))
+            .SelectMany(d => d.Clauses!)
+            .Where(SessionLayerFragments.IsAgmsgIllustration)
+            .Select(c => SessionLayerFragments.Expand(BareValues, c.Text))
+            .Distinct(StringComparer.Ordinal)
+            .Where(text => herdrJson.Contains(
+                System.Text.Json.JsonEncodedText.Encode(text).ToString(),
+                StringComparison.Ordinal))
+            .ToList();
+
+        Assert.NotEmpty(expected);
+        var missing = expected.Where(text => !covered.Contains(text)).ToArray();
+        Assert.True(
+            missing.Length == 0,
+            "descriptive agmsg clauses that survive without their context:\n" + string.Join("\n", missing));
+
+        // And nothing covered is operative: every listed value matches a clause
+        // declared CanonDescriptive under that property.
+        foreach (var entry in context.EnumerateObject())
+        {
+            foreach (var value in entry.Value.GetProperty("descriptive_values").EnumerateArray())
+            {
+                var text = value.GetString()!;
+                var declared = SessionLayerFragments.JsonDeclarations
+                    .Where(d => d.Section == entry.Name)
+                    .SelectMany(d => d.Clauses!)
+                    .Where(c => SessionLayerFragments.Expand(BareValues, c.Text) == text)
+                    .ToArray();
+
+                Assert.True(declared.Length > 0, $"context lists an undeclared clause under `{entry.Name}`: {text}");
+                Assert.All(declared, c => Assert.Equal(
+                    SessionLayerSections.FragmentType.CanonDescriptive,
+                    c.Type));
+            }
+        }
     }
 
     [Fact]
@@ -1246,12 +1380,18 @@ public sealed class SessionLayerModeG570Tests : IDisposable
 
             foreach (var value in covered)
             {
-                // Every covered value is descriptive agmsg illustration — never
-                // an instruction that still binds.
+                // Every covered value is one descriptive agmsg CLAUSE — never an
+                // instruction that still binds.
                 Assert.Contains("agmsg", value, StringComparison.OrdinalIgnoreCase);
-                Assert.Equal(
+                var declared = SessionLayerFragments.JsonDeclarations
+                    .Where(d => d.Section == entry.Name)
+                    .SelectMany(d => d.Clauses!)
+                    .Where(c => SessionLayerFragments.Expand(BareValues, c.Text) == value)
+                    .ToArray();
+                Assert.NotEmpty(declared);
+                Assert.All(declared, c => Assert.Equal(
                     SessionLayerSections.FragmentType.CanonDescriptive,
-                    SessionLayerFragments.JsonTypeOf(BareValues, entry.Name, value));
+                    c.Type));
             }
         }
     }

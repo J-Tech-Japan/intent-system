@@ -257,10 +257,24 @@ internal static class SessionLayerSections
     public static readonly IReadOnlyList<string> DescriptiveAgmsgContextJsonProperties =
         Declarations.Where(d => d.Descriptive && d.JsonProperty is not null).Select(d => d.JsonProperty!).ToArray();
 
-    public const string DescriptiveAgmsgContextLabel =
-        "> **agmsg example — descriptive, not an instruction.** This section explains the model using the agmsg "
-        + "transport because that is the practiced one. In herdr-only the rule it states still binds; the agmsg "
-        + "mechanics named here are illustration, and the herdr-only operating steps ship in G571.";
+    /// <summary>
+    /// G570 ninth repair: the label NAMES the clause it covers. A label placed
+    /// before a whole line still covered the operative sentences in that line —
+    /// the same over-reach as the section banner, one level down. Naming its
+    /// scope makes the coverage exact and checkable.
+    /// </summary>
+    public const string DescriptiveAgmsgContextPrefix =
+        "> **agmsg example — descriptive, not an instruction.** This applies to exactly one sentence below — ";
+
+    public const string DescriptiveAgmsgContextSuffix =
+        " — which explains the model using the agmsg transport because that is the practiced one. In herdr-only the "
+        + "rule it states still binds; the agmsg mechanics it names are illustration, and the herdr-only operating "
+        + "steps ship in G571. Every other sentence here is an instruction that applies unchanged.";
+
+    /// <summary>The label for one descriptive clause, quoting the clause so its
+    /// scope is unambiguous to a reader and to a guard.</summary>
+    public static string DescriptiveAgmsgContextFor(string clause) =>
+        DescriptiveAgmsgContextPrefix + "\"" + clause.Trim() + "\"" + DescriptiveAgmsgContextSuffix;
 
     public static bool CarriesTransportMechanic(string value) =>
         TransportMechanics.Any(token => value.Contains(token, StringComparison.OrdinalIgnoreCase));

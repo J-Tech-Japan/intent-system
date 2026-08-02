@@ -731,12 +731,23 @@ a prose reader never disagree about what applies.
   a binding ownership rule in one line, and a single type for the row either
   files the rule as prose or strips the identity.
 
-  The agmsg-example label is scoped to the descriptive FRAGMENT it qualifies,
-  one for one, in markdown and JSON alike. Declaring a whole mixed section or
-  property "descriptive, not an instruction" told the reader — and a JSON
-  consumer — that the binding duties inside it were illustration. A run banner
-  was tried and is also wrong: descriptive illustration and duties interleave,
-  so a banner still visually spans the instruction after it.
+  Typing is TOTAL at SENTENCE granularity. Every declaration is a clause list;
+  every clause is one sentence, or the scaffolding between sentences and table
+  cells; and the clauses reconstruct the fragment's text exactly. Typing whole
+  fragments and splitting only a handful of table rows was not enough — a
+  multi-sentence fragment that mixed mechanism with a binding duty still carried
+  one verdict, and a substring fixture over a list of imperatives cannot prove
+  otherwise. Both renderers consume the clause list, so routing and labelling
+  act at the granularity the types were decided at: a line that mixes canon with
+  a transport step keeps its canon and points away only that step.
+
+  The agmsg-example label NAMES the descriptive clause it qualifies. Three
+  weaker scopings were tried and each over-reached: a section banner marked
+  every duty in the section as illustration; a run banner still spanned the
+  instruction after it; and a whole-line label still covered the operative
+  sentences beside the descriptive one. A label that quotes its own scope cannot
+  reach past it. The JSON context lists each descriptive clause the same way,
+  one for one, instead of marking a property.
 
 Pointer-only text is G570 routing metadata: it says what does not apply and
 where the counterpart ships. It never says what to run instead, because a
