@@ -2625,21 +2625,21 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 
 ### 次リリース準備(v0.8.1)
 
-**`v0.8.0` は出荷済み**(GitHub Release + NuGet)で、version policy は `0.8.1`
-開発ラインへ roll されました。v0.8.0 バッチは **minor** バンプで、12 スライス(G570、G571、G573、G574、
-G575、G577、G578、G579、G580、G581、G582、G583)をカバーします。目玉は
-記録・可逆な session-layer dual mode と transport 非依存の `notify` サーフェス
-です。新コマンド群(`session-layer` / `notify`)を出荷するため patch ではなく
-minor です。両 session mode は対等なままで、agmsg は非推奨化しません。
+**`v0.8.0` は出荷済み**(GitHub Release + NuGet)で、version policy は
+`stableVersion: 0.8.0`、`nextVersion: 0.8.1` のままです。prepare-only の
+`v0.8.1` notes は G585、G586、G587、G588、G589 の 5 件だけを対象にします。
+マージ済み PR と commit の証跡は
+[release-notes-v0.8.1.md](release-notes-v0.8.1.md) を参照してください。
 
-リポジトリは in-development の **`0.8.1`** `nextVersion` 上にあります。`v0.8.1`
-で何を出荷するかはここでは決めません: 次の release-prep パケットがマージ済み
-スライスを選定し、DRAFT スタブに代えて実際の
-[release-notes-v0.8.1.md](release-notes-v0.8.1.md) を執筆し、バンプ根拠を
-記述します。それまで notes はスタブのままであり、`v0.8.1` の GitHub Release を
-publish してはいけません。
+`v0.8.1` は version policy 上の **PATCH** です。5 件すべてが correctness fix で、
+新しい command surface や広範な behavior change はありません。文書化する 2 件の
+additive な output-shape 変更も非破壊です: external resident への
+`notify delegate` / `notify report` delivery は team event を append して
+`event_appended=true` を返せるようになり、`automation stalled-work` は新しい
+finding kind を返せるようになります。この準備では Release、tag、package の作成も、
+version file の roll も行いません。
 
-**リリース準備検証(`v0.8.1` release-preparation のマージ前に実行):**
+**リリース準備検証(`v0.8.1` release-preparation PR のマージ前に実行):**
 
 ```bash
 # 1. version policy が release-to-be-cut を記録していることを確認。
@@ -2648,22 +2648,23 @@ cat eng/version.json   # stableVersion 0.8.0 (published), nextVersion 0.8.1 (to 
 # 2. build して表示バージョン識別(version + git SHA + G-unit)を確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待される形: intent-cli 0.8.1-<sha>-G576   (stale literal ではない)
+#   期待される形: intent-cli 0.8.1-<sha>-G590   (stale literal ではない)
 
 # 3. pack して NuGet package バージョンが policy と一致することを確認。
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
 ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.8.1.nupkg
 
-# 4. package metadata(id / command / license / project URL)を確認。
+# 4. G475 package/release guard と release/version guard を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
-  -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
+  -c Release --filter \
+  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 
-# 5. skill サーフェスのスモーク(本リリースの見出し)。
-dotnet run --project src/IntentSystem.Cli -c Release --no-build -- skill list
+# 5. Release full suite を実行。
+dotnet test IntentSystem.sln -c Release
 ```
 
-**リリース準備検証(`v0.8.1` preparation の merge が `main` に入り readiness evidence が揃った後も、Release 作成には
-operator の明示承認が必要です。その後に限り maintainer/operator (または authorize された
+`v0.8.1` preparation の merge が `main` に入り readiness evidence が揃った後も、
+Release 作成には operator の明示承認が必要です。その後に限り maintainer/operator (または authorize された
 外部 release automation)が `v0.8.1` GitHub Release を作成・publish できます。publish が
 `release.yml` (`on: release: published`)を trigger し、NuGet package と platform binary
 artifact を build・publish します。**その後すぐに `eng/version.json` を roll します** —

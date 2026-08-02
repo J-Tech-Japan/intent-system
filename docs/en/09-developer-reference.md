@@ -2543,23 +2543,22 @@ to keep in sync, and it goes stale on exactly the roll nobody is watching.
 
 ### Next release readiness (v0.8.1)
 
-**`v0.8.0` shipped** (GitHub Release + NuGet) and the version policy was rolled
-to the `0.8.1` development line. The v0.8.0 batch was a **minor** bump covering twelve slices — G570, G571,
-G573, G574, G575, G577, G578, G579, G580, G581, G582 and G583 — whose
-headline is the persisted, reversible session-layer dual mode with the
-transport-neutral `notify` surface. Minor rather than patch because it ships
-the new `session-layer` and `notify` command groups; both session modes stay
-first-class and agmsg is not deprecated.
+**`v0.8.0` shipped** (GitHub Release + NuGet), and the version policy remains
+`stableVersion: 0.8.0` with `nextVersion: 0.8.1`. The prepare-only `v0.8.1`
+notes cover exactly G585, G586, G587, G588, and G589; see
+[release-notes-v0.8.1.md](release-notes-v0.8.1.md) for the merged PR and commit
+evidence.
 
-The repository is now on the in-development **`0.8.1`** `nextVersion`. What
-ships in `v0.8.1` is not decided here: the next release-prep packet selects the
-merged slices, authors the real
-[release-notes-v0.8.1.md](release-notes-v0.8.1.md) content over the DRAFT
-stubs, and states the bump rationale. Until then the notes remain stubs and no
-`v0.8.1` GitHub Release may be published.
+`v0.8.1` is a **PATCH** under the version policy: all five slices are
+correctness fixes, with no new command surface or broad behavior change. The
+two documented additive output-shape changes remain non-breaking: external-
+resident `notify delegate` / `notify report` delivery can append the team event
+and set `event_appended=true`, and `automation stalled-work` can return new
+finding kinds. This preparation does not create a Release, tag, or package and
+does not roll the version file.
 
-**Release-readiness verification (run before merging the `v0.8.1` version
-bump):**
+**Release-readiness verification (run before merging the `v0.8.1`
+release-preparation PR):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
@@ -2568,15 +2567,19 @@ cat eng/version.json   # stableVersion 0.8.0 (published), nextVersion 0.8.1 (to 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.8.1-<sha>-G56x   (NOT a stale literal)
+#   expected shape: intent-cli 0.8.1-<sha>-G590   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
 ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.8.1.nupkg
 
-# 4. Confirm package metadata (id / command / license / project URL).
+# 4. Confirm the G475 package/release guard and the release/version guards.
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
-  -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
+  -c Release --filter \
+  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+
+# 5. Run the complete Release suite.
+dotnet test IntentSystem.sln -c Release
 ```
 
 After the preparation merge lands on `main` and the readiness evidence holds,
