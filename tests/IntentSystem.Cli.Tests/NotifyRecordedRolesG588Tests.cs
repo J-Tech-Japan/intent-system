@@ -96,9 +96,56 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
         Assert.True(result.GetProperty("event_appended").GetBoolean());
         var line = Assert.Single(File.ReadAllLines(workspace.EventPath));
         using var document = JsonDocument.Parse(line);
-        Assert.Equal("completed", document.RootElement.GetProperty("kind").GetString());
+        Assert.Equal("completion", document.RootElement.GetProperty("kind").GetString());
         Assert.Equal("https://example.test/pr/1280", document.RootElement.GetProperty("artifact").GetString());
         Assert.Equal("external routing completed", document.RootElement.GetProperty("summary").GetString());
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public void EveryEventKindNotifyCanEmit_BelongsToTheDocumentedSchema_G588()
+    {
+        var runner = Runner((_, _) => throw new InvalidOperationException(
+            "external-reader and escalation routes must not start herdr"));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+
+        Assert.Equal(0, workspace.Run(DelegateArgs(
+            from: "orchestration",
+            to: "design",
+            reportTo: "orchestration",
+            write: true)).ExitCode);
+        var reportStatuses = NotifyCommand.SupportedReportStatuses.ToArray();
+        foreach (var status in reportStatuses)
+        {
+            Assert.Equal(0, workspace.Run(ReportArgs(
+                from: "implementation",
+                to: "design",
+                write: true,
+                status: status)).ExitCode);
+        }
+
+        Assert.Equal(0, workspace.Run(EscalateArgs()).ExitCode);
+
+        var emittedKinds = File.ReadAllLines(workspace.EventPath)
+            .Select(line =>
+            {
+                using var document = JsonDocument.Parse(line);
+                return document.RootElement.GetProperty("kind").GetString()!;
+            })
+            .ToArray();
+        var documentedKinds = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "completion",
+            "blocked",
+            "question",
+            "escalation",
+        };
+
+        Assert.Equal(reportStatuses.Length + 2, emittedKinds.Length);
+        Assert.All(emittedKinds, kind => Assert.Contains(kind, documentedKinds));
+        Assert.Equal(
+            documentedKinds.Order(StringComparer.Ordinal),
+            emittedKinds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
         Assert.Empty(runner.Calls);
     }
 
@@ -292,12 +339,20 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
         "--result-nonce", "g588-nonce", write ? "--write" : "--dry-run", "--format", "json",
     ];
 
-    private static string[] ReportArgs(string from, string to, bool write) =>
+    private static string[] ReportArgs(string from, string to, bool write, string status = "completed") =>
     [
         "notify", "report", "--domain", Workspace.Domain, "--team", Workspace.Team,
-        "--from", from, "--to", to, "--task-id", "G588-demo", "--status", "completed",
+        "--from", from, "--to", to, "--task-id", "G588-demo", "--status", status,
         "--artifact", "https://example.test/pr/1280", "--summary", "external routing completed",
         write ? "--write" : "--dry-run", "--format", "json",
+    ];
+
+    private static string[] EscalateArgs() =>
+    [
+        "notify", "escalate", "--domain", Workspace.Domain, "--team", Workspace.Team,
+        "--from", "implementation", "--task-id", "G588-demo",
+        "--artifact", "https://example.test/pr/1280", "--summary", "needs design input",
+        "--write", "--format", "json",
     ];
 
     private sealed class FakeRunner(

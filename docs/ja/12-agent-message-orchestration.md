@@ -50,7 +50,8 @@ command を final step として実行するため、herdr-only の完了が rec
 recipient must be deliverable** です。このため `resident: external` role は pane なしで sender
 および `report-to` になれます。その external role が recipient の場合、`delegate` / `report`
 は安全な routing-root-relative の recorded `reader` へ変更されていない 6-field event を正確に
-1 件 append して配信します（`delegate` は `question`、`report` は既存 status を使います）。
+1 件 append して配信します（`delegate` は `question`、`report` は status
+`completed|blocked|question` を event kind `completion|blocked|question` へ map します）。
 そして `eventAppended: true` を返します。herdr-resident recipient は team の recorded workspace
 内にある明示的な recorded pane を target にします。他 workspace にだけ存在する agent は
 決して eligible ではありません。
@@ -417,7 +418,8 @@ receiver の canonical report も append できます。`O_APPEND` で開き、1
 
 recorded external reader 宛ての canonical notification と、design-relevant な completion /
 blocked / question / escalation だけを書きます。external reader 宛て delegation は `question`、
-external report は既存の `completed|blocked|question` status を使います。pane-resident dispatch、
+external report は `completed|blocked|question` status を event kind
+`completion|blocked|question` へ map します。pane-resident dispatch、
 routine progress、pane output、acknowledgement はここへ mirror しません。この mode-independent
 channel は explicit external-reader/design boundary のままで、fallback inter-agent bus ではなく、
 `intent-cli notify`、GitHub、intent-cli workflow state の代替でもありません。

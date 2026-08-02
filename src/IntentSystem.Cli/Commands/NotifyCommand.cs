@@ -9,6 +9,9 @@ internal static class NotifyCommand
     private const string OperationDelegate = "delegate";
     private const string OperationReport = "report";
     private const string OperationEscalate = "escalate";
+    private const string CompletionEventKind = "completion";
+    private const string BlockedEventKind = "blocked";
+    private const string QuestionEventKind = "question";
     private const string EscalationEventKind = "escalation";
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
@@ -34,6 +37,16 @@ internal static class NotifyCommand
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
+
+    private static readonly IReadOnlyDictionary<string, string> ReportReaderEventKinds =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["completed"] = CompletionEventKind,
+            ["blocked"] = BlockedEventKind,
+            ["question"] = QuestionEventKind,
+        };
+
+    internal static IEnumerable<string> SupportedReportStatuses => ReportReaderEventKinds.Keys;
 
     internal static Func<INotifyProcessRunner>? ProcessRunnerFactory { get; set; }
 
@@ -198,11 +211,7 @@ internal static class NotifyCommand
     {
         Timestamp = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
         Team = options.Team!,
-        // A delegation is an actionable request to the external reader; a
-        // report already carries one of the three existing outcome kinds.
-        Kind = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
-            ? "question"
-            : options.Status!,
+        Kind = ReaderEventKind(operation, options.Status),
         Unit = options.TaskId!,
         Summary = NotifyEventWriter.NormalizeSummary(
             string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
@@ -212,6 +221,22 @@ internal static class NotifyCommand
             ? options.Inputs.FirstOrDefault() ?? options.ExpectedArtifacts[0]
             : options.Artifact!,
     };
+
+    private static string ReaderEventKind(string operation, string? status)
+    {
+        if (string.Equals(operation, OperationDelegate, StringComparison.Ordinal))
+        {
+            return QuestionEventKind;
+        }
+
+        if (status is not null && ReportReaderEventKinds.TryGetValue(status, out var eventKind))
+        {
+            return eventKind;
+        }
+
+        throw new InvalidOperationException(
+            $"Report status '{status}' does not map to a documented reader-event kind.");
+    }
 
     private static int ExecuteEscalation(
         TextWriter writer,
@@ -543,7 +568,8 @@ internal static class NotifyCommand
         else if (string.Equals(operation, OperationReport, StringComparison.Ordinal))
         {
             if (!IsSafeIdentity(options.ToRole)
-                || options.Status is not ("completed" or "blocked" or "question")
+                || options.Status is null
+                || !ReportReaderEventKinds.ContainsKey(options.Status)
                 || string.IsNullOrWhiteSpace(options.Artifact)
                 || string.IsNullOrWhiteSpace(options.Summary))
             {

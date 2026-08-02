@@ -53,7 +53,8 @@ and delegate `report-to` role must exist in that team's recorded roster, but
 may send and may be `report-to` without a pane. When that external role is the
 recipient, `delegate` and `report` deliver by appending exactly one unchanged
 six-field event to its safe routing-root-relative recorded `reader` (`delegate`
-uses `question`; `report` uses its existing status), and return `eventAppended:
+uses `question`; `report` maps status `completed|blocked|question` to event kind
+`completion|blocked|question`), and return `eventAppended:
 true`; a herdr-resident recipient is prompted at its explicit
 recorded pane in the team's recorded workspace. Agents found only in another
 workspace are never eligible.
@@ -448,7 +449,8 @@ is:
 Write only canonical notifications addressed to a recorded external reader and
 design-relevant completion, blocked, question, and escalation events. A
 delegation to an external reader uses `question`; an external report uses its
-existing `completed|blocked|question` status. Pane-resident dispatch, routine
+`completed|blocked|question` status to write event kind
+`completion|blocked|question`. Pane-resident dispatch, routine
 progress, pane output, and acknowledgements are never mirrored here. This
 mode-independent channel remains the explicit external-reader/design boundary,
 never a fallback inter-agent bus and never a replacement for `intent-cli

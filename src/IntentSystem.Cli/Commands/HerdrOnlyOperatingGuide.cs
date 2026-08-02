@@ -116,7 +116,7 @@ internal static class HerdrOnlyOperatingGuide
         - **Fail closed before path construction:** reject an empty team name, a leading dot, `/` or `\`, and any `..` sequence. Do not sanitize or silently rewrite an invalid name.
         - **Append contract:** the canonical `intent-cli notify` surface is the only writer; callers never append by hand. The orchestrator normally writes delegate/escalate events, while a receiver's canonical report may append when its recorded recipient is external. Open with append semantics (`O_APPEND`), append exactly one complete JSON object per line, include no embedded newline, and normalize `summary` to one line.
         - **Schema:** `{"timestamp":"<RFC3339>","team":"<team>","kind":"completion|blocked|question|escalation","unit":"<execution-unit-or-task-id>","summary":"<one-line-summary>","artifact":"<repo-relative-path-or-URL>"}`. These six fields are required; `artifact` identifies the inspectable handoff or the decision input.
-        - **Writer boundary:** append only canonical notifications addressed to a recorded external reader plus design-relevant completion, blocked, question, and escalation events. An external delegation uses `question`; an external report uses its existing `completed|blocked|question` status. Routine pane-resident dispatch, progress, pane output, acknowledgements, and workflow label changes do not belong here.
+        - **Writer boundary:** append only canonical notifications addressed to a recorded external reader plus design-relevant completion, blocked, question, and escalation events. An external delegation uses `question`; an external report maps status `completed|blocked|question` to event kind `completion|blocked|question`. Routine pane-resident dispatch, progress, pane output, acknowledgements, and workflow label changes do not belong here.
 
         Reader recipes:
 
@@ -207,7 +207,7 @@ internal static class HerdrOnlyOperatingGuide
             ["append"] = "The canonical intent-cli notify surface is the only O_APPEND writer; callers never append by hand. Orchestration normally writes delegate/escalate, and canonical report may append for an external recipient. One object per line, no embedded newline, summary normalized to one line.",
             ["schema"] = "timestamp, team, kind, unit, summary, artifact",
             ["kinds"] = new JsonArray("completion", "blocked", "question", "escalation"),
-            ["external_delivery_kinds"] = "A delegate to a recorded external reader uses question; a report uses its existing completed, blocked, or question status. Pane-resident dispatch is never mirrored to the file.",
+            ["external_delivery_kinds"] = "A delegate to a recorded external reader uses question; a report maps completed, blocked, or question status to completion, blocked, or question event kind. Pane-resident dispatch is never mirrored to the file.",
             ["watermark_invariant"] = "Every reader persists file identity, byte offset, and complete-line count durably across watcher restarts; rotation, truncation, backwards byte/line count, or file replacement fails closed and never resets to the beginning because replay can duplicate a design decision.",
             ["readers"] = new JsonObject
             {
