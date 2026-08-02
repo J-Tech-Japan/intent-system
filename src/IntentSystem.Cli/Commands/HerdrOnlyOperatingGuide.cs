@@ -52,6 +52,8 @@ internal static class HerdrOnlyOperatingGuide
 
         Submit through the transport-neutral notify surface. The CLI resolves the recorded `herdr-only` mode, validates the logical-role mapping, and invokes the herdr adapter internally; workflow prompts never hand-write `herdr agent prompt`:
 
+        Persist the team-scoped delivery topology at `<host-repo>/.intent-cli/role-pane-mapping.json`: record the team `workspace_id`; under `roles`, give pane-backed roles `resident: herdr` with explicit workspace/pane ids and roles outside herdr `resident: external` with a safe routing-root-relative `reader`. Every recorded role can send or be the delegate `report-to`; ONLY the recipient must be deliverable. A herdr recipient requires a running agent at its recorded pane inside that exact team workspace. An external recipient receives one canonical delegate/report event through its recorded reader and returns `eventAppended: true`. `--dry-run` performs the same topology and recipient resolution as `--write`, including team-scoped unknown-role diagnostics, but never prompts or appends. Missing/unsafe readers, foreign-workspace-only agents, and stale mappings fail closed without fallback.
+
         ```bash
         intent-cli notify delegate --domain <domain> --team <team> --from <sender-role> \
           --to <logical-role> --report-to <orchestrator-role> --task-id <task-id> \
@@ -112,9 +114,9 @@ internal static class HerdrOnlyOperatingGuide
 
         - **Location:** resolve the host repository root at runtime, then use `<host-repo>/.intent-cli/events/<team>.jsonl`. The team name is the agmsg/herdr team name verbatim in one flat filename (example: `intent-cli-dev.jsonl`); there are no team subdirectories and readers never hard-code an absolute path.
         - **Fail closed before path construction:** reject an empty team name, a leading dot, `/` or `\`, and any `..` sequence. Do not sanitize or silently rewrite an invalid name.
-        - **Append contract:** the orchestrator is the only writer. Open with append semantics (`O_APPEND`), append exactly one complete JSON object per line, include no embedded newline, and normalize `summary` to one line.
+        - **Append contract:** the canonical `intent-cli notify` surface is the only writer; callers never append by hand. The orchestrator normally writes delegate/escalate events, while a receiver's canonical report may append when its recorded recipient is external. Open with append semantics (`O_APPEND`), append exactly one complete JSON object per line, include no embedded newline, and normalize `summary` to one line.
         - **Schema:** `{"timestamp":"<RFC3339>","team":"<team>","kind":"completion|blocked|question|escalation","unit":"<execution-unit-or-task-id>","summary":"<one-line-summary>","artifact":"<repo-relative-path-or-URL>"}`. These six fields are required; `artifact` identifies the inspectable handoff or the decision input.
-        - **Writer boundary:** append only design-relevant completion, blocked, question, and escalation events. Routine progress, dispatch traffic, pane output, acknowledgements, and workflow label changes do not belong here.
+        - **Writer boundary:** append only canonical notifications addressed to a recorded external reader plus design-relevant completion, blocked, question, and escalation events. An external delegation uses `question`; an external report maps status `completed|blocked|question` to event kind `completion|blocked|question`. Routine pane-resident dispatch, progress, pane output, acknowledgements, and workflow label changes do not belong here.
 
         Reader recipes:
 
@@ -158,6 +160,9 @@ internal static class HerdrOnlyOperatingGuide
         ["dispatch"] = new JsonObject
         {
             ["command"] = "intent-cli notify delegate --domain <domain> --team <team> --from <sender-role> --to <logical-role> --report-to <orchestrator-role> --task-id <task-id> --objective <outcome> --input <reference> --expected-artifact <artifact> --result-nonce <nonce> --write --format json",
+            ["topology"] = "Read <host-repo>/.intent-cli/role-pane-mapping.json for the requested team workspace. Each role records resident: herdr plus explicit workspace/pane ids, or resident: external plus a safe routing-root-relative reader.",
+            ["deliverability"] = "Every sender, recipient, and report-to must exist in the team roster, but only the recipient must be deliverable. Herdr recipients require a running agent at the recorded pane in the exact team workspace; external recipients receive one event through the recorded reader with eventAppended: true.",
+            ["dry_run_parity"] = "Dry-run performs the same topology and recipient resolution as write and returns the same refusal cause, without prompting or appending; foreign-workspace-only agents and unsafe readers fail closed without fallback.",
             ["required_fields"] = new JsonArray("domain", "team", "from", "to", "report-to", "task-id", "objective", "inputs", "expected-artifacts", "result-prefix", "result-nonce", "completion-marker"),
             ["reporting_contract"] = "The generated payload embeds task id, expected artifact, and the complete intent-cli notify report command (including transport-neutral --routing-root for isolated child checkouts) as the receiver's required final step; never hand-write a transport call.",
             ["marker_construction"] = "Concatenate result-prefix, space, fresh-per-dispatch result-nonce, space, status, space, artifact; never embed the composed wait needle in the task block.",
@@ -199,9 +204,10 @@ internal static class HerdrOnlyOperatingGuide
             ["path"] = "<host-repo>/.intent-cli/events/<team>.jsonl",
             ["team_encoding"] = "Team name verbatim as one flat filename; no subdirectories.",
             ["validation"] = "Reject empty, leading-dot, path separators, and any '..' sequence before path construction.",
-            ["append"] = "Orchestrator-only O_APPEND writer; one object per line, no embedded newline, summary normalized to one line.",
+            ["append"] = "The canonical intent-cli notify surface is the only O_APPEND writer; callers never append by hand. Orchestration normally writes delegate/escalate, and canonical report may append for an external recipient. One object per line, no embedded newline, summary normalized to one line.",
             ["schema"] = "timestamp, team, kind, unit, summary, artifact",
             ["kinds"] = new JsonArray("completion", "blocked", "question", "escalation"),
+            ["external_delivery_kinds"] = "A delegate to a recorded external reader uses question; a report maps completed, blocked, or question status to completion, blocked, or question event kind. Pane-resident dispatch is never mirrored to the file.",
             ["watermark_invariant"] = "Every reader persists file identity, byte offset, and complete-line count durably across watcher restarts; rotation, truncation, backwards byte/line count, or file replacement fails closed and never resets to the beginning because replay can duplicate a design decision.",
             ["readers"] = new JsonObject
             {

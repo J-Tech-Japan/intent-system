@@ -9,6 +9,9 @@ internal static class NotifyCommand
     private const string OperationDelegate = "delegate";
     private const string OperationReport = "report";
     private const string OperationEscalate = "escalate";
+    private const string CompletionEventKind = "completion";
+    private const string BlockedEventKind = "blocked";
+    private const string QuestionEventKind = "question";
     private const string EscalationEventKind = "escalation";
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
@@ -34,6 +37,16 @@ internal static class NotifyCommand
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
+
+    private static readonly IReadOnlyDictionary<string, string> ReportReaderEventKinds =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["completed"] = CompletionEventKind,
+            ["blocked"] = BlockedEventKind,
+            ["question"] = QuestionEventKind,
+        };
+
+    internal static IEnumerable<string> SupportedReportStatuses => ReportReaderEventKinds.Keys;
 
     internal static Func<INotifyProcessRunner>? ProcessRunnerFactory { get; set; }
 
@@ -122,20 +135,6 @@ internal static class NotifyCommand
             ? BuildDelegatePayload(options, reportCommand!)
             : BuildReportPayload(options);
 
-        if (!options.Write)
-        {
-            Emit(writer, options.Format, SuccessResult(
-                operation,
-                options,
-                resolution,
-                delivered: false,
-                eventAppended: false,
-                payload,
-                reportCommand,
-                $"Dry-run: would deliver {operation} through {resolution.Mode}."));
-            return 0;
-        }
-
         var runner = ProcessRunnerFactory?.Invoke() ?? new NotifyProcessRunner();
         var transport = string.Equals(resolution.Mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal)
             ? (INotifyTransport)new HerdrNotifyTransport(
@@ -148,13 +147,15 @@ internal static class NotifyCommand
             ? new[] { options.FromRole!, options.ToRole!, options.ReportToRole! }
             : new[] { options.FromRole!, options.ToRole! };
         var delivery = transport.Deliver(
+            options.RoutingRoot!,
             options.Team!,
             options.FromRole!,
             options.ToRole!,
             roles,
-            payload);
+            payload,
+            options.Write);
 
-        if (!delivery.Delivered)
+        if (!delivery.Resolved)
         {
             Emit(writer, options.Format, FailureResult(
                 operation,
@@ -167,16 +168,74 @@ internal static class NotifyCommand
             return 1;
         }
 
+        var eventAppended = false;
+        if (delivery.ReaderPath is not null && options.Write)
+        {
+            try
+            {
+                NotifyEventWriter.Append(delivery.ReaderPath, BuildReaderEvent(operation, options));
+                eventAppended = true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                Emit(writer, options.Format, FailureResult(
+                    operation,
+                    options,
+                    resolution.Mode,
+                    "event-append-failed",
+                    $"Could not append notification to external role '{options.ToRole}' through recorded reader "
+                    + $"'{delivery.ReaderPath}': {exception.Message} Fix reader access and retry notify.",
+                    payload,
+                    reportCommand));
+                return 1;
+            }
+        }
+
         Emit(writer, options.Format, SuccessResult(
             operation,
             options,
             resolution,
-            delivered: true,
-            eventAppended: false,
+            delivered: delivery.Delivered || eventAppended,
+            eventAppended,
             payload,
             reportCommand,
-            delivery.Summary));
+            eventAppended
+                ? $"Delivered {operation} to external logical role '{options.ToRole}' in team '{options.Team}' "
+                  + $"through recorded reader '{delivery.ReaderPath}'."
+                : delivery.Summary,
+            eventPath: delivery.ReaderPath));
         return 0;
+    }
+
+    private static NotifyDesignEvent BuildReaderEvent(string operation, NotifyOptions options) => new()
+    {
+        Timestamp = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+        Team = options.Team!,
+        Kind = ReaderEventKind(operation, options.Status),
+        Unit = options.TaskId!,
+        Summary = NotifyEventWriter.NormalizeSummary(
+            string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+                ? options.Objective!
+                : options.Summary!),
+        Artifact = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+            ? options.Inputs.FirstOrDefault() ?? options.ExpectedArtifacts[0]
+            : options.Artifact!,
+    };
+
+    private static string ReaderEventKind(string operation, string? status)
+    {
+        if (string.Equals(operation, OperationDelegate, StringComparison.Ordinal))
+        {
+            return QuestionEventKind;
+        }
+
+        if (status is not null && ReportReaderEventKinds.TryGetValue(status, out var eventKind))
+        {
+            return eventKind;
+        }
+
+        throw new InvalidOperationException(
+            $"Report status '{status}' does not map to a documented reader-event kind.");
     }
 
     private static int ExecuteEscalation(
@@ -509,7 +568,8 @@ internal static class NotifyCommand
         else if (string.Equals(operation, OperationReport, StringComparison.Ordinal))
         {
             if (!IsSafeIdentity(options.ToRole)
-                || options.Status is not ("completed" or "blocked" or "question")
+                || options.Status is null
+                || !ReportReaderEventKinds.ContainsKey(options.Status)
                 || string.IsNullOrWhiteSpace(options.Artifact)
                 || string.IsNullOrWhiteSpace(options.Summary))
             {

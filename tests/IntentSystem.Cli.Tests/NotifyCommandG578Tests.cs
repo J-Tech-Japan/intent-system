@@ -57,7 +57,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
         var delivery = Assert.Single(runner.Calls, call =>
             mode == SessionLayerMode.Agmsg
                 ? call.Arguments.Any(argument => argument.EndsWith("send.sh", StringComparison.Ordinal))
-                : call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "implementation"]));
+                : call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wH:p2"]));
         Assert.Equal(payload, delivery.Arguments[^1]);
     }
 
@@ -74,6 +74,27 @@ public sealed class NotifyCommandG578Tests : IDisposable
         Assert.Equal("default", result.GetProperty("mode_source").GetString());
         Assert.Contains(runner.Calls, call => call.Arguments.Any(argument =>
             argument.EndsWith("send.sh", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void AgmsgDryRun_ResolvesItsTeamRosterWithoutSendingOrStartingHerdr_G588()
+    {
+        var runner = SuccessfulRunner();
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        var args = DelegateArgs();
+        args[^3] = "--dry-run";
+
+        var (exitCode, result) = workspace.Run(args);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(SessionLayerMode.Agmsg, result.GetProperty("mode").GetString());
+        Assert.False(result.GetProperty("delivered").GetBoolean());
+        Assert.Contains(runner.Calls, call =>
+            call.Arguments.Any(argument => argument.EndsWith("team.sh", StringComparison.Ordinal)));
+        Assert.DoesNotContain(runner.Calls, call =>
+            call.Arguments.Any(argument => argument.EndsWith("send.sh", StringComparison.Ordinal))
+            || call.Arguments.Take(2).SequenceEqual(["agent", "list"])
+            || call.Arguments.Take(2).SequenceEqual(["agent", "prompt"]));
     }
 
     [Theory]
@@ -205,7 +226,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
             Assert.Equal(SessionLayerMode.HerdrOnly, result.RootElement.GetProperty("mode").GetString());
             Assert.Equal(workspace.RootPath, result.RootElement.GetProperty("routing_root").GetString());
             Assert.Contains(runner.Calls, call =>
-                call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "orchestration"]));
+                call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wH:p1"]));
         }
         finally
         {
@@ -366,6 +387,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
     private static object HerdrAgent(string name, string? paneId, bool running) => new
     {
         name,
+        workspace_id = "wH",
         pane_id = paneId,
         agent = running ? "codex" : null,
         agent_session = running ? new { id = name } : null,
@@ -403,6 +425,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
         {
             RootPath = Directory.CreateTempSubdirectory("notify-g578-").FullName;
             Directory.CreateDirectory(Path.Combine(RootPath, ".intent-cli"));
+            WriteTopology();
             AgmsgScriptsPath = Path.Combine(RootPath, "agmsg-scripts");
             Directory.CreateDirectory(AgmsgScriptsPath);
             File.WriteAllText(Path.Combine(AgmsgScriptsPath, "team.sh"), "fixture");
@@ -427,6 +450,45 @@ public sealed class NotifyCommandG578Tests : IDisposable
         public string AgmsgScriptsPath { get; }
         public string EventPath => Path.Combine(RootPath, ".intent-cli", "events", $"{Team}.jsonl");
         public CliContext Context { get; }
+
+        private void WriteTopology()
+        {
+            var topology = new
+            {
+                team = Team,
+                workspace_id = "wH",
+                roles = new Dictionary<string, object>
+                {
+                    ["design"] = new
+                    {
+                        resident = "external",
+                        frontend = "claude-app",
+                        reader = $".intent-cli/events/{Team}.jsonl",
+                    },
+                    ["orchestration"] = new
+                    {
+                        resident = "herdr",
+                        workspace_id = "wH",
+                        pane_id = "wH:p1",
+                    },
+                    ["implementation"] = new
+                    {
+                        resident = "herdr",
+                        workspace_id = "wH",
+                        pane_id = "wH:p2",
+                    },
+                    ["review"] = new
+                    {
+                        resident = "herdr",
+                        workspace_id = "wH",
+                        pane_id = "wH:p3",
+                    },
+                },
+            };
+            File.WriteAllText(
+                Path.Combine(RootPath, NotifyRoleTopologyStore.RelativePath.Replace('/', Path.DirectorySeparatorChar)),
+                JsonSerializer.Serialize(topology));
+        }
 
         public void SetMode(string mode)
         {
