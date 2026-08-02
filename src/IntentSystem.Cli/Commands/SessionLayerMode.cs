@@ -74,7 +74,89 @@ internal sealed record SessionLayerModeResolution
     /// <summary>The recorded entry this resolved to, when one exists.</summary>
     public SessionLayerModeEntry? Entry { get; init; }
 
+    /// <summary>
+    /// Team-scoped entries in the requested domain when the caller omitted a
+    /// team. They do not change resolution: they are disclosure evidence for
+    /// surfaces that would otherwise make those records disappear silently.
+    /// </summary>
+    public IReadOnlyList<SessionLayerModeEntry> TeamScopedEntriesInDomain { get; init; } = [];
+
     public bool IsHerdrOnly => string.Equals(Mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal);
+}
+
+internal sealed record SessionLayerTeamCorrection
+{
+    [JsonPropertyName("team")]
+    public required string Team { get; init; }
+
+    [JsonPropertyName("mode")]
+    public required string Mode { get; init; }
+
+    [JsonPropertyName("command")]
+    public required string Command { get; init; }
+}
+
+/// <summary>
+/// G585: the structured disclosure emitted when team-scoped records exist but
+/// a mode-reading caller omitted --team. Resolution remains deterministic; the
+/// disclosure makes its scope and the one-step correction impossible to miss.
+/// </summary>
+internal sealed record SessionLayerTeamOmissionDisclosure
+{
+    public const string MarkdownHeading = "TEAM NOT SUPPLIED — ROUTING DISCLOSURE";
+
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("mode_in_force")]
+    public required string ModeInForce { get; init; }
+
+    [JsonPropertyName("source")]
+    public required string Source { get; init; }
+
+    [JsonPropertyName("corrective_commands")]
+    public required IReadOnlyList<SessionLayerTeamCorrection> CorrectiveCommands { get; init; }
+
+    public static SessionLayerTeamOmissionDisclosure? Create(
+        SessionLayerModeResolution resolution,
+        string domain,
+        Func<SessionLayerModeEntry, string> correctiveCommand)
+    {
+        ArgumentNullException.ThrowIfNull(resolution);
+        ArgumentException.ThrowIfNullOrWhiteSpace(domain);
+        ArgumentNullException.ThrowIfNull(correctiveCommand);
+
+        if (resolution.TeamScopedEntriesInDomain.Count == 0)
+        {
+            return null;
+        }
+
+        var corrections = resolution.TeamScopedEntriesInDomain
+            .Select(entry => new SessionLayerTeamCorrection
+            {
+                Team = entry.Team!,
+                Mode = entry.Mode,
+                Command = correctiveCommand(entry),
+            })
+            .ToArray();
+        var recordedTeams = string.Join(
+            ", ",
+            corrections.Select(correction =>
+                $"`{correction.Team}` = {SessionLayerMode.Describe(correction.Mode)}"));
+        var source = resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default";
+
+        return new SessionLayerTeamOmissionDisclosure
+        {
+            Summary =
+                $"`--team` was not supplied. This invocation therefore uses "
+                + $"{SessionLayerMode.Describe(resolution.Mode)} ({source}). Team-scoped session-layer records also "
+                + $"exist in domain `{domain}`: {recordedTeams}. Run the command for the intended team below to "
+                + "correct this invocation in one step.",
+            ModeInForce = resolution.Mode,
+            Source = source,
+            CorrectiveCommands = corrections,
+        };
+    }
 }
 
 internal sealed record SessionLayerModeTransition
@@ -351,6 +433,15 @@ internal static class SessionLayerModeStore
             return new SessionLayerModeResolution { Mode = SessionLayerMode.Default, Source = SessionLayerModeSource.Default };
         }
 
+        var teamScopedEntriesInDomain = team is null
+            ? state.Entries
+                .Where(entry =>
+                    string.Equals(entry.Domain, domain, StringComparison.Ordinal)
+                    && entry.Team is not null)
+                .OrderBy(entry => entry.Team, StringComparer.Ordinal)
+                .ToArray()
+            : [];
+
         var teamScoped = team is null
             ? null
             : state.Entries.FirstOrDefault(entry =>
@@ -362,12 +453,18 @@ internal static class SessionLayerModeStore
 
         var match = teamScoped ?? domainWide;
         return match is null
-            ? new SessionLayerModeResolution { Mode = SessionLayerMode.Default, Source = SessionLayerModeSource.Default }
+            ? new SessionLayerModeResolution
+            {
+                Mode = SessionLayerMode.Default,
+                Source = SessionLayerModeSource.Default,
+                TeamScopedEntriesInDomain = teamScopedEntriesInDomain,
+            }
             : new SessionLayerModeResolution
             {
                 Mode = match.Mode,
                 Source = SessionLayerModeSource.Recorded,
                 Entry = match,
+                TeamScopedEntriesInDomain = teamScopedEntriesInDomain,
             };
     }
 
