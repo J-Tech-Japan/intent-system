@@ -37,9 +37,9 @@ internal static class SessionLayerSections
 
         /// <summary>
         /// G570 fourth repair: the ruling's fourth value, previously missing.
-        /// Content that exists only under herdr-only — today the synthetic
-        /// switch-checklist section and its JSON replacement metadata, which
-        /// have no agmsg counterpart and are produced by the routing itself.
+        /// Content that exists only under herdr-only — the synthetic G571
+        /// operating sections and their JSON representation, which have no
+        /// agmsg counterpart and are produced by the routing itself.
         /// </summary>
         HerdrOnly,
     }
@@ -124,6 +124,9 @@ internal static class SessionLayerSections
         new(ReplacementHeadingValue, "herdr_only_replaced_sections", Applicability.HerdrOnly),
         new("(json) herdr-only replacement note", "herdr_only_replacement_note", Applicability.HerdrOnly),
         new("(json) herdr-only descriptive context", "herdr_only_descriptive_agmsg_context", Applicability.HerdrOnly),
+        new("(json) herdr-only operations", HerdrOnlyOperatingGuide.JsonProperty, Applicability.HerdrOnly),
+        ..HerdrOnlyOperatingGuide.Headings.Select(heading =>
+            new SectionDeclaration(heading, null, Applicability.HerdrOnly)),
 
         // mode-independent — unchanged in both.
         new("## Session layer", "session_layer", Applicability.ModeIndependent),
@@ -275,8 +278,8 @@ internal static class SessionLayerSections
 
     public const string DescriptiveAgmsgContextSuffix =
         " — which explains the model using the agmsg transport because that is the practiced one. In herdr-only the "
-        + "rule it states still binds; the agmsg mechanics it names are illustration, and the herdr-only operating "
-        + "steps ship in G571. Every other sentence here is an instruction that applies unchanged.";
+        + "rule it states still binds; the agmsg mechanics it names are illustration. Follow the concrete herdr-only "
+        + "operating sections in this guide. Every other sentence here is an instruction that applies unchanged.";
 
     /// <summary>
     /// Names the table a deferred label's sentence lives in, so a reader who
@@ -331,7 +334,7 @@ internal static class SessionLayerSections
 
     public const string MechanicPointer =
         "(herdr-only: the session-layer step described here is agmsg-specific and does not apply; its herdr-only "
-        + "counterpart ships in G571. The rule stated by this section still binds.)";
+        + "counterpart is in the herdr-only operating sections above. The rule stated by this section still binds.)";
 
     private const string ReplacementHeadingValue = "## Session-layer switch checklist (herdr-only)";
 
@@ -353,32 +356,5 @@ internal static class SessionLayerSections
         Declarations.Single(d => d.Heading == "(json) herdr-only descriptive context").JsonProperty!;
 
     public static string ReplacementSection(IReadOnlyList<string> replacedHeadings)
-    {
-        var lines = new List<string>
-        {
-            ReplacementHeading,
-            string.Empty,
-            "This team runs the **herdr-only** session layer, so the agmsg-only sections of this guide do not apply "
-            + "and are not rendered. Their herdr-only counterparts — provisioning, dispatch and task format, the "
-            + "events channel, and the switch checklists — ship in **G571**.",
-            string.Empty,
-            "Replaced here (agmsg-only):",
-            string.Empty,
-        };
-
-        foreach (var heading in replacedHeadings)
-        {
-            lines.Add($"- `{heading.TrimStart('#', ' ')}`");
-        }
-
-        lines.Add(string.Empty);
-        lines.Add(
-            "Everything else in this document is mode-independent and applies unchanged: supervision, isolation, "
-            + "liveness, the wake contract, publish authority, the design↔orchestrator double-check rule, dependency "
-            + "planning, and escalation are properties of the four-thread model, and the model does not change with "
-            + "the transport.");
-        lines.Add(string.Empty);
-
-        return string.Join('\n', lines);
-    }
+        => HerdrOnlyOperatingGuide.RenderMarkdown(replacedHeadings);
 }

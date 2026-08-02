@@ -176,9 +176,7 @@ internal static class SessionLayerFragments
             Descriptive("A herdr-only request made at first setup is honoured from then on; the choice is reversible in both directions.")),
         Fragment(
             S0,
-            Descriptive("- setup-ready (herdr-only) — the registration, delivery-configuration and role-prompt steps of this intake are agmsg-only and do not apply."),
-            Scaffold(" "),
-            Descriptive("Their herdr-only counterparts ship in G571.")),
+            Descriptive("- setup-ready (herdr-only) — concrete provisioning, logical-role→pane mapping, typed launch, and G556 READY procedures are present in the herdr-only operating sections.")),
         Fragment(
             S0,
             Descriptive("PRIMARY four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / implementation / review coordinate over the session layer this team runs — herdr-only here."),
@@ -187,7 +185,7 @@ internal static class SessionLayerFragments
             Scaffold(" "),
             Descriptive("Timer-loop mode remains fully supported as the simpler ALTERNATIVE for setups without an orchestrator thread (see Mode separation)."),
             Scaffold(" "),
-            Descriptive("The herdr-only operating steps ship in G571.")),
+            Descriptive("The concrete herdr-only operating sections below cover provisioning, dispatch, bounded completion detection, the events boundary, recovery, and both switches.")),
         Fragment(S0, Operative("- missing-inputs — supply the 4 missing field(s) below to get a setup-ready plan.")),
         Fragment(S0, Descriptive("- **status: `missing-inputs`**")),
         Fragment(S0, Operative("- missing-inputs — supply the 6 missing field(s) below to get a setup-ready plan.")),
@@ -1040,12 +1038,10 @@ internal static class SessionLayerFragments
             Scaffold(" "),
             Descriptive("Timer-loop mode remains fully supported as the simpler ALTERNATIVE for setups without an orchestrator thread (see Mode separation)."),
             Scaffold(" "),
-            Descriptive("The herdr-only operating steps ship in G571.")),
+            Descriptive("The concrete herdr-only operating sections below cover provisioning, dispatch, bounded completion detection, the events boundary, recovery, and both switches.")),
         Fragment(
             "setup_intake",
-            Descriptive("setup-ready (herdr-only) — the registration, delivery-configuration and role-prompt steps of this intake are agmsg-only and do not apply."),
-            Scaffold(" "),
-            Descriptive("Their herdr-only counterparts ship in G571.")),
+            Descriptive("setup-ready (herdr-only) — concrete provisioning, logical-role→pane mapping, typed launch, and G556 READY procedures are present in the herdr-only operating sections.")),
         Fragment("setup_intake", Operative("missing-inputs — supply the 4 missing field(s) below to get a setup-ready plan.")),
         Fragment(
             "summary",

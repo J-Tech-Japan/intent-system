@@ -200,6 +200,125 @@ provided the same rules hold: one dedicated folder per role as the pane cwd,
 shim-safe typed launch, attended first-run prompts, actas + readiness before the
 ping test, and one holder per role with a graceful drop on handover.
 
+## Herdr-only (PREVIEW) operating procedure
+
+This section is operative only when the team has recorded `herdr-only`. It is
+the concrete counterpart to the agmsg provisioning/receiver sections. PREVIEW
+qualifies the transport, not the four-thread model. Exactly one transport runs
+per team; mixed agmsg and herdr delivery is a contract violation.
+
+### Provision and prove READY
+
+Create the team workspace and role tabs/panes with the role cwd (`<host-repo>`
+for design/orchestrator, the child checkout for implementation, and an isolated
+review cwd/worktree). Use `herdr workspace create`, `herdr tab create`, or
+`herdr pane split` as shown by the installed `herdr ... --help`. Record an
+operator-visible logical-role→pane-id/cwd mapping and resolve it before every
+operation; workflows never hard-code pane ids. An external design frontend is
+recorded as a reader type rather than fabricated as a pane.
+
+Launch with the typed surface:
+
+```text
+herdr agent start <logical-role> --kind <agent-kind> --pane <pane-id> -- <operator-approved-permission-flags>
+```
+
+Permission flags belong to the launch, not injected modifier chords. Approvals
+are never auto-answered; G550's MAY/escalate boundary still governs. Approvals
+are pane-visible and handled at the supervision boundary, explicitly unlike the
+agmsg Codex bridge's headless auto-decline. A role is READY only after the
+self-contained G556 verified-liveness gate: after the startup report, wait a
+settle delay, then re-check the expected cwd/repo and agent kind, same-pane
+detection, and a bounded probe whose response is observed. Repeat the entire
+settle-and-re-check sequence after re-provisioning. Workspace existence, a shell
+prompt, or agent state alone is not READY. In herdr-only the verified
+logical-role→pane mapping is the role identity; there is no separate agmsg
+identity step.
+
+### Dispatch, wait, and verify the artifact
+
+Send one structured block with `herdr agent prompt <logical-role> <task-block>`:
+
+```text
+TASK <task-id>
+role: <logical-role>
+objective: <one bounded outcome>
+inputs:
+  - <canonical issue/PR/path/reference>
+expected-artifacts:
+  - <file, commit, PR, report, or other inspectable artifact>
+completion-marker: Print exactly `ORCH_RESULT <task-id> <status> <artifact>` when ready; status is completed, blocked, or question.
+```
+
+Files, commits, PRs, and verification logs are the handoff; screen prose only
+points to them. Repairs return to the same logical role with the task id and
+concrete delta after resolving its current pane.
+
+Every wait is bounded:
+
+```text
+herdr agent wait <logical-role> --until done --until blocked --timeout <milliseconds>
+herdr pane wait-output --match "ORCH_RESULT <task-id>" --source recent-unwrapped --timeout <milliseconds> <pane-id>
+```
+
+A timeout is a re-entry point: inspect and persist progress, return control,
+then resume on a later wake. Deterministic scripts with persisted cursors are
+preferred for long flows. Composite success requires settled state + the exact
+task marker + an existing verified artifact. herdr `done`/`idle` alone never
+means success.
+
+### Normative `events.jsonl` design boundary
+
+Resolve the host root at runtime and use
+`<host-repo>/.intent-cli/events/<team>.jsonl`. `<team>` is the agmsg/herdr team
+name verbatim in one flat filename (`intent-cli-dev.jsonl`, for example); no
+team subdirectories and no hard-coded absolute paths. Before constructing the
+path, fail closed on an empty name, a leading dot, `/` or `\`, or any `..`
+sequence. Never sanitize an invalid name.
+
+The orchestrator is the only writer. Open with `O_APPEND`, append one complete
+JSON object per line, permit no embedded newline, and normalize `summary` to one
+line. The required schema is:
+
+```json
+{"timestamp":"<RFC3339>","team":"<team>","kind":"completion|blocked|question|escalation","unit":"<execution-unit-or-task-id>","summary":"<one-line-summary>","artifact":"<repo-relative-path-or-URL>"}
+```
+
+Write only design-relevant completion, blocked, question, and escalation
+events. This mode-independent channel is the design boundary only—never an
+inter-agent bus and never a replacement for herdr dispatch, GitHub, or
+intent-cli workflow state.
+
+- Claude app watcher: tail complete unseen lines from the resolved path and
+  retain its offset across restarts.
+- Codex CLI in a herdr pane: prompt the role directly; do not poll this file for
+  ordinary coordination.
+- Codex Desktop: poll at a one-minute-class cadence, consume only complete lines
+  after a durable byte-offset watermark, and advance after successful handling.
+  Truncation or malformed JSON fails closed and requires operator recovery.
+
+### Recovery and mode switches
+
+- Modifier-chord launch corruption: return to a shell/re-provision and use the
+  typed `agent start ... -- <permission-flags>` surface.
+- Post-reboot dead pty wiring: an undetected agent or shell-only pane requires
+  preserving artifacts, re-provisioning, rebuilding the mapping, and repeating
+  the self-contained settle-and-re-check READY gate above.
+- Long-wait turn death: use bounded waits, re-entry, and deterministic persisted
+  loops.
+
+For **agmsg → herdr-only**: drain/park work; gracefully drop roles and stop
+watchers/bridges; provision herdr, its mapping, and the validated events path;
+pass G556 and marker/artifact detection; finally run `intent-cli session-layer
+set --domain <domain> --team <team> --mode herdr-only --write`.
+
+For **herdr-only → agmsg**: drain/park work and append any final design event;
+stop or retain/close the workspace according to operator policy so it cannot
+keep delivering; provision agmsg roles and approved watcher/bridge; pass G556
+and end-to-end delivery; finally run `intent-cli session-layer set --domain
+<domain> --team <team> --mode agmsg --write`. The mode flip is the final
+canonical step in both directions.
+
 ## Design-thread workspace supervision (keeping the team moving)
 
 Provisioning builds the team; **supervision keeps it moving** — and that half is

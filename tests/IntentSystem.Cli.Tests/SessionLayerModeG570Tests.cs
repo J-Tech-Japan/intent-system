@@ -245,6 +245,15 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         // session-layer metadata, and fragment typing is what keeps descriptive
         // identities from being flagged.
         var body = WithoutSessionLayerExemptions(workspace.RenderOrchestratorGuide());
+        if (instruction.Equals("Codex bridge", StringComparison.OrdinalIgnoreCase))
+        {
+            // G571 requires this one non-operative contrast while preserving
+            // the G570 ban on every actual bridge instruction.
+            body = body.Replace(
+                "agmsg Codex bridge's headless auto-decline",
+                string.Empty,
+                StringComparison.OrdinalIgnoreCase);
+        }
 
         Assert.DoesNotContain(instruction, body, StringComparison.OrdinalIgnoreCase);
     }
@@ -268,7 +277,16 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             CollectStringValues(property.Value, path: property.Name, values);
         }
 
-        Assert.DoesNotContain(instruction, string.Join("\n", values), StringComparison.OrdinalIgnoreCase);
+        var body = string.Join("\n", values);
+        if (instruction.Equals("Codex bridge", StringComparison.OrdinalIgnoreCase))
+        {
+            body = body.Replace(
+                "agmsg Codex bridge's headless auto-decline",
+                string.Empty,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.DoesNotContain(instruction, body, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
