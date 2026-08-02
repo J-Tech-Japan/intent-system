@@ -78,7 +78,8 @@ The CLI is packaged as a .NET tool (package id `JTechJapan.IntentSystem.Cli`,
 command `intent-cli`). To smoke-test a locally built package:
 
 ```bash
-export INTENT_CLI_LOCAL_VERSION="0.3.2-local.$(date -u +%Y%m%d%H%M%S)"
+INTENT_CLI_BASE_VERSION="$(sed -n 's/^[[:space:]]*"nextVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' eng/version.json)"
+export INTENT_CLI_LOCAL_VERSION="$INTENT_CLI_BASE_VERSION-local.$(date -u +%Y%m%d%H%M%S)"
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj \
   -p:Version="$INTENT_CLI_LOCAL_VERSION" \
   -o .artifacts/packages
@@ -96,6 +97,33 @@ Equivalent `dnx` path:
 ```bash
 (cd .artifacts/smoke-repo && dnx --yes --source ../packages --version "$INTENT_CLI_LOCAL_VERSION" JTechJapan.IntentSystem.Cli project status)
 ```
+
+### Refresh the host-local wrapper safely
+
+Use the repository helper when the host-local orchestration CLI must track this
+checkout:
+
+```bash
+eng/refresh-host-local-intent-cli.sh /path/to/host-repo
+```
+
+The helper derives the local version base from `eng/version.json`
+`nextVersion` and reads the package id from the CLI project. It packs a unique
+candidate without deleting the package used by the installed wrapper, then
+runs the candidate wrapper from its `.tmp` path to verify:
+
+1. `--version` reports the derived local version;
+2. `automation summary --format json` emits
+   `automationCommandSurfaceVersion`; and
+3. every required automation capability is present.
+
+Only after all checks pass does one same-filesystem rename promote the
+candidate over `.intent-cli/bin/intent-cli`. A failed check names the check and
+a remedy, exits non-zero, removes the candidate package and `.tmp` wrapper, and
+leaves the previously installed wrapper byte-identical and runnable. The
+`HOST_ROOT`, `CHILD_INTENT_SYSTEM`, and `INTENT_CLI_LOCAL_VERSION` overrides
+remain available; an override may not reuse the fixed version derived from
+`nextVersion`.
 
 ---
 

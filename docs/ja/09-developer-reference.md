@@ -78,7 +78,8 @@ CLI は .NET ツールとしてパッケージ化されています（パッケ�
 コマンド `intent-cli`）。ローカルビルドパッケージのスモークテスト:
 
 ```bash
-export INTENT_CLI_LOCAL_VERSION="0.3.2-local.$(date -u +%Y%m%d%H%M%S)"
+INTENT_CLI_BASE_VERSION="$(sed -n 's/^[[:space:]]*"nextVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' eng/version.json)"
+export INTENT_CLI_LOCAL_VERSION="$INTENT_CLI_BASE_VERSION-local.$(date -u +%Y%m%d%H%M%S)"
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj \
   -p:Version="$INTENT_CLI_LOCAL_VERSION" \
   -o .artifacts/packages
@@ -96,6 +97,29 @@ EOF
 ```bash
 (cd .artifacts/smoke-repo && dnx --yes --source ../packages --version "$INTENT_CLI_LOCAL_VERSION" JTechJapan.IntentSystem.Cli project status)
 ```
+
+### host-local wrapper の安全な refresh
+
+host-local orchestration CLI をこの checkout に追従させる場合は repository helper を使います:
+
+```bash
+eng/refresh-host-local-intent-cli.sh /path/to/host-repo
+```
+
+helper は local version の base を `eng/version.json` の `nextVersion` から導出し、package id を
+CLI project から読み取ります。installed wrapper が使う package は削除せず、一意な candidate を
+pack してから `.tmp` path の candidate wrapper で次を検証します。
+
+1. `--version` が導出した local version を報告する;
+2. `automation summary --format json` が `automationCommandSurfaceVersion` を出力する; および
+3. required automation capability がすべて存在する。
+
+すべての check が通った後に限り、同一 filesystem 上の 1 回の rename で candidate を
+`.intent-cli/bin/intent-cli` へ promote します。check が失敗すると、失敗した check と remedy を
+明示して non-zero で終了し、candidate package と `.tmp` wrapper を削除します。以前の installed
+wrapper は byte-identical かつ runnable なままです。`HOST_ROOT`、`CHILD_INTENT_SYSTEM`、
+`INTENT_CLI_LOCAL_VERSION` override は引き続き利用できますが、override は `nextVersion` から
+導出した fixed version を再利用できません。
 
 ---
 
