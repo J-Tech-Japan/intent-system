@@ -2,6 +2,7 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 
@@ -677,8 +678,9 @@ public sealed class AutomationIssueRetireCommandTests : IDisposable
     public void Execute_Write_QueueStateWriteFails_RecoversOnRetryWithoutReClosing()
     {
         // Fault injected AFTER close + label removal succeed, around queue
-        // persistence: make the pre-existing queue-state.json read-only so
-        // the overwrite throws, then retry after restoring write access.
+        // persistence: interrupt the atomic writer after its temporary file
+        // is flushed but before the overwrite-move, then retry without the
+        // fault.
         using var workspace = new RetireWorkspace();
         workspace.WriteQueueState(BuildQueueStateJson("G600", QueueItemState.Queued, Repo, linkedIssueNumber: 2001));
         var queueStatePath = workspace.Context.GetQueueStatePath();
@@ -688,32 +690,24 @@ public sealed class AutomationIssueRetireCommandTests : IDisposable
         retirementMutator.Snapshots[2001] = OpenSnapshot(2001, "G600: Some slice", "intent-target");
         AutomationIssueRetireCommand.RetirementMutatorFactory = () => retirementMutator;
 
-        if (!OperatingSystem.IsWindows())
+        int firstExitCode;
+        using (AtomicFileWriter.RegisterBeforeMoveHook(
+            queueStatePath,
+            _ => throw new IOException("simulated queue-state publication failure")))
         {
-            File.SetUnixFileMode(queueStatePath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
-        }
+            using var firstWriter = new StringWriter();
+            firstExitCode = AutomationIssueRetireCommand.Execute(
+                workspace.Context,
+                ["--repo", Repo, "--issue", "2001", "--reason", "superseded", "--domain", "intent-cli", "--write", "--format", "json"],
+                firstWriter);
 
-        using var firstWriter = new StringWriter();
-        var firstExitCode = AutomationIssueRetireCommand.Execute(
-            workspace.Context,
-            ["--repo", Repo, "--issue", "2001", "--reason", "superseded", "--domain", "intent-cli", "--write", "--format", "json"],
-            firstWriter);
-
-        if (OperatingSystem.IsWindows())
-        {
-            // Read-only fault injection is unix-permission-specific; skip
-            // the assertions that depend on the write actually failing.
-            return;
+            Assert.Contains("queue-state update failed", firstWriter.ToString(), StringComparison.Ordinal);
         }
 
         Assert.Equal(1, firstExitCode);
-        Assert.Contains("queue-state update failed", firstWriter.ToString(), StringComparison.Ordinal);
         Assert.Single(retirementMutator.Closed);
         Assert.Single(labelMutator.Transitions);
 
-        File.SetUnixFileMode(
-            queueStatePath,
-            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
         retirementMutator.Snapshots[2001] = ClosedNotPlannedSnapshot(
             2001, "G600: Some slice", Array.Empty<string>(), new[] { retirementMutator.Closed[0].Comment });
 
