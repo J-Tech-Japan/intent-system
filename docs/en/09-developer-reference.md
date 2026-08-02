@@ -715,6 +715,29 @@ a prose reader never disagree about what applies.
   either string. Two sibling declarations modelled the titles as unrelated
   surfaces, so either could be reworded alone with every guard still green.
 
+  Declaring a fragment is not the same as typing it correctly. A first pass
+  assigned the types BY CONSTRUCTION — anything naming no transport mechanic
+  became `canon-descriptive` — which produced 454 descriptive declarations
+  against 14 mode-independent-operative ones and filed binding duties ("READ the
+  pane first", "never delete another team's workspace", "every label transition
+  goes through intent-cli") as prose. Every non-structural fragment is now
+  adjudicated on its own terms: a duty that binds regardless of transport is
+  `mode-independent-operative`, and only mechanism, history, and substrate
+  identity are `canon-descriptive`.
+
+  A fragment whose text mixes an independently applicable descriptive clause
+  with an operative one is declared as separately typed CLAUSES that concatenate
+  back to it exactly — the isolation table's rows carry a substrate identity and
+  a binding ownership rule in one line, and a single type for the row either
+  files the rule as prose or strips the identity.
+
+  The agmsg-example label is scoped to the descriptive FRAGMENT it qualifies,
+  one for one, in markdown and JSON alike. Declaring a whole mixed section or
+  property "descriptive, not an instruction" told the reader — and a JSON
+  consumer — that the binding duties inside it were illustration. A run banner
+  was tried and is also wrong: descriptive illustration and duties interleave,
+  so a banner still visually spans the instruction after it.
+
 Pointer-only text is G570 routing metadata: it says what does not apply and
 where the counterpart ships. It never says what to run instead, because a
 concrete herdr procedure is G571 content and is forbidden here.

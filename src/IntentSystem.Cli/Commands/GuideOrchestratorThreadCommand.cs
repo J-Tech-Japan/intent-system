@@ -234,16 +234,17 @@ internal static class GuideOrchestratorThreadCommand
                 continue;
             }
 
-            // Descriptive agmsg content is labelled as such, in place, so a
-            // reader distinguishes illustration from instruction at the point
-            // of reading rather than by inference.
-            if (!inFencedBlock
-                && line.StartsWith("## ", StringComparison.Ordinal)
-                && SessionLayerSections.DescriptiveAgmsgContextHeadings.Contains(line, StringComparer.Ordinal))
+            // G570 eighth repair: the label is scoped to DESCRIPTIVE fragments,
+            // not to the section. Declaring a whole mixed section "descriptive,
+            // not an instruction" told the reader that the binding cross-mode
+            // duties inside it — read the pane first, verify before answering,
+            // never delete another team's artifacts — were illustration. The
+            // banner is emitted before a RUN of descriptive fragments and never
+            // before an operative one, so an operative fragment is never covered
+            // by it.
+            if (!inFencedBlock && line.StartsWith("## ", StringComparison.Ordinal))
             {
                 kept.Add(line);
-                kept.Add(string.Empty);
-                kept.Add(SessionLayerSections.DescriptiveAgmsgContextLabel);
                 continue;
             }
 
@@ -260,17 +261,31 @@ internal static class GuideOrchestratorThreadCommand
             // G570 seventh repair: the type comes from the hand-authored
             // declaration table, not from a cue heuristic, and an undeclared
             // fragment throws rather than defaulting to "keep".
-            if (currentMixedHeading is not null
-                && SessionLayerFragments.TypeOf(values, currentMixedHeading, line)
-                    == SessionLayerSections.FragmentType.TransportOperative)
+            if (currentMixedHeading is not null)
             {
-                var pointerLine = PointerFor(line);
-                if (kept.Count == 0 || !string.Equals(kept[^1], pointerLine, StringComparison.Ordinal))
+                var type = SessionLayerFragments.TypeOf(values, currentMixedHeading, line);
+                if (type == SessionLayerSections.FragmentType.TransportOperative)
                 {
-                    kept.Add(pointerLine);
+                    var pointerLine = PointerFor(line);
+                    if (kept.Count == 0 || !string.Equals(kept[^1], pointerLine, StringComparison.Ordinal))
+                    {
+                        kept.Add(pointerLine);
+                    }
+
+                    continue;
                 }
 
-                continue;
+                // The label is attached to the fragment it qualifies, one for
+                // one. A run banner was tried first and is wrong: descriptive
+                // illustration and binding duties interleave, so a banner still
+                // visually spans the instruction that follows it, which is the
+                // same false cue at smaller scale.
+                if (type == SessionLayerSections.FragmentType.CanonDescriptive
+                    && SessionLayerFragments.CarriesAgmsgIllustration(values, currentMixedHeading, line))
+                {
+                    kept.Add(SessionLayerSections.DescriptiveAgmsgContextLabel);
+                    kept.Add(string.Empty);
+                }
             }
 
             kept.Add(line);
@@ -378,13 +393,39 @@ internal static class GuideOrchestratorThreadCommand
         // G570 fourth repair: the explicit descriptive-agmsg context exists in
         // BOTH renderers now. A field consumer previously had no way to tell a
         // retained description from an instruction.
+        //
+        // G570 eighth repair: the context now names the descriptive VALUES it
+        // covers instead of declaring a whole property "not an instruction".
+        // Marking a mixed property wholesale told a consumer that the binding
+        // duties inside it were illustration — the same over-reach the markdown
+        // banner made, in a form a machine reads.
         var descriptiveContext = new System.Text.Json.Nodes.JsonObject();
-        foreach (var property in SessionLayerSections.DescriptiveAgmsgContextJsonProperties)
+        foreach (var property in SessionLayerSections.MixedJsonProperties)
         {
-            if (node.ContainsKey(property))
+            if (!node.TryGetPropertyValue(property, out var rendered) || rendered is null)
             {
-                descriptiveContext[property] = SessionLayerSections.DescriptiveAgmsgContextLabel;
+                continue;
             }
+
+            var illustrations = new System.Text.Json.Nodes.JsonArray();
+            foreach (var text in CollectStrings(rendered))
+            {
+                if (SessionLayerFragments.JsonCarriesAgmsgIllustration(values, property, text))
+                {
+                    illustrations.Add(System.Text.Json.Nodes.JsonValue.Create(text));
+                }
+            }
+
+            if (illustrations.Count == 0)
+            {
+                continue;
+            }
+
+            descriptiveContext[property] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["note"] = SessionLayerSections.DescriptiveAgmsgContextLabel,
+                ["descriptive_values"] = illustrations,
+            };
         }
 
         node[SessionLayerSections.DescriptiveContextProperty] = descriptiveContext;
@@ -395,6 +436,43 @@ internal static class GuideOrchestratorThreadCommand
             + "herdr-only counterparts ship in G571. Every remaining field is mode-independent and applies unchanged.";
 
         return node.ToJsonString(JsonOptions);
+    }
+
+    /// <summary>
+    /// Every string value under a node, so the descriptive context can name the
+    /// exact values it covers rather than the property that holds them.
+    /// </summary>
+    private static IEnumerable<string> CollectStrings(System.Text.Json.Nodes.JsonNode? node)
+    {
+        switch (node)
+        {
+            case System.Text.Json.Nodes.JsonObject mapping:
+                foreach (var entry in mapping)
+                {
+                    if (!entry.Key.StartsWith("session_layer", StringComparison.Ordinal))
+                    {
+                        foreach (var text in CollectStrings(entry.Value))
+                        {
+                            yield return text;
+                        }
+                    }
+                }
+
+                break;
+            case System.Text.Json.Nodes.JsonArray array:
+                foreach (var item in array)
+                {
+                    foreach (var text in CollectStrings(item))
+                    {
+                        yield return text;
+                    }
+                }
+
+                break;
+            case System.Text.Json.Nodes.JsonValue value when value.TryGetValue<string>(out var text):
+                yield return text;
+                break;
+        }
     }
 
     /// <summary>

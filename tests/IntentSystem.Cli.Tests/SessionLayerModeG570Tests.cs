@@ -452,11 +452,36 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         var output = workspace.RenderOrchestratorGuide();
 
         Assert.Contains(SessionLayerSections.DescriptiveAgmsgContextLabel, output, StringComparison.Ordinal);
-        // The label sits immediately under the heading it qualifies, so a
-        // reader meets it before the description.
-        var heading = output.IndexOf("## Mode separation", StringComparison.Ordinal);
-        var label = output.IndexOf(SessionLayerSections.DescriptiveAgmsgContextLabel, StringComparison.Ordinal);
-        Assert.True(label > heading && label - heading < 200, "the agmsg-example label must directly follow its heading");
+
+        // G570 eighth repair: the label is scoped to the DESCRIPTIVE fragments
+        // it qualifies, not to a whole section. Every occurrence is immediately
+        // followed (after one blank line) by a descriptive fragment that
+        // actually illustrates the model with agmsg mechanics — never by a
+        // binding instruction.
+        var lines = output.Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
+        var occurrences = 0;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (!string.Equals(lines[i], SessionLayerSections.DescriptiveAgmsgContextLabel, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            occurrences++;
+            var next = i + 1;
+            while (next < lines.Length && lines[next].Trim().Length == 0)
+            {
+                next++;
+            }
+
+            Assert.True(next < lines.Length, "the agmsg-example label must qualify a fragment, not trail the document");
+            Assert.Contains("agmsg", lines[next], StringComparison.OrdinalIgnoreCase);
+            Assert.False(
+                lines[next].StartsWith("## ", StringComparison.Ordinal),
+                "the label must sit against the description it qualifies, not against a heading");
+        }
+
+        Assert.True(occurrences > 0, "descriptive agmsg illustration must carry its label");
     }
 
     [Fact]
@@ -988,6 +1013,204 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             actual.OrderBy(r => r, StringComparer.Ordinal));
     }
 
+    /// <summary>
+    /// G570 eighth repair, guard 1: known CROSS-MODE IMPERATIVES are typed
+    /// operative, not description.
+    ///
+    /// The seventh repair declared every fragment explicitly but assigned the
+    /// types by construction — anything naming no transport mechanic became
+    /// CanonDescriptive. That produced 454 descriptive rows against 14
+    /// mode-independent-operative ones and filed binding duties ("READ the pane
+    /// first", "never delete another team's workspace", "every label transition
+    /// goes through intent-cli") as prose. These are named by their own words so
+    /// the assertion is about the DOCUMENT, not about the classifier.
+    /// </summary>
+    [Theory]
+    [InlineData("READ the pane first")]
+    [InlineData("Confirm the role is still held by that session before concluding anything")]
+    [InlineData("answer only what the MAY list allows")]
+    [InlineData("may answer a dialog ONLY after it has actually read")]
+    [InlineData("Never delete another team's workspace")]
+    [InlineData("if you cannot positively establish ownership, the object is READ-ONLY to you")]
+    [InlineData("Never reuse, repurpose, or borrow another team's workspace")]
+    [InlineData("every label transition goes through intent-cli worker/automation")]
+    [InlineData("No hand-editing queue-state")]
+    [InlineData("Never ask intent-cli to launch Claude/Codex/Copilot")]
+    [InlineData("never hand-write the artifact")]
+    [InlineData("Remove a worktree only with `git worktree remove`")]
+    [InlineData("STOP and surface it; do not delete user work")]
+    [InlineData("Never raw `gh issue create`")]
+    [InlineData("Do not launch implement/review recurring timers")]
+    // Inside a MIXED row: the clause must be typed operative even though the
+    // row also carries descriptive substrate identity. Collapsing the split
+    // fails here, because a whole-row descriptive type cannot satisfy it.
+    [InlineData("Touch only files whose team segment is yours")]
+    [InlineData("never restart, reconfigure, or kill the shared server")]
+    [InlineData("Verify the process\u0027s cwd before stopping an app-server")]
+    [InlineData("Write only through the canonical commands for your own domain")]
+    public void KnownCrossModeImperativesAreTypedOperative_G570(string imperative)
+    {
+        var matches = SessionLayerFragments.Declarations
+            .Concat(SessionLayerFragments.JsonDeclarations)
+            .Where(d => d.Text.Contains(imperative, StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.True(matches.Length > 0, $"the guide no longer states this duty: {imperative}");
+
+        foreach (var declaration in matches)
+        {
+            var operative = declaration.Clauses is null
+                ? declaration.Type
+                : declaration.Clauses
+                    .First(c => c.Text.Contains(imperative, StringComparison.Ordinal)).Type;
+
+            Assert.True(
+                operative is SessionLayerSections.FragmentType.ModeIndependentOperative
+                    or SessionLayerSections.FragmentType.TransportOperative,
+                $"a binding duty is declared {operative}, which files an instruction as prose: {imperative}");
+        }
+    }
+
+    /// <summary>
+    /// G570 eighth repair, guard 2: NO operative fragment is covered by a
+    /// descriptive-only label, on either surface.
+    ///
+    /// Markdown: the agmsg-example banner applies until the next heading or the
+    /// next operative fragment, so this walks the rendered document and asserts
+    /// nothing operative falls inside a labelled run. JSON: the descriptive
+    /// context names values, and none of them may be operative.
+    /// </summary>
+    [Fact]
+    public void NoOperativeFragmentIsCoveredByADescriptiveLabel_G570()
+    {
+        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+
+        var lines = workspace.RenderOrchestratorGuide().Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
+        string? section = null;
+        var labelled = false;
+        var covered = new List<string>();
+
+        foreach (var line in lines)
+        {
+            if (line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                section = SessionLayerFragments.IsDeclaredSection(line) ? line : null;
+                labelled = false;
+                continue;
+            }
+
+            if (string.Equals(line, SessionLayerSections.DescriptiveAgmsgContextLabel, StringComparison.Ordinal))
+            {
+                labelled = true;
+                continue;
+            }
+
+            if (section is null || line.Trim().Length == 0 || !labelled)
+            {
+                continue;
+            }
+
+            // The label qualifies exactly the next fragment, so its coverage
+            // ends there. Anything it covers must be descriptive.
+            labelled = false;
+            if (line.Contains(SessionLayerSections.MechanicPointer, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (SessionLayerFragments.TypeOf(BareValues, section, line)
+                != SessionLayerSections.FragmentType.CanonDescriptive)
+            {
+                covered.Add(line.Trim());
+            }
+        }
+
+        Assert.True(
+            covered.Count == 0,
+            "binding instructions rendered under a \"descriptive, not an instruction\" label:\n"
+            + string.Join("\n", covered));
+
+        // The walk above can only catch a case the document happens to contain.
+        // This states the contract TOTALLY: no declared operative fragment is
+        // ever eligible for the label, whether or not one is rendered today.
+        var eligible = SessionLayerFragments.Declarations
+            .Where(d => d.Type != SessionLayerSections.FragmentType.CanonDescriptive
+                && SessionLayerFragments.CarriesAgmsgIllustration(
+                    BareValues,
+                    d.Section,
+                    SessionLayerFragments.Expand(BareValues, d.Text)))
+            .Select(d => $"[{d.Section}] {d.Text}")
+            .ToArray();
+        Assert.True(
+            eligible.Length == 0,
+            "operative fragments the renderer would label \"descriptive, not an instruction\":\n"
+            + string.Join("\n", eligible));
+
+        var jsonEligible = SessionLayerFragments.JsonDeclarations
+            .Where(d => d.Type != SessionLayerSections.FragmentType.CanonDescriptive
+                && SessionLayerFragments.JsonCarriesAgmsgIllustration(
+                    BareValues,
+                    d.Section,
+                    SessionLayerFragments.Expand(BareValues, d.Text)))
+            .Select(d => $"[{d.Section}] {d.Text}")
+            .ToArray();
+        Assert.True(
+            jsonEligible.Length == 0,
+            "operative JSON values the renderer would list as descriptive context:\n"
+            + string.Join("\n", jsonEligible));
+
+        // JSON: same contract, stated over the values the context actually names.
+        var context = workspace.RenderOrchestratorGuideJson()
+            .GetProperty("herdr_only_descriptive_agmsg_context");
+        foreach (var entry in context.EnumerateObject())
+        {
+            foreach (var value in entry.Value.GetProperty("descriptive_values").EnumerateArray())
+            {
+                Assert.Equal(
+                    SessionLayerSections.FragmentType.CanonDescriptive,
+                    SessionLayerFragments.JsonTypeOf(BareValues, entry.Name, value.GetString()!));
+            }
+        }
+    }
+
+    /// <summary>
+    /// G570 eighth repair: a fragment that mixes an independently applicable
+    /// descriptive clause with an operative one is declared as separately typed
+    /// CLAUSES, and the clauses reconstruct the fragment exactly — the document
+    /// is made addressable, not restructured.
+    /// </summary>
+    [Fact]
+    public void MixedSemanticsFragmentsAreDeclaredAsSeparatelyTypedClauses_G570()
+    {
+        var mixed = SessionLayerFragments.Declarations
+            .Concat(SessionLayerFragments.JsonDeclarations)
+            .Where(d => d.Clauses is not null)
+            .ToArray();
+
+        Assert.True(mixed.Length > 0, "the isolation table mixes descriptive identity with binding ownership rules");
+
+        foreach (var declaration in mixed)
+        {
+            Assert.Equal(declaration.Text, string.Concat(declaration.Clauses!.Select(c => c.Text)));
+            Assert.True(
+                declaration.Clauses!.Select(c => c.Type).Distinct().Count() > 1,
+                $"a clause split that types every clause the same is not a split: {declaration.Text}");
+        }
+
+        // The reviewer's named case: substrate identity kept, ownership rule
+        // declared operative, in the same row.
+        var runDirectory = mixed.Single(d =>
+            d.Text.Contains("agmsg run directory (`~/.agents/skills/agmsg/run`)", StringComparison.Ordinal));
+        Assert.Contains(
+            runDirectory.Clauses!,
+            c => c.Text.Contains("agmsg run directory", StringComparison.Ordinal)
+                && c.Type == SessionLayerSections.FragmentType.CanonDescriptive);
+        Assert.Contains(
+            runDirectory.Clauses!,
+            c => c.Text.Contains("Touch only files whose team segment is yours", StringComparison.Ordinal)
+                && c.Type == SessionLayerSections.FragmentType.ModeIndependentOperative);
+    }
+
     [Fact]
     public void UnderHerdrOnly_TheTitleDoesNotClaimAgmsg_G570()
     {
@@ -1004,15 +1227,31 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
         var root = workspace.RenderOrchestratorGuideJson();
 
+        // G570 eighth repair: the context names the descriptive VALUES it
+        // covers, not the properties that hold them. A property-level mark told
+        // a consumer that binding duties in a mixed property were illustration.
         var context = root.GetProperty("herdr_only_descriptive_agmsg_context");
-        foreach (var property in SessionLayerSections.DescriptiveAgmsgContextJsonProperties)
+        Assert.True(context.EnumerateObject().Any(), "retained descriptive agmsg illustration must carry its context");
+
+        foreach (var entry in context.EnumerateObject())
         {
-            if (root.TryGetProperty(property, out _))
+            Assert.Contains(
+                "descriptive, not an instruction",
+                entry.Value.GetProperty("note").GetString()!,
+                StringComparison.Ordinal);
+
+            var covered = entry.Value.GetProperty("descriptive_values").EnumerateArray()
+                .Select(v => v.GetString()!).ToArray();
+            Assert.NotEmpty(covered);
+
+            foreach (var value in covered)
             {
-                Assert.True(
-                    context.TryGetProperty(property, out var label),
-                    $"retained descriptive property `{property}` has no explicit agmsg-example context in JSON");
-                Assert.Contains("descriptive, not an instruction", label.GetString()!, StringComparison.Ordinal);
+                // Every covered value is descriptive agmsg illustration — never
+                // an instruction that still binds.
+                Assert.Contains("agmsg", value, StringComparison.OrdinalIgnoreCase);
+                Assert.Equal(
+                    SessionLayerSections.FragmentType.CanonDescriptive,
+                    SessionLayerFragments.JsonTypeOf(BareValues, entry.Name, value));
             }
         }
     }
