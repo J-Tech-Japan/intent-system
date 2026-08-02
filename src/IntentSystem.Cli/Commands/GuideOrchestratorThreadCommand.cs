@@ -667,6 +667,24 @@ internal static class GuideOrchestratorThreadCommand
             .Replace("<owner/repo>", repo, StringComparison.Ordinal)
             .Replace("<agent>", agent, StringComparison.Ordinal);
 
+        // G589: a CI wait is only survivable when the rendered mode names the
+        // thing that will observe the exact head becoming terminal. intent-cli
+        // describes that arrangement but never launches or owns a watcher.
+        var ciRecheckProducer = herdrOnly
+            ? Apply(
+                "HERDR-ONLY re-check producer: before yielding on pending CI, explicitly arm an exact-head "
+                + "CI-completion watch with `gh pr checks <pr> --repo <owner/repo> --watch`. A controller outside "
+                + "intent-cli owns that watch; when it reaches a terminal result, it wakes the recorded "
+                + "orchestration role at the pane ID resolved from the team's logical-role mapping (never hard-code "
+                + "a pane ID). intent-cli does not launch or manage this background process. The wake is a signal "
+                + "to re-read stalled-work plus exact-head GitHub facts, never proof of success.")
+            : Apply(
+                "TIMER-LOOP re-check producer: the configured recurring timer produces the next exact-head CI "
+                + "re-check; this preserves timer-loop behavior. In agmsg orchestrator-message mode, if no explicit "
+                + "fallback orchestrator timer is configured, explicitly arm the same exact-head GitHub surface, "
+                + "`gh pr checks <pr> --repo <owner/repo> --watch`; a receiver report alone does not prove CI "
+                + "completion. intent-cli does not launch or manage that watch.");
+
         // G489: the orchestrator prompt carries a mode-specific routing clause —
         // single-domain orchestrators stay scoped to one domain; multi-domain
         // orchestrators must attach explicit routing metadata to each delegation.
@@ -868,7 +886,7 @@ internal static class GuideOrchestratorThreadCommand
                     Apply("Ask intent-cli for worker state: `intent-cli worker next-action --repo <owner/repo> --github-only --format json`."),
                     Apply("Check host review readiness: `intent-cli automation host-review-preflight --repo <owner/repo> --format json`."),
                     "Verify GitHub facts directly: open PRs, CI conclusion, approvals, merge state, and closeout/label state.",
-                    "Classify each open PR's CI: pending = wait-and-recheck next wake (no message); green = delegate review/closeout; red = repair or escalate by ownership; stuck = escalate. Pending CI is normal progress, not a reason to message the operator.",
+                    "Classify each open PR's CI: pending = wait using the named mode-specific CI re-check producer (no message); green = delegate review/closeout; red = repair or escalate by ownership; stuck = escalate. Pending CI is normal progress, not a reason to message the operator.",
                     "Detect stale blockers and no-reply receivers: a delegation with no accepted/progress reply within the expected window, or a thread stuck off the official workflow.",
                     "On a no-reply receiver past the threshold (default 30m), run the SAFE stale-thread health check: send one non-destructive status-request, check read-only intent-cli/GitHub facts, keep watching if there is progress, treat waiting-permission as an operator notice (never auto-clear), and only after repeated no-reply with no progress send one idempotent re-entry or escalate.",
                     "If intent-cli reports an `issue-cut-ready` candidate and all gates pass (same-domain or routed, complete contract, no open clarification, dependencies satisfied, under WIP, clean host-sync/preflight), publish ONE issue this wake via canonical publish-flow / issue-publish, verify it, THEN delegate that same issue to implementation in THIS SAME WAKE (G524) — do not ask the operator to create it, and do not stop after publishing to wait for a future wake to send the delegation.",
@@ -895,19 +913,20 @@ internal static class GuideOrchestratorThreadCommand
             {
                 Summary =
                     "A PR with pending/running CI is an ACTIVE WAIT STATE, not a blocker. GitHub checks are "
-                    + "authoritative for CI state. Re-check the required checks on each scheduled wake; pending CI is "
+                    + "authoritative for CI state. Use the named re-check producer below; pending CI is "
                     + "normal progress and by itself NEVER triggers a request-update label, a repair message, or an "
                     + "operator question. Always re-verify the required checks immediately before delegating review, "
                     + "merge, or closeout — a green status read on an earlier wake can go stale.",
+                RecheckProducer = ciRecheckProducer,
                 States = new[]
                 {
                     new OrchestratorCiState
                     {
                         State = "pending",
                         Routing =
-                            "PENDING / RUNNING — wait and re-check on the next wake. Do not send a message, do not apply "
-                            + "request-update, and do not ask the operator. Track the PR as in-flight and move on; the "
-                            + "scheduled cadence re-evaluates it.",
+                            "PENDING / RUNNING — wait using the named mode-specific re-check producer. Do not send a "
+                            + "message, do not apply request-update, and do not ask the operator. Track the PR as "
+                            + "in-flight and move on.",
                     },
                     new OrchestratorCiState
                     {
@@ -1050,8 +1069,9 @@ internal static class GuideOrchestratorThreadCommand
                     {
                         Status = "dependency-waiting",
                         Action =
-                            "The dependency is published and in flight (e.g. PR CI pending) — wait and re-check on the "
-                            + "next wake; do not ask the operator. Keep the dependent candidate held.",
+                            "The dependency is published and in flight (e.g. PR CI pending) — wait using the CI wait "
+                            + "state's named mode-specific re-check producer; do not ask the operator. Keep the "
+                            + "dependent candidate held.",
                     },
                     new OrchestratorDependencyStatus
                     {
@@ -1138,7 +1158,9 @@ internal static class GuideOrchestratorThreadCommand
                 KeptInternal = new[]
                 {
                     "Normal progress, accepted, and in-flight delegations.",
-                    "CI waiting — pending checks are an active wait state, not a design-thread event.",
+                    "CI waiting — pending checks are an active wait state, not a design-thread event; when the exact "
+                    + "head becomes terminal, the end of the CI wait is a legitimate orchestration wake signal and "
+                    + "must be classified as green or failed rather than deduped as the pending wait.",
                     "Successful implementation (PR opened, CI green).",
                     "Successful review / approval.",
                     "Closeout of an already-approved PR.",
@@ -4016,6 +4038,7 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
         writer.WriteLine(guide.CiWaitState.Summary);
         writer.WriteLine();
+        writer.WriteLine($"- **re-check producer** — {guide.CiWaitState.RecheckProducer}");
         foreach (var state in guide.CiWaitState.States)
         {
             writer.WriteLine($"- **{state.State}** — {state.Routing}");
@@ -4729,6 +4752,9 @@ internal sealed record OrchestratorCiWaitState
 {
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    [JsonPropertyName("recheck_producer")]
+    public required string RecheckProducer { get; init; }
 
     [JsonPropertyName("states")]
     public required IReadOnlyList<OrchestratorCiState> States { get; init; }

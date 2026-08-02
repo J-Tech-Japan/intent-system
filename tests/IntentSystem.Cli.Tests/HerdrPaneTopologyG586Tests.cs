@@ -12,7 +12,7 @@ public sealed class HerdrPaneTopologyG586Tests : IDisposable
     private const string Domain = "intent-cli";
     private const string Team = "intent-cli-dev";
     private const string Repo = "J-Tech-Japan/intent-system";
-    private const string AgmsgBaselineSha256 = "305e7096344bc726f988734a04bf64445b25ae2167051bcc66d26d99c70b76f5";
+    private const string G589AgmsgBaselineSha256 = "90be8c7999369dc4dffa4fba58c13456e5f90319116473ad11cb9efd7baa47d8";
 
     private readonly string root = Directory.CreateTempSubdirectory("herdr-topology-g586-").FullName;
 
@@ -91,12 +91,12 @@ public sealed class HerdrPaneTopologyG586Tests : IDisposable
     }
 
     [Fact]
-    public void AgmsgRendering_IsByteIdenticalToMergedMainBaseline_G586()
+    public void AgmsgRendering_MatchesG589CiWakeContractBaseline_G589()
     {
         var markdown = Render(herdrOnly: false, format: "markdown");
         var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(markdown)));
 
-        Assert.Equal(AgmsgBaselineSha256, hash);
+        Assert.Equal(G589AgmsgBaselineSha256, hash);
     }
 
     private string Render(bool herdrOnly, string format)

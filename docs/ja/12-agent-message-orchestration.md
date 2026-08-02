@@ -851,12 +851,25 @@ orchestrator がメッセージ駆動で動作する場合でも fallback/legacy
 ### CI 待ち状態
 
 pending/running の CI を持つ PR は **アクティブな待ち状態** であり、ブロッカーでは
-ありません。GitHub checks が権威です。各 wake で必須チェックを再確認します。pending な CI
+ありません。GitHub checks が権威です。以下の mode ごとに名前を付けた再確認 producer を使います。pending な CI
 はそれ単独では request-update label、repair メッセージ、オペレーターへの質問を引き起こしません。
 review / merge / closeout を委譲する直前には必ず必須チェックを再検証してください — 以前読んだ
 green は古くなっている可能性があります。
 
-- **pending / running** — 次の wake で待って再確認する。メッセージなし、request-update なし、
+- **timer-loop** — 設定済みの定期タイマーが exact-head CI の再確認を発生させます。timer-loop の
+  挙動は変更しません。
+- **herdr-only** — pending CI で yield する前に、
+  `gh pr checks <pr> --repo <owner/repo> --watch` で exact-head の CI-completion watch を明示的に
+  arm します。intent-cli の外側の controller が watch を所有します。terminal に達したら、team の
+  logical-role mapping から解決した pane ID の recorded orchestration role を wake します。pane ID を
+  hard-code してはいけません。intent-cli はこの background process を起動も管理もしません。この
+  wake が示すのは待ちが終わったことだけです。成功か失敗かを判定するため、`stalled-work` と
+  exact-head の GitHub facts を再読します。
+- **agmsg orchestrator-message** — 明示的に設定した fallback orchestrator timer が再確認を発生
+  させられます。それがない場合は、同じ exact-head `gh pr checks ... --watch` surface を arm します。
+  receiver report だけでは CI 完了の証明になりません。
+
+- **pending / running** — 上で名前を付けた producer を使って待つ。メッセージなし、request-update なし、
   オペレーター質問なし。PR を in-flight として追跡し、先へ進む。
 - **green** — すべての必須チェックが通過。intent-cli review surface 経由で review/closeout を
   委譲する。委譲時に green を再検証する。
@@ -866,6 +879,13 @@ green は古くなっている可能性があります。
 - **stuck / ambiguous** — チェックが開始されない、妥当な時間を大きく超えてハングする、または
   矛盾/不明なステータスを報告する。1 件のオペレーター判断にエスカレーション（fail closed）。
   green を推測しない。
+
+`intent-cli automation stalled-work` は、同じ PR について exact-head のチェックが 1 つでも実行中なら
+informational な `ci-pending`、すべて terminal で失敗がなければ actionable な
+`ci-all-green-not-transitioned`、terminal の失敗が 1 つでもあれば actionable な
+`ci-failed-not-transitioned` を報告します。各 CI-aware item は `pr_head_sha`、
+pass/fail/skip/pending の breakdown、kind + PR + head SHA による安定した `dedupe_key` を含みます。
+この inventory は厳密に read-only であり、delegate、relabel、queue-state write を行いません。
 
 ## next-slice の publish
 
@@ -947,8 +967,8 @@ handwritten transport invocation で検証を迂回したりしてはいけま�
   hold のまま。
 - **dependency-actionable** — 依存にすでに issue または PR があり進められる → intent-cli /
   GitHub の事実を使ってルーティング（実装・レビュー・closeout・repair）。
-- **dependency-waiting** — 依存が in flight（例: PR の CI が pending）→ 次の wake まで待って
-  再確認。依存元は hold のまま。
+- **dependency-waiting** — 依存が in flight（例: PR の CI が pending）→ CI wait state で名前を付けた
+  mode-specific re-check producer を使って待つ。依存元は hold のまま。
 - **dependency-ambiguous** — 決定論的に解決できない（依存 packet 欠落、GitHub linkage の矛盾、
   ルートマッピングのない cross-domain）→ 1 件のオペレーター判断にエスカレーション。
 - **dependency-cycle** — 依存が循環している → エスカレーション（fail closed）。
@@ -992,7 +1012,9 @@ status-request は receiver に次のいずれかで返信するよう求めま�
 デフォルトで内部に留める（設計スレッドへ送らない）:
 
 - 通常の進捗 / accepted / in-flight な委譲;
-- CI 待ち（pending チェックはアクティブな待ち状態）;
+- CI 待ち（pending チェックはアクティブな待ち状態）。exact head が terminal になったとき、待ちの
+  終了は正当な orchestration wake signal であり、pending wait として dedupe せず green または
+  failed に分類する;
 - 成功した実装（PR open、CI green）;
 - 成功したレビュー / 承認;
 - 承認済み PR の closeout;

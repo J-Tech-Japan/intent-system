@@ -31,6 +31,13 @@ namespace IntentSystem.Cli.Commands;
 ///   <c>rereview-pending</c> below — G533 review repair, field finding: PR
 ///   #1750 was misreported this way with a wrong review-start
 ///   recommendation mid-repair).</item>
+/// <item><c>ci-all-green-not-transitioned</c> — the same PR lifecycle point,
+///   with every reported check terminal and no failed conclusion. Carries
+///   the exact head SHA, normalized outcome breakdown, and a stable dedupe
+///   key; recommends the existing review-start transition but never runs it.</item>
+/// <item><c>ci-failed-not-transitioned</c> — every reported check is terminal
+///   and at least one failed. Carries the same stable evidence but routes the
+///   next action to repair/escalation by ownership rather than review.</item>
 /// <item><c>merged-not-closed-out</c> — a MERGED PR's linked queue item is
 ///   not <see cref="QueueItemState.Completed"/>.</item>
 /// <item><c>approved-not-merged</c> — an OPEN PR carries
@@ -68,6 +75,10 @@ namespace IntentSystem.Cli.Commands;
 ///   would be actively wrong mid-repair.</item>
 /// <item><c>rereview-pending</c> — a PR carrying
 ///   <c>intent-pr-rereview-ready</c>; repair pushed, awaiting re-review.</item>
+/// <item><c>ci-pending</c> — a PR at the pre-review lifecycle point whose exact
+///   head still has pending/running checks. This is a legitimate active wait,
+///   not a blocker or transition recommendation; its terminal counterpart is
+///   deliberately a different kind so a watcher can wake exactly when useful.</item>
 /// <item><c>claimed-but-silent</c> — an issue carrying
 ///   <c>intent-issue-in-progress</c> (no PR yet) with no observable activity
 ///   for longer than <c>--claimed-silent-minutes</c> (default
@@ -144,6 +155,9 @@ internal static class AutomationStalledWorkCommand
 
     public const string KindPublishedNotDelegated = "published-not-delegated";
     public const string KindPrCreatedNotReviewing = "pr-created-not-reviewing";
+    public const string KindCiPending = "ci-pending";
+    public const string KindCiAllGreenNotTransitioned = "ci-all-green-not-transitioned";
+    public const string KindCiFailedNotTransitioned = "ci-failed-not-transitioned";
     public const string KindMergedNotClosedOut = "merged-not-closed-out";
 
     /// <summary>
@@ -513,7 +527,12 @@ internal static class AutomationStalledWorkCommand
             Repo = repo,
             StaleMinutesThreshold = staleMinutes,
             BacklogIdleMinutesThreshold = backlogIdleMinutes,
-            Stalled = filtered.Length > 0,
+            // G589: a still-pending CI item remains visible, but it must not
+            // by itself trip a heartbeat/watcher wake. The kind changes when
+            // the exact head becomes terminal, and that terminal item is the
+            // dedupe-ready actionable signal. Other historical informational
+            // kinds retain their established stalled semantics.
+            Stalled = filtered.Any(item => item.Kind != KindCiPending),
             Items = filtered,
             Excluded = excluded,
             Warnings = warnings,
@@ -777,6 +796,7 @@ internal static class AutomationStalledWorkCommand
             string kind;
             bool isInformational;
             string recommendedAction;
+            StalledWorkCiProjection? ci = null;
             if (prLabels.Contains(WorkerNextActionConstants.Labels.IntentPrRequestUpdate)
                 || prLabels.Contains(WorkerNextActionConstants.Labels.IntentPrUpdateInProgress))
             {
@@ -796,10 +816,38 @@ internal static class AutomationStalledWorkCommand
             }
             else
             {
-                kind = KindPrCreatedNotReviewing;
-                isInformational = false;
-                recommendedAction =
-                    $"intent-cli automation pr-transition --repo {repo} --pr {pr.Number} --transition review-start --write";
+                ci = ProjectCiState(pr);
+                if (ci is { Outcome: StalledWorkCiOutcomes.Pending })
+                {
+                    kind = KindCiPending;
+                    isInformational = true;
+                    recommendedAction =
+                        $"none — CI for PR #{pr.Number} head {pr.HeadRefOid} is still pending; keep it as an active "
+                        + "wait and let the mode-specific CI completion wake producer re-check the exact head.";
+                }
+                else if (ci is { Outcome: StalledWorkCiOutcomes.AllGreen })
+                {
+                    kind = KindCiAllGreenNotTransitioned;
+                    isInformational = false;
+                    recommendedAction =
+                        $"intent-cli automation pr-transition --repo {repo} --pr {pr.Number} --transition review-start --write";
+                }
+                else if (ci is { Outcome: StalledWorkCiOutcomes.Failed })
+                {
+                    kind = KindCiFailedNotTransitioned;
+                    isInformational = false;
+                    recommendedAction =
+                        $"inspect failed checks for PR #{pr.Number} at head {pr.HeadRefOid}; route branch-owned "
+                        + "failures to implementation repair and product/design or canonical failures to escalation; "
+                        + "do not start review.";
+                }
+                else
+                {
+                    kind = KindPrCreatedNotReviewing;
+                    isInformational = false;
+                    recommendedAction =
+                        $"intent-cli automation pr-transition --repo {repo} --pr {pr.Number} --transition review-start --write";
+                }
             }
 
             var resolution = ResolveExecutionUnit(context, matchedIssue.Title);
@@ -829,14 +877,15 @@ internal static class AutomationStalledWorkCommand
             // timestamps, and `updatedAt` reflects the PR's most recent
             // modification of ANY kind (which may postdate the specific
             // label change) unless a dedicated label-event fetch is added.
-            var ageSource = isInformational ? pr.UpdatedAt : pr.CreatedAt;
+            var isRepairLifecycle = kind is KindRepairPending or KindRereviewPending;
+            var ageSource = isRepairLifecycle ? pr.UpdatedAt : pr.CreatedAt;
             var ageMinutes = ComputeAgeMinutes(ageSource, now);
 
             // G546: promote a repair-lifecycle PR that has been observably
             // silent past the threshold. Inside the threshold — and whenever
             // the silence cannot be established at all — the G533
             // informational item below is emitted completely unchanged.
-            if (isInformational
+            if (isRepairLifecycle
                 && TryPromoteToRepairStalled(pr, prLabels, repo, now, repairSilentMinutes, out var promotedAction, out var silentMinutes))
             {
                 kind = KindRepairStalled;
@@ -854,8 +903,103 @@ internal static class AutomationStalledWorkCommand
                 AgeMinutes = ageMinutes,
                 IsInformational = isInformational,
                 RecommendedAction = recommendedAction,
+                PrHeadSha = ci is null ? null : pr.HeadRefOid,
+                CiOutcome = ci?.Outcome,
+                CiBreakdown = ci?.Breakdown,
+                DedupeKey = ci is null ? null : $"{kind}:pr-{pr.Number}:{pr.HeadRefOid}",
             });
         }
+    }
+
+    /// <summary>
+    /// G589: normalize GitHub's CheckRun / StatusContext union for the exact
+    /// PR head. Pending dominates until every row is terminal; after that,
+    /// any failed/error/cancelled conclusion makes the outcome failed.
+    /// A zero-row or headless rollup is not a completed CI run and preserves
+    /// the pre-G589 stalled-work kind.
+    /// </summary>
+    private static StalledWorkCiProjection? ProjectCiState(GitHubAutomationPrCandidate pr)
+    {
+        if (string.IsNullOrWhiteSpace(pr.HeadRefOid) || pr.StatusCheckRollup.Count == 0)
+        {
+            return null;
+        }
+
+        var passed = 0;
+        var failed = 0;
+        var skipped = 0;
+        var pending = 0;
+        foreach (var check in pr.StatusCheckRollup)
+        {
+            switch (ClassifyCheck(check))
+            {
+                case StalledWorkCheckOutcome.Passed:
+                    passed++;
+                    break;
+                case StalledWorkCheckOutcome.Failed:
+                    failed++;
+                    break;
+                case StalledWorkCheckOutcome.Skipped:
+                    skipped++;
+                    break;
+                default:
+                    pending++;
+                    break;
+            }
+        }
+
+        var outcome = pending > 0
+            ? StalledWorkCiOutcomes.Pending
+            : failed > 0
+                ? StalledWorkCiOutcomes.Failed
+                : StalledWorkCiOutcomes.AllGreen;
+        return new StalledWorkCiProjection(
+            outcome,
+            new StalledWorkCiBreakdown
+            {
+                Passed = passed,
+                Failed = failed,
+                Skipped = skipped,
+                Pending = pending,
+                Total = passed + failed + skipped + pending,
+            });
+    }
+
+    private static StalledWorkCheckOutcome ClassifyCheck(GitHubAutomationStatusCheckCandidate check)
+    {
+        var status = check.Status.Trim().ToUpperInvariant();
+        if (status.Length > 0 && !string.Equals(status, "COMPLETED", StringComparison.Ordinal))
+        {
+            return StalledWorkCheckOutcome.Pending;
+        }
+
+        var conclusion = check.Conclusion.Trim().ToUpperInvariant();
+        if (conclusion.Length > 0)
+        {
+            return conclusion switch
+            {
+                "SUCCESS" => StalledWorkCheckOutcome.Passed,
+                "SKIPPED" or "NEUTRAL" => StalledWorkCheckOutcome.Skipped,
+                _ => StalledWorkCheckOutcome.Failed,
+            };
+        }
+
+        var state = check.State.Trim().ToUpperInvariant();
+        if (state.Length > 0)
+        {
+            return state switch
+            {
+                "SUCCESS" => StalledWorkCheckOutcome.Passed,
+                "PENDING" or "EXPECTED" => StalledWorkCheckOutcome.Pending,
+                _ => StalledWorkCheckOutcome.Failed,
+            };
+        }
+
+        // A completed CheckRun with no conclusion is terminal but not green;
+        // an otherwise shape-less row cannot prove terminality and waits.
+        return string.Equals(status, "COMPLETED", StringComparison.Ordinal)
+            ? StalledWorkCheckOutcome.Failed
+            : StalledWorkCheckOutcome.Pending;
     }
 
     /// <summary>
@@ -2921,6 +3065,24 @@ internal static class AutomationStalledWorkCommand
                 {
                     writer.WriteLine($"- pr: #{pr.Number} — {pr.Url}");
                 }
+                if (item.PrHeadSha is { } headSha)
+                {
+                    writer.WriteLine($"- pr_head_sha: {headSha}");
+                }
+                if (item.CiOutcome is { } ciOutcome)
+                {
+                    writer.WriteLine($"- ci_outcome: {ciOutcome}");
+                }
+                if (item.CiBreakdown is { } breakdown)
+                {
+                    writer.WriteLine(
+                        $"- ci_breakdown: passed={breakdown.Passed}, failed={breakdown.Failed}, "
+                        + $"skipped={breakdown.Skipped}, pending={breakdown.Pending}, total={breakdown.Total}");
+                }
+                if (item.DedupeKey is { } dedupeKey)
+                {
+                    writer.WriteLine($"- dedupe_key: {dedupeKey}");
+                }
                 // G564: the declared targets belong in the item itself, so a
                 // reader knows WHAT the packet promised without opening it.
                 if (item.DeclaredWriteBackTargets is { Count: > 0 } declaredTargets)
@@ -3050,6 +3212,26 @@ internal sealed record StalledWorkItem
     [JsonPropertyName("recommended_action")]
     public required string RecommendedAction { get; init; }
 
+    /// <summary>G589: exact PR head SHA for CI-aware kinds.</summary>
+    [JsonPropertyName("pr_head_sha")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PrHeadSha { get; init; }
+
+    /// <summary>G589: pending / all-green / failed normalized terminal state.</summary>
+    [JsonPropertyName("ci_outcome")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CiOutcome { get; init; }
+
+    /// <summary>G589: stable pass/fail/skip/pending counts for the exact head.</summary>
+    [JsonPropertyName("ci_breakdown")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StalledWorkCiBreakdown? CiBreakdown { get; init; }
+
+    /// <summary>G589: stable watcher key; kind + PR number + exact head SHA.</summary>
+    [JsonPropertyName("dedupe_key")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DedupeKey { get; init; }
+
     /// <summary>
     /// G564: for <see cref="AutomationStalledWorkCommand.KindKnowledgeWritebackPending"/>,
     /// the target paths the packet DECLARED — so the report says what was
@@ -3058,6 +3240,43 @@ internal sealed record StalledWorkItem
     /// </summary>
     [JsonPropertyName("declared_write_back_targets")]
     public IReadOnlyList<string>? DeclaredWriteBackTargets { get; init; }
+}
+
+internal sealed record StalledWorkCiBreakdown
+{
+    [JsonPropertyName("passed")]
+    public required int Passed { get; init; }
+
+    [JsonPropertyName("failed")]
+    public required int Failed { get; init; }
+
+    [JsonPropertyName("skipped")]
+    public required int Skipped { get; init; }
+
+    [JsonPropertyName("pending")]
+    public required int Pending { get; init; }
+
+    [JsonPropertyName("total")]
+    public required int Total { get; init; }
+}
+
+internal static class StalledWorkCiOutcomes
+{
+    public const string Pending = "pending";
+    public const string AllGreen = "all-green";
+    public const string Failed = "failed";
+}
+
+internal readonly record struct StalledWorkCiProjection(
+    string Outcome,
+    StalledWorkCiBreakdown Breakdown);
+
+internal enum StalledWorkCheckOutcome
+{
+    Pending,
+    Passed,
+    Failed,
+    Skipped,
 }
 
 internal sealed record StalledWorkExcluded

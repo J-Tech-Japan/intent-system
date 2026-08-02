@@ -611,7 +611,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
 
         Assert.Contains("## CI wait state", output, StringComparison.Ordinal);
-        // Pending is wait-and-recheck and does not trigger request-update/operator question.
+        // Pending uses the named mode-specific producer and does not trigger request-update/operator question.
         Assert.Contains("active wait state", output, StringComparison.Ordinal);
         Assert.Contains("- **pending**", output, StringComparison.Ordinal);
         Assert.Contains("do not apply request-update", output, StringComparison.Ordinal);
@@ -640,6 +640,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         var ci = doc.RootElement.GetProperty("ci_wait_state");
 
         Assert.True(ci.TryGetProperty("summary", out _));
+        Assert.True(ci.TryGetProperty("recheck_producer", out _));
         var states = ci.GetProperty("states").EnumerateArray()
             .Select(s => s.GetProperty("state").GetString())
             .ToArray();
@@ -649,7 +650,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         var wake = doc.RootElement.GetProperty("scheduling").GetProperty("wake_responsibilities").EnumerateArray()
             .Select(w => w.GetString()!)
             .ToArray();
-        Assert.Contains(wake, w => w.Contains("pending = wait-and-recheck", StringComparison.Ordinal));
+        Assert.Contains(wake, w => w.Contains("pending = wait using the named mode-specific CI re-check producer",
+            StringComparison.Ordinal));
     }
 
     [Fact]

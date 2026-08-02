@@ -920,12 +920,27 @@ either trigger runs exactly one pass:
 ### CI wait state
 
 A PR with pending/running CI is an **active wait state**, not a blocker.
-GitHub checks are authoritative. Re-check the required checks on each wake;
+GitHub checks are authoritative. Use the mode's named re-check producer below;
 pending CI by itself never triggers a request-update label, a repair message,
 or an operator question. Always re-verify required checks immediately before
 delegating review, merge, or closeout — an earlier green read can go stale.
 
-- **pending / running** — wait and re-check next wake. No message, no
+- **timer-loop** — the configured recurring timer produces the exact-head CI
+  re-check; timer-loop behavior is unchanged.
+- **herdr-only** — before yielding on pending CI, explicitly arm an exact-head
+  CI-completion watch with `gh pr checks <pr> --repo <owner/repo> --watch`.
+  A controller outside intent-cli owns the watch. When it reaches a terminal
+  result, wake the recorded orchestration role at the pane ID resolved from the
+  team's logical-role mapping; never hard-code a pane ID. intent-cli does not
+  launch or manage this background process. The wake only says the wait ended:
+  re-read `stalled-work` and exact-head GitHub facts to determine success or
+  failure.
+- **agmsg orchestrator-message** — an explicitly configured fallback
+  orchestrator timer may produce the re-check; without one, arm the same
+  exact-head `gh pr checks ... --watch` surface. A receiver report alone does
+  not prove that CI completed.
+
+- **pending / running** — wait using the named producer above. No message, no
   request-update, no operator question; track the PR as in-flight and move on.
 - **green** — all required checks passed. Delegate review/closeout through
   intent-cli review surfaces; re-verify green at delegation time.
@@ -936,6 +951,14 @@ delegating review, merge, or closeout — an earlier green read can go stale.
 - **stuck / ambiguous** — checks never started, hung well past a reasonable
   window, or report conflicting/unknown status. Escalate one operator decision
   (fail closed); do not guess green.
+
+`intent-cli automation stalled-work` reports the same PR as informational
+`ci-pending` while any exact-head check is running, as actionable
+`ci-all-green-not-transitioned` when all checks are terminal without a failure, or
+as actionable `ci-failed-not-transitioned` when any terminal check failed.
+Each CI-aware item includes `pr_head_sha`, a pass/fail/skip/pending breakdown,
+and a stable kind + PR + head-SHA `dedupe_key`. This inventory is strictly
+read-only: it never delegates, relabels, or writes queue-state.
 
 ## Next-slice publication
 
@@ -1025,7 +1048,8 @@ Routing by dependency status:
   move → route it (implementation, review, closeout, or repair) using
   intent-cli / GitHub facts.
 - **dependency-waiting** — the dependency is in flight (e.g. PR CI pending) →
-  wait and re-check next wake; keep the dependent held.
+  wait using the CI wait state's named mode-specific re-check producer; keep
+  the dependent held.
 - **dependency-ambiguous** — cannot be resolved deterministically (missing
   dependency packet, conflicting GitHub linkage, cross-domain with no route
   mapping) → escalate one operator decision.
@@ -1076,7 +1100,10 @@ needs a human.
 Kept internal by default (no design-thread message):
 
 - normal progress / accepted / in-flight delegations;
-- CI waiting (pending checks are an active wait state);
+- CI waiting (pending checks are an active wait state); when the exact head
+  becomes terminal, the end of the wait is a legitimate orchestration wake
+  signal and must be classified as green or failed rather than deduped as the
+  pending wait;
 - successful implementation (PR opened, CI green);
 - successful review / approval;
 - closeout of an already-approved PR;

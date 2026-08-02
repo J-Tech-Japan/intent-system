@@ -80,6 +80,42 @@ internal sealed record GitHubAutomationPrCandidate
     /// </summary>
     [JsonPropertyName("isDraft")]
     public bool IsDraft { get; init; }
+
+    /// <summary>
+    /// G589: exact PR head the check rollup belongs to. Empty for callers and
+    /// fixtures that pre-date CI-aware stalled-work; those callers retain the
+    /// existing non-CI classification.
+    /// </summary>
+    [JsonPropertyName("headRefOid")]
+    public string HeadRefOid { get; init; } = string.Empty;
+
+    /// <summary>
+    /// G589: authoritative GitHub check/status rollup for <see cref="HeadRefOid"/>.
+    /// The stalled-work analyzer normalizes CheckRun and StatusContext entries
+    /// without performing any workflow transition.
+    /// </summary>
+    [JsonPropertyName("statusCheckRollup")]
+    public IReadOnlyList<GitHubAutomationStatusCheckCandidate> StatusCheckRollup { get; init; }
+        = Array.Empty<GitHubAutomationStatusCheckCandidate>();
+}
+
+/// <summary>G589: union-shaped row from GitHub's PR statusCheckRollup.</summary>
+internal sealed record GitHubAutomationStatusCheckCandidate
+{
+    [JsonPropertyName("__typename")]
+    public string TypeName { get; init; } = string.Empty;
+
+    /// <summary>CheckRun lifecycle status, normally QUEUED / IN_PROGRESS / COMPLETED.</summary>
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = string.Empty;
+
+    /// <summary>CheckRun terminal conclusion, e.g. SUCCESS / FAILURE / SKIPPED.</summary>
+    [JsonPropertyName("conclusion")]
+    public string Conclusion { get; init; } = string.Empty;
+
+    /// <summary>StatusContext state, e.g. PENDING / EXPECTED / SUCCESS / FAILURE / ERROR.</summary>
+    [JsonPropertyName("state")]
+    public string State { get; init; } = string.Empty;
 }
 
 /// <summary>
@@ -156,7 +192,8 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
     // G319: also request `isDraft` so the host-loop-next-action analyzer
     // can map an approved-but-draft PR to `approved-pr-draft-blocked`
     // (G297) instead of attempting a merge.
-    internal const string PrListJsonFields = "number,title,url,body,createdAt,updatedAt,labels,closingIssuesReferences,state,isDraft";
+    internal const string PrListJsonFields =
+        "number,title,url,body,createdAt,updatedAt,labels,closingIssuesReferences,state,isDraft,headRefOid,statusCheckRollup";
 
     /// <summary>
     /// G206: builds the <c>gh pr list</c> argument list shared by the live

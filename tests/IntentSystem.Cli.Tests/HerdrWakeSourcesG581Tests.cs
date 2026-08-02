@@ -9,8 +9,8 @@ namespace IntentSystem.Cli.Tests;
 
 public sealed class HerdrWakeSourcesG581Tests : IDisposable
 {
-    private const string PreG581AgmsgGuideSha256 =
-        "F1ED7A4DE358012BC19B197359DB5163CBC4FF04A8CE744E3A2DA4AD34248406";
+    private const string G589AgmsgGuideSha256 =
+        "F4D975FCAD0313DDD561924DE138FAB37A0307331CF01716387C8459EAEF98F2";
 
     private readonly string root = Directory.CreateTempSubdirectory("herdr-wake-g581-").FullName;
 
@@ -133,13 +133,13 @@ public sealed class HerdrWakeSourcesG581Tests : IDisposable
     }
 
     [Fact]
-    public void AgmsgGuide_OutsideG582SwitchChecklist_RemainsByteIdenticalToPreG581Baseline_G581()
+    public void AgmsgGuide_OutsideG582SwitchChecklist_MatchesG589CiWakeContractBaseline_G589()
     {
         var markdown = Render(herdrOnly: false, format: "markdown");
         var withoutG582Checklist = WithoutSection(markdown, SessionLayerSwitchChecklist.Heading);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(withoutG582Checklist)));
 
-        Assert.Equal(PreG581AgmsgGuideSha256, hash);
+        Assert.Equal(G589AgmsgGuideSha256, hash);
         Assert.DoesNotContain("## Herdr-only wake sources", markdown, StringComparison.Ordinal);
         Assert.DoesNotContain("pane.agent_status_changed", markdown, StringComparison.Ordinal);
     }
