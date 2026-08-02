@@ -191,6 +191,111 @@ agmsg internals と同じくリンクアウトし、herdr 自身のドキュメ�
 立ち会う、ping テスト前の actas + readiness、1 ロール 1 保持者と handover 時の graceful
 drop）が満たされるなら、**任意の** 同等なワークスペースマネージャーで置き換えられます。
 
+## herdr-only（PREVIEW）の運用手順
+
+この節はチームが `herdr-only` を記録している場合だけ operative です。agmsg の
+provisioning / receiver 節に対する具体的な counterpart です。PREVIEW が限定するのは
+transport であり、4 スレッドモデルではありません。1 チームでは transport を 1 つだけ
+動かし、agmsg と herdr の mixed delivery は contract violation です。
+
+### Provisioning と READY の証明
+
+チーム workspace と role ごとの tab/pane を role cwd 付きで作成します（design /
+orchestrator は `<host-repo>`、implementation は child checkout、review は隔離した review
+cwd/worktree）。インストール済みの `herdr ... --help` に従い、`herdr workspace create`、
+`herdr tab create`、`herdr pane split` を使います。operator-visible な
+logical-role→pane-id/cwd mapping を記録し、毎操作前に解決します。workflow が pane id を
+hard-code してはいけません。herdr 外の design frontend は架空 pane ではなく reader type
+として記録します。
+
+typed launch は次の surface です。
+
+```text
+herdr agent start <logical-role> --kind <agent-kind> --pane <pane-id> -- <operator-approved-permission-flags>
+```
+
+permission flag は launch に渡し、modifier chord を注入しません。approval は自動回答せず、
+G550 の MAY/escalate 境界がそのまま支配します。READY は G556 verified liveness（期待する
+cwd/repo と agent kind、同一 pane での detection、bounded probe の応答観測）をすべて
+通った後だけです。workspace の存在、shell prompt、agent state だけでは READY では
+ありません。herdr-only の role identity は検証済み logical-role→pane mapping であり、
+別の agmsg identity step はありません。
+
+### Dispatch、wait、artifact 検証
+
+`herdr agent prompt <logical-role> <task-block>` で次の structured block を 1 つ送ります。
+
+```text
+TASK <task-id>
+role: <logical-role>
+objective: <one bounded outcome>
+inputs:
+  - <canonical issue/PR/path/reference>
+expected-artifacts:
+  - <file, commit, PR, report, or other inspectable artifact>
+completion-marker: Ready になったら `ORCH_RESULT <task-id> <status> <artifact>` を正確に出力する。status は completed、blocked、question。
+```
+
+handoff は file、commit、PR、verification log などの inspectable artifact です。screen prose
+はそれを指す signal にすぎません。repair は現在の pane mapping を解決した後、同じ logical
+role に task id と具体的 delta を添えて戻します。
+
+wait は必ず bounded にします。
+
+```text
+herdr agent wait <logical-role> --until done --until blocked --timeout <milliseconds>
+herdr pane wait-output --match "ORCH_RESULT <task-id>" --source recent-unwrapped --timeout <milliseconds> <pane-id>
+```
+
+timeout は re-entry point です。状態を inspect/persist して制御を返し、後続 wake で再開します。
+長い flow には cursor を永続化する deterministic script を推奨します。success は settled
+state + 正確な task marker + 存在して検証済みの artifact の合成判定です。herdr の
+`done` / `idle` だけで成功と結論してはいけません。
+
+### Normative な `events.jsonl` design boundary
+
+host root を実行時に解決し、`<host-repo>/.intent-cli/events/<team>.jsonl` を使います。
+`<team>` は agmsg/herdr team name を verbatim にした flat filename（例:
+`intent-cli-dev.jsonl`）で、team subdirectory と absolute path の hard-code は禁止です。
+path 構築前に、空文字、先頭 dot、`/` または `\`、任意の `..` sequence を fail closed で
+拒否します。不正名を sanitize してはいけません。
+
+writer は orchestrator だけです。`O_APPEND` で開き、1 行に完全な JSON object を 1 つ
+append し、embedded newline を許さず、`summary` を 1 行へ normalize します。必須 schema:
+
+```json
+{"timestamp":"<RFC3339>","team":"<team>","kind":"completion|blocked|question|escalation","unit":"<execution-unit-or-task-id>","summary":"<one-line-summary>","artifact":"<repo-relative-path-or-URL>"}
+```
+
+design-relevant な completion / blocked / question / escalation だけを書きます。この
+mode-independent channel は design boundary のみで、inter-agent bus ではなく、herdr
+dispatch、GitHub、intent-cli workflow state の代替でもありません。
+
+- Claude app watcher: 解決済み path の完全な未読行だけを tail し、restart をまたいで offset
+  を保持します。
+- herdr pane の Codex CLI: role を直接 prompt し、通常 coordination で file poll しません。
+- Codex Desktop: one-minute-class（約 1 分）cadence で poll し、durable byte-offset watermark より後の
+  完全な行だけを処理し、成功後に watermark を進めます。truncate または malformed JSON は
+  fail closed とし operator recovery を要求します。
+
+### Recovery と mode switch
+
+- modifier-chord launch corruption: shell へ戻すか再 provision し、typed な
+  `agent start ... -- <permission-flags>` を使います。
+- reboot 後の dead pty wiring: undetected agent / shell-only pane では artifact を保全して
+  re-provision、mapping 再構築、完全な G556 gate 再実行を行います。
+- long-wait turn death: bounded wait、re-entry、persist された deterministic loop を使います。
+
+**agmsg → herdr-only**: work を drain/park、role を graceful drop して watcher/bridge を停止、
+herdr・mapping・検証済み events path を provision、G556 と marker/artifact 検出を通し、最後に
+`intent-cli session-layer set --domain <domain> --team <team> --mode herdr-only --write`。
+
+**herdr-only → agmsg**: work を drain/park して必要な final design event を append、operator
+policy に従って workspace を停止または retain/close し delivery を止め、agmsg role と承認済み
+watcher/bridge を provision、G556 と end-to-end delivery を通し、最後に `intent-cli
+session-layer set --domain <domain> --team <team> --mode agmsg --write`。両方向とも mode flip が
+final canonical step です。
+
 ## 設計スレッドによるワークスペース監督（チームを動かし続ける）
 
 provisioning はチームを作りますが、**チームを動かし続けるのは監督（supervision）** であり、

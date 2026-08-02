@@ -158,9 +158,9 @@ internal static class GuideOrchestratorThreadCommand
                 + $"`intent-cli session-layer set --domain {values["<domain>"]} --mode agmsg|herdr-only --write` changes it, "
                 + "reversibly, in both directions.",
             ResidualAgmsgMechanics = sessionLayer.IsHerdrOnly
-                ? "HERDR-ONLY: the agmsg-only sections of this guide are REPLACED, whole, by the switch-checklist "
-                    + "section below — they are not rendered and not annotated. Every section that remains is "
-                    + "mode-independent and applies unchanged."
+                ? "HERDR-ONLY: the agmsg-only sections of this guide are REPLACED, whole, by the concrete herdr-only "
+                    + "operating sections below. Retained sections are mode-independent; any agmsg mechanics they "
+                    + "mention are explicitly scoped descriptive examples or pointed to their herdr counterpart."
                 : null,
         };
 
@@ -527,7 +527,9 @@ internal static class GuideOrchestratorThreadCommand
             replaced.Select(name => (System.Text.Json.Nodes.JsonNode?)System.Text.Json.Nodes.JsonValue.Create(name)).ToArray());
         node[SessionLayerSections.ReplacementNoteProperty] =
             "Removed because this team runs the herdr-only session layer: these sections operate agmsg. Their "
-            + "herdr-only counterparts ship in G571. Every remaining field is mode-independent and applies unchanged.";
+            + "concrete counterparts are in the herdr_only_operations object. Every remaining field is "
+            + "mode-independent and applies unchanged.";
+        node[HerdrOnlyOperatingGuide.JsonProperty] = HerdrOnlyOperatingGuide.CreateJson(replaced);
 
         return node.ToJsonString(JsonOptions);
     }
@@ -682,7 +684,8 @@ internal static class GuideOrchestratorThreadCommand
                     + "signals between threads; it is NOT workflow state. intent-cli and GitHub remain authoritative "
                     + "for domain status, queue-state, issue/PR facts, labels, CI, and closeout. Timer-loop mode "
                     + "remains fully supported as the simpler ALTERNATIVE for setups without an orchestrator thread "
-                    + "(see Mode separation). The herdr-only operating steps ship in G571."
+                    + "(see Mode separation). The concrete herdr-only operating sections below cover provisioning, "
+                    + "dispatch, bounded completion detection, the events boundary, recovery, and both switches."
                 : "PRIMARY agmsg-backed four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / "
                     + "implementation / review coordinate over agmsg. agmsg carries natural-language delegation / "
                     + "progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli "
@@ -3026,8 +3029,8 @@ internal static class GuideOrchestratorThreadCommand
             {
                 Status = IntakeSetupReady,
                 Headline =
-                    "setup-ready (herdr-only) — the registration, delivery-configuration and role-prompt steps of "
-                    + "this intake are agmsg-only and do not apply. Their herdr-only counterparts ship in G571.",
+                    "setup-ready (herdr-only) — concrete provisioning, logical-role→pane mapping, typed launch, and "
+                    + "G556 READY procedures are present in the herdr-only operating sections.",
                 MissingFields = Array.Empty<string>(),
                 Inputs = inputs,
                 AgmsgCommands = null,
