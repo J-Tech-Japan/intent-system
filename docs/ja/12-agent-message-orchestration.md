@@ -203,7 +203,10 @@ transport であり、4 スレッドモデルではありません。1 チーム
 チーム workspace と role ごとの tab/pane を role cwd 付きで作成します（design /
 orchestrator は `<host-repo>`、implementation は child checkout、review は隔離した review
 cwd/worktree）。インストール済みの `herdr ... --help` に従い、`herdr workspace create`、
-`herdr tab create`、`herdr pane split` を使います。operator-visible な
+`herdr tab create`、`herdr pane split` を使います。herdr 0.7.5 の
+`workspace_created` result は top-level の `workspace`、`tab`、`root_pane` を返すため、
+`workspace.workspace_id`、`tab.tab_id`、`root_pane.pane_id` から mapping を seed し、
+`root_pane.cwd` を検証します。operator-visible な
 logical-role→pane-id/cwd mapping を記録し、毎操作前に解決します。workflow が pane id を
 hard-code してはいけません。herdr 外の design frontend は架空 pane ではなく reader type
 として記録します。
@@ -236,24 +239,35 @@ inputs:
   - <canonical issue/PR/path/reference>
 expected-artifacts:
   - <file, commit, PR, report, or other inspectable artifact>
-completion-marker: Ready になったら `ORCH_RESULT <task-id> <status> <artifact>` を正確に出力する。status は completed、blocked、question。
+result-prefix: ORCH_RESULT
+result-nonce: <fresh-per-dispatch-nonce>
+completion-marker: Ready になったら result-prefix、1 space、result-nonce、1 space、status、1 space、artifact を連結した 1 行を出力する。status は completed、blocked、question。precomposed marker をこの task block にコピーしない。
 ```
 
-handoff は file、commit、PR、verification log などの inspectable artifact です。screen prose
-はそれを指す signal にすぎません。repair は現在の pane mapping を解決した後、同じ logical
-role に task id と具体的 delta を添えて戻します。
+dispatch ごとに fresh で予測不能な nonce を生成し、再利用や task id 単独での代用をしません。
+`pane wait-output` は既存 output を即座に検索するため、task block 内の precomposed wait needle
+が echo され、作業開始前に false match することがあります。split field により、その literal を
+dispatch から除外します。handoff は file、commit、PR、verification log などの inspectable
+artifact です。screen prose はそれを指す signal にすぎません。repair は現在の pane mapping を
+解決した後、同じ logical role に task id と具体的 delta を添えて戻します。どの buffer 由来でも
+marker match だけでは不十分で、named artifact の存在と verification が必要です。
 
 wait は必ず bounded にします。
 
 ```text
-herdr agent wait <logical-role> --until done --until blocked --timeout <milliseconds>
-herdr pane wait-output --match "ORCH_RESULT <task-id>" --source recent-unwrapped --timeout <milliseconds> <pane-id>
+herdr agent wait <logical-role> --until idle --until done --until blocked --timeout <milliseconds>
+herdr pane wait-output --match "ORCH_RESULT <fresh-per-dispatch-nonce>" --source recent-unwrapped --timeout <milliseconds> <pane-id>
 ```
 
-timeout は re-entry point です。状態を inspect/persist して制御を返し、後続 wake で再開します。
-長い flow には cursor を永続化する deterministic script を推奨します。success は settled
-state + 正確な task marker + 存在して検証済みの artifact の合成判定です。herdr の
-`done` / `idle` だけで成功と結論してはいけません。
+`idle`、`done`、`blocked`、marker match、timeout を含む EVERY wait return 後に
+`herdr pane read --source recent-unwrapped <pane-id>` を実行し、pending approval / question を
+inspect します。`idle` は approval-paused の場合があります。結果を settled、
+approval/question-paused、timeout に分類します。pause では pane から読んだ G550 MAY class
+だけを回答し、それ以外は escalate してから wake に re-enter し、再度 wait します。timeout も
+re-entry point です。進捗を persist して制御を返し、後続 wake で再開します。長い flow には
+cursor を永続化する deterministic script を推奨します。success は dialog-free settled state +
+正確な fresh-nonce marker + 存在して検証済みの artifact の合成判定です。artifact verification
+が final gate であり、state 単独も marker 単独も success ではありません。
 
 ### Normative な `events.jsonl` design boundary
 
@@ -288,6 +302,10 @@ dispatch、GitHub、intent-cli workflow state の代替でもありません。
 - reboot 後の dead pty wiring: undetected agent / shell-only pane では artifact を保全して
   re-provision、mapping 再構築、上記の自己完結した settle-and-re-check READY gate 再実行を行います。
 - long-wait turn death: bounded wait、re-entry、persist された deterministic loop を使います。
+- dispatch-echo false match: composed wait needle を task block に入れず、return 後に pane を
+  inspect し、named artifact を独立に検証します。
+- idle と報告された approval/question pause: every wait 後に pane を inspect し、G550 の
+  MAY/escalate 境界を適用して wake に re-enter します。
 
 **agmsg → herdr-only**: work を drain/park、role を graceful drop して watcher/bridge を停止、
 herdr・mapping・検証済み events path を provision、G556 と marker/artifact 検出を通し、最後に
