@@ -237,22 +237,49 @@ transport であり、4 スレッドモデルではありません。1 チーム
 
 ### Provisioning と READY の証明
 
-チーム workspace と role ごとの tab/pane を role cwd 付きで作成します（design /
-orchestrator は `<host-repo>`、implementation は child checkout、review は隔離した review
-cwd/worktree）。インストール済みの `herdr ... --help` に従い、`herdr workspace create`、
-`herdr tab create`、`herdr pane split` を使います。herdr 0.7.5 の
-`workspace_created` result は top-level の `workspace`、`tab`、`root_pane` を返すため、
-`workspace.workspace_id`、`tab.tab_id`、`root_pane.pane_id` から mapping を seed し、
-`root_pane.cwd` を検証します。operator-visible な
-logical-role→pane-id/cwd mapping を記録し、workflow は pane/workspace id を hard-code
-しません。initial workspace creation が最初の id を返した後、すべての provisioning /
-mutation command は実行直前に記録済み mapping から明示的で空でない pane/workspace
-target id を解決し、command にその id を必ず指定します。解決結果が missing または
-empty なら fail closed とし、command を実行しません。そうしないと herdr が focus-default で
-他チームの currently focused pane を mutate する可能性があります。既存 G555 cross-project
-attribution rules が変わらず authoritative であり、別の attribution policy を再定義せず
-それを reference します。herdr 外の design frontend は架空 pane ではなく reader type
-として記録します。
+この topology を文字どおり使います: **1 チームにつき 1 workspace、team 名の 1 tab、role
+ごとに 1 pane とし、各 pane はその role の folder を cwd にして開きます。** これにより、
+すべての role を同時に operator から見える状態にし、G550 supervision pane scan が inactive
+な tab の背後に隠れないようにします。
+
+最初に workspace を作成します。
+
+```text
+herdr workspace create --cwd <host-repo> --label <team> --no-focus
+```
+
+herdr 0.7.5 の `workspace_created` result は top-level の `workspace`、`tab`、`root_pane` を
+返すため、`workspace.workspace_id`、`tab.tab_id`、`root_pane.pane_id` から mapping を seed
+し、`root_pane.cwd` を検証します。返された tab が team の通常唯一の tab です。その名前が
+`<team>` であることを保証し、必要なら返された explicit tab id を使います。
+
+```text
+herdr tab rename <tab-id> <team>
+```
+
+root pane を host-repo role の 1 つに割り当てます。残る各 herdr-resident role では **pane
+creation が default** です。記録済み mapping から non-empty pane id を resolve し、その
+explicit pane から split して新 role の cwd を指定します。
+
+```text
+herdr pane split --pane <pane-id> --direction right|down --cwd <role-cwd> --no-focus
+```
+
+design / orchestrator には `<host-repo>`、implementation には child checkout、review には
+隔離した review cwd/worktree を使い、各 pane creation result から mapping を更新します。
+`herdr tab create --workspace <workspace-id> --cwd <role-cwd> --label <logical-role> --no-focus`
+は primary path ではありません。tab-level lifecycle isolation を simultaneous visibility より
+優先する場合など、文書化した理由で separate role tab を operator が明示的に authorize した
+ときだけ例外として使います。
+
+operator-visible な logical-role→pane-id/cwd mapping を記録し、workflow は pane/workspace id を
+hard-code しません。initial workspace creation が最初の id を返した後、すべての provisioning /
+mutation command は実行直前に記録済み mapping から明示的で空でない pane/workspace target id
+を解決し、command にその id を必ず指定します。解決結果が missing または empty なら fail
+closed とし、command を実行しません。そうしないと herdr が focus-default で他チームの
+currently focused pane を mutate する可能性があります。既存 G555 cross-project attribution
+rules が変わらず authoritative であり、別の attribution policy を再定義せずそれを reference
+します。herdr 外の design frontend は架空 pane ではなく reader type として記録します。
 
 typed launch は次の surface です。
 

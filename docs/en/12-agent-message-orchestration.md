@@ -249,16 +249,45 @@ per team; mixed agmsg and herdr delivery is a contract violation.
 
 ### Provision and prove READY
 
-Create the team workspace and role tabs/panes with the role cwd (`<host-repo>`
-for design/orchestrator, the child checkout for implementation, and an isolated
-review cwd/worktree). Use `herdr workspace create`, `herdr tab create`, or
-`herdr pane split` as shown by the installed `herdr ... --help`. In herdr 0.7.5,
-the `workspace_created` result has top-level `workspace`, `tab`, and
-`root_pane`; seed the mapping from `workspace.workspace_id`, `tab.tab_id`, and
-`root_pane.pane_id`, and verify `root_pane.cwd`. Record an
-operator-visible logical-role→pane-id/cwd mapping; workflows never hard-code
-pane/workspace ids. After initial workspace creation returns the first ids,
-every provisioning or mutation command must resolve its explicit non-empty
+Use this topology literally: **one workspace per team, one tab named after the
+team, one pane per role, each pane opened with that role's folder as its cwd.**
+This keeps all roles visible to the operator at once and keeps the G550
+supervision pane scan from being hidden behind an inactive tab.
+
+Create the workspace first:
+
+```text
+herdr workspace create --cwd <host-repo> --label <team> --no-focus
+```
+
+In herdr 0.7.5, the `workspace_created` result has top-level `workspace`, `tab`,
+and `root_pane`; seed the mapping from `workspace.workspace_id`, `tab.tab_id`,
+and `root_pane.pane_id`, and verify `root_pane.cwd`. The returned tab is the one
+normal tab for the team. Ensure it is named `<team>`; if needed, use the
+returned explicit tab id:
+
+```text
+herdr tab rename <tab-id> <team>
+```
+
+Assign the root pane to one host-repo role. **Pane creation is the default** for
+every remaining herdr-resident role. Resolve a non-empty pane id from the
+recorded mapping, split from that explicit pane, and set the new role cwd:
+
+```text
+herdr pane split --pane <pane-id> --direction right|down --cwd <role-cwd> --no-focus
+```
+
+Use `<host-repo>` for design/orchestrator, the child checkout for implementation,
+and an isolated review cwd/worktree for review. Update the mapping from every
+pane creation result. `herdr tab create --workspace <workspace-id> --cwd <role-cwd> --label <logical-role> --no-focus` is **not** the primary path. Use
+it only when the operator explicitly authorizes a separate role tab for a
+documented reason, such as requiring tab-level lifecycle isolation instead of
+simultaneous visibility.
+
+Record an operator-visible logical-role→pane-id/cwd mapping; workflows never
+hard-code pane/workspace ids. After initial workspace creation returns the first
+ids, every provisioning or mutation command must resolve its explicit non-empty
 pane/workspace target id from that recorded mapping immediately before it runs
 and carry the id on the command. If resolution is missing or empty, fail closed
 and do not run the command: herdr can otherwise focus-default to the currently
