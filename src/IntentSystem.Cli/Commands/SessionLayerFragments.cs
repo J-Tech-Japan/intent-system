@@ -636,7 +636,7 @@ internal static class SessionLayerFragments
         Fragment(S4, Operative("- Verify GitHub facts directly: open PRs, CI conclusion, approvals, merge state, and closeout/label state.")),
         Fragment(
             S4,
-            Operative("- Classify each open PR's CI: pending = wait-and-recheck next wake (no message); green = delegate review/closeout; red = repair or escalate by ownership; stuck = escalate."),
+            Operative("- Classify each open PR's CI: pending = wait using the named mode-specific CI re-check producer (no message); green = delegate review/closeout; red = repair or escalate by ownership; stuck = escalate."),
             Scaffold(" "),
             Descriptive("Pending CI is normal progress, not a reason to message the operator.")),
         Fragment(S4, Operative("- Detect stale blockers and no-reply receivers: a delegation with no accepted/progress reply within the expected window, or a thread stuck off the official workflow.")),
@@ -1532,7 +1532,7 @@ internal static class SessionLayerFragments
         Fragment("scheduling", Operative("Verify GitHub facts directly: open PRs, CI conclusion, approvals, merge state, and closeout/label state.")),
         Fragment(
             "scheduling",
-            Operative("Classify each open PR's CI: pending = wait-and-recheck next wake (no message); green = delegate review/closeout; red = repair or escalate by ownership; stuck = escalate."),
+            Operative("Classify each open PR's CI: pending = wait using the named mode-specific CI re-check producer (no message); green = delegate review/closeout; red = repair or escalate by ownership; stuck = escalate."),
             Scaffold(" "),
             Descriptive("Pending CI is normal progress, not a reason to message the operator.")),
         Fragment("scheduling", Operative("Detect stale blockers and no-reply receivers: a delegation with no accepted/progress reply within the expected window, or a thread stuck off the official workflow.")),

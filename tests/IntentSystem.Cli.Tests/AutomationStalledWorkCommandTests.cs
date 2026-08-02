@@ -161,6 +161,135 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_CiPendingAndTerminalGreen_ForSamePr_ProduceDistinctDedupeReadyEvidence()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G589", "intent-cli");
+        var issue = BuildIssue(1281, "G589: CI wait must be survivable without a timer",
+            FixedNow.AddDays(-2), "intent-pr-created");
+        const string headSha = "589abc123def4567890abc123def4567890abc12";
+        var pendingPr = BuildPr(
+            1282,
+            issue.Title,
+            FixedNow.AddMinutes(-90),
+            state: "OPEN",
+            closingIssueNumber: issue.Number,
+            headRefOid: headSha,
+            statusCheckRollup:
+            [
+                CheckRun("COMPLETED", "SUCCESS"),
+                CheckRun("IN_PROGRESS"),
+            ]);
+
+        var pending = RunJson(workspace, issue, pendingPr);
+        Assert.False(pending.RootElement.GetProperty("stalled").GetBoolean());
+        var pendingItem = Assert.Single(pending.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindCiPending, pendingItem.GetProperty("kind").GetString());
+        Assert.True(pendingItem.GetProperty("is_informational").GetBoolean());
+        Assert.Equal(headSha, pendingItem.GetProperty("pr_head_sha").GetString());
+        Assert.Equal("pending", pendingItem.GetProperty("ci_outcome").GetString());
+        AssertCiBreakdown(pendingItem, passed: 1, failed: 0, skipped: 0, pending: 1, total: 2);
+        Assert.Equal($"ci-pending:pr-1282:{headSha}", pendingItem.GetProperty("dedupe_key").GetString());
+        Assert.DoesNotContain("pr-transition", pendingItem.GetProperty("recommended_action").GetString(),
+            StringComparison.Ordinal);
+
+        var greenPr = pendingPr with
+        {
+            StatusCheckRollup =
+            [
+                CheckRun("COMPLETED", "SUCCESS"),
+                CheckRun("COMPLETED", "SKIPPED"),
+            ],
+        };
+        var green = RunJson(workspace, issue, greenPr);
+        Assert.True(green.RootElement.GetProperty("stalled").GetBoolean());
+        var greenItem = Assert.Single(green.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindCiAllGreenNotTransitioned,
+            greenItem.GetProperty("kind").GetString());
+        Assert.False(greenItem.GetProperty("is_informational").GetBoolean());
+        Assert.Equal("all-green", greenItem.GetProperty("ci_outcome").GetString());
+        AssertCiBreakdown(greenItem, passed: 1, failed: 0, skipped: 1, pending: 0, total: 2);
+        Assert.Equal($"ci-all-green-not-transitioned:pr-1282:{headSha}",
+            greenItem.GetProperty("dedupe_key").GetString());
+        Assert.Contains("--transition review-start", greenItem.GetProperty("recommended_action").GetString(),
+            StringComparison.Ordinal);
+        Assert.NotEqual(pendingItem.GetProperty("kind").GetString(), greenItem.GetProperty("kind").GetString());
+    }
+
+    [Fact]
+    public void Execute_CiTerminalFailure_IsActionableAndCarriesOutcomeBreakdown()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G589", "intent-cli");
+        var issue = BuildIssue(1281, "G589: CI wait must be survivable without a timer",
+            FixedNow.AddDays(-2), "intent-pr-created");
+        const string headSha = "589fff123def4567890abc123def4567890abc12";
+        var failedPr = BuildPr(
+            1282,
+            issue.Title,
+            FixedNow.AddMinutes(-90),
+            state: "OPEN",
+            closingIssueNumber: issue.Number,
+            headRefOid: headSha,
+            statusCheckRollup:
+            [
+                StatusContext("SUCCESS"),
+                CheckRun("COMPLETED", "SKIPPED"),
+                StatusContext("FAILURE"),
+            ]);
+
+        var result = RunJson(workspace, issue, failedPr);
+        var item = Assert.Single(result.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindCiFailedNotTransitioned,
+            item.GetProperty("kind").GetString());
+        Assert.False(item.GetProperty("is_informational").GetBoolean());
+        Assert.Equal("failed", item.GetProperty("ci_outcome").GetString());
+        AssertCiBreakdown(item, passed: 1, failed: 1, skipped: 1, pending: 0, total: 3);
+        Assert.Equal($"ci-failed-not-transitioned:pr-1282:{headSha}",
+            item.GetProperty("dedupe_key").GetString());
+        var action = item.GetProperty("recommended_action").GetString();
+        Assert.Contains("repair", action, StringComparison.Ordinal);
+        Assert.Contains("escalation", action, StringComparison.Ordinal);
+        Assert.DoesNotContain("review-start", action, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_CiClassification_IsStrictlyReadOnlyAcrossAllOutcomes()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G589", "intent-cli");
+        workspace.WriteFile("sentinel.txt", "workflow state must remain untouched\n");
+        var issue = BuildIssue(1281, "G589: CI wait must be survivable without a timer",
+            FixedNow.AddDays(-2), "intent-pr-created");
+        const string headSha = "589ddd123def4567890abc123def4567890abc12";
+        var before = SnapshotFiles(workspace.RootPath);
+
+        foreach (var checks in new IReadOnlyList<GitHubAutomationStatusCheckCandidate>[]
+                 {
+                     [CheckRun("IN_PROGRESS")],
+                     [CheckRun("COMPLETED", "SUCCESS")],
+                     [CheckRun("COMPLETED", "FAILURE")],
+                 })
+        {
+            var pr = BuildPr(1282, issue.Title, FixedNow.AddMinutes(-90), "OPEN", issue.Number,
+                headRefOid: headSha, statusCheckRollup: checks);
+            _ = RunJson(workspace, issue, pr);
+        }
+
+        var after = SnapshotFiles(workspace.RootPath);
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public void LiveLister_RequestsExactHeadAndStatusRollup()
+    {
+        Assert.Contains("headRefOid", GhCliGitHubAutomationCandidateLister.PrListJsonFields,
+            StringComparison.Ordinal);
+        Assert.Contains("statusCheckRollup", GhCliGitHubAutomationCandidateLister.PrListJsonFields,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_PrCreatedNotReviewing_ExcludesPrAlreadyReviewing()
     {
         using var workspace = new StalledWorkWorkspace();
@@ -3046,6 +3175,59 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
             Labels = labels.Select(name => new GitHubAutomationLabel { Name = name }).ToArray(),
         };
 
+    private static JsonDocument RunJson(
+        StalledWorkWorkspace workspace,
+        GitHubAutomationIssueCandidate issue,
+        GitHubAutomationPrCandidate pr)
+    {
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue], prs: [pr]);
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--stale-minutes", "0",
+                "--repair-silent-minutes", "0", "--format", "json"],
+            writer);
+        Assert.Equal(0, exitCode);
+        return JsonDocument.Parse(writer.ToString());
+    }
+
+    private static GitHubAutomationStatusCheckCandidate CheckRun(string status, string conclusion = "") => new()
+    {
+        TypeName = "CheckRun",
+        Status = status,
+        Conclusion = conclusion,
+    };
+
+    private static GitHubAutomationStatusCheckCandidate StatusContext(string state) => new()
+    {
+        TypeName = "StatusContext",
+        State = state,
+    };
+
+    private static void AssertCiBreakdown(
+        JsonElement item,
+        int passed,
+        int failed,
+        int skipped,
+        int pending,
+        int total)
+    {
+        var breakdown = item.GetProperty("ci_breakdown");
+        Assert.Equal(passed, breakdown.GetProperty("passed").GetInt32());
+        Assert.Equal(failed, breakdown.GetProperty("failed").GetInt32());
+        Assert.Equal(skipped, breakdown.GetProperty("skipped").GetInt32());
+        Assert.Equal(pending, breakdown.GetProperty("pending").GetInt32());
+        Assert.Equal(total, breakdown.GetProperty("total").GetInt32());
+    }
+
+    private static IReadOnlyDictionary<string, string> SnapshotFiles(string rootPath) =>
+        Directory.GetFiles(rootPath, "*", SearchOption.AllDirectories)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToDictionary(
+                path => Path.GetRelativePath(rootPath, path),
+                path => Convert.ToHexString(File.ReadAllBytes(path)),
+                StringComparer.Ordinal);
+
     private static GitHubAutomationPrCandidate BuildPr(
         int number,
         string title,
@@ -3054,7 +3236,9 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         int? closingIssueNumber = null,
         string[]? extraLabels = null,
         DateTimeOffset? updatedAt = null,
-        bool isDraft = false) => new()
+        bool isDraft = false,
+        string headRefOid = "",
+        IReadOnlyList<GitHubAutomationStatusCheckCandidate>? statusCheckRollup = null) => new()
         {
             Number = number,
             Title = title,
@@ -3063,6 +3247,8 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
             UpdatedAt = (updatedAt ?? createdAt).ToString("O"),
             State = state,
             IsDraft = isDraft,
+            HeadRefOid = headRefOid,
+            StatusCheckRollup = statusCheckRollup ?? Array.Empty<GitHubAutomationStatusCheckCandidate>(),
             Labels = (extraLabels ?? Array.Empty<string>()).Select(name => new GitHubAutomationLabel { Name = name }).ToArray(),
             ClosingIssuesReferences = closingIssueNumber is int n
                 ? new[]
