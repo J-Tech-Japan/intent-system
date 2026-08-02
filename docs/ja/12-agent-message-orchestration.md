@@ -280,6 +280,47 @@ artifact です。screen prose はそれを指す signal にすぎません。re
 marker match だけでは不十分で、named artifact の存在と verification が必要です。repair も
 `intent-cli notify delegate` で同じ logical role に戻します。
 
+### 2 つの normative wake source
+
+herdr-only orchestration には 2 つの normative wake source があります。canonical な
+`intent-cli notify report` は primary かつ最も情報量が多く、task id、status、artifact、
+summary を運びますが、worker が協力して必須の final command を実行することに依存します。
+normative な **SECOND wake source** は herdr が観測する
+`pane.agent_status_changed` です。worker が report を省略しても、herdr による process 観測
+だけで orchestration を wake できますが、task outcome は運びません。
+
+実測した herdr 0.7.5 socket API は `events.subscribe` を使います。
+`pane.agent_status_changed` は `pane_id` を必須とするため、watched pane ごとに 1 つの
+subscription entry を含めます。
+
+```json
+{"method":"events.subscribe","params":{"subscriptions":[{"type":"pane.agent_status_changed","pane_id":"<resolved-pane-id>"}]}}
+```
+
+各 `<resolved-pane-id>` は subscribe 時と re-provision 後に、記録済み
+logical-role→pane mapping から解決し、pane id を hard-code してはいけません。event frame は
+`agent`、`agent_status`、`pane_id`、`workspace_id` を運びます。
+
+```json
+{"event":"pane.agent_status_changed","data":{"agent":"<agent>","agent_status":"<working|idle|done|blocked|unknown>","pane_id":"<resolved-pane-id>","workspace_id":"<workspace-id>"}}
+```
+
+直前の status は logical role ごとに独立して追跡します。その role が `working` から
+settled (`idle`、`done`、`blocked`) へ遷移した場合だけ wake します。最初から settled の
+sample、`unknown`、settled→settled の変化では wake しません。wake 前に settle delay を置き、
+per-role dedupe により burst から生じる wake を、その観測済み transition につき 1 回にします。
+新しい `working` の観測で、その role を re-arm します。
+
+**state change は何かが起きたことだけを意味し、task が成功したことを決して意味しません。**
+どちらの source から wake した後も毎回、orchestration は現在の herdr state と pending
+approval/question pause、正確で fresh な completion marker と status、検証済み named
+artifact、fresh な canonical intent-cli/GitHub facts を確認します。2 つの source は相補的です:
+notify report は最も情報量が多い一方で worker の協力に依存し、state change は herdr の観測
+だけに依存する一方で outcome を運びません。periodic な
+`intent-cli automation stalled-work ...` check が last net です。この実測 shape は、
+version-specific details について installed herdr help/schema を確認するという standing rule を
+置き換えません。
+
 wait は必ず bounded にします。
 
 ```text
@@ -293,9 +334,10 @@ inspect します。`idle` は approval-paused の場合があります。結果
 approval/question-paused、timeout に分類します。pause では pane から読んだ G550 MAY class
 だけを回答し、それ以外は escalate してから wake に re-enter し、再度 wait します。timeout も
 re-entry point です。進捗を persist して制御を返し、後続 wake で再開します。長い flow には
-cursor を永続化する deterministic script を推奨します。success は dialog-free settled state +
-正確な fresh-nonce marker + 存在して検証済みの artifact の合成判定です。artifact verification
-が final gate であり、state 単独も marker 単独も success ではありません。
+cursor を永続化する deterministic script を推奨します。success は pending
+approval/question のない settled state + 正確な fresh-nonce marker と status + 存在して検証済みの
+artifact + fresh な canonical intent-cli/GitHub facts の合成判定です。artifact verification と
+canonical facts が final gate であり、state 単独も marker 単独も success ではありません。
 
 ### Normative な `events.jsonl` design boundary
 

@@ -3,10 +3,10 @@ using System.Text.Json.Nodes;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G571: the concrete operating procedure selected by the G570 session-layer
-/// router. This content is synthetic rather than part of the agmsg-backed
-/// guide model so the practiced agmsg rendering remains byte-for-byte on its
-/// existing path.
+/// G571/G581: the concrete operating procedure selected by the G570
+/// session-layer router. This content is synthetic rather than part of the
+/// agmsg-backed guide model so the practiced agmsg rendering remains
+/// byte-for-byte on its existing path.
 /// </summary>
 internal static class HerdrOnlyOperatingGuide
 {
@@ -16,6 +16,7 @@ internal static class HerdrOnlyOperatingGuide
     [
         "## Herdr-only provisioning and READY gate",
         "## Herdr-only dispatch and artifact handoff",
+        "## Herdr-only wake sources",
         "## Herdr-only bounded waiting and success detection",
         "## events.jsonl design boundary",
         "## Herdr-only failure modes and recovery",
@@ -71,6 +72,31 @@ internal static class HerdrOnlyOperatingGuide
 
         `notify delegate` generates the structured task block, keeps the result prefix and fresh unpredictable nonce separate, and embeds task id, expected artifact, plus the complete canonical `intent-cli notify report` command as the receiver's required final step. That command carries the transport-neutral `--routing-root`, so an isolated child checkout still resolves the recorded mode internally without learning a transport-specific send instruction. The receiver reports `completed`, `blocked`, or `question` only through that embedded command; it never hand-writes a transport call. Never reuse a nonce or substitute the task id alone. `pane wait-output` searches existing pane output immediately, so a precomposed wait needle in the dispatched task can be echoed and falsely match before the agent does any work. Files, commits, PRs, test logs, and other inspectable artifacts are the handoff; terminal prose is only a signal pointing at them. A repair or re-dispatch goes to the same logical role through `intent-cli notify delegate` and carries the same task id plus the concrete delta. A marker match from any pane buffer is NEVER sufficient: the named artifact must exist and pass its verification.
 
+        ## Herdr-only wake sources
+
+        Herdr-only has two normative wake sources. Neither replaces the composite success gate below:
+
+        1. **Canonical notify report (primary and most informative):** the receiver's embedded `intent-cli notify report` carries task id, status, artifact, and summary directly to orchestration, but it depends on the worker cooperating and running its required final command.
+        2. **Observed agent state change (normative SECOND wake source):** independently subscribe to herdr `pane.agent_status_changed` for every watched role. This depends only on herdr observing the agent process, so it still wakes orchestration when a worker omits its report; the event carries no task outcome.
+
+        For the measured herdr 0.7.5 socket API, call `events.subscribe` with one subscription entry per watched pane because `pane.agent_status_changed` requires `pane_id`:
+
+        ```json
+        {"method":"events.subscribe","params":{"subscriptions":[{"type":"pane.agent_status_changed","pane_id":"<resolved-pane-id>"}]} }
+        ```
+
+        Resolve each `<resolved-pane-id>` from the recorded logical-role→pane mapping at subscription time and after any re-provisioning; NEVER hard-code pane ids. The subscription event frame carries the observed `agent`, `agent_status`, `pane_id`, and `workspace_id`:
+
+        ```json
+        {"event":"pane.agent_status_changed","data":{"agent":"<agent>","agent_status":"<working|idle|done|blocked|unknown>","pane_id":"<resolved-pane-id>","workspace_id":"<workspace-id>"} }
+        ```
+
+        Track the previous status independently for each logical role. Schedule a wake only when that role transitions from `working` to a settled state (`idle`, `done`, or `blocked`); an initial settled observation, `unknown`, or a settled→settled change does not wake orchestration. Apply a settle delay before the wake, and keep per-role dedupe state so a burst produces only one wake for that role's observed working→settled transition. A newly observed `working` state re-arms that role.
+
+        **A state change means only that something happened, never that a task succeeded.** After EVERY wake from either source, orchestration checks current herdr state and pending approval/question, the exact fresh-nonce completion marker and status, the named verified artifact, and fresh canonical intent-cli/GitHub facts before advancing or concluding the task. A settled pane may still be paused for approval or a question.
+
+        The failure modes are complementary: notify report is the richest signal but depends on worker cooperation; state change depends only on herdr observation but carries no outcome. The periodic `intent-cli automation stalled-work ...` check remains the last net when neither immediate source produces a usable wake. This herdr 0.7.5 shape does not replace the standing rule: consult the installed herdr help/schema for version-specific details before operating it.
+
         ## Herdr-only bounded waiting and success detection
 
         Use bounded waits only. For agent state, use `herdr agent wait <logical-role> --until idle --until done --until blocked --timeout <milliseconds>`. For the task signal, use `herdr pane wait-output --match "ORCH_RESULT <fresh-per-dispatch-nonce>" --source recent-unwrapped --timeout <milliseconds> <pane-id>`. Both commands wait indefinitely when `--timeout` is omitted, so omission is forbidden in an orchestrator wake.
@@ -79,7 +105,7 @@ internal static class HerdrOnlyOperatingGuide
 
         A timeout is a re-entry point: persist progress, return control to the orchestrator, and wait again on the next bounded wake. Prefer a deterministic script that persists its cursor for long multi-wait flows; do not hold one chat turn open indefinitely, because turn death loses the continuation.
 
-        **Composite success is mandatory:** (1) herdr reports a settled state and pane inspection finds no pending dialog, (2) the exact `ORCH_RESULT` marker matches the fresh dispatch nonce and status, and (3) the named artifact exists and passes the task's verification. The named artifact verification is the final gate. State alone and marker alone NEVER mean task success; in particular, herdr `done` or `idle` alone is insufficient, and a marker found anywhere in the pane buffer is only a signal. `blocked` and `question` markers route back to the orchestrator/design decision boundary; they are not failures to hide or successes to assume.
+        **Composite success is mandatory:** (1) herdr reports a settled state and pane inspection finds no pending approval/question, (2) the exact `ORCH_RESULT` marker matches the fresh dispatch nonce and status, (3) the named artifact exists and passes the task's verification, and (4) fresh canonical intent-cli/GitHub facts confirm the workflow state. The named artifact verification is the final gate only together with fresh canonical facts. State alone and marker alone NEVER mean task success; in particular, herdr `done` or `idle` alone is insufficient, and a marker found anywhere in the pane buffer is only a signal. `blocked` and `question` markers route back to the orchestrator/design decision boundary; they are not failures to hide or successes to assume.
 
         ## events.jsonl design boundary
 
@@ -150,6 +176,25 @@ internal static class HerdrOnlyOperatingGuide
             ["artifact_first"] = "Files, commits, PRs, and verification logs are the handoff; terminal text points to them.",
             ["redispatch"] = "Use intent-cli notify delegate for the same logical role with the task id plus concrete repair delta.",
         },
+        ["wake_sources"] = new JsonObject
+        {
+            ["notify_report"] = "Primary and most informative: carries task id, status, artifact, and summary, but depends on the worker running the embedded final intent-cli notify report command.",
+            ["state_change"] = new JsonObject
+            {
+                ["role"] = "Normative SECOND wake source; depends only on herdr observation and carries no outcome.",
+                ["measured_version"] = "herdr 0.7.5",
+                ["method"] = "events.subscribe",
+                ["subscription"] = "{\"type\":\"pane.agent_status_changed\",\"pane_id\":\"<resolved-pane-id>\"}",
+                ["cardinality"] = "One subscription entry per watched pane; resolve pane_id from the recorded logical-role mapping and never hard-code it.",
+                ["event"] = "{\"event\":\"pane.agent_status_changed\",\"data\":{\"agent\":\"<agent>\",\"agent_status\":\"<working|idle|done|blocked|unknown>\",\"pane_id\":\"<resolved-pane-id>\",\"workspace_id\":\"<workspace-id>\"}}",
+                ["transition"] = "Wake only on a per-role working-to-settled transition: idle, done, or blocked; initial settled, unknown, and settled-to-settled observations do not wake.",
+                ["settle_and_dedupe"] = "Apply a settle delay and per-role dedupe so one observed working-to-settled transition produces one wake; a new working observation re-arms the role.",
+            },
+            ["semantic_boundary"] = "A state change means only that something happened, never that a task succeeded.",
+            ["composite_check"] = "After every wake from either source, check current herdr state and approval/question pauses + exact fresh-nonce completion marker/status + verified artifact + fresh canonical intent-cli/GitHub facts.",
+            ["last_net"] = "The periodic intent-cli automation stalled-work check remains the last net when neither immediate source produces a usable wake.",
+            ["version_rule"] = "Consult installed herdr help/schema for version-specific details before operating the measured 0.7.5 shape.",
+        },
         ["waiting"] = new JsonObject
         {
             ["agent"] = "herdr agent wait <logical-role> --until idle --until done --until blocked --timeout <milliseconds>",
@@ -157,7 +202,7 @@ internal static class HerdrOnlyOperatingGuide
             ["post_wait_inspection"] = "After every wait return, run herdr pane read --source recent-unwrapped <pane-id> and classify settled, approval/question-paused, or timeout; idle can be approval-paused.",
             ["paused_reentry"] = "For a visible approval/question, apply the G550 MAY/escalate boundary, then re-enter the wake and wait again.",
             ["bounded_rule"] = "Timeouts are re-entry points; never leave a wait unbounded. Persist cursors in deterministic scripts for long loops.",
-            ["success"] = "Composite success requires dialog-free settled state + matching fresh-nonce marker + existing verified artifact; artifact verification is the final gate, and neither state nor marker alone concludes success.",
+            ["success"] = "Composite success requires approval/question-free settled state + matching fresh-nonce marker/status + existing verified artifact + fresh canonical intent-cli/GitHub facts; artifact verification plus canonical facts are the final gate, and neither state nor marker alone concludes success.",
         },
         ["events_jsonl"] = new JsonObject
         {
