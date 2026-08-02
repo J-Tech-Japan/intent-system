@@ -44,11 +44,24 @@ intent-cli notify escalate --domain <domain> --team <team> --from <sender-role> 
 checkout から必要な transport-neutral `--routing-root` を含む完全な canonical report
 command を配信 task に埋め込みます。receiver は他のすべての作業後、その report
 command を final step として実行するため、herdr-only の完了が receiver pane に表示される
-だけで終わらず orchestration role を能動的に wake します。unknown role と delivery failure
-は named cause と non-zero で fail closed します。`notify escalate` は変更していない 6-field
-event schema を append します。いずれも merge / label / publish / queue mutation を行いません。
-direct transport command は provisioning/readiness diagnostics に限り、workflow send instruction
-には使いません。
+だけで終わらず orchestration role を能動的に wake します。herdr-only mode の source of truth は
+`<routing-root>/.intent-cli/role-pane-mapping.json` です。sender、recipient、delegate の
+`report-to` はすべてその team の recorded roster に存在する必要がありますが、**only the
+recipient must be deliverable** です。このため `resident: external` role は pane なしで sender
+および `report-to` になれます。その external role が recipient の場合、`delegate` / `report`
+は安全な routing-root-relative の recorded `reader` へ変更されていない 6-field event を正確に
+1 件 append して配信します（`delegate` は `question`、`report` は既存 status を使います）。
+そして `eventAppended: true` を返します。herdr-resident recipient は team の recorded workspace
+内にある明示的な recorded pane を target にします。他 workspace にだけ存在する agent は
+決して eligible ではありません。
+
+`--dry-run` は `--write` と同じ topology、team-workspace、recipient-state、reader resolution を
+実行し、prompt / append の副作用なしで同じ refusal verdict と cause を返します。unknown-role
+failure は実際に参照した source、team/workspace scope、その scope で見つかった role、corrective
+action を明示します。resolution はすべて fail closed で、foreign workspace や別 transport への
+fallback はありません。`notify escalate` は同じ 6-field event schema を引き続き append します。
+いずれも merge / label / publish / queue mutation を行いません。direct transport command は
+provisioning/readiness diagnostics に限り、workflow send instruction には使いません。
 
 ## orchestrator モードの開始（設計スレッドのセットアップ）
 
@@ -281,6 +294,16 @@ currently focused pane を mutate する可能性があります。既存 G555 c
 rules が変わらず authoritative であり、別の attribution policy を再定義せずそれを reference
 します。herdr 外の design frontend は架空 pane ではなく reader type として記録します。
 
+この team-scoped topology は
+`<host-repo>/.intent-cli/role-pane-mapping.json` に persist します。team の
+`workspace_id` を記録し、`roles` 配下で pane-backed role には `resident: herdr` と明示的な
+`workspace_id` / `pane_id`、herdr 外の role には `resident: external` と routing-root-relative
+な `reader`（通常は `.intent-cli/events/<team>.jsonl`）を記録します。すべての recorded role は
+sender と delegate report target になれます。受信時は herdr resident に、その正確な team
+workspace の recorded pane で running agent が必要です。external resident は recorded reader
+を通して canonical delegate/report event を受け取ります。missing/unsafe reader、stale pane、
+foreign-workspace-only name、ambiguous mapping は prompt / append なしで fail closed になります。
+
 typed launch は次の surface です。
 
 ```text
@@ -383,15 +406,20 @@ host root を実行時に解決し、`<host-repo>/.intent-cli/events/<team>.json
 path 構築前に、空文字、先頭 dot、`/` または `\`、任意の `..` sequence を fail closed で
 拒否します。不正名を sanitize してはいけません。
 
-writer は orchestrator だけです。`O_APPEND` で開き、1 行に完全な JSON object を 1 つ
-append し、embedded newline を許さず、`summary` を 1 行へ normalize します。必須 schema:
+canonical `intent-cli notify` surface だけが writer で、caller は手動 append しません。
+通常は orchestrator が delegate/escalate event を書き、recorded recipient が external の場合は
+receiver の canonical report も append できます。`O_APPEND` で開き、1 行に完全な JSON object
+を 1 つ append し、embedded newline を許さず、`summary` を 1 行へ normalize します。必須 schema:
 
 ```json
 {"timestamp":"<RFC3339>","team":"<team>","kind":"completion|blocked|question|escalation","unit":"<execution-unit-or-task-id>","summary":"<one-line-summary>","artifact":"<repo-relative-path-or-URL>"}
 ```
 
-design-relevant な completion / blocked / question / escalation だけを書きます。この
-mode-independent channel は design boundary のみで、inter-agent bus ではなく、
+recorded external reader 宛ての canonical notification と、design-relevant な completion /
+blocked / question / escalation だけを書きます。external reader 宛て delegation は `question`、
+external report は既存の `completed|blocked|question` status を使います。pane-resident dispatch、
+routine progress、pane output、acknowledgement はここへ mirror しません。この mode-independent
+channel は explicit external-reader/design boundary のままで、fallback inter-agent bus ではなく、
 `intent-cli notify`、GitHub、intent-cli workflow state の代替でもありません。
 
 すべての reader は watcher restart をまたいで durable watermark を永続化し、file identity、

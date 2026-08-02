@@ -122,20 +122,6 @@ internal static class NotifyCommand
             ? BuildDelegatePayload(options, reportCommand!)
             : BuildReportPayload(options);
 
-        if (!options.Write)
-        {
-            Emit(writer, options.Format, SuccessResult(
-                operation,
-                options,
-                resolution,
-                delivered: false,
-                eventAppended: false,
-                payload,
-                reportCommand,
-                $"Dry-run: would deliver {operation} through {resolution.Mode}."));
-            return 0;
-        }
-
         var runner = ProcessRunnerFactory?.Invoke() ?? new NotifyProcessRunner();
         var transport = string.Equals(resolution.Mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal)
             ? (INotifyTransport)new HerdrNotifyTransport(
@@ -148,13 +134,15 @@ internal static class NotifyCommand
             ? new[] { options.FromRole!, options.ToRole!, options.ReportToRole! }
             : new[] { options.FromRole!, options.ToRole! };
         var delivery = transport.Deliver(
+            options.RoutingRoot!,
             options.Team!,
             options.FromRole!,
             options.ToRole!,
             roles,
-            payload);
+            payload,
+            options.Write);
 
-        if (!delivery.Delivered)
+        if (!delivery.Resolved)
         {
             Emit(writer, options.Format, FailureResult(
                 operation,
@@ -167,17 +155,63 @@ internal static class NotifyCommand
             return 1;
         }
 
+        var eventAppended = false;
+        if (delivery.ReaderPath is not null && options.Write)
+        {
+            try
+            {
+                NotifyEventWriter.Append(delivery.ReaderPath, BuildReaderEvent(operation, options));
+                eventAppended = true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                Emit(writer, options.Format, FailureResult(
+                    operation,
+                    options,
+                    resolution.Mode,
+                    "event-append-failed",
+                    $"Could not append notification to external role '{options.ToRole}' through recorded reader "
+                    + $"'{delivery.ReaderPath}': {exception.Message} Fix reader access and retry notify.",
+                    payload,
+                    reportCommand));
+                return 1;
+            }
+        }
+
         Emit(writer, options.Format, SuccessResult(
             operation,
             options,
             resolution,
-            delivered: true,
-            eventAppended: false,
+            delivered: delivery.Delivered || eventAppended,
+            eventAppended,
             payload,
             reportCommand,
-            delivery.Summary));
+            eventAppended
+                ? $"Delivered {operation} to external logical role '{options.ToRole}' in team '{options.Team}' "
+                  + $"through recorded reader '{delivery.ReaderPath}'."
+                : delivery.Summary,
+            eventPath: delivery.ReaderPath));
         return 0;
     }
+
+    private static NotifyDesignEvent BuildReaderEvent(string operation, NotifyOptions options) => new()
+    {
+        Timestamp = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+        Team = options.Team!,
+        // A delegation is an actionable request to the external reader; a
+        // report already carries one of the three existing outcome kinds.
+        Kind = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+            ? "question"
+            : options.Status!,
+        Unit = options.TaskId!,
+        Summary = NotifyEventWriter.NormalizeSummary(
+            string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+                ? options.Objective!
+                : options.Summary!),
+        Artifact = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+            ? options.Inputs.FirstOrDefault() ?? options.ExpectedArtifacts[0]
+            : options.Artifact!,
+    };
 
     private static int ExecuteEscalation(
         TextWriter writer,

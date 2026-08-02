@@ -52,9 +52,13 @@ internal sealed class NotifyProcessRunner : INotifyProcessRunner
 
 internal sealed record NotifyDeliveryResult
 {
+    public required bool Resolved { get; init; }
+
     public required bool Delivered { get; init; }
 
     public string? Cause { get; init; }
+
+    public string? ReaderPath { get; init; }
 
     public required string Summary { get; init; }
 }
@@ -62,11 +66,13 @@ internal sealed record NotifyDeliveryResult
 internal interface INotifyTransport
 {
     NotifyDeliveryResult Deliver(
+        string routingRoot,
         string team,
         string fromRole,
         string toRole,
         IReadOnlyList<string> rolesToValidate,
-        string payload);
+        string payload,
+        bool write);
 }
 
 internal sealed class AgmsgNotifyTransport : INotifyTransport
@@ -81,11 +87,13 @@ internal sealed class AgmsgNotifyTransport : INotifyTransport
     }
 
     public NotifyDeliveryResult Deliver(
+        string routingRoot,
         string team,
         string fromRole,
         string toRole,
         IReadOnlyList<string> rolesToValidate,
-        string payload)
+        string payload,
+        bool write)
     {
         var teamScript = Path.Combine(scriptsDirectory, "team.sh");
         var sendScript = Path.Combine(scriptsDirectory, "send.sh");
@@ -125,6 +133,16 @@ internal sealed class AgmsgNotifyTransport : INotifyTransport
             }
         }
 
+        if (!write)
+        {
+            return new NotifyDeliveryResult
+            {
+                Resolved = true,
+                Delivered = false,
+                Summary = $"Dry-run: would deliver notification to agmsg role '{toRole}' in team '{team}'.",
+            };
+        }
+
         NotifyProcessResult delivery;
         try
         {
@@ -138,6 +156,7 @@ internal sealed class AgmsgNotifyTransport : INotifyTransport
         return delivery.ExitCode == 0
             ? new NotifyDeliveryResult
             {
+                Resolved = true,
                 Delivered = true,
                 Summary = $"Delivered notification to agmsg role '{toRole}' in team '{team}'.",
             }
@@ -165,6 +184,7 @@ internal sealed class AgmsgNotifyTransport : INotifyTransport
 
     private static NotifyDeliveryResult Failure(string cause, string summary) => new()
     {
+        Resolved = false,
         Delivered = false,
         Cause = cause,
         Summary = summary,
@@ -189,12 +209,60 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
     }
 
     public NotifyDeliveryResult Deliver(
+        string routingRoot,
         string team,
         string fromRole,
         string toRole,
         IReadOnlyList<string> rolesToValidate,
-        string payload)
+        string payload,
+        bool write)
     {
+        var topologyResolution = NotifyRoleTopologyStore.Resolve(routingRoot, team);
+        if (!topologyResolution.Resolved)
+        {
+            return Failure(topologyResolution.Cause!, topologyResolution.Summary);
+        }
+
+        var topology = topologyResolution.Topology!;
+        foreach (var role in rolesToValidate.Distinct(StringComparer.Ordinal))
+        {
+            if (!topology.Roles.ContainsKey(role))
+            {
+                return Failure(
+                    "unknown-role",
+                    $"Recorded role topology '{topology.SourcePath}' for team '{team}' workspace "
+                    + $"'{topology.WorkspaceId}' does not contain logical role '{role}' (found in that team scope: "
+                    + $"{FormatRoles(topology.Roles.Keys)}). Record that role for this team before retrying notify.");
+            }
+        }
+
+        var recipient = topology.Roles[toRole];
+        if (string.Equals(recipient.Resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal))
+        {
+            if (!NotifyRoleTopologyStore.TryResolveReaderPath(
+                    routingRoot,
+                    recipient.Reader,
+                    out var readerPath,
+                    out var readerError))
+            {
+                return Failure(
+                    "reader-unavailable",
+                    $"External logical role '{toRole}' in team '{team}' has no deliverable recorded reader in "
+                    + $"'{topology.SourcePath}': {readerError} Record a safe routing-root-relative reader and retry.");
+            }
+
+            return new NotifyDeliveryResult
+            {
+                Resolved = true,
+                Delivered = false,
+                ReaderPath = readerPath,
+                Summary = write
+                    ? $"Resolved external logical role '{toRole}' in team '{team}' to recorded reader '{readerPath}'."
+                    : $"Dry-run: would append notification for external logical role '{toRole}' in team '{team}' "
+                      + $"to recorded reader '{readerPath}'.",
+            };
+        }
+
         NotifyProcessResult agentList;
         try
         {
@@ -202,71 +270,122 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
         }
         catch (InvalidOperationException exception)
         {
-            return Failure("transport-unavailable", exception.Message);
+            return Failure(
+                "transport-unavailable",
+                $"{exception.Message} Verify the installed herdr executable and retry notify.");
         }
 
         if (agentList.ExitCode != 0)
         {
             return Failure(
                 "transport-failure",
-                $"herdr logical-role lookup failed: {OneLine(agentList.StandardError, agentList.StandardOutput)}");
+                $"herdr agent list lookup for team '{team}' workspace '{topology.WorkspaceId}' failed: "
+                + $"{OneLine(agentList.StandardError, agentList.StandardOutput)} Inspect herdr agent list/API state "
+                + "for that workspace and retry notify.");
         }
 
         IReadOnlyDictionary<string, HerdrRoleState> roles;
         try
         {
-            roles = ParseRoles(agentList.StandardOutput);
+            roles = ParseRoles(agentList.StandardOutput, topology.WorkspaceId);
         }
         catch (InvalidOperationException exception)
         {
-            return Failure("transport-invalid-response", exception.Message);
+            return Failure(
+                "transport-invalid-response",
+                $"{exception.Message} Inspect the installed herdr agent-list response schema and retry notify.");
         }
 
-        foreach (var role in rolesToValidate.Distinct(StringComparer.Ordinal))
+        if (!roles.TryGetValue(toRole, out var state))
         {
-            if (!roles.TryGetValue(role, out var state))
-            {
-                return Failure(
-                    "unknown-role",
-                    $"herdr logical role '{role}' is not present in the recorded agent mapping.");
-            }
+            return Failure(
+                "unknown-role",
+                $"herdr agent list for team '{team}' workspace '{topology.WorkspaceId}' does not contain logical "
+                + $"role '{toRole}' (found in that workspace: {FormatRoles(roles.Keys)}). Verify the team's recorded "
+                + "workspace and start the intended recipient there before retrying; agents in other workspaces are "
+                + "not eligible.");
+        }
 
-            if (string.IsNullOrWhiteSpace(state.PaneId))
-            {
-                return Failure("pane-absent", $"herdr logical role '{role}' has no mapped pane.");
-            }
+        if (string.IsNullOrWhiteSpace(recipient.PaneId))
+        {
+            return Failure(
+                "pane-absent",
+                $"Recorded topology '{topology.SourcePath}' gives herdr recipient '{toRole}' in team '{team}' no "
+                + "pane_id. Record its explicit pane and retry.");
+        }
 
-            if (!state.AgentRunning)
+        if (string.IsNullOrWhiteSpace(state.PaneId))
+        {
+            return Failure(
+                "pane-absent",
+                $"herdr agent list found logical role '{toRole}' in team '{team}' workspace "
+                + $"'{topology.WorkspaceId}' without a pane. Re-provision the recorded recipient before retrying.");
+        }
+
+        if (!string.Equals(state.PaneId, recipient.PaneId, StringComparison.Ordinal))
+        {
+            return Failure(
+                "pane-mismatch",
+                $"herdr agent list found logical role '{toRole}' in team '{team}' workspace "
+                + $"'{topology.WorkspaceId}' at pane '{state.PaneId ?? "none"}', but '{topology.SourcePath}' records "
+                + $"pane '{recipient.PaneId}'. Refresh the recorded topology before retrying.");
+        }
+
+        if (!state.AgentRunning)
+        {
+            return Failure(
+                "agent-not-running",
+                $"herdr logical role '{toRole}' in team '{team}' workspace '{topology.WorkspaceId}' has no running "
+                + "agent. Start and verify that recorded recipient before retrying.");
+        }
+
+        if (!write)
+        {
+            return new NotifyDeliveryResult
             {
-                return Failure("agent-not-running", $"herdr logical role '{role}' has no running agent.");
-            }
+                Resolved = true,
+                Delivered = false,
+                Summary = $"Dry-run: would deliver notification to herdr logical role '{toRole}' in team '{team}' "
+                    + $"workspace '{topology.WorkspaceId}' at recorded pane '{recipient.PaneId}'.",
+            };
         }
 
         NotifyProcessResult delivery;
         try
         {
-            delivery = runner.Run(executable, ["agent", "prompt", toRole, payload]);
+            // A pane id is globally unique and is the explicit target recorded for this
+            // team's workspace. Passing the logical name here would re-enter herdr's
+            // global name namespace after we had just scoped validation to the team.
+            delivery = runner.Run(executable, ["agent", "prompt", recipient.PaneId, payload]);
         }
         catch (InvalidOperationException exception)
         {
-            return Failure("transport-unavailable", exception.Message);
+            return Failure(
+                "transport-unavailable",
+                $"{exception.Message} Verify the installed herdr executable and recorded recipient pane, then "
+                + "retry notify.");
         }
 
         if (delivery.ExitCode == 0)
         {
             return new NotifyDeliveryResult
             {
+                Resolved = true,
                 Delivered = true,
-                Summary = $"Delivered notification to herdr logical role '{toRole}' in team '{team}'.",
+                Summary = $"Delivered notification to herdr logical role '{toRole}' in team '{team}' workspace "
+                    + $"'{topology.WorkspaceId}' at recorded pane '{recipient.PaneId}'.",
             };
         }
 
         var detail = OneLine(delivery.StandardError, delivery.StandardOutput);
         var cause = ClassifyPromptFailure(detail);
-        return Failure(cause, $"herdr delivery to logical role '{toRole}' failed: {detail}");
+        return Failure(
+            cause,
+            $"herdr delivery to logical role '{toRole}' in team '{team}' workspace '{topology.WorkspaceId}' failed: "
+            + $"{detail} Inspect the recorded recipient pane and running-agent state, then retry notify.");
     }
 
-    internal static IReadOnlyDictionary<string, HerdrRoleState> ParseRoles(string output)
+    internal static IReadOnlyDictionary<string, HerdrRoleState> ParseRoles(string output, string workspaceId)
     {
         try
         {
@@ -288,6 +407,12 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 }
 
                 var paneId = ReadString(agent, "pane_id");
+                var agentWorkspaceId = ReadString(agent, "workspace_id") ?? WorkspaceFromPane(paneId);
+                if (!string.Equals(agentWorkspaceId, workspaceId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
                 var agentKind = ReadString(agent, "agent");
                 var status = ReadString(agent, "agent_status");
                 var explicitlyNotReady = agent.TryGetProperty("interactive_ready", out var ready)
@@ -299,10 +424,11 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                     && !explicitlyNotReady
                     && !string.Equals(status, "unknown", StringComparison.Ordinal);
 
-                if (!roles.TryAdd(name, new HerdrRoleState(paneId, running)))
+                if (!roles.TryAdd(name, new HerdrRoleState(agentWorkspaceId, paneId, running)))
                 {
                     throw new InvalidOperationException(
-                        $"herdr agent list returned duplicate logical-role mapping '{name}'.");
+                        $"herdr agent list returned duplicate logical role '{name}' in workspace '{workspaceId}'. "
+                        + "Rename or remove the competing agent before retrying.");
                 }
             }
 
@@ -320,6 +446,18 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
         element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static string? WorkspaceFromPane(string? paneId)
+    {
+        var separator = paneId?.IndexOf(':', StringComparison.Ordinal) ?? -1;
+        return separator > 0 ? paneId![..separator] : null;
+    }
+
+    private static string FormatRoles(IEnumerable<string> roles)
+    {
+        var ordered = roles.OrderBy(value => value, StringComparer.Ordinal).ToArray();
+        return ordered.Length == 0 ? "none" : string.Join(", ", ordered);
+    }
 
     private static string ClassifyPromptFailure(string detail)
     {
@@ -348,6 +486,7 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
 
     private static NotifyDeliveryResult Failure(string cause, string summary) => new()
     {
+        Resolved = false,
         Delivered = false,
         Cause = cause,
         Summary = summary,
@@ -360,7 +499,7 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
     }
 }
 
-internal sealed record HerdrRoleState(string? PaneId, bool AgentRunning);
+internal sealed record HerdrRoleState(string? WorkspaceId, string? PaneId, bool AgentRunning);
 
 internal static class NotifyTransportPaths
 {

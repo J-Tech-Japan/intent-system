@@ -46,11 +46,27 @@ and complete canonical report command (including the transport-neutral
 `--routing-root` needed from an isolated child checkout) in the delivered task. Running that
 report command is the receiver's required final step after all other work, so a
 herdr-only completion actively wakes the orchestration role instead of merely
-printing into the receiver pane. Unknown roles and delivery failures fail
-closed with a named cause. `notify escalate` appends the unchanged six-field
-event schema; none of these commands merges, labels, publishes, or mutates queue
-state. Direct transport commands remain provisioning/readiness diagnostics,
-not workflow send instructions.
+printing into the receiver pane. In herdr-only mode the source of truth is
+`<routing-root>/.intent-cli/role-pane-mapping.json`: every sender, recipient,
+and delegate `report-to` role must exist in that team's recorded roster, but
+**only the recipient must be deliverable**. A `resident: external` role therefore
+may send and may be `report-to` without a pane. When that external role is the
+recipient, `delegate` and `report` deliver by appending exactly one unchanged
+six-field event to its safe routing-root-relative recorded `reader` (`delegate`
+uses `question`; `report` uses its existing status), and return `eventAppended:
+true`; a herdr-resident recipient is prompted at its explicit
+recorded pane in the team's recorded workspace. Agents found only in another
+workspace are never eligible.
+
+`--dry-run` performs the same topology, team-workspace, recipient-state, and
+reader resolution as `--write`, returning the same refusal verdict and cause
+without prompting or appending. Unknown-role failures name the source actually
+consulted, the team/workspace scope, the roles found there, and a corrective
+action. All resolution remains fail-closed: there is no fallback to a foreign
+workspace or another transport. `notify escalate` continues to append the same
+six-field event schema; none of these commands merges, labels, publishes, or
+mutates queue state. Direct transport commands remain provisioning/readiness
+diagnostics, not workflow send instructions.
 
 ## Starting orchestrator mode (design-thread setup)
 
@@ -296,6 +312,18 @@ attribution rules remain authoritative and unchanged; reference them rather
 than inventing another attribution policy. An external design frontend is
 recorded as a reader type rather than fabricated as a pane.
 
+Persist that team-scoped topology at
+`<host-repo>/.intent-cli/role-pane-mapping.json`. Record the team
+`workspace_id`; under `roles`, give each pane-backed role `resident: herdr` plus
+its explicit `workspace_id` and `pane_id`, and give a role outside herdr
+`resident: external` plus its routing-root-relative `reader` (normally
+`.intent-cli/events/<team>.jsonl`). All recorded roles may be senders and
+delegate report targets. On receipt, herdr residents require a running agent at
+the recorded pane in that exact team workspace; external residents receive the
+canonical delegate/report event through the recorded reader. A missing/unsafe
+reader, stale pane, foreign-workspace-only name, or ambiguous mapping fails
+closed with no prompt or append.
+
 Launch with the typed surface:
 
 ```text
@@ -406,18 +434,25 @@ team subdirectories and no hard-coded absolute paths. Before constructing the
 path, fail closed on an empty name, a leading dot, `/` or `\`, or any `..`
 sequence. Never sanitize an invalid name.
 
-The orchestrator is the only writer. Open with `O_APPEND`, append one complete
-JSON object per line, permit no embedded newline, and normalize `summary` to one
-line. The required schema is:
+The canonical `intent-cli notify` surface is the only writer; callers never
+append by hand. The orchestrator normally writes delegate/escalate events, and
+a receiver's canonical report may append when its recorded recipient is
+external. Open with `O_APPEND`, append one complete JSON object per line, permit
+no embedded newline, and normalize `summary` to one line. The required schema
+is:
 
 ```json
 {"timestamp":"<RFC3339>","team":"<team>","kind":"completion|blocked|question|escalation","unit":"<execution-unit-or-task-id>","summary":"<one-line-summary>","artifact":"<repo-relative-path-or-URL>"}
 ```
 
-Write only design-relevant completion, blocked, question, and escalation
-events. This mode-independent channel is the design boundary only—never an
-inter-agent bus and never a replacement for `intent-cli notify`, GitHub, or
-intent-cli workflow state.
+Write only canonical notifications addressed to a recorded external reader and
+design-relevant completion, blocked, question, and escalation events. A
+delegation to an external reader uses `question`; an external report uses its
+existing `completed|blocked|question` status. Pane-resident dispatch, routine
+progress, pane output, and acknowledgements are never mirrored here. This
+mode-independent channel remains the explicit external-reader/design boundary,
+never a fallback inter-agent bus and never a replacement for `intent-cli
+notify`, GitHub, or intent-cli workflow state.
 
 Every reader persists a durable watermark across watcher restarts containing
 the file identity, byte offset, and complete-line count. Before each read it
