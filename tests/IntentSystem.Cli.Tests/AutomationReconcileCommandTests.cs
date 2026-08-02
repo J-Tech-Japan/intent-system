@@ -515,16 +515,16 @@ public sealed class AutomationReconcileCommandTests : IDisposable
         Assert.Equal(0, exitCode);
         var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
 
-        var linkedPrRepair = Assert.Single(result.SafeRepairs.Where(r =>
-            string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal)));
+        var linkedPrRepair = Assert.Single(result.SafeRepairs, r =>
+            string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal));
         Assert.Equal(AutomationReconcileConfidence.High, linkedPrRepair.Confidence);
         Assert.Equal("queue-state", linkedPrRepair.TargetKind);
         Assert.Equal("G284", linkedPrRepair.QueueStateExecutionUnit);
         Assert.Equal(492, linkedPrRepair.PrNumberToLink);
         Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/492", linkedPrRepair.QueueStateLinkedPrUrl);
         Assert.False(linkedPrRepair.Applied);
-        Assert.Empty(result.UnsafeStops.Where(s =>
-            string.Equals(s.Kind, AutomationReconcileUnsafeStopKinds.AmbiguousQueueLinkage, StringComparison.Ordinal)));
+        Assert.DoesNotContain(result.UnsafeStops, s =>
+            string.Equals(s.Kind, AutomationReconcileUnsafeStopKinds.AmbiguousQueueLinkage, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -556,8 +556,8 @@ public sealed class AutomationReconcileCommandTests : IDisposable
 
         Assert.Equal(0, exitCode);
         var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
-        var linkedPrRepair = Assert.Single(result.SafeRepairs.Where(r =>
-            string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal)));
+        var linkedPrRepair = Assert.Single(result.SafeRepairs, r =>
+            string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal));
         Assert.True(linkedPrRepair.Applied);
 
         var patched = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
@@ -598,8 +598,8 @@ public sealed class AutomationReconcileCommandTests : IDisposable
 
         Assert.Equal(0, exitCode);
         var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
-        var stop = Assert.Single(result.UnsafeStops.Where(s =>
-            string.Equals(s.Kind, AutomationReconcileUnsafeStopKinds.AmbiguousQueueLinkage, StringComparison.Ordinal)));
+        var stop = Assert.Single(result.UnsafeStops, s =>
+            string.Equals(s.Kind, AutomationReconcileUnsafeStopKinds.AmbiguousQueueLinkage, StringComparison.Ordinal));
         Assert.Equal(491, stop.TargetNumber);
         Assert.Contains("G284-a", stop.Reason, StringComparison.Ordinal);
         Assert.Contains("G284-b", stop.Reason, StringComparison.Ordinal);
@@ -802,8 +802,8 @@ public sealed class AutomationReconcileCommandTests : IDisposable
 
         Assert.Equal(0, exitCode);
         var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
-        var advisory = Assert.Single(result.SafeRepairs.Where(r =>
-            string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal)));
+        var advisory = Assert.Single(result.SafeRepairs, r =>
+            string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal));
         Assert.Equal(AutomationReconcileConfidence.Advisory, advisory.Confidence);
         Assert.NotNull(advisory.RequiresFollowupCommand);
         Assert.Contains("intent-cli closeout pr", advisory.RequiresFollowupCommand!, StringComparison.Ordinal);

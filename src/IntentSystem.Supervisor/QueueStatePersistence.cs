@@ -671,7 +671,7 @@ public sealed record QueueStatePersistResult
         ReappliedExecutionUnits = Array.Empty<string>(),
     };
 
-    public static QueueStatePersistResult Reapplied(QueueState state, IReadOnlyList<string> units) => new()
+    public static QueueStatePersistResult Reapplied(QueueState? state, IReadOnlyList<string> units) => new()
     {
         PersistedState = state,
         ReappliedOnFreshBase = true,

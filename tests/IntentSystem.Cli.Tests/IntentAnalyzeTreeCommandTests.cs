@@ -462,7 +462,7 @@ public sealed class IntentAnalyzeTreeCommandTests
         Assert.Equal(0, exitCode);
         using var document = System.Text.Json.JsonDocument.Parse(writer.ToString());
         var coverage = document.RootElement.GetProperty("facet_coverage");
-        Assert.Equal(0, coverage.EnumerateObject().Count());
+        Assert.Empty(coverage.EnumerateObject());
     }
 
     [Fact]

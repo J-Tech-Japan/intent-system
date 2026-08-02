@@ -520,7 +520,10 @@ public sealed class QueueStatePersistenceTests : IDisposable
 
         using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(QueueStatePath));
         var items = document.RootElement.GetProperty("items").EnumerateArray().ToArray();
-        Assert.Equal(["SKS-G841", "G545"], items.Select(item => item.GetProperty("execution_unit").GetString()).ToArray());
+        Assert.Collection(
+            items.Select(item => item.GetProperty("execution_unit").GetString()),
+            executionUnit => Assert.Equal("SKS-G841", executionUnit),
+            executionUnit => Assert.Equal("G545", executionUnit));
         Assert.Equal("completed", items[0].GetProperty("state").GetString());
         // Fields the model does not know about survive on both sides.
         Assert.Equal("preserved", items[0].GetProperty("custom_host_field").GetString());

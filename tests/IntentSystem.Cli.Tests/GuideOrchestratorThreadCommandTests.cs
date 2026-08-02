@@ -2494,7 +2494,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("read-only", attribution.GetProperty("unverifiable_is_read_only").GetString(), StringComparison.OrdinalIgnoreCase);
 
         Assert.Contains("G521", isolation.GetProperty("team_exclusive_role_folders").GetString(), StringComparison.Ordinal);
-        Assert.NotEmpty(isolation.GetProperty("one_workspace_per_team").GetString());
+        Assert.NotEmpty(Assert.IsType<string>(isolation.GetProperty("one_workspace_per_team").GetString()));
 
         // AC: EXACTLY four substrates, each with a sharing unit and an
         // ownership rule — the table is the whole set, so a fifth row or a
@@ -2597,7 +2597,7 @@ public sealed class GuideOrchestratorThreadCommandTests
             .GetProperty("verified_liveness");
 
         Assert.Contains("report alone", liveness.GetProperty("report_is_not_readiness").GetString(), StringComparison.Ordinal);
-        Assert.NotEmpty(liveness.GetProperty("settle_delay").GetString());
+        Assert.NotEmpty(Assert.IsType<string>(liveness.GetProperty("settle_delay").GetString()));
 
         // EXACTLY three post-report checks, each with a verification method —
         // the set is the contract, so a missing one would weaken readiness.

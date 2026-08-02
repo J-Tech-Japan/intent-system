@@ -29,7 +29,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
     public void Execute_DryRunDefault_ReportsWouldChangeWithoutMutating()
     {
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
         var queueStateBefore = File.ReadAllText(workspace.QueueStatePath);
 
         using var writer = new StringWriter();
@@ -55,7 +55,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
     public void Execute_Write_MutatesPriorityAndAppendsReasonedRunEvent()
     {
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
         var changedAt = new DateTimeOffset(2026, 7, 19, 3, 0, 0, TimeSpan.Zero);
         QueueReprioritizeCommand.UtcNowFactory = () => changedAt;
 
@@ -89,7 +89,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
     public void Execute_RefusesOnNonQueuedState()
     {
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Active, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Active, "normal", LinkedIssue: null)));
 
         using var writer = new StringWriter();
         var exitCode = QueueReprioritizeCommand.Execute(
@@ -133,7 +133,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
     public void Execute_RefusesOnUnknownExecutionUnit()
     {
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
 
         using var writer = new StringWriter();
         var exitCode = QueueReprioritizeCommand.Execute(
@@ -151,7 +151,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
     public void Execute_RefusesWithoutReason()
     {
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
 
         using var writer = new StringWriter();
         var exitCode = QueueReprioritizeCommand.Execute(
@@ -167,7 +167,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
     public void Execute_RefusesUnsupportedPriorityValue()
     {
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
 
         using var writer = new StringWriter();
         var exitCode = QueueReprioritizeCommand.Execute(
@@ -192,7 +192,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // needed for this; this test locks the existing behavior in as
         // the documented recipe.
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G543", QueueItemState.Queued, "medium", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G543", QueueItemState.Queued, "medium", LinkedIssue: null)));
         var changedAt = new DateTimeOffset(2026, 7, 20, 8, 0, 0, TimeSpan.Zero);
         QueueReprioritizeCommand.UtcNowFactory = () => changedAt;
 
@@ -224,7 +224,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
     public void Execute_SamePriorityRequested_IsIdempotentNoOp()
     {
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "high", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "high", LinkedIssue: null)));
 
         using var writer = new StringWriter();
         var exitCode = QueueReprioritizeCommand.Execute(
@@ -246,7 +246,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // The audit event is written FIRST; if that fails, queue-state.json
         // must never be mutated at all — no silent, unaudited change.
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
         var queueStateBefore = File.ReadAllText(workspace.QueueStatePath);
         QueueReprioritizeCommand.AppendPriorityChangedEventOverride = (_, _) =>
             throw new IOException("simulated disk failure appending runs.jsonl");
@@ -276,7 +276,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // fails. Must fail loud and explain exactly what state the
         // operator is in.
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
         QueueReprioritizeCommand.WriteQueueStateOverride = (_, _) =>
             throw new IOException("simulated disk failure writing queue-state.json");
 
@@ -310,7 +310,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // (skip re-appending — no duplicate), retry ONLY the queue-state
         // write, and converge to a fully consistent, singly-audited state.
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
         QueueReprioritizeCommand.WriteQueueStateOverride = (_, _) =>
             throw new IOException("simulated disk failure writing queue-state.json");
 
@@ -364,7 +364,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // never repeats a value once consumed.
         using var workspace = new ReprioritizeWorkspace();
         var fixedNow = new DateTimeOffset(2026, 7, 19, 4, 0, 0, TimeSpan.Zero);
-        var originalRaw = BuildQueueStateWithUpdatedAt(("G537", QueueItemState.Queued, "normal", linkedIssue: null), fixedNow);
+        var originalRaw = BuildQueueStateWithUpdatedAt(("G537", QueueItemState.Queued, "normal", LinkedIssue: null), fixedNow);
         workspace.WriteQueueState(originalRaw);
         QueueReprioritizeCommand.UtcNowFactory = () => fixedNow;
 
@@ -408,7 +408,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // is EARLIER than op1's) must not break anything, since the
         // revision counter never consults time at all.
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
 
         QueueReprioritizeCommand.UtcNowFactory = () => new DateTimeOffset(2026, 7, 19, 10, 0, 0, TimeSpan.Zero);
         Assert.Equal(0, QueueReprioritizeCommand.Execute(
@@ -446,7 +446,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // closed (never silently append a second, different claim on the
         // same pair).
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
         SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': OLD_REASON (revision 0->1)");
 
         using var writer = new StringWriter();
@@ -475,7 +475,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // records the OPPOSITE transition direction — also a conflict,
         // not a "wrong reason, append anyway" case.
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
         SeedHistoricalEvent(workspace, "G537", "priority changed from 'high' to 'normal': R (revision 0->1)");
 
         using var writer = new StringWriter();
@@ -506,7 +506,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // insertion order semantics exercised via conflictingIndex.
         _ = unusedIndex;
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
         if (conflictingIndex == 0)
         {
             SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': DIFFERENT (revision 0->1)");
@@ -540,7 +540,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // problem (how did that happen?) — must fail closed, not be
         // silently treated as "one pending retry."
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
         SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': R (revision 0->1)");
         SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': R (revision 0->1)");
 
@@ -567,7 +567,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // durable state — must refuse before any preview/mutation, in
         // BOTH dry-run and write mode.
         using var workspace = new ReprioritizeWorkspace();
-        var baseState = QueueStateSerializer.Deserialize(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        var baseState = QueueStateSerializer.Deserialize(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
         workspace.WriteQueueState(QueueStateSerializer.Serialize(
             baseState with { Items = new[] { baseState.Items.Single() with { PriorityRevision = -1 } } }));
 
@@ -596,7 +596,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // int.MinValue, directly violating the monotonic/injective
         // invariant. Must fail closed instead, in BOTH dry-run and write.
         using var workspace = new ReprioritizeWorkspace();
-        var baseState = QueueStateSerializer.Deserialize(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        var baseState = QueueStateSerializer.Deserialize(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
         workspace.WriteQueueState(QueueStateSerializer.Serialize(
             baseState with { Items = new[] { baseState.Items.Single() with { PriorityRevision = int.MaxValue } } }));
 
@@ -667,7 +667,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // seam. The subsequent final write must detect the mismatch and
         // refuse, rather than blindly overwriting the concurrent change.
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
 
         QueueReprioritizeCommand.AppendPriorityChangedEventOverride = (path, runEvent) =>
         {
@@ -723,7 +723,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // partially applying. After the outer call completes, exactly
         // ONE mutation and ONE event must exist.
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
 
         int? innerExitCode = null;
         string? innerOutput = null;
@@ -784,7 +784,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // succeed even with the lock file already present/created by a
         // prior write.
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
 
         // A prior --write created (and released) the lock file; it stays
         // on disk afterward (never deleted — only ever held/released).
@@ -817,7 +817,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // immediately — with the queue/runs state left byte-unchanged by
         // the failed first call.
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
 
         QueueReprioritizeCommand.OnLockAcquiredForTest = () =>
         {
@@ -867,7 +867,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // for a DIFFERENT execution unit — must never dedupe this unit's
         // request.
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
         SeedHistoricalEvent(workspace, "G999", "priority changed from 'normal' to 'high': R (revision 0->1)");
 
         using var writer = new StringWriter();
@@ -892,7 +892,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // otherwise-matching unit/reason — a tagged expected reason can
         // never exact-match an untagged one, so this must never dedupe.
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
         SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': R");
 
         using var writer = new StringWriter();
@@ -919,7 +919,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         // unit/event/reason, must be recognized as the pending audit for
         // an in-progress attempt and never duplicated.
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", LinkedIssue: null)));
         SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': R (revision 0->1)");
 
         using var writer = new StringWriter();

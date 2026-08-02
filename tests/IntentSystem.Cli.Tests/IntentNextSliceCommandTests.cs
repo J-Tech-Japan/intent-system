@@ -3575,8 +3575,8 @@ public sealed class IntentNextSliceCommandTests
 
             Assert.NotNull(regex);
             // Parent regex matches `G42`; child's `^SKS-G[0-9]+$` would NOT.
-            Assert.True(regex!.IsMatch("G42"));
-            Assert.False(regex.IsMatch("SKS-G42"));
+            Assert.Matches(regex!, "G42");
+            Assert.DoesNotMatch(regex, "SKS-G42");
         }
         finally
         {
@@ -3618,7 +3618,7 @@ public sealed class IntentNextSliceCommandTests
             var regex = NextSliceDomainBindingsExecutionUnitRegex.TryLoad(context, "intent-cli");
 
             Assert.NotNull(regex);
-            Assert.True(regex!.IsMatch("SKS-G42"));
+            Assert.Matches(regex!, "SKS-G42");
         }
         finally
         {

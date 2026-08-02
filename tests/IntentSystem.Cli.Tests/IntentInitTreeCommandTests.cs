@@ -137,7 +137,7 @@ public sealed class IntentInitTreeCommandTests
         var resolution = NextSliceDomainBindingsExecutionUnitRegex.Resolve(context, "auth");
         Assert.Equal(ExecutionUnitRegexResolutionKind.Present, resolution.Kind);
         Assert.NotNull(resolution.Regex);
-        Assert.True(resolution.Regex!.IsMatch("any-execution-unit-id"));
+        Assert.Matches(resolution.Regex!, "any-execution-unit-id");
     }
 
     [Fact]
