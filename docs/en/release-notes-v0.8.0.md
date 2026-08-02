@@ -9,13 +9,17 @@
 
 ## What's in v0.8.0
 
-v0.8.0 covers exactly five slices merged after `v0.7.1`: **G570**, **G571**,
-**G573**, **G574**, and **G575**.
+v0.8.0 covers exactly twelve shipped slices merged after `v0.7.1`: **G570**,
+**G571**, **G573**, **G574**, **G575**, **G577**, **G578**, **G579**,
+**G580**, **G581**, **G582**, and **G583**. G576 prepared the first edition of
+these notes and G584 refreshes them; neither maintenance slice is counted as a
+shipped product slice.
 
-**Why minor.** G570 adds `session-layer` as a new top-level command group, and
-the persisted dual-mode session layer is a broad behavior addition across
-orchestrator guidance. That is an ongoing user capability rather than a bounded
-repair, so the documented policy calls for `0.8.0`, not `0.7.2`.
+**Why minor.** G570 adds `session-layer` and G578 adds `notify` as new top-level
+command groups. Together with the persisted dual-mode session layer and the
+transport-neutral role workflow, these are broad, ongoing user capabilities
+rather than bounded repairs, so the documented policy calls for `0.8.0`, not
+`0.7.2`.
 
 ### A persisted, reversible session layer (G570)
 
@@ -30,13 +34,15 @@ intent-cli session-layer set --domain <domain> --team <team> --mode herdr-only -
 ```
 
 The recorded mode routes `intent-cli guide orchestrator-thread`, so one team is
-never handed operating instructions for both transports at once. The
-positioning is deliberate: **agmsg is PRIMARY and herdr-only is PREVIEW. PREVIEW
-is scoped only to the session transport, never to the four-thread model.** The
-design / orchestrator / implementation / review roles and their authority
-boundaries remain the same in both modes.
+never handed operating instructions for both transports at once. **Both agmsg
+and herdr-only remain first-class session-layer modes: they are selectable and
+reversible, and agmsg is not deprecated.** agmsg remains the default and PRIMARY
+transport; herdr-only remains PREVIEW. **PREVIEW scopes only to the herdr-only
+session transport, never to the four-thread collaboration model.** The design /
+orchestrator / implementation / review roles and their authority boundaries
+remain the same in both modes.
 
-### The herdr-only operating model, proven before release (G571, G575)
+### The herdr-only operating contract (G571, G575)
 
 The herdr-only preview now has a complete, user-facing operating procedure:
 
@@ -59,9 +65,7 @@ The herdr-only preview now has a complete, user-facing operating procedure:
   3. **Codex Desktop uses a timer poll and durable byte-offset watermark.**
      This Desktop recipe is a new capability and was never supported by agmsg.
 
-Before release, the design team ran the full concept spike against merged main
-on 2026-08-02: **11/11 checks passed, with zero agmsg processes for the spike
-team**. The spike also found three procedure defects, all corrected in G575:
+G575 hardened three procedure defects found while exercising that contract:
 
 - a marker literal embedded in dispatched task text could be matched from its
   own pane echo, so dispatch now separates a fresh nonce from the prefix and a
@@ -71,8 +75,6 @@ team**. The spike also found three procedure defects, all corrected in G575:
   MAY/escalate boundary before re-entry; and
 - the documented `workspace_created` fields and `agent wait` idle shape now
   match installed herdr 0.7.5.
-
-No additional dogfood is claimed by this release-preparation change.
 
 ### Safe shipped-skill updates (G573)
 
@@ -98,6 +100,74 @@ participate in this classification and may be null. G574 introduced the
 `state-drift` classification for half-converged representations, and if a unit
 is unblocked its age restarts at the unblock transition.
 
+### Production-trial findings fixed in the same release (G577–G583)
+
+The evidence for herdr-only is now a real production trial. The intent-cli team
+used herdr-only for the actual work that published, implemented, reviewed,
+merged, and closed out G577 through G583, with **zero agmsg processes for the
+team**. The trial surfaced concrete defects and quality gaps; every one was
+fixed on this same release line:
+
+- **G577 — one `--workdir` rule.** Ten automation commands had private,
+  inconsistent relative-path handling. They now share one resolver: an omitted
+  or blank value uses the repository root, a relative value resolves from that
+  root rather than the caller cwd, and an absolute path is preserved.
+- **G578 — transport-neutral role workflow.** `intent-cli notify delegate`,
+  `report`, and `escalate` now validate logical roles, resolve the recorded
+  session mode internally, embed the canonical report command in delegated
+  work, and keep design-boundary escalation on the existing events channel.
+- **G579 — atomic canonical state writes.** Canonical queue-state persistence
+  now writes and flushes a uniquely named temporary sibling, publishes it with
+  one overwrite move, and removes the temporary file after success or
+  interruption, so a reader never observes a truncated target.
+- **G580 — shared-static race guard.** A discovery-based test reflects over
+  every settable CLI static seam, discovers assigning test classes from IL, and
+  fails with the seam and class names unless the classes are provably
+  serialized. The five accepted split-collection cases are explicit and bound
+  fail-closed to the supported xUnit v2 runner semantics.
+- **G581 — observation without worker cooperation.** herdr
+  `pane.agent_status_changed` became the normative second wake source. It uses
+  the recorded logical-role mapping, working-to-settled transitions, a settle
+  delay, and per-role dedupe; the event is only a reason to inspect, never proof
+  of success.
+- **G582 — five measured field findings.** Both modes now render the session
+  switch checklist; agmsg-to-herdr teardown removes the outgoing project hook
+  and delivery mode that could block the next launch at the hook-trust screen;
+  every herdr mutation resolves a non-empty explicit pane/workspace id and
+  fails closed instead of mutating another team's focused pane; every
+  `events.jsonl` reader keeps a restart-durable identity/offset/line watermark
+  and fails closed on rotation, truncation, backwards progress, or replacement;
+  and stalled-work now reports `approved-not-merged` for an approved open PR
+  that has exceeded its threshold.
+- **G583 — warning-free build floor.** The authored 56-test-warning inventory
+  plus five nullable warnings on then-current `main` were fixed at source.
+  Solution-wide .NET 10 analyzers and warnings-as-errors now make the next
+  warning fail the build; the deliberate CS8603 negative proof demonstrated the
+  floor before the scratch edit was removed.
+
+### Three wake sources, complementary failure modes (G578, G581, G582)
+
+herdr-only uses three wake sources; none is treated as an outcome by itself:
+
+1. **herdr state-change subscription** — `pane.agent_status_changed` needs no
+   worker cooperation, but carries no task outcome. After its settle/dedupe
+   gate, orchestration still checks pane state, a fresh completion marker, the
+   artifact, and canonical intent-cli/GitHub facts, including approval or
+   question pauses.
+2. **canonical notify report** — `intent-cli notify report` is the most
+   informative source because it carries task id, status, summary, and artifact,
+   but it depends on the worker reaching and executing the report step. Its
+   claims are still verified against the artifact and canonical state.
+3. **periodic stalled-work check** — this is the last net rather than a
+   real-time completion signal. It derives overdue work from canonical state and
+   recommends recovery, including merge and closeout for
+   `approved-not-merged`.
+
+The coverage standard is that **a stall must remain detectable even if every
+single wake source fails**: no source may be the sole detector. G582 added
+`approved-not-merged` precisely so an approved open PR cannot become invisible
+after its report or state-change wake is missed.
+
 ## Install
 
 ```bash
@@ -118,23 +188,30 @@ The default remains agmsg. Existing teams do not enter herdr-only unless the
 operator records that mode through `session-layer set`; mode changes are
 reversible and must follow the guide's drain/provision/READY checklist.
 
-## Release-readiness gate (G576)
+## Release-readiness gate (G576, refreshed by G584)
 
 These items must hold **before the GitHub Release for `v0.8.0` is created or
 published**. This gate fails closed.
 
-- [ ] The five release-bound slices are merged to `main`: G570 (PR #1246), G571
-      (PR #1248), G573 (PR #1250), G574 (PR #1252), and G575 (PR #1254), plus
-      this G576 release-preparation PR.
-- [ ] These EN/JA notes cover exactly that five-slice lineage, and neither
+- [ ] The twelve shipped slices are merged to `main`: G570 (PR #1246), G571
+      (PR #1248), G573 (PR #1250), G574 (PR #1252), G575 (PR #1254), G577
+      (PR #1258), G578 (PR #1260), G579 (PR #1262), G580 (PR #1264), G581
+      (PR #1266), G582 (PR #1268), and G583 (PR #1270). G576 (PR #1256) is
+      the initial release preparation and this G584 refresh is notes
+      maintenance; neither is a shipped slice.
+- [ ] These EN/JA notes cover exactly that twelve-slice lineage, and neither
       superseded `release-notes-v0.7.2.md` copy remains.
 - [ ] `eng/version.json` shows `stableVersion` `0.7.1` and `nextVersion` `0.8.0`.
 - [ ] The G475 next-version release-note/package guards pass with **zero
       current-state guard flips**, and the full test suite is green on the exact
-      release-preparation head.
-- [ ] The recorded pre-release evidence is still the verified 11/11 spike with
-      zero agmsg processes for its team; do not replace it with an unverified
-      marker-only or state-only claim.
+      G584 notes-maintenance head.
+- [ ] The recorded pre-release evidence is the intent-cli team's real
+      herdr-only production trial for G577–G583, including publish through
+      closeout with zero agmsg processes for the team, and every surfaced
+      finding is tied above to the slice that fixed it.
+- [ ] All three wake sources and their failure modes remain documented, and
+      `approved-not-merged` preserves the coverage standard when report or
+      state-change delivery is missed.
 - [ ] Package metadata is correct: `PackageId = JTechJapan.IntentSystem.Cli`,
       repository/project URLs point at this repository, the license is
       `Apache-2.0`, and README/docs links resolve.
@@ -144,9 +221,9 @@ published**. This gate fails closed.
 
 ## Publishing v0.8.0
 
-Merging this preparation does **not** create a Release, tag, package publish,
-version roll, or announcement. After merge, readiness evidence must be checked
-and the operator must explicitly approve Release creation.
+Merging this notes maintenance does **not** create a Release, tag, package
+publish, version roll, or announcement. After merge, readiness evidence must be
+checked and the operator must explicitly approve Release creation.
 
 Only then may a maintainer/operator (or explicitly authorized external release
 automation) create and publish the `v0.8.0` GitHub Release. Publishing it
@@ -162,4 +239,4 @@ Post-release verification includes:
 - [ ] After publication, perform the separately authorized immediate roll to
       `stableVersion → 0.8.0` / `nextVersion → 0.8.1`, with new EN/JA DRAFT
       stubs, refreshed readiness sections, and green post-roll child-main CI.
-      That roll is not part of G576.
+      That roll is not part of G576 or G584.
