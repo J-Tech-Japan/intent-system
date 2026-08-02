@@ -80,8 +80,39 @@ public sealed class SharedStaticSeamSerializationMetaTests
         }
     }
 
+    [Fact]
+    public void CrossCollectionRule_IsBoundToLoadedSupportedXunitV2Core_G580()
+    {
+        var loadedXunitCore = typeof(CollectionDefinitionAttribute).Assembly.GetName();
+
+        StaticSeamAnalysis.EnsureSupportedCrossCollectionSemantics(loadedXunitCore);
+
+        Console.WriteLine(
+            $"Cross-collection DisableParallelization semantics accepted for loaded {loadedXunitCore.FullName}.");
+    }
+
+    [Fact]
+    public void CrossCollectionRule_FailsClosedForUnsupportedXunitCore_G580()
+    {
+        var unsupportedXunitCore = new AssemblyName("xunit.core")
+        {
+            Version = new Version(3, 0, 0, 0),
+        };
+
+        var failure = Assert.Throws<InvalidOperationException>(() =>
+            StaticSeamAnalysis.EnsureSupportedCrossCollectionSemantics(unsupportedXunitCore));
+
+        Assert.Contains("cannot accept shared-static assignments split across distinct xUnit collections", failure.Message);
+        Assert.Contains("xunit.core 2.9.3.0", failure.Message);
+        Assert.Contains("xunit.core 3.0.0.0", failure.Message);
+        Assert.Contains("Consolidate the split cases or revalidate", failure.Message);
+    }
+
     private sealed class StaticSeamAnalysis
     {
+        private const string SupportedXunitCoreAssemblyName = "xunit.core";
+        private static readonly Version SupportedXunitCoreAssemblyVersion = new(2, 9, 3, 0);
+
         private static readonly IReadOnlyDictionary<ushort, OpCode> OpCodesByValue =
             typeof(OpCodes)
                 .GetFields(BindingFlags.Public | BindingFlags.Static)
@@ -188,8 +219,37 @@ public sealed class SharedStaticSeamSerializationMetaTests
                 return true;
             }
 
-            return distinctCollections.All(name =>
+            var allCollectionsDisableParallelization = distinctCollections.All(name =>
                 collectionParallelizationDisabled.TryGetValue(name, out var disabled) && disabled);
+            if (!allCollectionsDisableParallelization)
+            {
+                return false;
+            }
+
+            EnsureSupportedCrossCollectionSemantics(
+                typeof(CollectionDefinitionAttribute).Assembly.GetName());
+            return true;
+        }
+
+        public static void EnsureSupportedCrossCollectionSemantics(AssemblyName loadedXunitCore)
+        {
+            if (string.Equals(
+                    loadedXunitCore.Name,
+                    SupportedXunitCoreAssemblyName,
+                    StringComparison.Ordinal)
+                && loadedXunitCore.Version == SupportedXunitCoreAssemblyVersion)
+            {
+                return;
+            }
+
+            var loadedName = loadedXunitCore.Name ?? "<unknown>";
+            var loadedVersion = loadedXunitCore.Version?.ToString() ?? "<unknown>";
+            throw new InvalidOperationException(
+                "G580 cannot accept shared-static assignments split across distinct xUnit collections: "
+                + "the documented CollectionDefinitionAttribute.DisableParallelization cross-collection semantics "
+                + $"are validated only for {SupportedXunitCoreAssemblyName} {SupportedXunitCoreAssemblyVersion} (xUnit v2), "
+                + $"but loaded {loadedName} {loadedVersion}. Consolidate the split cases or revalidate the runner semantics "
+                + "and update the supported version before accepting them.");
         }
 
         public IReadOnlyList<SplitCollectionCase> DiscoverSplitCollectionCases()
