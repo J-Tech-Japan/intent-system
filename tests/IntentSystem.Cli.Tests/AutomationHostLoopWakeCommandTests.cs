@@ -11,6 +11,7 @@ namespace IntentSystem.Cli.Tests;
 /// at-most-one-PR / at-most-one-publish invariant, the stale-cli gate, and the
 /// fail-closed <c>--write</c> behavior.
 /// </summary>
+[Collection("WorkerNextActionSharedState")]
 public sealed class AutomationHostLoopWakeCommandTests : IDisposable
 {
     private const string Repo = "J-Tech-Japan/intent-system";

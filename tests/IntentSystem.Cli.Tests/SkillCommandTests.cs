@@ -15,6 +15,7 @@ namespace IntentSystem.Cli.Tests;
 /// platform does not define is refused instead of written somewhere that
 /// platform will never read.
 /// </summary>
+[Collection(SkillVersionLineageG573Collection.Name)]
 public sealed class SkillCommandTests
 {
     [Fact]

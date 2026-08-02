@@ -13,6 +13,7 @@ namespace IntentSystem.Cli.Tests;
 /// degrades the surface to "missing" rather than throwing (which previously
 /// surfaced as a hard exit 1 in release CI).
 /// </summary>
+[Collection("WorkerNextActionSharedState")]
 public sealed class AutomationInstalledCliSurfaceProbeTests : IDisposable
 {
     public AutomationInstalledCliSurfaceProbeTests()
