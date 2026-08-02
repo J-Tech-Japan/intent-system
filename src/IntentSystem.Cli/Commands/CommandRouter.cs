@@ -341,6 +341,20 @@ internal static class CommandRouter
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(writer);
 
+        if (args.Length > 0 && string.Equals(args[0], "guide", StringComparison.Ordinal))
+        {
+            return GuideSkillUpdateNudge.Execute(
+                context,
+                args,
+                writer,
+                guideWriter => ExecuteCore(args, context, guideWriter));
+        }
+
+        return ExecuteCore(args, context, writer);
+    }
+
+    private static int ExecuteCore(string[] args, CliContext context, TextWriter writer)
+    {
         // G379: `intent-cli --help --all` (and the `--help-all` synonym) shows
         // every command group, including the advanced/legacy/provider-runtime
         // surfaces hidden from the chat-first default. Checked before the

@@ -2343,25 +2343,44 @@ intent-cli skill diff --target claude              # 編集済みコピーの差
 `--target claude|codex|copilot|all`、`--scope user|repo`、`--skill <name>`、
 `--force`、`--format` を受け取ります。
 
-契約は次の 4 点です:
+installed copy には `not-installed`、`current`、`stale-shipped`、
+`locally-modified` の 4 状態があります。`stale-shipped` は正規化 content hash が package の
+shipped-version lineage にある以前の entry と一致する状態です。`skill list` は
+`update_available` を示し、`skill diff` は previous-shipped → current の比較だと明示します。
+`skill install` は `--force` なしで更新し、`updated-stale` を報告します。lineage 外の content は
+`locally-modified` で、後述する拒否保護を維持します。
+
+`skills/<name>/SKILL.md` を変更するたびに、旧版と新版の正規化 SHA-256 identity を embedded
+lineage へ追記しなければなりません。current embedded content が lineage に無いと guard が失敗する
+ため、lineage duty を伴わない skill-content change は出荷できません。guide group の各 command は
+known install location だけを bounded な local-filesystem check で確認します。stale-shipped copy が
+あれば Markdown へ footer を 1 行、JSON へ exact な `skill install` command を含む
+`skill_update_nudge` field を 1 つ追加します。not-installed / locally-modified は nudge せず、probe
+failure は黙って無視され、guide output を block・変更しません。
+
+installed official skill の変更は unsupported です。`locally-modified` は data-safety state であり
+customization feature ではありません。installed-guide-wins rule により編集は意味的に inert です。
+local behavior には別の own-named skill を作るか、upstream feedback を送ってください。
+
+install 契約は引き続き次の 4 点です:
 
 1. **プラットフォームが定義していない scope は、書かずに拒否する。** `codex` に対する
    `--scope repo` は、サポートされる scope を明示して失敗します。そのプラットフォームが
    決して読まない、それらしいディレクトリへ書くことは、install 成功に見えて
    install していないのと同じ挙動になります。
-2. **編集済みコピーを黙って置き換えない。** install は installed ファイルを埋め込み
-   ソースと比較し、差分があれば `refused-drifted` を報告し、ファイルを 1 バイトも
-   変えずに残し、**非ゼロで終了**します(script が検知できるように)。置き換えは
+2. **編集済みコピーを黙って置き換えない。** install は正規化した installed hash を shipped
+   lineage と比較します。lineage 外の content は locally-modified として `refused-drifted` を
+   報告し、ファイルを 1 バイトも変えずに残し、**非ゼロで終了**します(script が検知できるように)。置き換えは
    `--force` による明示的な opt-in です。改行コードの違いは drift 扱いしないため、
    Windows checkout ですべての install が編集済みと報告されることはありません。
 3. **最初の書き込み前に plan 全体を解決・検査する。** install は 2 フェーズで動きます。
    まず全 target/scope の組み合わせを検証し、全 destination のパスを解決し、全
    destination の状態を検査します。書き込みはその後です。不正な target/scope の
-   組み合わせ**または** drift した destination が plan の**どこかに**1 つでもあれば、
+   組み合わせ**または** locally-modified destination が plan の**どこかに**1 つでもあれば、
    何も作らず何も変更せずに実行全体を中止します。書き込み可能だった destination は
    `skipped-plan-aborted` として報告され、plan に含まれていたが意図的に書かれなかった
    ことが分かるようになっています。検査と書き込みを 1 パスで行うのは「書き込み前の
-   検証」ではありません。`--target all` の下では、後続の drift が見つかった時点で
+   検証」ではありません。`--target all` の下では、後続の local edit が見つかった時点で
    先行する未 install の target はすでにディスク上にあり、「何も起きていない」と主張する
    exit code の裏で部分 install が残ります。同じ plan を最後まで成功させるのが
    `--force` です。

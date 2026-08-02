@@ -304,7 +304,7 @@ public sealed class SkillCommandTests
         Assert.Contains(("claude", "repo", "not-installed"), installations);
         Assert.Contains(("claude", "user", "not-installed"), installations);
         Assert.Contains(("codex", "user", "not-installed"), installations);
-        Assert.Contains(("copilot", "repo", "installed"), installations);
+        Assert.Contains(("copilot", "repo", "current"), installations);
     }
 
     [Fact]
@@ -319,7 +319,8 @@ public sealed class SkillCommandTests
         var exit = workspace.Run(SkillCommand.ExecuteDiff, ["--target", "copilot"], out var output);
 
         Assert.Equal(0, exit);
-        Assert.Contains("drifted", output, StringComparison.Ordinal);
+        Assert.Contains("locally-modified", output, StringComparison.Ordinal);
+        Assert.Contains("locally modified copy → current embedded version", output, StringComparison.Ordinal);
         Assert.Contains("Operator addition worth seeing.", output, StringComparison.Ordinal);
     }
 
