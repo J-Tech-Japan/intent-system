@@ -294,6 +294,49 @@ points to them. Repairs return to the same logical role with the task id and
 concrete delta through `intent-cli notify delegate`. A marker match from any buffer
 is never sufficient; the named artifact must exist and pass verification.
 
+### Two normative wake sources
+
+Herdr-only orchestration has two normative wake sources. The canonical
+`intent-cli notify report` is primary and most informative: it carries the task
+id, status, artifact, and summary, but depends on the worker cooperating and
+running its required final command. The normative **SECOND wake source** is
+herdr's observed `pane.agent_status_changed`: it depends only on herdr observing
+the process, so it still wakes orchestration when the worker omits its report,
+but it carries no task outcome.
+
+The measured herdr 0.7.5 socket API uses `events.subscribe`. Include one
+subscription entry per watched pane because `pane.agent_status_changed`
+requires `pane_id`:
+
+```json
+{"method":"events.subscribe","params":{"subscriptions":[{"type":"pane.agent_status_changed","pane_id":"<resolved-pane-id>"}]}}
+```
+
+Resolve every `<resolved-pane-id>` from the recorded logical-role→pane mapping
+when subscribing and after re-provisioning; never hard-code pane ids. The event
+frame carries `agent`, `agent_status`, `pane_id`, and `workspace_id`:
+
+```json
+{"event":"pane.agent_status_changed","data":{"agent":"<agent>","agent_status":"<working|idle|done|blocked|unknown>","pane_id":"<resolved-pane-id>","workspace_id":"<workspace-id>"}}
+```
+
+Track the prior status independently for each logical role. Wake only on that
+role's `working`→settled transition, where settled is `idle`, `done`, or
+`blocked`; an initial settled sample, `unknown`, or settled→settled change does
+not wake orchestration. Apply a settle delay before waking and per-role dedupe
+so a burst produces one wake for that observed transition. A new `working`
+observation re-arms that role.
+
+**A state change means only that something happened, never that a task
+succeeded.** After every wake from either source, orchestration checks current
+herdr state and any approval/question pause, the exact fresh completion marker
+and status, the named verified artifact, and fresh canonical intent-cli/GitHub
+facts. The two sources cover complementary failures: notify report is richest
+but depends on worker cooperation; state change needs only herdr observation but
+carries no outcome. The periodic `intent-cli automation stalled-work ...` check
+is the last net. This measured shape does not replace the standing rule to
+consult installed herdr help/schema for version-specific details.
+
 Every wait is bounded:
 
 ```text
@@ -309,9 +352,10 @@ answer only a pane-read G550 MAY class; escalate everything else, then re-enter
 the wake and wait again. A timeout is likewise a re-entry point: persist
 progress, return control, then resume on a later wake. Deterministic scripts
 with persisted cursors are preferred for long flows. Composite success requires
-dialog-free settled state + the exact fresh-nonce marker + an existing verified
-artifact. Artifact verification is the final gate; neither state nor marker
-alone means success.
+approval/question-free settled state + the exact fresh-nonce marker and status +
+an existing verified artifact + fresh canonical intent-cli/GitHub facts.
+Artifact verification plus canonical facts is the final gate;
+neither state nor marker alone means success.
 
 ### Normative `events.jsonl` design boundary
 
