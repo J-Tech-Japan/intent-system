@@ -24,13 +24,13 @@ internal static class SessionLayerCommand
     private const string FormatMarkdown = "markdown";
 
     /// <summary>
-    /// G570: the guide section a switch must be followed by. Its CONTENT ships
-    /// in G571 — this slice makes the mode exist, persist, and route — so the
-    /// pointer names the section without claiming the content is already there.
+    /// G570/G582: the guide section a switch must be followed by. The heading
+    /// is shared with the renderer so the pointer cannot drift from the section
+    /// that is present in both modes.
     /// </summary>
     public const string SwitchChecklistSection =
         "`intent-cli guide orchestrator-thread --domain <domain> --target-repo <owner/repo> --agent <agent>` → "
-        + "\"Session-layer switch checklist\" (herdr-only operating content ships in G571)";
+        + "`" + SessionLayerSwitchChecklist.Heading + "`";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

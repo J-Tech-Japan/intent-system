@@ -33,6 +33,10 @@ namespace IntentSystem.Cli.Commands;
 ///   recommendation mid-repair).</item>
 /// <item><c>merged-not-closed-out</c> — a MERGED PR's linked queue item is
 ///   not <see cref="QueueItemState.Completed"/>.</item>
+/// <item><c>approved-not-merged</c> — an OPEN PR carries
+///   <c>intent-pr-approved</c> past the scan's stale threshold. Reports the
+///   age and canonical merge-then-closeout continuation so the last-net
+///   heartbeat still detects it when every immediate wake source fails.</item>
 /// <item><c>backlog-ready-idle</c> — WIP is empty for the domain (no open PR
 ///   or <c>intent-target</c> issue confirmed for it, each resolved through
 ///   its own closing-issue/packet linkage — a confirmed OTHER-domain PR or
@@ -141,6 +145,14 @@ internal static class AutomationStalledWorkCommand
     public const string KindPublishedNotDelegated = "published-not-delegated";
     public const string KindPrCreatedNotReviewing = "pr-created-not-reviewing";
     public const string KindMergedNotClosedOut = "merged-not-closed-out";
+
+    /// <summary>
+    /// G582: an approved PR is an intermediate workflow state, not completion.
+    /// This actionable kind closes the last-net gap when an open approved PR
+    /// sits past <c>--stale-minutes</c> without any wake source advancing the
+    /// canonical merge and closeout continuation.
+    /// </summary>
+    public const string KindApprovedNotMerged = "approved-not-merged";
 
     /// <summary>
     /// G533: a PR whose source issue carries <c>intent-pr-created</c> but
@@ -473,6 +485,7 @@ internal static class AutomationStalledWorkCommand
         var warnings = new List<string>();
 
         CollectPublishedNotDelegated(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
+        CollectApprovedNotMerged(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded, warnings);
         CollectPrCreatedNotReviewing(context, domain, candidateDomains, openIssues, openPrs, repo, now, repairSilentMinutes, items, excluded);
         CollectDraftRepairStalled(context, domain, candidateDomains, openIssues, openPrs, repo, now, repairSilentMinutes, items, excluded);
         CollectMergedNotClosedOut(context, domain, candidateDomains, repo, mergedPrs, now, items, excluded, warnings);
@@ -505,6 +518,129 @@ internal static class AutomationStalledWorkCommand
             Excluded = excluded,
             Warnings = warnings,
         };
+    }
+
+    /// <summary>
+    /// G582 F5: detects the intermediate approved-but-unmerged state using the
+    /// existing global stale threshold. The collector is deliberately silent
+    /// for non-open PRs, a draft that is simultaneously back in request-update,
+    /// and a source unit blocked either on GitHub or in canonical queue-state.
+    /// </summary>
+    private static void CollectApprovedNotMerged(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
+        IReadOnlyList<GitHubAutomationIssueCandidate> openIssues,
+        IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
+        string repo,
+        DateTimeOffset now,
+        List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded,
+        List<string> warnings)
+    {
+        var queueState = TryLoadQueueStateForApprovedNotMerged(context, domain, repo, warnings);
+
+        foreach (var pr in openPrs)
+        {
+            if (!IsOpen(pr.State))
+            {
+                continue;
+            }
+
+            var prLabels = LabelSet(pr.Labels);
+            if (!prLabels.Contains(WorkerPrReviewPreflightConstants.Labels.IntentPrApproved))
+            {
+                continue;
+            }
+
+            // A draft handed back for updates is a repair wait, not a merge
+            // continuation, even if a stale approved label is still present.
+            if (pr.IsDraft
+                && prLabels.Contains(WorkerPrReviewPreflightConstants.Labels.IntentPrRequestUpdate))
+            {
+                continue;
+            }
+
+            var matchedIssue = pr.ClosingIssuesReferences
+                .Where(reference => reference.Number > 0 && ReferenceMatchesRepo(reference, repo))
+                .Select(reference => openIssues.FirstOrDefault(issue =>
+                    issue.Number == reference.Number && IsOpen(issue.State)))
+                .FirstOrDefault(issue => issue is not null);
+            if (matchedIssue is null)
+            {
+                continue;
+            }
+
+            var issueLabels = LabelSet(matchedIssue.Labels);
+            if (issueLabels.Contains(WorkerNextActionConstants.Labels.IntentIssueBlocked))
+            {
+                continue;
+            }
+
+            var resolution = ResolveExecutionUnit(context, matchedIssue.Title);
+            if (queueState?.Items.FirstOrDefault(candidate =>
+                    string.Equals(candidate.ExecutionUnit, resolution.ExecutionUnit, StringComparison.Ordinal))
+                is { State: QueueItemState.Blocked })
+            {
+                continue;
+            }
+
+            var packetDeclaredDomain = resolution.Corroborated
+                ? ReadPacketDeclaredDomain(context, resolution.ExecutionUnit)
+                : null;
+            if (!TryConfirmDomain(domain, resolution, packetDeclaredDomain, candidateDomains, repo,
+                    out var reason, out var detail))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindApprovedNotMerged,
+                    ExecutionUnit = resolution.ExecutionUnit,
+                    Issue = new StalledWorkRef { Number = matchedIssue.Number, Url = matchedIssue.Url },
+                    Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
+                    Reason = reason,
+                    Detail = detail,
+                });
+                continue;
+            }
+
+            items.Add(new StalledWorkItem
+            {
+                Kind = KindApprovedNotMerged,
+                ExecutionUnit = resolution.ExecutionUnit,
+                Issue = new StalledWorkRef { Number = matchedIssue.Number, Url = matchedIssue.Url },
+                Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
+                // GitHub updates the PR when the approved label is applied;
+                // this is the same conservative label-age proxy used by the
+                // other post-creation lifecycle kinds.
+                AgeMinutes = ComputeAgeMinutes(pr.UpdatedAt, now),
+                IsInformational = false,
+                RecommendedAction =
+                    $"canonical merge/closeout: merge PR #{pr.Number} through the repository-approved merge "
+                    + "operation, verify merged == true, then run "
+                    + $"intent-cli closeout pr --pr {pr.Number} --repo {repo} --domain {domain} "
+                    + "--pr-merged true --write --format json",
+            });
+        }
+    }
+
+    private static QueueState? TryLoadQueueStateForApprovedNotMerged(
+        CliContext context, string domain, string repo, List<string> warnings)
+    {
+        var queueStateLocation = RuntimeScopedStateResolver.ResolveQueueStatePathForRead(context.RepoRoot, domain, repo);
+        if (!File.Exists(queueStateLocation.Path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return QueueStateSerializer.Deserialize(File.ReadAllText(queueStateLocation.Path));
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException)
+        {
+            warnings.Add($"queue-state at '{queueStateLocation.Path}' could not be parsed: {exception.Message}; skipped the approved-not-merged blocked exemption.");
+            return null;
+        }
     }
 
     private static void CollectPublishedNotDelegated(
@@ -2905,8 +3041,8 @@ internal sealed record StalledWorkItem
     /// these kinds carry age for visibility but never recommend a state
     /// transition (<see cref="RecommendedAction"/> is descriptive prose, not
     /// an executable command). <see langword="false"/> for the original
-    /// three actionable kinds, where <see cref="RecommendedAction"/> is
-    /// always a runnable <c>intent-cli</c> command.
+    /// actionable kinds, where <see cref="RecommendedAction"/> names the
+    /// canonical action or runnable <c>intent-cli</c> command.
     /// </summary>
     [JsonPropertyName("is_informational")]
     public required bool IsInformational { get; init; }

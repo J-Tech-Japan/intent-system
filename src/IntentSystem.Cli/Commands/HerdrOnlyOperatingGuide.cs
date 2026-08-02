@@ -20,7 +20,6 @@ internal static class HerdrOnlyOperatingGuide
         "## Herdr-only bounded waiting and success detection",
         "## events.jsonl design boundary",
         "## Herdr-only failure modes and recovery",
-        "## Session-layer switch checklists",
     ];
 
     public static string RenderMarkdown(IReadOnlyList<string> replacedHeadings)
@@ -43,7 +42,7 @@ internal static class HerdrOnlyOperatingGuide
 
         1. Confirm the installed surface with `herdr workspace --help`, `herdr tab --help`, `herdr pane --help`, and `herdr agent --help`. Use the installed help when a version-specific option is needed.
         2. Create a team workspace with `herdr workspace create --cwd <host-repo> --label <team> --no-focus`. In herdr 0.7.5 its `workspace_created` result has top-level `workspace`, `tab`, and `root_pane`; seed the mapping from `workspace.workspace_id`, `tab.tab_id`, and `root_pane.pane_id`, and verify `root_pane.cwd`. Create role tabs/panes with the role cwd: design and orchestrator use `<host-repo>`, implementation uses `<implementation-repo>`, and review uses its isolated review cwd/worktree. `herdr tab create --workspace <workspace-id> --cwd <role-cwd> --label <logical-role> --no-focus` is the typed tab surface; `herdr pane split --pane <pane-id> --direction right|down --cwd <role-cwd> --no-focus` is available when a split is preferred. Update the mapping from each later tab/pane creation result.
-        3. Record a durable operator-visible mapping of each herdr-resident logical role (`design`, `orchestrator`, `implementation`, `review`) to its current workspace/tab/pane id and cwd. Workflows address the logical role and resolve this mapping at dispatch time; they NEVER hard-code a pane id. A design frontend outside herdr is recorded as the design reader type, not fabricated as a pane.
+        3. Record a durable operator-visible mapping of each herdr-resident logical role (`design`, `orchestrator`, `implementation`, `review`) to its current workspace/tab/pane id and cwd. Workflows address the logical role and NEVER hard-code pane/workspace ids. After the initial workspace creation returns the first ids, every provisioning or mutation command MUST resolve its explicit non-empty pane/workspace target id from this recorded mapping immediately before execution and carry that id on the command. If resolution is missing or empty, fail closed and DO NOT run the command: herdr can otherwise apply a focus-default and mutate the currently focused pane in another team. The existing G555 cross-project attribution rules remain authoritative and unchanged; reference them rather than inventing a second attribution policy. A design frontend outside herdr is recorded as the design reader type, not fabricated as a pane.
         4. Launch the typed agent in the mapped pane with `herdr agent start <logical-role> --kind <claude|codex|...> --pane <pane-id> -- <operator-approved-permission-flags>`. Pass launch and permission flags after `--`; do not inject modifier chords into an interactive prompt. Approvals are NEVER auto-answered: only the G550 MAY-answer classes may be handled, and every other approval is escalated to the operator.
         5. READY is a G556 verified-liveness result, not workspace existence. Approvals surface visibly in the pane and are handled at the supervision boundary, explicitly unlike the agmsg Codex bridge's headless auto-decline. After the startup report, wait a settle delay, then re-check `herdr agent list`, inspect the mapped pane/agent, verify the expected cwd/repository and detected agent kind, and send a bounded ping whose ack is observed in that same pane. An undetected agent, a shell prompt where the agent should be, a mismatched cwd, or no ack is NOT READY; after re-provisioning, repeat this entire settle-and-re-check sequence before declaring READY.
 
@@ -119,37 +118,21 @@ internal static class HerdrOnlyOperatingGuide
 
         Reader recipes:
 
-        1. **Claude app watcher:** resolve the host root and validated team path, then tail complete lines from `<host-repo>/.intent-cli/events/<team>.jsonl`; surface only unseen design-relevant records and retain the read offset across watcher restarts.
-        2. **Codex CLI:** when Codex is a herdr pane, address that logical role through `intent-cli notify delegate` / `report`; it does not poll the file for ordinary coordination. The events file remains available only when that Codex role is acting as a design-boundary reader.
-        3. **Codex Desktop:** run a one-minute-class timer poll. Resolve the host root plus validated team filename on every resumed session, read only complete lines after a durable byte-offset watermark, surface the unseen records, then advance the watermark after successful handling. Rotation/truncation or malformed JSON fails closed and requires operator recovery; it never resets silently and replays decisions.
+        Every reader persists a durable watermark across watcher restarts containing the file identity, byte offset, and complete-line count. Before each read it verifies the same file identity and that neither the byte nor line count moved backwards. Rotation, truncation, a backwards count, or file replacement fails closed for operator recovery; a reader NEVER silently resets to the beginning because replay can duplicate a design decision.
+
+        1. **Claude app watcher:** resolve the host root and validated team path, then tail complete lines after its durable file-identity/byte-offset/complete-line-count watermark; surface only unseen design-relevant records and advance the watermark only after successful handling. The watermark survives watcher restarts; rotation, truncation, a backwards byte/line count, or file replacement fails closed and never resumes at the beginning.
+        2. **Codex CLI:** when Codex is a herdr pane, address that logical role through `intent-cli notify delegate` / `report`; it does not poll the file for ordinary coordination. If that Codex role acts as a design-boundary reader, it uses the same durable file-identity/byte-offset/complete-line-count watermark across restarts and fails closed on rotation, truncation, a backwards count, or file replacement—never a reset to the beginning.
+        3. **Codex Desktop:** run a one-minute-class timer poll. Resolve the host root plus validated team filename on every resumed session, read only complete lines after its durable file-identity/byte-offset/complete-line-count watermark, surface the unseen records, then advance the watermark after successful handling. The watermark survives watcher restarts; rotation, truncation, a backwards byte/line count, file replacement, or malformed JSON fails closed and requires operator recovery; it never resets silently to the beginning and replays decisions.
 
         ## Herdr-only failure modes and recovery
 
         - **Modifier-chord injection / launch corruption:** do not type launch control chords into a live prompt. Re-provision or return the pane to a shell, then use `herdr agent start ... -- <permission-flags>` so flags are part of the typed launch.
         - **Post-reboot dead pty wiring:** a pane may still exist while `herdr agent list` cannot detect the agent or the pane is sitting at a shell. Treat it as `agent-undetected`, preserve artifacts, close/re-provision the affected workspace/panes, rebuild the logical-role mapping, and repeat the self-contained settle-and-re-check READY gate above before READY.
+        - **Focus-default cross-team mutation:** a missing or empty explicit pane/workspace id can make herdr target the currently focused pane, including a pane in another team. For every provisioning/mutation command after initial workspace creation, resolve a non-empty id from the recorded logical-role mapping, include it explicitly, and do not run when resolution fails. Apply the existing G555 attribution rules unchanged.
         - **Long-wait turn death:** replace unbounded `agent wait`/`pane wait-output` calls with bounded timeouts and re-entry. Use deterministic scripts with persisted task id, pane resolution, and watermark for long loops.
         - **Dispatch-echo false match:** never place the composed `ORCH_RESULT <fresh-per-dispatch-nonce>` wait needle in the task block. Use the split prefix/nonce fields, then require pane inspection and independently verified artifact evidence after a match.
         - **Approval/question pause reported as idle:** read the pane after every wait return. Apply the G550 MAY/escalate boundary to the visible dialog and re-enter the wake; `idle` is not completion evidence.
 
-        ## Session-layer switch checklists
-
-        One team runs exactly one session-layer mode at a time. Simultaneous agmsg and herdr-only delivery is a mixed-delivery CONTRACT VIOLATION.
-
-        **agmsg → herdr-only**
-
-        1. Drain or explicitly park every in-flight delegation; record artifacts and unresolved blockers.
-        2. Gracefully drop outgoing agmsg roles and stop their watchers/bridges. Verify no agmsg receiver can still deliver for this team.
-        3. Provision the herdr workspace, role cwds, typed agents, and logical-role→pane mapping above; validate approvals and the events path.
-        4. Pass the self-contained settle-and-re-check READY gate above for every incoming role and verify bounded dispatch/marker/artifact detection.
-        5. As the FINAL canonical step, run `intent-cli session-layer set --domain <domain> --team <team> --mode herdr-only --write`.
-
-        **herdr-only → agmsg**
-
-        1. Drain or explicitly park every in-flight delegation; append any final design-relevant event and record artifacts/blockers.
-        2. Gracefully stop agents or retain/close the outgoing herdr workspace according to the operator's workspace policy; ensure it cannot keep delivering tasks for this team.
-        3. Provision agmsg roles, transport configuration, and any approved watcher/bridge; do not reuse a stale role hold. Keep `events.jsonl` as the mode-independent design boundary, not as an agmsg bus.
-        4. Pass the applicable self-contained G556 settle-and-re-check READY gate and end-to-end delivery ack for every incoming role.
-        5. As the FINAL canonical step, run `intent-cli session-layer set --domain <domain> --team <team> --mode agmsg --write`.
         """;
     }
 
@@ -161,7 +144,8 @@ internal static class HerdrOnlyOperatingGuide
         {
             ["workspace"] = "Create the team workspace and role tabs/panes with role-specific cwds; in herdr 0.7.5 workspace_created returns top-level workspace, tab, and root_pane.",
             ["workspace_result_mapping"] = "Seed from workspace.workspace_id, tab.tab_id, and root_pane.pane_id; verify root_pane.cwd and update from later tab/pane creation results.",
-            ["mapping"] = "Record an operator-visible logical-role-to-current-pane-id-and-cwd mapping; resolve it at dispatch time and never hard-code pane ids.",
+            ["mapping"] = "Record an operator-visible logical-role-to-current-pane-id-and-cwd mapping; never hard-code pane/workspace ids.",
+            ["target_id_rule"] = "After initial workspace creation returns the first ids, every provisioning/mutation command resolves an explicit non-empty pane/workspace target id from the recorded logical-role mapping immediately before execution and carries it on the command; empty or missing resolution fails closed and the command does not run. This prevents herdr focus-default mutation of the currently focused pane in another team and references the unchanged G555 attribution rules.",
             ["typed_launch"] = "herdr agent start <logical-role> --kind <agent-kind> --pane <pane-id> -- <operator-approved-permission-flags>",
             ["approval_boundary"] = "Approvals surface visibly in the pane and are handled at the supervision boundary, unlike the agmsg Codex bridge's headless auto-decline; the G550 MAY/escalate boundary governs.",
             ["ready_gate"] = "READY only after G556 verified liveness: after the startup report, wait a settle delay, then re-check the expected agent/cwd/repo and detected same-pane process before observing a bounded probe response; repeat after re-provisioning.",
@@ -213,24 +197,20 @@ internal static class HerdrOnlyOperatingGuide
             ["append"] = "Orchestrator-only O_APPEND writer; one object per line, no embedded newline, summary normalized to one line.",
             ["schema"] = "timestamp, team, kind, unit, summary, artifact",
             ["kinds"] = new JsonArray("completion", "blocked", "question", "escalation"),
+            ["watermark_invariant"] = "Every reader persists file identity, byte offset, and complete-line count durably across watcher restarts; rotation, truncation, backwards byte/line count, or file replacement fails closed and never resets to the beginning because replay can duplicate a design decision.",
             ["readers"] = new JsonObject
             {
-                ["claude_app"] = "Tail complete unseen lines from the resolved host path and retain the read offset.",
-                ["codex_cli"] = "Use intent-cli notify delegate/report for a herdr-resident Codex role; no file poll for ordinary coordination.",
-                ["codex_desktop"] = "One-minute-class timer poll using a durable byte-offset watermark; fail closed on truncation or malformed JSON.",
+                ["claude_app"] = "Tail complete unseen lines after a durable file-identity/byte-offset/complete-line-count watermark that survives watcher restarts; fail closed on rotation, truncation, backwards count, or file replacement, never reset to the beginning.",
+                ["codex_cli"] = "Use intent-cli notify delegate/report for ordinary coordination; when acting as a design-boundary reader, use the same durable restart-surviving file-identity/byte-offset/complete-line-count watermark and fail closed on rotation, truncation, backwards count, or file replacement, never reset to the beginning.",
+                ["codex_desktop"] = "One-minute-class timer poll using a durable restart-surviving file-identity/byte-offset/complete-line-count watermark; fail closed on rotation, truncation, backwards count, file replacement, or malformed JSON, never reset to the beginning.",
             },
         },
         ["failure_recovery"] = new JsonArray(
             "Modifier-chord injection: relaunch with typed agent-start permission flags.",
             "Post-reboot dead pty: detect agent-undetected panes, re-provision, rebuild mapping, repeat G556.",
+            "Focus-default cross-team mutation: every provisioning/mutation command after initial workspace creation resolves and carries a non-empty explicit pane/workspace id from the recorded mapping; empty resolution fails closed and the command does not run; G555 attribution remains unchanged.",
             "Long-wait turn death: bounded waits, re-entry, and deterministic persisted loops.",
             "Dispatch-echo false match: keep the composed wait needle out of the task block and require independently verified artifact evidence.",
             "Approval/question pause: inspect the pane after every wait return, apply G550 MAY/escalate, and re-enter the wake."),
-        ["switches"] = new JsonObject
-        {
-            ["exclusivity"] = "Exactly one mode per team; mixed delivery is a contract violation.",
-            ["agmsg_to_herdr_only"] = "Drain; gracefully drop roles/bridges; provision herdr; G556 verify; set herdr-only as the final canonical step.",
-            ["herdr_only_to_agmsg"] = "Drain; handle workspace; provision roles/bridge; G556 verify; set agmsg as the final canonical step.",
-        },
     };
 }

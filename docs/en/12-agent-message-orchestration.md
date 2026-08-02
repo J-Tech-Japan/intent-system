@@ -256,8 +256,15 @@ review cwd/worktree). Use `herdr workspace create`, `herdr tab create`, or
 the `workspace_created` result has top-level `workspace`, `tab`, and
 `root_pane`; seed the mapping from `workspace.workspace_id`, `tab.tab_id`, and
 `root_pane.pane_id`, and verify `root_pane.cwd`. Record an
-operator-visible logical-role→pane-id/cwd mapping and resolve it before every
-operation; workflows never hard-code pane ids. An external design frontend is
+operator-visible logical-role→pane-id/cwd mapping; workflows never hard-code
+pane/workspace ids. After initial workspace creation returns the first ids,
+every provisioning or mutation command must resolve its explicit non-empty
+pane/workspace target id from that recorded mapping immediately before it runs
+and carry the id on the command. If resolution is missing or empty, fail closed
+and do not run the command: herdr can otherwise focus-default to the currently
+focused pane, including a pane in another team. The existing G555 cross-project
+attribution rules remain authoritative and unchanged; reference them rather
+than inventing another attribution policy. An external design frontend is
 recorded as a reader type rather than fabricated as a pane.
 
 Launch with the typed surface:
@@ -334,8 +341,12 @@ and status, the named verified artifact, and fresh canonical intent-cli/GitHub
 facts. The two sources cover complementary failures: notify report is richest
 but depends on worker cooperation; state change needs only herdr observation but
 carries no outcome. The periodic `intent-cli automation stalled-work ...` check
-is the last net. This measured shape does not replace the standing rule to
-consult installed herdr help/schema for version-specific details.
+is the last net. Its non-informational `approved-not-merged` kind makes an open,
+non-blocked PR carrying `intent-pr-approved` past the configured stale threshold
+actionable even if every immediate wake source failed; it reports age and points
+to the canonical merge-then-`closeout pr` path. This measured shape does not
+replace the standing rule to consult installed herdr help/schema for
+version-specific details.
 
 Every wait is bounded:
 
@@ -379,13 +390,30 @@ events. This mode-independent channel is the design boundary only—never an
 inter-agent bus and never a replacement for `intent-cli notify`, GitHub, or
 intent-cli workflow state.
 
-- Claude app watcher: tail complete unseen lines from the resolved path and
-  retain its offset across restarts.
-- Codex CLI in a herdr pane: use `intent-cli notify delegate` / `report`; do not poll this file for
-  ordinary coordination.
+Every reader persists a durable watermark across watcher restarts containing
+the file identity, byte offset, and complete-line count. Before each read it
+verifies the same identity and that neither byte nor line count moved backwards.
+The durable byte-offset watermark is always paired with that file identity and
+complete-line count; none of the three values is restart-local.
+Rotation, truncation, a backwards count, or file replacement fails closed for
+operator recovery; readers never silently reset to the beginning because replay
+can duplicate a design decision.
+
+- Claude app watcher: tail complete unseen lines after its durable
+  file-identity/byte-offset/complete-line-count watermark, advance only after
+  successful handling, and preserve it across watcher restarts. Rotation,
+  truncation, backwards byte/line count, or file replacement fails closed and
+  never resumes at the beginning.
+- Codex CLI in a herdr pane: use `intent-cli notify delegate` / `report` and do
+  not poll this file for ordinary coordination. When acting as a design-boundary
+  reader, use the same durable restart-surviving watermark and fail closed on
+  rotation, truncation, backwards count, or file replacement—never reset to the
+  beginning.
 - Codex Desktop: poll at a one-minute-class cadence, consume only complete lines
-  after a durable byte-offset watermark, and advance after successful handling.
-  Truncation or malformed JSON fails closed and requires operator recovery.
+  after its durable restart-surviving file-identity/byte-offset/complete-line-count
+  watermark, and advance after successful handling. Rotation, truncation,
+  backwards byte/line count, file replacement, or malformed JSON fails closed
+  and never resets to the beginning.
 
 ### Recovery and mode switches
 
@@ -394,6 +422,12 @@ intent-cli workflow state.
 - Post-reboot dead pty wiring: an undetected agent or shell-only pane requires
   preserving artifacts, re-provisioning, rebuilding the mapping, and repeating
   the self-contained settle-and-re-check READY gate above.
+- Focus-default cross-team mutation: a missing or empty explicit pane/workspace
+  id can mutate the currently focused pane in another team. For every
+  provisioning/mutation command after initial workspace creation, resolve a
+  non-empty id from the recorded logical-role mapping, carry it explicitly, and
+  do not run when resolution fails. Apply the existing G555 attribution rules
+  unchanged.
 - Long-wait turn death: use bounded waits, re-entry, and deterministic persisted
   loops.
 - Dispatch-echo false match: keep the composed wait needle out of the task
@@ -402,10 +436,16 @@ intent-cli workflow state.
 - Approval/question pause reported as idle: inspect the pane after every wait,
   apply the G550 MAY/escalate boundary, and re-enter the wake.
 
+### Session-layer switch checklist
+
 For **agmsg → herdr-only**: drain/park work; gracefully drop roles and stop
-watchers/bridges; provision herdr, its mapping, and the validated events path;
-pass G556 and marker/artifact detection; finally run `intent-cli session-layer
-set --domain <domain> --team <team> --mode herdr-only --write`.
+watchers/bridges. Turn off or remove the outgoing transport's
+per-project agmsg hook configuration and delivery mode, then verify it cannot
+deliver. This is not cosmetic: the observed leftover hook caused the next-launch hook-trust screen
+to block the next Codex launch. Provision herdr, its mapping, and the validated
+events path; pass G556 and marker/artifact detection; finally run
+`intent-cli session-layer set --domain <domain> --team <team> --mode herdr-only
+--write`.
 
 For **herdr-only → agmsg**: drain/park work and append any final design event;
 stop or retain/close the workspace according to operator policy so it cannot
