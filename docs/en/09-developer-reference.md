@@ -2528,16 +2528,20 @@ to keep in sync, and it goes stale on exactly the roll nobody is watching.
 ### Next release readiness (v0.8.0)
 
 **`v0.7.1` shipped** (GitHub Release + NuGet). The repository is now prepared
-for the **`0.8.0`** minor line: G570/G571/G573/G574/G575 are merged, the
-superseded 0.7.2 note copies have been removed, and real
+for the **`0.8.0`** minor line: the twelve shipped slices G570/G571/G573/G574/
+G575/G577/G578/G579/G580/G581/G582/G583 are merged, the superseded 0.7.2 note
+copies have been removed, and real
 [release-notes-v0.8.0.md](release-notes-v0.8.0.md) content defines the release
-and its operator gate. The minor rationale is the new top-level `session-layer`
-command group plus the broad persisted dual-mode behavior; agmsg remains
-PRIMARY and herdr-only remains PREVIEW only as a transport, never as a preview
-of the four-thread model.
+and its operator gate. G576 prepared the notes and G584 refreshes them; neither
+maintenance slice is counted as shipped. The minor rationale is the new
+top-level `session-layer` and `notify` command groups plus the broad persisted
+dual-mode and transport-neutral workflow behavior. Both session modes remain
+first-class, selectable, and reversible; agmsg remains PRIMARY and is not
+deprecated, while PREVIEW qualifies only the herdr-only session transport and
+never the four-thread model.
 
 No Release, tag, package publish, version roll, or announcement is performed by
-this preparation. After it merges, the operator must explicitly approve
+this notes maintenance. After it merges, the operator must explicitly approve
 creating the `v0.8.0` GitHub Release.
 
 **Release-readiness verification (run before merging the `v0.8.0`

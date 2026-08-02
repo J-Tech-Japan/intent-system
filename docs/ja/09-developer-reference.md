@@ -2612,13 +2612,16 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 ### 次リリース準備(v0.8.0)
 
 **`v0.7.1` は出荷済み**(GitHub Release + NuGet)です。リポジトリは **`0.8.0`** minor
-line の準備状態にあります: G570/G571/G573/G574/G575 は merge 済み、superseded 0.7.2
-notes copy は削除済みで、実際の [release-notes-v0.8.0.md](release-notes-v0.8.0.md) が
-release と operator gate を定義します。minor の根拠は新 top-level `session-layer` command
-group と広範な persisted dual-mode behavior です。agmsg は PRIMARY、herdr-only は transport
-についてだけ PREVIEW であり、4 スレッドモデルの preview では決してありません。
+line の準備状態にあります: shipped 12 slices G570/G571/G573/G574/G575/G577/G578/G579/
+G580/G581/G582/G583 は merge 済み、superseded 0.7.2 notes copy は削除済みで、実際の
+[release-notes-v0.8.0.md](release-notes-v0.8.0.md) が release と operator gate を定義します。
+G576 は notes を prepare し G584 は refresh しますが、どちらの maintenance slice も shipped
+には数えません。minor の根拠は新 top-level `session-layer` / `notify` command group と広範な
+persisted dual-mode / transport-neutral workflow behavior です。両 session mode は first-class、
+selectable、reversible のままです。agmsg は PRIMARY で deprecated ではなく、PREVIEW が
+qualify するのは herdr-only session transport だけで、4 スレッドモデルでは決してありません。
 
-この preparation は Release / tag / package publish / version roll / announcement を行いません。
+この notes maintenance は Release / tag / package publish / version roll / announcement を行いません。
 merge 後も `v0.8.0` GitHub Release 作成には operator の明示承認が必要です。
 
 **リリース準備検証(`v0.8.0` release-preparation のマージ前に実行):**
