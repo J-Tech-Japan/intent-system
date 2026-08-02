@@ -82,10 +82,12 @@ edit 検出への自動回答ではありません。
 
 ### Park 済み work を publishable と報告しない (G574)
 
-stalled-work detection は converged blocked unit と本当の idle candidate を区別します。queue item と
-linked issue の両方が blocked の場合、unit は informational `blocked-parked`、transport は
-heartbeat、publish recommendation はありません。half-converged blocked state は引き続き
-`state-drift` で、unit が unblock された場合の age は unblock transition から再開します。
+stalled-work detection は converged blocked unit と本当の idle candidate を区別します。queue
+entry の `state` が `blocked` かつ `blocked_by` list が non-empty の場合、unit は informational
+`blocked-parked`、transport は heartbeat、publish recommendation はありません。この分類に
+`linked_issue` は関与せず null でも構いません。G574 は half-converged representation に
+`state-drift` classification を導入しました。unit が unblock された場合の age は unblock
+transition から再開します。
 
 ## Install
 

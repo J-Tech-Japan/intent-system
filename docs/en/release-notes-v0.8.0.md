@@ -91,10 +91,12 @@ automatic answer to detected edits.
 ### Parked work is no longer advertised as publishable (G574)
 
 Stalled-work detection now distinguishes a converged blocked unit from a true
-idle candidate. When both the queue item and linked issue are blocked, the unit
-is informational `blocked-parked`, uses heartbeat transport, and carries no
-publish recommendation. A half-converged blocked state remains `state-drift`,
-and if a unit is unblocked its age restarts at the unblock transition.
+idle candidate. When the queue entry's `state` is `blocked` and its `blocked_by`
+list is non-empty, the unit is informational `blocked-parked`, uses heartbeat
+transport, and carries no publish recommendation; `linked_issue` does not
+participate in this classification and may be null. G574 introduced the
+`state-drift` classification for half-converged representations, and if a unit
+is unblocked its age restarts at the unblock transition.
 
 ## Install
 
