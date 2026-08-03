@@ -232,34 +232,32 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                     "unknown-role",
                     $"Recorded role topology '{topology.SourcePath}' for team '{team}' workspace "
                     + $"'{topology.WorkspaceId}' does not contain logical role '{role}' (found in that team scope: "
-                    + $"{FormatRoles(topology.Roles.Keys)}). Record that role for this team before retrying notify.");
+                    + $"{FormatRoles(topology.Roles.Keys)}). Record that role for this team before retrying notify. "
+                    + NotifyRoleTopologyStore.TopologyRemedy(team));
             }
         }
 
         var recipient = topology.Roles[toRole];
+        var deliveryTarget = NotifyRoleTopologyStore.ResolveDeliveryTarget(routingRoot, topology, toRole);
+        if (!deliveryTarget.Resolved)
+        {
+            return Failure(
+                deliveryTarget.Cause!,
+                $"{deliveryTarget.Summary} {NotifyRoleTopologyStore.TopologyRemedy(team)}");
+        }
+
         if (string.Equals(recipient.Resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal))
         {
-            if (!NotifyRoleTopologyStore.TryResolveReaderPath(
-                    routingRoot,
-                    recipient.Reader,
-                    out var readerPath,
-                    out var readerError))
-            {
-                return Failure(
-                    "reader-unavailable",
-                    $"External logical role '{toRole}' in team '{team}' has no deliverable recorded reader in "
-                    + $"'{topology.SourcePath}': {readerError} Record a safe routing-root-relative reader and retry.");
-            }
-
             return new NotifyDeliveryResult
             {
                 Resolved = true,
                 Delivered = false,
-                ReaderPath = readerPath,
+                ReaderPath = deliveryTarget.Target,
                 Summary = write
-                    ? $"Resolved external logical role '{toRole}' in team '{team}' to recorded reader '{readerPath}'."
+                    ? $"Resolved external logical role '{toRole}' in team '{team}' to recorded reader "
+                      + $"'{deliveryTarget.Target}'."
                     : $"Dry-run: would append notification for external logical role '{toRole}' in team '{team}' "
-                      + $"to recorded reader '{readerPath}'.",
+                      + $"to recorded reader '{deliveryTarget.Target}'.",
             };
         }
 
@@ -303,15 +301,7 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 $"herdr agent list for team '{team}' workspace '{topology.WorkspaceId}' does not contain logical "
                 + $"role '{toRole}' (found in that workspace: {FormatRoles(roles.Keys)}). Verify the team's recorded "
                 + "workspace and start the intended recipient there before retrying; agents in other workspaces are "
-                + "not eligible.");
-        }
-
-        if (string.IsNullOrWhiteSpace(recipient.PaneId))
-        {
-            return Failure(
-                "pane-absent",
-                $"Recorded topology '{topology.SourcePath}' gives herdr recipient '{toRole}' in team '{team}' no "
-                + "pane_id. Record its explicit pane and retry.");
+                + $"not eligible. {NotifyRoleTopologyStore.TopologyRemedy(team)}");
         }
 
         if (string.IsNullOrWhiteSpace(state.PaneId))
@@ -322,13 +312,14 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 + $"'{topology.WorkspaceId}' without a pane. Re-provision the recorded recipient before retrying.");
         }
 
-        if (!string.Equals(state.PaneId, recipient.PaneId, StringComparison.Ordinal))
+        if (!string.Equals(state.PaneId, deliveryTarget.Target, StringComparison.Ordinal))
         {
             return Failure(
                 "pane-mismatch",
                 $"herdr agent list found logical role '{toRole}' in team '{team}' workspace "
                 + $"'{topology.WorkspaceId}' at pane '{state.PaneId ?? "none"}', but '{topology.SourcePath}' records "
-                + $"pane '{recipient.PaneId}'. Refresh the recorded topology before retrying.");
+                + $"pane '{deliveryTarget.Target}'. Refresh the recorded topology before retrying. "
+                + NotifyRoleTopologyStore.TopologyRemedy(team));
         }
 
         if (!state.AgentRunning)
@@ -356,7 +347,7 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
             // A pane id is globally unique and is the explicit target recorded for this
             // team's workspace. Passing the logical name here would re-enter herdr's
             // global name namespace after we had just scoped validation to the team.
-            delivery = runner.Run(executable, ["agent", "prompt", recipient.PaneId, payload]);
+            delivery = runner.Run(executable, ["agent", "prompt", deliveryTarget.Target!, payload]);
         }
         catch (InvalidOperationException exception)
         {

@@ -114,11 +114,12 @@ internal static class CommandRouter
                 ["record-answer"] = InterviewRecordAnswerCommand.Execute,
                 ["compile"] = InterviewCompileCommand.Execute
             },
-            // G570: session-layer mode show/set.
+            // G570/G592: session-layer mode plus canonical delivery topology.
             ["session-layer"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["show"] = SessionLayerCommand.ExecuteShow,
-                ["set"] = SessionLayerCommand.ExecuteSet
+                ["set"] = SessionLayerCommand.ExecuteSet,
+                ["topology"] = SessionLayerTopologyCommand.Execute
             },
             // G578: one workflow contract over agmsg and herdr-only transports.
             ["notify"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
@@ -580,7 +581,7 @@ internal static class CommandRouter
             ["packet"] = "`intent-cli packet draft --execution-unit <id> --target-repo <r> --format markdown`.",
             ["issue"] = "`intent-cli issue publish-flow <id> --repo <r> --write --format json` then `intent-cli automation issue-publish --write`.",
             ["automation"] = "`intent-cli automation summary --domain <d> --format json` (capability JSON), `intent-cli automation doctor --format json` (CLI freshness).",
-            ["session-layer"] = "`intent-cli session-layer show --domain <d> [--team <t>]` (which transport is in force), then `intent-cli session-layer set --domain <d> --mode agmsg|herdr-only --write` to change it.",
+            ["session-layer"] = "`intent-cli session-layer show --domain <d> [--team <t>]` (which transport is in force), `session-layer set` to change it, and `session-layer topology record|show|validate --team <t>` for the delivery mapping.",
             ["notify"] = "`intent-cli notify delegate|report|escalate --domain <d> --team <t> ...` (canonical role workflow; transport follows the recorded session-layer mode).",
             ["bug"] = "`intent-cli guide worker pr-comment-fix --format json` (repair guidance), `intent-cli bug report`/`triage` for new-bug intake.",
             ["worker"] = "`intent-cli worker next-action --repo <r> --workdir <child> --format json` then claim / result-summary / complete.",

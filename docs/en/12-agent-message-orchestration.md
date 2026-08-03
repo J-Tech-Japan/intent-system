@@ -325,6 +325,30 @@ canonical delegate/report event through the recorded reader. A missing/unsafe
 reader, stale pane, foreign-workspace-only name, or ambiguous mapping fails
 closed with no prompt or append.
 
+Write and inspect this artifact through the canonical topology surface, never
+by hand:
+
+```text
+intent-cli session-layer topology record --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
+intent-cli session-layer topology record --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
+intent-cli session-layer topology validate --team <team> --format json
+intent-cli session-layer topology show --team <team> --format json
+```
+
+`record` uses only values supplied by the operator. It never queries herdr,
+guesses ids, provisions resources, or repairs an existing conflict: an exact
+match is an idempotent no-op and a different existing role is refused without
+rewriting the file. `validate` is read-only and returns `valid: true|false`
+plus every finding in one answer; each finding names its role, field, cause,
+and message, including missing/unsupported residence, missing `pane_id`, unsafe
+reader, and team-workspace mismatch. `show` is also read-only and resolves each
+pane or reader through the same delivery-target function used by `notify`, with
+no prompt, append, or herdr query. `automation doctor` carries this health when
+the mapping exists or herdr-only requires it, and notify topology refusals point
+back to `topology validate` / `record` as the remedy. Invalid state always stays
+fail-closed; these commands add knowledge and a controlled writer, never a
+fallback.
+
 Launch with the typed surface:
 
 ```text
