@@ -1492,15 +1492,17 @@ visible on the operator's screen the moment it breaks.
   watching this live session — the exact advantage an in-session watchdog
   has over the retired invisible external scheduler (see Retired below) —
   while still never fabricating or sending a notify nudge from broken input;
-  only a genuine `stale=true` result ever produces a sent message.
+  only an `actionable-stall` verdict with its returned canonical notify command
+  ever produces a sent nudge. Do not use `stale` or `message_body` to infer the
+  action; the closed verdict is the sole decision trigger.
 - **Failure visibility** — silence is reserved for `healthy-active-wait`
   ONLY. A heartbeat command execution failure or
   malformed/non-object output must be surfaced **visibly** in the watchdog's
   own turn output this wake — never silently swallowed or silently retried,
   since silent failure is exactly the defect this slice retires the external
   OS scheduler for — while still never fabricating or sending a notify nudge
-  from broken input; only a genuine `stale=true` result ever produces a sent
-  message.
+  from broken input; only an `actionable-stall` verdict with its returned
+  canonical notify command ever produces a sent nudge.
 - **Checks** — the design/HITL inbox for unread human-facing escalations
   (`inbox.sh` on the design role); orchestrator staleness via read-only
   intent-cli/GitHub facts (`worker next-action --github-only`, open PR/CI/
@@ -1561,8 +1563,8 @@ The **selectable alternative** to the design-thread watchdog: the same
 `intent-cli automation heartbeat` call, run directly from a long-interval
 automation **in the orchestrator's own thread** (Codex automation or Claude
 same-thread `/loop`) rather than from the design thread. On each wake it
-calls `automation heartbeat` itself and, when stale, acts on the returned
-state in the **same** wake — there is no design-to-orchestrator message hop,
+calls `automation heartbeat` itself and acts on its closed verdict in the
+**same** wake — there is no design-to-orchestrator message hop,
 because the orchestrator is the one running the check.
 
 - **Frequency** — 30-60 minute class — the same low-frequency band as the
@@ -1577,13 +1579,15 @@ because the orchestrator is the one running the check.
   Choose orchestrator-side only when an operator has a specific reason to
   prefer one fewer hop over keeping the orchestrator loopless.
 - **Command** —
-  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
+  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --team <team> --format json`
 - **Setup prompt** (paste into the orchestrator thread) — run a Codex
   automation or Claude same-thread `/loop` firing every 30-60 minutes in the
   orchestrator thread; each wake runs `automation heartbeat` in addition to
-  the normal orchestrator wake checks, and when `stale` is `true` treats the
-  returned `message_body` as this wake's repair/escalation signal (still at
-  most one message per wake, per the G524 wake contract).
+  the normal orchestrator wake checks. It waits for `healthy-active-wait`,
+  runs the returned canonical notify command only for `actionable-stall`,
+  routes `operator-required` to the operator, and visibly repairs/escalates
+  `cannot-determine` (still at most one nudge per dedupe key, per the G524
+  wake contract). It never infers this from `stale` or `message_body`.
 
 ### Retired: external OS-scheduler heartbeat (G526 → G539)
 

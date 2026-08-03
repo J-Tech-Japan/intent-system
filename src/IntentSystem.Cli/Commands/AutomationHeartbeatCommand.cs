@@ -86,13 +86,21 @@ internal static class AutomationHeartbeatCommand
             Repo = repo!,
             Team = team,
             StaleMinutesThreshold = staleMinutes,
-            Stale = stalledWork.Stalled,
+            // G597: the closed decision is the authoritative heartbeat
+            // outcome. Keep the legacy field aligned so pre-decision callers
+            // cannot suppress an overdue CI wait merely because stalled-work
+            // intentionally treats a pending check as non-stale.
+            Stale = stalledWork.Stalled
+                || string.Equals(decision.Verdict, "actionable-stall", StringComparison.Ordinal),
             Items = stalledWork.Items,
             Warnings = stalledWork.Warnings,
             OperatorAttentionStatus = stalledWork.OperatorAttentionStatus,
             OperatorAttentionError = stalledWork.OperatorAttentionError,
             RouteTo = ResolveRoute(stalledWork),
-            MessageBody = stalledWork.Stalled ? BuildMessageBody(stalledWork) : null,
+            MessageBody = stalledWork.Stalled
+                || string.Equals(decision.Verdict, "actionable-stall", StringComparison.Ordinal)
+                ? BuildMessageBody(stalledWork)
+                : null,
             Verdict = decision.Verdict,
             Reason = decision.Reason,
             LastProgressBasis = decision.LastProgressBasis,
@@ -297,6 +305,18 @@ internal static class AutomationHeartbeatCommand
             return CannotDetermine(route.Reason!, stalledWork.Items.FirstOrDefault(), "recorded topology");
         }
 
+        // A concrete actionable finding always wins over a legitimate active
+        // wait. Otherwise one fresh PR CI run could hide an unrelated stale
+        // pipeline and force callers to re-derive the answer from Items.
+        var actionable = stalledWork.Items.FirstOrDefault(item =>
+            !item.IsInformational
+            && !string.Equals(item.RequiredActor, "operator", StringComparison.Ordinal)
+            && !string.Equals(item.Kind, AutomationStalledWorkCommand.KindCiPending, StringComparison.Ordinal));
+        if (actionable is not null)
+        {
+            return ActionableStall(actionable, route, staleMinutes);
+        }
+
         var ciPending = stalledWork.Items.FirstOrDefault(item =>
             string.Equals(item.Kind, AutomationStalledWorkCommand.KindCiPending, StringComparison.Ordinal));
         if (ciPending is not null && ciPending.AgeMinutes < staleMinutes)
@@ -317,30 +337,9 @@ internal static class AutomationHeartbeatCommand
                 SuggestedAction: "Wait for the named CI completion signal, then re-evaluate this heartbeat decision.");
         }
 
-        var actionable = ciPending is not null && ciPending.AgeMinutes >= staleMinutes
-            ? ciPending
-            : stalledWork.Items.FirstOrDefault(item =>
-                !item.IsInformational
-                && !string.Equals(item.RequiredActor, "operator", StringComparison.Ordinal));
-        if (actionable is not null)
+        if (ciPending is not null)
         {
-            var overdueReason = string.Equals(actionable.Kind, AutomationStalledWorkCommand.KindCiPending, StringComparison.Ordinal)
-                ? $"CI wait for PR #{actionable.Pr?.Number} exceeded its {staleMinutes}-minute bound without a terminal signal."
-                : $"Stalled-work reports actionable '{actionable.Kind}' for '{actionable.ExecutionUnit}'.";
-            return new HeartbeatDecision(
-                Verdict: "actionable-stall",
-                Reason: overdueReason,
-                LastProgressBasis: ProgressBasis(actionable),
-                LastProgressSource: ProgressSource(actionable),
-                LastProgressAgeMinutes: actionable.AgeMinutes,
-                DedupeKey: MaterialKey("actionable-stall", actionable, "orchestration", route.TargetRole!),
-                ActionOwner: "orchestration",
-                TargetRole: route.TargetRole,
-                CanonicalNotifyCommand: route.CanonicalNotifyCommand!,
-                WaitCondition: null,
-                WaitEndSignal: null,
-                WaitBoundMinutes: null,
-                SuggestedAction: $"Run the canonical notify command once for dedupe key '{MaterialKey("actionable-stall", actionable, "orchestration", route.TargetRole!)}'.");
+            return ActionableStall(ciPending, route, staleMinutes);
         }
 
         if (stalledWork.Items.Count > 0)
@@ -353,19 +352,45 @@ internal static class AutomationHeartbeatCommand
         }
 
         return new HeartbeatDecision(
-            Verdict: "healthy-active-wait",
-            Reason: "No pending pipeline transition is currently reported.",
+            Verdict: "actionable-stall",
+            Reason: "No pending pipeline transition or named active wait is currently reported.",
             LastProgressBasis: "current successful stalled-work observation",
             LastProgressSource: "automation.stalled-work",
             LastProgressAgeMinutes: 0,
-            DedupeKey: $"heartbeat:healthy-active-wait:{domain}:{repo}:{team}:no-pending-transition",
+            DedupeKey: $"heartbeat:actionable-stall:orchestration:{route.TargetRole}:no-pending-transition:{domain}:{repo}:{team}",
             ActionOwner: "orchestration",
             TargetRole: route.TargetRole,
-            CanonicalNotifyCommand: null,
-            WaitCondition: "the next canonical pipeline transition",
-            WaitEndSignal: "a GitHub or canonical intent-cli state change observed on the next external wake",
-            WaitBoundMinutes: staleMinutes,
-            SuggestedAction: "Wait for the named signal, then re-evaluate this heartbeat decision.");
+            CanonicalNotifyCommand: route.CanonicalNotifyCommand,
+            WaitCondition: null,
+            WaitEndSignal: null,
+            WaitBoundMinutes: null,
+            SuggestedAction: "Run the canonical notify command once for this no-pending-transition dedupe key.");
+    }
+
+    private static HeartbeatDecision ActionableStall(
+        StalledWorkItem item,
+        HeartbeatRoute route,
+        int staleMinutes)
+    {
+        var isOverdueCi = string.Equals(item.Kind, AutomationStalledWorkCommand.KindCiPending, StringComparison.Ordinal);
+        var reason = isOverdueCi
+            ? $"CI wait for PR #{item.Pr?.Number} exceeded its {staleMinutes}-minute bound without a terminal signal."
+            : $"Stalled-work reports actionable '{item.Kind}' for '{item.ExecutionUnit}'.";
+        var dedupeKey = MaterialKey("actionable-stall", item, "orchestration", route.TargetRole!);
+        return new HeartbeatDecision(
+            Verdict: "actionable-stall",
+            Reason: reason,
+            LastProgressBasis: ProgressBasis(item),
+            LastProgressSource: ProgressSource(item),
+            LastProgressAgeMinutes: item.AgeMinutes,
+            DedupeKey: dedupeKey,
+            ActionOwner: "orchestration",
+            TargetRole: route.TargetRole,
+            CanonicalNotifyCommand: route.CanonicalNotifyCommand!,
+            WaitCondition: null,
+            WaitEndSignal: null,
+            WaitBoundMinutes: null,
+            SuggestedAction: $"Run the canonical notify command once for dedupe key '{dedupeKey}'.");
     }
 
     private static HeartbeatDecision CannotDetermine(string reason, StalledWorkItem? item, string source) => new(

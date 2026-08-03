@@ -1360,15 +1360,17 @@ authenticate します)、壊れた瞬間にオペレーターの画面上で可
   監視しているオペレーターに見える形で、失敗を明示的に述べます — これこそが、
   retire された見えない外部スケジューラに対して in-session の watchdog が持つ
   正確な優位性です(下記 Retired を参照)— その一方で、壊れた入力から notify の
-  nudge を捏造・送信することは決してありません。実際に送信されるメッセージは、
-  本物の `stale=true` 結果の場合だけです。
+  nudge を捏造・送信することは決してありません。送信する nudge は
+  `actionable-stall` verdict とともに返された canonical notify command の場合だけです。
+  `stale` や `message_body` から action を推論せず、closed verdict だけを decision trigger にします。
 - **failure visibility** — 沈黙は `healthy-active-wait` の heartbeat 結果にのみ
   許されます。heartbeat コマンドの実行失敗や不正な/オブジェクトでない出力は、
   この wake の watchdog 自身の turn 出力で **可視的に** 表面化させなければ
   なりません — 決して黙って飲み込んだり、黙ってリトライしたりしません。沈黙した
   失敗こそが、このスライスが外部 OS スケジューラを retire する理由そのものだから
   です — その一方で、壊れた入力から notify の nudge を捏造・送信することは決して
-  ありません。実際に送信されるメッセージは、本物の `stale=true` 結果の場合だけです。
+  ありません。送信する nudge は `actionable-stall` verdict とともに返された
+  canonical notify command の場合だけです。
 - **チェック内容** — design/HITL inbox で未読の人間向けエスカレーションを確認
   (design ロールの `inbox.sh`)、read-only な intent-cli/GitHub の事実
   (`worker next-action --github-only`、open PR/CI/label 状態)を最後に確認した
@@ -1425,7 +1427,7 @@ design-thread watchdog に対する **選択可能な alternative** です: 同�
 `intent-cli automation heartbeat` の呼び出しを、design スレッドではなく
 **orchestrator 自身のスレッド** の中で、長間隔の automation(Codex automation または
 Claude 同一スレッド `/loop`)から直接実行します。各 wake で `automation heartbeat`
-を自分自身で呼び出し、stale であれば **同じ** wake の中でその結果に対して行動します
+を自分自身で呼び出し、その closed verdict に従って **同じ** wake の中で行動します
 — design から orchestrator へのメッセージのホップは発生しません。なぜなら
 orchestrator 自身がそのチェックを実行しているからです。
 
@@ -1441,13 +1443,15 @@ orchestrator 自身がそのチェックを実行しているからです。
   を選ぶのは、オペレーターが orchestrator を loopless に保つことよりも 1 ホップ少ない
   ことを優先する特定の理由がある場合だけにしてください。
 - **コマンド** —
-  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
+  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --team <team> --format json`
 - **setup プロンプト**(orchestrator スレッドに貼り付ける)— orchestrator スレッドの
   中で、30〜60 分ごとに発火する Codex automation または Claude 同一スレッド `/loop`
   を実行します。各 wake は通常の orchestrator wake チェックに加えて
-  `automation heartbeat` を実行し、`stale` が `true` であれば返された `message_body`
-  をその wake の repair/escalation シグナルとして扱います(引き続き 1 wake につき
-  最大 1 通、G524 の wake contract に従います)。
+  `automation heartbeat` を実行します。`healthy-active-wait` は待機し、
+  `actionable-stall` だけが返された canonical notify command を実行し、
+  `operator-required` は operator に route し、`cannot-determine` は可視化して
+  repair/escalate します（G524 の wake contract に従い、dedupe key ごとに最大 1 nudge）。
+  `stale` や `message_body` から action を推論しません。
 
 ### Retired: 外部 OS スケジューラの heartbeat(G526 → G539)
 

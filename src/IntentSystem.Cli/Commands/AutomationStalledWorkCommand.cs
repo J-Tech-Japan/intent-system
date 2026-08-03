@@ -534,7 +534,8 @@ internal static class AutomationStalledWorkCommand
             // G596: explicit human obligations and unreadable human-obligation
             // state are load-bearing immediately; they do not wait for the
             // generic GitHub staleness threshold before becoming visible.
-            .Where(item => item.Kind is KindOperatorAttentionPending or KindOperatorAttentionCannotDetermine or KindCiPending
+            .Where(item => item.Kind is KindOperatorAttentionPending or KindOperatorAttentionCannotDetermine
+                or KindCiPending or KindCiAllGreenNotTransitioned or KindCiFailedNotTransitioned
                 || item.AgeMinutes >= staleMinutes)
             .OrderByDescending(item => item.AgeMinutes)
             .ToArray();

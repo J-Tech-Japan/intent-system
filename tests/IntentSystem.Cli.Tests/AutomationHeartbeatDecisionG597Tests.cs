@@ -103,7 +103,70 @@ public sealed class AutomationHeartbeatDecisionG597Tests : IDisposable
 
         Assert.Equal("actionable-stall", result.GetProperty("verdict").GetString());
         Assert.Contains("exceeded its 45-minute bound", result.GetProperty("reason").GetString(), StringComparison.Ordinal);
+        Assert.True(result.GetProperty("stale").GetBoolean());
+        Assert.True(result.TryGetProperty("message_body", out var messageBody));
+        Assert.False(string.IsNullOrWhiteSpace(messageBody.GetString()));
         Assert.True(result.TryGetProperty("canonical_notify_command", out _));
+    }
+
+    [Fact]
+    public void Execute_SameIdlePipelineClassifiesNoWaitCiWaitAndOperatorAttention_G597()
+    {
+        using var neither = new HeartbeatWorkspace();
+        neither.WriteTopology();
+        var neitherResult = Run(neither, new FakeLister());
+        Assert.Equal("actionable-stall", neitherResult.GetProperty("verdict").GetString());
+
+        using var ciWait = new HeartbeatWorkspace();
+        ciWait.WriteTopology();
+        ciWait.WritePacketDomain("G589");
+        var ciIssue = Issue(1281, "G589: CI wait", FixedNow.AddHours(-2), "intent-pr-created");
+        var pendingPr = Pr(1282, ciIssue.Title, FixedNow.AddMinutes(-20), ciIssue.Number,
+            [CheckRun("IN_PROGRESS")]);
+        var ciWaitResult = Run(ciWait, new FakeLister([ciIssue], [pendingPr]));
+        Assert.Equal("healthy-active-wait", ciWaitResult.GetProperty("verdict").GetString());
+
+        using var operatorWait = new HeartbeatWorkspace();
+        operatorWait.WriteTopology();
+        operatorWait.OpenAttention("same-idle-pipeline", "Approve the operator decision");
+        var operatorResult = Run(operatorWait, new FakeLister());
+        Assert.Equal("operator-required", operatorResult.GetProperty("verdict").GetString());
+    }
+
+    [Fact]
+    public void Execute_ActionableStallOutranksFreshCiWait_G597()
+    {
+        using var workspace = new HeartbeatWorkspace();
+        workspace.WriteTopology();
+        workspace.WritePacketDomain("G600");
+        workspace.WritePacketDomain("G589");
+        var stalledIssue = Issue(1600, "G600: action needed", FixedNow.AddHours(-6), "intent-target");
+        var ciIssue = Issue(1281, "G589: CI wait", FixedNow.AddHours(-2), "intent-pr-created");
+        var pendingPr = Pr(1282, ciIssue.Title, FixedNow.AddMinutes(-5), ciIssue.Number,
+            [CheckRun("IN_PROGRESS")]);
+
+        var result = Run(workspace, new FakeLister([stalledIssue, ciIssue], [pendingPr]));
+
+        Assert.Equal("actionable-stall", result.GetProperty("verdict").GetString());
+        Assert.Contains("G600", result.GetProperty("reason").GetString(), StringComparison.Ordinal);
+        Assert.Contains("intent-cli notify report", result.GetProperty("canonical_notify_command").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_TerminalCiEndSignalNoLongerReportsHealthyActiveWait_G597()
+    {
+        using var workspace = new HeartbeatWorkspace();
+        workspace.WriteTopology();
+        workspace.WritePacketDomain("G589");
+        var issue = Issue(1281, "G589: CI wait", FixedNow.AddHours(-2), "intent-pr-created");
+        var completedPr = Pr(1282, issue.Title, FixedNow.AddMinutes(-20), issue.Number,
+            [CheckRun("COMPLETED", "SUCCESS")]);
+
+        var result = Run(workspace, new FakeLister([issue], [completedPr]));
+
+        Assert.Equal("actionable-stall", result.GetProperty("verdict").GetString());
+        Assert.Contains("ci-all-green-not-transitioned", result.GetProperty("reason").GetString(), StringComparison.Ordinal);
+        Assert.True(result.GetProperty("stale").GetBoolean());
     }
 
     [Fact]
@@ -134,6 +197,8 @@ public sealed class AutomationHeartbeatDecisionG597Tests : IDisposable
         Assert.Contains("cannot-determine", content, StringComparison.Ordinal);
         Assert.Contains("dedupe key", content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("canonical `intent-cli notify", content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("only a genuine `stale=true` result ever produces", content, StringComparison.Ordinal);
+        Assert.Contains("actionable-stall", content, StringComparison.Ordinal);
     }
 
     private static JsonElement Run(HeartbeatWorkspace workspace, FakeLister lister)
@@ -191,11 +256,11 @@ public sealed class AutomationHeartbeatDecisionG597Tests : IDisposable
         ],
     };
 
-    private static GitHubAutomationStatusCheckCandidate CheckRun(string status) => new()
+    private static GitHubAutomationStatusCheckCandidate CheckRun(string status, string conclusion = "") => new()
     {
         TypeName = "CheckRun",
         Status = status,
-        Conclusion = string.Empty,
+        Conclusion = conclusion,
     };
 
     private static IReadOnlyDictionary<string, string> SnapshotFiles(string rootPath) =>
