@@ -62,10 +62,17 @@ internal static class AutomationDoctorCommand
         var missing = requiredCommands
             .Where(command => !command.Available)
             .ToArray();
+        var topologyHealth = SessionLayerTopologyHealth.Analyze(context.RepoRoot);
+        var topologyInvalid = string.Equals(topologyHealth.Status, "invalid", StringComparison.Ordinal);
+        var status = !surfaceReport.Available
+            ? "stale-host-cli"
+            : topologyInvalid
+                ? "topology-invalid"
+                : "ok";
 
         return new AutomationDoctorResult
         {
-            Status = surfaceReport.Available ? "ok" : "stale-host-cli",
+            Status = status,
             ReadOnly = true,
             InstalledCliPath = surfaceReport.InstalledCliPath,
             BinarySource = surfaceReport.BinarySource,
@@ -74,9 +81,12 @@ internal static class AutomationDoctorCommand
             AutomationCapabilitySchemaVersion = AutomationSummaryConstants.AutomationCapabilitySchemaVersion,
             AutomationCommandSurfaceVersion = AutomationSummaryConstants.AutomationCommandSurfaceVersion,
             AutomationCommandCapabilities = AutomationSummaryConstants.AutomationCommandCapabilities,
-            Summary = surfaceReport.Available
-                ? $"Host automation command preflight passed: required installed automation command surfaces are available (binary_source={surfaceReport.BinarySource}, host_data_root={surfaceReport.HostDataRoot})."
-                : $"Host automation command preflight failed: installed CLI at {surfaceReport.InstalledCliPath} (binary_source={surfaceReport.BinarySource}) is missing or stale for {string.Join(", ", missing.Select(command => command.Usage))}. Abort before label transitions; refresh the installed CLI instead of falling back to raw gh label mutation.",
+            TopologyHealth = topologyHealth,
+            Summary = !surfaceReport.Available
+                ? $"Host automation command preflight failed: installed CLI at {surfaceReport.InstalledCliPath} (binary_source={surfaceReport.BinarySource}) is missing or stale for {string.Join(", ", missing.Select(command => command.Usage))}. Abort before label transitions; refresh the installed CLI instead of falling back to raw gh label mutation. {topologyHealth.Summary}"
+                : topologyInvalid
+                    ? $"Host automation command surfaces are available, but topology health failed. {topologyHealth.Summary}"
+                    : $"Host automation command preflight passed: required installed automation command surfaces are available (binary_source={surfaceReport.BinarySource}, host_data_root={surfaceReport.HostDataRoot}). {topologyHealth.Summary}",
         };
     }
 
@@ -156,6 +166,20 @@ internal static class AutomationDoctorCommand
         writer.WriteLine($"host_data_root: {result.HostDataRoot}");
         writer.WriteLine(result.Summary);
         writer.WriteLine();
+        writer.WriteLine("## Session-layer delivery topology health");
+        writer.WriteLine($"status: {result.TopologyHealth.Status}");
+        writer.WriteLine($"required: {result.TopologyHealth.Required.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"record: {result.TopologyHealth.RecordPath}");
+        writer.WriteLine(result.TopologyHealth.Summary);
+        foreach (var team in result.TopologyHealth.Teams)
+        {
+            foreach (var finding in team.Findings)
+            {
+                writer.WriteLine($"- team={team.Team}; role={finding.Role}; field={finding.Field}; "
+                    + $"cause={finding.Cause}; {finding.Message}");
+            }
+        }
+        writer.WriteLine();
         writer.WriteLine("## Required installed automation command surfaces");
         foreach (var command in result.RequiredCommands)
         {
@@ -232,6 +256,12 @@ internal sealed record AutomationDoctorResult
 
     [JsonPropertyName("automationCommandCapabilities")]
     public IReadOnlyList<AutomationCommandCapability> AutomationCommandCapabilitiesCamel => AutomationCommandCapabilities;
+
+    [JsonPropertyName("topology_health")]
+    public required SessionLayerTopologyHealthResult TopologyHealth { get; init; }
+
+    [JsonPropertyName("topologyHealth")]
+    public SessionLayerTopologyHealthResult TopologyHealthCamel => TopologyHealth;
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }

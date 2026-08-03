@@ -305,6 +305,26 @@ workspace の recorded pane で running agent が必要です。external residen
 を通して canonical delegate/report event を受け取ります。missing/unsafe reader、stale pane、
 foreign-workspace-only name、ambiguous mapping は prompt / append なしで fail closed になります。
 
+この artifact は手編集せず、canonical topology surface で記録・検査します。
+
+```text
+intent-cli session-layer topology record --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
+intent-cli session-layer topology record --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
+intent-cli session-layer topology validate --team <team> --format json
+intent-cli session-layer topology show --team <team> --format json
+```
+
+`record` が使う値は operator が供給したものだけです。herdr query、id の guess、resource の
+provision、既存 conflict の repair は行いません。完全一致は idempotent no-op、異なる既存 role
+は file を書き換えず refuse します。read-only の `validate` は `valid: true|false` と全 finding
+を一度に返し、missing/unsupported residence、missing `pane_id`、unsafe reader、team-workspace
+mismatch を含む各 finding に role、field、cause、message を記載します。`show` も read-only
+であり、`notify` と同じ delivery-target 関数を通して各 pane / reader を解決し、prompt、append、
+herdr query を行いません。mapping が存在するか herdr-only が必要とする場合、`automation doctor`
+もこの health を載せ、notify の topology refusal は remedy として `topology validate` / `record`
+を示します。不正状態は常に fail closed のままです。これらは knowledge と controlled writer を
+追加するものであり、fallback は追加しません。
+
 typed launch は次の surface です。
 
 ```text
