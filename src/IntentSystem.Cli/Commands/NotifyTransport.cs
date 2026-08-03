@@ -64,6 +64,10 @@ internal sealed record NotifyDeliveryResult
 
     public string? WorkingTransition { get; init; }
 
+    public string? SettleOutcome { get; init; }
+
+    public bool? ResendPermitted { get; init; }
+
     public SessionLayerPreflightPhaseResult? ActivePhase { get; init; }
 
     public required string Summary { get; init; }
@@ -424,6 +428,8 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 Delivered = true,
                 ReceiverStateOutcome = "already-working",
                 WorkingTransition = "unobservable",
+                SettleOutcome = "not-applicable",
+                ResendPermitted = false,
                 ActivePhase = new SessionLayerPreflightPhaseResult
                 {
                     Status = SessionLayerPreflight.ActiveUnobservable,
@@ -455,18 +461,27 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
             }
             catch (InvalidOperationException exception)
             {
-                return Failure(
-                    "transport-unavailable",
-                    $"The unattended working transition was observed for team '{team}' workspace "
-                    + $"'{topology.WorkspaceId}' pane '{recordedPane}', but the bounded settled-state wait could "
-                    + $"not run: {exception.Message} Inspect the pane before retrying.",
-                    activePhase: new SessionLayerPreflightPhaseResult
+                return new NotifyDeliveryResult
+                {
+                    Resolved = true,
+                    Delivered = true,
+                    ReceiverStateOutcome = "working-did-not-settle",
+                    WorkingTransition = "observed",
+                    SettleOutcome = "not-observed-within-bound",
+                    ResendPermitted = false,
+                    ActivePhase = new SessionLayerPreflightPhaseResult
                     {
                         Status = SessionLayerPreflight.ActiveNotObserved,
                         Checked = true,
                         ContactedReceiver = true,
                         Summary = "Working was observed, but a fresh settled acknowledgement could not be checked.",
-                    });
+                    },
+                    Summary = $"Team '{team}' workspace '{topology.WorkspaceId}' pane '{recordedPane}' entered "
+                        + "unattended working, but the bounded settled-state wait could not run: "
+                        + $"{exception.Message} Delivered after the observed working transition; settled acknowledgement "
+                        + "was not observed within the bound. Resend is forbidden because the recipient may still be "
+                        + "performing this work.",
+                };
             }
 
             if (settled.ExitCode == 0)
@@ -477,6 +492,8 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                     Delivered = true,
                     ReceiverStateOutcome = "idle-transitions",
                     WorkingTransition = "observed",
+                    SettleOutcome = "observed",
+                    ResendPermitted = false,
                     ActivePhase = new SessionLayerPreflightPhaseResult
                     {
                         Status = SessionLayerPreflight.ActiveObserved,
@@ -494,11 +511,12 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
             var settledDetail = OneLine(settled.StandardError, settled.StandardOutput);
             return new NotifyDeliveryResult
             {
-                Resolved = false,
-                Delivered = false,
-                Cause = "receiver-settle-unobserved",
+                Resolved = true,
+                Delivered = true,
                 ReceiverStateOutcome = "working-did-not-settle",
                 WorkingTransition = "observed",
+                SettleOutcome = "not-observed-within-bound",
+                ResendPermitted = false,
                 ActivePhase = new SessionLayerPreflightPhaseResult
                 {
                     Status = SessionLayerPreflight.ActiveNotObserved,
@@ -508,8 +526,9 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 },
                 Summary = $"Team '{team}' workspace '{topology.WorkspaceId}' pane '{recordedPane}' entered "
                     + "unattended working, but did not return to idle/done/blocked within "
-                    + $"{BoundedPromptTimeoutMilliseconds}ms ({settledDetail}). Reported as not delivered; inspect "
-                    + "the pane before retrying so active work is not duplicated.",
+                    + $"{BoundedPromptTimeoutMilliseconds}ms ({settledDetail}). Delivered after the observed working "
+                    + "transition; settled acknowledgement was not observed within the bound. Resend is forbidden "
+                    + "because the recipient may still be performing this work.",
             };
         }
 
@@ -527,6 +546,8 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 Cause = "receiver-transition-unobserved",
                 ReceiverStateOutcome = "idle-stays-idle",
                 WorkingTransition = "not-observed",
+                SettleOutcome = "not-applicable",
+                ResendPermitted = true,
                 ActivePhase = new SessionLayerPreflightPhaseResult
                 {
                     Status = SessionLayerPreflight.ActiveNotObserved,
@@ -536,8 +557,8 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 },
                 Summary = $"herdr accepted or attempted the prompt for settled logical role '{toRole}' in team "
                     + $"'{team}', but no unattended working transition and fresh settled acknowledgement were "
-                    + $"observed within {BoundedPromptTimeoutMilliseconds}ms ({detail}). Reported as not delivered; "
-                    + "inspect the pane before retrying so a late prompt is not duplicated.",
+                    + $"observed within {BoundedPromptTimeoutMilliseconds}ms ({detail}). Not delivered; resend is "
+                    + "permitted because the required unattended working transition was never observed.",
             };
         }
 

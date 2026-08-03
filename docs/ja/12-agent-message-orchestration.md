@@ -372,13 +372,20 @@ herdr-only を内部解決し、role mapping を検証して structured task blo
 `herdr agent prompt` を手書きしてはいけません。
 
 settled pane では、notify は最初に bounded `agent prompt --wait --until working` を使い、続けて
-idle/done/blocked を待つ別の bounded `agent wait` を実行します。herdr が unattended working
-transition と、その後の settled/fresh acknowledgement を観測した後だけ
-`delivered: true` にします。idle のままなら `receiver_state_outcome: idle-stays-idle`、
-`working_transition: not-observed` で未配達です。notify 開始時にすでに working の pane は prompt
-submission 成功後に delivered としますが、`receiver_state_outcome: already-working`、
-`working_transition: unobservable` と報告し、active turn を新 prompt の transition と誤認しません。
-dry-run は active phase を `skipped` のままにして prompt しません。
+idle/done/blocked を待つ別の bounded `agent wait` を実行します。観測された unattended working
+transition が delivery verdict です。一度これを観測したら、後続の settle check が
+`delivered: true` を否定することはありません。独立した acknowledgement は `settle_outcome` で
+`observed`、`not-observed-within-bound`、`not-applicable` と報告し、機械可読な retry verdict は
+`resend_permitted` です。idle のままなら `receiver_state_outcome: idle-stays-idle`、
+`working_transition: not-observed`、`settle_outcome: not-applicable` で未配達のため
+`resend_permitted: true` です。working には入ったが bound 内に settle しない場合は
+`receiver_state_outcome: working-did-not-settle`、配達済み、
+`settle_outcome: not-observed-within-bound`、`resend_permitted: false` となります。receiver が
+まだ作業中であり得るため automation は再送してはいけません。notify 開始時にすでに working の pane は
+prompt submission 成功後に delivered としますが、`receiver_state_outcome: already-working`、
+`working_transition: unobservable`、`settle_outcome: not-applicable`、`resend_permitted: false` と
+報告し、active turn を新 prompt の transition と誤認しません。dry-run は active phase を `skipped`
+のままにして prompt しません。
 
 `--to` は引き続き topology の logical role を指定しますが、logical role name は globally unique な
 herdr agent name から独立しています。recipient identity は recorded workspace と pane の組です。

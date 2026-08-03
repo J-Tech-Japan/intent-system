@@ -206,7 +206,9 @@ internal static class NotifyCommand
                 modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
                 preflight: deliveryPreflight,
                 receiverStateOutcome: delivery.ReceiverStateOutcome,
-                workingTransition: delivery.WorkingTransition));
+                workingTransition: delivery.WorkingTransition,
+                settleOutcome: delivery.SettleOutcome,
+                resendPermitted: delivery.ResendPermitted));
             return 1;
         }
 
@@ -259,7 +261,9 @@ internal static class NotifyCommand
             eventPath: delivery.ReaderPath,
             preflight: deliveryPreflight,
             receiverStateOutcome: delivery.ReceiverStateOutcome,
-            workingTransition: delivery.WorkingTransition));
+            workingTransition: delivery.WorkingTransition,
+            settleOutcome: delivery.SettleOutcome,
+            resendPermitted: delivery.ResendPermitted));
         return 0;
     }
 
@@ -418,7 +422,9 @@ internal static class NotifyCommand
         string? eventPath = null,
         SessionLayerPreflightResult? preflight = null,
         string? receiverStateOutcome = null,
-        string? workingTransition = null) => new()
+        string? workingTransition = null,
+        string? settleOutcome = null,
+        bool? resendPermitted = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot!,
@@ -438,6 +444,8 @@ internal static class NotifyCommand
             SessionLayerPreflight = preflight,
             ReceiverStateOutcome = receiverStateOutcome,
             WorkingTransition = workingTransition,
+            SettleOutcome = settleOutcome,
+            ResendPermitted = resendPermitted,
             Cause = null,
             Payload = payload,
             ReportCommand = reportCommand,
@@ -455,7 +463,9 @@ internal static class NotifyCommand
         string? modeSource = null,
         SessionLayerPreflightResult? preflight = null,
         string? receiverStateOutcome = null,
-        string? workingTransition = null) => new()
+        string? workingTransition = null,
+        string? settleOutcome = null,
+        bool? resendPermitted = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot ?? string.Empty,
@@ -475,6 +485,8 @@ internal static class NotifyCommand
             SessionLayerPreflight = preflight,
             ReceiverStateOutcome = receiverStateOutcome,
             WorkingTransition = workingTransition,
+            SettleOutcome = settleOutcome,
+            ResendPermitted = resendPermitted,
             Cause = cause,
             Payload = payload,
             ReportCommand = reportCommand,
@@ -512,6 +524,14 @@ internal static class NotifyCommand
         if (result.WorkingTransition is not null)
         {
             writer.WriteLine($"- working transition: {result.WorkingTransition}");
+        }
+        if (result.SettleOutcome is not null)
+        {
+            writer.WriteLine($"- settle outcome: {result.SettleOutcome}");
+        }
+        if (result.ResendPermitted is not null)
+        {
+            writer.WriteLine($"- resend permitted: {result.ResendPermitted.Value.ToString().ToLowerInvariant()}");
         }
         if (result.ReportCommand is not null)
         {
@@ -740,6 +760,8 @@ internal sealed record NotifyResult
     [JsonPropertyName("session_layer_preflight")] public SessionLayerPreflightResult? SessionLayerPreflight { get; init; }
     [JsonPropertyName("receiver_state_outcome")] public string? ReceiverStateOutcome { get; init; }
     [JsonPropertyName("working_transition")] public string? WorkingTransition { get; init; }
+    [JsonPropertyName("settle_outcome")] public string? SettleOutcome { get; init; }
+    [JsonPropertyName("resend_permitted")] public bool? ResendPermitted { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("payload")] public string? Payload { get; init; }
     [JsonPropertyName("report_command")] public string? ReportCommand { get; init; }
