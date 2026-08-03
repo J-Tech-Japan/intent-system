@@ -161,6 +161,18 @@ internal static class AutomationStalledWorkCommand
     public const string KindMergedNotClosedOut = "merged-not-closed-out";
 
     /// <summary>
+    /// G596: an explicitly opened durable obligation that only the human
+    /// operator can clear. It is actionable, but never orchestrator-actionable.
+    /// </summary>
+    public const string KindOperatorAttentionPending = "operator-attention-pending";
+
+    /// <summary>
+    /// G596: the durable store exists but cannot be trusted. A corrupt store
+    /// can never be collapsed into a healthy/no-attention result.
+    /// </summary>
+    public const string KindOperatorAttentionCannotDetermine = "operator-attention-cannot-determine";
+
+    /// <summary>
     /// G582: an approved PR is an intermediate workflow state, not completion.
     /// This actionable kind closes the last-net gap when an open approved PR
     /// sits past <c>--stale-minutes</c> without any wake source advancing the
@@ -516,8 +528,14 @@ internal static class AutomationStalledWorkCommand
             items,
             excluded);
 
+        var operatorAttention = CollectOperatorAttention(context, domain, now, items);
+
         var filtered = items
-            .Where(item => item.AgeMinutes >= staleMinutes)
+            // G596: explicit human obligations and unreadable human-obligation
+            // state are load-bearing immediately; they do not wait for the
+            // generic GitHub staleness threshold before becoming visible.
+            .Where(item => item.Kind is KindOperatorAttentionPending or KindOperatorAttentionCannotDetermine
+                || item.AgeMinutes >= staleMinutes)
             .OrderByDescending(item => item.AgeMinutes)
             .ToArray();
 
@@ -536,6 +554,88 @@ internal static class AutomationStalledWorkCommand
             Items = filtered,
             Excluded = excluded,
             Warnings = warnings,
+            // A host that has never used the new lifecycle retains the exact
+            // pre-G596 stalled-work shape. Its independent query still says
+            // check-not-completed; once a store exists (or is corrupt), this
+            // scanner emits the load-bearing status.
+            OperatorAttentionStatus = operatorAttention.Status == OperatorAttentionReadStatus.Missing
+                ? null
+                : operatorAttention.Status,
+            OperatorAttentionError = operatorAttention.Status == OperatorAttentionReadStatus.Missing
+                ? null
+                : operatorAttention.Error,
+        };
+    }
+
+    private static OperatorAttentionReadResult CollectOperatorAttention(
+        CliContext context,
+        string domain,
+        DateTimeOffset now,
+        List<StalledWorkItem> items)
+    {
+        var read = OperatorAttentionStore.Read(context.RepoRoot);
+        if (read.Status == OperatorAttentionReadStatus.CannotDetermine)
+        {
+            items.Add(new StalledWorkItem
+            {
+                Kind = KindOperatorAttentionCannotDetermine,
+                ExecutionUnit = "operator-attention-store",
+                Issue = null,
+                Pr = null,
+                AgeMinutes = 0,
+                IsInformational = false,
+                RecommendedAction = read.Error!,
+                RequiredActor = "operator",
+                OrchestratorActionable = false,
+                OperatorAttentionRecordId = null,
+                OperatorAttentionOwner = "operator",
+                BlockingReference = OperatorAttentionStore.RelativePath,
+                DedupeKey = $"operator-attention:cannot-determine:{domain}",
+            });
+            return read;
+        }
+
+        if (read.Status != OperatorAttentionReadStatus.Readable)
+        {
+            // Missing is deliberately exposed as check-not-completed on the
+            // result, but it is not invented into an open obligation. Only an
+            // explicit `operator-attention open --write` may create one.
+            return read;
+        }
+
+        var domainRecords = read.Document!.Records
+            .Where(record => string.Equals(record.Domain, domain, StringComparison.Ordinal))
+            .ToArray();
+        var openRecords = domainRecords
+            .Where(record => string.Equals(record.Status, OperatorAttentionStatus.Open, StringComparison.Ordinal))
+            .ToArray();
+        foreach (var record in openRecords)
+        {
+            items.Add(new StalledWorkItem
+            {
+                Kind = KindOperatorAttentionPending,
+                ExecutionUnit = record.RecordId,
+                Issue = null,
+                Pr = null,
+                AgeMinutes = Math.Max(0, (int)Math.Floor((now - record.OpenedAt).TotalMinutes)),
+                IsInformational = false,
+                RecommendedAction = record.ActionNeeded,
+                RequiredActor = "operator",
+                OrchestratorActionable = false,
+                OperatorAttentionRecordId = record.RecordId,
+                OperatorAttentionOwner = record.Owner,
+                BlockingReference = record.BlockingReference,
+                DedupeKey = $"operator-attention:{record.Domain}:{record.Team}:{record.RecordId}",
+            });
+        }
+
+        return read with
+        {
+            Status = openRecords.Length > 0
+                ? OperatorAttentionQueryStatus.AttentionPending
+                : domainRecords.Length > 0
+                    ? OperatorAttentionQueryStatus.NoAttentionPending
+                    : OperatorAttentionQueryStatus.CheckNotCompleted,
         };
     }
 
@@ -3045,6 +3145,14 @@ internal static class AutomationStalledWorkCommand
         writer.WriteLine($"- stalled: {(result.Stalled ? "true" : "false")}");
         writer.WriteLine($"- items: {result.Items.Count}");
         writer.WriteLine($"- excluded: {result.Excluded.Count}");
+        if (result.OperatorAttentionStatus is not null)
+        {
+            writer.WriteLine($"- operator_attention_status: {result.OperatorAttentionStatus}");
+        }
+        if (result.OperatorAttentionError is not null)
+        {
+            writer.WriteLine($"- operator_attention_error: {result.OperatorAttentionError}");
+        }
         writer.WriteLine();
 
         if (result.Items.Count == 0)
@@ -3082,6 +3190,26 @@ internal static class AutomationStalledWorkCommand
                 if (item.DedupeKey is { } dedupeKey)
                 {
                     writer.WriteLine($"- dedupe_key: {dedupeKey}");
+                }
+                if (item.RequiredActor is { } requiredActor)
+                {
+                    writer.WriteLine($"- required_actor: {requiredActor}");
+                }
+                if (item.OrchestratorActionable is { } orchestratorActionable)
+                {
+                    writer.WriteLine($"- orchestrator_actionable: {(orchestratorActionable ? "true" : "false")}");
+                }
+                if (item.OperatorAttentionRecordId is { } recordId)
+                {
+                    writer.WriteLine($"- operator_attention_record_id: {recordId}");
+                }
+                if (item.OperatorAttentionOwner is { } owner)
+                {
+                    writer.WriteLine($"- operator_attention_owner: {owner}");
+                }
+                if (item.BlockingReference is { } blockingReference)
+                {
+                    writer.WriteLine($"- blocking_reference: {blockingReference}");
                 }
                 // G564: the declared targets belong in the item itself, so a
                 // reader knows WHAT the packet promised without opening it.
@@ -3177,6 +3305,14 @@ internal sealed record AutomationStalledWorkResult
 
     [JsonPropertyName("warnings")]
     public required IReadOnlyList<string> Warnings { get; init; }
+
+    [JsonPropertyName("operator_attention_status")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public required string? OperatorAttentionStatus { get; init; }
+
+    [JsonPropertyName("operator_attention_error")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public required string? OperatorAttentionError { get; init; }
 }
 
 internal sealed record StalledWorkItem
@@ -3240,6 +3376,28 @@ internal sealed record StalledWorkItem
     /// </summary>
     [JsonPropertyName("declared_write_back_targets")]
     public IReadOnlyList<string>? DeclaredWriteBackTargets { get; init; }
+
+    /// <summary>G596: actor that can actually discharge the finding.</summary>
+    [JsonPropertyName("required_actor")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RequiredActor { get; init; }
+
+    /// <summary>G596: false for human obligations; orchestration must route, not act.</summary>
+    [JsonPropertyName("orchestrator_actionable")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? OrchestratorActionable { get; init; }
+
+    [JsonPropertyName("operator_attention_record_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OperatorAttentionRecordId { get; init; }
+
+    [JsonPropertyName("operator_attention_owner")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OperatorAttentionOwner { get; init; }
+
+    [JsonPropertyName("blocking_reference")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BlockingReference { get; init; }
 }
 
 internal sealed record StalledWorkCiBreakdown

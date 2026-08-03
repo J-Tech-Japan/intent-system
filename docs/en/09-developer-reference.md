@@ -657,6 +657,49 @@ wake procedure and from an external heartbeat are separate follow-up slices.
 informational one, so a reader (human or orchestrator) can never mistake
 "no transition needed" for an actionable next command.
 
+### Durable operator attention (G596)
+
+Human-required work is state, not a notification that may scroll past. Use
+the explicit lifecycle surface:
+
+```text
+intent-cli operator-attention open --record <id> --domain <d> --team <t> --owner <owner> --blocking-reference <issue|pr|unit|release> --action-needed <action> --evidence <evidence> [--supersedes <id>] --write --format json
+intent-cli operator-attention resolve --record <id> --resolution-evidence <evidence> --write --format json
+intent-cli operator-attention supersede --record <id> --evidence <evidence> --write --format json
+intent-cli operator-attention query [--domain <d>] [--team <t>] --format json
+```
+
+Open a record whenever progress requires a human operator's decision or act
+and the requirement is not already the unchanged clarification mechanism.
+The opening thread must name an owner, the blocking reference, a specific
+action a reader can perform without reconstructing chat, and establishing
+evidence. It remains that thread's obligation to route the record to the
+operator and later run an explicit terminal command with evidence.
+
+The lifecycle is exactly `open`, `resolved`, and `superseded`. Superseded does
+not mean answered: it carries no `resolution_evidence`. If the obligation
+returns, first supersede the old record and open a new ID with `--supersedes`;
+the terminal old record is never mutated or reopened. Every transition and
+its evidence/timestamp remains in `.intent-cli/operator-attention.json`,
+published through the shared atomic durable writer.
+
+Only these explicit commands write or transition the store. Pane text,
+`events.jsonl`, `intent-cli notify escalate`, and prose/event heuristics can
+announce that something happened but never open, resolve, or supersede a
+record. Querying by domain, by team, or both reports every matching record,
+the current open set, and age since opening. A missing store or no history at
+the selected scope returns `check-not-completed`; malformed or unreadable
+state returns `cannot-determine`, never `no-attention-pending`.
+
+An open record appears immediately in the existing `automation stalled-work`
+and `automation heartbeat` output as `operator-attention-pending`. The item
+names the record and carries `required_actor: operator` plus
+`orchestrator_actionable: false`; a heartbeat whose only item is that record
+sets `route_to: operator` and says `ROUTE TO OPERATOR`. The orchestrator routes
+the obligation but must not pretend it can clear the human decision itself.
+No new watchdog, scheduler, timer, polling loop, process launch, or automatic
+open/resolve path is introduced.
+
 ### Session-layer mode: which transport the four threads use (G570)
 
 `intent-cli session-layer show --domain <d> [--team <t>] [--format markdown|json]`
