@@ -170,7 +170,7 @@ public sealed class OperatorAttentionG596Tests : IDisposable
     public void IdlePipelineWithOpenRecord_RoutesHeartbeatToOperatorNotOrchestrator_G596()
     {
         OperatorAttentionCommand.UtcNowFactory = () => FixedNow.AddMinutes(-1);
-        Assert.Equal(0, workspace.Open("release-approval", write: true).ExitCode);
+        Assert.Equal(0, workspace.OpenOwned("release-approval", "operator", write: true).ExitCode);
 
         var stalled = AutomationStalledWorkCommand.Analyze(
             workspace.Context, "intent-cli", "J-Tech-Japan/intent-system", staleMinutes: 45);
@@ -191,6 +191,51 @@ public sealed class OperatorAttentionG596Tests : IDisposable
         Assert.Contains("orchestrator_actionable=false", message, StringComparison.Ordinal);
         Assert.Contains("release-approval", message, StringComparison.Ordinal);
         Assert.DoesNotContain("1 orchestrator-actionable", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DesignOwnedLifecycle_PropagatesOwnerThroughStalledWorkHeartbeatAndResolution_G599()
+    {
+        workspace.WriteTopology();
+        Assert.Equal(0, workspace.OpenOwned("design-gate", "design", write: true).ExitCode);
+
+        var stalled = AutomationStalledWorkCommand.Analyze(
+            workspace.Context, "intent-cli", "J-Tech-Japan/intent-system", staleMinutes: 45);
+        var item = Assert.Single(stalled.Items);
+        Assert.Equal("design", item.RequiredActor);
+        Assert.Equal("design", item.OperatorAttentionOwner);
+        Assert.Contains(":design:", item.DedupeKey, StringComparison.Ordinal);
+
+        var (_, heartbeat) = workspace.Run("automation", "heartbeat", "--domain", "intent-cli",
+            "--repo", "J-Tech-Japan/intent-system", "--team", "intent-cli-dev", "--format", "json");
+        Assert.Equal("operator-required", heartbeat.GetProperty("verdict").GetString());
+        Assert.Equal("design", heartbeat.GetProperty("action_owner").GetString());
+        Assert.Equal("design", heartbeat.GetProperty("target_role").GetString());
+        Assert.Equal("design", heartbeat.GetProperty("route_to").GetString());
+        Assert.Contains("--to design", heartbeat.GetProperty("canonical_notify_command").GetString(), StringComparison.Ordinal);
+        Assert.Contains(":design:", heartbeat.GetProperty("dedupe_key").GetString(), StringComparison.Ordinal);
+
+        Assert.Equal(0, workspace.Run("operator-attention", "resolve", "--record", "design-gate",
+            "--resolution-evidence", "design ruling recorded", "--write", "--format", "json").ExitCode);
+        var (_, restored) = workspace.Run("automation", "heartbeat", "--domain", "intent-cli",
+            "--repo", "J-Tech-Japan/intent-system", "--team", "intent-cli-dev", "--format", "json");
+        Assert.Equal("actionable-stall", restored.GetProperty("verdict").GetString());
+    }
+
+    [Fact]
+    public void UnknownOwnerAndCommentOnlyBlock_FailClosedOrRemainActionable_G599()
+    {
+        workspace.WriteTopology();
+        var (_, commentOnly) = workspace.Run("automation", "heartbeat", "--domain", "intent-cli",
+            "--repo", "J-Tech-Japan/intent-system", "--team", "intent-cli-dev", "--format", "json");
+        Assert.Equal("actionable-stall", commentOnly.GetProperty("verdict").GetString());
+
+        Assert.Equal(0, workspace.OpenOwned("unknown-gate", "unrecorded-owner", write: true).ExitCode);
+        var (_, unknown) = workspace.Run("automation", "heartbeat", "--domain", "intent-cli",
+            "--repo", "J-Tech-Japan/intent-system", "--team", "intent-cli-dev", "--format", "json");
+        Assert.Equal("cannot-determine", unknown.GetProperty("verdict").GetString());
+        Assert.Contains("unrecorded-owner", unknown.GetProperty("reason").GetString(), StringComparison.Ordinal);
+        Assert.NotEqual("operator", unknown.GetProperty("action_owner").GetString());
     }
 
     [Fact]
@@ -315,6 +360,28 @@ public sealed class OperatorAttentionG596Tests : IDisposable
                 "--domain", domain, "--team", team, "--owner", "operator",
                 "--blocking-reference", $"unit:{record}", "--action-needed", $"Decide {record}",
                 "--evidence", $"Evidence for {record}", "--write", "--format", "json");
+        }
+
+        public (int ExitCode, JsonElement Result) OpenOwned(string record, string owner, bool write)
+        {
+            return Run("operator-attention", "open", "--record", record,
+                "--domain", "intent-cli", "--team", "intent-cli-dev", "--owner", owner,
+                "--blocking-reference", $"design:{record}", "--action-needed", "Record a design ruling",
+                "--evidence", "implementation is blocked", write ? "--write" : "--dry-run", "--format", "json");
+        }
+
+        public void WriteTopology()
+        {
+            var path = NotifyRoleTopologyStore.ResolvePath(RootPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, JsonSerializer.Serialize(new
+            {
+                team = "intent-cli-dev", workspace_id = "workspace", roles = new Dictionary<string, object>
+                {
+                    ["design"] = new { resident = "herdr", workspace_id = "workspace", pane_id = "workspace:p1" },
+                    ["orchestration"] = new { resident = "herdr", workspace_id = "workspace", pane_id = "workspace:p2" },
+                },
+            }));
         }
 
         public void RecordAgmsgMode()
