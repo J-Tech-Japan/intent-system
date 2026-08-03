@@ -145,25 +145,31 @@ internal static class AutomationHeartbeatCommand
     /// </summary>
     private static string BuildMessageBody(AutomationStalledWorkResult stalledWork)
     {
-        var operatorRequiredCount = stalledWork.Items.Count(item =>
-            string.Equals(item.RequiredActor, "operator", StringComparison.Ordinal));
+        var attentionItems = stalledWork.Items
+            .Where(item => item.OrchestratorActionable is false && !string.IsNullOrWhiteSpace(item.RequiredActor))
+            .ToArray();
+        var attentionOwners = attentionItems
+            .Select(item => item.RequiredActor!)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
         var actionableCount = stalledWork.Items.Count(item =>
             !item.IsInformational && item.OrchestratorActionable is not false);
         var informationalCount = stalledWork.Items.Count(item => item.IsInformational);
 
         var builder = new StringBuilder();
         builder.Append("WAKE (heartbeat): ");
-        if (operatorRequiredCount > 0)
+        if (attentionItems.Length > 0)
         {
+            var ownerRoute = string.Join(" AND ", attentionOwners).ToUpperInvariant();
             builder
-                .Append("ROUTE TO OPERATOR — ")
-                .Append(operatorRequiredCount)
-                .Append(" operator-required attention item(s), ");
+                .Append("ROUTE TO ").Append(ownerRoute).Append(" — ")
+                .Append(attentionItems.Length).Append(" ")
+                .Append(string.Join("-and-", attentionOwners)).Append("-required attention item(s), ");
         }
         builder
             .Append(actionableCount)
             .Append(" pending transition(s)");
-        if (operatorRequiredCount > 0)
+        if (attentionItems.Length > 0)
         {
             builder
                 .Append(" (")
@@ -203,10 +209,11 @@ internal static class AutomationHeartbeatCommand
             }
 
             builder.Append(')');
-            if (string.Equals(item.RequiredActor, "operator", StringComparison.Ordinal))
+            if (item.OrchestratorActionable is false && item.RequiredActor is { } requiredActor)
             {
                 builder
-                    .Append(" — OPERATOR REQUIRED (orchestrator_actionable=false): ")
+                    .Append(" — ").Append(requiredActor.ToUpperInvariant())
+                    .Append(" REQUIRED (orchestrator_actionable=false): ")
                     .Append(item.RecommendedAction);
                 if (item.OperatorAttentionOwner is { } owner)
                 {

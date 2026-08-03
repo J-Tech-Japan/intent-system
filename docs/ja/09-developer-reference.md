@@ -713,8 +713,9 @@ scope に履歴が無ければ `check-not-completed`、malformed または unrea
 `operator-attention` は、この obligation に対しては狭い compatibility name です。open record は既存の
 `automation stalled-work` と `automation heartbeat` に `operator-attention-pending` として即時に現れます。
 item は record を名指しし、recorded `required_actor` と `orchestrator_actionable: false` を持ちます。その
-record だけが item の heartbeat は `route_to: operator` と `ROUTE TO OPERATOR`
-を返します。orchestrator は義務を route しますが、人間の判断を自分で clear
+record だけが item の heartbeat は recorded owner の `route_to` と
+`ROUTE TO <RECORDED OWNER>` を返し、reader-facing item に owner と blocking reference を含めます。
+orchestrator は義務を route しますが、別の party の判断を自分で clear
 できるかのように扱ってはいけません。新しい watchdog、scheduler、timer、
 polling loop、process launch、automatic open/resolve path は追加しません。
 

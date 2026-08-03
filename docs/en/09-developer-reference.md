@@ -699,8 +699,10 @@ carries. An open record appears immediately in the existing `automation
 stalled-work` and `automation heartbeat` output as `operator-attention-pending`.
 The item names the record and carries its recorded `required_actor` plus
 `orchestrator_actionable: false`; a heartbeat whose only item is that record
-sets `route_to: operator` and says `ROUTE TO OPERATOR`. The orchestrator routes
-the obligation but must not pretend it can clear the human decision itself.
+sets `route_to` to the recorded owner and says `ROUTE TO <RECORDED OWNER>`,
+including the owner and blocking reference in the reader-facing item. The
+orchestrator routes the obligation but must not pretend it can clear another
+party's judgment itself.
 No new watchdog, scheduler, timer, polling loop, process launch, or automatic
 open/resolve path is introduced.
 

@@ -214,6 +214,12 @@ public sealed class OperatorAttentionG596Tests : IDisposable
         Assert.Equal("design", heartbeat.GetProperty("route_to").GetString());
         Assert.Contains("--to design", heartbeat.GetProperty("canonical_notify_command").GetString(), StringComparison.Ordinal);
         Assert.Contains(":design:", heartbeat.GetProperty("dedupe_key").GetString(), StringComparison.Ordinal);
+        var message = heartbeat.GetProperty("message_body").GetString()!;
+        Assert.Contains("ROUTE TO DESIGN", message, StringComparison.Ordinal);
+        Assert.Contains("design-required attention item", message, StringComparison.Ordinal);
+        Assert.Contains("DESIGN REQUIRED (orchestrator_actionable=false)", message, StringComparison.Ordinal);
+        Assert.Contains("Owner: design.", message, StringComparison.Ordinal);
+        Assert.Contains("Blocking reference: design:design-gate.", message, StringComparison.Ordinal);
 
         Assert.Equal(0, workspace.Run("operator-attention", "resolve", "--record", "design-gate",
             "--resolution-evidence", "design ruling recorded", "--write", "--format", "json").ExitCode);
