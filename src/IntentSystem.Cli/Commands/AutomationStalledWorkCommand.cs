@@ -621,12 +621,14 @@ internal static class AutomationStalledWorkCommand
                 AgeMinutes = Math.Max(0, (int)Math.Floor((now - record.OpenedAt).TotalMinutes)),
                 IsInformational = false,
                 RecommendedAction = record.ActionNeeded,
-                RequiredActor = "operator",
+                // G599: the compatibility-named lifecycle records an owner;
+                // this projection must not replace it with a literal.
+                RequiredActor = record.Owner,
                 OrchestratorActionable = false,
                 OperatorAttentionRecordId = record.RecordId,
                 OperatorAttentionOwner = record.Owner,
                 BlockingReference = record.BlockingReference,
-                DedupeKey = $"operator-attention:{record.Domain}:{record.Team}:{record.RecordId}",
+                DedupeKey = $"operator-attention:{record.Domain}:{record.Team}:{record.Owner}:{record.RecordId}",
             });
         }
 

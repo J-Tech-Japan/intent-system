@@ -669,8 +669,11 @@ intent-cli operator-attention supersede --record <id> --evidence <evidence> --wr
 intent-cli operator-attention query [--domain <d>] [--team <t>] --format json
 ```
 
-Open a record whenever progress requires a human operator's decision or act
-and the requirement is not already the unchanged clarification mechanism.
+Open a record whenever progress is blocked awaiting another party's judgment —
+the human operator or a logical thread such as design — and the requirement is
+not already the unchanged clarification mechanism. In particular, a thread
+that needs a design ruling opens this record rather than posting the question
+only as a GitHub comment.
 The opening thread must name an owner, the blocking reference, a specific
 action a reader can perform without reconstructing chat, and establishing
 evidence. It remains that thread's obligation to route the record to the
@@ -691,12 +694,15 @@ the current open set, and age since opening. A missing store or no history at
 the selected scope returns `check-not-completed`; malformed or unreadable
 state returns `cannot-determine`, never `no-attention-pending`.
 
-An open record appears immediately in the existing `automation stalled-work`
-and `automation heartbeat` output as `operator-attention-pending`. The item
-names the record and carries `required_actor: operator` plus
+The compatibility name `operator-attention` is narrower than the obligation it
+carries. An open record appears immediately in the existing `automation
+stalled-work` and `automation heartbeat` output as `operator-attention-pending`.
+The item names the record and carries its recorded `required_actor` plus
 `orchestrator_actionable: false`; a heartbeat whose only item is that record
-sets `route_to: operator` and says `ROUTE TO OPERATOR`. The orchestrator routes
-the obligation but must not pretend it can clear the human decision itself.
+sets `route_to` to the recorded owner and says `ROUTE TO <RECORDED OWNER>`,
+including the owner and blocking reference in the reader-facing item. The
+orchestrator routes the obligation but must not pretend it can clear another
+party's judgment itself.
 No new watchdog, scheduler, timer, polling loop, process launch, or automatic
 open/resolve path is introduced.
 

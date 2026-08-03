@@ -145,25 +145,31 @@ internal static class AutomationHeartbeatCommand
     /// </summary>
     private static string BuildMessageBody(AutomationStalledWorkResult stalledWork)
     {
-        var operatorRequiredCount = stalledWork.Items.Count(item =>
-            string.Equals(item.RequiredActor, "operator", StringComparison.Ordinal));
+        var attentionItems = stalledWork.Items
+            .Where(item => item.OrchestratorActionable is false && !string.IsNullOrWhiteSpace(item.RequiredActor))
+            .ToArray();
+        var attentionOwners = attentionItems
+            .Select(item => item.RequiredActor!)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
         var actionableCount = stalledWork.Items.Count(item =>
             !item.IsInformational && item.OrchestratorActionable is not false);
         var informationalCount = stalledWork.Items.Count(item => item.IsInformational);
 
         var builder = new StringBuilder();
         builder.Append("WAKE (heartbeat): ");
-        if (operatorRequiredCount > 0)
+        if (attentionItems.Length > 0)
         {
+            var ownerRoute = string.Join(" AND ", attentionOwners).ToUpperInvariant();
             builder
-                .Append("ROUTE TO OPERATOR — ")
-                .Append(operatorRequiredCount)
-                .Append(" operator-required attention item(s), ");
+                .Append("ROUTE TO ").Append(ownerRoute).Append(" — ")
+                .Append(attentionItems.Length).Append(" ")
+                .Append(string.Join("-and-", attentionOwners)).Append("-required attention item(s), ");
         }
         builder
             .Append(actionableCount)
             .Append(" pending transition(s)");
-        if (operatorRequiredCount > 0)
+        if (attentionItems.Length > 0)
         {
             builder
                 .Append(" (")
@@ -203,10 +209,11 @@ internal static class AutomationHeartbeatCommand
             }
 
             builder.Append(')');
-            if (string.Equals(item.RequiredActor, "operator", StringComparison.Ordinal))
+            if (item.OrchestratorActionable is false && item.RequiredActor is { } requiredActor)
             {
                 builder
-                    .Append(" — OPERATOR REQUIRED (orchestrator_actionable=false): ")
+                    .Append(" — ").Append(requiredActor.ToUpperInvariant())
+                    .Append(" REQUIRED (orchestrator_actionable=false): ")
                     .Append(item.RecommendedAction);
                 if (item.OperatorAttentionOwner is { } owner)
                 {
@@ -237,20 +244,21 @@ internal static class AutomationHeartbeatCommand
             return null;
         }
 
-        var hasOperator = stalledWork.Items.Any(item =>
-            string.Equals(item.RequiredActor, "operator", StringComparison.Ordinal));
-        if (!hasOperator)
+        var attentionOwners = stalledWork.Items
+            .Where(item => item.Kind is AutomationStalledWorkCommand.KindOperatorAttentionPending
+                or AutomationStalledWorkCommand.KindOperatorAttentionCannotDetermine)
+            .Select(item => item.RequiredActor)
+            .Where(owner => !string.IsNullOrWhiteSpace(owner))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (attentionOwners.Length == 0)
         {
             return null;
         }
         var hasOrchestrator = stalledWork.Items.Any(item =>
             !item.IsInformational && item.OrchestratorActionable is not false);
-        return (hasOperator, hasOrchestrator) switch
-        {
-            (true, true) => "operator-and-orchestration",
-            (true, false) => "operator",
-            _ => null,
-        };
+        var ownerRoute = string.Join("-and-", attentionOwners);
+        return hasOrchestrator ? $"{ownerRoute}-and-orchestration" : ownerRoute;
     }
 
     private static HeartbeatDecision Decide(
@@ -275,20 +283,35 @@ internal static class AutomationHeartbeatCommand
             string.Equals(item.Kind, AutomationStalledWorkCommand.KindOperatorAttentionPending, StringComparison.Ordinal));
         if (operatorRecord is not null)
         {
-            return new HeartbeatDecision(
-                Verdict: "operator-required",
-                Reason: $"Open operator-attention record '{operatorRecord.OperatorAttentionRecordId}' requires a human decision.",
-                LastProgressBasis: $"operator-attention record '{operatorRecord.OperatorAttentionRecordId}' opened",
-                LastProgressSource: "operator-attention.opened_at",
-                LastProgressAgeMinutes: operatorRecord.AgeMinutes,
-                DedupeKey: MaterialKey("operator-required", operatorRecord, "operator", null),
-                ActionOwner: "operator",
-                TargetRole: null,
-                CanonicalNotifyCommand: null,
-                WaitCondition: null,
-                WaitEndSignal: null,
-                WaitBoundMinutes: null,
-                SuggestedAction: $"Operator action required for '{operatorRecord.OperatorAttentionRecordId}': {operatorRecord.RecommendedAction}");
+            var owner = operatorRecord.OperatorAttentionOwner;
+            if (string.IsNullOrWhiteSpace(owner))
+            {
+                return CannotDetermine(
+                    $"Open operator-attention record '{operatorRecord.OperatorAttentionRecordId}' has no recorded owner.",
+                    operatorRecord,
+                    "operator-attention owner");
+            }
+
+            if (!string.Equals(owner, "operator", StringComparison.Ordinal))
+            {
+                if (string.IsNullOrWhiteSpace(team))
+                {
+                    return CannotDetermine(
+                        $"Recorded owner '{owner}' cannot be routed because --team is required for this heartbeat decision.",
+                        operatorRecord,
+                        "operator-attention owner routing");
+                }
+
+                var ownerRoute = ResolveAttentionOwnerRoute(context, domain, team, owner);
+                if (!ownerRoute.Resolved)
+                {
+                    return CannotDetermine(ownerRoute.Reason!, operatorRecord, "operator-attention owner routing");
+                }
+
+                return AttentionRequired(operatorRecord, owner, ownerRoute);
+            }
+
+            return AttentionRequired(operatorRecord, owner, null);
         }
 
         if (string.IsNullOrWhiteSpace(team))
@@ -310,7 +333,7 @@ internal static class AutomationHeartbeatCommand
         // pipeline and force callers to re-derive the answer from Items.
         var actionable = stalledWork.Items.FirstOrDefault(item =>
             !item.IsInformational
-            && !string.Equals(item.RequiredActor, "operator", StringComparison.Ordinal)
+            && !string.Equals(item.Kind, AutomationStalledWorkCommand.KindOperatorAttentionPending, StringComparison.Ordinal)
             && !string.Equals(item.Kind, AutomationStalledWorkCommand.KindCiPending, StringComparison.Ordinal));
         if (actionable is not null)
         {
@@ -365,6 +388,29 @@ internal static class AutomationHeartbeatCommand
             WaitEndSignal: null,
             WaitBoundMinutes: null,
             SuggestedAction: "Run the canonical notify command once for this no-pending-transition dedupe key.");
+    }
+
+    private static HeartbeatDecision AttentionRequired(StalledWorkItem record, string owner, HeartbeatRoute? route)
+    {
+        var targetRole = route?.TargetRole;
+        var dedupeKey = MaterialKey("operator-required", record, owner, targetRole);
+        var action = string.Equals(owner, "operator", StringComparison.Ordinal)
+            ? $"Operator action required for '{record.OperatorAttentionRecordId}': {record.RecommendedAction}"
+            : $"{owner} action required for '{record.OperatorAttentionRecordId}': {record.RecommendedAction}";
+        return new HeartbeatDecision(
+            Verdict: "operator-required",
+            Reason: $"Open operator-attention record '{record.OperatorAttentionRecordId}' requires the recorded owner '{owner}'.",
+            LastProgressBasis: $"operator-attention record '{record.OperatorAttentionRecordId}' opened",
+            LastProgressSource: "operator-attention.opened_at",
+            LastProgressAgeMinutes: record.AgeMinutes,
+            DedupeKey: dedupeKey,
+            ActionOwner: owner,
+            TargetRole: targetRole,
+            CanonicalNotifyCommand: route?.CanonicalNotifyCommand,
+            WaitCondition: null,
+            WaitEndSignal: null,
+            WaitBoundMinutes: null,
+            SuggestedAction: action);
     }
 
     private static HeartbeatDecision ActionableStall(
@@ -434,6 +480,30 @@ internal static class AutomationHeartbeatCommand
             + $" --routing-root '{context.RepoRoot.Replace("'", "'\\''", StringComparison.Ordinal)}'"
             + " --write --format json";
         return new HeartbeatRoute(true, null, "orchestration", command);
+    }
+
+    private static HeartbeatRoute ResolveAttentionOwnerRoute(CliContext context, string domain, string team, string owner)
+    {
+        var topology = NotifyRoleTopologyStore.Resolve(context.RepoRoot, team);
+        if (!topology.Resolved)
+        {
+            return HeartbeatRoute.Failure(topology.Summary);
+        }
+
+        var sender = NotifyRoleTopologyStore.ResolveDeliveryTarget(context.RepoRoot, topology.Topology!, "orchestration");
+        var recipient = NotifyRoleTopologyStore.ResolveDeliveryTarget(context.RepoRoot, topology.Topology!, owner);
+        if (!sender.Resolved || !recipient.Resolved)
+        {
+            return HeartbeatRoute.Failure($"Recorded owner '{owner}' cannot be resolved for team '{team}': {sender.Summary} {recipient.Summary}");
+        }
+
+        var command = "intent-cli notify report"
+            + $" --domain {domain} --team {team} --from orchestration --to {owner}"
+            + " --task-id <heartbeat-dedupe-key> --status question --artifact <heartbeat-evidence>"
+            + " --summary <one-line-summary>"
+            + $" --routing-root '{context.RepoRoot.Replace("'", "'\\''", StringComparison.Ordinal)}'"
+            + " --write --format json";
+        return new HeartbeatRoute(true, null, owner, command);
     }
 
     private static string MaterialKey(string verdict, StalledWorkItem? item, string owner, string? targetRole) =>

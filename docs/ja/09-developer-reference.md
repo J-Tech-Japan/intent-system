@@ -684,9 +684,11 @@ intent-cli operator-attention supersede --record <id> --evidence <evidence> --wr
 intent-cli operator-attention query [--domain <d>] [--team <t>] --format json
 ```
 
-進行に human operator の判断または作業が必要で、かつ既存の clarification
+進行が別の party の判断待ちで止まっており、かつ既存の clarification
 mechanism（この仕組みでは変更しません）で扱うものではないとき、record を
-open します。open した thread は owner、blocking reference、chat を再構成せず
+open します。party は human operator でも design のような logical thread でも構いません。
+特に design の ruling が必要な thread は、GitHub comment だけを投稿せず、この record を open
+します。open した thread は owner、blocking reference、chat を再構成せず
 実行できる具体的 action、establishing evidence を記録しなければなりません。
 その record を operator に route し、後で evidence 付きの明示的 terminal
 command を実行することも、その thread の責務です。
@@ -708,11 +710,12 @@ scope に履歴が無ければ `check-not-completed`、malformed または unrea
 `cannot-determine` であり、
 `no-attention-pending` には決してなりません。
 
-open record は既存の `automation stalled-work` と `automation heartbeat` に
-`operator-attention-pending` として即時に現れます。item は record を名指しし、
-`required_actor: operator` と `orchestrator_actionable: false` を持ちます。その
-record だけが item の heartbeat は `route_to: operator` と `ROUTE TO OPERATOR`
-を返します。orchestrator は義務を route しますが、人間の判断を自分で clear
+`operator-attention` は、この obligation に対しては狭い compatibility name です。open record は既存の
+`automation stalled-work` と `automation heartbeat` に `operator-attention-pending` として即時に現れます。
+item は record を名指しし、recorded `required_actor` と `orchestrator_actionable: false` を持ちます。その
+record だけが item の heartbeat は recorded owner の `route_to` と
+`ROUTE TO <RECORDED OWNER>` を返し、reader-facing item に owner と blocking reference を含めます。
+orchestrator は義務を route しますが、別の party の判断を自分で clear
 できるかのように扱ってはいけません。新しい watchdog、scheduler、timer、
 polling loop、process launch、automatic open/resolve path は追加しません。
 
