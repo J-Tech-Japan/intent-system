@@ -234,7 +234,13 @@ deterministic worker/metadata commands live under
 intent-cli worker issue-preflight       --repo <owner>/<repo> --issue <n> --format json
 intent-cli worker pr-comment-preflight  --repo <owner>/<repo> --pr <n>    --format json
 intent-cli automation doctor --format json
+intent-cli automation doctor --domain <domain> --team <team> --format json
 ```
+
+The bare doctor keeps an empty anonymous root unjudged. Supply `--domain` and
+`--team` together to require the shared record-first session-layer preflight for
+that named team; an unrecorded mode is configuration-incomplete, never
+not-required.
 
 ---
 

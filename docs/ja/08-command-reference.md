@@ -226,7 +226,12 @@ worker/metadata コマンドだけでループを回す operator dogfooding 向�
 intent-cli worker issue-preflight       --repo <owner>/<repo> --issue <n> --format json
 intent-cli worker pr-comment-preflight  --repo <owner>/<repo> --pr <n>    --format json
 intent-cli automation doctor --format json
+intent-cli automation doctor --domain <domain> --team <team> --format json
 ```
+
+引数なしの doctor は空の anonymous root を unjudged のままにします。named team に shared
+record-first session-layer preflight を必須にするには `--domain` と `--team` を一緒に指定します。
+mode 未記録は configuration-incomplete であり、not-required にはなりません。
 
 ---
 

@@ -101,10 +101,42 @@ internal static class NotifyCommand
             return 1;
         }
 
-        SessionLayerModeResolution resolution;
+        if (!string.Equals(operation, OperationEscalate, StringComparison.Ordinal))
+        {
+            var preflight = SessionLayerPreflight.Analyze(
+                routingRoot,
+                options.Domain!,
+                options.Team!,
+                options.ToRole!);
+            var scope = preflight.Scopes.Single();
+            var resolution = scope.Resolution ?? new SessionLayerModeResolution
+            {
+                Mode = scope.Mode ?? SessionLayerMode.Default,
+                Source = SessionLayerModeSource.Default,
+            };
+            if (preflight.Ready is not true)
+            {
+                var primaryFinding = scope.Findings.FirstOrDefault();
+                var cause = primaryFinding?.Cause ?? "session-layer-not-ready";
+                Emit(writer, options.Format, FailureResult(
+                    operation,
+                    options,
+                    resolution.Mode,
+                    cause,
+                    (primaryFinding is null ? string.Empty : primaryFinding.Message + " ")
+                    + scope.Summary + " " + preflight.Summary,
+                    modeSource: scope.ModeSource,
+                    preflight: preflight));
+                return 1;
+            }
+
+            return ExecuteDelivery(writer, operation, options, resolution, preflight);
+        }
+
+        SessionLayerModeResolution escalationResolution;
         try
         {
-            resolution = SessionLayerModeStore.Resolve(routingRoot, options.Domain!, options.Team);
+            escalationResolution = SessionLayerModeStore.Resolve(routingRoot, options.Domain!, options.Team);
         }
         catch (InvalidOperationException exception)
         {
@@ -117,16 +149,15 @@ internal static class NotifyCommand
             return 1;
         }
 
-        return string.Equals(operation, OperationEscalate, StringComparison.Ordinal)
-            ? ExecuteEscalation(writer, options, resolution)
-            : ExecuteDelivery(writer, operation, options, resolution);
+        return ExecuteEscalation(writer, options, escalationResolution);
     }
 
     private static int ExecuteDelivery(
         TextWriter writer,
         string operation,
         NotifyOptions options,
-        SessionLayerModeResolution resolution)
+        SessionLayerModeResolution resolution,
+        SessionLayerPreflightResult preflight)
     {
         var reportCommand = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? BuildReportCommand(options)
@@ -154,6 +185,13 @@ internal static class NotifyCommand
             roles,
             payload,
             options.Write);
+        var deliveryPreflight = delivery.ActivePhase is null
+            ? preflight
+            : SessionLayerPreflight.WithActivePhase(
+                preflight,
+                delivery.ActivePhase.Status,
+                delivery.ActivePhase.ContactedReceiver,
+                delivery.ActivePhase.Summary);
 
         if (!delivery.Resolved)
         {
@@ -164,7 +202,11 @@ internal static class NotifyCommand
                 delivery.Cause!,
                 delivery.Summary,
                 payload,
-                reportCommand));
+                reportCommand,
+                modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
+                preflight: deliveryPreflight,
+                receiverStateOutcome: delivery.ReceiverStateOutcome,
+                workingTransition: delivery.WorkingTransition));
             return 1;
         }
 
@@ -186,9 +228,20 @@ internal static class NotifyCommand
                     $"Could not append notification to external role '{options.ToRole}' through recorded reader "
                     + $"'{delivery.ReaderPath}': {exception.Message} Fix reader access and retry notify.",
                     payload,
-                    reportCommand));
+                    reportCommand,
+                    modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
+                    preflight: deliveryPreflight));
                 return 1;
             }
+        }
+
+        if (eventAppended)
+        {
+            deliveryPreflight = SessionLayerPreflight.WithActivePhase(
+                preflight,
+                SessionLayerPreflight.ActiveAcknowledged,
+                contactedReceiver: false,
+                summary: "The canonical external-reader event append completed exactly once; pane transition observation does not apply.");
         }
 
         Emit(writer, options.Format, SuccessResult(
@@ -203,7 +256,10 @@ internal static class NotifyCommand
                 ? $"Delivered {operation} to external logical role '{options.ToRole}' in team '{options.Team}' "
                   + $"through recorded reader '{delivery.ReaderPath}'."
                 : delivery.Summary,
-            eventPath: delivery.ReaderPath));
+            eventPath: delivery.ReaderPath,
+            preflight: deliveryPreflight,
+            receiverStateOutcome: delivery.ReceiverStateOutcome,
+            workingTransition: delivery.WorkingTransition));
         return 0;
     }
 
@@ -359,7 +415,10 @@ internal static class NotifyCommand
         string? payload,
         string? reportCommand,
         string summary,
-        string? eventPath = null) => new()
+        string? eventPath = null,
+        SessionLayerPreflightResult? preflight = null,
+        string? receiverStateOutcome = null,
+        string? workingTransition = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot!,
@@ -376,6 +435,9 @@ internal static class NotifyCommand
             Delivered = delivered,
             EventAppended = eventAppended,
             EventPath = eventPath,
+            SessionLayerPreflight = preflight,
+            ReceiverStateOutcome = receiverStateOutcome,
+            WorkingTransition = workingTransition,
             Cause = null,
             Payload = payload,
             ReportCommand = reportCommand,
@@ -389,14 +451,18 @@ internal static class NotifyCommand
         string cause,
         string summary,
         string? payload = null,
-        string? reportCommand = null) => new()
+        string? reportCommand = null,
+        string? modeSource = null,
+        SessionLayerPreflightResult? preflight = null,
+        string? receiverStateOutcome = null,
+        string? workingTransition = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot ?? string.Empty,
             Domain = options.Domain!,
             Team = options.Team!,
             Mode = mode,
-            ModeSource = null,
+            ModeSource = modeSource,
             CommandMode = options.Write ? "write" : "dry-run",
             FromRole = options.FromRole!,
             ToRole = options.ToRole,
@@ -406,6 +472,9 @@ internal static class NotifyCommand
             Delivered = false,
             EventAppended = false,
             EventPath = null,
+            SessionLayerPreflight = preflight,
+            ReceiverStateOutcome = receiverStateOutcome,
+            WorkingTransition = workingTransition,
             Cause = cause,
             Payload = payload,
             ReportCommand = reportCommand,
@@ -429,6 +498,20 @@ internal static class NotifyCommand
         if (result.Cause is not null)
         {
             writer.WriteLine($"- cause: {result.Cause}");
+        }
+        if (result.SessionLayerPreflight is { } preflight)
+        {
+            writer.WriteLine($"- session-layer preflight: {preflight.Verdict}");
+            writer.WriteLine($"- passive phase: {preflight.PassivePhase.Status}");
+            writer.WriteLine($"- active phase: {preflight.ActivePhase.Status}");
+        }
+        if (result.ReceiverStateOutcome is not null)
+        {
+            writer.WriteLine($"- receiver outcome: {result.ReceiverStateOutcome}");
+        }
+        if (result.WorkingTransition is not null)
+        {
+            writer.WriteLine($"- working transition: {result.WorkingTransition}");
         }
         if (result.ReportCommand is not null)
         {
@@ -654,6 +737,9 @@ internal sealed record NotifyResult
     [JsonPropertyName("delivered")] public required bool Delivered { get; init; }
     [JsonPropertyName("event_appended")] public required bool EventAppended { get; init; }
     [JsonPropertyName("event_path")] public string? EventPath { get; init; }
+    [JsonPropertyName("session_layer_preflight")] public SessionLayerPreflightResult? SessionLayerPreflight { get; init; }
+    [JsonPropertyName("receiver_state_outcome")] public string? ReceiverStateOutcome { get; init; }
+    [JsonPropertyName("working_transition")] public string? WorkingTransition { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("payload")] public string? Payload { get; init; }
     [JsonPropertyName("report_command")] public string? ReportCommand { get; init; }

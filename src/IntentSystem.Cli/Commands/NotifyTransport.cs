@@ -60,6 +60,12 @@ internal sealed record NotifyDeliveryResult
 
     public string? ReaderPath { get; init; }
 
+    public string? ReceiverStateOutcome { get; init; }
+
+    public string? WorkingTransition { get; init; }
+
+    public SessionLayerPreflightPhaseResult? ActivePhase { get; init; }
+
     public required string Summary { get; init; }
 }
 
@@ -139,6 +145,7 @@ internal sealed class AgmsgNotifyTransport : INotifyTransport
             {
                 Resolved = true,
                 Delivered = false,
+                ActivePhase = Skipped("Dry-run resolved the recorded agmsg roster without contacting the recipient."),
                 Summary = $"Dry-run: would deliver notification to agmsg role '{toRole}' in team '{team}'.",
             };
         }
@@ -158,6 +165,13 @@ internal sealed class AgmsgNotifyTransport : INotifyTransport
             {
                 Resolved = true,
                 Delivered = true,
+                ActivePhase = new SessionLayerPreflightPhaseResult
+                {
+                    Status = SessionLayerPreflight.ActiveAcknowledged,
+                    Checked = true,
+                    ContactedReceiver = true,
+                    Summary = "The recorded agmsg transport acknowledged the bounded send operation.",
+                },
                 Summary = $"Delivered notification to agmsg role '{toRole}' in team '{team}'.",
             }
             : Failure(
@@ -187,6 +201,15 @@ internal sealed class AgmsgNotifyTransport : INotifyTransport
         Resolved = false,
         Delivered = false,
         Cause = cause,
+        ActivePhase = Skipped("Active receiver delivery did not start because recorded-route resolution failed."),
+        Summary = summary,
+    };
+
+    private static SessionLayerPreflightPhaseResult Skipped(string summary) => new()
+    {
+        Status = SessionLayerPreflight.ActiveSkipped,
+        Checked = false,
+        ContactedReceiver = false,
         Summary = summary,
     };
 
@@ -199,6 +222,7 @@ internal sealed class AgmsgNotifyTransport : INotifyTransport
 
 internal sealed class HerdrNotifyTransport : INotifyTransport
 {
+    private const string BoundedPromptTimeoutMilliseconds = "10000";
     private readonly INotifyProcessRunner runner;
     private readonly string executable;
 
@@ -253,6 +277,13 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 Resolved = true,
                 Delivered = false,
                 ReaderPath = deliveryTarget.Target,
+                ActivePhase = new SessionLayerPreflightPhaseResult
+                {
+                    Status = SessionLayerPreflight.ActiveNotApplicable,
+                    Checked = false,
+                    ContactedReceiver = false,
+                    Summary = "The recipient is an external recorded reader; pane working-state observation does not apply.",
+                },
                 Summary = write
                     ? $"Resolved external logical role '{toRole}' in team '{team}' to recorded reader "
                       + $"'{deliveryTarget.Target}'."
@@ -282,10 +313,10 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 + "for that workspace and retry notify.");
         }
 
-        IReadOnlyDictionary<string, HerdrRoleState> roles;
+        IReadOnlyList<HerdrAgentState> agents;
         try
         {
-            roles = ParseRoles(agentList.StandardOutput, topology.WorkspaceId);
+            agents = ParseAgents(agentList.StandardOutput);
         }
         catch (InvalidOperationException exception)
         {
@@ -294,41 +325,58 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 $"{exception.Message} Inspect the installed herdr agent-list response schema and retry notify.");
         }
 
-        if (!roles.TryGetValue(toRole, out var state))
+        var recordedPane = deliveryTarget.Target!;
+        var atRecordedPane = agents
+            .Where(agent => string.Equals(agent.WorkspaceId, topology.WorkspaceId, StringComparison.Ordinal)
+                && string.Equals(agent.PaneId, recordedPane, StringComparison.Ordinal))
+            .ToArray();
+        var runningAtRecordedPane = atRecordedPane.Where(agent => agent.AgentRunning).ToArray();
+        if (runningAtRecordedPane.Length == 0)
         {
-            return Failure(
-                "unknown-role",
-                $"herdr agent list for team '{team}' workspace '{topology.WorkspaceId}' does not contain logical "
-                + $"role '{toRole}' (found in that workspace: {FormatRoles(roles.Keys)}). Verify the team's recorded "
-                + "workspace and start the intended recipient there before retrying; agents in other workspaces are "
-                + $"not eligible. {NotifyRoleTopologyStore.TopologyRemedy(team)}");
-        }
+            var foreignWorkspaceAgents = agents
+                .Where(agent => string.Equals(agent.PaneId, recordedPane, StringComparison.Ordinal)
+                    && !string.Equals(agent.WorkspaceId, topology.WorkspaceId, StringComparison.Ordinal))
+                .ToArray();
+            if (foreignWorkspaceAgents.Length > 0)
+            {
+                return Failure(
+                    "pane-foreign-workspace",
+                    $"Team '{team}' records workspace '{topology.WorkspaceId}' and pane '{recordedPane}' for logical "
+                    + $"role '{toRole}', but that pane was reported only under foreign workspace(s): "
+                    + $"{FormatAgents(foreignWorkspaceAgents)}. Agent names are diagnostic only and are never a "
+                    + "routing fallback. Correct the recorded workspace/pane or re-provision the intended recipient.");
+            }
 
-        if (string.IsNullOrWhiteSpace(state.PaneId))
-        {
+            if (atRecordedPane.Length > 0)
+            {
+                return Failure(
+                    "agent-not-running",
+                    $"Team '{team}' recorded workspace '{topology.WorkspaceId}' pane '{recordedPane}' for logical "
+                    + $"role '{toRole}', but no running agent is eligible there (observed: "
+                    + $"{FormatAgents(atRecordedPane)}). Start exactly one agent at that recorded workspace/pane; "
+                    + "agent names are diagnostic only and are never a routing fallback.");
+            }
+
             return Failure(
                 "pane-absent",
-                $"herdr agent list found logical role '{toRole}' in team '{team}' workspace "
-                + $"'{topology.WorkspaceId}' without a pane. Re-provision the recorded recipient before retrying.");
-        }
-
-        if (!string.Equals(state.PaneId, deliveryTarget.Target, StringComparison.Ordinal))
-        {
-            return Failure(
-                "pane-mismatch",
-                $"herdr agent list found logical role '{toRole}' in team '{team}' workspace "
-                + $"'{topology.WorkspaceId}' at pane '{state.PaneId ?? "none"}', but '{topology.SourcePath}' records "
-                + $"pane '{deliveryTarget.Target}'. Refresh the recorded topology before retrying. "
+                $"Team '{team}' recorded workspace '{topology.WorkspaceId}' pane '{recordedPane}' for logical role "
+                + $"'{toRole}', but herdr reported no agent at that exact workspace/pane (observed agents: "
+                + $"{FormatAgents(agents)}). Start exactly one running agent there; agent names are diagnostic only "
+                + "and are never a routing fallback. "
                 + NotifyRoleTopologyStore.TopologyRemedy(team));
         }
 
-        if (!state.AgentRunning)
+        if (runningAtRecordedPane.Length > 1)
         {
             return Failure(
-                "agent-not-running",
-                $"herdr logical role '{toRole}' in team '{team}' workspace '{topology.WorkspaceId}' has no running "
-                + "agent. Start and verify that recorded recipient before retrying.");
+                "multiple-agents-at-pane",
+                $"Team '{team}' recorded workspace '{topology.WorkspaceId}' pane '{recordedPane}' for logical role "
+                + $"'{toRole}', but {runningAtRecordedPane.Length} running agents were reported there: "
+                + $"{FormatAgents(runningAtRecordedPane)}. Exactly one running agent is required; agent names are "
+                + "diagnostic only and are never a routing fallback.");
         }
+
+        var state = runningAtRecordedPane[0];
 
         if (!write)
         {
@@ -336,18 +384,29 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
             {
                 Resolved = true,
                 Delivered = false,
+                ActivePhase = Skipped("Dry-run resolved the recorded herdr pane without prompting it."),
                 Summary = $"Dry-run: would deliver notification to herdr logical role '{toRole}' in team '{team}' "
                     + $"workspace '{topology.WorkspaceId}' at recorded pane '{recipient.PaneId}'.",
             };
         }
 
+        var alreadyWorking = string.Equals(state.AgentStatus, "working", StringComparison.Ordinal);
+        IReadOnlyList<string> promptArguments = alreadyWorking
+            ? ["agent", "prompt", deliveryTarget.Target!, payload]
+            :
+            [
+                "agent", "prompt", deliveryTarget.Target!, payload,
+                "--wait",
+                "--until", "working",
+                "--timeout", BoundedPromptTimeoutMilliseconds,
+            ];
         NotifyProcessResult delivery;
         try
         {
             // A pane id is globally unique and is the explicit target recorded for this
             // team's workspace. Passing the logical name here would re-enter herdr's
             // global name namespace after we had just scoped validation to the team.
-            delivery = runner.Run(executable, ["agent", "prompt", deliveryTarget.Target!, payload]);
+            delivery = runner.Run(executable, promptArguments);
         }
         catch (InvalidOperationException exception)
         {
@@ -357,26 +416,146 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 + "retry notify.");
         }
 
-        if (delivery.ExitCode == 0)
+        if (delivery.ExitCode == 0 && alreadyWorking)
         {
             return new NotifyDeliveryResult
             {
                 Resolved = true,
                 Delivered = true,
-                Summary = $"Delivered notification to herdr logical role '{toRole}' in team '{team}' workspace "
-                    + $"'{topology.WorkspaceId}' at recorded pane '{recipient.PaneId}'.",
+                ReceiverStateOutcome = "already-working",
+                WorkingTransition = "unobservable",
+                ActivePhase = new SessionLayerPreflightPhaseResult
+                {
+                    Status = SessionLayerPreflight.ActiveUnobservable,
+                    Checked = true,
+                    ContactedReceiver = true,
+                    Summary = "The recorded recipient was already working. Prompt submission succeeded, so delivery is "
+                        + "accepted, but that active turn makes this prompt's working transition unobservable.",
+                },
+                Summary = $"Delivered notification to already-working herdr logical role '{toRole}' in team '{team}' "
+                    + $"workspace '{topology.WorkspaceId}' at recorded pane '{recipient.PaneId}'; working "
+                    + "transition is unobservable.",
+            };
+        }
+
+        if (delivery.ExitCode == 0)
+        {
+            NotifyProcessResult settled;
+            try
+            {
+                settled = runner.Run(
+                    executable,
+                    [
+                        "agent", "wait", deliveryTarget.Target!,
+                        "--until", "idle",
+                        "--until", "done",
+                        "--until", "blocked",
+                        "--timeout", BoundedPromptTimeoutMilliseconds,
+                    ]);
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Failure(
+                    "transport-unavailable",
+                    $"The unattended working transition was observed for team '{team}' workspace "
+                    + $"'{topology.WorkspaceId}' pane '{recordedPane}', but the bounded settled-state wait could "
+                    + $"not run: {exception.Message} Inspect the pane before retrying.",
+                    activePhase: new SessionLayerPreflightPhaseResult
+                    {
+                        Status = SessionLayerPreflight.ActiveNotObserved,
+                        Checked = true,
+                        ContactedReceiver = true,
+                        Summary = "Working was observed, but a fresh settled acknowledgement could not be checked.",
+                    });
+            }
+
+            if (settled.ExitCode == 0)
+            {
+                return new NotifyDeliveryResult
+                {
+                    Resolved = true,
+                    Delivered = true,
+                    ReceiverStateOutcome = "idle-transitions",
+                    WorkingTransition = "observed",
+                    ActivePhase = new SessionLayerPreflightPhaseResult
+                    {
+                        Status = SessionLayerPreflight.ActiveObserved,
+                        Checked = true,
+                        ContactedReceiver = true,
+                        Summary = "Bounded herdr prompt-wait observed the settled recipient enter unattended work; "
+                            + "a second bounded agent wait then observed its fresh settled acknowledgement state.",
+                    },
+                    Summary = $"Delivered notification to herdr logical role '{toRole}' in team '{team}' workspace "
+                        + $"'{topology.WorkspaceId}' at recorded pane '{recipient.PaneId}' after a bounded observed "
+                        + "unattended working transition and fresh settled acknowledgement.",
+                };
+            }
+
+            var settledDetail = OneLine(settled.StandardError, settled.StandardOutput);
+            return new NotifyDeliveryResult
+            {
+                Resolved = false,
+                Delivered = false,
+                Cause = "receiver-settle-unobserved",
+                ReceiverStateOutcome = "working-did-not-settle",
+                WorkingTransition = "observed",
+                ActivePhase = new SessionLayerPreflightPhaseResult
+                {
+                    Status = SessionLayerPreflight.ActiveNotObserved,
+                    Checked = true,
+                    ContactedReceiver = true,
+                    Summary = "Unattended working was observed, but no fresh settled acknowledgement followed within the bound.",
+                },
+                Summary = $"Team '{team}' workspace '{topology.WorkspaceId}' pane '{recordedPane}' entered "
+                    + "unattended working, but did not return to idle/done/blocked within "
+                    + $"{BoundedPromptTimeoutMilliseconds}ms ({settledDetail}). Reported as not delivered; inspect "
+                    + "the pane before retrying so active work is not duplicated.",
             };
         }
 
         var detail = OneLine(delivery.StandardError, delivery.StandardOutput);
+        var transitionUnobserved = !alreadyWorking
+            && (detail.Contains("agent_prompt_stalled", StringComparison.OrdinalIgnoreCase)
+                || detail.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+                || detail.Contains("state change", StringComparison.OrdinalIgnoreCase));
+        if (transitionUnobserved)
+        {
+            return new NotifyDeliveryResult
+            {
+                Resolved = false,
+                Delivered = false,
+                Cause = "receiver-transition-unobserved",
+                ReceiverStateOutcome = "idle-stays-idle",
+                WorkingTransition = "not-observed",
+                ActivePhase = new SessionLayerPreflightPhaseResult
+                {
+                    Status = SessionLayerPreflight.ActiveNotObserved,
+                    Checked = true,
+                    ContactedReceiver = true,
+                    Summary = "The bounded unattended prompt did not produce the required settled-to-working-to-settled acknowledgement.",
+                },
+                Summary = $"herdr accepted or attempted the prompt for settled logical role '{toRole}' in team "
+                    + $"'{team}', but no unattended working transition and fresh settled acknowledgement were "
+                    + $"observed within {BoundedPromptTimeoutMilliseconds}ms ({detail}). Reported as not delivered; "
+                    + "inspect the pane before retrying so a late prompt is not duplicated.",
+            };
+        }
+
         var cause = ClassifyPromptFailure(detail);
         return Failure(
             cause,
             $"herdr delivery to logical role '{toRole}' in team '{team}' workspace '{topology.WorkspaceId}' failed: "
-            + $"{detail} Inspect the recorded recipient pane and running-agent state, then retry notify.");
+            + $"{detail} Inspect the recorded recipient pane and running-agent state, then retry notify.",
+            activePhase: new SessionLayerPreflightPhaseResult
+            {
+                Status = SessionLayerPreflight.ActiveNotObserved,
+                Checked = true,
+                ContactedReceiver = true,
+                Summary = "The recorded herdr prompt failed before a bounded receiver acknowledgement was observed.",
+            });
     }
 
-    internal static IReadOnlyDictionary<string, HerdrRoleState> ParseRoles(string output, string workspaceId)
+    internal static IReadOnlyList<HerdrAgentState> ParseAgents(string output)
     {
         try
         {
@@ -388,22 +567,12 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 throw new InvalidOperationException("herdr agent list response did not contain result.agents.");
             }
 
-            var roles = new Dictionary<string, HerdrRoleState>(StringComparer.Ordinal);
+            var parsed = new List<HerdrAgentState>();
             foreach (var agent in agents.EnumerateArray())
             {
-                var name = ReadString(agent, "name");
-                if (string.IsNullOrWhiteSpace(name))
-                {
-                    continue;
-                }
-
+                var name = ReadString(agent, "name") ?? "<unnamed>";
                 var paneId = ReadString(agent, "pane_id");
                 var agentWorkspaceId = ReadString(agent, "workspace_id") ?? WorkspaceFromPane(paneId);
-                if (!string.Equals(agentWorkspaceId, workspaceId, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
                 var agentKind = ReadString(agent, "agent");
                 var status = ReadString(agent, "agent_status");
                 var explicitlyNotReady = agent.TryGetProperty("interactive_ready", out var ready)
@@ -415,15 +584,10 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                     && !explicitlyNotReady
                     && !string.Equals(status, "unknown", StringComparison.Ordinal);
 
-                if (!roles.TryAdd(name, new HerdrRoleState(agentWorkspaceId, paneId, running)))
-                {
-                    throw new InvalidOperationException(
-                        $"herdr agent list returned duplicate logical role '{name}' in workspace '{workspaceId}'. "
-                        + "Rename or remove the competing agent before retrying.");
-                }
+                parsed.Add(new HerdrAgentState(name, agentWorkspaceId, paneId, running, status));
             }
 
-            return roles;
+            return parsed;
         }
         catch (JsonException exception)
         {
@@ -448,6 +612,16 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
     {
         var ordered = roles.OrderBy(value => value, StringComparer.Ordinal).ToArray();
         return ordered.Length == 0 ? "none" : string.Join(", ", ordered);
+    }
+
+    private static string FormatAgents(IEnumerable<HerdrAgentState> agents)
+    {
+        var formatted = agents
+            .Select(agent => $"{agent.Name}@{agent.WorkspaceId ?? "<no-workspace>"}/{agent.PaneId ?? "<no-pane>"}"
+                + $"[{agent.AgentStatus ?? "unknown"}; running={agent.AgentRunning.ToString().ToLowerInvariant()}]")
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+        return formatted.Length == 0 ? "none" : string.Join(", ", formatted);
     }
 
     private static string ClassifyPromptFailure(string detail)
@@ -475,11 +649,23 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
         return "transport-failure";
     }
 
-    private static NotifyDeliveryResult Failure(string cause, string summary) => new()
+    private static NotifyDeliveryResult Failure(
+        string cause,
+        string summary,
+        SessionLayerPreflightPhaseResult? activePhase = null) => new()
+        {
+            Resolved = false,
+            Delivered = false,
+            Cause = cause,
+            ActivePhase = activePhase ?? Skipped("Active receiver delivery did not start because recorded-route resolution failed."),
+            Summary = summary,
+        };
+
+    private static SessionLayerPreflightPhaseResult Skipped(string summary) => new()
     {
-        Resolved = false,
-        Delivered = false,
-        Cause = cause,
+        Status = SessionLayerPreflight.ActiveSkipped,
+        Checked = false,
+        ContactedReceiver = false,
         Summary = summary,
     };
 
@@ -490,7 +676,12 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
     }
 }
 
-internal sealed record HerdrRoleState(string? WorkspaceId, string? PaneId, bool AgentRunning);
+internal sealed record HerdrAgentState(
+    string Name,
+    string? WorkspaceId,
+    string? PaneId,
+    bool AgentRunning,
+    string? AgentStatus);
 
 internal static class NotifyTransportPaths
 {

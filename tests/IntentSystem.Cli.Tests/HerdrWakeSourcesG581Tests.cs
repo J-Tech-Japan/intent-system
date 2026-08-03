@@ -9,8 +9,8 @@ namespace IntentSystem.Cli.Tests;
 
 public sealed class HerdrWakeSourcesG581Tests : IDisposable
 {
-    private const string G589AgmsgGuideSha256 =
-        "F4D975FCAD0313DDD561924DE138FAB37A0307331CF01716387C8459EAEF98F2";
+    private const string G594AgmsgGuideSha256 =
+        "984EC1645C357940CC6D24345D0CB0B7618DA1A2B47BA3A21FA095EA95E8F38E";
 
     private readonly string root = Directory.CreateTempSubdirectory("herdr-wake-g581-").FullName;
 
@@ -133,13 +133,16 @@ public sealed class HerdrWakeSourcesG581Tests : IDisposable
     }
 
     [Fact]
-    public void AgmsgGuide_OutsideG582SwitchChecklist_MatchesG589CiWakeContractBaseline_G589()
+    public void AgmsgGuide_OutsideG582SwitchChecklist_IncludesG594SharedPreflight_G594()
     {
         var markdown = Render(herdrOnly: false, format: "markdown");
         var withoutG582Checklist = WithoutSection(markdown, SessionLayerSwitchChecklist.Heading);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(withoutG582Checklist)));
 
-        Assert.Equal(G589AgmsgGuideSha256, hash);
+        Assert.True(
+            string.Equals(G594AgmsgGuideSha256, hash, StringComparison.Ordinal),
+            $"agmsg guide hash changed: {hash}");
+        Assert.Contains("shared preflight verdict", markdown, StringComparison.Ordinal);
         Assert.DoesNotContain("## Herdr-only wake sources", markdown, StringComparison.Ordinal);
         Assert.DoesNotContain("pane.agent_status_changed", markdown, StringComparison.Ordinal);
     }

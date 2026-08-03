@@ -150,7 +150,7 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
     }
 
     [Fact]
-    public void ForeignWorkspaceOnlyRecipient_IsRefusedWithScopedRoster_AndNeverPrompted_G588()
+    public void ForeignWorkspaceSameName_IsDiagnosticOnlyAndNeverARecipientFallback_G594()
     {
         var runner = Runner((_, arguments) => arguments.SequenceEqual(["agent", "list"])
             ? Success(Roster(
@@ -167,11 +167,12 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
             write: true));
 
         Assert.Equal(1, exitCode);
-        Assert.Equal("unknown-role", result.GetProperty("cause").GetString());
+        Assert.Equal("pane-absent", result.GetProperty("cause").GetString());
         var summary = result.GetProperty("summary").GetString()!;
-        Assert.Contains("team 'intent-cli-dev' workspace 'wH'", summary, StringComparison.Ordinal);
-        Assert.Contains("found in that workspace: implementation, orchestration", summary, StringComparison.Ordinal);
-        Assert.Contains("agents in other workspaces are not eligible", summary, StringComparison.Ordinal);
+        Assert.Contains("Team 'intent-cli-dev' recorded workspace 'wH' pane 'wH:p3'", summary, StringComparison.Ordinal);
+        Assert.Contains("review@wForeign/wForeign:p9", summary, StringComparison.Ordinal);
+        Assert.Contains("diagnostic only", summary, StringComparison.Ordinal);
+        Assert.Contains("never a routing fallback", summary, StringComparison.Ordinal);
         Assert.DoesNotContain("recorded agent mapping", summary, StringComparison.Ordinal);
         Assert.DoesNotContain(runner.Calls, call =>
             call.Arguments.Take(2).SequenceEqual(["agent", "prompt"]));
@@ -255,7 +256,7 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
 
         Assert.Equal(1, dryExit);
         Assert.Equal(dryExit, writeExit);
-        Assert.Equal("unknown-role", dry.GetProperty("cause").GetString());
+        Assert.Equal("pane-absent", dry.GetProperty("cause").GetString());
         Assert.Equal(dry.GetProperty("cause").GetString(), write.GetProperty("cause").GetString());
         Assert.Equal(dry.GetProperty("summary").GetString(), write.GetProperty("summary").GetString());
         Assert.DoesNotContain(runner.Calls, call =>

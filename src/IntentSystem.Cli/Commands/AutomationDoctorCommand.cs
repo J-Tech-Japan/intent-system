@@ -25,13 +25,13 @@ internal static class AutomationDoctorCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (!TryParseArguments(args, out var format, out var error))
+        if (!TryParseArguments(args, out var format, out var domain, out var team, out var error))
         {
             writer.WriteLine(error);
             return 1;
         }
 
-        var result = BuildResult(context);
+        var result = BuildResult(context, domain, team);
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
             writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
@@ -44,7 +44,7 @@ internal static class AutomationDoctorCommand
         return string.Equals(result.Status, "ok", StringComparison.Ordinal) ? 0 : 1;
     }
 
-    private static AutomationDoctorResult BuildResult(CliContext context)
+    private static AutomationDoctorResult BuildResult(CliContext context, string? domain, string? team)
     {
         var surfaceReport = AutomationInstalledCliSurfaceProbe.Check(context);
         var requiredCommands = surfaceReport.Checks
@@ -62,12 +62,14 @@ internal static class AutomationDoctorCommand
         var missing = requiredCommands
             .Where(command => !command.Available)
             .ToArray();
-        var topologyHealth = SessionLayerTopologyHealth.Analyze(context.RepoRoot);
-        var topologyInvalid = string.Equals(topologyHealth.Status, "invalid", StringComparison.Ordinal);
+        var preflight = SessionLayerPreflight.Analyze(context.RepoRoot, domain, team);
+        var topologyHealth = SessionLayerTopologyHealth.FromPreflight(preflight);
+        var preflightInvalid = preflight.Verdict is SessionLayerPreflight.ConfigurationIncomplete
+            or SessionLayerPreflight.CannotDetermine;
         var status = !surfaceReport.Available
             ? "stale-host-cli"
-            : topologyInvalid
-                ? "topology-invalid"
+            : preflightInvalid
+                ? "session-layer-not-ready"
                 : "ok";
 
         return new AutomationDoctorResult
@@ -81,11 +83,13 @@ internal static class AutomationDoctorCommand
             AutomationCapabilitySchemaVersion = AutomationSummaryConstants.AutomationCapabilitySchemaVersion,
             AutomationCommandSurfaceVersion = AutomationSummaryConstants.AutomationCommandSurfaceVersion,
             AutomationCommandCapabilities = AutomationSummaryConstants.AutomationCommandCapabilities,
+            SessionLayerPreflight = preflight,
             TopologyHealth = topologyHealth,
             Summary = !surfaceReport.Available
                 ? $"Host automation command preflight failed: installed CLI at {surfaceReport.InstalledCliPath} (binary_source={surfaceReport.BinarySource}) is missing or stale for {string.Join(", ", missing.Select(command => command.Usage))}. Abort before label transitions; refresh the installed CLI instead of falling back to raw gh label mutation. {topologyHealth.Summary}"
-                : topologyInvalid
-                    ? $"Host automation command surfaces are available, but topology health failed. {topologyHealth.Summary}"
+                : preflightInvalid
+                    ? $"Host automation command surfaces are available, but the shared session-layer preflight "
+                      + $"returned '{preflight.Verdict}'. {preflight.Summary}"
                     : $"Host automation command preflight passed: required installed automation command surfaces are available (binary_source={surfaceReport.BinarySource}, host_data_root={surfaceReport.HostDataRoot}). {topologyHealth.Summary}",
         };
     }
@@ -118,9 +122,13 @@ internal static class AutomationDoctorCommand
     private static bool TryParseArguments(
         string[] args,
         out string format,
+        out string? domain,
+        out string? team,
         out string error)
     {
         format = FormatText;
+        domain = null;
+        team = null;
         error = string.Empty;
 
         for (var index = 0; index < args.Length; index++)
@@ -147,10 +155,34 @@ internal static class AutomationDoctorCommand
                     index++;
                     break;
 
+                case "--domain":
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = $"{argument} requires a value.";
+                        return false;
+                    }
+
+                    if (string.Equals(argument, "--domain", StringComparison.Ordinal))
+                    {
+                        domain = args[++index];
+                    }
+                    else
+                    {
+                        team = args[++index];
+                    }
+                    break;
+
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: --format text|json.";
+                    error = $"Unknown argument '{argument}'. Supported: --domain <d> --team <t> --format text|json.";
                     return false;
             }
+        }
+
+        if ((domain is null) != (team is null))
+        {
+            error = "--domain and --team must be supplied together when declaring an expected session-layer team.";
+            return false;
         }
 
         return true;
@@ -165,6 +197,21 @@ internal static class AutomationDoctorCommand
         writer.WriteLine($"binary_source: {result.BinarySource}");
         writer.WriteLine($"host_data_root: {result.HostDataRoot}");
         writer.WriteLine(result.Summary);
+        writer.WriteLine();
+        writer.WriteLine("## Shared session-layer preflight");
+        writer.WriteLine($"verdict: {result.SessionLayerPreflight.Verdict}");
+        writer.WriteLine($"ready: {result.SessionLayerPreflight.Ready?.ToString().ToLowerInvariant() ?? "unjudged"}");
+        writer.WriteLine($"passive: {result.SessionLayerPreflight.PassivePhase.Status}");
+        writer.WriteLine($"active: {result.SessionLayerPreflight.ActivePhase.Status}");
+        writer.WriteLine(result.SessionLayerPreflight.Summary);
+        foreach (var scope in result.SessionLayerPreflight.Scopes)
+        {
+            foreach (var finding in scope.Findings)
+            {
+                writer.WriteLine($"- team={finding.Team ?? "<undeclared>"}; role={finding.Role}; "
+                    + $"field={finding.Field}; cause={finding.Cause}; {finding.Message}");
+            }
+        }
         writer.WriteLine();
         writer.WriteLine("## Session-layer delivery topology health");
         writer.WriteLine($"status: {result.TopologyHealth.Status}");
@@ -262,6 +309,12 @@ internal sealed record AutomationDoctorResult
 
     [JsonPropertyName("topologyHealth")]
     public SessionLayerTopologyHealthResult TopologyHealthCamel => TopologyHealth;
+
+    [JsonPropertyName("session_layer_preflight")]
+    public required SessionLayerPreflightResult SessionLayerPreflight { get; init; }
+
+    [JsonPropertyName("sessionLayerPreflight")]
+    public SessionLayerPreflightResult SessionLayerPreflightCamel => SessionLayerPreflight;
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }

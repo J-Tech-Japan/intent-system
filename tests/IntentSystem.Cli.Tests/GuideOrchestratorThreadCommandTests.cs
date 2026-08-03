@@ -1122,7 +1122,8 @@ public sealed class GuideOrchestratorThreadCommandTests
     [Fact]
     public void Execute_Markdown_SetupIntake_CompleteInputs_IsSetupReady_EmitsCommandsAndPrompts_G500()
     {
-        var output = RunMarkdown([
+        using var workspace = new RecordedGuideWorkspace("intent-cli", "intent-orch");
+        var output = RunMarkdown(workspace.Context, [
             "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system",
             "--orchestrator-path", "/work/orch", "--implementation-path", "/work/impl", "--review-path", "/work/review",
             "--orchestrator-agent", "claude", "--implementer-agent", "claude", "--reviewer-agent", "codex",
@@ -1173,9 +1174,10 @@ public sealed class GuideOrchestratorThreadCommandTests
     [Fact]
     public void Execute_Json_SetupIntake_RoleAgentsDefaultToAgent_G500()
     {
+        using var workspace = new RecordedGuideWorkspace("intent-cli", "t");
         using var writer = new StringWriter();
         var exitCode = GuideOrchestratorThreadCommand.Execute(
-            CreateContext(),
+            workspace.Context,
             [
                 "--domain", "intent-cli", "--target-repo", "owner/repo",
                 "--orchestrator-path", "/o", "--implementation-path", "/i", "--review-path", "/r",
@@ -1449,7 +1451,8 @@ public sealed class GuideOrchestratorThreadCommandTests
     [Fact]
     public void Execute_Markdown_SetupReady_FirstValidation_IncludesPreflightOfThreeCwds_G508()
     {
-        var output = RunMarkdown([
+        using var workspace = new RecordedGuideWorkspace("intent-cli", "intent-orch");
+        var output = RunMarkdown(workspace.Context, [
             "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system",
             "--orchestrator-path", "/work/orch", "--implementation-path", "/work/impl", "--review-path", "/work/review",
             "--orchestrator-agent", "claude", "--implementer-agent", "claude", "--reviewer-agent", "codex",
@@ -2647,12 +2650,54 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     private static string RunMarkdown(string[] args)
+        => RunMarkdown(CreateContext(), args);
+
+    private static string RunMarkdown(CliContext context, string[] args)
     {
         using var writer = new StringWriter();
         var fullArgs = args.Concat(new[] { "--format", "markdown" }).ToArray();
-        var exitCode = GuideOrchestratorThreadCommand.Execute(CreateContext(), fullArgs, writer);
+        var exitCode = GuideOrchestratorThreadCommand.Execute(context, fullArgs, writer);
         Assert.Equal(0, exitCode);
         return writer.ToString();
+    }
+
+    private sealed class RecordedGuideWorkspace : IDisposable
+    {
+        public RecordedGuideWorkspace(string domain, string team)
+        {
+            RootPath = Directory.CreateTempSubdirectory("guide-recorded-session-g594-").FullName;
+            Context = new CliContext
+            {
+                RepoRoot = RootPath,
+                Config = new CliConfig
+                {
+                    Project = new ProjectConfig
+                    {
+                        Domain = domain,
+                        ArtifactRoot = ".intent-cli",
+                        WorktreeRoot = ".intent-cli/worktrees",
+                    },
+                },
+            };
+            using var writer = new StringWriter();
+            var exitCode = SessionLayerCommand.ExecuteSet(
+                Context,
+                ["--domain", domain, "--team", team, "--mode", SessionLayerMode.Agmsg, "--write", "--format", "json"],
+                writer);
+            Assert.True(exitCode == 0, writer.ToString());
+        }
+
+        public string RootPath { get; }
+
+        public CliContext Context { get; }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(RootPath))
+            {
+                Directory.Delete(RootPath, recursive: true);
+            }
+        }
     }
 
     private static CliContext CreateContext()
