@@ -2569,38 +2569,40 @@ For the same reason the version-flow example above uses placeholders rather than
 a worked version pair: a second copy of the current versions is a second thing
 to keep in sync, and it goes stale on exactly the roll nobody is watching.
 
-### Next release readiness (v0.9.0)
+### Next release readiness (v0.9.1)
 
-**`v0.8.1` shipped silently** (GitHub Release + NuGet) by operator decision and
-is announced together with v0.9.0. See
-[release-notes-v0.8.1.md](release-notes-v0.8.1.md) for its five
-wake-reliability slices; this section links them rather than restating them.
+**`v0.9.0` shipped** (GitHub Release + NuGet) and the version policy was rolled
+to the `0.9.1` development line. The v0.9.0 batch was a **minor** bump covering
+two slices — G591 and G592 — whose headline is that herdr-only stops requiring
+hand-authored state: the host-local CLI refresh now verifies a candidate before
+promoting it, so a failed refresh leaves the working install untouched, and the
+delivery topology has a canonical writer and validator in the new
+`session-layer topology` command group. Minor rather than patch because G592
+adds that command surface. See
+[release-notes-v0.9.0.md](release-notes-v0.9.0.md) for the shipped scope, and
+[release-notes-v0.8.1.md](release-notes-v0.8.1.md) for the five
+wake-reliability slices that shipped silently before it.
 
-`v0.9.0` covers exactly G591 and G592. The release theme is durable state that
-intent-cli depends on but did not own: host-local CLI refresh now verifies an
-isolated candidate before atomic promotion, and the team delivery topology now
-has canonical `session-layer topology record|show|validate` commands. This is a
-**MINOR** bump because the documented policy reserves minor for a new command
-surface and G592 adds the `session-layer topology` command group. See the real
-[release-notes-v0.9.0.md](release-notes-v0.9.0.md) for the exact PRs, merge
-commits, surface behavior, and prepare-only gate. The superseded v0.8.2 draft
-stubs are intentionally absent because no v0.8.2 release will be cut.
+**Nothing is decided for `v0.9.1` yet.** What ships is chosen by the v0.9.1
+release-prep packet, not by this section, and
+[release-notes-v0.9.1.md](release-notes-v0.9.1.md) is a DRAFT stub until that
+packet fills it in.
 
-**Release-readiness verification (run before merging the `v0.9.0`
+**Release-readiness verification (run before merging the `v0.9.1`
 release-preparation PR):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.8.1 (published), nextVersion 0.9.0 (to release)
+cat eng/version.json   # stableVersion 0.9.0 (published), nextVersion 0.9.1 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.9.0-<sha>-G<unit>   (NOT a stale literal)
+#   expected shape: intent-cli 0.9.1-<sha>-G<unit>   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.9.0.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.9.1.nupkg
 
 # 4. Confirm the G475 package/release guard and the release/version guards.
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
@@ -2614,10 +2616,10 @@ dotnet test IntentSystem.sln -c Release
 After the preparation merge lands on `main` and the readiness evidence holds,
 the operator must explicitly approve Release creation. Only then may a
 maintainer/operator (or authorized external release automation) create and
-publish the GitHub Release for `v0.9.0`; publishing it triggers `release.yml`
+publish the GitHub Release for `v0.9.1`; publishing it triggers `release.yml`
 (`on: release: published`) to build and publish the NuGet package and the
 per-platform binary artifacts. **Then roll `eng/version.json` immediately** —
-`stableVersion → 0.9.0`, `nextVersion → 0.9.1` — carrying, per **steps 4–6** of the
+`stableVersion → 0.9.1`, `nextVersion → 0.9.2` — carrying, per **steps 4–6** of the
 [post-release version roll](#post-release-version-roll-g554--required-immediate):
 the **DRAFT note stubs in the same commit** (step 4), the **"Next release
 readiness" section refreshed to the new line in both language mirrors** (step

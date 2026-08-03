@@ -2647,36 +2647,38 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 使っています: 現在のバージョンの 2 つ目のコピーは同期し続けるべき対象が 1 つ増えることを
 意味し、しかも誰も見ていない roll でこそ stale になります。
 
-### 次リリース準備(v0.9.0)
+### 次リリース準備(v0.9.1)
 
-**`v0.8.1` は operator decision により silent release として出荷済み**(GitHub Release +
-NuGet)で、v0.9.0 と合わせて announcement されます。5 件の wake-reliability slice は
-[release-notes-v0.8.1.md](release-notes-v0.8.1.md) を参照してください。この section では
-restatement せず link のみにします。
+**`v0.9.0` は出荷済み**(GitHub Release + NuGet)で、version policy は `0.9.1`
+開発ラインへ roll 済みです。v0.9.0 は **minor** bump で、G591 と G592 の 2 件を
+対象としました。見出しは **herdr-only が手書きの状態を必要としなくなったこと**です ——
+host-local CLI refresh は候補を検証してから昇格するようになり、失敗しても稼働中の
+install は無傷のままです。delivery topology には新しい `session-layer topology`
+command group という canonical な writer と validator が付きました。patch ではなく
+minor なのは、G592 がその command surface を追加するためです。出荷範囲は
+[release-notes-v0.9.0.md](release-notes-v0.9.0.md)、その前に silent で出荷した
+5 件の wake 信頼性スライスは
+[release-notes-v0.8.1.md](release-notes-v0.8.1.md) を参照してください。
 
-`v0.9.0` が対象とするのは正確に G591 と G592 です。release theme は intent-cli が依存しながら
-所有していなかった durable state です: host-local CLI refresh は隔離 candidate を検証してから
-atomic promotion を行い、team delivery topology には canonical な
-`session-layer topology record|show|validate` command が追加されました。文書化済み policy は新しい
-command surface に minor を予約しており、G592 が `session-layer topology` command group を追加する
-ため **MINOR** bump です。正確な PR、merge commit、surface behavior、prepare-only gate は real notes
-[release-notes-v0.9.0.md](release-notes-v0.9.0.md) を参照してください。v0.8.2 Release は作成されない
-ため、superseded な v0.8.2 draft stub は意図的に存在しません。
+**`v0.9.1` の内容はまだ何も決まっていません。** 何を出荷するかを決めるのは v0.9.1 の
+release-prep パケットであってこのセクションではなく、
+[release-notes-v0.9.1.md](release-notes-v0.9.1.md) はそのパケットが埋めるまで
+DRAFT stub のままです。
 
-**リリース準備検証(`v0.9.0` release-preparation PR のマージ前に実行):**
+**リリース準備検証(`v0.9.1` release-preparation PR のマージ前に実行):**
 
 ```bash
 # 1. version policy が release-to-be-cut を記録していることを確認。
-cat eng/version.json   # stableVersion 0.8.1 (published), nextVersion 0.9.0 (to release)
+cat eng/version.json   # stableVersion 0.9.0 (published), nextVersion 0.9.1 (to release)
 
 # 2. build して表示バージョン識別(version + git SHA + G-unit)を確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待する形: intent-cli 0.9.0-<sha>-G<unit>   (古いリテラルではない)
+#   期待する形: intent-cli 0.9.1-<sha>-G<unit>   (古いリテラルではない)
 
 # 3. pack して NuGet package version が policy と一致することを確認。
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.9.0.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.9.1.nupkg
 
 # 4. G475 package/release guard と release/version guard を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
@@ -2689,11 +2691,12 @@ dotnet test IntentSystem.sln -c Release
 
 準備コミットが `main` に入り readiness の証跡が揃ったら、operator が Release 作成を
 明示的に承認しなければなりません。そのうえで初めて maintainer/operator(または承認済みの
-外部リリース自動化)が `v0.9.0` の GitHub Release を作成・公開できます。公開すると
+外部リリース自動化)が `v0.9.1` の GitHub Release を作成・公開できます。公開すると
 `release.yml`(`on: release: published`)が起動し、NuGet package とプラットフォーム別
-バイナリを build/publish します。**その直後に `eng/version.json` を roll します** ——
-`stableVersion → 0.9.0`、`nextVersion → 0.9.1` —— [post-release version roll](#post-release-version-roll-g554--required-immediate)
-の **ステップ 4–6** に従い、**同一コミットに DRAFT note スタブ**(ステップ 4)、
+バイナリを build/publish します。**その後すぐに `eng/version.json` を roll します** —
+`stableVersion → 0.9.1`、`nextVersion → 0.9.2` —
+[リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
+**ステップ 4–6** に従い、**同一コミットに DRAFT note スタブ**(ステップ 4)、
 **「次リリース準備」セクションを ja/en 両ミラーで新しいラインへ更新**(ステップ 5)、
 そして roll を完了とみなす前の **roll 後の child main CI green 確認**(ステップ 6)を
 伴います。
