@@ -47,7 +47,7 @@ internal static class AutomationHeartbeatCommand
     };
 
     private const string UsageLine =
-        "Usage: intent-cli automation heartbeat --domain <name> --repo <owner/repo> [--stale-minutes <m, default 45>] [--format json|markdown]";
+        "Usage: intent-cli automation heartbeat --domain <name> --repo <owner/repo> [--team <logical-team>] [--stale-minutes <m, default 45>] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -61,7 +61,7 @@ internal static class AutomationHeartbeatCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var domain, out var repo, out var staleMinutes, out var format, out var error))
+        if (!TryParseArguments(args, out var domain, out var repo, out var team, out var staleMinutes, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -79,10 +79,12 @@ internal static class AutomationHeartbeatCommand
             return 1;
         }
 
+        var decision = Decide(context, domain!, repo!, team, staleMinutes, stalledWork);
         var result = new AutomationHeartbeatResult
         {
             Domain = domain!,
             Repo = repo!,
+            Team = team,
             StaleMinutesThreshold = staleMinutes,
             Stale = stalledWork.Stalled,
             Items = stalledWork.Items,
@@ -91,6 +93,19 @@ internal static class AutomationHeartbeatCommand
             OperatorAttentionError = stalledWork.OperatorAttentionError,
             RouteTo = ResolveRoute(stalledWork),
             MessageBody = stalledWork.Stalled ? BuildMessageBody(stalledWork) : null,
+            Verdict = decision.Verdict,
+            Reason = decision.Reason,
+            LastProgressBasis = decision.LastProgressBasis,
+            LastProgressSource = decision.LastProgressSource,
+            LastProgressAgeMinutes = decision.LastProgressAgeMinutes,
+            DedupeKey = decision.DedupeKey,
+            ActionOwner = decision.ActionOwner,
+            TargetRole = decision.TargetRole,
+            CanonicalNotifyCommand = decision.CanonicalNotifyCommand,
+            WaitCondition = decision.WaitCondition,
+            WaitEndSignal = decision.WaitEndSignal,
+            WaitBoundMinutes = decision.WaitBoundMinutes,
+            SuggestedAction = decision.SuggestedAction,
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -230,16 +245,203 @@ internal static class AutomationHeartbeatCommand
         };
     }
 
+    private static HeartbeatDecision Decide(
+        CliContext context,
+        string domain,
+        string repo,
+        string? team,
+        int staleMinutes,
+        AutomationStalledWorkResult stalledWork)
+    {
+        var operatorStateUnknown = stalledWork.Items.FirstOrDefault(item =>
+            string.Equals(item.Kind, AutomationStalledWorkCommand.KindOperatorAttentionCannotDetermine, StringComparison.Ordinal));
+        if (operatorStateUnknown is not null)
+        {
+            return CannotDetermine(
+                $"Operator-attention state cannot be determined: {operatorStateUnknown.RecommendedAction}",
+                operatorStateUnknown,
+                "operator-attention store");
+        }
+
+        var operatorRecord = stalledWork.Items.FirstOrDefault(item =>
+            string.Equals(item.Kind, AutomationStalledWorkCommand.KindOperatorAttentionPending, StringComparison.Ordinal));
+        if (operatorRecord is not null)
+        {
+            return new HeartbeatDecision(
+                Verdict: "operator-required",
+                Reason: $"Open operator-attention record '{operatorRecord.OperatorAttentionRecordId}' requires a human decision.",
+                LastProgressBasis: $"operator-attention record '{operatorRecord.OperatorAttentionRecordId}' opened",
+                LastProgressSource: "operator-attention.opened_at",
+                LastProgressAgeMinutes: operatorRecord.AgeMinutes,
+                DedupeKey: MaterialKey("operator-required", operatorRecord, "operator", null),
+                ActionOwner: "operator",
+                TargetRole: null,
+                CanonicalNotifyCommand: null,
+                WaitCondition: null,
+                WaitEndSignal: null,
+                WaitBoundMinutes: null,
+                SuggestedAction: $"Operator action required for '{operatorRecord.OperatorAttentionRecordId}': {operatorRecord.RecommendedAction}");
+        }
+
+        if (string.IsNullOrWhiteSpace(team))
+        {
+            return CannotDetermine(
+                "Recorded routing cannot be resolved because --team is required for this heartbeat decision.",
+                stalledWork.Items.FirstOrDefault(),
+                "heartbeat routing context");
+        }
+
+        var route = ResolveOrchestratorRoute(context, domain, team);
+        if (!route.Resolved)
+        {
+            return CannotDetermine(route.Reason!, stalledWork.Items.FirstOrDefault(), "recorded topology");
+        }
+
+        var ciPending = stalledWork.Items.FirstOrDefault(item =>
+            string.Equals(item.Kind, AutomationStalledWorkCommand.KindCiPending, StringComparison.Ordinal));
+        if (ciPending is not null && ciPending.AgeMinutes < staleMinutes)
+        {
+            return new HeartbeatDecision(
+                Verdict: "healthy-active-wait",
+                Reason: $"CI for PR #{ciPending.Pr?.Number} remains pending at its recorded exact head.",
+                LastProgressBasis: $"PR #{ciPending.Pr?.Number} exact-head CI pending observation",
+                LastProgressSource: "github.pr.status_check_rollup",
+                LastProgressAgeMinutes: ciPending.AgeMinutes,
+                DedupeKey: MaterialKey("healthy-active-wait", ciPending, "orchestration", route.TargetRole!),
+                ActionOwner: "orchestration",
+                TargetRole: route.TargetRole,
+                CanonicalNotifyCommand: null,
+                WaitCondition: $"CI for PR #{ciPending.Pr?.Number} head {ciPending.PrHeadSha} to reach a terminal outcome",
+                WaitEndSignal: "the mode-specific CI-completion wake followed by an exact-head GitHub re-check",
+                WaitBoundMinutes: staleMinutes,
+                SuggestedAction: "Wait for the named CI completion signal, then re-evaluate this heartbeat decision.");
+        }
+
+        var actionable = ciPending is not null && ciPending.AgeMinutes >= staleMinutes
+            ? ciPending
+            : stalledWork.Items.FirstOrDefault(item =>
+                !item.IsInformational
+                && !string.Equals(item.RequiredActor, "operator", StringComparison.Ordinal));
+        if (actionable is not null)
+        {
+            var overdueReason = string.Equals(actionable.Kind, AutomationStalledWorkCommand.KindCiPending, StringComparison.Ordinal)
+                ? $"CI wait for PR #{actionable.Pr?.Number} exceeded its {staleMinutes}-minute bound without a terminal signal."
+                : $"Stalled-work reports actionable '{actionable.Kind}' for '{actionable.ExecutionUnit}'.";
+            return new HeartbeatDecision(
+                Verdict: "actionable-stall",
+                Reason: overdueReason,
+                LastProgressBasis: ProgressBasis(actionable),
+                LastProgressSource: ProgressSource(actionable),
+                LastProgressAgeMinutes: actionable.AgeMinutes,
+                DedupeKey: MaterialKey("actionable-stall", actionable, "orchestration", route.TargetRole!),
+                ActionOwner: "orchestration",
+                TargetRole: route.TargetRole,
+                CanonicalNotifyCommand: route.CanonicalNotifyCommand!,
+                WaitCondition: null,
+                WaitEndSignal: null,
+                WaitBoundMinutes: null,
+                SuggestedAction: $"Run the canonical notify command once for dedupe key '{MaterialKey("actionable-stall", actionable, "orchestration", route.TargetRole!)}'.");
+        }
+
+        if (stalledWork.Items.Count > 0)
+        {
+            var unresolved = stalledWork.Items[0];
+            return CannotDetermine(
+                $"No action owner can be determined for informational stalled-work kind '{unresolved.Kind}'.",
+                unresolved,
+                "stalled-work classification");
+        }
+
+        return new HeartbeatDecision(
+            Verdict: "healthy-active-wait",
+            Reason: "No pending pipeline transition is currently reported.",
+            LastProgressBasis: "current successful stalled-work observation",
+            LastProgressSource: "automation.stalled-work",
+            LastProgressAgeMinutes: 0,
+            DedupeKey: $"heartbeat:healthy-active-wait:{domain}:{repo}:{team}:no-pending-transition",
+            ActionOwner: "orchestration",
+            TargetRole: route.TargetRole,
+            CanonicalNotifyCommand: null,
+            WaitCondition: "the next canonical pipeline transition",
+            WaitEndSignal: "a GitHub or canonical intent-cli state change observed on the next external wake",
+            WaitBoundMinutes: staleMinutes,
+            SuggestedAction: "Wait for the named signal, then re-evaluate this heartbeat decision.");
+    }
+
+    private static HeartbeatDecision CannotDetermine(string reason, StalledWorkItem? item, string source) => new(
+        Verdict: "cannot-determine",
+        Reason: reason,
+        LastProgressBasis: item is null ? source : ProgressBasis(item),
+        LastProgressSource: item is null ? source : ProgressSource(item),
+        LastProgressAgeMinutes: item?.AgeMinutes ?? 0,
+        DedupeKey: $"heartbeat:cannot-determine:monitor:{source}:{reason}",
+        ActionOwner: "monitor",
+        TargetRole: null,
+        CanonicalNotifyCommand: null,
+        WaitCondition: null,
+        WaitEndSignal: null,
+        WaitBoundMinutes: null,
+        SuggestedAction: $"Repair or inspect the named {source} failure before treating this heartbeat as healthy.");
+
+    private static HeartbeatRoute ResolveOrchestratorRoute(
+        CliContext context,
+        string domain,
+        string team)
+    {
+        var topology = NotifyRoleTopologyStore.Resolve(context.RepoRoot, team);
+        if (!topology.Resolved)
+        {
+            return HeartbeatRoute.Failure(topology.Summary);
+        }
+
+        var sender = NotifyRoleTopologyStore.ResolveDeliveryTarget(context.RepoRoot, topology.Topology!, "design");
+        var recipient = NotifyRoleTopologyStore.ResolveDeliveryTarget(context.RepoRoot, topology.Topology!, "orchestration");
+        if (!sender.Resolved || !recipient.Resolved)
+        {
+            return HeartbeatRoute.Failure($"Recorded routing for team '{team}' is unresolved: "
+                + $"{sender.Summary} {recipient.Summary}");
+        }
+
+        var command = "intent-cli notify report"
+            + $" --domain {domain} --team {team} --from design --to orchestration"
+            + " --task-id <heartbeat-dedupe-key> --status question --artifact <heartbeat-evidence>"
+            + " --summary <one-line-summary>"
+            + $" --routing-root '{context.RepoRoot.Replace("'", "'\\''", StringComparison.Ordinal)}'"
+            + " --write --format json";
+        return new HeartbeatRoute(true, null, "orchestration", command);
+    }
+
+    private static string MaterialKey(string verdict, StalledWorkItem? item, string owner, string? targetRole) =>
+        $"heartbeat:{verdict}:{owner}:{targetRole ?? "none"}:{item?.DedupeKey ?? $"{item?.Kind ?? "none"}:{item?.ExecutionUnit ?? "none"}:{item?.Issue?.Number}:{item?.Pr?.Number}"}";
+
+    private static string ProgressBasis(StalledWorkItem item) => item.Kind switch
+    {
+        AutomationStalledWorkCommand.KindOperatorAttentionPending =>
+            $"operator-attention record '{item.OperatorAttentionRecordId}' opened",
+        AutomationStalledWorkCommand.KindCiPending =>
+            $"PR #{item.Pr?.Number} exact-head CI pending observation",
+        _ => $"stalled-work kind '{item.Kind}' for '{item.ExecutionUnit}'",
+    };
+
+    private static string ProgressSource(StalledWorkItem item) => item.Kind switch
+    {
+        AutomationStalledWorkCommand.KindOperatorAttentionPending => "operator-attention.opened_at",
+        AutomationStalledWorkCommand.KindCiPending => "github.pr.status_check_rollup",
+        _ => "automation.stalled-work",
+    };
+
     private static bool TryParseArguments(
         string[] args,
         out string? domain,
         out string? repo,
+        out string? team,
         out int staleMinutes,
         out string format,
         out string error)
     {
         domain = null;
         repo = null;
+        team = null;
         staleMinutes = DefaultStaleMinutes;
         format = FormatMarkdown;
         error = string.Empty;
@@ -263,6 +465,14 @@ internal static class AutomationHeartbeatCommand
                         return false;
                     }
                     repo = args[++index].Trim();
+                    break;
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a value.";
+                        return false;
+                    }
+                    team = args[++index].Trim();
                     break;
                 case "--stale-minutes":
                     if (index + 1 >= args.Length
@@ -316,6 +526,29 @@ internal static class AutomationHeartbeatCommand
         writer.WriteLine();
         writer.WriteLine($"- stale_minutes_threshold: {result.StaleMinutesThreshold}");
         writer.WriteLine($"- stale: {(result.Stale ? "true" : "false")}");
+        writer.WriteLine($"- verdict: {result.Verdict}");
+        writer.WriteLine($"- dedupe_key: {result.DedupeKey}");
+        writer.WriteLine($"- last_progress: {result.LastProgressBasis} ({result.LastProgressSource}, {result.LastProgressAgeMinutes}m)");
+        writer.WriteLine($"- action_owner: {result.ActionOwner}");
+        if (result.TargetRole is not null)
+        {
+            writer.WriteLine($"- target_role: {result.TargetRole}");
+        }
+        if (result.WaitCondition is not null)
+        {
+            writer.WriteLine($"- wait: {result.WaitCondition}");
+            writer.WriteLine($"- wait_end_signal: {result.WaitEndSignal}");
+            writer.WriteLine($"- wait_bound_minutes: {result.WaitBoundMinutes}");
+        }
+        if (result.CanonicalNotifyCommand is not null)
+        {
+            writer.WriteLine($"- canonical_notify_command: `{result.CanonicalNotifyCommand}`");
+        }
+        if (result.Reason is not null)
+        {
+            writer.WriteLine($"- reason: {result.Reason}");
+        }
+        writer.WriteLine($"- suggested_action: {result.SuggestedAction}");
         writer.WriteLine($"- items: {result.Items.Count}");
         if (result.OperatorAttentionStatus is not null)
         {
@@ -392,6 +625,10 @@ internal sealed record AutomationHeartbeatResult
     [JsonPropertyName("repo")]
     public required string Repo { get; init; }
 
+    [JsonPropertyName("team")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public required string? Team { get; init; }
+
     [JsonPropertyName("stale_minutes_threshold")]
     public required int StaleMinutesThreshold { get; init; }
 
@@ -425,4 +662,68 @@ internal sealed record AutomationHeartbeatResult
     /// </summary>
     [JsonPropertyName("message_body")]
     public string? MessageBody { get; init; }
+
+    [JsonPropertyName("verdict")]
+    public required string Verdict { get; init; }
+
+    [JsonPropertyName("reason")]
+    public required string? Reason { get; init; }
+
+    [JsonPropertyName("last_progress_basis")]
+    public required string LastProgressBasis { get; init; }
+
+    [JsonPropertyName("last_progress_source")]
+    public required string LastProgressSource { get; init; }
+
+    [JsonPropertyName("last_progress_age_minutes")]
+    public required int LastProgressAgeMinutes { get; init; }
+
+    [JsonPropertyName("dedupe_key")]
+    public required string DedupeKey { get; init; }
+
+    [JsonPropertyName("action_owner")]
+    public required string ActionOwner { get; init; }
+
+    [JsonPropertyName("target_role")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public required string? TargetRole { get; init; }
+
+    [JsonPropertyName("canonical_notify_command")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public required string? CanonicalNotifyCommand { get; init; }
+
+    [JsonPropertyName("wait_condition")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public required string? WaitCondition { get; init; }
+
+    [JsonPropertyName("wait_end_signal")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public required string? WaitEndSignal { get; init; }
+
+    [JsonPropertyName("wait_bound_minutes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public required int? WaitBoundMinutes { get; init; }
+
+    [JsonPropertyName("suggested_action")]
+    public required string SuggestedAction { get; init; }
+}
+
+internal sealed record HeartbeatDecision(
+    string Verdict,
+    string Reason,
+    string LastProgressBasis,
+    string LastProgressSource,
+    int LastProgressAgeMinutes,
+    string DedupeKey,
+    string ActionOwner,
+    string? TargetRole,
+    string? CanonicalNotifyCommand,
+    string? WaitCondition,
+    string? WaitEndSignal,
+    int? WaitBoundMinutes,
+    string SuggestedAction);
+
+internal sealed record HeartbeatRoute(bool Resolved, string? Reason, string? TargetRole, string? CanonicalNotifyCommand)
+{
+    public static HeartbeatRoute Failure(string reason) => new(false, reason, null, null);
 }

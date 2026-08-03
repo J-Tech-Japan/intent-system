@@ -1333,9 +1333,11 @@ resume）します。その後 orchestrator がループを自律的に駆動し
 経路自身が自己報告できないスタールは、依然として何かが検知しなければなりません。
 **RECOMMENDED なデフォルト** のセーフティネット(G539。G526 の外部スケジューラ推奨を
 supersede します)は、**design** スレッドから実行する **30 分クラス** の間隔の
-watchdog loop です: `intent-cli automation heartbeat` を呼び出し、`stale=true` の
-場合は返された `message_body` を使って orchestrator へ **最大 1 通** の canonical な
-nudge を送ります — それ以外は完全に沈黙します。生きた、人間が監視しているエージェント
+watchdog loop です: `intent-cli automation heartbeat` を唯一の scheduler-agnostic な
+decision surface として呼び出します。各 valid result は `healthy-active-wait`、
+`actionable-stall`、`operator-required`、`cannot-determine` のちょうど一つの verdict を持ちます。
+外部 loop が cadence、watermark、dedupe persistence を所有し、intent-cli は schedule、sleep、send、
+poll state の永続化をしません。生きた、人間が監視しているエージェント
 セッションの **内側** で動作するため、見えない外部プロセスとは異なり、別途の
 credential/keychain セットアップも不要で(セッションの他の部分と同じ方法で
 authenticate します)、壊れた瞬間にオペレーターの画面上で可視化されます。
@@ -1346,19 +1348,21 @@ authenticate します)、壊れた瞬間にオペレーターの画面上で可
 - **loop setup プロンプト**(design スレッドに貼り付ける)— design スレッドで
   `/loop 30m`(Claude 同一スレッド)、または 30 分ごとに発火する Codex automation を
   実行します。プロンプトは各 wake で
-  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
-  を実行し、結果の `stale` フィールドが `true` であれば `message_body` をそのまま
-  `intent-cli notify report`（`--from design --to orchestrator --status question`、fresh な
-  heartbeat task id、heartbeat evidence artifact）で orchestrator に送ります（正確に **1 通**）。`stale` が
-  `false` であれば何も送らず静かに終了します — 沈黙は **この健全なケースにのみ**
-  許されます。heartbeat コマンドの実行失敗や不正な/オブジェクトでない出力は
+  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --team <team> --format json`
+  を実行します。外部 dedupe は age や poll time ではなく返された `dedupe_key` を key にします。
+  `healthy-active-wait` では何も送らず、result が示す awaited condition、observable end signal、有限の
+  bound に従って signal または bound 超過時に再評価します。`actionable-stall` では返された canonical
+  `intent-cli notify` command をその key に対して最大 **1 回** 実行します。`operator-required` は named
+  record と action を operator に提示し、orchestration を nudge しません。`cannot-determine` は named
+  monitor/routing failure を可視化して repair または escalate し、healthy/silent として扱いません。
+  heartbeat コマンドの実行失敗や不正な/オブジェクトでない出力は
   **決して沈黙しません**: この wake 自身の turn 出力で、生きたこのセッションを
   監視しているオペレーターに見える形で、失敗を明示的に述べます — これこそが、
   retire された見えない外部スケジューラに対して in-session の watchdog が持つ
   正確な優位性です(下記 Retired を参照)— その一方で、壊れた入力から notify の
   nudge を捏造・送信することは決してありません。実際に送信されるメッセージは、
   本物の `stale=true` 結果の場合だけです。
-- **failure visibility** — 沈黙は健全な `stale=false` の heartbeat 結果にのみ
+- **failure visibility** — 沈黙は `healthy-active-wait` の heartbeat 結果にのみ
   許されます。heartbeat コマンドの実行失敗や不正な/オブジェクトでない出力は、
   この wake の watchdog 自身の turn 出力で **可視的に** 表面化させなければ
   なりません — 決して黙って飲み込んだり、黙ってリトライしたりしません。沈黙した
@@ -1370,11 +1374,12 @@ authenticate します)、壊れた瞬間にオペレーターの画面上で可
   (`worker next-action --github-only`、open PR/CI/label 状態)を最後に確認した
   orchestrator の活動と比較して orchestrator の停滞を確認、そして RECOMMENDED な
   primary チェックとして `intent-cli automation heartbeat` 自体 — これは
-  `automation stalled-work`(G523)をラップし、スタールした各項目とその canonical な
-  次のコマンドを示す `message_body` を返します。
-- **アクション** — 停滞、未回答の HITL メッセージ、または heartbeat の `stale=true`
-  結果を検知したら、orchestrator へ canonical な repair/status リクエストまたは
-  heartbeat の nudge を最大 1 通だけ送ります:
+  `automation stalled-work`(G523)、operator-attention、recorded topology を一つの verdict、
+  evidence/age basis、stable dedupe key、owner、canonical notify command に統合します。
+- **アクション** — その一つの verdict だけに従います: named signal を bound 内で待ち、
+  `actionable-stall` key には返された canonical notify command を最大 1 回実行し、
+  `operator-required` は human に route し、`cannot-determine` は可視化して repair/escalate します。
+  他の field から action を推論せず、hand-written transport request を送ってはいけません。
 
   ```json
   {"type":"status-request","to":"orchestrator","from":"design-watchdog","ask":"non-destructive liveness check: reply with current state and next action, or confirm idle"}
