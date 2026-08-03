@@ -2649,21 +2649,20 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 
 ### 次リリース準備(v0.9.1)
 
-**`v0.9.0` は出荷済み**(GitHub Release + NuGet)で、version policy は `0.9.1`
-開発ラインへ roll 済みです。v0.9.0 は **minor** bump で、G591 と G592 の 2 件を
-対象としました。見出しは **herdr-only が手書きの状態を必要としなくなったこと**です ——
-host-local CLI refresh は候補を検証してから昇格するようになり、失敗しても稼働中の
-install は無傷のままです。delivery topology には新しい `session-layer topology`
-command group という canonical な writer と validator が付きました。patch ではなく
-minor なのは、G592 がその command surface を追加するためです。出荷範囲は
-[release-notes-v0.9.0.md](release-notes-v0.9.0.md)、その前に silent で出荷した
-5 件の wake 信頼性スライスは
-[release-notes-v0.8.1.md](release-notes-v0.8.1.md) を参照してください。
+**`v0.9.0` は出荷済み**(GitHub Release + NuGet)で、version policy は
+`stableVersion: 0.9.0`、`nextVersion: 0.9.1` のままです。prepare-only の
+`v0.9.1` notes が対象とする merged correctness slice は G594 の正確に 1 件です
+(PR #1292、merge `022e7ec2acbc354aeb6a054f675165ba0e2a9238`)。実測した PATCH
+根拠と正確な merge 証跡は
+[release-notes-v0.9.1.md](release-notes-v0.9.1.md) を参照してください。
 
-**`v0.9.1` の内容はまだ何も決まっていません。** 何を出荷するかを決めるのは v0.9.1 の
-release-prep パケットであってこのセクションではなく、
-[release-notes-v0.9.1.md](release-notes-v0.9.1.md) はそのパケットが埋めるまで
-DRAFT stub のままです。
+`v0.9.1` は **PATCH** です。merged code の inspection で新しい command surface が
+ないこと、named-team doctor preflight は optional な paired `--domain` / `--team`
+引数による opt-in であることを確認しました。同一の record-less host で scoped doctor は
+`session-layer-not-ready`、unscoped doctor は引き続き `ok` を返します。notes は
+bounded な herdr delivery acknowledgement の厳密化と scoped doctor result を開示し、
+PRIMARY agmsg path は変更しません。この preparation は Release、tag、package、
+announcement、version roll を作成しません。
 
 **リリース準備検証(`v0.9.1` release-preparation PR のマージ前に実行):**
 
@@ -2674,7 +2673,7 @@ cat eng/version.json   # stableVersion 0.9.0 (published), nextVersion 0.9.1 (to 
 # 2. build して表示バージョン識別(version + git SHA + G-unit)を確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待する形: intent-cli 0.9.1-<sha>-G<unit>   (古いリテラルではない)
+#   期待する形: intent-cli 0.9.1-<sha>-G595   (古いリテラルではない)
 
 # 3. pack して NuGet package version が policy と一致することを確認。
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages

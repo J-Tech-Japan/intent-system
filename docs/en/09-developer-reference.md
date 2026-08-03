@@ -2571,22 +2571,21 @@ to keep in sync, and it goes stale on exactly the roll nobody is watching.
 
 ### Next release readiness (v0.9.1)
 
-**`v0.9.0` shipped** (GitHub Release + NuGet) and the version policy was rolled
-to the `0.9.1` development line. The v0.9.0 batch was a **minor** bump covering
-two slices — G591 and G592 — whose headline is that herdr-only stops requiring
-hand-authored state: the host-local CLI refresh now verifies a candidate before
-promoting it, so a failed refresh leaves the working install untouched, and the
-delivery topology has a canonical writer and validator in the new
-`session-layer topology` command group. Minor rather than patch because G592
-adds that command surface. See
-[release-notes-v0.9.0.md](release-notes-v0.9.0.md) for the shipped scope, and
-[release-notes-v0.8.1.md](release-notes-v0.8.1.md) for the five
-wake-reliability slices that shipped silently before it.
+**`v0.9.0` shipped** (GitHub Release + NuGet), and the version policy remains
+`stableVersion: 0.9.0` with `nextVersion: 0.9.1`. The prepare-only `v0.9.1`
+notes cover exactly one merged correctness slice, G594 (PR #1292, merge
+`022e7ec2acbc354aeb6a054f675165ba0e2a9238`). See
+[release-notes-v0.9.1.md](release-notes-v0.9.1.md) for the measured PATCH
+rationale and exact merge evidence.
 
-**Nothing is decided for `v0.9.1` yet.** What ships is chosen by the v0.9.1
-release-prep packet, not by this section, and
-[release-notes-v0.9.1.md](release-notes-v0.9.1.md) is a DRAFT stub until that
-packet fills it in.
+`v0.9.1` is a **PATCH**: merged-code inspection found no new command surface,
+and the named-team doctor preflight is opt-in through the optional paired
+`--domain` / `--team` arguments. On the same record-less host, the scoped
+doctor reports `session-layer-not-ready` while the unscoped doctor still
+reports `ok`. The notes disclose the stricter bounded herdr delivery
+acknowledgement and the scoped doctor result, both without changing the PRIMARY
+agmsg path. This preparation creates no Release, tag, package, announcement, or
+version roll.
 
 **Release-readiness verification (run before merging the `v0.9.1`
 release-preparation PR):**
@@ -2598,7 +2597,7 @@ cat eng/version.json   # stableVersion 0.9.0 (published), nextVersion 0.9.1 (to 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.9.1-<sha>-G<unit>   (NOT a stale literal)
+#   expected shape: intent-cli 0.9.1-<sha>-G595   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
