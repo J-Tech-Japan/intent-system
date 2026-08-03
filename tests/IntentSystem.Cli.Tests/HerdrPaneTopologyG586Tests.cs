@@ -12,7 +12,7 @@ public sealed class HerdrPaneTopologyG586Tests : IDisposable
     private const string Domain = "intent-cli";
     private const string Team = "intent-cli-dev";
     private const string Repo = "J-Tech-Japan/intent-system";
-    private const string G589AgmsgBaselineSha256 = "90be8c7999369dc4dffa4fba58c13456e5f90319116473ad11cb9efd7baa47d8";
+    private const string G594AgmsgBaselineSha256 = "b5e54295c8bdecfa2ee3ec16ce3d7c7e3bc173ab43b16edb5b51f41a7bc06d5f";
 
     private readonly string root = Directory.CreateTempSubdirectory("herdr-topology-g586-").FullName;
 
@@ -91,12 +91,15 @@ public sealed class HerdrPaneTopologyG586Tests : IDisposable
     }
 
     [Fact]
-    public void AgmsgRendering_MatchesG589CiWakeContractBaseline_G589()
+    public void AgmsgRendering_PinsG594NamedTeamRecordFirstPreflight_G594()
     {
         var markdown = Render(herdrOnly: false, format: "markdown");
         var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(markdown)));
 
-        Assert.Equal(G589AgmsgBaselineSha256, hash);
+        Assert.True(
+            string.Equals(G594AgmsgBaselineSha256, hash, StringComparison.Ordinal),
+            $"agmsg guide hash changed: {hash}");
+        Assert.Contains("configuration-incomplete", markdown, StringComparison.Ordinal);
     }
 
     private string Render(bool herdrOnly, string format)

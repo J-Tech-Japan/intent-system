@@ -87,20 +87,19 @@ internal static class GuideOrchestratorThreadCommand
         // would follow agmsg instructions in a herdr-only team and never know
         // the record was the reason. An invalid PRESENT record is not absence:
         // it fails closed here, with no guidance rendered at all.
-        SessionLayerModeResolution sessionLayer;
-        try
+        var requestedTeam = string.Equals(values["<team>"], "<team>", StringComparison.Ordinal)
+            ? null
+            : values["<team>"];
+        var requestedDomain = string.Equals(values["<domain>"], "<domain>", StringComparison.Ordinal)
+            ? null
+            : values["<domain>"];
+        var preflight = SessionLayerPreflight.Analyze(
+            context.RepoRoot,
+            requestedDomain,
+            requestedTeam);
+        if (string.Equals(preflight.Verdict, SessionLayerPreflight.CannotDetermine, StringComparison.Ordinal))
         {
-            var requestedTeam = string.Equals(values["<team>"], "<team>", StringComparison.Ordinal)
-                ? null
-                : values["<team>"];
-            sessionLayer = SessionLayerModeStore.Resolve(
-                context.RepoRoot,
-                values["<domain>"],
-                requestedTeam);
-        }
-        catch (InvalidOperationException exception)
-        {
-            writer.WriteLine($"session-layer-mode-unreadable: {exception.Message}");
+            writer.WriteLine($"session-layer-mode-unreadable: {preflight.Summary}");
             writer.WriteLine(
                 "Refusing to render orchestrator-thread guidance: which sections are operative depends on the "
                 + "session layer, and rendering the default would hand you instructions for a transport this team "
@@ -109,7 +108,21 @@ internal static class GuideOrchestratorThreadCommand
             return 1;
         }
 
-        var guide = ApplySessionLayer(BuildGuide(values, sessionLayer.IsHerdrOnly), sessionLayer, values);
+        SessionLayerModeResolution sessionLayer;
+        if (requestedTeam is not null)
+        {
+            sessionLayer = preflight.Scopes.Single().Resolution!;
+        }
+        else
+        {
+            sessionLayer = preflight.Resolution!;
+        }
+
+        var guide = ApplySessionLayer(
+            BuildGuide(values, sessionLayer.IsHerdrOnly),
+            sessionLayer,
+            values,
+            preflight);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -145,8 +158,10 @@ internal static class GuideOrchestratorThreadCommand
     internal static OrchestratorThreadGuide ApplySessionLayer(
         OrchestratorThreadGuide guide,
         SessionLayerModeResolution sessionLayer,
-        IReadOnlyDictionary<string, string> values)
+        IReadOnlyDictionary<string, string> values,
+        SessionLayerPreflightResult? preflight = null)
     {
+        preflight ??= SessionLayerPreflight.AnonymousUnjudged();
         var teamOmission = SessionLayerTeamOmissionDisclosure.Create(
             sessionLayer,
             values["<domain>"],
@@ -166,9 +181,18 @@ internal static class GuideOrchestratorThreadCommand
             Exclusivity = SessionLayerMode.ExclusivitySentence,
             PreviewScoping = SessionLayerMode.PreviewScopingSentence,
             Selection =
-                $"`intent-cli session-layer show --domain {values["<domain>"]}` reports it; "
-                + $"`intent-cli session-layer set --domain {values["<domain>"]} --mode agmsg|herdr-only --write` changes it, "
+                $"`intent-cli session-layer show --domain {values["<domain>"]}"
+                + (string.IsNullOrWhiteSpace(values["<team>"]) || string.Equals(values["<team>"], "<team>", StringComparison.Ordinal)
+                    ? string.Empty
+                    : $" --team {values["<team>"]}")
+                + "` reports it; "
+                + $"`intent-cli session-layer set --domain {values["<domain>"]}"
+                + (string.IsNullOrWhiteSpace(values["<team>"]) || string.Equals(values["<team>"], "<team>", StringComparison.Ordinal)
+                    ? string.Empty
+                    : $" --team {values["<team>"]}")
+                + " --mode agmsg|herdr-only --write` changes it, "
                 + "reversibly, in both directions.",
+            Preflight = preflight,
             ResidualAgmsgMechanics = sessionLayer.IsHerdrOnly
                 ? "HERDR-ONLY: the agmsg-only sections of this guide are REPLACED, whole, by the concrete herdr-only "
                     + "operating sections below. Retained sections carry mode-independent duties, but transport-specific "
@@ -189,10 +213,26 @@ internal static class GuideOrchestratorThreadCommand
                 + "--mode agmsg|herdr-only --write`. A herdr-only request made at first setup is honoured from then on; "
                 + "the choice is reversible in both directions.";
 
+        var setupIntake = guide.SetupIntake;
+        if (preflight.ExpectedTeamDeclared
+            && !string.Equals(preflight.Verdict, SessionLayerPreflight.Ready, StringComparison.Ordinal)
+            && string.Equals(setupIntake.Status, IntakeSetupReady, StringComparison.Ordinal))
+        {
+            setupIntake = setupIntake with
+            {
+                Status = IntakeBlocked,
+                Headline = "blocked — shared session-layer preflight did not pass. Record and validate the intended "
+                    + "mode before declaring READY or notifying.",
+                AgmsgCommands = null,
+                RolePrompts = null,
+                FirstValidation = null,
+            };
+        }
+
         return guide with
         {
             SessionLayer = block,
-            SetupIntake = guide.SetupIntake with
+            SetupIntake = setupIntake with
             {
                 SessionLayerMode = sessionLayer.Mode,
                 SessionLayerNote = intakeNote,
@@ -3702,6 +3742,21 @@ internal static class GuideOrchestratorThreadCommand
             writer.WriteLine("## Session layer");
             writer.WriteLine();
             writer.WriteLine(sessionLayer.Summary);
+            if (sessionLayer.Preflight is { } preflight)
+            {
+                writer.WriteLine();
+                writer.WriteLine($"- shared preflight verdict: `{preflight.Verdict}`");
+                writer.WriteLine($"- passive phase: `{preflight.PassivePhase.Status}` (contacts no receiver)");
+                writer.WriteLine($"- active phase: `{preflight.ActivePhase.Status}`");
+                writer.WriteLine($"- {preflight.Summary}");
+                foreach (var scope in preflight.Scopes)
+                {
+                    foreach (var finding in scope.Findings)
+                    {
+                        writer.WriteLine($"  - team={finding.Team ?? "<undeclared>"}; cause={finding.Cause}; {finding.Message}");
+                    }
+                }
+            }
             if (sessionLayer.TeamOmission is { } teamOmission)
             {
                 writer.WriteLine();
@@ -5936,6 +5991,9 @@ internal sealed record OrchestratorSessionLayer
 
     [JsonPropertyName("selection")]
     public required string Selection { get; init; }
+
+    [JsonPropertyName("preflight")]
+    public required SessionLayerPreflightResult Preflight { get; init; }
 
     [JsonPropertyName("team_omission")]
     public SessionLayerTeamOmissionDisclosure? TeamOmission { get; init; }

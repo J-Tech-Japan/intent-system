@@ -349,6 +349,32 @@ back to `topology validate` / `record` as the remedy. Invalid state always stays
 fail-closed; these commands add knowledge and a controlled writer, never a
 fallback.
 
+#### Shared record-first session-layer preflight
+
+`automation doctor`, the guide's READY definition, and `notify` consume one
+machine-readable `session_layer_preflight` result from the same production
+predicate. They do not maintain three look-alike checks. Its passive structural
+phase contacts no receiver and its active receiver phase is reported
+separately; skipping the active phase does not invalidate a passing passive
+verdict.
+
+For a named team, absence of a mode record is
+`configuration-incomplete`—check not completed, never `not-required`. Record
+the intended mode explicitly, then validate it:
+
+```text
+intent-cli session-layer set --domain <domain> --team <team> --mode agmsg|herdr-only --write
+intent-cli automation doctor --domain <domain> --team <team> --format json
+```
+
+A bare anonymous root remains `unjudged` until an expected domain/team is
+declared. `cannot-determine` is never green. Preflight never infers or repairs a
+mode from live herdr state: once a mode is recorded it probes only that
+transport, and contradictory evidence is diagnostic detail only. A role-pane
+topology describes `herdr-only`; if the team records `agmsg`, the preflight
+reports a mismatch naming the team, recorded mode, and topology mode. Agmsg
+teams therefore do not need herdr installed.
+
 Launch with the typed surface:
 
 ```text
@@ -358,12 +384,14 @@ herdr agent start <logical-role> --kind <agent-kind> --pane <pane-id> -- <operat
 Permission flags belong to the launch, not injected modifier chords. Approvals
 are never auto-answered; G550's MAY/escalate boundary still governs. Approvals
 are pane-visible and handled at the supervision boundary, explicitly unlike the
-agmsg Codex bridge's headless auto-decline. A role is READY only after the
-self-contained G556 verified-liveness gate: after the startup report, wait a
-settle delay, then re-check the expected cwd/repo and agent kind, same-pane
-detection, and a bounded probe whose response is observed. Repeat the entire
-settle-and-re-check sequence after re-provisioning. Workspace existence, a shell
-prompt, or agent state alone is not READY. In herdr-only the verified
+agmsg Codex bridge's headless auto-decline. READY first requires the shared
+passive preflight to be `ready`, then applies the G556 active receiver proof.
+After the startup report, wait a settle delay, re-check the expected cwd/repo
+and agent kind plus same-pane detection, and send a bounded unattended probe
+whose working transition and fresh settled acknowledgement are observed.
+Repeat the entire record-first settle-and-re-check sequence after
+re-provisioning. Workspace existence, a shell prompt, agent state alone, or an
+unattended prompt that stays idle is not READY. In herdr-only the verified
 logical-role→pane mapping is the role identity; there is no separate agmsg
 identity step.
 
@@ -373,6 +401,25 @@ Use the [canonical notify workflow](#canonical-notify-workflow): run
 `intent-cli notify delegate ...` with the target logical role. The CLI resolves
 herdr-only internally, validates the role mapping, and generates the structured
 task block; do not hand-write `herdr agent prompt`.
+
+For a settled pane, notify first uses bounded `agent prompt --wait --until
+working` semantics, then a separate bounded `agent wait` for
+idle/done/blocked. It sets `delivered: true` only after herdr observes that
+unattended working transition followed by a settled/fresh acknowledgement. An idle pane that stays
+idle is `receiver_state_outcome: idle-stays-idle`,
+`working_transition: not-observed`, and not delivered. A pane already working
+when notify starts is still delivered after prompt submission, but reports
+`receiver_state_outcome: already-working` and
+`working_transition: unobservable`; it never attributes the active turn to the
+new prompt. Dry-run keeps the active phase `skipped` and never prompts.
+
+`--to` continues to name the topology's logical role, but a logical role name
+is independent of the globally unique herdr agent name. Recipient identity is
+the recorded workspace plus pane: notify requires exactly one running agent at
+that pane inside that workspace and uses its name only as diagnostic detail. No
+agent, several running agents, or a pane reported only in a foreign workspace
+fails closed while naming the team, recorded workspace, and recorded pane;
+there is never an agent-name match fallback.
 
 Generate a fresh unpredictable nonce for each dispatch; never reuse one or use
 the task id alone. `pane wait-output` searches existing output immediately, so

@@ -428,6 +428,21 @@ internal static class SessionLayerModeStore
 
         var state = TryRead(repoRoot);
 
+        return Resolve(state, domain, team);
+    }
+
+    /// <summary>
+    /// Resolves from an already validated snapshot. G594's shared preflight
+    /// reads the record once, then gives every consumer the same verdict and
+    /// resolution without re-reading or independently defaulting.
+    /// </summary>
+    internal static SessionLayerModeResolution Resolve(
+        SessionLayerModeState? state,
+        string domain,
+        string? team)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(domain);
+
         if (state is null)
         {
             return new SessionLayerModeResolution { Mode = SessionLayerMode.Default, Source = SessionLayerModeSource.Default };

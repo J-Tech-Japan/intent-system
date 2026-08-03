@@ -189,6 +189,11 @@ internal static class SessionLayerFragments
         Fragment(S0, Operative("- missing-inputs — supply the 4 missing field(s) below to get a setup-ready plan.")),
         Fragment(S0, Descriptive("- **status: `missing-inputs`**")),
         Fragment(S0, Operative("- missing-inputs — supply the 6 missing field(s) below to get a setup-ready plan.")),
+        Fragment(
+            S0,
+            Operative("- blocked — shared session-layer preflight did not pass."),
+            Scaffold(" "),
+            Operative("Record and validate the intended mode before declaring READY or notifying.")),
         Fragment(S0, Transport("- The implementation and review threads are loopless agmsg receivers — they must NOT run their own `/loop` or recurring timer for the same domain/repo, whether the orchestrator runs message-driven (the default, woken by agmsg replies) or on an explicit fallback/legacy timer (Codex 5m / Claude `/loop 5m`).")),
         Fragment(S0, Descriptive("- orchestrator folder")),
         Fragment(S0, Descriptive("- implementation folder")),
@@ -1737,6 +1742,11 @@ internal static class SessionLayerFragments
             Scaffold(" "),
             Transport("The implementation receiver still derives its target from `intent-cli worker next-action`, not the agmsg text.")),
         Fragment("setup_intake", Descriptive("blocked")),
+        Fragment(
+            "setup_intake",
+            Operative("blocked — shared session-layer preflight did not pass."),
+            Scaffold(" "),
+            Operative("Record and validate the intended mode before declaring READY or notifying.")),
         Fragment(
             "setup_intake",
             Descriptive("blocked — existing implementation/review timer loops for this domain/repo would race the orchestrator (mixed-mode)."),

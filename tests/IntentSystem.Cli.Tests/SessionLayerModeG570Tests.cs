@@ -898,6 +898,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         var shapes = new List<(string Rendered, IReadOnlyDictionary<string, string> Values)>
         {
             (workspace.RenderOrchestratorGuide(), BareValues),
+            (workspace.RenderSetupReadyMarkdownWithoutModeRecord(), SetupReadyValues),
         };
         foreach (var policy in new[] { "none", "will-stop", "keep" })
         {
@@ -907,75 +908,77 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         // A RECORDED agmsg selection, which states the mode differently from the
         // default, and the herdr-only renderings. Declaring only what the
         // default happens to render would leave the other states untyped.
-        Assert.Equal(0, workspace.RunSet(SessionLayerMode.Agmsg, write: true).ExitCode);
-        shapes.Add((workspace.RenderOrchestratorGuide(), BareValues));
-        shapes.Add((workspace.RenderSetupReadyMarkdown(), SetupReadyValues));
+        using var agmsgWorkspace = new ModeWorkspace();
+        Assert.Equal(0, agmsgWorkspace.RunSet(SessionLayerMode.Agmsg, write: true).ExitCode);
+        shapes.Add((agmsgWorkspace.RenderOrchestratorGuide(), BareValues));
+        shapes.Add((agmsgWorkspace.RenderSetupReadyMarkdown(), SetupReadyValues));
 
-        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
-        shapes.Add((workspace.RenderOrchestratorGuide(), BareValues));
-        shapes.Add((workspace.RenderSetupReadyMarkdown(), SetupReadyValues));
+        using var herdrWorkspace = new ModeWorkspace();
+        Assert.Equal(0, herdrWorkspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        shapes.Add((herdrWorkspace.RenderOrchestratorGuide(), BareValues));
+        shapes.Add((herdrWorkspace.RenderSetupReadyMarkdown(), SetupReadyValues));
 
         foreach (var (rendered, values) in shapes)
         {
-        string? section = null;
-        var inFence = false;
+            string? section = null;
+            var inFence = false;
 
-        foreach (var raw in rendered.Split('\n'))
-        {
-            var line = raw.TrimEnd('\r');
-            var trimmed = line.Trim();
-
-            if (trimmed.StartsWith("```", StringComparison.Ordinal))
+            foreach (var raw in rendered.Split('\n'))
             {
-                inFence = !inFence;
-                continue;
+                var line = raw.TrimEnd('\r');
+                var trimmed = line.Trim();
+
+                if (trimmed.StartsWith("```", StringComparison.Ordinal))
+                {
+                    inFence = !inFence;
+                    continue;
+                }
+
+                if (!inFence && line.StartsWith("## ", StringComparison.Ordinal))
+                {
+                    section = SessionLayerFragments.IsDeclaredSection(line) ? line : null;
+                    continue;
+                }
+
+                if (section is null || trimmed.Length == 0)
+                {
+                    continue;
+                }
+
+                // This guard's OWN reading of what carries no semantics. It is
+                // deliberately re-implemented rather than borrowed, so a bug in the
+                // production notion of "structural" cannot hide a fragment here.
+                if (trimmed.StartsWith("#", StringComparison.Ordinal)
+                    || (trimmed.StartsWith("|", StringComparison.Ordinal)
+                        && trimmed.Trim('|', '-', ':', ' ').Length == 0))
+                {
+                    continue;
+                }
+
+                if (trimmed.Contains(SessionLayerSections.MechanicPointer, StringComparison.Ordinal)
+                    || trimmed.Contains("descriptive, not an instruction", StringComparison.Ordinal))
+                {
+                    // The pointer and the descriptive label are what routing
+                    // PRODUCES, not fragments the document declares.
+                    continue;
+                }
+
+                var matches = SessionLayerFragments.Declarations
+                    .Where(d => d.Section == section
+                        && SessionLayerFragments.Expand(values, d.Text) == trimmed)
+                    .ToArray();
+
+                if (matches.Length == 0)
+                {
+                    undeclared.Add($"[{section}] {trimmed}");
+                    continue;
+                }
+
+                Assert.True(
+                    matches.Length == 1,
+                    $"fragment matches {matches.Length} declarations in `{section}`: {trimmed}");
+                consumed.Add((section, trimmed));
             }
-
-            if (!inFence && line.StartsWith("## ", StringComparison.Ordinal))
-            {
-                section = SessionLayerFragments.IsDeclaredSection(line) ? line : null;
-                continue;
-            }
-
-            if (section is null || trimmed.Length == 0)
-            {
-                continue;
-            }
-
-            // This guard's OWN reading of what carries no semantics. It is
-            // deliberately re-implemented rather than borrowed, so a bug in the
-            // production notion of "structural" cannot hide a fragment here.
-            if (trimmed.StartsWith("#", StringComparison.Ordinal)
-                || (trimmed.StartsWith("|", StringComparison.Ordinal)
-                    && trimmed.Trim('|', '-', ':', ' ').Length == 0))
-            {
-                continue;
-            }
-
-            if (trimmed.Contains(SessionLayerSections.MechanicPointer, StringComparison.Ordinal)
-                || trimmed.Contains("descriptive, not an instruction", StringComparison.Ordinal))
-            {
-                // The pointer and the descriptive label are what routing
-                // PRODUCES, not fragments the document declares.
-                continue;
-            }
-
-            var matches = SessionLayerFragments.Declarations
-                .Where(d => d.Section == section
-                    && SessionLayerFragments.Expand(values, d.Text) == trimmed)
-                .ToArray();
-
-            if (matches.Length == 0)
-            {
-                undeclared.Add($"[{section}] {trimmed}");
-                continue;
-            }
-
-            Assert.True(
-                matches.Length == 1,
-                $"fragment matches {matches.Length} declarations in `{section}`: {trimmed}");
-            consumed.Add((section, trimmed));
-        }
         }
 
         Assert.True(
@@ -1007,19 +1010,22 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         var shapes = new List<(JsonElement Root, IReadOnlyDictionary<string, string> Values)>
         {
             (workspace.RenderOrchestratorGuideJson(), BareValues),
+            (workspace.RenderSetupReadyJsonWithoutModeRecord(), SetupReadyValues),
         };
         foreach (var policy in new[] { "none", "will-stop", "keep" })
         {
             shapes.Add((workspace.RenderSetupReadyJson(policy), SetupReadyValues));
         }
 
-        Assert.Equal(0, workspace.RunSet(SessionLayerMode.Agmsg, write: true).ExitCode);
-        shapes.Add((workspace.RenderOrchestratorGuideJson(), BareValues));
-        shapes.Add((workspace.RenderSetupReadyJson(), SetupReadyValues));
+        using var agmsgWorkspace = new ModeWorkspace();
+        Assert.Equal(0, agmsgWorkspace.RunSet(SessionLayerMode.Agmsg, write: true).ExitCode);
+        shapes.Add((agmsgWorkspace.RenderOrchestratorGuideJson(), BareValues));
+        shapes.Add((agmsgWorkspace.RenderSetupReadyJson(), SetupReadyValues));
 
-        Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
-        shapes.Add((workspace.RenderOrchestratorGuideJson(), BareValues));
-        shapes.Add((workspace.RenderSetupReadyJson(), SetupReadyValues));
+        using var herdrWorkspace = new ModeWorkspace();
+        Assert.Equal(0, herdrWorkspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+        shapes.Add((herdrWorkspace.RenderOrchestratorGuideJson(), BareValues));
+        shapes.Add((herdrWorkspace.RenderSetupReadyJson(), SetupReadyValues));
 
         var undeclared = new List<string>();
         var consumed = new HashSet<(string, string)>();
@@ -2031,11 +2037,60 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             "--format", format,
         ];
 
-        public string RenderSetupReadyMarkdown(string existingLoopPolicy = "none") =>
+        public string RenderSetupReadyMarkdown(string existingLoopPolicy = "none")
+        {
+            EnsureSetupTeamRecord();
+            return Render(SetupReadyArgs("markdown", existingLoopPolicy));
+        }
+
+        public string RenderSetupReadyMarkdownWithoutModeRecord(string existingLoopPolicy = "none") =>
             Render(SetupReadyArgs("markdown", existingLoopPolicy));
 
-        public JsonElement RenderSetupReadyJson(string existingLoopPolicy = "none") =>
+        public JsonElement RenderSetupReadyJson(string existingLoopPolicy = "none")
+        {
+            EnsureSetupTeamRecord();
+            return JsonDocument.Parse(Render(SetupReadyArgs("json", existingLoopPolicy))).RootElement.Clone();
+        }
+
+        public JsonElement RenderSetupReadyJsonWithoutModeRecord(string existingLoopPolicy = "none") =>
             JsonDocument.Parse(Render(SetupReadyArgs("json", existingLoopPolicy))).RootElement.Clone();
+
+        private void EnsureSetupTeamRecord()
+        {
+            var mode = SessionLayerModeStore.Resolve(RootPath, Domain, team: null).Mode;
+            var result = RunSet(mode, write: true, team: "demo-team");
+            Assert.Equal(0, result.ExitCode);
+            if (string.Equals(mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal))
+            {
+                WriteSetupTopology();
+            }
+        }
+
+        private void WriteSetupTopology()
+        {
+            var path = NotifyRoleTopologyStore.ResolvePath(RootPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, JsonSerializer.Serialize(new
+            {
+                team = "demo-team",
+                workspace_id = "w-demo",
+                roles = new Dictionary<string, object>
+                {
+                    ["orchestration"] = new
+                    {
+                        resident = "herdr",
+                        workspace_id = "w-demo",
+                        pane_id = "w-demo:p1",
+                    },
+                    ["implementation"] = new
+                    {
+                        resident = "herdr",
+                        workspace_id = "w-demo",
+                        pane_id = "w-demo:p2",
+                    },
+                },
+            }));
+        }
 
         public JsonElement RenderOrchestratorGuideJson()
         {

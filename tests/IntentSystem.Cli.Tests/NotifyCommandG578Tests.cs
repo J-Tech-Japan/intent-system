@@ -58,27 +58,29 @@ public sealed class NotifyCommandG578Tests : IDisposable
             mode == SessionLayerMode.Agmsg
                 ? call.Arguments.Any(argument => argument.EndsWith("send.sh", StringComparison.Ordinal))
                 : call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wH:p2"]));
-        Assert.Equal(payload, delivery.Arguments[^1]);
+        Assert.Equal(payload, mode == SessionLayerMode.Agmsg ? delivery.Arguments[^1] : delivery.Arguments[3]);
     }
 
     [Fact]
-    public void UnrecordedMode_DefaultsToAgmsg_G578()
+    public void UnrecordedMode_IsConfigurationIncompleteBeforeDefaultAgmsgTransport_G594()
     {
         var runner = SuccessfulRunner();
         NotifyCommand.ProcessRunnerFactory = () => runner;
 
         var (exitCode, result) = workspace.Run(DelegateArgs());
 
-        Assert.Equal(0, exitCode);
+        Assert.Equal(1, exitCode);
         Assert.Equal(SessionLayerMode.Agmsg, result.GetProperty("mode").GetString());
         Assert.Equal("default", result.GetProperty("mode_source").GetString());
-        Assert.Contains(runner.Calls, call => call.Arguments.Any(argument =>
-            argument.EndsWith("send.sh", StringComparison.Ordinal)));
+        Assert.Equal("session-layer-mode-unrecorded", result.GetProperty("cause").GetString());
+        Assert.Contains("session-layer set --domain intent-cli --team intent-cli-dev", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Empty(runner.Calls);
     }
 
     [Fact]
     public void AgmsgDryRun_ResolvesItsTeamRosterWithoutSendingOrStartingHerdr_G588()
     {
+        workspace.SetMode(SessionLayerMode.Agmsg);
         var runner = SuccessfulRunner();
         NotifyCommand.ProcessRunnerFactory = () => runner;
         var args = DelegateArgs();
@@ -115,7 +117,9 @@ public sealed class NotifyCommandG578Tests : IDisposable
         var (exitCode, result) = workspace.Run(DelegateArgs());
 
         Assert.Equal(1, exitCode);
-        Assert.Equal("unknown-role", result.GetProperty("cause").GetString());
+        Assert.Equal(
+            mode == SessionLayerMode.HerdrOnly ? "pane-absent" : "unknown-role",
+            result.GetProperty("cause").GetString());
         Assert.False(result.GetProperty("delivered").GetBoolean());
         Assert.DoesNotContain(runner.Calls, call =>
             call.Arguments.Any(argument => argument.EndsWith("send.sh", StringComparison.Ordinal))
@@ -147,6 +151,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
     [Fact]
     public void AgmsgRosterLookupFailure_IsReceiverMissing_G578()
     {
+        workspace.SetMode(SessionLayerMode.Agmsg);
         var runner = Runner((_, _) => Failure("team receiver missing"));
         NotifyCommand.ProcessRunnerFactory = () => runner;
 
@@ -492,6 +497,18 @@ public sealed class NotifyCommandG578Tests : IDisposable
 
         public void SetMode(string mode)
         {
+            var topologyPath = Path.Combine(
+                RootPath,
+                NotifyRoleTopologyStore.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (string.Equals(mode, SessionLayerMode.Agmsg, StringComparison.Ordinal))
+            {
+                File.Delete(topologyPath);
+            }
+            else if (!File.Exists(topologyPath))
+            {
+                WriteTopology();
+            }
+
             using var writer = new StringWriter();
             var exitCode = SessionLayerCommand.ExecuteSet(
                 Context,

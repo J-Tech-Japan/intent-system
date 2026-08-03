@@ -325,6 +325,28 @@ herdr query を行いません。mapping が存在するか herdr-only が必要
 を示します。不正状態は常に fail closed のままです。これらは knowledge と controlled writer を
 追加するものであり、fallback は追加しません。
 
+#### shared record-first session-layer preflight
+
+`automation doctor`、guide の READY definition、`notify` は、同じ production predicate が返す
+1 つの machine-readable `session_layer_preflight` result を consume します。似た predicate を
+3 個持つのではありません。passive structural phase は receiver に接触せず、active receiver
+phase は別に報告されます。active phase の skip は、passing な passive verdict を無効にしません。
+
+named team に mode record がない場合は `configuration-incomplete`、すなわち check-not-completed
+であり、決して `not-required` ではありません。intended mode を明示的に record してから検証します。
+
+```text
+intent-cli session-layer set --domain <domain> --team <team> --mode agmsg|herdr-only --write
+intent-cli automation doctor --domain <domain> --team <team> --format json
+```
+
+bare anonymous root は expected domain/team を宣言するまで `unjudged` のままです。
+`cannot-determine` は決して green ではありません。preflight は live herdr state から mode を infer
+または repair しません。mode が record 済みなら、その transport だけを probe し、contradiction
+evidence は diagnostic detail にとどめます。role-pane topology が記述する mode は `herdr-only`
+です。team の recorded mode が `agmsg` なら、team、recorded mode、topology mode を明記した
+mismatch を返します。このため agmsg team に herdr install は要求されません。
+
 typed launch は次の surface です。
 
 ```text
@@ -333,13 +355,14 @@ herdr agent start <logical-role> --kind <agent-kind> --pane <pane-id> -- <operat
 
 permission flag は launch に渡し、modifier chord を注入しません。approval は自動回答せず、
 G550 の MAY/escalate 境界がそのまま支配します。approval は pane-visible で supervision boundary
-において処理し、agmsg Codex bridge の headless auto-decline とは明確に異なります。
-READY は自己完結した G556 verified-liveness gate、すなわち startup report 後に settle delay を
-置き、その後で期待する cwd/repo と agent kind、同一 pane での detection、bounded probe の
-応答観測を再確認して、すべて通った後だけです。re-provision 後は settle-and-re-check sequence
-全体を繰り返します。workspace の存在、shell prompt、agent state だけでは READY では
-ありません。herdr-only の role identity は検証済み logical-role→pane mapping であり、別の
-agmsg identity step はありません。
+において処理し、agmsg Codex bridge の headless auto-decline とは明確に異なります。READY は最初に
+shared passive preflight の `ready` を要求し、その後 G556 active receiver proof を適用します。
+startup report 後に settle delay を置き、期待する cwd/repo と agent kind、同一 pane detection を
+再確認し、bounded unattended probe の working transition と fresh settled acknowledgement を
+観測します。re-provision 後は record-first の settle-and-re-check sequence 全体を繰り返します。
+workspace の存在、shell prompt、agent state だけ、または idle のままの unattended prompt は
+READY ではありません。herdr-only の role identity は検証済み logical-role→pane mapping であり、
+別の agmsg identity step はありません。
 
 ### Dispatch、wait、artifact 検証
 
@@ -347,6 +370,22 @@ agmsg identity step はありません。
 `intent-cli notify delegate ...` を target logical role に対して実行します。CLI が
 herdr-only を内部解決し、role mapping を検証して structured task block を生成します。
 `herdr agent prompt` を手書きしてはいけません。
+
+settled pane では、notify は最初に bounded `agent prompt --wait --until working` を使い、続けて
+idle/done/blocked を待つ別の bounded `agent wait` を実行します。herdr が unattended working
+transition と、その後の settled/fresh acknowledgement を観測した後だけ
+`delivered: true` にします。idle のままなら `receiver_state_outcome: idle-stays-idle`、
+`working_transition: not-observed` で未配達です。notify 開始時にすでに working の pane は prompt
+submission 成功後に delivered としますが、`receiver_state_outcome: already-working`、
+`working_transition: unobservable` と報告し、active turn を新 prompt の transition と誤認しません。
+dry-run は active phase を `skipped` のままにして prompt しません。
+
+`--to` は引き続き topology の logical role を指定しますが、logical role name は globally unique な
+herdr agent name から独立しています。recipient identity は recorded workspace と pane の組です。
+notify はその workspace 内のその pane に running agent がちょうど 1 件あることを要求し、agent
+name は diagnostic detail にだけ使います。agent が 0 件、running agent が複数、または pane が
+foreign workspace でのみ報告された場合は、team、recorded workspace、recorded pane を明記して
+fail closed にし、agent-name match fallback は決して行いません。
 
 dispatch ごとに fresh で予測不能な nonce を生成し、再利用や task id 単独での代用をしません。
 `pane wait-output` は既存 output を即座に検索するため、task block 内の precomposed wait needle
