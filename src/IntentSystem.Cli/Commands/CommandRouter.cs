@@ -116,12 +116,13 @@ internal static class CommandRouter
                 ["record-answer"] = InterviewRecordAnswerCommand.Execute,
                 ["compile"] = InterviewCompileCommand.Execute
             },
-            // G570/G592: session-layer mode plus canonical delivery topology.
+            // G570/G592/G601: mode, canonical delivery topology, and generated visibility markers.
             ["session-layer"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["show"] = SessionLayerCommand.ExecuteShow,
                 ["set"] = SessionLayerCommand.ExecuteSet,
-                ["topology"] = SessionLayerTopologyCommand.Execute
+                ["topology"] = SessionLayerTopologyCommand.Execute,
+                ["marker"] = SessionLayerMarkerCommand.Execute,
             },
             // G578: one workflow contract over agmsg and herdr-only transports.
             ["notify"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)

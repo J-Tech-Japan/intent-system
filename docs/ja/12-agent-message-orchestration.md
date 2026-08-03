@@ -325,6 +325,35 @@ herdr query を行いません。mapping が存在するか herdr-only が必要
 を示します。不正状態は常に fail closed のままです。これらは knowledge と controlled writer を
 追加するものであり、fallback は追加しません。
 
+#### 可視な生成済み mode marker
+
+mode record は唯一の source of truth のままですが、team が transport を知るために毎回 query を
+思い出す必要はありません。agent-startup file（`AGENTS.md` または `CLAUDE.md`）に各
+`(domain, team)` 用の明示的な空の managed block を 1 つ置き、recorded mode から display を生成します。
+
+```text
+<!-- intent-cli:session-layer-marker:start domain="<domain>" team="<team>" -->
+<!-- intent-cli:session-layer-marker:end -->
+
+intent-cli session-layer marker generate --domain <domain> --team <team> --file <AGENTS.md|CLAUDE.md> --write
+```
+
+生成済み block は domain、team、mode、canonical な `session-layer show` verification command、
+resolved canonical record の hash を持ちます。host-global または bare な mode claim にはなりません。
+writer は record だけを読み、その delimited block だけを更新します。unrecorded team（`session-layer
+set ... --write` を明記）、absent block、malformed marker は refuse し、
+`session-layer-mode.json` を書きません。
+
+shared preflight は `AGENTS.md` / `CLAUDE.md` 内の managed marker を発見します。recorded team に
+marker がなければ generating command を含む informational な `marker-not-generated` です。mode または
+record hash が異なる marker は file、claim、canonical truth を明記する `marker-drift` となり、verdict を
+`configuration-incomplete` にします。mode switch の後は regenerate してください。marker は signpost であり、
+canonical record の代わりにはなりません。
+
+herdr workspace を provision するときは、recorded mode を workspace label に含めます（例:
+`<team> · herdr-only`）。この label は human-facing かつ non-authoritative です。intent-cli は herdr
+state を書かず、label を mode evidence として読みません。
+
 #### shared record-first session-layer preflight
 
 `automation doctor`、guide の READY definition、`notify` は、同じ production predicate が返す
