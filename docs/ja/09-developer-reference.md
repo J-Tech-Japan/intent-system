@@ -2647,37 +2647,38 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 使っています: 現在のバージョンの 2 つ目のコピーは同期し続けるべき対象が 1 つ増えることを
 意味し、しかも誰も見ていない roll でこそ stale になります。
 
-### 次リリース準備(v0.9.1)
+### 次リリース準備(v0.9.2)
 
-**`v0.9.0` は出荷済み**(GitHub Release + NuGet)で、version policy は
-`stableVersion: 0.9.0`、`nextVersion: 0.9.1` のままです。prepare-only の
-`v0.9.1` notes が対象とする merged correctness slice は G594 の正確に 1 件です
-(PR #1292、merge `022e7ec2acbc354aeb6a054f675165ba0e2a9238`)。実測した PATCH
-根拠と正確な merge 証跡は
+**`v0.9.1` は出荷済み**(GitHub Release + NuGet)で、version policy は `0.9.2`
+開発ラインへ roll 済みです。v0.9.1 は **patch** bump で、G594 の 1 slice を
+運びました。session-layer の readiness を record-first にしたもので、記録の
+不在は check-not-required ではなく **check-not-completed** として報告され、
+1 つの共有 preflight を `automation doctor`・本リファレンスの READY 定義・
+`notify` が消費し、受信者の同一性は **記録された workspace + pane** になって
+論理ロール名がグローバル一意な herdr agent 名から独立しました。minor ではなく
+patch なのは、新しい command surface を追加せず、doctor の preflight が opt-in
+だからです。出荷範囲は
 [release-notes-v0.9.1.md](release-notes-v0.9.1.md) を参照してください。
 
-`v0.9.1` は **PATCH** です。merged code の inspection で新しい command surface が
-ないこと、named-team doctor preflight は optional な paired `--domain` / `--team`
-引数による opt-in であることを確認しました。同一の record-less host で scoped doctor は
-`session-layer-not-ready`、unscoped doctor は引き続き `ok` を返します。notes は
-bounded な herdr delivery acknowledgement の厳密化と scoped doctor result を開示し、
-PRIMARY agmsg path は変更しません。この preparation は Release、tag、package、
-announcement、version roll を作成しません。
+**`v0.9.2` の内容はまだ何も決まっていません。** 何を出荷するかを決めるのは
+v0.9.2 の release-prep パケットであってこのセクションではなく、
+[release-notes-v0.9.2.md](release-notes-v0.9.2.md) はそのパケットが埋めるまで
+DRAFT stub のままです。
 
-**リリース準備検証(`v0.9.1` release-preparation PR のマージ前に実行):**
+**リリース準備検証(`v0.9.2` release-preparation PR のマージ前に実行):**
 
 ```bash
 # 1. version policy が release-to-be-cut を記録していることを確認。
-cat eng/version.json   # stableVersion 0.9.0 (published), nextVersion 0.9.1 (to release)
+cat eng/version.json   # stableVersion 0.9.1 (published), nextVersion 0.9.2 (to release)
 
 # 2. build して表示バージョン識別(version + git SHA + G-unit)を確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待する形: intent-cli 0.9.1-<sha>-G595   (古いリテラルではない)
+#   期待する形: intent-cli 0.9.2-<sha>-G<unit>   (古いリテラルではない)
 
 # 3. pack して NuGet package version が policy と一致することを確認。
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.9.1.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.9.2.nupkg
 
 # 4. G475 package/release guard と release/version guard を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
@@ -2690,10 +2691,10 @@ dotnet test IntentSystem.sln -c Release
 
 準備コミットが `main` に入り readiness の証跡が揃ったら、operator が Release 作成を
 明示的に承認しなければなりません。そのうえで初めて maintainer/operator(または承認済みの
-外部リリース自動化)が `v0.9.1` の GitHub Release を作成・公開できます。公開すると
+外部リリース自動化)が `v0.9.2` の GitHub Release を作成・公開できます。公開すると
 `release.yml`(`on: release: published`)が起動し、NuGet package とプラットフォーム別
 バイナリを build/publish します。**その後すぐに `eng/version.json` を roll します** —
-`stableVersion → 0.9.1`、`nextVersion → 0.9.2` —
+`stableVersion → 0.9.2`、`nextVersion → 0.9.3` —
 [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
 **ステップ 4–6** に従い、**同一コミットに DRAFT note スタブ**(ステップ 4)、
 **「次リリース準備」セクションを ja/en 両ミラーで新しいラインへ更新**(ステップ 5)、
