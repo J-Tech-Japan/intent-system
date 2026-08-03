@@ -1462,9 +1462,11 @@ something must still notice a stall the message-driven path itself cannot
 self-report. The **RECOMMENDED DEFAULT** safety net (G539, superseding G526's
 external-scheduler recommendation) is a watchdog loop run from the **design**
 thread at a **30-minute-class** interval: it calls `intent-cli automation
-heartbeat` and, when `stale=true`, sends **at most one** canonical nudge to
-the orchestrator using the returned `message_body` — completely silent
-otherwise. It runs **inside** a live, human-monitored agent session rather
+heartbeat` as the one scheduler-agnostic decision surface. Each valid result
+has exactly one verdict: `healthy-active-wait`, `actionable-stall`,
+`operator-required`, or `cannot-determine`. The external loop owns cadence,
+watermark, and dedupe persistence; intent-cli never schedules, sleeps, sends,
+or persists poll state. It runs **inside** a live, human-monitored agent session rather
 than an invisible external process, needs no separate credential/keychain
 setup (it authenticates the same way the rest of the session does), and is
 visible on the operator's screen the moment it breaks.
@@ -1476,38 +1478,44 @@ visible on the operator's screen the moment it breaks.
 - **Loop setup prompt** (paste into the design thread) — run `/loop 30m`
   (Claude same-thread) or a Codex automation firing every 30 minutes, with a
   prompt that on each wake runs
-  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`;
-  when the result's `stale` field is `true`, send its `message_body` to the
-  orchestrator with exactly **one** `intent-cli notify report` call (`--from
-  design --to orchestrator --status question`, a fresh heartbeat task id, and
-  the heartbeat evidence artifact);
-  when `stale` is `false`, send nothing and exit quietly — silence is
-  reserved for this healthy case **only**. A heartbeat command execution
+  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --team <team> --format json`.
+  Key external dedupe on the returned `dedupe_key` (the stable dedupe key), never age or poll time.
+  For `healthy-active-wait`, send nothing: the result names the awaited
+  condition, observable end signal, and finite bound; re-evaluate when the
+  signal occurs or the bound expires. For `actionable-stall`, run the returned
+  canonical `intent-cli notify` command at most once for that key. For
+  `operator-required`, surface the named record and action to the operator,
+  never nudge orchestration. For `cannot-determine`, visibly repair or escalate
+  the named monitor/routing failure; it is never a healthy/silent result. A heartbeat command execution
   failure or malformed/non-object output is **never** silent: state the
   failure explicitly in this wake's own turn output, visible to the operator
   watching this live session — the exact advantage an in-session watchdog
   has over the retired invisible external scheduler (see Retired below) —
   while still never fabricating or sending a notify nudge from broken input;
-  only a genuine `stale=true` result ever produces a sent message.
-- **Failure visibility** — silence is reserved for a healthy `stale=false`
-  heartbeat result ONLY. A heartbeat command execution failure or
+  only an `actionable-stall` verdict with its returned canonical notify command
+  ever produces a sent nudge. Do not use `stale` or `message_body` to infer the
+  action; the closed verdict is the sole decision trigger.
+- **Failure visibility** — silence is reserved for `healthy-active-wait`
+  ONLY. A heartbeat command execution failure or
   malformed/non-object output must be surfaced **visibly** in the watchdog's
   own turn output this wake — never silently swallowed or silently retried,
   since silent failure is exactly the defect this slice retires the external
   OS scheduler for — while still never fabricating or sending a notify nudge
-  from broken input; only a genuine `stale=true` result ever produces a sent
-  message.
+  from broken input; only an `actionable-stall` verdict with its returned
+  canonical notify command ever produces a sent nudge.
 - **Checks** — the design/HITL inbox for unread human-facing escalations
   (`inbox.sh` on the design role); orchestrator staleness via read-only
   intent-cli/GitHub facts (`worker next-action --github-only`, open PR/CI/
   label state) compared against the last known orchestrator activity; and,
   as the RECOMMENDED primary check, `intent-cli automation heartbeat`
-  itself — it wraps `automation stalled-work` (G523) and returns a
-  ready-to-send `message_body` naming every stale item and its canonical
-  next command.
-- **Action** — when staleness, an unanswered HITL message, or a heartbeat
-  `stale=true` result is detected, send **at most one** canonical
-  repair/status request or heartbeat nudge to the orchestrator:
+  itself — it wraps `automation stalled-work` (G523), operator-attention,
+  and recorded topology into one verdict, evidence/age basis, stable dedupe
+  key, owner, and canonical notify command.
+- **Action** — act only on that one verdict: wait for the named signal within
+  its bound, run at most one returned canonical notify command for an
+  `actionable-stall` key, route `operator-required` to a human, and visibly
+  repair/escalate `cannot-determine`. Do not infer an action from any other
+  field or send a hand-written transport request.
 
   ```json
   {"type":"status-request","to":"orchestrator","from":"design-watchdog","ask":"non-destructive liveness check: reply with current state and next action, or confirm idle"}
@@ -1555,8 +1563,8 @@ The **selectable alternative** to the design-thread watchdog: the same
 `intent-cli automation heartbeat` call, run directly from a long-interval
 automation **in the orchestrator's own thread** (Codex automation or Claude
 same-thread `/loop`) rather than from the design thread. On each wake it
-calls `automation heartbeat` itself and, when stale, acts on the returned
-state in the **same** wake — there is no design-to-orchestrator message hop,
+calls `automation heartbeat` itself and acts on its closed verdict in the
+**same** wake — there is no design-to-orchestrator message hop,
 because the orchestrator is the one running the check.
 
 - **Frequency** — 30-60 minute class — the same low-frequency band as the
@@ -1571,13 +1579,15 @@ because the orchestrator is the one running the check.
   Choose orchestrator-side only when an operator has a specific reason to
   prefer one fewer hop over keeping the orchestrator loopless.
 - **Command** —
-  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
+  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --team <team> --format json`
 - **Setup prompt** (paste into the orchestrator thread) — run a Codex
   automation or Claude same-thread `/loop` firing every 30-60 minutes in the
   orchestrator thread; each wake runs `automation heartbeat` in addition to
-  the normal orchestrator wake checks, and when `stale` is `true` treats the
-  returned `message_body` as this wake's repair/escalation signal (still at
-  most one message per wake, per the G524 wake contract).
+  the normal orchestrator wake checks. It waits for `healthy-active-wait`,
+  runs the returned canonical notify command only for `actionable-stall`,
+  routes `operator-required` to the operator, and visibly repairs/escalates
+  `cannot-determine` (still at most one nudge per dedupe key, per the G524
+  wake contract). It never infers this from `stale` or `message_body`.
 
 ### Retired: external OS-scheduler heartbeat (G526 → G539)
 
