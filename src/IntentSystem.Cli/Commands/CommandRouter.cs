@@ -33,7 +33,9 @@ internal static class CommandRouter
         // G570: session-layer transport selection (agmsg | herdr-only).
         "session-layer",
         // G578: transport-neutral role notification surface.
-        "notify"
+        "notify",
+        // G596: explicit durable lifecycle for obligations requiring a human operator.
+        "operator-attention"
     ];
 
     /// <summary>
@@ -127,6 +129,13 @@ internal static class CommandRouter
                 ["delegate"] = NotifyCommand.ExecuteDelegate,
                 ["report"] = NotifyCommand.ExecuteReport,
                 ["escalate"] = NotifyCommand.ExecuteEscalate
+            },
+            ["operator-attention"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["open"] = OperatorAttentionCommand.ExecuteOpen,
+                ["resolve"] = OperatorAttentionCommand.ExecuteResolve,
+                ["supersede"] = OperatorAttentionCommand.ExecuteSupersede,
+                ["query"] = OperatorAttentionCommand.ExecuteQuery
             },
             // G559: cross-platform agent skill install surface.
             ["skill"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
@@ -583,6 +592,7 @@ internal static class CommandRouter
             ["automation"] = "`intent-cli automation summary --domain <d> --format json` (capability JSON), `intent-cli automation doctor --format json` (CLI freshness).",
             ["session-layer"] = "`intent-cli session-layer show --domain <d> [--team <t>]` (which transport is in force), `session-layer set` to change it, and `session-layer topology record|show|validate --team <t>` for the delivery mapping.",
             ["notify"] = "`intent-cli notify delegate|report|escalate --domain <d> --team <t> ...` (canonical role workflow; transport follows the recorded session-layer mode).",
+            ["operator-attention"] = "`intent-cli operator-attention query --domain <d> [--team <t>] --format json` (durable human-operator obligations); use `open|resolve|supersede --write` for explicit lifecycle transitions.",
             ["bug"] = "`intent-cli guide worker pr-comment-fix --format json` (repair guidance), `intent-cli bug report`/`triage` for new-bug intake.",
             ["worker"] = "`intent-cli worker next-action --repo <r> --workdir <child> --format json` then claim / result-summary / complete.",
             ["metadata"] = "`intent-cli metadata validate --format json` (read-only); use `intent-cli metadata update --mode completed-closeout --write` for the bounded controlled writer instead of hand-editing.",

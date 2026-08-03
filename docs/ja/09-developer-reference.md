@@ -672,6 +672,50 @@ kind では `— FYI:` prose `` で終わります — そのため読み手（�
 orchestrator でも）が「transition は不要」を actionable な次コマンドと
 取り違えることはありません。
 
+### operator attention の durable state (G596)
+
+人間にしか処理できない作業は、流れて消える通知ではなく state です。次の
+明示的な lifecycle surface を使います。
+
+```text
+intent-cli operator-attention open --record <id> --domain <d> --team <t> --owner <owner> --blocking-reference <issue|pr|unit|release> --action-needed <action> --evidence <evidence> [--supersedes <id>] --write --format json
+intent-cli operator-attention resolve --record <id> --resolution-evidence <evidence> --write --format json
+intent-cli operator-attention supersede --record <id> --evidence <evidence> --write --format json
+intent-cli operator-attention query [--domain <d>] [--team <t>] --format json
+```
+
+進行に human operator の判断または作業が必要で、かつ既存の clarification
+mechanism（この仕組みでは変更しません）で扱うものではないとき、record を
+open します。open した thread は owner、blocking reference、chat を再構成せず
+実行できる具体的 action、establishing evidence を記録しなければなりません。
+その record を operator に route し、後で evidence 付きの明示的 terminal
+command を実行することも、その thread の責務です。
+
+lifecycle は厳密に `open`、`resolved`、`superseded` の 3 つです。
+superseded は回答済みではなく、`resolution_evidence` を持ちません。同じ義務が
+再発した場合、古い record をまず supersede し、`--supersedes` でそれを参照する
+新しい ID を open します。terminal な古い record を変更したり reopen したりは
+しません。全 transition と evidence/timestamp は
+`.intent-cli/operator-attention.json` に残り、共有 atomic durable writer で
+publish されます。
+
+store を write/transition するのはこれらの明示 command だけです。pane text、
+`events.jsonl`、`intent-cli notify escalate`、prose/event heuristic は何かが
+起きたことを通知できますが、record を open / resolve / supersede することは
+ありません。domain 単独、team 単独、または両方で query すると、該当する全
+record、現在 open の集合、open からの age が返ります。store が無い、または選択
+scope に履歴が無ければ `check-not-completed`、malformed または unreadable なら
+`cannot-determine` であり、
+`no-attention-pending` には決してなりません。
+
+open record は既存の `automation stalled-work` と `automation heartbeat` に
+`operator-attention-pending` として即時に現れます。item は record を名指しし、
+`required_actor: operator` と `orchestrator_actionable: false` を持ちます。その
+record だけが item の heartbeat は `route_to: operator` と `ROUTE TO OPERATOR`
+を返します。orchestrator は義務を route しますが、人間の判断を自分で clear
+できるかのように扱ってはいけません。新しい watchdog、scheduler、timer、
+polling loop、process launch、automatic open/resolve path は追加しません。
+
 ### session-layer モード: 4 スレッドがどの transport を使うか (G570)
 
 `intent-cli session-layer show --domain <d> [--team <t>] [--format markdown|json]`

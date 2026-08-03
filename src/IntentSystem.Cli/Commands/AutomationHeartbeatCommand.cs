@@ -87,6 +87,9 @@ internal static class AutomationHeartbeatCommand
             Stale = stalledWork.Stalled,
             Items = stalledWork.Items,
             Warnings = stalledWork.Warnings,
+            OperatorAttentionStatus = stalledWork.OperatorAttentionStatus,
+            OperatorAttentionError = stalledWork.OperatorAttentionError,
+            RouteTo = ResolveRoute(stalledWork),
             MessageBody = stalledWork.Stalled ? BuildMessageBody(stalledWork) : null,
         };
 
@@ -119,14 +122,31 @@ internal static class AutomationHeartbeatCommand
     /// </summary>
     private static string BuildMessageBody(AutomationStalledWorkResult stalledWork)
     {
-        var actionableCount = stalledWork.Items.Count(item => !item.IsInformational);
+        var operatorRequiredCount = stalledWork.Items.Count(item =>
+            string.Equals(item.RequiredActor, "operator", StringComparison.Ordinal));
+        var actionableCount = stalledWork.Items.Count(item =>
+            !item.IsInformational && item.OrchestratorActionable is not false);
         var informationalCount = stalledWork.Items.Count(item => item.IsInformational);
 
         var builder = new StringBuilder();
+        builder.Append("WAKE (heartbeat): ");
+        if (operatorRequiredCount > 0)
+        {
+            builder
+                .Append("ROUTE TO OPERATOR — ")
+                .Append(operatorRequiredCount)
+                .Append(" operator-required attention item(s), ");
+        }
         builder
-            .Append("WAKE (heartbeat): ")
             .Append(actionableCount)
             .Append(" pending transition(s)");
+        if (operatorRequiredCount > 0)
+        {
+            builder
+                .Append(" (")
+                .Append(actionableCount)
+                .Append(" orchestrator-actionable)");
+        }
         if (informationalCount > 0)
         {
             builder.Append(", ").Append(informationalCount).Append(" informational note(s)");
@@ -160,7 +180,21 @@ internal static class AutomationHeartbeatCommand
             }
 
             builder.Append(')');
-            if (item.IsInformational)
+            if (string.Equals(item.RequiredActor, "operator", StringComparison.Ordinal))
+            {
+                builder
+                    .Append(" — OPERATOR REQUIRED (orchestrator_actionable=false): ")
+                    .Append(item.RecommendedAction);
+                if (item.OperatorAttentionOwner is { } owner)
+                {
+                    builder.Append(" Owner: ").Append(owner).Append('.');
+                }
+                if (item.BlockingReference is { } blockingReference)
+                {
+                    builder.Append(" Blocking reference: ").Append(blockingReference).Append('.');
+                }
+            }
+            else if (item.IsInformational)
             {
                 builder.Append(" — FYI: ").Append(item.RecommendedAction);
             }
@@ -171,6 +205,29 @@ internal static class AutomationHeartbeatCommand
         }
 
         return builder.ToString();
+    }
+
+    private static string? ResolveRoute(AutomationStalledWorkResult stalledWork)
+    {
+        if (!stalledWork.Stalled)
+        {
+            return null;
+        }
+
+        var hasOperator = stalledWork.Items.Any(item =>
+            string.Equals(item.RequiredActor, "operator", StringComparison.Ordinal));
+        if (!hasOperator)
+        {
+            return null;
+        }
+        var hasOrchestrator = stalledWork.Items.Any(item =>
+            !item.IsInformational && item.OrchestratorActionable is not false);
+        return (hasOperator, hasOrchestrator) switch
+        {
+            (true, true) => "operator-and-orchestration",
+            (true, false) => "operator",
+            _ => null,
+        };
     }
 
     private static bool TryParseArguments(
@@ -260,6 +317,14 @@ internal static class AutomationHeartbeatCommand
         writer.WriteLine($"- stale_minutes_threshold: {result.StaleMinutesThreshold}");
         writer.WriteLine($"- stale: {(result.Stale ? "true" : "false")}");
         writer.WriteLine($"- items: {result.Items.Count}");
+        if (result.OperatorAttentionStatus is not null)
+        {
+            writer.WriteLine($"- operator_attention_status: {result.OperatorAttentionStatus}");
+        }
+        if (result.RouteTo is not null)
+        {
+            writer.WriteLine($"- route_to: {result.RouteTo}");
+        }
         writer.WriteLine();
 
         if (result.Items.Count == 0)
@@ -287,6 +352,14 @@ internal static class AutomationHeartbeatCommand
                 else
                 {
                     writer.WriteLine($"- recommended_action: `{item.RecommendedAction}`");
+                }
+                if (item.RequiredActor is { } requiredActor)
+                {
+                    writer.WriteLine($"- required_actor: {requiredActor}");
+                }
+                if (item.OrchestratorActionable is { } orchestratorActionable)
+                {
+                    writer.WriteLine($"- orchestrator_actionable: {(orchestratorActionable ? "true" : "false")}");
                 }
                 writer.WriteLine();
             }
@@ -330,6 +403,18 @@ internal sealed record AutomationHeartbeatResult
 
     [JsonPropertyName("warnings")]
     public required IReadOnlyList<string> Warnings { get; init; }
+
+    [JsonPropertyName("operator_attention_status")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public required string? OperatorAttentionStatus { get; init; }
+
+    [JsonPropertyName("operator_attention_error")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public required string? OperatorAttentionError { get; init; }
+
+    [JsonPropertyName("route_to")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public required string? RouteTo { get; init; }
 
     /// <summary>
     /// Ready-to-send orchestrator reconcile status-request, present only
