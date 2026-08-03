@@ -2179,8 +2179,8 @@ ping だけがそれを表面化させました。`intent-cli guide orchestrator
 
 - **design-thread watchdog(推奨されるデフォルト)** — **design** スレッドから
   実行する **30 分クラス** の間隔の watchdog loop: `intent-cli automation
-  heartbeat --domain <domain> --repo <owner/repo> --format json` を呼び出し、
-  `stale=true` の場合は返された `message_body` を使って orchestrator へ
+  heartbeat --domain <domain> --repo <owner/repo> --team <team> --format json` を呼び出し、
+  返された closed `verdict` が actionable の場合は `message_body` を使って orchestrator へ
   最大 1 通の canonical な nudge を送ります — それ以外は完全に沈黙します。
   生きた、人間が監視しているエージェントセッションの内側で動作するため、
   見えない外部プロセスとは異なり、別途の credential/keychain セットアップも
@@ -2694,9 +2694,9 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 使っています: 現在のバージョンの 2 つ目のコピーは同期し続けるべき対象が 1 つ増えることを
 意味し、しかも誰も見ていない roll でこそ stale になります。
 
-### 次リリース準備(v0.9.2)
+### 次リリース準備(v0.10.0)
 
-**`v0.9.1` は出荷済み**(GitHub Release + NuGet)で、version policy は `0.9.2`
+**`v0.9.1` は出荷済み**(GitHub Release + NuGet)で、version policy は `0.10.0`
 開発ラインへ roll 済みです。v0.9.1 は **patch** bump で、G594 の 1 slice を
 運びました。session-layer の readiness を record-first にしたもので、記録の
 不在は check-not-required ではなく **check-not-completed** として報告され、
@@ -2707,25 +2707,24 @@ patch なのは、新しい command surface を追加せず、doctor の preflig
 だからです。出荷範囲は
 [release-notes-v0.9.1.md](release-notes-v0.9.1.md) を参照してください。
 
-**`v0.9.2` の内容はまだ何も決まっていません。** 何を出荷するかを決めるのは
-v0.9.2 の release-prep パケットであってこのセクションではなく、
-[release-notes-v0.9.2.md](release-notes-v0.9.2.md) はそのパケットが埋めるまで
-DRAFT stub のままです。
+**v0.10.0 release-prep パケットが出荷範囲を固定します。** このセクションは
+範囲を選ばず、[release-notes-v0.10.0.md](release-notes-v0.10.0.md) が prepared release の
+四つの first-parent merge と MINOR の根拠を記録します。
 
-**リリース準備検証(`v0.9.2` release-preparation PR のマージ前に実行):**
+**リリース準備検証(`v0.10.0` release-preparation PR のマージ前に実行):**
 
 ```bash
 # 1. version policy が release-to-be-cut を記録していることを確認。
-cat eng/version.json   # stableVersion 0.9.1 (published), nextVersion 0.9.2 (to release)
+cat eng/version.json   # stableVersion 0.9.1 (published), nextVersion 0.10.0 (to release)
 
 # 2. build して表示バージョン識別(version + git SHA + G-unit)を確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待する形: intent-cli 0.9.2-<sha>-G<unit>   (古いリテラルではない)
+#   期待する形: intent-cli 0.10.0-<sha>-G<unit>   (古いリテラルではない)
 
 # 3. pack して NuGet package version が policy と一致することを確認。
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.9.2.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.10.0.nupkg
 
 # 4. G475 package/release guard と release/version guard を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
@@ -2738,10 +2737,10 @@ dotnet test IntentSystem.sln -c Release
 
 準備コミットが `main` に入り readiness の証跡が揃ったら、operator が Release 作成を
 明示的に承認しなければなりません。そのうえで初めて maintainer/operator(または承認済みの
-外部リリース自動化)が `v0.9.2` の GitHub Release を作成・公開できます。公開すると
+外部リリース自動化)が `v0.10.0` の GitHub Release を作成・公開できます。公開すると
 `release.yml`(`on: release: published`)が起動し、NuGet package とプラットフォーム別
 バイナリを build/publish します。**その後すぐに `eng/version.json` を roll します** —
-`stableVersion → 0.9.2`、`nextVersion → 0.9.3` —
+`stableVersion → 0.10.0`、`nextVersion → 0.10.1` —
 [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
 **ステップ 4–6** に従い、**同一コミットに DRAFT note スタブ**(ステップ 4)、
 **「次リリース準備」セクションを ja/en 両ミラーで新しいラインへ更新**(ステップ 5)、
