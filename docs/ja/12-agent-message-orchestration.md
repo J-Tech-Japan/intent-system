@@ -354,6 +354,19 @@ herdr workspace を provision するときは、recorded mode を workspace labe
 `<team> · herdr-only`）。この label は human-facing かつ non-authoritative です。intent-cli は herdr
 state を書かず、label を mode evidence として読みません。
 
+#### mode switch 後の manual migration review
+
+`session-layer set --write` が recorded mode を実際に変更したときは、順序付きの **manual migration
+plan** を出力します。other mode の session hooks、inbox watchers / monitors を review し、続けて G601
+visibility marker を regenerate してください。各項目は operator action です。intent-cli は user
+configuration を delete、rewrite、disable しません。no-op の set は plan を出しません。
+
+shared preflight は declared location だけで known other-mode residue を確認します。たとえば
+herdr-only team 上の `.codex/hooks.json` にある project-level agmsg session hooks は報告対象です。
+`other-mode-residue` finding は path と owning mode、one-mode exclusivity contract、removal guidance を
+明記しますが advisory のままです。residue は active mixing の証明ではなく hazard であり、canonical
+mode record を infer、flip、override しません。
+
 #### shared record-first session-layer preflight
 
 `automation doctor`、guide の READY definition、`notify` は、同じ production predicate が返す

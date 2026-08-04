@@ -199,6 +199,9 @@ internal static class SessionLayerCommand
             RequestedMode = requested,
             PreviousMode = existing?.Mode ?? SessionLayerMode.Default,
             AlreadyRecorded = alreadyRecorded,
+            MigrationPlan = applied
+                ? SessionLayerMigration.Plan(domain!, team, existing?.Mode ?? SessionLayerMode.Default, requested!)
+                : null,
         };
 
         Emit(writer, format, result);
@@ -292,6 +295,18 @@ internal static class SessionLayerCommand
             foreach (var transition in result.Transitions)
             {
                 writer.WriteLine($"- {transition.At:O}: {transition.From} → {transition.To}");
+            }
+        }
+
+        if (result.MigrationPlan is { Count: > 0 })
+        {
+            writer.WriteLine();
+            writer.WriteLine("## Manual migration plan");
+            writer.WriteLine();
+            writer.WriteLine("Review these user-managed artifacts; this command did not change any of them.");
+            foreach (var item in result.MigrationPlan)
+            {
+                writer.WriteLine($"1. {item.Action}");
             }
         }
     }
@@ -453,4 +468,7 @@ internal sealed record SessionLayerResult
 
     [JsonPropertyName("team_omission")]
     public SessionLayerTeamOmissionDisclosure? TeamOmission { get; init; }
+
+    [JsonPropertyName("migration_plan")]
+    public IReadOnlyList<SessionLayerMigrationPlanItem>? MigrationPlan { get; init; }
 }
