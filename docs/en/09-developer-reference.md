@@ -2623,12 +2623,14 @@ to keep in sync, and it goes stale on exactly the roll nobody is watching.
 
 ### Next release readiness (v0.11.1)
 
-**`v0.11.0` shipped** (GitHub Release + NuGet), and the next prepared line is
-`0.11.1`. Its scope and bump rationale are deliberately unassigned until the
-`v0.11.1` release-prep packet replaces the
-[DRAFT notes](release-notes-v0.11.1.md). See
-[release-notes-v0.11.0.md](release-notes-v0.11.0.md) for the preceding shipped
-scope.
+**`v0.11.0` shipped** (GitHub Release + NuGet), and the prepared patch line is
+`0.11.1`. Its scope is exactly G607 / [PR #1318](https://github.com/J-Tech-Japan/intent-system/pull/1318)
+merge `764905194ee1` and G608 / [PR #1320](https://github.com/J-Tech-Japan/intent-system/pull/1320)
+merge `a138e32b82a7`. It adds no command surface: the `src` delta is limited to
+presentation strings in the three guide commands named in the
+[v0.11.1 notes](release-notes-v0.11.1.md), aligning installed-guide transport
+presentation with the published docs chooser. See
+[release-notes-v0.11.0.md](release-notes-v0.11.0.md) for the preceding shipped scope.
 
 **Release-readiness verification (run before merging the `v0.11.1`
 release-preparation PR):**
@@ -2646,10 +2648,10 @@ dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
 ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.11.1.nupkg
 
-# 4. Confirm the G475 package/release guard and the release/version guards.
+# 4. Confirm G475, the v0.11.1 release-note check, and the release/version guards.
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
-  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0111DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 
 # 5. Run the complete Release suite.
 dotnet test IntentSystem.sln -c Release
