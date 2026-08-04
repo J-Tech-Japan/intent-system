@@ -211,7 +211,7 @@ public sealed class HerdrOnlyOperatingGuideG571Tests : IDisposable
     }
 
     [Fact]
-    public void WorkspaceCreate_UsesInstalledHerdr075ResultFields_G575()
+    public void WorkspaceCreate_UsesMeasuredHerdr080ResultFields_G605()
     {
         var output = Render(herdrOnly: true, format: "markdown");
         var provisioning = JsonDocument.Parse(Render(herdrOnly: true, format: "json"))
@@ -231,6 +231,29 @@ public sealed class HerdrOnlyOperatingGuideG571Tests : IDisposable
 
         Assert.Contains("workspace.workspace_id", provisioning.GetProperty("workspace_result_mapping").GetString());
         Assert.Contains("root_pane.cwd", provisioning.GetProperty("workspace_result_mapping").GetString());
+        Assert.Contains("herdr 0.8.0", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("0.7.5", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LiveHandoffRecovery_RebaselinesGuidanceWithoutChangingDeliverySemantics_G605()
+    {
+        var output = Render(herdrOnly: true, format: "markdown");
+        var recovery = JsonDocument.Parse(Render(herdrOnly: true, format: "json"))
+            .RootElement.GetProperty(HerdrOnlyOperatingGuide.JsonProperty).GetProperty("failure_recovery")
+            .EnumerateArray().Select(item => item.GetString()).ToArray();
+
+        Assert.Contains("herdr server live-handoff", output, StringComparison.Ordinal);
+        Assert.Contains("EOF as a resubscribe trigger", output, StringComparison.Ordinal);
+        Assert.Contains("re-read the pane and re-judge", output, StringComparison.Ordinal);
+        Assert.Contains("headless resize/zoom does not restore the PTY", output, StringComparison.Ordinal);
+        Assert.Contains("server_not_running", output, StringComparison.Ordinal);
+        Assert.Contains("restored agent sessions without waiting for a TUI client", output, StringComparison.Ordinal);
+        Assert.Contains("latest stable herdr on macOS/Linux", output, StringComparison.Ordinal);
+        Assert.Contains("Windows support is beta", output, StringComparison.Ordinal);
+        Assert.Contains("herdr --skill", output, StringComparison.Ordinal);
+        Assert.Contains("never replaces intent-cli guide authority", output, StringComparison.Ordinal);
+        Assert.Contains(recovery, item => item!.Contains("live-handoff", StringComparison.Ordinal));
     }
 
     private string Render(bool herdrOnly, string format)

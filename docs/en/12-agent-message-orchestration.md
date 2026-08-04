@@ -277,7 +277,7 @@ Create the workspace first:
 herdr workspace create --cwd <host-repo> --label <team> --no-focus
 ```
 
-In herdr 0.7.5, the `workspace_created` result has top-level `workspace`, `tab`,
+Measured on herdr 0.8.0, the `workspace_created` result has top-level `workspace`, `tab`,
 and `root_pane`; seed the mapping from `workspace.workspace_id`, `tab.tab_id`,
 and `root_pane.pane_id`, and verify `root_pane.cwd`. The returned tab is the one
 normal tab for the team. Ensure it is named `<team>`; if needed, use the
@@ -506,7 +506,7 @@ herdr's observed `pane.agent_status_changed`: it depends only on herdr observing
 the process, so it still wakes orchestration when the worker omits its report,
 but it carries no task outcome.
 
-The measured herdr 0.7.5 socket API uses `events.subscribe`. Include one
+The herdr 0.8.0 socket API measured on this host uses `events.subscribe`. Include one
 subscription entry per watched pane because `pane.agent_status_changed`
 requires `pane_id`:
 
@@ -620,11 +620,26 @@ can duplicate a design decision.
 
 ### Recovery and mode switches
 
+The operating baseline is the latest stable herdr on macOS/Linux; Windows support
+is beta and is not assumed. Use `herdr --skill` only to discover the bundled herdr
+agent skill; it is subordinate to intent-cli guide authority. Continue to consult
+installed herdr help/schema for version-specific details.
+
+- Live server update: use `herdr server live-handoff` to preserve running panes.
+  An `events.subscribe` consumer treats stream EOF as a resubscribe trigger, not
+  an error. An approval near the handoff can be re-presented: re-read the pane and
+  re-judge the same dialog—never assume the earlier answer was consumed or blind
+  re-answer. Pane PTY sizes can shrink until a TUI client reattaches; reads remain
+  valid, headless resize/zoom does not restore the PTY, and operator TUI reattach
+  is the remedy rather than a headless repair.
+
 - Modifier-chord launch corruption: return to a shell/re-provision and use the
   typed `agent start ... -- <permission-flags>` surface.
-- Post-reboot dead pty wiring: an undetected agent or shell-only pane requires
-  preserving artifacts, re-provisioning, rebuilding the mapping, and repeating
-  the self-contained settle-and-re-check READY gate above.
+- Post-reboot dead pty wiring: `server_not_running` diagnoses a stopped server;
+  headless servers resume restored agent sessions without waiting for a TUI client.
+  An undetected agent or shell-only pane still requires preserving artifacts,
+  re-provisioning, rebuilding the mapping, and repeating the self-contained
+  settle-and-re-check READY gate above.
 - Focus-default cross-team mutation: a missing or empty explicit pane/workspace
   id can mutate the currently focused pane in another team. For every
   provisioning/mutation command after initial workspace creation, resolve a
