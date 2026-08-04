@@ -89,6 +89,21 @@ you whether a child-loop-owned repair exists. Host-owned categories surface as
 > `--issue <n>`. Child `--github-only` loops never write `linked_pr`; this recovery
 > belongs to the host closeout surface.
 
+> **Repository-qualified linkage and completed repairs (G603).** A GitHub
+> issue or PR number is an identity only together with `owner/repo`. Worker
+> completion, closeout, review planning, and stalled-work therefore reject a
+> bare or wrong-repository linkage rather than letting a colliding number pick
+> a foreign queue item. In host context, `worker complete` also refuses a
+> queue write when the selected unit's declared domain disagrees with the
+> command domain. For a completed unit whose `linked_pr` points at the wrong
+> repository, use `automation host-queue-item-recovery --repo <owner/repo>
+> --unit <unit> --issue <n> --pr <n> --write`: it requires GitHub evidence
+> that the proposed PR exists, is merged, and closes that unit's own issue,
+> then appends a `completed-linkage-repair` run event containing the evidence.
+> A legacy packet without a readable `publish.yaml` identity stops with
+> `legacy-publish-identity-missing` and names the missing evidence; it never
+> guesses or changes a completed linkage.
+
 ### Repeated-stall recovery (G408)
 
 When an automation loop hits the same blocker on the same target for **two or more

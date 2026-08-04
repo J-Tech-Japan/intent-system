@@ -214,7 +214,7 @@ internal static class ReviewCloseoutPlanCommand
         if (queueState is not null)
         {
             var prToken = pr!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item.LinkedPr, repo!, prToken));
+            matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item, repo!, prToken));
             if (matchedItem is null)
             {
                 // G329 review fix: auto-fetch closing issues from
@@ -689,11 +689,12 @@ internal static class ReviewCloseoutPlanCommand
                 string.Equals(i.ExecutionUnit, matchedUnit, StringComparison.Ordinal));
             if (existing is not null)
             {
-                if (existing.LinkedIssue is { Number: int existingIssue } && existingIssue != matchedIssue)
+                if (existing.LinkedIssue is { Number: int }
+                    && !GitHubWorkItemIdentity.MatchesIssue(existing.LinkedIssue, repo, matchedIssue))
                 {
                     return null;
                 }
-                var existingPr = TryParsePrNumberFromLinkedPr(existing.LinkedPr);
+                var existingPr = GitHubWorkItemIdentity.GetPullRequestNumberForRepo(existing.LinkedPr, repo);
                 if (existingPr is int otherPr && otherPr != prNumber)
                 {
                     return null;
@@ -707,11 +708,11 @@ internal static class ReviewCloseoutPlanCommand
                 {
                     continue;
                 }
-                if (item.LinkedIssue is { Number: int otherIssue } && otherIssue == matchedIssue)
+                if (GitHubWorkItemIdentity.MatchesIssue(item.LinkedIssue, repo, matchedIssue))
                 {
                     return null;
                 }
-                if (TryParsePrNumberFromLinkedPr(item.LinkedPr) == prNumber)
+                if (GitHubWorkItemIdentity.GetPullRequestNumberForRepo(item.LinkedPr, repo) == prNumber)
                 {
                     return null;
                 }
@@ -731,28 +732,6 @@ internal static class ReviewCloseoutPlanCommand
                 + $"which is the closing-issue for PR #{prNumber} in '{repo}'; host-queue-item-recovery can "
                 + "deterministically reconstruct the missing queue item.",
         };
-    }
-
-    private static int? TryParsePrNumberFromLinkedPr(string? linkedPr)
-    {
-        if (string.IsNullOrWhiteSpace(linkedPr))
-        {
-            return null;
-        }
-        if (int.TryParse(linkedPr, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var direct))
-        {
-            return direct;
-        }
-        var idx = linkedPr.LastIndexOf('/');
-        if (idx >= 0 && idx + 1 < linkedPr.Length)
-        {
-            var tail = linkedPr[(idx + 1)..];
-            if (int.TryParse(tail, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var n))
-            {
-                return n;
-            }
-        }
-        return null;
     }
 
     /// <summary>
@@ -875,25 +854,10 @@ internal static class ReviewCloseoutPlanCommand
     private static ReviewCloseoutPlanGap LinkageAmbiguousGap(string description) =>
         new() { Description = description, Classification = GapClassificationLinkageAmbiguous };
 
-    private static bool MatchesLinkedPr(string? linkedPr, string repo, string prToken)
+    private static bool MatchesLinkedPr(QueueItem item, string repo, string prToken)
     {
-        if (string.IsNullOrWhiteSpace(linkedPr))
-        {
-            return false;
-        }
-
-        if (string.Equals(linkedPr, prToken, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        if (linkedPr!.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase))
-        {
-            return linkedPr.StartsWith($"https://github.com/{repo}/pull/", StringComparison.OrdinalIgnoreCase)
-                && linkedPr.EndsWith($"/{prToken}", StringComparison.Ordinal);
-        }
-
-        return linkedPr!.EndsWith($"/{prToken}", StringComparison.Ordinal);
+        return int.TryParse(prToken, out var number)
+            && GitHubWorkItemIdentity.MatchesPullRequest(item, repo, number);
     }
 
     private static string DeriveSubmodulePath(string repo)

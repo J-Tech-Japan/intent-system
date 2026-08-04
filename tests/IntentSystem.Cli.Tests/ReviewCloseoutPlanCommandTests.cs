@@ -265,6 +265,41 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G603_RecoveryLane_IgnoresForeignRepoCollisionPrefilters()
+    {
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithTwoItems(
+            ("SKS-G593", "completed", "https://github.com/J-Tech-Japan/intent-system/pull/647",
+                ("J-Tech-Japan/intent-system", 646, null)),
+            ("OTHER", "review", "https://github.com/J-Tech-Japan/intent-system/pull/999",
+                ("J-Tech-Japan/intent-system", 999, null))));
+        var publishArtifact = new IssuePublishArtifact
+        {
+            ExecutionUnit = "SKS-G263",
+            PublishStatus = "issue-created",
+            PacketPath = ".intent-cli/issues/SKS-G263/packet.yaml",
+            IssueBodyPath = ".intent-cli/issues/SKS-G263/github-body.md",
+            CreatedIssueNumber = 646,
+            CreatedIssueUrl = "https://github.com/J-Tech-Japan/SekibanAsAService/issues/646",
+            PublishedLabelName = "intent-target",
+        };
+        workspace.WriteFile(".intent-cli/issues/SKS-G263/publish.yaml", IssuePublishArtifactYaml.Serialize(publishArtifact));
+        workspace.WriteFile(".intent-cli/issues/SKS-G263/packet.yaml", "implementation_issue_packet:\n  target_repo: J-Tech-Japan/SekibanAsAService\n");
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory = () => new FakePrClosingIssuesFetcher(new[] { 646 });
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(workspace.Context,
+            ["--repo", "J-Tech-Japan/SekibanAsAService", "--domain", "intent-cli", "--pr", "647", "--format", "json"], writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var lane = document.RootElement.GetProperty("recovery_lane");
+        Assert.Equal("SKS-G263", lane.GetProperty("execution_unit").GetString());
+        Assert.Equal(646, lane.GetProperty("linked_issue").GetInt32());
+        Assert.Equal(647, lane.GetProperty("linked_pr").GetInt32());
+    }
+
+    [Fact]
     public void Execute_G455_EmptyGitHubRefs_BodyClosesRecoversLinkage_ReadyWithBodyFallbackSource()
     {
         // AIC #3750 shape: PR targets a non-default base, GitHub
@@ -1319,7 +1354,10 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
 
     private static string BuildQueueState(string executionUnit, string state, string? linkedPr, (string Repo, int Number, string? Url)? linkedIssue)
     {
-        var linkedPrToken = linkedPr is null ? "null" : $"\"{linkedPr}\"";
+        var qualified = linkedPr is not null && int.TryParse(linkedPr, out var number)
+            ? $"https://github.com/J-Tech-Japan/intent-system/pull/{number}"
+            : linkedPr;
+        var linkedPrToken = qualified is null ? "null" : $"\"{qualified}\"";
         var linkedIssueBlock = linkedIssue is null
             ? ""
             : $@",

@@ -35,6 +35,7 @@ internal static class HostQueueItemRecoveryAnalyzer
     public const string ReasonClosedIssue = "closed-issue";
     public const string ReasonClosedPr = "closed-pr";
     public const string ReasonPrIsDraft = "pr-is-draft";
+    public const string ReasonLegacyPublishIdentityMissing = "legacy-publish-identity-missing";
 
     /// <summary>
     /// G344 second-round repair: emitted when the GitHub issue the PR
@@ -199,13 +200,31 @@ internal static class HostQueueItemRecoveryAnalyzer
                 + "(both 'intent-target' and 'intent-pr-created') before reconstructing queue state.");
         }
 
-        // PR must be open and non-draft. A merged / closed PR is not a
-        // recoverable review wake.
+        var sameUnitItem = (candidate.ExistingQueueItems ?? Array.Empty<HostQueueItemRecoveryExistingItem>())
+            .FirstOrDefault(i => string.Equals(i.ExecutionUnit, unit, StringComparison.Ordinal));
+        var completedLinkageRepair = sameUnitItem is { State: QueueItemState.Completed }
+            && string.Equals(sameUnitItem.LinkedIssueRepo, repo, StringComparison.OrdinalIgnoreCase)
+            && sameUnitItem.LinkedIssueNumber == publishIssueNumber
+            && !string.Equals(sameUnitItem.LinkedPrRepo, repo, StringComparison.OrdinalIgnoreCase);
+
+        // An open non-draft PR is the normal review recovery. G603 also
+        // permits a merged PR only for a completed unit whose existing PR
+        // linkage is demonstrably from another repository; GitHub's closing
+        // reference remains the evidence for replacing it.
         var prClosed = string.Equals(candidate.PrState, "CLOSED", StringComparison.OrdinalIgnoreCase)
             || string.Equals(candidate.PrState, "MERGED", StringComparison.OrdinalIgnoreCase)
             || string.Equals(candidate.PrState, "closed", StringComparison.OrdinalIgnoreCase)
             || string.Equals(candidate.PrState, "merged", StringComparison.OrdinalIgnoreCase);
-        if (prClosed)
+        var prMerged = string.Equals(candidate.PrState, "MERGED", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(candidate.PrState, "merged", StringComparison.OrdinalIgnoreCase);
+        if (completedLinkageRepair && !prMerged)
+        {
+            return UnsafeStop(
+                ReasonClosedPr,
+                $"completed linkage repair for '{unit}' requires merged PR #{candidate.PrNumber} in '{repo}'; "
+                + $"GitHub reports state '{candidate.PrState}'.");
+        }
+        if (prClosed && !(completedLinkageRepair && prMerged))
         {
             return UnsafeStop(
                 ReasonClosedPr,
@@ -239,8 +258,10 @@ internal static class HostQueueItemRecoveryAnalyzer
         foreach (var existing in candidate.ExistingQueueItems ?? Array.Empty<HostQueueItemRecoveryExistingItem>())
         {
             var sameUnit = string.Equals(existing.ExecutionUnit, unit, StringComparison.Ordinal);
-            var bindsThisPr = existing.LinkedPrNumber == candidate.PrNumber;
-            var bindsThisIssue = existing.LinkedIssueNumber == publishIssueNumber;
+            var bindsThisPr = existing.LinkedPrNumber == candidate.PrNumber
+                && SameOrImplicitRepo(existing.LinkedPrRepo, repo);
+            var bindsThisIssue = existing.LinkedIssueNumber == publishIssueNumber
+                && SameOrImplicitRepo(existing.LinkedIssueRepo, repo);
 
             if (!sameUnit && (bindsThisPr || bindsThisIssue))
             {
@@ -251,7 +272,7 @@ internal static class HostQueueItemRecoveryAnalyzer
                     $" — cannot reconstruct queue item for '{unit}' without resolving the conflict first.");
             }
 
-            if (sameUnit
+            if (sameUnit && !completedLinkageRepair
                 && existing.LinkedPrNumber is int otherPr && otherPr > 0 && otherPr != candidate.PrNumber)
             {
                 return UnsafeStop(
@@ -272,11 +293,11 @@ internal static class HostQueueItemRecoveryAnalyzer
 
         // If queue-state already has a fully-linked entry for this unit
         // pointing at the correct PR + issue, nothing to recover.
-        var sameUnitItem = (candidate.ExistingQueueItems ?? Array.Empty<HostQueueItemRecoveryExistingItem>())
-            .FirstOrDefault(i => string.Equals(i.ExecutionUnit, unit, StringComparison.Ordinal));
         if (sameUnitItem is not null
             && sameUnitItem.LinkedPrNumber == candidate.PrNumber
-            && sameUnitItem.LinkedIssueNumber == publishIssueNumber)
+            && SameOrImplicitRepo(sameUnitItem.LinkedPrRepo, repo)
+            && sameUnitItem.LinkedIssueNumber == publishIssueNumber
+            && SameOrImplicitRepo(sameUnitItem.LinkedIssueRepo, repo))
         {
             return new HostQueueItemRecoveryAnalysis
             {
@@ -319,6 +340,10 @@ internal static class HostQueueItemRecoveryAnalyzer
             $"GitHub issue #{publishIssueNumber} state = '{candidate.ClosingIssue.State}', labels = [{string.Join(", ", candidate.ClosingIssue.Labels)}].",
             $"no other packet/publish artifact in repo '{repo}' claims this issue; recovery is deterministic.",
         };
+        if (completedLinkageRepair)
+        {
+            evidence.Add($"completed unit '{unit}' previously linked PR #{sameUnitItem!.LinkedPrNumber} in '{sameUnitItem.LinkedPrRepo}'; replacing only the repo-mismatched linkage with GitHub-verified {repo}#{candidate.PrNumber}.");
+        }
 
         return new HostQueueItemRecoveryAnalysis
         {
@@ -347,6 +372,10 @@ internal static class HostQueueItemRecoveryAnalyzer
         var marker = $"github.com/{repo}/issues/";
         return artifactUrl.IndexOf(marker, StringComparison.OrdinalIgnoreCase) >= 0;
     }
+
+    private static bool SameOrImplicitRepo(string? recordedRepo, string repo) =>
+        string.IsNullOrWhiteSpace(recordedRepo)
+        || string.Equals(recordedRepo, repo, StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>
@@ -406,6 +435,9 @@ internal sealed record HostQueueItemRecoveryExistingItem
     public required string ExecutionUnit { get; init; }
     public required int? LinkedPrNumber { get; init; }
     public required int? LinkedIssueNumber { get; init; }
+    public string? LinkedIssueRepo { get; init; }
+    public string? LinkedPrRepo { get; init; }
+    public QueueItemState State { get; init; }
     public string? Title { get; init; }
 }
 

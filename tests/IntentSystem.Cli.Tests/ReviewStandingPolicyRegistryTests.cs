@@ -277,7 +277,7 @@ public sealed class ReviewStandingPolicyRegistryTests : IDisposable
                         ReviewContext = ".intent-cli/issues/G248/review-context.md",
                     },
                     LinkedIssue = null,
-                    LinkedPr = "598",
+                    LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/598",
                     WorkerRole = "Claude",
                     ReviewRole = "Codex",
                     Priority = "normal",

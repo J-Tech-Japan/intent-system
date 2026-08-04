@@ -119,6 +119,17 @@ internal static class WorkerCompleteCommand
             return 1;
         }
 
+        // G603: the host-side linked_pr projection is a write path. Verify
+        // the command's declared domain agrees with the selected queue item
+        // before touching GitHub labels or durable state. A child github-only
+        // worker never reads queue state, so this guard is host-only.
+        if (isPrCreatedOutcome && !inChildCwdMode
+            && TryFindDomainDisagreement(context, repo!, number, out var disagreement))
+        {
+            writer.WriteLine(disagreement);
+            return 1;
+        }
+
         // G389: refuse to complete an issue whose contract bundles multiple
         // execution-unit / packet identities — `issue-to-pr` requires a single
         // self-contained unit of work, not a multi-packet issue. Best-effort:
@@ -171,8 +182,7 @@ internal static class WorkerCompleteCommand
             // for the source issue, accept that even if the body wording
             // differs. Otherwise fall back to text parsing.
             var resolvedByGitHub = prLookupResult.ClosingIssuesReferences.Any(reference =>
-                reference.Number == number
-                && IsSameRepo(reference.Repository, repo!));
+                GitHubWorkItemIdentity.MatchesClosingIssue(reference, repo!, number));
             if (resolvedByGitHub)
             {
                 closingRefResult = new PrClosingReferenceResult
@@ -427,7 +437,7 @@ internal static class WorkerCompleteCommand
             for (var index = 0; index < queueState.Items.Count; index++)
             {
                 var linkedIssue = queueState.Items[index].LinkedIssue;
-                if (linkedIssue is { Number: { } linkedNumber } && linkedNumber == sourceIssueNumber)
+                if (GitHubWorkItemIdentity.MatchesIssue(linkedIssue, repo, sourceIssueNumber))
                 {
                     matchedIndex = index;
                     break;
@@ -436,7 +446,7 @@ internal static class WorkerCompleteCommand
 
             if (matchedIndex < 0)
             {
-                return (false, $"queue-state.json has no item with linked_issue.number={sourceIssueNumber.ToString(System.Globalization.CultureInfo.InvariantCulture)}; PR-side intent-target was applied but linked_pr could not be synced.");
+                return (false, $"queue-state.json has no item with linked_issue identity {repo}#{sourceIssueNumber.ToString(System.Globalization.CultureInfo.InvariantCulture)}; PR-side intent-target was applied but linked_pr could not be synced.");
             }
 
             var existingItem = queueState.Items[matchedIndex];
@@ -462,6 +472,41 @@ internal static class WorkerCompleteCommand
         {
             return (false, $"failed to sync linked_pr for issue #{sourceIssueNumber} in queue-state.json: {exception.Message}");
         }
+    }
+
+    private static bool TryFindDomainDisagreement(CliContext context, string repo, int issueNumber, out string message)
+    {
+        message = string.Empty;
+        var queueStatePath = ResolveQueueStatePath(context);
+        if (!File.Exists(queueStatePath)) return false;
+
+        try
+        {
+            var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            foreach (var item in queueState.Items)
+            {
+                if (!GitHubWorkItemIdentity.MatchesIssue(item.LinkedIssue, repo, issueNumber)) continue;
+                var marker = "intents/";
+                var path = item.ClarificationReturnPath.Replace('\\', '/');
+                var start = path.IndexOf(marker, StringComparison.Ordinal);
+                if (start < 0) continue;
+                var remainder = path[(start + marker.Length)..];
+                var slash = remainder.IndexOf('/');
+                var itemDomain = slash < 0 ? remainder : remainder[..slash];
+                if (!string.IsNullOrWhiteSpace(itemDomain)
+                    && !string.Equals(itemDomain, context.Config.Project.Domain, StringComparison.Ordinal))
+                {
+                    message = $"refused queue write: command identity '{context.Config.Project.Domain}/{repo}#{issueNumber}' conflicts with queue identity '{itemDomain}/{repo}#{issueNumber}' on unit '{item.ExecutionUnit}'.";
+                    return true;
+                }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException)
+        {
+            // Existing sync handling emits the precise persistence warning.
+            _ = exception;
+        }
+        return false;
     }
 
     /// <summary>
@@ -656,29 +701,6 @@ internal static class WorkerCompleteCommand
         return File.Exists(parentQueueStatePath)
             ? parentQueueStatePath
             : localQueueStatePath;
-    }
-
-    /// <summary>
-    /// G311: returns true when the GitHub-reported closing-issue
-    /// repository matches <paramref name="repo"/>. <paramref name="repo"/>
-    /// is in <c>owner/name</c> form. A null repository (same-repo
-    /// closing reference) is also treated as matching.
-    /// </summary>
-    private static bool IsSameRepo(GitHubPrClosingIssueRepository? repository, string repo)
-    {
-        if (repository is null)
-        {
-            return true;
-        }
-        var ownerLogin = repository.Owner?.Login ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(ownerLogin) || string.IsNullOrWhiteSpace(repository.Name))
-        {
-            return false;
-        }
-        return string.Equals(
-            $"{ownerLogin}/{repository.Name}",
-            repo,
-            StringComparison.OrdinalIgnoreCase);
     }
 
     private static IReadOnlyList<string> LabelNames(IReadOnlyList<GitHubAutomationLabel>? labels)

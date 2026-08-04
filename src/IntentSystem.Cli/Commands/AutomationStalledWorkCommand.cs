@@ -1338,7 +1338,7 @@ internal static class AutomationStalledWorkCommand
             // every ACTIVE (non-completed) match first; more than one is
             // never resolved by picking one, it is reported as ambiguous.
             var activeMatches = queueState.Items
-                .Where(item => MatchesLinkedPr(item.LinkedPr, repo, prToken) && item.State != QueueItemState.Completed)
+                .Where(item => MatchesLinkedPr(item, repo, prToken) && item.State != QueueItemState.Completed)
                 .ToArray();
             if (activeMatches.Length == 0)
             {
@@ -2708,25 +2708,10 @@ internal static class AutomationStalledWorkCommand
         return string.Equals(candidateRepo, repo, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool MatchesLinkedPr(string? linkedPr, string repo, string prToken)
+    private static bool MatchesLinkedPr(QueueItem item, string repo, string prToken)
     {
-        if (string.IsNullOrWhiteSpace(linkedPr))
-        {
-            return false;
-        }
-
-        if (string.Equals(linkedPr, prToken, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        if (linkedPr!.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase))
-        {
-            return linkedPr.StartsWith($"https://github.com/{repo}/pull/", StringComparison.OrdinalIgnoreCase)
-                && linkedPr.EndsWith($"/{prToken}", StringComparison.Ordinal);
-        }
-
-        return linkedPr!.EndsWith($"/{prToken}", StringComparison.Ordinal);
+        return int.TryParse(prToken, out var number)
+            && GitHubWorkItemIdentity.MatchesPullRequest(item, repo, number);
     }
 
     /// <summary>

@@ -143,6 +143,13 @@ internal static class AutomationHostQueueItemRecoveryCommand
             .Where(a => a.Artifact is null || ArtifactBelongsToRepo(a.Artifact, repo!))
             .ToList();
 
+        // G603 legacy packets can lack publish.yaml identity fields. Do not
+        // silently skip the requested completed unit: emit a concrete finding
+        // that names the missing evidence and tells the operator how to
+        // restore it. This is intentionally fail-closed rather than guessing.
+        var legacyRequestedUnit = !string.IsNullOrWhiteSpace(unit)
+            && scopedArtifacts.All(a => !string.Equals(a.Unit, unit, StringComparison.Ordinal));
+
         // Build a map of issue-number → units that claim it (after repo
         // filter), so the analyzer can flag multiple-matching-packets.
         var issueToUnits = new Dictionary<int, List<string>>();
@@ -310,6 +317,18 @@ internal static class AutomationHostQueueItemRecoveryCommand
             });
         }
 
+        if (legacyRequestedUnit)
+        {
+            perCandidate.Add(new HostQueueItemRecoveryRecord
+            {
+                Unit = unit!,
+                PublishArtifactPath = $".intent-cli/issues/{unit}/publish.yaml",
+                Result = HostQueueItemRecoveryAnalyzer.ResultUnsafeStop,
+                ReasonCode = HostQueueItemRecoveryAnalyzer.ReasonLegacyPublishIdentityMissing,
+                Explanation = $"legacy packet '{unit}' has no readable publish.yaml issue identity. Restore or supply publish evidence that identifies {repo}#<issue>, then rerun host-queue-item-recovery with --unit {unit} --issue <n> --pr <n>; no completed linkage is changed without that evidence.",
+            });
+        }
+
         // Apply repairs if --write.
         var appliedUnits = new List<string>();
         var warnings = new List<string>();
@@ -323,6 +342,7 @@ internal static class AutomationHostQueueItemRecoveryCommand
                 try
                 {
                     queueState = ApplyRepair(context, repo!, domain, queueLocation, queueState, record.ProposedQueueItem!);
+                    AppendRepairEvidence(context, repo!, domain, queueLocation, record);
                     appliedUnits.Add(record.Unit);
                 }
                 catch (Exception exception) when (exception is IOException or InvalidOperationException)
@@ -481,6 +501,34 @@ internal static class AutomationHostQueueItemRecoveryCommand
         return newState;
     }
 
+    private static void AppendRepairEvidence(
+        CliContext context,
+        string repo,
+        string domain,
+        StateLocation queueLocation,
+        HostQueueItemRecoveryRecord record)
+    {
+        var runsPath = queueLocation.Kind == StateLocationKind.Legacy
+            ? RuntimeScopedStateResolver.GetLegacyRunLogPath(context.RepoRoot)
+            : RuntimeScopedStateResolver.GetScopedRunLogPath(context.RepoRoot, domain, repo);
+        Directory.CreateDirectory(Path.GetDirectoryName(runsPath)!);
+        var proposed = record.ProposedQueueItem!;
+        var evidence = string.Join(" | ", record.Evidence ?? Array.Empty<string>());
+        var runEvent = new RunEvent
+        {
+            Ts = DateTimeOffset.UtcNow,
+            ExecutionUnit = record.Unit,
+            Event = "completed-linkage-repair",
+            By = "intent-cli automation host-queue-item-recovery (G603)",
+            LinkedIssue = proposed.LinkedIssueUrl,
+            LinkedPr = proposed.LinkedPrUrl,
+            Repo = repo,
+            Pr = proposed.LinkedPrNumber,
+            Reason = evidence,
+        };
+        File.AppendAllText(runsPath, RunLogSerializer.SerializeLine(runEvent) + Environment.NewLine);
+    }
+
     private static GitHubPrLookupResult? LookupPr(
         IGitHubPrLookup prLookup,
         Dictionary<int, GitHubPrLookupResult?> cache,
@@ -533,7 +581,8 @@ internal static class AutomationHostQueueItemRecoveryCommand
         // PR view. The PR must explicitly close this issue (i.e. the
         // GitHub "linked issues" relation) for the recovery to be
         // deterministic.
-        var closesIssue = prView?.ClosingIssuesReferences?.Any(r => r.Number == issueNumber) == true;
+        var closesIssue = prView?.ClosingIssuesReferences?.Any(r =>
+            GitHubWorkItemIdentity.MatchesClosingIssue(r, repo, issueNumber)) == true;
         if (prView is null || !closesIssue)
         {
             return ClosingIssueResolution.PrDoesNotCloseIssue();
@@ -601,8 +650,19 @@ internal static class AutomationHostQueueItemRecoveryCommand
             ExecutionUnit = item.ExecutionUnit,
             LinkedPrNumber = prNumber,
             LinkedIssueNumber = issueNumber,
+            LinkedIssueRepo = item.LinkedIssue?.Repo,
+            LinkedPrRepo = TryParseRepoFromUrl(item.LinkedPr),
+            State = item.State,
             Title = item.Title,
         };
+    }
+
+    private static string? TryParseRepoFromUrl(string? url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase)) return null;
+        var parts = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0]}/{parts[1]}" : null;
     }
 
     private static int? TryParsePrNumberFromUrl(string? linkedPr)

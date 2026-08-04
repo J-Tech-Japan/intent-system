@@ -193,6 +193,25 @@ public sealed class AutomationHostQueueItemRecoveryCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_LegacyPacketWithoutPublishIdentity_ReportsSpecificFinding()
+    {
+        using var workspace = new RecoveryWorkspace();
+        workspace.WritePacketYaml(Unit, Repo);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostQueueItemRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", Repo, "--unit", Unit, "--pr", PrNumber.ToString(), "--format", "json"], writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var record = Assert.Single(doc.RootElement.GetProperty("records").EnumerateArray());
+        Assert.Equal("legacy-publish-identity-missing", record.GetProperty("reason_code").GetString());
+        Assert.Contains("publish.yaml", record.GetProperty("explanation").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("no completed linkage", record.GetProperty("explanation").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_ConflictingExistingQueueItem_UnsafeStop_NoApply()
     {
         using var workspace = new RecoveryWorkspace();

@@ -88,6 +88,19 @@ child-loop 所有の修復が存在するかを示す。host 所有のカテゴ�
 > `linkage-ambiguous` エラーで fail closed する。その場合のみ正しい `--issue <n>` で再実行する。
 > child `--github-only` ループは `linked_pr` を書かない。この recovery は host closeout surface の責務。
 
+> **repo-qualified linkage と completed repair（G603）。** GitHub の issue / PR
+> 番号は `owner/repo` と組になって初めて identity になる。worker complete、closeout、
+> review planning、stalled-work は bare な番号または別 repo の linkage を拒否し、
+> 同じ番号の foreign queue item を選ばない。host context の `worker complete` は、
+> 選ばれた unit の declared domain と command domain が違う write も拒否する。
+> completed unit の `linked_pr` が別 repo を指す場合は
+> `automation host-queue-item-recovery --repo <owner/repo> --unit <unit> --issue <n> --pr <n> --write`
+> を使う。提案する PR の存在・merged・その unit 自身の issue を closes することを
+> GitHub facts で確認してから、evidence を含む `completed-linkage-repair` run event を追加する。
+> readable な `publish.yaml` identity が無い legacy packet は
+> `legacy-publish-identity-missing` で不足 evidence を明示して停止し、推測や completed
+> linkage の変更は行わない。
+
 ### 繰り返しストール回復（G408）
 
 同じターゲットで同じブロッカーに **2 回以上連続** してヒットした場合は、
