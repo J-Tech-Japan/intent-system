@@ -68,6 +68,12 @@ repository and paste one of these prompts:
 > I want to start agmsg orchestrator mode for `<owner>/<repo>` with intent-cli.
 > Ask intent-cli for the orchestrator setup checklist.
 
+**Start a collocated four-thread herdr-only team (PREVIEW transport):**
+
+> I want to start a collocated single-machine four-thread team for
+> `<owner>/<repo>` with intent-cli using the herdr-only transport. Ask intent-cli
+> for the orchestration setup checklist and guide me through new-team stand-up.
+
 **Start an implementation loop (timer-loop alternative):**
 
 > Set up a child implementation loop for `<owner>/<repo>`.

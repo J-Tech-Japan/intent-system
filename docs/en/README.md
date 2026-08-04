@@ -17,12 +17,19 @@ The agent runs `intent-cli` internally and brings back questions or results. You
 
 1. [Install](01-install.md)
 2. [Start a project](02-project-start.md)
+2a. [Getting started: the road to the first packet](02a-getting-started-orchestration.md) — **primary model** onboarding; collocated `herdr-only` is a **PREVIEW transport**
 3. [Intent Storming & organize intents](03-intents.md)
 4. [Create packets & publish issues](04-packets-issues.md)
 4a. [GitHub workflow labels and what they mean](04a-workflow-labels.md) — label meanings and how to read them
-12. [Agent-message orchestration](12-agent-message-orchestration.md) — **primary**: the four-thread (design/orchestrator/implementation/review) agmsg orchestrator model; single-domain vs multi-domain routing
+12. [Agent-message orchestration](12-agent-message-orchestration.md) — four-thread contract reference; single-domain vs multi-domain routing
+
+### Alternative paths
+
 5. [Implementation loop setup](05-implementation-loop.md) — timer-loop **alternative** setup
 6. [Review / next-slice loop setup](06-review-next-slice-loop.md) — timer-loop **alternative** setup
+
+### Reference and recovery
+
 7. [Recover when a loop looks wrong](07-recovery.md)
 8. [Command reference](08-command-reference.md) — agent-facing and power-user command surfaces
 9. [Developer reference](09-developer-reference.md) — packaged invocation, preview channel, version flow
