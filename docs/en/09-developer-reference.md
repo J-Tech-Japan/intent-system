@@ -2621,37 +2621,35 @@ For the same reason the version-flow example above uses placeholders rather than
 a worked version pair: a second copy of the current versions is a second thing
 to keep in sync, and it goes stale on exactly the roll nobody is watching.
 
-### Next release readiness (v0.11.1)
+### Next release readiness (v0.11.2)
 
-**`v0.11.0` shipped** (GitHub Release + NuGet), and the prepared patch line is
-`0.11.1`. Its scope is exactly G607 / [PR #1318](https://github.com/J-Tech-Japan/intent-system/pull/1318)
-merge `764905194ee1` and G608 / [PR #1320](https://github.com/J-Tech-Japan/intent-system/pull/1320)
-merge `a138e32b82a7`. It adds no command surface: the `src` delta is limited to
-presentation strings in the three guide commands named in the
-[v0.11.1 notes](release-notes-v0.11.1.md), aligning installed-guide transport
-presentation with the published docs chooser. See
-[release-notes-v0.11.0.md](release-notes-v0.11.0.md) for the preceding shipped scope.
+**`v0.11.1` shipped** (GitHub Release + NuGet), and the next prepared line is
+`0.11.2`. Its scope and bump rationale are deliberately unassigned until the
+`v0.11.2` release-prep packet replaces the
+[DRAFT notes](release-notes-v0.11.2.md). See
+[release-notes-v0.11.1.md](release-notes-v0.11.1.md) for the preceding shipped
+scope.
 
-**Release-readiness verification (run before merging the `v0.11.1`
+**Release-readiness verification (run before merging the `v0.11.2`
 release-preparation PR):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.11.0 (published), nextVersion 0.11.1 (to release)
+cat eng/version.json   # stableVersion 0.11.1 (published), nextVersion 0.11.2 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.11.1-<sha>-G<unit>   (NOT a stale literal)
+#   expected shape: intent-cli 0.11.2-<sha>-G<unit>   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.11.1.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.11.2.nupkg
 
-# 4. Confirm G475, the v0.11.1 release-note check, and the release/version guards.
+# 4. Confirm G475, the v0.11.2 release-note check, and the release/version guards.
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
-  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0111DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0112DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 
 # 5. Run the complete Release suite.
 dotnet test IntentSystem.sln -c Release
@@ -2660,10 +2658,10 @@ dotnet test IntentSystem.sln -c Release
 After the preparation merge lands on `main` and the readiness evidence holds,
 the operator must explicitly approve Release creation. Only then may a
 maintainer/operator (or authorized external release automation) create and
-publish the GitHub Release for `v0.11.1`; publishing it triggers `release.yml`
+publish the GitHub Release for `v0.11.2`; publishing it triggers `release.yml`
 (`on: release: published`) to build and publish the NuGet package and the
 per-platform binary artifacts. **Then roll `eng/version.json` immediately** —
-`stableVersion → 0.11.1`, `nextVersion → 0.11.2` — carrying, per **steps 4–6** of the
+`stableVersion → 0.11.2`, `nextVersion → 0.11.3` — carrying, per **steps 4–6** of the
 [post-release version roll](#post-release-version-roll-g554--required-immediate):
 the **DRAFT note stubs in the same commit** (step 4), the **"Next release
 readiness" section refreshed to the new line in both language mirrors** (step
