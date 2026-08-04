@@ -91,8 +91,8 @@ internal static class NotifyRoleTopologyStore
         LocalIgnoreFileName));
 
     public static string TopologyRemedy(string team) =>
-        $"Run `intent-cli session-layer topology validate --team {team} --format json`, then use "
-        + "`session-layer topology record ... --write` to record the operator-supplied correction.";
+        $"Run `intent-cli session-layer topology validate --domain <domain> --team {team} --format json`, then use "
+        + "`session-layer topology record --domain <domain> ... --write` to record the operator-supplied correction.";
 
     public static NotifyTopologyResolution Resolve(string routingRoot, string team) =>
         Resolve(routingRoot, domain: null, team);
@@ -141,11 +141,11 @@ internal static class NotifyRoleTopologyStore
                 Warnings =
                 [
                     $"Deprecated topology compatibility read from '{legacyPath}'; run "
-                    + $"`intent-cli session-layer topology record --team {team} ... --write` to record this "
+                    + $"`intent-cli session-layer topology record --domain {domain} --team {team} ... --write` to record this "
                     + "machine's topology at its per-team local path.",
                 ],
                 Summary = legacy.Summary + " Deprecated legacy topology compatibility read; re-record with "
-                    + $"`intent-cli session-layer topology record --team {team} ... --write`.",
+                    + $"`intent-cli session-layer topology record --domain {domain} --team {team} ... --write`.",
             };
         }
 
@@ -387,13 +387,27 @@ internal static class NotifyRoleTopologyStore
         {
             path = ResolvePath(routingRoot);
         }
+
+        if (!string.IsNullOrWhiteSpace(domain)
+            && File.Exists(ResolvePath(routingRoot, domain, team))
+            && File.Exists(ResolvePath(routingRoot)))
+        {
+            var dualLocation = Resolve(routingRoot, domain, team);
+            if (!dualLocation.Resolved
+                && string.Equals(dualLocation.Cause, "topology-location-conflict", StringComparison.Ordinal))
+            {
+                findings.Add(Finding("<topology>", "location", dualLocation.Cause!, dualLocation.Summary));
+                return Validation(team, path, findings);
+            }
+        }
+
         var warnings = !string.IsNullOrWhiteSpace(domain)
             && string.Equals(path, ResolvePath(routingRoot), StringComparison.Ordinal)
             && File.Exists(path)
                 ? new[]
                 {
                     $"Deprecated topology compatibility read from '{path}'; run "
-                    + $"`intent-cli session-layer topology record --team {team} ... --write` to re-record this "
+                    + $"`intent-cli session-layer topology record --domain {domain} --team {team} ... --write` to re-record this "
                     + "machine's topology at its per-team local path.",
                 }
                 : [];

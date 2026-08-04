@@ -591,7 +591,7 @@ internal static class CommandRouter
             ["packet"] = "`intent-cli packet draft --execution-unit <id> --target-repo <r> --format markdown`.",
             ["issue"] = "`intent-cli issue publish-flow <id> --repo <r> --write --format json` then `intent-cli automation issue-publish --write`.",
             ["automation"] = "`intent-cli automation summary --domain <d> --format json` (capability JSON), `intent-cli automation doctor --format json` (CLI freshness).",
-            ["session-layer"] = "`intent-cli session-layer show --domain <d> [--team <t>]` (which transport is in force), `session-layer set` to change it, and `session-layer topology record|show|validate --team <t>` for the delivery mapping.",
+            ["session-layer"] = "`intent-cli session-layer show --domain <d> [--team <t>]` (which transport is in force), `session-layer set` to change it, and `session-layer topology record|show|validate --domain <d> --team <t>` for the delivery mapping.",
             ["notify"] = "`intent-cli notify delegate|report|escalate --domain <d> --team <t> ...` (canonical role workflow; transport follows the recorded session-layer mode).",
             ["operator-attention"] = "`intent-cli operator-attention query --domain <d> [--team <t>] --format json` (durable human-operator obligations); use `open|resolve|supersede --write` for explicit lifecycle transitions.",
             ["bug"] = "`intent-cli guide worker pr-comment-fix --format json` (repair guidance), `intent-cli bug report`/`triage` for new-bug intake.",

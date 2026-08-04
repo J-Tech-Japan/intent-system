@@ -17,16 +17,16 @@ internal static class SessionLayerTopologyCommand
     private const string Usage =
         "Usage: intent-cli session-layer topology record|show|validate [options]";
     private const string RecordUsage =
-        "Usage: intent-cli session-layer topology record --team <name> --role <name> --resident herdr "
+        "Usage: intent-cli session-layer topology record --domain <name> --team <name> --role <name> --resident herdr "
         + "--workspace-id <id> --pane-id <id> --cwd <path> [--kind <kind>] [--dry-run|--write] "
         + "[--format markdown|json]\n"
-        + "   or: intent-cli session-layer topology record --team <name> --role <name> --resident external "
+        + "   or: intent-cli session-layer topology record --domain <name> --team <name> --role <name> --resident external "
         + "--reader <routing-root-relative-path> [--frontend <name>] [--dry-run|--write] "
         + "[--format markdown|json]";
     private const string ShowUsage =
-        "Usage: intent-cli session-layer topology show --team <name> [--format markdown|json]";
+        "Usage: intent-cli session-layer topology show --domain <name> --team <name> [--format markdown|json]";
     private const string ValidateUsage =
-        "Usage: intent-cli session-layer topology validate --team <name> [--format markdown|json]";
+        "Usage: intent-cli session-layer topology validate --domain <name> --team <name> [--format markdown|json]";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -67,19 +67,19 @@ internal static class SessionLayerTopologyCommand
             return 0;
         }
 
-        if (!TryParseReadArguments(args, out var team, out var format, out var error))
+        if (!TryParseReadArguments(args, out var domain, out var team, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(ValidateUsage);
             return 1;
         }
 
-        var validation = NotifyRoleTopologyStore.Validate(context.RepoRoot, context.Config.Project.Domain, team!);
+        var validation = NotifyRoleTopologyStore.Validate(context.RepoRoot, domain!, team!);
         var result = new SessionLayerTopologyValidationResult
         {
             Valid = validation.Valid,
             Team = team!,
-            RecordPath = NotifyRoleTopologyStore.RelativePathFor(context.Config.Project.Domain, team!),
+            RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
             Findings = validation.Findings,
             Summary = (validation.Valid
                 ? $"Recorded delivery topology for team '{team}' is valid."
@@ -100,14 +100,14 @@ internal static class SessionLayerTopologyCommand
             return 0;
         }
 
-        if (!TryParseReadArguments(args, out var team, out var format, out var error))
+        if (!TryParseReadArguments(args, out var domain, out var team, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(ShowUsage);
             return 1;
         }
 
-        var validation = NotifyRoleTopologyStore.Validate(context.RepoRoot, context.Config.Project.Domain, team!);
+        var validation = NotifyRoleTopologyStore.Validate(context.RepoRoot, domain!, team!);
         if (!validation.Valid)
         {
             var invalid = new SessionLayerTopologyShowResult
@@ -115,7 +115,7 @@ internal static class SessionLayerTopologyCommand
                 Valid = false,
                 Team = team!,
                 WorkspaceId = null,
-                RecordPath = NotifyRoleTopologyStore.RelativePathFor(context.Config.Project.Domain, team!),
+                RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
                 Roles = [],
                 Findings = validation.Findings,
                 Summary = $"Recorded delivery topology for team '{team}' is invalid; no delivery targets were "
@@ -125,7 +125,7 @@ internal static class SessionLayerTopologyCommand
             return 1;
         }
 
-        var topologyResolution = NotifyRoleTopologyStore.Resolve(context.RepoRoot, context.Config.Project.Domain, team!);
+        var topologyResolution = NotifyRoleTopologyStore.Resolve(context.RepoRoot, domain!, team!);
         if (!topologyResolution.Resolved)
         {
             var invalid = new SessionLayerTopologyShowResult
@@ -133,7 +133,7 @@ internal static class SessionLayerTopologyCommand
                 Valid = false,
                 Team = team!,
                 WorkspaceId = null,
-                RecordPath = NotifyRoleTopologyStore.RelativePathFor(context.Config.Project.Domain, team!),
+                RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
                 Roles = [],
                 Findings =
                 [
@@ -161,7 +161,7 @@ internal static class SessionLayerTopologyCommand
                     Valid = false,
                     Team = team!,
                     WorkspaceId = topology.WorkspaceId,
-                    RecordPath = NotifyRoleTopologyStore.RelativePathFor(context.Config.Project.Domain, team!),
+                    RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
                     Roles = roles,
                     Findings =
                     [
@@ -195,7 +195,7 @@ internal static class SessionLayerTopologyCommand
             Valid = true,
             Team = team!,
             WorkspaceId = topology.WorkspaceId,
-            RecordPath = NotifyRoleTopologyStore.RelativePathFor(context.Config.Project.Domain, team!),
+            RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
             Roles = roles,
             Findings = [],
             Summary = $"Resolved {roles.Count} recorded delivery target(s) for team '{team}' without sending."
@@ -213,7 +213,7 @@ internal static class SessionLayerTopologyCommand
             return 0;
         }
 
-        if (!TryParseRecordArguments(context.Config.Project.Domain, args, out var request, out var error))
+        if (!TryParseRecordArguments(args, out var request, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(RecordUsage);
@@ -227,10 +227,12 @@ internal static class SessionLayerTopologyCommand
 
     private static bool TryParseReadArguments(
         string[] args,
+        out string? domain,
         out string? team,
         out string format,
         out string error)
     {
+        domain = null;
         team = null;
         format = FormatMarkdown;
         error = string.Empty;
@@ -238,6 +240,12 @@ internal static class SessionLayerTopologyCommand
         {
             switch (args[index])
             {
+                case "--domain":
+                    if (!TryReadValue(args, ref index, "--domain", out domain, out error))
+                    {
+                        return false;
+                    }
+                    break;
                 case "--team":
                     if (!TryReadValue(args, ref index, "--team", out team, out error))
                     {
@@ -261,9 +269,9 @@ internal static class SessionLayerTopologyCommand
             }
         }
 
-        if (string.IsNullOrWhiteSpace(team))
+        if (string.IsNullOrWhiteSpace(domain) || string.IsNullOrWhiteSpace(team))
         {
-            error = "--team is required.";
+            error = "--domain and --team are required.";
             return false;
         }
 
@@ -271,13 +279,13 @@ internal static class SessionLayerTopologyCommand
     }
 
     private static bool TryParseRecordArguments(
-        string domain,
         string[] args,
         out SessionLayerTopologyRecordRequest? request,
         out string error)
     {
         request = null;
         error = string.Empty;
+        string? domain = null;
         string? team = null;
         string? role = null;
         string? resident = null;
@@ -295,6 +303,9 @@ internal static class SessionLayerTopologyCommand
             var option = args[index];
             switch (option)
             {
+                case "--domain":
+                    if (!TryReadValue(args, ref index, option, out domain, out error)) return false;
+                    break;
                 case "--team":
                     if (!TryReadValue(args, ref index, option, out team, out error)) return false;
                     break;
@@ -345,9 +356,10 @@ internal static class SessionLayerTopologyCommand
             }
         }
 
-        if (string.IsNullOrWhiteSpace(team) || string.IsNullOrWhiteSpace(role) || string.IsNullOrWhiteSpace(resident))
+        if (string.IsNullOrWhiteSpace(domain) || string.IsNullOrWhiteSpace(team)
+            || string.IsNullOrWhiteSpace(role) || string.IsNullOrWhiteSpace(resident))
         {
-            error = "--team, --role, and --resident are required.";
+            error = "--domain, --team, --role, and --resident are required.";
             return false;
         }
 

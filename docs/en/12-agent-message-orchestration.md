@@ -339,10 +339,10 @@ Write and inspect this artifact through the canonical topology surface, never
 by hand:
 
 ```text
-intent-cli session-layer topology record --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
-intent-cli session-layer topology record --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
-intent-cli session-layer topology validate --team <team> --format json
-intent-cli session-layer topology show --team <team> --format json
+intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
+intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
+intent-cli session-layer topology validate --domain <domain> --team <team> --format json
+intent-cli session-layer topology show --domain <domain> --team <team> --format json
 ```
 
 `record` uses only values supplied by the operator. It never queries herdr,

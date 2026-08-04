@@ -6,6 +6,7 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection("WorkerNextActionSharedState")]
 public sealed class SessionLayerTopologyG604Tests : IDisposable
 {
     private const string Domain = "intent-cli";
@@ -89,6 +90,80 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
         var missing = Assert.Single(preflight.Scopes.Single().Findings, finding => finding.Cause == "topology-missing");
         Assert.Contains("topology record", missing.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void TopologyCommands_RequireExplicitNonDefaultDomainForRecordAndValidate_G604()
+    {
+        var context = CreateContext("sekiban-as-a-service");
+        using var recordWriter = new StringWriter();
+        Assert.Equal(0, SessionLayerTopologyCommand.ExecuteRecord(context,
+            ["--domain", Domain, "--team", "intent-cli-dev", "--role", "orchestration", "--resident", "herdr",
+                "--workspace-id", "w1", "--pane-id", "w1:p1", "--cwd", "/machine-local", "--write", "--format", "json"],
+            recordWriter));
+
+        Assert.True(File.Exists(NotifyRoleTopologyStore.ResolvePath(root, Domain, "intent-cli-dev")));
+        Assert.False(File.Exists(NotifyRoleTopologyStore.ResolvePath(root, "sekiban-as-a-service", "intent-cli-dev")));
+
+        using var validateWriter = new StringWriter();
+        Assert.Equal(0, SessionLayerTopologyCommand.ExecuteValidate(context,
+            ["--domain", Domain, "--team", "intent-cli-dev", "--format", "json"], validateWriter));
+        using var validation = JsonDocument.Parse(validateWriter.ToString());
+        Assert.True(validation.RootElement.GetProperty("valid").GetBoolean());
+        Assert.Contains($"/{Domain}/intent-cli-dev.json", validation.RootElement.GetProperty("record_path").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DualLocationConflict_BlocksValidatePreflightAndAutomationDoctor_G604()
+    {
+        const string team = "intent-cli-dev";
+        Assert.True(Record(team, "orchestration", "w1:p1").Applied);
+        var legacyPath = NotifyRoleTopologyStore.ResolvePath(root);
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyPath)!);
+        File.WriteAllText(legacyPath,
+            """
+            { "team": "intent-cli-dev", "workspace_id": "other", "roles": {
+                "orchestration": { "resident": "herdr", "workspace_id": "other", "pane_id": "other:p1" }
+            }}
+            """);
+
+        var context = CreateContext(Domain);
+        using var modeWriter = new StringWriter();
+        Assert.Equal(0, SessionLayerCommand.ExecuteSet(context,
+            ["--domain", Domain, "--team", team, "--mode", "herdr-only", "--write", "--format", "json"], modeWriter));
+        using var validateWriter = new StringWriter();
+        Assert.Equal(1, SessionLayerTopologyCommand.ExecuteValidate(context,
+            ["--domain", Domain, "--team", team, "--format", "json"], validateWriter));
+        using (var validate = JsonDocument.Parse(validateWriter.ToString()))
+        {
+            Assert.Contains(validate.RootElement.GetProperty("findings").EnumerateArray(), finding =>
+                finding.GetProperty("cause").GetString() == "topology-location-conflict");
+        }
+
+        var preflight = SessionLayerPreflight.Analyze(root, Domain, team);
+        Assert.False(preflight.Ready);
+        Assert.Contains(preflight.Scopes.Single().Findings, finding => finding.Cause == "topology-location-conflict");
+
+        AutomationInstalledCliSurfaceProbe.PathResolver = _ => null;
+        try
+        {
+            using var doctorWriter = new StringWriter();
+            Assert.Equal(1, AutomationDoctorCommand.Execute(context, ["--format", "json"], doctorWriter));
+            using var doctor = JsonDocument.Parse(doctorWriter.ToString());
+            var findings = doctor.RootElement.GetProperty("topology_health").GetProperty("teams")[0]
+                .GetProperty("findings").EnumerateArray();
+            Assert.Contains(findings, finding => finding.GetProperty("cause").GetString() == "topology-location-conflict");
+        }
+        finally
+        {
+            AutomationInstalledCliSurfaceProbe.PathResolver = null;
+        }
+    }
+
+    private CliContext CreateContext(string defaultDomain) => new()
+    {
+        RepoRoot = root,
+        Config = new CliConfig { Project = new ProjectConfig { Domain = defaultDomain, ArtifactRoot = ".intent-cli" } },
+    };
 
     private SessionLayerTopologyRecordResult Record(string team, string role, string paneId) =>
         SessionLayerTopologyWriter.Record(root, new SessionLayerTopologyRecordRequest

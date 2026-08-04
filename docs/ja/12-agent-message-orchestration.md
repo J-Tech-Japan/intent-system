@@ -317,10 +317,10 @@ foreign-workspace-only name、ambiguous mapping は prompt / append なしで fa
 この artifact は手編集せず、canonical topology surface で記録・検査します。
 
 ```text
-intent-cli session-layer topology record --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
-intent-cli session-layer topology record --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
-intent-cli session-layer topology validate --team <team> --format json
-intent-cli session-layer topology show --team <team> --format json
+intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
+intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
+intent-cli session-layer topology validate --domain <domain> --team <team> --format json
+intent-cli session-layer topology show --domain <domain> --team <team> --format json
 ```
 
 `record` が使う値は operator が供給したものだけです。herdr query、id の guess、resource の
