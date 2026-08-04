@@ -1,6 +1,6 @@
 # Start a project
 
-← [docs index](README.md) | → [Organize & maintain intents](03-intents.md)
+← [docs index](README.md) | → [Getting started: the road to the first packet](02a-getting-started-orchestration.md)
 
 This is **host/design** work. Paste the prompt below into your AI agent
 design thread; the agent will run the intent-cli commands and bring back
@@ -111,4 +111,4 @@ Both topologies are valid. Pick whichever fits your team's existing conventions.
 
 ## Next
 
-[Organize & maintain intents](03-intents.md).
+[Getting started: the road to the first packet](02a-getting-started-orchestration.md).

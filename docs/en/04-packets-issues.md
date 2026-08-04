@@ -1,6 +1,6 @@
 # Create packets & publish issues
 
-← [docs index](README.md) | → [GitHub workflow labels](04a-workflow-labels.md) | → [Implementation loop setup](05-implementation-loop.md)
+← [Organize & maintain intents](03-intents.md) | [docs index](README.md) | → [Agent-message orchestration](12-agent-message-orchestration.md)
 
 This is **host/design** work. When your intent is clear enough to act on, the design thread splits it into **packets** — focused implementation units — and publishes one at a time as a GitHub Issue for a child implementation agent to pick up.
 
@@ -51,6 +51,12 @@ intent-cli issue publish-flow <id> --repo <owner>/<repo> --write --format json
 intent-cli automation issue-publish --issue <n> --write --format json
 ```
 
+## Alternative: timer-loop setup
+
+Use [Implementation loop setup](05-implementation-loop.md) and then
+[Review / next-slice loop setup](06-review-next-slice-loop.md) only when you
+choose the timer-loop alternative.
+
 ## Next
 
-[Implementation loop setup](05-implementation-loop.md).
+[Agent-message orchestration](12-agent-message-orchestration.md).

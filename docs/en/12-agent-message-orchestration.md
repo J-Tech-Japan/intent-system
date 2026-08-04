@@ -1,13 +1,16 @@
 # Agent-message orchestration (single-domain vs multi-domain)
 
-← [Review standing policy](11-review-standing-policy.md) | [docs index](README.md)
+← [Create packets & publish issues](04-packets-issues.md) | [docs index](README.md)
 
-This page describes the **primary** agmsg-backed four-thread orchestrator
-model (design / orchestrator / implementation / review) and, in particular,
-how it stays safe when a single host repository holds **several intent
-domains**. The authoritative, paste-ready prompts come from installed
-intent-cli guidance — do not copy prompts from this page by hand. Generate the
-current prompts with:
+This page describes the **primary four-thread model** (design / orchestrator /
+implementation / review) and, in particular, how it stays safe when a single
+host repository holds **several intent domains**. Choose the supported
+`herdr-only` transport first for a collocated single-machine team (its
+**PREVIEW** label is a maturity note), or choose supported `agmsg` + herdr for
+a distributed team or an existing agmsg investment. Record the choice with
+`session-layer set`; neither transport is primary. The authoritative,
+paste-ready prompts come from installed intent-cli guidance — do not copy
+prompts from this page by hand. Generate the current prompts with:
 
 ```text
 intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --mode single-domain|multi-domain --format markdown
@@ -257,7 +260,7 @@ provided the same rules hold: one dedicated folder per role as the pane cwd,
 shim-safe typed launch, attended first-run prompts, actas + readiness before the
 ping test, and one holder per role with a graceful drop on handover.
 
-## Herdr-only (PREVIEW) operating procedure
+## Herdr-only operating procedure (PREVIEW maturity)
 
 This section is operative only when the team has recorded `herdr-only`. It is
 the concrete counterpart to the agmsg provisioning/receiver sections. PREVIEW

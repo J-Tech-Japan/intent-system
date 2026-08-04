@@ -1,13 +1,15 @@
 # agent メッセージオーケストレーション（single-domain と multi-domain）
 
-← [レビュー standing-policy](11-review-standing-policy.md) | [docs インデックス](README.md)
+← [packet 作成と issue 公開](04-packets-issues.md) | [docs インデックス](README.md)
 
-このページは **主要な(primary)** agmsg ベースの 4 スレッドの orchestrator
-モデル(design / orchestrator / implementation / review)と、特に 1 つの
-host リポジトリが **複数の intent ドメイン** を保持する場合に、それをどう
-安全に保つかを説明します。権威ある貼り付け可能なプロンプトはインストール済み
-の intent-cli ガイダンスから生成され、このページのプロンプトを手で写してはいけません。
-現在のプロンプトは次で生成します:
+このページは **primary な 4 スレッドモデル**（design / orchestrator / implementation /
+review）と、特に 1 つの host リポジトリが **複数の intent ドメイン** を保持する場合に
+それを安全に保つ方法を説明します。1 台に collocate する team は supported な
+`herdr-only` transport を最初に選びます（**PREVIEW** は maturity note）。distributed team
+または既存 agmsg investment には supported な `agmsg` + herdr を選びます。選択は
+`session-layer set` で record し、どちらの transport も primary ではありません。権威ある
+貼り付け可能なプロンプトはインストール済みの intent-cli ガイダンスから生成され、このページの
+プロンプトを手で写してはいけません。現在のプロンプトは次で生成します:
 
 ```text
 intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --mode single-domain|multi-domain --format markdown
@@ -242,7 +244,7 @@ agmsg internals と同じくリンクアウトし、herdr 自身のドキュメ�
 立ち会う、ping テスト前の actas + readiness、1 ロール 1 保持者と handover 時の graceful
 drop）が満たされるなら、**任意の** 同等なワークスペースマネージャーで置き換えられます。
 
-## herdr-only（PREVIEW）の運用手順
+## herdr-only の運用手順（PREVIEW maturity）
 
 この節はチームが `herdr-only` を記録している場合だけ operative です。agmsg の
 provisioning / receiver 節に対する具体的な counterpart です。PREVIEW が限定するのは

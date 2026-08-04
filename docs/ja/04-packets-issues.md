@@ -1,6 +1,6 @@
 # packet 作成と issue 公開
 
-← [ドキュメント索引](README.md) | → [GitHub ワークフローラベル](04a-workflow-labels.md) | → [実装ループの設定](05-implementation-loop.md)
+← [intent の整理・保守](03-intents.md) | [ドキュメント索引](README.md) | → [agent メッセージオーケストレーション](12-agent-message-orchestration.md)
 
 これは **host/design** 作業です。intent が十分に固まったら、デザインスレッドがそれを **packet**（実行可能な実装単位）に分割し、1つずつ GitHub Issue として公開します。child implementation agent がその issue を受け取って実装します。
 
@@ -51,6 +51,11 @@ intent-cli issue publish-flow <id> --repo <owner>/<repo> --write --format json
 intent-cli automation issue-publish --issue <n> --write --format json
 ```
 
+## 代替: timer-loop のセットアップ
+
+timer-loop の alternative を選ぶときだけ、[実装ループの設定](05-implementation-loop.md)、続けて
+[レビュー / next-slice ループの設定](06-review-next-slice-loop.md) を使います。
+
 ## 次へ
 
-[実装ループの設定](05-implementation-loop.md)。
+[agent メッセージオーケストレーション](12-agent-message-orchestration.md)。

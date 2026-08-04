@@ -90,6 +90,13 @@ public sealed class GuideOnboardingCommandTests
         var modelStep = steps.Single(s => s.GetProperty("command").GetString()!
             .StartsWith("intent-cli guide model", StringComparison.Ordinal));
         Assert.Contains("PRIMARY execution orchestration model", modelStep.GetProperty("purpose").GetString(), StringComparison.Ordinal);
+
+        var sessionStep = steps.Single(s => s.GetProperty("command").GetString()!
+            .StartsWith("intent-cli session-layer show", StringComparison.Ordinal));
+        var sessionPurpose = sessionStep.GetProperty("purpose").GetString()!;
+        Assert.Contains("supported `herdr-only` first", sessionPurpose, StringComparison.Ordinal);
+        Assert.Contains("supported `agmsg` + herdr", sessionPurpose, StringComparison.Ordinal);
+        Assert.DoesNotContain("agmsg` (PRIMARY", sessionPurpose, StringComparison.Ordinal);
     }
 
     [Fact]

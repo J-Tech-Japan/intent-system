@@ -1,6 +1,6 @@
 # プロジェクト開始
 
-← [ドキュメント索引](README.md) | → [intent の整理・保守](03-intents.md)
+← [ドキュメント索引](README.md) | → [はじめに: 最初の packet までの道のり](02a-getting-started-orchestration.md)
 
 これは **host/design** 作業です。以下のプロンプトを AI agent のデザインスレッドに
 貼り付けてください。agent が intent-cli コマンドを実行し、質問や結果を返します。
@@ -106,4 +106,4 @@ myorg/my-project           ← 単一リポジトリ
 
 ## 次へ
 
-[intent の整理・保守](03-intents.md)。
+[はじめに: 最初の packet までの道のり](02a-getting-started-orchestration.md)。

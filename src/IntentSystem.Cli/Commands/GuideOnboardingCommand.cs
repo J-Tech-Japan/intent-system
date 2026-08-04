@@ -85,7 +85,7 @@ internal static class GuideOnboardingCommand
                 {
                     Order = 3,
                     Command = "intent-cli session-layer show --domain <domain> [--team <team>] --format json",
-                    Purpose = "G570: learn which SESSION LAYER this team runs — `agmsg` (PRIMARY, the practiced transport) or `herdr-only` (PREVIEW, single-machine, herdr as terminal controller). "
+                    Purpose = "G570: learn which SESSION LAYER this team runs — choose supported `herdr-only` first for a collocated single-machine team (PREVIEW is a maturity note), or supported `agmsg` + herdr for a distributed team or an existing agmsg investment. "
                         + SessionLayerMode.PreviewScopingSentence
                         + " Absent a record the mode is `agmsg`. The recorded mode selects which operating sections `guide orchestrator-thread` renders, so read it before following any transport-specific setup. Change it with `intent-cli session-layer set --domain <domain> --mode agmsg|herdr-only --write` — reversible in both directions.",
                     NoMutation = "Pure read; `show` never writes. Only `session-layer set --write` records a mode."

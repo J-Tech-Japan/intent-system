@@ -1853,15 +1853,16 @@ public sealed class SessionLayerModeG570Tests : IDisposable
     }
 
     [Fact]
-    public void BothModesAreDescribed_WithAgmsgPrimary_G570()
+    public void BothModesAreDescribed_AsConditionalSupportedChoices_G608()
     {
         var model = workspace.Render(["guide", "model"]);
 
         Assert.Contains("## Session layer (transport for the four threads)", model, StringComparison.Ordinal);
-        Assert.Contains("agmsg (PRIMARY)", model, StringComparison.Ordinal);
-        Assert.Contains("herdr-only (PREVIEW)", model, StringComparison.Ordinal);
-        // The positioning paragraph the packet asks for: when herdr-only is the
-        // right call.
+        Assert.Contains("herdr-only (PREVIEW maturity)", model, StringComparison.Ordinal);
+        Assert.Contains("agmsg + herdr", model, StringComparison.Ordinal);
+        Assert.DoesNotContain("agmsg (PRIMARY)", model, StringComparison.Ordinal);
+        Assert.Contains("Both are supported choices.", model, StringComparison.Ordinal);
+        // The positioning paragraph says when herdr-only is the right call.
         Assert.Contains("herdr-resident on ONE machine", model, StringComparison.Ordinal);
         Assert.Contains(SessionLayerMode.ExclusivitySentence, model, StringComparison.Ordinal);
     }
@@ -1889,7 +1890,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         var purpose = group.GetProperty("purpose").GetString()!;
         Assert.Contains("session-layer show", purpose, StringComparison.Ordinal);
         Assert.Contains("agmsg|herdr-only", purpose, StringComparison.Ordinal);
-        Assert.Contains("never to the four-thread model", purpose, StringComparison.Ordinal);
+        Assert.Contains("PRIMARY four-thread model is unchanged", purpose, StringComparison.Ordinal);
     }
 
     /// <summary>

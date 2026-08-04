@@ -1,12 +1,35 @@
 # Getting started: the road to the first packet
 
-← [docs index](README.md) | [Start a project](02-project-start.md) | → [Organize & maintain intents](03-intents.md)
+← [Start a project](02-project-start.md) | [docs index](README.md) | → [Organize & maintain intents](03-intents.md)
 
-This page is the **orchestration-first** route from an empty workspace to the
-first published packet. It does not replace [Start a project](02-project-start.md)
-or the [agent-message orchestration contract](12-agent-message-orchestration.md):
-those pages remain authoritative for repository topology and session-layer
-semantics.
+## Minimal start: two empty repositories, one prompt
+
+Create an empty implementation repository and an empty intents host repository.
+Check out **only the host**, open an AI agent there, and paste:
+
+> I am setting up intent-cli for target implementation repository
+> `<owner>/<implementation-repo>`. I have the empty intents host repository
+> open. First understand intent-cli using its installed guidance, then guide me
+> through initialization. Ask me for one decision at a time.
+
+For the one-repository option, first choose [topology B](02-project-start.md#topology-b--same-repo-with-a-metadata-branch);
+do not create a second repository. The agent follows the shipped skill to
+`guide onboarding`, verifies `intent-cli --version`, reads `guide model`, runs
+`intent init` once as a dry-run and once with `--write`, and checks the host.
+The observed v0.11.0 write creates **nine files** and `host-check` returns
+`"classification": "ok"`. The human makes four decisions: repository topology,
+base-branch policy, transport, and the agent kind for each role.
+
+Choose `herdr-only` first when all four agents are collocated on one machine;
+its **PREVIEW** status is a maturity note, not a recommendation against it.
+Choose `agmsg` + herdr when the team is distributed or already invests in
+agmsg. Both are supported choices, recorded with `session-layer set`; the
+**four-thread model** is primary, never either transport.
+
+This page is the **orchestration-first** route from that minimal start to the
+first published packet. [Start a project](02-project-start.md) remains
+authoritative for topology, and the [agent-message orchestration contract](12-agent-message-orchestration.md)
+remains authoritative for session-layer semantics.
 
 ## What you are setting up
 
@@ -167,8 +190,12 @@ ready to publish.
 
 ## Alternatives
 
-- **agmsg:** use the [agent-message orchestration contract](12-agent-message-orchestration.md)
-  for the primary transport's provisioning guidance.
+- **agmsg + herdr:** for the distributed or existing-agmsg choice, use the
+  [agent-message orchestration contract](12-agent-message-orchestration.md).
 - **timer-loop:** use [Implementation loop setup](05-implementation-loop.md)
   and [Review / next-slice loop setup](06-review-next-slice-loop.md). It is an
   alternative to the orchestration-first route above.
+
+## Next
+
+[Organize & maintain intents](03-intents.md).

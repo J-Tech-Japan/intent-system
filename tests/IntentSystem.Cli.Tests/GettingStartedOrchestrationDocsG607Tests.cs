@@ -87,9 +87,10 @@ public sealed class GettingStartedOrchestrationDocsG607Tests
     {
         var root = File.ReadAllText(Path.Combine(RepoVersionPolicySource.RepoRoot(), "README.md"));
 
-        Assert.Contains("Start a collocated four-thread herdr-only team", root, StringComparison.Ordinal);
-        Assert.Contains("PREVIEW transport", root, StringComparison.Ordinal);
-        Assert.Contains("Start an implementation loop (timer-loop alternative)", root, StringComparison.Ordinal);
+        Assert.Contains("Check out **only the host repository**", root, StringComparison.Ordinal);
+        Assert.Contains("Start with an AI agent", root, StringComparison.Ordinal);
+        Assert.Contains("PREVIEW** label is a maturity note", root, StringComparison.Ordinal);
+        Assert.Contains("Timer-loop alternative", root, StringComparison.Ordinal);
     }
 
     private static string ReadDoc(string language, string path) =>
