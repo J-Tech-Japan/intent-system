@@ -271,6 +271,35 @@ public sealed class AgentMessageOrchestrationDocsTests
     }
 
     [Fact]
+    public void BothDocs_RecordAndResolveDesignJudgmentWaits_G610()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        // Both design-boundary surfaces carry the duty and the shipped lifecycle.
+        foreach (var doc in new[] { en, ja })
+        {
+            Assert.Contains("operator-attention open", doc, StringComparison.Ordinal);
+            Assert.Contains("--owner design", doc, StringComparison.Ordinal);
+            Assert.Contains("operator-attention query", doc, StringComparison.Ordinal);
+            Assert.Contains("operator-attention resolve", doc, StringComparison.Ordinal);
+            Assert.Contains("<design-wait-id>", doc, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("opening an operator-attention record is a duty, not an option", en, StringComparison.Ordinal);
+        Assert.Contains("Whoever supplies the judgment **must resolve**", en, StringComparison.Ordinal);
+        Assert.Contains("An answered-but-open record is a lie", en, StringComparison.Ordinal);
+        Assert.Contains("operator-attention record を開くことは任意ではなく義務です", ja, StringComparison.Ordinal);
+        Assert.Contains("回答した人は、その回答と evidence を添えて同じ record を**必ず resolve**", ja, StringComparison.Ordinal);
+        Assert.Contains("回答済みで open のままの record は嘘です", ja, StringComparison.Ordinal);
+
+        Assert.Contains("## Role boundary — design authors, orchestrator coordinates", en, StringComparison.Ordinal);
+        Assert.Contains("## ロール境界 — design が authoring、orchestrator は coordinate", ja, StringComparison.Ordinal);
+        Assert.Contains("## Design traffic-controller playbook", en, StringComparison.Ordinal);
+        Assert.Contains("## design traffic-controller プレイブック", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BothDocs_BoundTheDefaultAuthority_AndKeepSemanticDecisionsWithDesign_G552()
     {
         var en = ReadDoc("en");

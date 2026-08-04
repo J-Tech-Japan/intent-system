@@ -1639,6 +1639,13 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("**missing packet**", output, StringComparison.Ordinal);
         Assert.Contains("does NOT invent the packet", output, StringComparison.Ordinal);
         Assert.Contains("\"type\":\"packet-needed\"", output, StringComparison.Ordinal);
+        // G610: a wait for design is a recorded, queryable lifecycle state.
+        Assert.Contains("operator-attention open", output, StringComparison.Ordinal);
+        Assert.Contains("--owner design", output, StringComparison.Ordinal);
+        Assert.Contains("operator-attention query", output, StringComparison.Ordinal);
+        Assert.Contains("operator-attention resolve", output, StringComparison.Ordinal);
+        Assert.Contains("whoever supplies the judgment MUST resolve it", output, StringComparison.Ordinal);
+        Assert.Contains("answered-but-open record is a lie", output, StringComparison.Ordinal);
         // Release-prep is design-owned.
         Assert.Contains("**release-prep**", output, StringComparison.Ordinal);
         Assert.Contains("Release-prep is design-owned", output, StringComparison.Ordinal);
@@ -1662,6 +1669,14 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("packet-needed", boundary.GetProperty("missing_packet_message_template").GetString()!, StringComparison.Ordinal);
         Assert.Contains("design-owned", boundary.GetProperty("release_prep_rule").GetString()!, StringComparison.Ordinal);
         Assert.Contains("does NOT invent the packet", boundary.GetProperty("missing_packet_response").GetString()!, StringComparison.Ordinal);
+        var designWait = boundary.GetProperty("missing_packet_response").GetString()!;
+        Assert.Contains("--owner design", designWait, StringComparison.Ordinal);
+        Assert.Contains("operator-attention query", designWait, StringComparison.Ordinal);
+        Assert.Contains("operator-attention resolve", designWait, StringComparison.Ordinal);
+
+        var trafficController = doc.RootElement.GetProperty("design_traffic_controller");
+        Assert.Contains(trafficController.GetProperty("playbook").EnumerateArray().Select(item => item.GetString()),
+            item => item is not null && item.Contains("answered-but-open record is a lie", StringComparison.Ordinal));
 
         // Existing orchestrator publish ability is preserved (not removed).
         var publication = doc.RootElement.GetProperty("next_slice_publication");
