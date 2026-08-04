@@ -2619,40 +2619,31 @@ For the same reason the version-flow example above uses placeholders rather than
 a worked version pair: a second copy of the current versions is a second thing
 to keep in sync, and it goes stale on exactly the roll nobody is watching.
 
-### Next release readiness (v0.10.1)
+### Next release readiness (v0.11.0)
 
-**`v0.10.0` shipped** (GitHub Release + NuGet) and the version policy was rolled
-to the `0.10.1` development line. The v0.10.0 batch was a **minor** bump
-carrying four slices — G596, G597, G598 and G599 — whose headline is that
-stalls stop being found only because the operator asked: a blocking obligation
-on a human (or on design) is a durable queryable `operator-attention` record,
-the heartbeat returns one actionable verdict with a poll-stable dedupe key, and
-herdr delivery is decided at the observed unattended working transition with
-`resend_permitted` reported separately. Minor rather than patch because the
-`operator-attention` command group (`open`/`query`/`resolve`/`supersede`) first
-ships in this release. See
-[release-notes-v0.10.0.md](release-notes-v0.10.0.md) for the shipped scope.
+**`v0.10.0` shipped** (GitHub Release + NuGet), and the next prepared line is
+`0.11.0`. This is a **minor** bump because `session-layer marker generate` is a
+new command absent from `v0.10.0`, and because per-team topology introduces an
+explicit `--domain` requirement on `topology record`, `show`, and `validate`.
+See [release-notes-v0.11.0.md](release-notes-v0.11.0.md) for the exact shipped
+scope, behaviour changes, and migration guidance; see
+[release-notes-v0.10.0.md](release-notes-v0.10.0.md) for the preceding scope.
 
-**Nothing is decided for `v0.10.1` yet.** What ships is chosen by the v0.10.1
-release-prep packet, not by this section, and
-[release-notes-v0.10.1.md](release-notes-v0.10.1.md) is a DRAFT stub until that
-packet fills it in.
-
-**Release-readiness verification (run before merging the `v0.10.1`
+**Release-readiness verification (run before merging the `v0.11.0`
 release-preparation PR):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.10.0 (published), nextVersion 0.10.1 (to release)
+cat eng/version.json   # stableVersion 0.10.0 (published), nextVersion 0.11.0 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.10.1-<sha>-G<unit>   (NOT a stale literal)
+#   expected shape: intent-cli 0.11.0-<sha>-G<unit>   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.10.1.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.11.0.nupkg
 
 # 4. Confirm the G475 package/release guard and the release/version guards.
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
@@ -2666,10 +2657,10 @@ dotnet test IntentSystem.sln -c Release
 After the preparation merge lands on `main` and the readiness evidence holds,
 the operator must explicitly approve Release creation. Only then may a
 maintainer/operator (or authorized external release automation) create and
-publish the GitHub Release for `v0.10.1`; publishing it triggers `release.yml`
+publish the GitHub Release for `v0.11.0`; publishing it triggers `release.yml`
 (`on: release: published`) to build and publish the NuGet package and the
 per-platform binary artifacts. **Then roll `eng/version.json` immediately** —
-`stableVersion → 0.10.1`, `nextVersion → 0.10.2` — carrying, per **steps 4–6** of the
+`stableVersion → 0.11.0`, `nextVersion → 0.11.1` — carrying, per **steps 4–6** of the
 [post-release version roll](#post-release-version-roll-g554--required-immediate):
 the **DRAFT note stubs in the same commit** (step 4), the **"Next release
 readiness" section refreshed to the new line in both language mirrors** (step
