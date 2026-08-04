@@ -116,7 +116,13 @@ internal static class NotifyCommand
             };
             if (preflight.Ready is not true)
             {
-                var primaryFinding = scope.Findings.FirstOrDefault();
+                // G601 marker absence is intentionally informational. It must
+                // never hide the actionable structural cause that made this
+                // delivery preflight fail (for example, an unsafe external
+                // reader).
+                var primaryFinding = scope.Findings.FirstOrDefault(finding =>
+                    !string.Equals(finding.Cause, "marker-not-generated", StringComparison.Ordinal))
+                    ?? scope.Findings.FirstOrDefault();
                 var cause = primaryFinding?.Cause ?? "session-layer-not-ready";
                 Emit(writer, options.Format, FailureResult(
                     operation,

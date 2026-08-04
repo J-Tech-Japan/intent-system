@@ -349,6 +349,39 @@ back to `topology validate` / `record` as the remedy. Invalid state always stays
 fail-closed; these commands add knowledge and a controlled writer, never a
 fallback.
 
+#### Visible, generated mode markers
+
+The mode record remains the only source of truth, but a team should not have to
+remember to query it before noticing which transport it uses. Put one explicit
+empty managed block for each `(domain, team)` in an agent-startup file
+(`AGENTS.md` or `CLAUDE.md`), then generate its display from the recorded mode:
+
+```text
+<!-- intent-cli:session-layer-marker:start domain="<domain>" team="<team>" -->
+<!-- intent-cli:session-layer-marker:end -->
+
+intent-cli session-layer marker generate --domain <domain> --team <team> --file <AGENTS.md|CLAUDE.md> --write
+```
+
+The generated block carries the domain, team, mode, canonical `session-layer
+show` verification command, and a hash of the resolved canonical record. It is
+never a host-global or bare mode claim. The writer reads only the record and
+updates only that delimited block; it refuses an unrecorded team (naming
+`session-layer set ... --write`), an absent block, or malformed markers, and
+never writes `session-layer-mode.json`.
+
+The shared preflight discovers managed markers in `AGENTS.md` / `CLAUDE.md`.
+An unmarked recorded team produces informational `marker-not-generated` with
+the generating command. A marker whose mode or record hash differs produces
+`marker-drift`, names the file, claim, and canonical truth, and makes the
+verdict `configuration-incomplete`; regenerate after every mode switch. A
+marker is a signpost, never a substitute for the canonical record.
+
+When provisioning a herdr workspace, include the recorded mode in the workspace
+label (for example, `<team> · herdr-only`). That label is human-facing and
+non-authoritative: intent-cli neither writes herdr state nor reads the label as
+mode evidence.
+
 #### Shared record-first session-layer preflight
 
 `automation doctor`, the guide's READY definition, and `notify` consume one

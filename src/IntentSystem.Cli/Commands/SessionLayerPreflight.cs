@@ -48,6 +48,7 @@ internal static class SessionLayerPreflight
         }
 
         var topology = DiscoverTopology(repoRoot);
+        var markers = DiscoverMarkers(repoRoot);
         var teamDeclared = !string.IsNullOrWhiteSpace(expectedTeam);
         var requestedResolution = expectedDomain is null
             ? new SessionLayerModeResolution
@@ -97,6 +98,7 @@ internal static class SessionLayerPreflight
             modeState,
             modeReadError,
             topology,
+            markers,
             requiredRecipient)).ToArray();
         return Aggregate(
             teamDeclared,
@@ -158,6 +160,7 @@ internal static class SessionLayerPreflight
         SessionLayerModeState? modeState,
         string? modeReadError,
         TopologyDiscovery topology,
+        MarkerDiscovery markers,
         string? requiredRecipient)
     {
         if (modeReadError is not null)
@@ -210,6 +213,13 @@ internal static class SessionLayerPreflight
             : SessionLayerModeStore.Resolve(modeState, domain, team);
         var topologyRecordedForTeam = topology.Teams.Contains(team, StringComparer.Ordinal);
         var findings = new List<SessionLayerPreflightFinding>();
+
+        // G601 markers supplement—not replace—the canonical record. Include
+        // their evidence even when another structural check also fails.
+        if (resolution.Source == SessionLayerModeSource.Recorded)
+        {
+            AddMarkerFindings(findings, markers, domain!, team, resolution);
+        }
 
         if (topology.Error is not null && resolution.Source != SessionLayerModeSource.Recorded)
         {
@@ -334,15 +344,18 @@ internal static class SessionLayerPreflight
                 + NotifyRoleTopologyStore.TopologyRemedy(team));
         }
 
+        var markerInvalid = findings.Any(finding => finding.Cause is "marker-drift" or "marker-malformed" or "marker-unreadable");
         return Scope(
             domain,
             team,
-            Ready,
+            markerInvalid ? ConfigurationIncomplete : Ready,
             resolution,
             resolution.IsHerdrOnly ? TopologyMode : null,
-            [],
-            $"Passive session-layer structure is ready for team '{team}' in recorded mode '{resolution.Mode}'. "
-            + "Only that recorded transport may be probed; active receiver readiness is reported separately.");
+            findings,
+            markerInvalid
+                ? $"Session-layer marker verification did not pass for team '{team}'."
+                : $"Passive session-layer structure is ready for team '{team}' in recorded mode '{resolution.Mode}'. "
+                    + "Only that recorded transport may be probed; active receiver readiness is reported separately.");
     }
 
     private static SessionLayerPreflightFinding MissingModeFinding(
@@ -390,6 +403,103 @@ internal static class SessionLayerPreflight
             RecordedMode = recordedMode,
             TopologyMode = TopologyMode,
         }));
+    }
+
+    private static void AddMarkerFindings(
+        List<SessionLayerPreflightFinding> findings,
+        MarkerDiscovery markers,
+        string domain,
+        string team,
+        SessionLayerModeResolution resolution)
+    {
+        foreach (var error in markers.Errors)
+        {
+            findings.Add(new SessionLayerPreflightFinding
+            {
+                Team = team,
+                Role = error.File,
+                Field = "marker",
+                Cause = error.Cause,
+                Message = error.Message,
+                RecordedMode = resolution.Mode,
+                TopologyMode = null,
+            });
+        }
+
+        var matching = markers.Blocks
+            .Where(marker => string.Equals(marker.Domain, domain, StringComparison.Ordinal)
+                && string.Equals(marker.Team, team, StringComparison.Ordinal))
+            .ToArray();
+        if (matching.Length == 0)
+        {
+            AddMarkerNotGeneratedFinding(findings, "<marker>", domain, team, resolution.Mode,
+                $"No managed marker has been generated for team '{team}' in domain '{domain}'.");
+            return;
+        }
+
+        var recordHash = SessionLayerMarkerStore.Hash(resolution.Entry!);
+        foreach (var marker in matching)
+        {
+            if (marker.IsEmpty)
+            {
+                // The documented start/end-only block is deliberately the
+                // generator's valid target. It has no generated claim yet,
+                // but is not malformed and must not prevent delivery.
+                AddMarkerNotGeneratedFinding(findings, marker.File, domain, team, resolution.Mode,
+                    $"Managed marker in '{marker.File}' for team '{team}' is an empty generation placeholder.");
+                continue;
+            }
+
+            if (!marker.IsGenerated)
+            {
+                findings.Add(new SessionLayerPreflightFinding
+                {
+                    Team = team,
+                    Role = marker.File,
+                    Field = "marker",
+                    Cause = "marker-malformed",
+                    Message = $"Managed marker in '{marker.File}' for team '{team}' is malformed and cannot be trusted.",
+                    RecordedMode = resolution.Mode,
+                    TopologyMode = null,
+                });
+                continue;
+            }
+
+            if (!string.Equals(marker.Mode, resolution.Mode, StringComparison.Ordinal)
+                || !string.Equals(marker.RecordHash, recordHash, StringComparison.Ordinal))
+            {
+                findings.Add(new SessionLayerPreflightFinding
+                {
+                    Team = team,
+                    Role = marker.File,
+                    Field = "marker",
+                    Cause = "marker-drift",
+                    Message = $"Managed marker in '{marker.File}' claims mode '{marker.Mode}' and record hash '{marker.RecordHash}', but canonical record truth is mode '{resolution.Mode}' and record hash '{recordHash}'. Regenerate the marker before declaring READY.",
+                    RecordedMode = resolution.Mode,
+                    TopologyMode = null,
+                });
+            }
+        }
+    }
+
+    private static void AddMarkerNotGeneratedFinding(
+        List<SessionLayerPreflightFinding> findings,
+        string role,
+        string domain,
+        string team,
+        string recordedMode,
+        string detail)
+    {
+        findings.Add(new SessionLayerPreflightFinding
+        {
+            Team = team,
+            Role = role,
+            Field = "marker",
+            Cause = "marker-not-generated",
+            Message = $"{detail} This is informational; generate it with `intent-cli session-layer marker generate --domain {domain} --team {team} --file <AGENTS.md|CLAUDE.md> --write`.",
+            RecordedMode = recordedMode,
+            TopologyMode = null,
+        });
     }
 
     private static SessionLayerPreflightScopeResult Scope(
@@ -516,7 +626,44 @@ internal static class SessionLayerPreflight
         }
     }
 
+    private static MarkerDiscovery DiscoverMarkers(string repoRoot)
+    {
+        var blocks = new List<SessionLayerMarkerBlock>();
+        var errors = new List<MarkerDiscoveryError>();
+        try
+        {
+            foreach (var path in SessionLayerMarkerStore.StartupFiles(repoRoot))
+            {
+                var relative = Path.GetRelativePath(repoRoot, path).Replace(Path.DirectorySeparatorChar, '/');
+                try
+                {
+                    var parsed = SessionLayerMarkerStore.Parse(relative, File.ReadAllText(path));
+                    if (parsed.Error is not null)
+                    {
+                        errors.Add(new(relative, "marker-malformed", parsed.Error));
+                    }
+                    else
+                    {
+                        blocks.AddRange(parsed.Blocks);
+                    }
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    errors.Add(new(relative, "marker-unreadable", $"Managed marker file '{relative}' is unreadable: {exception.Message}"));
+                }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            errors.Add(new("<startup-files>", "marker-unreadable", $"Startup marker discovery failed: {exception.Message}"));
+        }
+
+        return new MarkerDiscovery(blocks, errors);
+    }
+
     private sealed record TopologyDiscovery(bool FileExists, string[] Teams, string? Error);
+    private sealed record MarkerDiscovery(IReadOnlyList<SessionLayerMarkerBlock> Blocks, IReadOnlyList<MarkerDiscoveryError> Errors);
+    private sealed record MarkerDiscoveryError(string File, string Cause, string Message);
 }
 
 internal sealed record SessionLayerPreflightResult
