@@ -432,22 +432,24 @@ internal static class SessionLayerPreflight
             .ToArray();
         if (matching.Length == 0)
         {
-            findings.Add(new SessionLayerPreflightFinding
-            {
-                Team = team,
-                Role = "<marker>",
-                Field = "marker",
-                Cause = "marker-not-generated",
-                Message = $"No managed marker has been generated for team '{team}' in domain '{domain}'. This is informational; generate it with `intent-cli session-layer marker generate --domain {domain} --team {team} --file <AGENTS.md|CLAUDE.md> --write`.",
-                RecordedMode = resolution.Mode,
-                TopologyMode = null,
-            });
+            AddMarkerNotGeneratedFinding(findings, "<marker>", domain, team, resolution.Mode,
+                $"No managed marker has been generated for team '{team}' in domain '{domain}'.");
             return;
         }
 
         var recordHash = SessionLayerMarkerStore.Hash(resolution.Entry!);
         foreach (var marker in matching)
         {
+            if (marker.IsEmpty)
+            {
+                // The documented start/end-only block is deliberately the
+                // generator's valid target. It has no generated claim yet,
+                // but is not malformed and must not prevent delivery.
+                AddMarkerNotGeneratedFinding(findings, marker.File, domain, team, resolution.Mode,
+                    $"Managed marker in '{marker.File}' for team '{team}' is an empty generation placeholder.");
+                continue;
+            }
+
             if (!marker.IsGenerated)
             {
                 findings.Add(new SessionLayerPreflightFinding
@@ -478,6 +480,26 @@ internal static class SessionLayerPreflight
                 });
             }
         }
+    }
+
+    private static void AddMarkerNotGeneratedFinding(
+        List<SessionLayerPreflightFinding> findings,
+        string role,
+        string domain,
+        string team,
+        string recordedMode,
+        string detail)
+    {
+        findings.Add(new SessionLayerPreflightFinding
+        {
+            Team = team,
+            Role = role,
+            Field = "marker",
+            Cause = "marker-not-generated",
+            Message = $"{detail} This is informational; generate it with `intent-cli session-layer marker generate --domain {domain} --team {team} --file <AGENTS.md|CLAUDE.md> --write`.",
+            RecordedMode = recordedMode,
+            TopologyMode = null,
+        });
     }
 
     private static SessionLayerPreflightScopeResult Scope(
