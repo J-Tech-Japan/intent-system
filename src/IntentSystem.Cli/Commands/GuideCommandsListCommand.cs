@@ -149,7 +149,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationSupport,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerOperator,
-            Purpose = "Session-layer transport and delivery topology (G570/G592): `intent-cli session-layer show` reads the team transport and `session-layer set --mode agmsg|herdr-only` selects it, while `session-layer topology record|show|validate --team <t>` canonically writes and checks `.intent-cli/role-pane-mapping.json`. Topology record is dry-run by default, idempotent on an exact match, and refuses conflicts; show/validate are read-only and never query herdr or send. `agmsg` remains PRIMARY; `herdr-only` is PREVIEW only for the TRANSPORT, never to the four-thread model."
+            Purpose = "Session-layer transport and delivery topology (G570/G592/G604): `intent-cli session-layer show` reads the team transport and `session-layer set --mode agmsg|herdr-only` selects it, while `session-layer topology record|show|validate --team <t>` canonically writes and checks machine-local `.intent-cli/topology/<domain>/<team>.json` with directory-local CLI-owned ignore and internal identity. Topology record is dry-run by default, idempotent on an exact match, and refuses conflicts; show/validate are read-only and never query herdr or send. `agmsg` remains PRIMARY; `herdr-only` is PREVIEW only for the TRANSPORT, never to the four-thread model."
         },
         new CommandGroupEntry
         {

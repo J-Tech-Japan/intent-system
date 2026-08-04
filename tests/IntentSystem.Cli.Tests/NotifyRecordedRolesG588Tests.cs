@@ -298,7 +298,7 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
             language,
             "12-agent-message-orchestration.md"));
 
-        Assert.Contains(".intent-cli/role-pane-mapping.json", content, StringComparison.Ordinal);
+        Assert.Contains(".intent-cli/topology/<domain>/<team>.json", content, StringComparison.Ordinal);
         Assert.Contains("resident: external", content, StringComparison.Ordinal);
         Assert.Contains("reader", content, StringComparison.Ordinal);
         Assert.Contains("recipient must be deliverable", content, StringComparison.OrdinalIgnoreCase);
@@ -306,7 +306,7 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
         Assert.Contains("workspace", content, StringComparison.Ordinal);
 
         var runtimeGuide = HerdrOnlyOperatingGuide.RenderMarkdown([]);
-        Assert.Contains(".intent-cli/role-pane-mapping.json", runtimeGuide, StringComparison.Ordinal);
+        Assert.Contains(".intent-cli/topology/<domain>/<team>.json", runtimeGuide, StringComparison.Ordinal);
         Assert.Contains("resident: external", runtimeGuide, StringComparison.Ordinal);
         Assert.Contains("ONLY the recipient must be deliverable", runtimeGuide, StringComparison.Ordinal);
         Assert.Contains("team-scoped unknown-role diagnostics", runtimeGuide, StringComparison.Ordinal);

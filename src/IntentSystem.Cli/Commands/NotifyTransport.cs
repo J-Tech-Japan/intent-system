@@ -77,6 +77,7 @@ internal interface INotifyTransport
 {
     NotifyDeliveryResult Deliver(
         string routingRoot,
+        string domain,
         string team,
         string fromRole,
         string toRole,
@@ -98,6 +99,7 @@ internal sealed class AgmsgNotifyTransport : INotifyTransport
 
     public NotifyDeliveryResult Deliver(
         string routingRoot,
+        string domain,
         string team,
         string fromRole,
         string toRole,
@@ -238,6 +240,7 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
 
     public NotifyDeliveryResult Deliver(
         string routingRoot,
+        string domain,
         string team,
         string fromRole,
         string toRole,
@@ -245,7 +248,7 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
         string payload,
         bool write)
     {
-        var topologyResolution = NotifyRoleTopologyStore.Resolve(routingRoot, team);
+        var topologyResolution = NotifyRoleTopologyStore.Resolve(routingRoot, domain, team);
         if (!topologyResolution.Resolved)
         {
             return Failure(topologyResolution.Cause!, topologyResolution.Summary);

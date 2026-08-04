@@ -47,7 +47,7 @@ and complete canonical report command (including the transport-neutral
 report command is the receiver's required final step after all other work, so a
 herdr-only completion actively wakes the orchestration role instead of merely
 printing into the receiver pane. In herdr-only mode the source of truth is
-`<routing-root>/.intent-cli/role-pane-mapping.json`: every sender, recipient,
+`<routing-root>/.intent-cli/topology/<domain>/<team>.json`: every sender, recipient,
 and delegate `report-to` role must exist in that team's recorded roster, but
 **only the recipient must be deliverable**. A `resident: external` role therefore
 may send and may be `report-to` without a pane. When that external role is the
@@ -313,8 +313,14 @@ attribution rules remain authoritative and unchanged; reference them rather
 than inventing another attribution policy. An external design frontend is
 recorded as a reader type rather than fabricated as a pane.
 
-Persist that team-scoped topology at
-`<host-repo>/.intent-cli/role-pane-mapping.json`. Record the team
+Persist that machine-scoped, team-specific topology at
+`<host-repo>/.intent-cli/topology/<domain>/<team>.json`. The CLI writes a
+directory-local ignore file under `.intent-cli/topology`, so pane ids and absolute
+working paths remain local and never require editing the repository root `.gitignore`.
+Each record carries its `domain` and `team`; a copied record whose path and identity
+disagree fails closed. `session-layer-mode.json` remains the tracked multi-team truth.
+Re-recording on the destination machine—not copying machine values—is the migration.
+Record the team
 `workspace_id`; under `roles`, give each pane-backed role `resident: herdr` plus
 its explicit `workspace_id` and `pane_id`, and give a role outside herdr
 `resident: external` plus its routing-root-relative `reader` (normally
@@ -324,6 +330,10 @@ the recorded pane in that exact team workspace; external residents receive the
 canonical delegate/report event through the recorded reader. A missing/unsafe
 reader, stale pane, foreign-workspace-only name, or ambiguous mapping fails
 closed with no prompt or append.
+
+When the new per-team file is absent only, a reader may consult the legacy fixed
+file with a deprecation warning naming `topology record` as the re-record remedy.
+If both paths exist and disagree, it fails closed rather than preferring either.
 
 Write and inspect this artifact through the canonical topology surface, never
 by hand:

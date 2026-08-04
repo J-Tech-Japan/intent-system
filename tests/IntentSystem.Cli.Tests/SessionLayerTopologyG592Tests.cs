@@ -131,7 +131,8 @@ public sealed class SessionLayerTopologyG592Tests
 
         using (var recorded = JsonDocument.Parse(File.ReadAllText(workspace.TopologyPath)))
         {
-            var team = recorded.RootElement.GetProperty("teams").GetProperty(TopologyWorkspace.Team);
+            Assert.Equal("intent-cli", recorded.RootElement.GetProperty("domain").GetString());
+            var team = recorded.RootElement;
             Assert.Equal("w1", team.GetProperty("workspace_id").GetString());
             var roles = team.GetProperty("roles");
             var orchestration = roles.GetProperty("orchestration");
@@ -309,10 +310,19 @@ public sealed class SessionLayerTopologyG592Tests
 
         public string RootPath { get; }
         public CliContext Context { get; }
-        public string TopologyPath => NotifyRoleTopologyStore.ResolvePath(RootPath);
+        public string TopologyPath => NotifyRoleTopologyStore.ResolvePath(RootPath, Context.Config.Project.Domain, Team);
         public string EventPath => Path.Combine(RootPath, ".intent-cli", "events", $"{Team}.jsonl");
 
-        public void WriteRawTopology(string content) => File.WriteAllText(TopologyPath, content);
+        public void WriteRawTopology(string content)
+        {
+            if (content.StartsWith("{", StringComparison.Ordinal) && !content.Contains("{ not json", StringComparison.Ordinal))
+            {
+                content = content.Insert(content.IndexOf('{') + 1, "\n  \"domain\": \"intent-cli\",");
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(TopologyPath)!);
+            File.WriteAllText(TopologyPath, content);
+        }
 
         public (int ExitCode, JsonElement Result) Run(params string[] args)
         {

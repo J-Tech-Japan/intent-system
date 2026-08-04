@@ -74,17 +74,18 @@ internal static class SessionLayerTopologyCommand
             return 1;
         }
 
-        var validation = NotifyRoleTopologyStore.Validate(context.RepoRoot, team!);
+        var validation = NotifyRoleTopologyStore.Validate(context.RepoRoot, context.Config.Project.Domain, team!);
         var result = new SessionLayerTopologyValidationResult
         {
             Valid = validation.Valid,
             Team = team!,
-            RecordPath = NotifyRoleTopologyStore.RelativePath,
+            RecordPath = NotifyRoleTopologyStore.RelativePathFor(context.Config.Project.Domain, team!),
             Findings = validation.Findings,
-            Summary = validation.Valid
+            Summary = (validation.Valid
                 ? $"Recorded delivery topology for team '{team}' is valid."
                 : $"Recorded delivery topology for team '{team}' is invalid with "
-                    + $"{validation.Findings.Count} finding(s). No topology was changed.",
+                    + $"{validation.Findings.Count} finding(s). No topology was changed.")
+                + FormatWarnings(validation.Warnings),
         };
 
         EmitValidation(writer, format, result);
@@ -106,7 +107,7 @@ internal static class SessionLayerTopologyCommand
             return 1;
         }
 
-        var validation = NotifyRoleTopologyStore.Validate(context.RepoRoot, team!);
+        var validation = NotifyRoleTopologyStore.Validate(context.RepoRoot, context.Config.Project.Domain, team!);
         if (!validation.Valid)
         {
             var invalid = new SessionLayerTopologyShowResult
@@ -114,17 +115,17 @@ internal static class SessionLayerTopologyCommand
                 Valid = false,
                 Team = team!,
                 WorkspaceId = null,
-                RecordPath = NotifyRoleTopologyStore.RelativePath,
+                RecordPath = NotifyRoleTopologyStore.RelativePathFor(context.Config.Project.Domain, team!),
                 Roles = [],
                 Findings = validation.Findings,
                 Summary = $"Recorded delivery topology for team '{team}' is invalid; no delivery targets were "
-                    + "invented or resolved.",
+                    + "invented or resolved." + FormatWarnings(validation.Warnings),
             };
             EmitShow(writer, format, invalid);
             return 1;
         }
 
-        var topologyResolution = NotifyRoleTopologyStore.Resolve(context.RepoRoot, team!);
+        var topologyResolution = NotifyRoleTopologyStore.Resolve(context.RepoRoot, context.Config.Project.Domain, team!);
         if (!topologyResolution.Resolved)
         {
             var invalid = new SessionLayerTopologyShowResult
@@ -132,7 +133,7 @@ internal static class SessionLayerTopologyCommand
                 Valid = false,
                 Team = team!,
                 WorkspaceId = null,
-                RecordPath = NotifyRoleTopologyStore.RelativePath,
+                RecordPath = NotifyRoleTopologyStore.RelativePathFor(context.Config.Project.Domain, team!),
                 Roles = [],
                 Findings =
                 [
@@ -160,7 +161,7 @@ internal static class SessionLayerTopologyCommand
                     Valid = false,
                     Team = team!,
                     WorkspaceId = topology.WorkspaceId,
-                    RecordPath = NotifyRoleTopologyStore.RelativePath,
+                    RecordPath = NotifyRoleTopologyStore.RelativePathFor(context.Config.Project.Domain, team!),
                     Roles = roles,
                     Findings =
                     [
@@ -194,10 +195,11 @@ internal static class SessionLayerTopologyCommand
             Valid = true,
             Team = team!,
             WorkspaceId = topology.WorkspaceId,
-            RecordPath = NotifyRoleTopologyStore.RelativePath,
+            RecordPath = NotifyRoleTopologyStore.RelativePathFor(context.Config.Project.Domain, team!),
             Roles = roles,
             Findings = [],
-            Summary = $"Resolved {roles.Count} recorded delivery target(s) for team '{team}' without sending.",
+            Summary = $"Resolved {roles.Count} recorded delivery target(s) for team '{team}' without sending."
+                + FormatWarnings(topologyResolution.Warnings),
         };
         EmitShow(writer, format, result);
         return 0;
@@ -211,7 +213,7 @@ internal static class SessionLayerTopologyCommand
             return 0;
         }
 
-        if (!TryParseRecordArguments(args, out var request, out var error))
+        if (!TryParseRecordArguments(context.Config.Project.Domain, args, out var request, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(RecordUsage);
@@ -269,6 +271,7 @@ internal static class SessionLayerTopologyCommand
     }
 
     private static bool TryParseRecordArguments(
+        string domain,
         string[] args,
         out SessionLayerTopologyRecordRequest? request,
         out string error)
@@ -396,6 +399,7 @@ internal static class SessionLayerTopologyCommand
 
         request = new SessionLayerTopologyRecordRequest
         {
+            Domain = domain,
             Team = team,
             Role = role,
             Resident = resident,
@@ -438,7 +442,11 @@ internal static class SessionLayerTopologyCommand
 
     private static bool IsKnownFormat(string format) =>
         string.Equals(format, FormatJson, StringComparison.Ordinal)
-        || string.Equals(format, FormatMarkdown, StringComparison.Ordinal);
+            || string.Equals(format, FormatMarkdown, StringComparison.Ordinal);
+
+    private static string FormatWarnings(IReadOnlyList<string> warnings) => warnings.Count == 0
+        ? string.Empty
+        : " " + string.Join(" ", warnings);
 
     private static bool IsHelp(string[] args) =>
         args.Length == 1 && string.Equals(args[0], "--help", StringComparison.Ordinal);
@@ -532,7 +540,7 @@ internal static class SessionLayerTopologyWriter
         string routingRoot,
         SessionLayerTopologyRecordRequest request)
     {
-        var path = NotifyRoleTopologyStore.ResolvePath(routingRoot);
+        var path = NotifyRoleTopologyStore.ResolvePath(routingRoot, request.Domain, request.Team);
         if (string.Equals(request.Resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal)
             && !NotifyRoleTopologyStore.TryResolveReaderPath(
                 routingRoot,
@@ -549,7 +557,12 @@ internal static class SessionLayerTopologyWriter
             root = File.Exists(path)
                 ? JsonNode.Parse(File.ReadAllText(path)) as JsonObject
                     ?? throw new JsonException("the root is not a JSON object")
-                : new JsonObject();
+                : new JsonObject
+                {
+                    ["domain"] = request.Domain,
+                    ["team"] = request.Team,
+                    ["roles"] = new JsonObject(),
+                };
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -557,6 +570,14 @@ internal static class SessionLayerTopologyWriter
                 request,
                 path,
                 $"Topology file '{path}' is unreadable: {exception.Message} Refusing to overwrite it.");
+        }
+
+        var recordedDomain = ReadString(root, "domain");
+        if (!string.Equals(recordedDomain, request.Domain, StringComparison.Ordinal))
+        {
+            return Conflict(request, path,
+                $"Topology file '{path}' identifies domain '{recordedDomain ?? "missing"}', not requested domain "
+                + $"'{request.Domain}'. Refusing to overwrite a copied or misplaced machine record.");
         }
 
         if (!TrySelectTeamForWrite(root, request.Team, out var team, out var selectError))
@@ -614,7 +635,7 @@ internal static class SessionLayerTopologyWriter
                 Role = request.Role,
                 Resident = request.Resident,
                 Mode = request.Write ? "write" : "dry-run",
-                RecordPath = NotifyRoleTopologyStore.RelativePath,
+                RecordPath = NotifyRoleTopologyStore.RelativePathFor(request.Domain, request.Team),
                 Applied = false,
                 Changed = false,
                 AlreadyRecorded = true,
@@ -629,6 +650,7 @@ internal static class SessionLayerTopologyWriter
         {
             try
             {
+                EnsureLocalIgnore(routingRoot);
                 WriteAtomically(path, root.ToJsonString(FileJsonOptions) + Environment.NewLine);
                 applied = true;
             }
@@ -644,7 +666,7 @@ internal static class SessionLayerTopologyWriter
             Role = request.Role,
             Resident = request.Resident,
             Mode = request.Write ? "write" : "dry-run",
-            RecordPath = NotifyRoleTopologyStore.RelativePath,
+            RecordPath = NotifyRoleTopologyStore.RelativePathFor(request.Domain, request.Team),
             Applied = applied,
             Changed = true,
             AlreadyRecorded = false,
@@ -666,7 +688,8 @@ internal static class SessionLayerTopologyWriter
         if (root.Count == 0)
         {
             team = new JsonObject { ["roles"] = new JsonObject() };
-            root["teams"] = new JsonObject { [teamName] = team };
+            root["team"] = teamName;
+            root["roles"] = team["roles"];
             return true;
         }
 
@@ -829,26 +852,39 @@ internal static class SessionLayerTopologyWriter
         }
     }
 
+    private static void EnsureLocalIgnore(string routingRoot)
+    {
+        var path = NotifyRoleTopologyStore.ResolveLocalIgnorePath(routingRoot);
+        var content = "*" + Environment.NewLine;
+        if (File.Exists(path) && string.Equals(File.ReadAllText(path), content, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        WriteAtomically(path, content);
+    }
+
     private static SessionLayerTopologyRecordResult Conflict(
         SessionLayerTopologyRecordRequest request,
         string path,
         string summary) => new()
-    {
-        Team = request.Team,
-        Role = request.Role,
-        Resident = request.Resident,
-        Mode = request.Write ? "write" : "dry-run",
-        RecordPath = NotifyRoleTopologyStore.RelativePath,
-        Applied = false,
-        Changed = false,
-        AlreadyRecorded = false,
-        Conflict = true,
-        Summary = summary,
-    };
+        {
+            Team = request.Team,
+            Role = request.Role,
+            Resident = request.Resident,
+            Mode = request.Write ? "write" : "dry-run",
+            RecordPath = NotifyRoleTopologyStore.RelativePathFor(request.Domain, request.Team),
+            Applied = false,
+            Changed = false,
+            AlreadyRecorded = false,
+            Conflict = true,
+            Summary = summary,
+        };
 }
 
 internal sealed record SessionLayerTopologyRecordRequest
 {
+    public required string Domain { get; init; }
     public required string Team { get; init; }
     public required string Role { get; init; }
     public required string Resident { get; init; }

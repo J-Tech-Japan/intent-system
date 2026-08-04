@@ -36,7 +36,7 @@ internal static class SessionLayerTopologyHealth
         {
             Status = status,
             Required = !string.Equals(preflight.Verdict, SessionLayerPreflight.Unjudged, StringComparison.Ordinal),
-            RecordPath = NotifyRoleTopologyStore.RelativePath,
+            RecordPath = NotifyRoleTopologyStore.TopologyDirectoryRelativePath,
             Teams = teams,
             Summary = string.Equals(status, "valid", StringComparison.Ordinal)
                 ? $"Shared session-layer preflight is structurally ready for {teams.Length} named team(s)."
