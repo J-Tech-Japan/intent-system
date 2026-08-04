@@ -102,7 +102,7 @@ residency variant と validation rule の詳細は [doc 12](12-agent-message-orc
 ### 2.3 visible marker を generate する
 
 generate の前に、domain/team 用の空の managed marker block を `AGENTS.md` または `CLAUDE.md` に
-[doc 12 の generated marker 節](12-agent-message-orchestration.md#visible-generated-mode-markers)の
+[doc 12 の generated marker 節](12-agent-message-orchestration.md#可視な生成済み-mode-marker)の
 指定どおり 1 つ置きます。続けて次の prompt を貼り付けます。
 
 > recorded domain `<domain>`、team `<team>` の marker を generate してください。

@@ -43,10 +43,17 @@ public sealed class GettingStartedOrchestrationDocsG607Tests
     public void GettingStartedPage_LinksAuthoritiesAndKeepsSwitchChecklistOutOfLine_G607(string language)
     {
         var doc = ReadDoc(language, GettingStartedPath);
+        var generatedMarkerAnchor = language == "en"
+            ? "visible-generated-mode-markers"
+            : "可視な生成済み-mode-marker";
+        var generatedMarkerHeading = language == "en"
+            ? "#### Visible, generated mode markers"
+            : "#### 可視な生成済み mode marker";
 
         Assert.Contains("02-project-start.md", doc, StringComparison.Ordinal);
         Assert.Contains("12-agent-message-orchestration.md#session-layer-switch-checklist", doc, StringComparison.Ordinal);
-        Assert.Contains("12-agent-message-orchestration.md#visible-generated-mode-markers", doc, StringComparison.Ordinal);
+        Assert.Contains($"12-agent-message-orchestration.md#{generatedMarkerAnchor}", doc, StringComparison.Ordinal);
+        Assert.Contains(generatedMarkerHeading, ReadDoc(language, "12-agent-message-orchestration.md"), StringComparison.Ordinal);
         Assert.Contains("05-implementation-loop.md", doc, StringComparison.Ordinal);
         Assert.Contains("06-review-next-slice-loop.md", doc, StringComparison.Ordinal);
 
