@@ -45,7 +45,7 @@ checkout から必要な transport-neutral `--routing-root` を含む完全な c
 command を配信 task に埋め込みます。receiver は他のすべての作業後、その report
 command を final step として実行するため、herdr-only の完了が receiver pane に表示される
 だけで終わらず orchestration role を能動的に wake します。herdr-only mode の source of truth は
-`<routing-root>/.intent-cli/role-pane-mapping.json` です。sender、recipient、delegate の
+`<routing-root>/.intent-cli/topology/<domain>/<team>.json` です。sender、recipient、delegate の
 `report-to` はすべてその team の recorded roster に存在する必要がありますが、**only the
 recipient must be deliverable** です。このため `resident: external` role は pane なしで sender
 および `report-to` になれます。その external role が recipient の場合、`delegate` / `report`
@@ -295,8 +295,13 @@ currently focused pane を mutate する可能性があります。既存 G555 c
 rules が変わらず authoritative であり、別の attribution policy を再定義せずそれを reference
 します。herdr 外の design frontend は架空 pane ではなく reader type として記録します。
 
-この team-scoped topology は
-`<host-repo>/.intent-cli/role-pane-mapping.json` に persist します。team の
+この machine-scoped かつ team ごとの topology は
+`<host-repo>/.intent-cli/topology/<domain>/<team>.json` に persist します。CLI は
+`.intent-cli/topology` 内だけに directory-local ignore を書くため、pane id と absolute path
+は machine local のままで root `.gitignore` を編集しません。各 record は `domain` と `team`
+を自身に持ち、path と identity が食い違う copy は fail closed します。
+`session-layer-mode.json` はこれまで通り tracked な multi-team truth です。machine truth を
+移す方法は値の copy ではなく destination machine での re-record です。team の
 `workspace_id` を記録し、`roles` 配下で pane-backed role には `resident: herdr` と明示的な
 `workspace_id` / `pane_id`、herdr 外の role には `resident: external` と routing-root-relative
 な `reader`（通常は `.intent-cli/events/<team>.jsonl`）を記録します。すべての recorded role は
@@ -305,13 +310,17 @@ workspace の recorded pane で running agent が必要です。external residen
 を通して canonical delegate/report event を受け取ります。missing/unsafe reader、stale pane、
 foreign-workspace-only name、ambiguous mapping は prompt / append なしで fail closed になります。
 
+新しい per-team file が absent のときだけ legacy fixed file を compatibility read し、
+`topology record` を名指しする deprecation warning を出します。両方が存在して内容が
+食い違う場合は、どちらも優先せず fail closed します。
+
 この artifact は手編集せず、canonical topology surface で記録・検査します。
 
 ```text
-intent-cli session-layer topology record --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
-intent-cli session-layer topology record --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
-intent-cli session-layer topology validate --team <team> --format json
-intent-cli session-layer topology show --team <team> --format json
+intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
+intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
+intent-cli session-layer topology validate --domain <domain> --team <team> --format json
+intent-cli session-layer topology show --domain <domain> --team <team> --format json
 ```
 
 `record` が使う値は operator が供給したものだけです。herdr query、id の guess、resource の

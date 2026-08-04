@@ -271,7 +271,7 @@ internal static class SessionLayerPreflight
         SessionLayerTopologyValidation? validation = null;
         if (topologyRecordedForTeam || resolution.IsHerdrOnly)
         {
-            validation = NotifyRoleTopologyStore.Validate(repoRoot, team);
+            validation = NotifyRoleTopologyStore.Validate(repoRoot, domain, team);
             if (requiredRecipient is not null)
             {
                 var routeRelevantFindings = validation.Findings
@@ -603,51 +603,61 @@ internal static class SessionLayerPreflight
 
     private static TopologyDiscovery DiscoverTopology(string repoRoot)
     {
-        var path = NotifyRoleTopologyStore.ResolvePath(repoRoot);
-        if (!File.Exists(path))
+        var legacyPath = NotifyRoleTopologyStore.ResolvePath(repoRoot);
+        var topologyRoot = Path.Combine(
+            repoRoot,
+            NotifyRoleTopologyStore.TopologyDirectoryRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var paths = Directory.Exists(topologyRoot)
+            ? Directory.EnumerateFiles(topologyRoot, "*.json", SearchOption.AllDirectories).ToArray()
+            : [];
+        if (File.Exists(legacyPath))
+        {
+            paths = [.. paths, legacyPath];
+        }
+
+        if (paths.Length == 0)
         {
             return new TopologyDiscovery(false, [], null);
         }
 
+        var teams = new HashSet<string>(StringComparer.Ordinal);
         try
         {
-            using var document = JsonDocument.Parse(File.ReadAllText(path));
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
+            foreach (var path in paths)
             {
-                return new TopologyDiscovery(true, [], $"Topology file '{path}' is not a JSON object.");
+                using var document = JsonDocument.Parse(File.ReadAllText(path));
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object)
+                {
+                    return new TopologyDiscovery(true, [], $"Topology file '{path}' is not a JSON object.");
+                }
+
+                if (root.TryGetProperty("teams", out var teamMap) && teamMap.ValueKind == JsonValueKind.Object)
+                {
+                    teams.UnionWith(teamMap.EnumerateObject()
+                        .Where(team => team.Value.ValueKind == JsonValueKind.Object)
+                        .Select(team => team.Name));
+                }
+                else if (root.TryGetProperty("team", out var team)
+                    && team.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(team.GetString()))
+                {
+                    teams.Add(team.GetString()!);
+                }
+                else
+                {
+                    teams.UnionWith(root.EnumerateObject()
+                        .Where(property => property.Value.ValueKind == JsonValueKind.Object
+                            && property.Name is not ("workspace" or "roles"))
+                        .Select(property => property.Name));
+                }
             }
 
-            string[] teams;
-            if (root.TryGetProperty("teams", out var teamMap) && teamMap.ValueKind == JsonValueKind.Object)
-            {
-                teams = teamMap.EnumerateObject()
-                    .Where(team => team.Value.ValueKind == JsonValueKind.Object)
-                    .Select(team => team.Name)
-                    .OrderBy(team => team, StringComparer.Ordinal)
-                    .ToArray();
-            }
-            else if (root.TryGetProperty("team", out var team)
-                && team.ValueKind == JsonValueKind.String
-                && !string.IsNullOrWhiteSpace(team.GetString()))
-            {
-                teams = [team.GetString()!];
-            }
-            else
-            {
-                teams = root.EnumerateObject()
-                    .Where(property => property.Value.ValueKind == JsonValueKind.Object
-                        && property.Name is not ("workspace" or "roles"))
-                    .Select(property => property.Name)
-                    .OrderBy(teamName => teamName, StringComparer.Ordinal)
-                    .ToArray();
-            }
-
-            return new TopologyDiscovery(true, teams, null);
+            return new TopologyDiscovery(true, teams.OrderBy(team => team, StringComparer.Ordinal).ToArray(), null);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
         {
-            return new TopologyDiscovery(true, [], $"Topology file '{path}' is unreadable: {exception.Message}");
+            return new TopologyDiscovery(true, [], $"Topology discovery is unreadable: {exception.Message}");
         }
     }
 

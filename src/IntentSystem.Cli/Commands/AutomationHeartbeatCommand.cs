@@ -459,7 +459,7 @@ internal static class AutomationHeartbeatCommand
         string domain,
         string team)
     {
-        var topology = NotifyRoleTopologyStore.Resolve(context.RepoRoot, team);
+        var topology = NotifyRoleTopologyStore.Resolve(context.RepoRoot, domain, team);
         if (!topology.Resolved)
         {
             return HeartbeatRoute.Failure(topology.Summary);
@@ -484,7 +484,7 @@ internal static class AutomationHeartbeatCommand
 
     private static HeartbeatRoute ResolveAttentionOwnerRoute(CliContext context, string domain, string team, string owner)
     {
-        var topology = NotifyRoleTopologyStore.Resolve(context.RepoRoot, team);
+        var topology = NotifyRoleTopologyStore.Resolve(context.RepoRoot, domain, team);
         if (!topology.Resolved)
         {
             return HeartbeatRoute.Failure(topology.Summary);

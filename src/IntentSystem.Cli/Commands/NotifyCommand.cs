@@ -189,6 +189,7 @@ internal static class NotifyCommand
             : new[] { options.FromRole!, options.ToRole! };
         var delivery = transport.Deliver(
             options.RoutingRoot!,
+            options.Domain!,
             options.Team!,
             options.FromRole!,
             options.ToRole!,

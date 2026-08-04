@@ -36,7 +36,7 @@ internal static class SessionLayerTopologyHealth
         {
             Status = status,
             Required = !string.Equals(preflight.Verdict, SessionLayerPreflight.Unjudged, StringComparison.Ordinal),
-            RecordPath = NotifyRoleTopologyStore.RelativePath,
+            RecordPath = NotifyRoleTopologyStore.TopologyDirectoryRelativePath,
             Teams = teams,
             Summary = string.Equals(status, "valid", StringComparison.Ordinal)
                 ? $"Shared session-layer preflight is structurally ready for {teams.Length} named team(s)."
@@ -44,7 +44,7 @@ internal static class SessionLayerTopologyHealth
                     ? "No named team is declared or discovered; topology health is unjudged until an expected team is declared."
                     : $"Shared session-layer preflight is invalid with {invalidCount} finding(s). "
                         + "Run `intent-cli automation doctor --domain <domain> --team <team> --format json` and "
-                        + "`intent-cli session-layer topology validate --team <team> --format json`, then follow "
+                        + "`intent-cli session-layer topology validate --domain <domain> --team <team> --format json`, then follow "
                         + "their canonical session-layer/topology remedies.",
         };
     }

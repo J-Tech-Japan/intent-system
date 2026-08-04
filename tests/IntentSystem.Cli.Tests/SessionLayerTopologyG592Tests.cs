@@ -32,6 +32,7 @@ public sealed class SessionLayerTopologyG592Tests
 
         var (exitCode, result) = workspace.Run(
             "session-layer", "topology", "validate",
+            "--domain", "intent-cli",
             "--team", TopologyWorkspace.Team,
             "--format", "json");
 
@@ -67,6 +68,7 @@ public sealed class SessionLayerTopologyG592Tests
 
         var (exitCode, result) = workspace.Run(
             "session-layer", "topology", "validate",
+            "--domain", "intent-cli",
             "--team", TopologyWorkspace.Team,
             "--format", "json");
 
@@ -86,6 +88,7 @@ public sealed class SessionLayerTopologyG592Tests
 
         var (missingExit, missing) = workspace.Run(
             "session-layer", "topology", "validate",
+            "--domain", "intent-cli",
             "--team", TopologyWorkspace.Team,
             "--format", "json");
         Assert.Equal(1, missingExit);
@@ -95,6 +98,7 @@ public sealed class SessionLayerTopologyG592Tests
         workspace.WriteRawTopology("{ not json");
         var (unreadableExit, unreadable) = workspace.Run(
             "session-layer", "topology", "validate",
+            "--domain", "intent-cli",
             "--team", TopologyWorkspace.Team,
             "--format", "json");
         Assert.Equal(1, unreadableExit);
@@ -120,6 +124,7 @@ public sealed class SessionLayerTopologyG592Tests
 
         var (externalExit, external) = workspace.Run(
             "session-layer", "topology", "record",
+            "--domain", "intent-cli",
             "--team", TopologyWorkspace.Team,
             "--role", "design",
             "--resident", "external",
@@ -131,7 +136,8 @@ public sealed class SessionLayerTopologyG592Tests
 
         using (var recorded = JsonDocument.Parse(File.ReadAllText(workspace.TopologyPath)))
         {
-            var team = recorded.RootElement.GetProperty("teams").GetProperty(TopologyWorkspace.Team);
+            Assert.Equal("intent-cli", recorded.RootElement.GetProperty("domain").GetString());
+            var team = recorded.RootElement;
             Assert.Equal("w1", team.GetProperty("workspace_id").GetString());
             var roles = team.GetProperty("roles");
             var orchestration = roles.GetProperty("orchestration");
@@ -155,6 +161,7 @@ public sealed class SessionLayerTopologyG592Tests
 
         var (validateExit, validation) = workspace.Run(
             "session-layer", "topology", "validate",
+            "--domain", "intent-cli",
             "--team", TopologyWorkspace.Team,
             "--format", "json");
         Assert.Equal(0, validateExit);
@@ -168,6 +175,7 @@ public sealed class SessionLayerTopologyG592Tests
         Assert.Equal(0, workspace.Run(HerdrRecord("w1:p1")).ExitCode);
         Assert.Equal(0, workspace.Run(
             "session-layer", "topology", "record",
+            "--domain", "intent-cli",
             "--team", TopologyWorkspace.Team,
             "--role", "design",
             "--resident", "external",
@@ -186,6 +194,7 @@ public sealed class SessionLayerTopologyG592Tests
 
         var (showExit, show) = workspace.Run(
             "session-layer", "topology", "show",
+            "--domain", "intent-cli",
             "--team", TopologyWorkspace.Team,
             "--format", "json");
 
@@ -274,6 +283,7 @@ public sealed class SessionLayerTopologyG592Tests
     private static string[] HerdrRecord(string paneId) =>
     [
         "session-layer", "topology", "record",
+        "--domain", "intent-cli",
         "--team", TopologyWorkspace.Team,
         "--role", "orchestration",
         "--resident", "herdr",
@@ -309,10 +319,19 @@ public sealed class SessionLayerTopologyG592Tests
 
         public string RootPath { get; }
         public CliContext Context { get; }
-        public string TopologyPath => NotifyRoleTopologyStore.ResolvePath(RootPath);
+        public string TopologyPath => NotifyRoleTopologyStore.ResolvePath(RootPath, Context.Config.Project.Domain, Team);
         public string EventPath => Path.Combine(RootPath, ".intent-cli", "events", $"{Team}.jsonl");
 
-        public void WriteRawTopology(string content) => File.WriteAllText(TopologyPath, content);
+        public void WriteRawTopology(string content)
+        {
+            if (content.StartsWith("{", StringComparison.Ordinal) && !content.Contains("{ not json", StringComparison.Ordinal))
+            {
+                content = content.Insert(content.IndexOf('{') + 1, "\n  \"domain\": \"intent-cli\",");
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(TopologyPath)!);
+            File.WriteAllText(TopologyPath, content);
+        }
 
         public (int ExitCode, JsonElement Result) Run(params string[] args)
         {
