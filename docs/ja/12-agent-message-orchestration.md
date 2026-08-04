@@ -795,7 +795,9 @@ intent-cli clarify open <execution-unit> \
 任意で、省略すれば G552 以前の packet 由来挙動のままです。**clarification の schema
 変更はありません。**
 
-**design 判断待ちの記録義務。** 進行が design の判断で止まるとき、operator-attention
+### design 判断待ちの記録義務
+
+進行が design の判断で止まるとき、operator-attention
 record を開くことは任意ではなく義務です。その待ちが始まった時点で design を owner として
 記録します。record は query でき、scrollback に埋もれず `heartbeat` / `stalled-work` に
 現れます:

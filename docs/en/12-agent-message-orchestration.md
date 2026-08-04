@@ -871,7 +871,9 @@ evidence land in the artifact's `Reason` under `Recommended answer:` and
 `Evidence:` labels. All three flags are optional — omit them and the pre-G552
 packet-derived behavior is unchanged. **No clarification schema change.**
 
-**Design-judgment wait recording duty.** When progress blocks on a design
+### Design-judgment wait recording duty
+
+When progress blocks on a design
 judgment, opening an operator-attention record is a duty, not an option. At the
 start of that wait, record design as the owner; the record is queryable and
 surfaces in `heartbeat` / `stalled-work` instead of living in scrollback:

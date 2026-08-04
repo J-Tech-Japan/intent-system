@@ -299,6 +299,22 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("## design traffic-controller プレイブック", ja, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("en", "Design-judgment wait recording duty", "design-judgment-wait-recording-duty")]
+    [InlineData("ja", "design 判断待ちの記録義務", "design-判断待ちの記録義務")]
+    public void DesignJudgmentWaitCrossLink_TargetsItsOwnLanguageHeading_G610(string language, string heading, string anchor)
+    {
+        var doc = ReadDoc(language);
+
+        Assert.Contains($"### {heading}", doc, StringComparison.Ordinal);
+        Assert.Contains($"](#{anchor})", doc, StringComparison.Ordinal);
+
+        var otherLanguageAnchor = language == "en"
+            ? "#design-判断待ちの記録義務"
+            : "#design-judgment-wait-recording-duty";
+        Assert.DoesNotContain(otherLanguageAnchor, doc, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void BothDocs_BoundTheDefaultAuthority_AndKeepSemanticDecisionsWithDesign_G552()
     {
