@@ -2,27 +2,22 @@
 
 ← [プロジェクト開始](02-project-start.md) | [ドキュメント索引](README.md) | → [intent の整理・保守](03-intents.md)
 
-## Minimal start: 空の 2 repository と 1 つの prompt
+## 最初の decision: 2×2 onboarding pattern を選ぶ
 
-空の implementation repository と空の intents host repository を作成します。**host だけを**
-checkout し、そこで AI agent を開いて次を貼り付けます:
+host metadata の置き場と project が brand-new / existing のどちらかを最初に選びます。
+各リンク先は意図的に自己完結しており、2 つの pattern の手順を混ぜる必要はありません。
 
-> target implementation repository `<owner>/<implementation-repo>` 用に intent-cli を
-> 設定します。空の intents host repository を開いています。まずインストール済みの
-> guidance で intent-cli を理解し、それから初期化を案内してください。1 回に 1 つずつ
-> decision を聞いてください。
+| Host metadata | Brand-new project | Existing project に intent-cli を追加 |
+| --- | --- | --- |
+| Separate host repository | [Separate host × brand-new](02b-separate-host-brand-new.md) | [Separate host × existing](02c-separate-host-existing.md) |
+| Same repository, metadata branch | [Same repo × brand-new](02d-same-repo-brand-new.md) | [Same repo × existing](02e-same-repo-existing.md) |
 
-1 repository の選択肢では、先に [topology B](02-project-start.md#トポロジー-b--metadata-ブランチを使う同一リポジトリ)
-を選び、2 つ目の repository は作りません。agent は shipped skill から `guide onboarding` に進み、
-`intent-cli --version` を確認し、`guide model` を読み、`intent init` を dry-run と `--write` で
-各 1 回実行して host を確認します。観測した v0.11.0 の write は **9 files** を生成し、
-`host-check` は `"classification": "ok"` を返しました。human が決めるのは repository topology、
-base-branch policy、transport、role ごとの agent kind の 4 点です。
-
-4 agent 全員が 1 台に collocate する場合は `herdr-only` を最初に選びます。**PREVIEW** は
-maturity note であり、非推奨という意味ではありません。distributed team または既存の agmsg
-investment がある場合は `agmsg` + herdr を選びます。どちらも supported choice であり、
-`session-layer set` で record します。primary なのは transport ではなく **4 スレッドモデル**です。
+各 pattern は共存する貼り付け可能な initial prompt をちょうど 2 つ提示します。4 agent 全員が
+1 台に collocate する場合は `herdr-only` を最初に選びます。**PREVIEW** は maturity note です。
+distributed team または既存 agmsg investment には `agmsg` + herdr を選びます。どちらも
+supported choice で、`session-layer set` で record します。primary なのは transport ではなく
+**4 スレッドモデル**です。initial prompt の後は transport 固有の手順を混ぜず、record された
+mode と current installed guides に従います。
 
 このページは minimal start から最初の公開 packet までの **orchestration-first** 経路です。
 [プロジェクト開始](02-project-start.md) は topology の authority、[agent メッセージ

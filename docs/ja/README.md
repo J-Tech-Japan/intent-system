@@ -6,24 +6,22 @@
 
 `intent-cli` は、AI agent に Intent System の正規手順を確認させながら Intent-Driven Development を進めるための **決定論的なサポートツール** です。
 
-新しい project では implementation repository と intents host repository を作り、host だけを
-checkout します。そこで AI agent を開き、次を貼り付けます:
-
-> target implementation repository `<owner>/<implementation-repo>` 用に intent-cli を
-> 設定します。空の intents host repository を開いています。まずインストール済みの
-> guidance で intent-cli を理解し、それから初期化を案内してください。1 回に 1 つずつ
-> decision を聞いてください。
-
-agent が内部で `intent-cli` を実行し、質問や結果を返します。1 台に collocate する team は
-`herdr-only` を最初の supported choice とします（PREVIEW は maturity note）。distributed team
-または既存の agmsg investment には `agmsg` + herdr を選びます。primary なのは transport
-ではなく 4 スレッドモデルです。
+最初に [自己完結した onboarding pattern](02a-getting-started-orchestration.md) を選びます。
+separate host repository / same-repository metadata branch と、brand-new / existing project を
+掛け合わせます。各 pattern には貼り付け可能な initial prompt が 2 つあります。1 台に
+collocate する team は `herdr-only` を最初の supported choice とします（PREVIEW は maturity
+note）。distributed team または既存の agmsg investment には `agmsg` + herdr を選びます。
+primary なのは transport ではなく 4 スレッドモデルです。
 
 ## ページ一覧
 
 1. [インストール](01-install.md)
 2. [プロジェクト開始](02-project-start.md)
 2a. [はじめに: 最初の packet までの道のり](02a-getting-started-orchestration.md) — minimal start と primary な 4 スレッドモデル。collocate する `herdr-only` は supported（PREVIEW は maturity note）
+   - [Separate host × brand-new](02b-separate-host-brand-new.md)
+   - [Separate host × existing](02c-separate-host-existing.md)
+   - [Same repo × brand-new](02d-same-repo-brand-new.md)
+   - [Same repo × existing](02e-same-repo-existing.md)
 3. [Intent Storming と intent の整理](03-intents.md)
 4. [packet 作成と issue 公開](04-packets-issues.md)
 4a. [GitHub ワークフローラベルで見る現在地](04a-workflow-labels.md) — ラベルの意味と読み方

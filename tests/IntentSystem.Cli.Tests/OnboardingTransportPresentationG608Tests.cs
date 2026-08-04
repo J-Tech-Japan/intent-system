@@ -12,31 +12,51 @@ public sealed class OnboardingTransportPresentationG608Tests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void MinimalStart_UsesOneHostCheckoutOnePromptAndFourHumanDecisions_G608(string language)
+    public void PatternChooser_IsTheFirstOnboardingDecision_G608(string language)
     {
         var root = language == "en"
             ? File.ReadAllText(Path.Combine(RepoVersionPolicySource.RepoRoot(), "README.md"))
             : ReadDoc(language, "README.md");
         var gettingStarted = ReadDoc(language, "02a-getting-started-orchestration.md");
 
-        foreach (var text in new[]
-                 {
-                     "<owner>/<implementation-repo>",
-                     "guide onboarding",
-                     "intent-cli --version",
-                     "intent init",
-                     "--write",
-                     language == "en" ? "nine files" : "9 files",
-                     "session-layer set",
-                 })
+        foreach (var path in PatternPaths)
         {
-            Assert.Contains(text, root + gettingStarted, StringComparison.Ordinal);
+            Assert.Contains($"]({path})", root + gettingStarted, StringComparison.Ordinal);
         }
 
-        Assert.Contains("repository topology", gettingStarted, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("base-branch", gettingStarted, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("transport", gettingStarted, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("agent kind", gettingStarted, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Separate host", gettingStarted, StringComparison.Ordinal);
+        Assert.Contains("Same repo", gettingStarted, StringComparison.Ordinal);
+        Assert.Contains("brand-new", gettingStarted, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("existing", gettingStarted, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void EveryPattern_IsSelfContainedAndHasExactlyTwoInitialPrompts_G608(string language)
+    {
+        foreach (var path in PatternPaths)
+        {
+            var doc = ReadDoc(language, path);
+
+            Assert.Contains("<owner>/<implementation-repo>", doc, StringComparison.Ordinal);
+            Assert.Contains("guide onboarding", doc, StringComparison.Ordinal);
+            Assert.Contains("guide model", doc, StringComparison.Ordinal);
+            Assert.Contains("intent init", doc, StringComparison.Ordinal);
+            Assert.Contains("--write", doc, StringComparison.Ordinal);
+            Assert.Contains(language == "en" ? "nine files" : "9 files", doc, StringComparison.Ordinal);
+            Assert.Contains("base-branch", doc, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("agent kind", doc, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("herdr-only", doc, StringComparison.Ordinal);
+            Assert.Contains("agmsg", doc, StringComparison.Ordinal);
+            Assert.Equal(2, CountOccurrences(doc, "### "));
+            Assert.Equal(2, CountOccurrences(doc, "\n> "));
+            Assert.Contains("](02a-getting-started-orchestration.md)", doc, StringComparison.Ordinal);
+        }
+
+        var fieldTestPattern = ReadDoc(language, "02b-separate-host-brand-new.md");
+        Assert.Contains(language == "en" ? "two empty repositories" : "空の", fieldTestPattern, StringComparison.Ordinal);
+        Assert.Contains(language == "en" ? "only the empty host repository" : "host repository だけ", fieldTestPattern, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -114,4 +134,25 @@ public sealed class OnboardingTransportPresentationG608Tests
 
     private static string ReadDoc(string language, string path) =>
         File.ReadAllText(Path.Combine(RepoVersionPolicySource.RepoRoot(), "docs", language, path));
+
+    private static int CountOccurrences(string value, string needle)
+    {
+        var count = 0;
+        var offset = 0;
+        while ((offset = value.IndexOf(needle, offset, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            offset += needle.Length;
+        }
+
+        return count;
+    }
+
+    private static readonly string[] PatternPaths =
+    [
+        "02b-separate-host-brand-new.md",
+        "02c-separate-host-existing.md",
+        "02d-same-repo-brand-new.md",
+        "02e-same-repo-existing.md",
+    ];
 }

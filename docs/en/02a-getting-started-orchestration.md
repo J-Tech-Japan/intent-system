@@ -2,29 +2,24 @@
 
 ← [Start a project](02-project-start.md) | [docs index](README.md) | → [Organize & maintain intents](03-intents.md)
 
-## Minimal start: two empty repositories, one prompt
+## First decision: choose your 2×2 onboarding pattern
 
-Create an empty implementation repository and an empty intents host repository.
-Check out **only the host**, open an AI agent there, and paste:
+Choose where host metadata lives and whether the project is brand-new or
+existing. Do this first; each linked page is deliberately self-contained, so
+you never combine instructions from two patterns.
 
-> I am setting up intent-cli for target implementation repository
-> `<owner>/<implementation-repo>`. I have the empty intents host repository
-> open. First understand intent-cli using its installed guidance, then guide me
-> through initialization. Ask me for one decision at a time.
+| Host metadata | Brand-new project | Adding intent-cli to an existing project |
+| --- | --- | --- |
+| Separate host repository | [Separate host × brand-new](02b-separate-host-brand-new.md) | [Separate host × existing](02c-separate-host-existing.md) |
+| Same repository, metadata branch | [Same repo × brand-new](02d-same-repo-brand-new.md) | [Same repo × existing](02e-same-repo-existing.md) |
 
-For the one-repository option, first choose [topology B](02-project-start.md#topology-b--same-repo-with-a-metadata-branch);
-do not create a second repository. The agent follows the shipped skill to
-`guide onboarding`, verifies `intent-cli --version`, reads `guide model`, runs
-`intent init` once as a dry-run and once with `--write`, and checks the host.
-The observed v0.11.0 write creates **nine files** and `host-check` returns
-`"classification": "ok"`. The human makes four decisions: repository topology,
-base-branch policy, transport, and the agent kind for each role.
-
+Each pattern starts with exactly two coexisting paste-ready initial prompts.
 Choose `herdr-only` first when all four agents are collocated on one machine;
-its **PREVIEW** status is a maturity note, not a recommendation against it.
-Choose `agmsg` + herdr when the team is distributed or already invests in
-agmsg. Both are supported choices, recorded with `session-layer set`; the
-**four-thread model** is primary, never either transport.
+its **PREVIEW** status is a maturity note. Choose `agmsg` + herdr for a
+distributed team or an existing agmsg investment. Both are supported choices,
+recorded with `session-layer set`; the **four-thread model** is primary, never
+either transport. After the initial prompt, follow the recorded mode and the
+current installed guides instead of combining transport-specific instructions.
 
 This page is the **orchestration-first** route from that minimal start to the
 first published packet. [Start a project](02-project-start.md) remains
