@@ -67,6 +67,25 @@ public sealed class SessionLayerMigrationG602Tests : IDisposable
     }
 
     [Fact]
+    public void Notify_UsesTopologyCauseWhenAdvisoryResidueIsAlsoPresent_G602()
+    {
+        workspace.Record(SessionLayerMode.HerdrOnly);
+        workspace.WriteAndGenerateMarker(SessionLayerMode.HerdrOnly);
+        workspace.WriteHooks("""
+            { "hooks": { "session-start": [{ "command": "agmsg watch.sh" }] } }
+            """);
+
+        var (exitCode, result) = workspace.RunNotify();
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("topology-missing", result.GetProperty("cause").GetString());
+        var findings = result.GetProperty("session_layer_preflight").GetProperty("scopes")[0]
+            .GetProperty("findings").EnumerateArray().ToArray();
+        Assert.Contains(findings, finding => finding.GetProperty("cause").GetString() == SessionLayerMigration.ResidueCause);
+        Assert.Contains(findings, finding => finding.GetProperty("cause").GetString() == "topology-missing");
+    }
+
+    [Fact]
     public void AgmsgHerdrHooks_AreDetectedWhenTheReverseResidueIsDeclared_G602()
     {
         workspace.Record(SessionLayerMode.Agmsg);
@@ -168,6 +187,28 @@ public sealed class SessionLayerMigrationG602Tests : IDisposable
                     orchestration = new { resident = "herdr", workspace_id = "w", pane_id = "w:p1" },
                 },
             }));
+        }
+
+        public (int ExitCode, JsonElement Result) RunNotify()
+        {
+            using var writer = new StringWriter();
+            var exitCode = CommandRouter.Execute(
+                [
+                    "notify", "report",
+                    "--domain", Domain,
+                    "--team", Team,
+                    "--from", "implementation",
+                    "--to", "orchestration",
+                    "--task-id", "G602-ac4",
+                    "--status", "completed",
+                    "--artifact", "https://example.test/pr/1308",
+                    "--summary", "residue precedence verification",
+                    "--write",
+                    "--format", "json",
+                ],
+                Context,
+                writer);
+            return (exitCode, JsonDocument.Parse(writer.ToString()).RootElement.Clone());
         }
 
         public void Dispose()

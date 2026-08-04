@@ -116,12 +116,12 @@ internal static class NotifyCommand
             };
             if (preflight.Ready is not true)
             {
-                // G601 marker absence is intentionally informational. It must
-                // never hide the actionable structural cause that made this
-                // delivery preflight fail (for example, an unsafe external
-                // reader).
+                // G601 marker absence and G602 other-mode residue are
+                // intentionally advisory. They must never hide the actionable
+                // structural cause that made this delivery preflight fail
+                // (for example, missing topology or an unsafe external reader).
                 var primaryFinding = scope.Findings.FirstOrDefault(finding =>
-                    !string.Equals(finding.Cause, "marker-not-generated", StringComparison.Ordinal))
+                    !IsAdvisoryPreflightFinding(finding))
                     ?? scope.Findings.FirstOrDefault();
                 var cause = primaryFinding?.Cause ?? "session-layer-not-ready";
                 Emit(writer, options.Format, FailureResult(
@@ -157,6 +157,10 @@ internal static class NotifyCommand
 
         return ExecuteEscalation(writer, options, escalationResolution);
     }
+
+    private static bool IsAdvisoryPreflightFinding(SessionLayerPreflightFinding finding) =>
+        string.Equals(finding.Cause, "marker-not-generated", StringComparison.Ordinal)
+        || string.Equals(finding.Cause, SessionLayerMigration.ResidueCause, StringComparison.Ordinal);
 
     private static int ExecuteDelivery(
         TextWriter writer,
