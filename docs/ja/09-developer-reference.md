@@ -728,12 +728,13 @@ polling loop、process launch、automatic open/resolve path は追加しませ�
 会話する **session layer** は別の話です。2026-08-01 のオペレーター裁定により、後者は
 固定ではなく**選択可能**になりました。
 
-- **`agmsg` が PRIMARY** — 実運用され保守されている transport であり、記録が無いときの
-  既定値です。
-- **`herdr-only` は PREVIEW** — herdr が terminal controller となり、別立ての message
-  bridge を動かさない単一マシン向けの代替です。**PREVIEW という限定詞は transport のみ**
-  に掛かります。4 スレッドモデル自体は両モードで PRIMARY かつ無限定のままであり
-  (G540 の裁定どおり)、transport を選ぶことがモデルを暫定的にすることはありません。
+- **`herdr-only`（PREVIEW maturity）** — team agent 全員が 1 台に collocate する場合の
+  supported な最初の選択です。herdr が terminal controller になり、別立ての message bridge
+  を動かしません。**PREVIEW という限定詞は transport のみ**に掛かります。
+- **`agmsg` + herdr** — team member が複数 machine に分散する場合、または既存の agmsg
+  investment がある場合の supported choice です。記録が無いときは `agmsg` が既定値です。
+- **primary で無限定なのは 4 スレッドモデル**であり、両モードで変わりません（G540 の裁定
+  どおり）。transport を選んでもモデルが暫定的になることはありません。
 - **1 チーム 1 モード。** 1 つのチーム内で agmsg と herdr-only の配送を混在させることは
   fallback ではなく contract violation です。transport が 2 つあるということは「誰に何を
   伝えたか」の見え方が 2 つあるということです。

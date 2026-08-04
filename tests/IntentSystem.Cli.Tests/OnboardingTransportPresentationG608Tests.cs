@@ -122,6 +122,13 @@ public sealed class OnboardingTransportPresentationG608Tests
         {
             ReadDoc(language, "README.md"),
             ReadDoc(language, "02a-getting-started-orchestration.md"),
+            ReadDoc(language, "02b-separate-host-brand-new.md"),
+            ReadDoc(language, "02c-separate-host-existing.md"),
+            ReadDoc(language, "02d-same-repo-brand-new.md"),
+            ReadDoc(language, "02e-same-repo-existing.md"),
+            ReadDoc(language, "09-developer-reference.md").Split(language == "en"
+                ? "Semantics:"
+                : "セマンティクス:", StringSplitOptions.None)[0],
             ReadDoc(language, "12-agent-message-orchestration.md").Split("## Canonical notify workflow", StringSplitOptions.None)[0],
         });
 
@@ -129,7 +136,28 @@ public sealed class OnboardingTransportPresentationG608Tests
         Assert.Contains("agmsg", presentation, StringComparison.Ordinal);
         Assert.Contains("PREVIEW", presentation, StringComparison.Ordinal);
         Assert.DoesNotContain("agmsg (PRIMARY)", presentation, StringComparison.Ordinal);
+        Assert.DoesNotContain("`agmsg` is PRIMARY", presentation, StringComparison.Ordinal);
+        Assert.DoesNotContain("`agmsg` が PRIMARY", presentation, StringComparison.Ordinal);
         Assert.DoesNotContain("primary transport", presentation, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void LiveDocumentation_DoesNotLabelAnyTransportPrimary_G608(string language)
+    {
+        var docsDirectory = Path.Combine(RepoVersionPolicySource.RepoRoot(), "docs", language);
+        var liveDocs = Directory.GetFiles(docsDirectory, "*.md")
+            .Where(path => !Path.GetFileName(path).StartsWith("release-notes-", StringComparison.Ordinal))
+            .Select(File.ReadAllText);
+
+        foreach (var doc in liveDocs)
+        {
+            Assert.DoesNotContain("agmsg (PRIMARY)", doc, StringComparison.Ordinal);
+            Assert.DoesNotContain("`agmsg` is PRIMARY", doc, StringComparison.Ordinal);
+            Assert.DoesNotContain("`agmsg` が PRIMARY", doc, StringComparison.Ordinal);
+            Assert.DoesNotContain("primary transport", doc, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     private static string ReadDoc(string language, string path) =>
