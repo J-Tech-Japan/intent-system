@@ -2697,10 +2697,13 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 
 ### 次リリース準備(v0.11.1)
 
-**`v0.11.0` は出荷済み**(GitHub Release + NuGet)で、次に準備するラインは
-`0.11.1` です。出荷範囲と bump 根拠は `v0.11.1` の release-prep packet が
-[DRAFT ノート](release-notes-v0.11.1.md)を置き換えるまで意図的に未確定です。
-直前の出荷範囲は [release-notes-v0.11.0.md](release-notes-v0.11.0.md) を参照してください。
+**`v0.11.0` は出荷済み**(GitHub Release + NuGet)で、準備済み patch line は `0.11.1` です。
+scope は G607 / [PR #1318](https://github.com/J-Tech-Japan/intent-system/pull/1318) merge
+`764905194ee1` と、G608 / [PR #1320](https://github.com/J-Tech-Japan/intent-system/pull/1320)
+merge `a138e32b82a7` だけです。新しい command surface はありません。`src` delta は
+[v0.11.1 notes](release-notes-v0.11.1.md) が名指しする三つの guide command の presentation
+string に限定され、installed-guide の transport presentation を published docs chooser と整合
+させます。直前の出荷範囲は [release-notes-v0.11.0.md](release-notes-v0.11.0.md) を参照してください。
 
 **リリース準備検証(`v0.11.1` release-preparation PR のマージ前に実行):**
 
@@ -2717,10 +2720,10 @@ dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
 ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.11.1.nupkg
 
-# 4. G475 package/release guard と release/version guard を確認。
+# 4. G475、v0.11.1 release-note check、release/version guard を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
-  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0111DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 
 # 5. Release suite を完全実行。
 dotnet test IntentSystem.sln -c Release
