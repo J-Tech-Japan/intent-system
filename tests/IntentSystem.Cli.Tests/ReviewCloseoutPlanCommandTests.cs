@@ -1319,7 +1319,10 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
 
     private static string BuildQueueState(string executionUnit, string state, string? linkedPr, (string Repo, int Number, string? Url)? linkedIssue)
     {
-        var linkedPrToken = linkedPr is null ? "null" : $"\"{linkedPr}\"";
+        var qualified = linkedPr is not null && int.TryParse(linkedPr, out var number)
+            ? $"https://github.com/J-Tech-Japan/intent-system/pull/{number}"
+            : linkedPr;
+        var linkedPrToken = qualified is null ? "null" : $"\"{qualified}\"";
         var linkedIssueBlock = linkedIssue is null
             ? ""
             : $@",

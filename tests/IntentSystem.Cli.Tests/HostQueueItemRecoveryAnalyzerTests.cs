@@ -1,4 +1,5 @@
 using IntentSystem.Cli.Commands;
+using IntentSystem.Supervisor.Models;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -319,6 +320,33 @@ public sealed class HostQueueItemRecoveryAnalyzerTests
 
         Assert.Equal(HostQueueItemRecoveryAnalyzer.ResultUnsafeStop, result.Result);
         Assert.Equal(HostQueueItemRecoveryAnalyzer.ReasonClosedPr, result.ReasonCode);
+    }
+
+    [Fact]
+    public void Analyze_CompletedUnitWithWrongRepoLinkedPr_RepairsFromMergedEvidence()
+    {
+        var candidate = BuildCandidate() with
+        {
+            PrState = "MERGED",
+            ExistingQueueItems = new[]
+            {
+                new HostQueueItemRecoveryExistingItem
+                {
+                    ExecutionUnit = Unit,
+                    LinkedIssueNumber = IssueNumber,
+                    LinkedIssueRepo = Repo,
+                    LinkedPrNumber = PrNumber,
+                    LinkedPrRepo = "J-Tech-Japan/intent-system",
+                    State = QueueItemState.Completed,
+                }
+            }
+        };
+
+        var result = HostQueueItemRecoveryAnalyzer.Analyze(candidate);
+
+        Assert.Equal(HostQueueItemRecoveryAnalyzer.ResultRecoverable, result.Result);
+        Assert.Contains(result.Evidence, e => e.Contains("completed unit", StringComparison.Ordinal));
+        Assert.Equal($"https://github.com/{Repo}/pull/{PrNumber}", result.ProposedQueueItem!.LinkedPrUrl);
     }
 
     [Fact]

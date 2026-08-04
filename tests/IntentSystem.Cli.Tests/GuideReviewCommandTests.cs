@@ -709,7 +709,10 @@ public sealed class GuideReviewCommandTests
 
     private static string BuildQueueState(string executionUnit, string state, string title, string? linkedPr)
     {
-        var linked = linkedPr is null ? "null" : $"\"{linkedPr}\"";
+        var qualified = linkedPr is not null && int.TryParse(linkedPr, out var number)
+            ? $"https://github.com/J-Tech-Japan/intent-system/pull/{number}"
+            : linkedPr;
+        var linked = qualified is null ? "null" : $"\"{qualified}\"";
         return $$"""
             {
               "schema_version": "1",

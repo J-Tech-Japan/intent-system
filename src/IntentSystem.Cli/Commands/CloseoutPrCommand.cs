@@ -150,14 +150,14 @@ internal static class CloseoutPrCommand
         }
 
         var prToken = pr!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item.LinkedPr, repo!, prToken));
+        var matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item, repo!, prToken));
 
         // Fallback A (operator-supplied): when linked_pr is absent, resolve via
         // --issue (linked_issue.Number). Deterministic operator input wins.
         if (matchedItem is null && linkedIssueNumber.HasValue)
         {
             matchedItem = queueState.Items.FirstOrDefault(item =>
-                item.LinkedIssue?.Number == linkedIssueNumber.Value);
+                GitHubWorkItemIdentity.MatchesIssue(item.LinkedIssue, repo!, linkedIssueNumber.Value));
         }
 
         // G477 Fallback B (automatic, deterministic): when linked_pr is missing
@@ -337,25 +337,10 @@ internal static class CloseoutPrCommand
         return 0;
     }
 
-    private static bool MatchesLinkedPr(string? linkedPr, string repo, string prToken)
+    private static bool MatchesLinkedPr(QueueItem item, string repo, string prToken)
     {
-        if (string.IsNullOrWhiteSpace(linkedPr))
-        {
-            return false;
-        }
-
-        if (string.Equals(linkedPr, prToken, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        if (linkedPr!.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase))
-        {
-            return linkedPr.StartsWith($"https://github.com/{repo}/pull/", StringComparison.OrdinalIgnoreCase)
-                && linkedPr.EndsWith($"/{prToken}", StringComparison.Ordinal);
-        }
-
-        return linkedPr!.EndsWith($"/{prToken}", StringComparison.Ordinal);
+        return int.TryParse(prToken, out var number)
+            && GitHubWorkItemIdentity.MatchesPullRequest(item, repo, number);
     }
 
     private static QueueItem UpdateItemState(QueueItem item, QueueItemState state, string? recoveredLinkedPr = null)

@@ -215,6 +215,51 @@ public sealed class WorkerCompleteCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_CollidingIssueNumbers_UpdatesOnlyRepoQualifiedUnit()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        workspace.WriteQueueState(
+            workspace.CreateItem("G603", "J-Tech-Japan/intent-system", 525, "intent-cli"),
+            workspace.CreateItem("SKS-G593", "J-Tech-Japan/SekibanAsAService", 525, "sekiban-as-a-service",
+                existingLinkedPr: "https://github.com/J-Tech-Japan/SekibanAsAService/pull/1306"));
+        var foreignBefore = File.ReadAllBytes(workspace.QueueStatePath);
+        var mutator = new FakeMutator { Labels = new[] { "intent-target", "intent-issue-in-progress" } };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--kind", "issue", "--number", "525",
+             "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated, "--pr", "1306", "--write", "--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        var state = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/1306", state.Items[0].LinkedPr);
+        Assert.Equal("https://github.com/J-Tech-Japan/SekibanAsAService/pull/1306", state.Items[1].LinkedPr);
+        Assert.NotEqual(foreignBefore, File.ReadAllBytes(workspace.QueueStatePath));
+    }
+
+    [Fact]
+    public void Execute_DomainDisagreement_RefusesBeforeLabelOrQueueWrite()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        workspace.WriteQueueState(workspace.CreateItem("SKS-G593", "J-Tech-Japan/intent-system", 1305, "sekiban-as-a-service"));
+        var before = File.ReadAllBytes(workspace.QueueStatePath);
+        var mutator = new FakeMutator { Labels = new[] { "intent-target", "intent-issue-in-progress" } };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--kind", "issue", "--number", "1305",
+             "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated, "--pr", "1306", "--write", "--format", "json"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("J-Tech-Japan/intent-system#1305", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("sekiban-as-a-service", writer.ToString(), StringComparison.Ordinal);
+        Assert.Empty(mutator.AppliedTransitions);
+        Assert.Equal(before, File.ReadAllBytes(workspace.QueueStatePath));
+    }
+
+    [Fact]
     public void Execute_IssuePrCreatedOutcomeWithParentIntentRoot_SyncsParentQueueStateLinkedPr()
     {
         using var parentWorkspace = new WorkerCompleteWorkspace();
@@ -2037,6 +2082,31 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             };
             File.WriteAllText(QueueStatePath, QueueStateSerializer.Serialize(state));
         }
+
+        public QueueItem CreateItem(string executionUnit, string repo, int issue, string domain, string? existingLinkedPr = null) =>
+            new()
+            {
+                ExecutionUnit = executionUnit,
+                Title = executionUnit,
+                State = QueueItemState.Queued,
+                Dependencies = Array.Empty<string>(),
+                BlockedBy = Array.Empty<string>(),
+                ClarificationReturnPath = $"intents/{domain}/clarifications/open.md",
+                PacketPaths = new PacketPaths { Implementation = "i", ReviewContext = "r", Yaml = "p" },
+                LinkedIssue = new LinkedIssue { Repo = repo, Number = issue, Url = $"https://github.com/{repo}/issues/{issue}" },
+                LinkedPr = existingLinkedPr,
+                WorkerRole = "child-impl",
+                ReviewRole = "host-review",
+                Priority = "normal",
+            };
+
+        public void WriteQueueState(params QueueItem[] items) => File.WriteAllText(QueueStatePath,
+            QueueStateSerializer.Serialize(new QueueState
+            {
+                SchemaVersion = "1",
+                UpdatedAt = DateTimeOffset.UtcNow,
+                Items = items,
+            }));
 
         public IReadOnlyDictionary<string, string> SnapshotWorkspace()
         {

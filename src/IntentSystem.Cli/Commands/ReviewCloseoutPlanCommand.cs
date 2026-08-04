@@ -214,7 +214,7 @@ internal static class ReviewCloseoutPlanCommand
         if (queueState is not null)
         {
             var prToken = pr!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item.LinkedPr, repo!, prToken));
+            matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item, repo!, prToken));
             if (matchedItem is null)
             {
                 // G329 review fix: auto-fetch closing issues from
@@ -875,25 +875,10 @@ internal static class ReviewCloseoutPlanCommand
     private static ReviewCloseoutPlanGap LinkageAmbiguousGap(string description) =>
         new() { Description = description, Classification = GapClassificationLinkageAmbiguous };
 
-    private static bool MatchesLinkedPr(string? linkedPr, string repo, string prToken)
+    private static bool MatchesLinkedPr(QueueItem item, string repo, string prToken)
     {
-        if (string.IsNullOrWhiteSpace(linkedPr))
-        {
-            return false;
-        }
-
-        if (string.Equals(linkedPr, prToken, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        if (linkedPr!.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase))
-        {
-            return linkedPr.StartsWith($"https://github.com/{repo}/pull/", StringComparison.OrdinalIgnoreCase)
-                && linkedPr.EndsWith($"/{prToken}", StringComparison.Ordinal);
-        }
-
-        return linkedPr!.EndsWith($"/{prToken}", StringComparison.Ordinal);
+        return int.TryParse(prToken, out var number)
+            && GitHubWorkItemIdentity.MatchesPullRequest(item, repo, number);
     }
 
     private static string DeriveSubmodulePath(string repo)

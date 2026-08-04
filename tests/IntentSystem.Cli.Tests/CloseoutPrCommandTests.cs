@@ -572,7 +572,7 @@ public sealed class CloseoutPrCommandTests : IDisposable
     public void Execute_PrMergedFalse_RefusesAndDoesNotMutate()
     {
         using var workspace = new CloseoutPrWorkspace();
-        workspace.WriteQueueState(BuildQueueState("G297", "review", linkedPr: "523"));
+        workspace.WriteQueueState(BuildQueueState("G297", "review", linkedPr: "https://github.com/owner/repo/pull/523"));
         using var writer = new StringWriter();
 
         var exitCode = CloseoutPrCommand.Execute(
@@ -593,7 +593,7 @@ public sealed class CloseoutPrCommandTests : IDisposable
         Assert.Contains("G297", json, StringComparison.Ordinal);
 
         // Mutation invariant: queue-state must not have been modified.
-        Assert.Equal(BuildQueueState("G297", "review", linkedPr: "523"),
+        Assert.Equal(BuildQueueState("G297", "review", linkedPr: "https://github.com/owner/repo/pull/523"),
             File.ReadAllText(workspace.Context.GetQueueStatePath()));
         Assert.False(File.Exists(workspace.Context.GetRunLogPath()));
     }
@@ -602,7 +602,7 @@ public sealed class CloseoutPrCommandTests : IDisposable
     public void Execute_PrMergedTrue_AllowsCloseout()
     {
         using var workspace = new CloseoutPrWorkspace();
-        workspace.WriteQueueState(BuildQueueState("G297", "review", linkedPr: "523"));
+        workspace.WriteQueueState(BuildQueueState("G297", "review", linkedPr: "https://github.com/owner/repo/pull/523"));
         using var writer = new StringWriter();
 
         var exitCode = CloseoutPrCommand.Execute(
@@ -626,7 +626,7 @@ public sealed class CloseoutPrCommandTests : IDisposable
     public void Execute_PrMergedOmitted_BackwardsCompatible_AllowsCloseout()
     {
         using var workspace = new CloseoutPrWorkspace();
-        workspace.WriteQueueState(BuildQueueState("G297", "review", linkedPr: "523"));
+        workspace.WriteQueueState(BuildQueueState("G297", "review", linkedPr: "https://github.com/owner/repo/pull/523"));
         using var writer = new StringWriter();
 
         var exitCode = CloseoutPrCommand.Execute(
@@ -841,7 +841,10 @@ public sealed class CloseoutPrCommandTests : IDisposable
 
     private static string BuildQueueState(string executionUnit, string state, string? linkedPr)
     {
-        var linked = linkedPr is null ? "null" : $"\"{linkedPr}\"";
+        var qualified = linkedPr is not null && int.TryParse(linkedPr, out var number)
+            ? $"https://github.com/J-Tech-Japan/intent-system/pull/{number}"
+            : linkedPr;
+        var linked = qualified is null ? "null" : $"\"{qualified}\"";
         return $$"""
             {
               "schema_version": "1",
@@ -869,8 +872,14 @@ public sealed class CloseoutPrCommandTests : IDisposable
         (string ExecutionUnit, string State, string? LinkedPr) completing,
         (string ExecutionUnit, string State, string? LinkedPr) waiting)
     {
-        var completingLinked = completing.LinkedPr is null ? "null" : $"\"{completing.LinkedPr}\"";
-        var waitingLinked = waiting.LinkedPr is null ? "null" : $"\"{waiting.LinkedPr}\"";
+        var completingQualified = completing.LinkedPr is not null && int.TryParse(completing.LinkedPr, out var completingNumber)
+            ? $"https://github.com/J-Tech-Japan/intent-system/pull/{completingNumber}"
+            : completing.LinkedPr;
+        var waitingQualified = waiting.LinkedPr is not null && int.TryParse(waiting.LinkedPr, out var waitingNumber)
+            ? $"https://github.com/J-Tech-Japan/intent-system/pull/{waitingNumber}"
+            : waiting.LinkedPr;
+        var completingLinked = completingQualified is null ? "null" : $"\"{completingQualified}\"";
+        var waitingLinked = waitingQualified is null ? "null" : $"\"{waitingQualified}\"";
         return $$"""
             {
               "schema_version": "1",
