@@ -219,6 +219,7 @@ internal static class SessionLayerPreflight
         if (resolution.Source == SessionLayerModeSource.Recorded)
         {
             AddMarkerFindings(findings, markers, domain!, team, resolution);
+            AddResidueFindings(findings, repoRoot, team, resolution);
         }
 
         if (topology.Error is not null && resolution.Source != SessionLayerModeSource.Recorded)
@@ -500,6 +501,30 @@ internal static class SessionLayerPreflight
             RecordedMode = recordedMode,
             TopologyMode = null,
         });
+    }
+
+    private static void AddResidueFindings(
+        List<SessionLayerPreflightFinding> findings,
+        string repoRoot,
+        string team,
+        SessionLayerModeResolution resolution)
+    {
+        foreach (var residue in SessionLayerMigration.Discover(repoRoot, resolution.Mode))
+        {
+            findings.Add(new SessionLayerPreflightFinding
+            {
+                Team = team,
+                Role = residue.Path,
+                Field = "residue",
+                Cause = SessionLayerMigration.ResidueCause,
+                Message = $"Known '{residue.OwningMode}' {residue.Artifact} residue is present at '{residue.Path}', "
+                    + $"while the canonical record names '{resolution.Mode}'. A team runs exactly ONE session-layer "
+                    + "mode at a time; review and remove or disable this user-managed residue. This advisory finding "
+                    + "never infers, changes, or overrides the recorded mode.",
+                RecordedMode = resolution.Mode,
+                TopologyMode = null,
+            });
+        }
     }
 
     private static SessionLayerPreflightScopeResult Scope(

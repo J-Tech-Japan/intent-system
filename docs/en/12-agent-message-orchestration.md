@@ -382,6 +382,21 @@ label (for example, `<team> · herdr-only`). That label is human-facing and
 non-authoritative: intent-cli neither writes herdr state nor reads the label as
 mode evidence.
 
+#### Mode switches require a manual migration review
+
+When `session-layer set --write` actually changes a recorded mode, it emits an
+ordered **manual migration plan**. Review the other mode's session hooks, inbox
+watchers or monitors, then regenerate the G601 visibility marker. Each item is
+an operator action: intent-cli never deletes, rewrites, or disables user
+configuration. A no-op set emits no plan.
+
+The shared preflight checks only declared locations for known other-mode
+residue. For example, project-level agmsg session hooks in `.codex/hooks.json`
+are reported on a herdr-only team. Such `other-mode-residue` findings name the
+path and owning mode, state the one-mode exclusivity contract and removal
+guidance, but remain advisory: residue is a hazard rather than proof of active
+mixing and never infers, flips, or overrides the canonical mode record.
+
 #### Shared record-first session-layer preflight
 
 `automation doctor`, the guide's READY definition, and `notify` consume one
