@@ -104,6 +104,20 @@ public sealed class GuideModelCommandTests
         Assert.Contains("PRIMARY and unqualified in both modes", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_Markdown_PresentsBothTransportsAsConditionalChoices_G608()
+    {
+        using var writer = new StringWriter();
+        Assert.Equal(0, GuideModelCommand.Execute(CreateContext(), [], writer));
+        var output = writer.ToString();
+
+        Assert.Contains("herdr-only (PREVIEW maturity)", output, StringComparison.Ordinal);
+        Assert.Contains("agmsg + herdr", output, StringComparison.Ordinal);
+        Assert.Contains("Both are supported choices.", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("agmsg (PRIMARY)", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Use this unless", output, StringComparison.Ordinal);
+    }
+
     private static string SectionBetween(string output, string startHeading, string endHeading)
     {
         var start = output.IndexOf(startHeading, StringComparison.Ordinal);

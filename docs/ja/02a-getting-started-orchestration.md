@@ -1,11 +1,28 @@
 # はじめに: 最初の packet までの道のり
 
-← [ドキュメント索引](README.md) | [プロジェクト開始](02-project-start.md) | → [intent の整理・保守](03-intents.md)
+← [プロジェクト開始](02-project-start.md) | [ドキュメント索引](README.md) | → [intent の整理・保守](03-intents.md)
 
-このページは、空の workspace から最初の公開 packet まで進む **orchestration-first** の経路です。
-[プロジェクト開始](02-project-start.md) と [agent メッセージオーケストレーションの
-contract](12-agent-message-orchestration.md) を置き換えません。repository topology と
-session-layer semantics の authority は引き続きそれらのページです。
+## 最初の decision: 2×2 onboarding pattern を選ぶ
+
+host metadata の置き場と project が brand-new / existing のどちらかを最初に選びます。
+各リンク先は意図的に自己完結しており、2 つの pattern の手順を混ぜる必要はありません。
+
+| Host metadata | Brand-new project | Existing project に intent-cli を追加 |
+| --- | --- | --- |
+| Separate host repository | [Separate host × brand-new](02b-separate-host-brand-new.md) | [Separate host × existing](02c-separate-host-existing.md) |
+| Same repository, metadata branch | [Same repo × brand-new](02d-same-repo-brand-new.md) | [Same repo × existing](02e-same-repo-existing.md) |
+
+各 pattern は共存する貼り付け可能な initial prompt をちょうど 2 つ提示します。4 agent 全員が
+1 台に collocate する場合は `herdr-only` を最初に選びます。**PREVIEW** は maturity note です。
+distributed team または既存 agmsg investment には `agmsg` + herdr を選びます。どちらも
+supported choice で、`session-layer set` で record します。primary なのは transport ではなく
+**4 スレッドモデル**です。initial prompt の後は transport 固有の手順を混ぜず、record された
+mode と current installed guides に従います。
+
+このページは minimal start から最初の公開 packet までの **orchestration-first** 経路です。
+[プロジェクト開始](02-project-start.md) は topology の authority、[agent メッセージ
+オーケストレーション contract](12-agent-message-orchestration.md) は session-layer semantics の
+authority として残ります。
 
 ## これから設定するもの
 
@@ -157,7 +174,12 @@ session layer は record され visibility も得ました。[intent の整理�
 
 ## 代替経路
 
-- **agmsg:** primary transport の provisioning guidance は [agent message orchestration contract](12-agent-message-orchestration.md) を使います。
+- **agmsg + herdr:** distributed または既存 agmsg の選択では [agent message
+  orchestration contract](12-agent-message-orchestration.md) を使います。
 - **timer-loop:** [実装ループの設定](05-implementation-loop.md) と
   [レビュー / next-slice ループの設定](06-review-next-slice-loop.md) を使います。上の
   orchestration-first route の alternative です。
+
+## 次へ
+
+[intent の整理・保守](03-intents.md)。

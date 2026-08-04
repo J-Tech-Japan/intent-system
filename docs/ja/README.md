@@ -6,18 +6,22 @@
 
 `intent-cli` は、AI agent に Intent System の正規手順を確認させながら Intent-Driven Development を進めるための **決定論的なサポートツール** です。
 
-`intent-cli` をインストールしたら、AI agent のデザインスレッドで次のように依頼します:
-
-> `<owner>/<repo>` で intent-cli を使い始めたいです。
-> intent-cli に現在のフェーズと次に決断すべきことを聞いてください。
-
-agent が内部で `intent-cli` を実行し、質問や結果を返します。コマンドを覚える必要はありません。
+最初に [自己完結した onboarding pattern](02a-getting-started-orchestration.md) を選びます。
+separate host repository / same-repository metadata branch と、brand-new / existing project を
+掛け合わせます。各 pattern には貼り付け可能な initial prompt が 2 つあります。1 台に
+collocate する team は `herdr-only` を最初の supported choice とします（PREVIEW は maturity
+note）。distributed team または既存の agmsg investment には `agmsg` + herdr を選びます。
+primary なのは transport ではなく 4 スレッドモデルです。
 
 ## ページ一覧
 
 1. [インストール](01-install.md)
 2. [プロジェクト開始](02-project-start.md)
-2a. [はじめに: 最初の packet までの道のり](02a-getting-started-orchestration.md) — **primary model** の onboarding。collocate する `herdr-only` は **PREVIEW transport**
+2a. [はじめに: 最初の packet までの道のり](02a-getting-started-orchestration.md) — minimal start と primary な 4 スレッドモデル。collocate する `herdr-only` は supported（PREVIEW は maturity note）
+   - [Separate host × brand-new](02b-separate-host-brand-new.md)
+   - [Separate host × existing](02c-separate-host-existing.md)
+   - [Same repo × brand-new](02d-same-repo-brand-new.md)
+   - [Same repo × existing](02e-same-repo-existing.md)
 3. [Intent Storming と intent の整理](03-intents.md)
 4. [packet 作成と issue 公開](04-packets-issues.md)
 4a. [GitHub ワークフローラベルで見る現在地](04a-workflow-labels.md) — ラベルの意味と読み方

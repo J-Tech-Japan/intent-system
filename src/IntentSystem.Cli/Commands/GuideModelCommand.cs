@@ -171,17 +171,18 @@ internal static class GuideModelCommand
             + "same four threads, the same authority boundaries, the same wake contract in either mode.",
         Modes = new[]
         {
-            "agmsg (PRIMARY) — the practiced, maintained transport: threads register as agmsg roles and exchange "
-                + "delegation / progress / completion / blocker messages. Use this unless you have a specific reason "
-                + "not to; every field-proven behaviour (wake contract, stalled-work, heartbeat) was built here.",
-            "herdr-only (PREVIEW) — a single-machine alternative in which herdr is the terminal controller and no "
-                + "separate message bridge runs. " + SessionLayerMode.PreviewScopingSentence,
+            "herdr-only (PREVIEW maturity) — the supported first choice when every agent in the team is "
+                + "herdr-resident on ONE machine: herdr is the terminal controller and no separate message bridge runs. "
+                + SessionLayerMode.PreviewScopingSentence,
+            "agmsg + herdr — the supported choice when team members are distributed across machines or the team "
+                + "already invests in agmsg: threads register as agmsg roles and exchange delegation / progress / "
+                + "completion / blocker messages.",
         },
         WhenToChooseHerdrOnly =
-            "Consider herdr-only when every agent in the team is herdr-resident on ONE machine and you want fewer "
+            "Choose herdr-only when every agent in the team is herdr-resident on ONE machine and you want fewer "
             + "moving parts: no message-bridge process to keep alive, and the terminal controller you already run "
-            + "carries the delegations. Stay on agmsg when threads live on different machines or when you want the "
-            + "most exercised path.",
+            + "carries the delegations. Choose agmsg + herdr when threads live on different machines or the team "
+            + "already invests in agmsg. Both are supported choices.",
         Exclusivity = SessionLayerMode.ExclusivitySentence,
         Selection =
             "`intent-cli session-layer show --domain <d> [--team <t>]` reports the mode in force; "

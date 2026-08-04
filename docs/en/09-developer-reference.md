@@ -715,13 +715,15 @@ The four-thread model (design / orchestrator / implementation / review) is one
 thing; the SESSION LAYER those threads talk over is another, and per the
 operator ruling of 2026-08-01 it is now selectable rather than fixed.
 
-- **`agmsg` is PRIMARY** — the practiced, maintained transport, and the default
-  when nothing is recorded.
-- **`herdr-only` is PREVIEW** — a single-machine alternative where herdr is the
-  terminal controller and no separate message bridge runs. **The preview
-  qualifier scopes the TRANSPORT only.** The four-thread model itself stays
-  PRIMARY and unqualified in both modes, exactly as G540 ruled; choosing a
-  transport never makes the model provisional.
+- **`herdr-only` (PREVIEW maturity)** — the supported first choice when every
+  team agent is collocated on one machine: herdr is the terminal controller and
+  no separate message bridge runs. **The preview qualifier scopes the
+  TRANSPORT only.**
+- **`agmsg` + herdr** — the supported choice when team members are distributed
+  across machines or the team already invests in agmsg. `agmsg` remains the
+  default when nothing is recorded.
+- **The four-thread model is PRIMARY** and unqualified in both modes, exactly
+  as G540 ruled; choosing a transport never makes the model provisional.
 - **One mode per team.** Mixing agmsg and herdr-only delivery inside one team is
   a contract violation, not a fallback: two transports mean two views of who was
   told what.

@@ -53,28 +53,24 @@ or `%USERPROFILE%\.dotnet\tools` (Windows) to your `PATH`.
 intent-cli --version
 ```
 
-### 3. Ask an AI agent
+### 3. Start with an AI agent
 
-Open Claude, Codex, Copilot, or another coding assistant with access to your
-repository and paste one of these prompts:
+Choose your onboarding pattern **before** making any files. Where will host
+metadata live, and are you starting a new project or adding intent-cli to one?
 
-**Start or continue a project:**
+| Host metadata | Brand-new project | Existing project |
+| --- | --- | --- |
+| Separate host repository | [Separate host × brand-new](docs/en/02b-separate-host-brand-new.md) | [Separate host × existing](docs/en/02c-separate-host-existing.md) |
+| Same repository, metadata branch | [Same repo × brand-new](docs/en/02d-same-repo-brand-new.md) | [Same repo × existing](docs/en/02e-same-repo-existing.md) |
 
-> I want to work on `<owner>/<repo>` with intent-cli.
-> Ask intent-cli what phase I'm in and what I should decide next.
+Each pattern is self-contained and gives two paste-ready initial prompts: choose
+supported `herdr-only` first for a collocated single-machine team (its
+**PREVIEW** label is a maturity note), or choose supported `agmsg` + herdr for
+a distributed/multi-machine team or an existing agmsg investment. Record the
+choice with `intent-cli session-layer set`; the **four-thread model**, not a
+transport, is primary.
 
-**Start four-thread agmsg orchestration (primary path):**
-
-> I want to start agmsg orchestrator mode for `<owner>/<repo>` with intent-cli.
-> Ask intent-cli for the orchestrator setup checklist.
-
-**Start a collocated four-thread herdr-only team (PREVIEW transport):**
-
-> I want to start a collocated single-machine four-thread team for
-> `<owner>/<repo>` with intent-cli using the herdr-only transport. Ask intent-cli
-> for the orchestration setup checklist and guide me through new-team stand-up.
-
-**Start an implementation loop (timer-loop alternative):**
+**Timer-loop alternative:**
 
 > Set up a child implementation loop for `<owner>/<repo>`.
 > Ask intent-cli for the next step.
@@ -116,10 +112,10 @@ each answer until a stop condition is reached.
   — agent-facing and power-user command surfaces.
 - **Developer reference:** [`docs/en/09-developer-reference.md`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/09-developer-reference.md)
   — packaged invocation smoke test, preview channel, version flow.
-- **Agent-message orchestration (primary):** [`docs/en/12-agent-message-orchestration.md`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/12-agent-message-orchestration.md)
-  — the primary four-thread agmsg orchestrator model (日本語: [`docs/ja/12`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/12-agent-message-orchestration.md)).
+- **Agent-message orchestration:** [`docs/en/12-agent-message-orchestration.md`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/12-agent-message-orchestration.md)
+  — the primary four-thread model and its supported transport choices (日本語: [`docs/ja/12`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/12-agent-message-orchestration.md)).
 
-> **Four-thread agmsg orchestration is the primary way to run intent-cli.** A
+> **The four-thread model is the primary way to run intent-cli.** A
 > **design** thread authors intent and packets; an **orchestrator** thread
 > moves ready packets through the workflow and paces the loopless
 > **implementation** and **review** threads over a local message bus (agmsg)

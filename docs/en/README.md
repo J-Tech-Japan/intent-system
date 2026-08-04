@@ -6,18 +6,23 @@
 
 `intent-cli` is **deterministic support tooling** for an intent-driven development workflow on top of GitHub.
 
-Once installed, open a design thread in your AI agent and paste a prompt like:
-
-> I want to work on `<owner>/<repo>` with intent-cli.
-> Ask intent-cli what phase I'm in and what I should decide next.
-
-The agent runs `intent-cli` internally and brings back questions or results. You do not need to memorize commands.
+Start by choosing one [self-contained onboarding pattern](02a-getting-started-orchestration.md):
+separate host repository or same-repository metadata branch, crossed with a
+brand-new or existing project. Each pattern has two paste-ready initial prompts.
+For a collocated single-machine team, `herdr-only` is the first supported
+choice (PREVIEW is a maturity note); choose `agmsg` + herdr for distributed
+teams or an existing agmsg investment. The primary thing is the four-thread
+model, not either transport.
 
 ## Pages
 
 1. [Install](01-install.md)
 2. [Start a project](02-project-start.md)
-2a. [Getting started: the road to the first packet](02a-getting-started-orchestration.md) — **primary model** onboarding; collocated `herdr-only` is a **PREVIEW transport**
+2a. [Getting started: the road to the first packet](02a-getting-started-orchestration.md) — minimal start and the primary four-thread model; collocated `herdr-only` is supported (PREVIEW maturity note)
+   - [Separate host × brand-new](02b-separate-host-brand-new.md)
+   - [Separate host × existing](02c-separate-host-existing.md)
+   - [Same repo × brand-new](02d-same-repo-brand-new.md)
+   - [Same repo × existing](02e-same-repo-existing.md)
 3. [Intent Storming & organize intents](03-intents.md)
 4. [Create packets & publish issues](04-packets-issues.md)
 4a. [GitHub workflow labels and what they mean](04a-workflow-labels.md) — label meanings and how to read them

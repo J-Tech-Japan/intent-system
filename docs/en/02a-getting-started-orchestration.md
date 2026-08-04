@@ -1,12 +1,30 @@
 # Getting started: the road to the first packet
 
-← [docs index](README.md) | [Start a project](02-project-start.md) | → [Organize & maintain intents](03-intents.md)
+← [Start a project](02-project-start.md) | [docs index](README.md) | → [Organize & maintain intents](03-intents.md)
 
-This page is the **orchestration-first** route from an empty workspace to the
-first published packet. It does not replace [Start a project](02-project-start.md)
-or the [agent-message orchestration contract](12-agent-message-orchestration.md):
-those pages remain authoritative for repository topology and session-layer
-semantics.
+## First decision: choose your 2×2 onboarding pattern
+
+Choose where host metadata lives and whether the project is brand-new or
+existing. Do this first; each linked page is deliberately self-contained, so
+you never combine instructions from two patterns.
+
+| Host metadata | Brand-new project | Adding intent-cli to an existing project |
+| --- | --- | --- |
+| Separate host repository | [Separate host × brand-new](02b-separate-host-brand-new.md) | [Separate host × existing](02c-separate-host-existing.md) |
+| Same repository, metadata branch | [Same repo × brand-new](02d-same-repo-brand-new.md) | [Same repo × existing](02e-same-repo-existing.md) |
+
+Each pattern starts with exactly two coexisting paste-ready initial prompts.
+Choose `herdr-only` first when all four agents are collocated on one machine;
+its **PREVIEW** status is a maturity note. Choose `agmsg` + herdr for a
+distributed team or an existing agmsg investment. Both are supported choices,
+recorded with `session-layer set`; the **four-thread model** is primary, never
+either transport. After the initial prompt, follow the recorded mode and the
+current installed guides instead of combining transport-specific instructions.
+
+This page is the **orchestration-first** route from that minimal start to the
+first published packet. [Start a project](02-project-start.md) remains
+authoritative for topology, and the [agent-message orchestration contract](12-agent-message-orchestration.md)
+remains authoritative for session-layer semantics.
 
 ## What you are setting up
 
@@ -167,8 +185,12 @@ ready to publish.
 
 ## Alternatives
 
-- **agmsg:** use the [agent-message orchestration contract](12-agent-message-orchestration.md)
-  for the primary transport's provisioning guidance.
+- **agmsg + herdr:** for the distributed or existing-agmsg choice, use the
+  [agent-message orchestration contract](12-agent-message-orchestration.md).
 - **timer-loop:** use [Implementation loop setup](05-implementation-loop.md)
   and [Review / next-slice loop setup](06-review-next-slice-loop.md). It is an
   alternative to the orchestration-first route above.
+
+## Next
+
+[Organize & maintain intents](03-intents.md).

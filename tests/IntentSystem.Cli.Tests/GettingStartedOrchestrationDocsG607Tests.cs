@@ -71,7 +71,9 @@ public sealed class GettingStartedOrchestrationDocsG607Tests
         var index = ReadDoc(language, "README.md");
 
         var projectStart = index.IndexOf("02-project-start.md", StringComparison.Ordinal);
-        var gettingStarted = index.IndexOf(GettingStartedPath, StringComparison.Ordinal);
+        // The updated G608 front-door paragraph links 02a before the numbered
+        // list. The list ordering is the contract this G607 guard protects.
+        var gettingStarted = index.LastIndexOf(GettingStartedPath, StringComparison.Ordinal);
         var intents = index.IndexOf("03-intents.md", StringComparison.Ordinal);
         var packets = index.IndexOf("04-packets-issues.md", StringComparison.Ordinal);
         var contract = index.IndexOf("12-agent-message-orchestration.md", StringComparison.Ordinal);
@@ -87,9 +89,11 @@ public sealed class GettingStartedOrchestrationDocsG607Tests
     {
         var root = File.ReadAllText(Path.Combine(RepoVersionPolicySource.RepoRoot(), "README.md"));
 
-        Assert.Contains("Start a collocated four-thread herdr-only team", root, StringComparison.Ordinal);
-        Assert.Contains("PREVIEW transport", root, StringComparison.Ordinal);
-        Assert.Contains("Start an implementation loop (timer-loop alternative)", root, StringComparison.Ordinal);
+        Assert.Contains("Choose your onboarding pattern", root, StringComparison.Ordinal);
+        Assert.Contains("Separate host × brand-new", root, StringComparison.Ordinal);
+        Assert.Contains("Same repo × existing", root, StringComparison.Ordinal);
+        Assert.Contains("PREVIEW** label is a maturity note", root, StringComparison.Ordinal);
+        Assert.Contains("Timer-loop alternative", root, StringComparison.Ordinal);
     }
 
     private static string ReadDoc(string language, string path) =>
