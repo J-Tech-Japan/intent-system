@@ -350,6 +350,59 @@ public sealed class HostQueueItemRecoveryAnalyzerTests
     }
 
     [Fact]
+    public void Analyze_CompletedUnitWithWrongRepoLinkedPr_RejectsClosedUnmergedPr()
+    {
+        var candidate = BuildCandidate() with
+        {
+            PrState = "CLOSED",
+            ExistingQueueItems = new[]
+            {
+                new HostQueueItemRecoveryExistingItem
+                {
+                    ExecutionUnit = Unit,
+                    LinkedIssueNumber = IssueNumber,
+                    LinkedIssueRepo = Repo,
+                    LinkedPrNumber = PrNumber,
+                    LinkedPrRepo = "J-Tech-Japan/intent-system",
+                    State = QueueItemState.Completed,
+                }
+            }
+        };
+
+        var result = HostQueueItemRecoveryAnalyzer.Analyze(candidate);
+
+        Assert.Equal(HostQueueItemRecoveryAnalyzer.ResultUnsafeStop, result.Result);
+        Assert.Equal(HostQueueItemRecoveryAnalyzer.ReasonClosedPr, result.ReasonCode);
+    }
+
+    [Fact]
+    public void Analyze_CompletedUnitWithWrongRepoLinkedPr_RejectsOpenPr()
+    {
+        var candidate = BuildCandidate() with
+        {
+            PrState = "OPEN",
+            ExistingQueueItems = new[]
+            {
+                new HostQueueItemRecoveryExistingItem
+                {
+                    ExecutionUnit = Unit,
+                    LinkedIssueNumber = IssueNumber,
+                    LinkedIssueRepo = Repo,
+                    LinkedPrNumber = PrNumber,
+                    LinkedPrRepo = "J-Tech-Japan/intent-system",
+                    State = QueueItemState.Completed,
+                }
+            }
+        };
+
+        var result = HostQueueItemRecoveryAnalyzer.Analyze(candidate);
+
+        Assert.Equal(HostQueueItemRecoveryAnalyzer.ResultUnsafeStop, result.Result);
+        Assert.Equal(HostQueueItemRecoveryAnalyzer.ReasonClosedPr, result.ReasonCode);
+        Assert.Contains("requires merged PR", result.Explanation, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Analyze_RejectsDraftPrAsUnsafeStop()
     {
         // Every other field is the happy path, but PrIsDraft = true must

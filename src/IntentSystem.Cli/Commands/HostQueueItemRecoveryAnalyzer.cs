@@ -203,9 +203,9 @@ internal static class HostQueueItemRecoveryAnalyzer
         var sameUnitItem = (candidate.ExistingQueueItems ?? Array.Empty<HostQueueItemRecoveryExistingItem>())
             .FirstOrDefault(i => string.Equals(i.ExecutionUnit, unit, StringComparison.Ordinal));
         var completedLinkageRepair = sameUnitItem is { State: QueueItemState.Completed }
-            && SameOrImplicitRepo(sameUnitItem.LinkedIssueRepo, repo)
+            && string.Equals(sameUnitItem.LinkedIssueRepo, repo, StringComparison.OrdinalIgnoreCase)
             && sameUnitItem.LinkedIssueNumber == publishIssueNumber
-            && !SameOrImplicitRepo(sameUnitItem.LinkedPrRepo, repo);
+            && !string.Equals(sameUnitItem.LinkedPrRepo, repo, StringComparison.OrdinalIgnoreCase);
 
         // An open non-draft PR is the normal review recovery. G603 also
         // permits a merged PR only for a completed unit whose existing PR
@@ -215,7 +215,16 @@ internal static class HostQueueItemRecoveryAnalyzer
             || string.Equals(candidate.PrState, "MERGED", StringComparison.OrdinalIgnoreCase)
             || string.Equals(candidate.PrState, "closed", StringComparison.OrdinalIgnoreCase)
             || string.Equals(candidate.PrState, "merged", StringComparison.OrdinalIgnoreCase);
-        if (prClosed && !completedLinkageRepair)
+        var prMerged = string.Equals(candidate.PrState, "MERGED", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(candidate.PrState, "merged", StringComparison.OrdinalIgnoreCase);
+        if (completedLinkageRepair && !prMerged)
+        {
+            return UnsafeStop(
+                ReasonClosedPr,
+                $"completed linkage repair for '{unit}' requires merged PR #{candidate.PrNumber} in '{repo}'; "
+                + $"GitHub reports state '{candidate.PrState}'.");
+        }
+        if (prClosed && !(completedLinkageRepair && prMerged))
         {
             return UnsafeStop(
                 ReasonClosedPr,

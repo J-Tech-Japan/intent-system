@@ -222,7 +222,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             workspace.CreateItem("G603", "J-Tech-Japan/intent-system", 525, "intent-cli"),
             workspace.CreateItem("SKS-G593", "J-Tech-Japan/SekibanAsAService", 525, "sekiban-as-a-service",
                 existingLinkedPr: "https://github.com/J-Tech-Japan/SekibanAsAService/pull/1306"));
-        var foreignBefore = File.ReadAllBytes(workspace.QueueStatePath);
+        var foreignBefore = QueueItemBytes(workspace.QueueStatePath, index: 1);
         var mutator = new FakeMutator { Labels = new[] { "intent-target", "intent-issue-in-progress" } };
         WorkerCompleteCommand.MutatorFactory = () => mutator;
 
@@ -235,7 +235,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         var state = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
         Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/1306", state.Items[0].LinkedPr);
         Assert.Equal("https://github.com/J-Tech-Japan/SekibanAsAService/pull/1306", state.Items[1].LinkedPr);
-        Assert.NotEqual(foreignBefore, File.ReadAllBytes(workspace.QueueStatePath));
+        Assert.Equal(foreignBefore, QueueItemBytes(workspace.QueueStatePath, index: 1));
     }
 
     [Fact]
@@ -257,6 +257,25 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.Contains("sekiban-as-a-service", writer.ToString(), StringComparison.Ordinal);
         Assert.Empty(mutator.AppliedTransitions);
         Assert.Equal(before, File.ReadAllBytes(workspace.QueueStatePath));
+    }
+
+    [Theory]
+    [InlineData("", "intent-system")]
+    [InlineData("J-Tech-Japan", "")]
+    public void MatchesClosingIssue_PartialRepositoryDescriptor_IsRejected(string owner, string name)
+    {
+        var reference = new GitHubPrClosingIssueReference
+        {
+            Number = 1309,
+            Repository = new GitHubPrClosingIssueRepository
+            {
+                Name = name,
+                Owner = new GitHubPrClosingIssueRepositoryOwner { Login = owner },
+            },
+        };
+
+        Assert.False(GitHubWorkItemIdentity.MatchesClosingIssue(
+            reference, "J-Tech-Japan/intent-system", 1309));
     }
 
     [Fact]
@@ -2127,5 +2146,12 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                 Directory.Delete(RootPath, recursive: true);
             }
         }
+    }
+
+    private static byte[] QueueItemBytes(string queueStatePath, int index)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(queueStatePath));
+        return System.Text.Encoding.UTF8.GetBytes(
+            document.RootElement.GetProperty("items")[index].GetRawText());
     }
 }
