@@ -45,20 +45,15 @@ public sealed class ReleaseNotesV0111DocsTests
     }
 
     [Fact]
-    public void Readiness_TracksThePreparedPatchWithoutChangingVersionPolicy_G609()
+    public void ReleasedPatchNotesRemainHistoricalAfterTheVersionRoll_G609()
     {
-        var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.11.0", policy.StableVersion);
-        Assert.Equal("0.11.1", policy.NextVersion);
-
         foreach (var language in new[] { "en", "ja" })
         {
-            var reference = Read(language, "09-developer-reference.md");
-            Assert.Contains("G607", reference, StringComparison.Ordinal);
-            Assert.Contains("G608", reference, StringComparison.Ordinal);
-            Assert.Contains("764905194ee1", reference, StringComparison.Ordinal);
-            Assert.Contains("a138e32b82a7", reference, StringComparison.Ordinal);
-            Assert.Contains("ReleaseNotesV0111DocsTests", reference, StringComparison.Ordinal);
+            var notes = Read(language, "release-notes-v0.11.1.md");
+            Assert.Contains("0.11.1", notes, StringComparison.Ordinal);
+            Assert.Contains("G607", notes, StringComparison.Ordinal);
+            Assert.Contains("G608", notes, StringComparison.Ordinal);
+            Assert.DoesNotContain("DRAFT", notes, StringComparison.OrdinalIgnoreCase);
         }
     }
 
