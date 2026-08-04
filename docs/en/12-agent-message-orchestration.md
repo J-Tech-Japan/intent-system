@@ -871,6 +871,34 @@ evidence land in the artifact's `Reason` under `Recommended answer:` and
 `Evidence:` labels. All three flags are optional — omit them and the pre-G552
 packet-derived behavior is unchanged. **No clarification schema change.**
 
+### Design-judgment wait recording duty
+
+When progress blocks on a design
+judgment, opening an operator-attention record is a duty, not an option. At the
+start of that wait, record design as the owner; the record is queryable and
+surfaces in `heartbeat` / `stalled-work` instead of living in scrollback:
+
+```bash
+intent-cli operator-attention open --record <design-wait-id> \
+  --domain <domain> --team <team> --owner design \
+  --blocking-reference <issue|pr|unit|release> \
+  --action-needed "<design judgment needed>" --evidence "<facts>" \
+  --write --format json
+intent-cli operator-attention query --domain <domain> --team <team> --format json
+```
+
+Whoever supplies the judgment **must resolve** that same record with the answer
+and evidence:
+
+```bash
+intent-cli operator-attention resolve --record <design-wait-id> \
+  --resolution-evidence "<answer and evidence>" --write --format json
+```
+
+An answered-but-open record is a lie: the existing lifecycle is not complete
+until its answerer resolves it. This records the design-owned wait without
+adding a helper or changing the clarification lifecycle above.
+
 **Reviewer hold rule (refined).** Technical checks green and the only pending
 item non-semantic and mechanically fact-checkable → resolve it under bounded
 default authority, log the verifying facts, and proceed. Anything else →
@@ -967,6 +995,12 @@ packet (or give an explicit instruction):
 ```json
 {"to":"design","type":"packet-needed","domain":"<domain>","need":"<what is needed>","reason":"<why the orchestrator cannot proceed>","blocking":"<the work that is waiting>"}
 ```
+
+This is a design-judgment wait, not an inbox-only state: when it starts, the
+orchestrator opens the operator-attention record with `--owner design`, queries
+the existing record while waiting, and whoever answers resolves it with
+evidence. The complete lifecycle is specified in
+[Design-judgment wait recording duty](#design-judgment-wait-recording-duty).
 
 **Release-prep is design-owned:** design decides the release version and scope
 and authors the release-prep packet; the orchestrator may publish and coordinate
@@ -1788,6 +1822,10 @@ coordinates through the orchestrator and only surfaces human-needed items.
    metadata — that is the orchestrator/receivers' job through intent-cli.
 5. Summarize **only** human-needed items to the human; keep routine progress
    internal.
+6. If progress is waiting on a design judgment, make that wait durable before
+   waiting: open operator-attention with `--owner design`, query the record, and
+   resolve it with evidence when you supply the answer. An answered-but-open
+   record is a lie, not a completed design handoff.
 
 **"Orchestrator appears idle" diagnostic** (before escalating): confirm the
 orchestrator is scheduled and on a fresh turn; confirm it received your last

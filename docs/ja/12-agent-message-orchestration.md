@@ -795,6 +795,33 @@ intent-cli clarify open <execution-unit> \
 任意で、省略すれば G552 以前の packet 由来挙動のままです。**clarification の schema
 変更はありません。**
 
+### design 判断待ちの記録義務
+
+進行が design の判断で止まるとき、operator-attention
+record を開くことは任意ではなく義務です。その待ちが始まった時点で design を owner として
+記録します。record は query でき、scrollback に埋もれず `heartbeat` / `stalled-work` に
+現れます:
+
+```bash
+intent-cli operator-attention open --record <design-wait-id> \
+  --domain <domain> --team <team> --owner design \
+  --blocking-reference <issue|pr|unit|release> \
+  --action-needed "<必要な design judgment>" --evidence "<事実>" \
+  --write --format json
+intent-cli operator-attention query --domain <domain> --team <team> --format json
+```
+
+判断を回答した人は、その回答と evidence を添えて同じ record を**必ず resolve**します:
+
+```bash
+intent-cli operator-attention resolve --record <design-wait-id> \
+  --resolution-evidence "<回答と evidence>" --write --format json
+```
+
+回答済みで open のままの record は嘘です。既存 lifecycle は回答者が resolve するまで完了
+しません。これは design 所有の待ちを記録するもので、helper を追加せず、上記 clarification
+lifecycle も変更しません。
+
 **reviewer hold ルール(refined)。** 技術チェックが green で、保留項目が
 非セマンティックかつ機械的に事実確認可能 → bounded default authority のもとで
 解決し、検証事実をログに残して先へ進みます。それ以外 → clarification を記録し、
@@ -883,6 +910,11 @@ packet を author/更新する（または明示的に指示する）のを **�
 ```json
 {"to":"design","type":"packet-needed","domain":"<domain>","need":"<what is needed>","reason":"<why the orchestrator cannot proceed>","blocking":"<the work that is waiting>"}
 ```
+
+これは inbox だけに置く state ではなく design judgment の待ちです。開始時に orchestrator は
+`--owner design` つきの operator-attention record を open し、待機中に既存 record を query し、
+回答者が evidence とともに resolve します。完全な lifecycle は
+[design 判断待ちの記録義務](#design-判断待ちの記録義務)を参照してください。
 
 **release-prep は design 所有:** design がリリースバージョンとスコープを決め、release-prep
 packet を author します。orchestrator はそれが存在し `issue-cut-ready` になった **後** にのみ
@@ -1632,6 +1664,10 @@ orchestrator を通じて調整し、人間が必要な項目だけを surface �
 4. implementation/review の作業・labels・host メタデータを直接 **変更しない** — それは
    orchestrator/receivers が intent-cli 経由で行う仕事。
 5. 人間が必要な項目 **だけ** を人間に要約する。ルーチンな進捗は内部に留める。
+6. design judgment を待つことで進行が止まるなら、待つ前にその待ちを durable にします:
+   `--owner design` つきで operator-attention を open し、record を query し、回答を出したら
+   evidence とともに resolve します。回答済みで open のままの record は嘘であり、design handoff
+   は完了していません。
 
 **「orchestrator が idle に見える」診断**（エスカレーション前）: orchestrator がスケジュールされ
 新しい turn にあるか確認。最後のメッセージを受信したか確認（`inbox.sh`）— pre-monitor の送信は

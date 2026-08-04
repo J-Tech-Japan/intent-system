@@ -780,6 +780,13 @@ internal static class SessionLayerFragments
             Operative("Until it is recorded, the unit stays visible as a `knowledge-writeback-pending` item in `automation stalled-work` / `automation heartbeat` — closing the PR does not clear it, and nothing here writes intent content on design's behalf.")),
         Fragment(
             S8,
+            Descriptive("8."),
+            Scaffold(" "),
+            Operative("When progress blocks on a design judgment, record that wait before waiting: open operator-attention with `--owner design`, query the existing record, and whoever supplies the judgment MUST resolve it with evidence."),
+            Scaffold(" "),
+            Operative("An answered-but-open record is a lie, not a completed design handoff.")),
+        Fragment(
+            S8,
             Descriptive("1."),
             Scaffold(" "),
             Operative("Confirm the orchestrator is actually scheduled and on a fresh turn (its `/loop` or Codex automation is running).")),
@@ -1619,6 +1626,11 @@ internal static class SessionLayerFragments
             Operative("Same-cadence write-back check: perform the packet's declared write-backs and RECORD them in the same closeout wake, with `intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --write`."),
             Scaffold(" "),
             Operative("Until it is recorded, the unit stays visible as a `knowledge-writeback-pending` item in `automation stalled-work` / `automation heartbeat` — closing the PR does not clear it, and nothing here writes intent content on design's behalf.")),
+        Fragment(
+            "design_traffic_controller",
+            Operative("When progress blocks on a design judgment, record that wait before waiting: open operator-attention with `--owner design`, query the existing record, and whoever supplies the judgment MUST resolve it with evidence."),
+            Scaffold(" "),
+            Operative("An answered-but-open record is a lie, not a completed design handoff.")),
         Fragment("design_traffic_controller", Operative("Confirm the orchestrator is actually scheduled and on a fresh turn (its `/loop` or Codex automation is running).")),
         Fragment("design_traffic_controller", Transport("Confirm it received your last message (`inbox.sh` on the orchestrator) — a pre-monitor send may be queued, not delivered live; resend after an ack.")),
         Fragment("design_traffic_controller", Operative("Confirm intent-cli actually reports an actionable item for THIS domain/repo (`worker next-action` / `intent status`) — idle may be correct (nothing to do).")),
