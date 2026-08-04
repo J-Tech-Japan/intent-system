@@ -262,7 +262,7 @@ transport であり、4 スレッドモデルではありません。1 チーム
 herdr workspace create --cwd <host-repo> --label <team> --no-focus
 ```
 
-herdr 0.7.5 の `workspace_created` result は top-level の `workspace`、`tab`、`root_pane` を
+この host で herdr 0.8.0 にて実測した `workspace_created` result は top-level の `workspace`、`tab`、`root_pane` を
 返すため、`workspace.workspace_id`、`tab.tab_id`、`root_pane.pane_id` から mapping を seed
 し、`root_pane.cwd` を検証します。返された tab が team の通常唯一の tab です。その名前が
 `<team>` であることを保証し、必要なら返された explicit tab id を使います。
@@ -463,7 +463,7 @@ normative な **SECOND wake source** は herdr が観測する
 `pane.agent_status_changed` です。worker が report を省略しても、herdr による process 観測
 だけで orchestration を wake できますが、task outcome は運びません。
 
-実測した herdr 0.7.5 socket API は `events.subscribe` を使います。
+この host で herdr 0.8.0 にて実測した socket API は `events.subscribe` を使います。
 `pane.agent_status_changed` は `pane_id` を必須とするため、watched pane ごとに 1 つの
 subscription entry を含めます。
 
@@ -563,10 +563,24 @@ decision を重複させるため、先頭から silent reset してはいけま
 
 ### Recovery と mode switch
 
+運用 baseline は macOS/Linux の latest stable herdr です。Windows support は beta であり、
+この guide では仮定しません。`herdr --skill` は bundled herdr agent skill を見つけるためだけの
+discovery pointer で、intent-cli guide authority より下位です。version-specific detail は引き続き
+installed herdr help/schema を参照します。
+
+- live server update: running pane を保つ `herdr server live-handoff` を使います。
+  `events.subscribe` consumer は stream EOF を error ではなく resubscribe trigger として扱います。
+  handoff 近くで回答した approval は re-present され得るため、pane を re-read し同じ dialog を
+  re-judge します。以前の回答が consumed されたと仮定せず、blind re-answer もしません。pane PTY size
+  は TUI client の reattach まで shrink することがあります。read は有効なままで、headless
+  resize/zoom は PTY を restore せず、operator の TUI reattach が remedy です。
+
 - modifier-chord launch corruption: shell へ戻すか再 provision し、typed な
   `agent start ... -- <permission-flags>` を使います。
-- reboot 後の dead pty wiring: undetected agent / shell-only pane では artifact を保全して
-  re-provision、mapping 再構築、上記の自己完結した settle-and-re-check READY gate 再実行を行います。
+- reboot 後の dead pty wiring: stopped server の socket command は `server_not_running` を返します。
+  headless server は TUI client を待たず restored agent session を resume します。undetected agent /
+  shell-only pane では artifact を保全して re-provision、mapping 再構築、上記の自己完結した
+  settle-and-re-check READY gate 再実行を行います。
 - focus-default cross-team mutation: 明示的な pane/workspace id が missing / empty だと、他チームの
   currently focused pane を mutate する可能性があります。initial workspace creation 後の every
   provisioning/mutation command で記録済み logical-role mapping から non-empty id を解決・明示し、

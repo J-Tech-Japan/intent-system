@@ -33,7 +33,7 @@ public sealed class HerdrWakeSourcesG581Tests : IDisposable
         Assert.Contains("one subscription entry per watched pane", markdown, StringComparison.Ordinal);
         Assert.Contains("logical-role→pane mapping", markdown, StringComparison.Ordinal);
         Assert.Contains("NEVER hard-code pane ids", markdown, StringComparison.Ordinal);
-        Assert.Equal("herdr 0.7.5", stateChange.GetProperty("measured_version").GetString());
+        Assert.Equal("herdr 0.8.0", stateChange.GetProperty("measured_version").GetString());
         Assert.Equal("events.subscribe", stateChange.GetProperty("method").GetString());
         Assert.Contains("One subscription entry per watched pane", stateChange.GetProperty("cardinality").GetString());
     }
@@ -115,7 +115,7 @@ public sealed class HerdrWakeSourcesG581Tests : IDisposable
                      "canonical intent-cli/GitHub facts",
                      "approval/question",
                      "stalled-work",
-                     "herdr 0.7.5",
+                     "herdr 0.8.0",
                      "installed herdr help/schema",
                  })
         {
