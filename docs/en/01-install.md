@@ -41,10 +41,10 @@ not on your `PATH`, the install output prints the line to add.
 **No .NET SDK?** Download the self-contained binary for your platform from the
 [latest GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/latest);
 the runtime is bundled. Verify the `.sha256` sidecar before use. See the
-[root README](../../README.md#install-without-a-net-sdk) for the full steps.
+[developer reference](09-developer-reference.md#install-without-a-net-sdk) for the full steps.
 
 **Preview channel users** consuming the `preview-pack` artifact: see the
-[root README preview section](../../README.md#preview-install).
+[developer reference preview section](09-developer-reference.md#preview-install).
 
 ## Next
 

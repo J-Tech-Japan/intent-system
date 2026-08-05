@@ -111,5 +111,5 @@ v0.3.9 からの破壊的変更はありません。
          `metadata_source_branch`/`metadata_write_branch` 設定で、valid な packet が
          `automation queue-seed-from-packet` 後 `issue publish-flow` を通過する。
    - [ ] ローカル preview/dry-run のバージョンメタデータが `0.3.10` 後の次の開発ラインを
-         使う（[Version flow](09-developer-reference.md#version-flow) のリリース後手順に
+         使う（[バージョンフロー](09-developer-reference.md#バージョンフロー) のリリース後手順に
          従い `eng/version.json` を bump）: `stableVersion → 0.3.10`, `nextVersion → 0.3.11`。

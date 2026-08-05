@@ -2528,7 +2528,7 @@ literal:
 ```
 
 The shape is written with placeholders on purpose: **read the actual values from
-`eng/version.json`**, and see [Next release readiness](#next-release-readiness)
+`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0112)
 for the line currently being cut. A worked example here would be a second copy
 of the version pair that goes stale on the next roll — the defect G557/G560
 exist to remove.
