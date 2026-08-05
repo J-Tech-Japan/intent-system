@@ -15,7 +15,7 @@ internal static class SessionLayerTopologyCommand
     private const string FormatMarkdown = "markdown";
 
     private const string Usage =
-        "Usage: intent-cli session-layer topology record|show|validate|update-kind|retire-legacy [options]";
+        "Usage: intent-cli session-layer topology record|show|validate|update-kind|update-field|retire-legacy [options]";
     private const string RecordUsage =
         "Usage: intent-cli session-layer topology record --domain <name> --team <name> --role <name> --resident herdr "
         + "--workspace-id <id> --pane-id <id> --cwd <path> [--kind <kind>] [--delivery-method inline|file-backed] [--dry-run|--write] "
@@ -30,6 +30,10 @@ internal static class SessionLayerTopologyCommand
     private const string UpdateKindUsage =
         "Usage: intent-cli session-layer topology update-kind --domain <name> --team <name> --role <name> "
         + "--current-kind <kind> --new-kind <kind> --confirm-update-kind [--dry-run|--write] [--format json]";
+    private const string UpdateFieldUsage =
+        "Usage: intent-cli session-layer topology update-field --domain <name> --team <name> --role <name> "
+        + "--field delivery_method --current <value|absent> --new <value> --confirm-update-field "
+        + "[--dry-run|--write] [--format json]";
     private const string RetireLegacyUsage =
         "Usage: intent-cli session-layer topology retire-legacy --domain <name> --team <name> "
         + "--evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write [--format json]";
@@ -54,6 +58,7 @@ internal static class SessionLayerTopologyCommand
             writer.WriteLine(ShowUsage);
             writer.WriteLine(ValidateUsage);
             writer.WriteLine(UpdateKindUsage);
+            writer.WriteLine(UpdateFieldUsage);
             writer.WriteLine(RetireLegacyUsage);
             return args.Length == 0 ? 1 : 0;
         }
@@ -64,6 +69,7 @@ internal static class SessionLayerTopologyCommand
             "show" => ExecuteShow(context, args[1..], writer),
             "validate" => ExecuteValidate(context, args[1..], writer),
             "update-kind" => ExecuteUpdateKind(context, args[1..], writer),
+            "update-field" => ExecuteUpdateField(context, args[1..], writer),
             "retire-legacy" => ExecuteRetireLegacy(context, args[1..], writer),
             _ => UnknownSubcommand(args[0], writer),
         };
@@ -246,6 +252,17 @@ internal static class SessionLayerTopologyCommand
         return result.Conflict ? 1 : 0;
     }
 
+    internal static int ExecuteUpdateField(CliContext context, string[] args, TextWriter writer)
+    {
+        if (!TryParseUpdateFieldArguments(args, out var request, out var error))
+        {
+            writer.WriteLine(error); writer.WriteLine(UpdateFieldUsage); return 1;
+        }
+        var result = SessionLayerTopologyWriter.UpdateField(context.RepoRoot, request!);
+        WriteJson(writer, result);
+        return result.Conflict ? 1 : 0;
+    }
+
     internal static int ExecuteRetireLegacy(CliContext context, string[] args, TextWriter writer)
     {
         if (!TryParseRetireLegacyArguments(args, out var request, out var error))
@@ -282,6 +299,34 @@ internal static class SessionLayerTopologyCommand
         // A dry-run is an explicit non-mutating request, irrespective of flag order.
         var write = requestedWrite && !requestedDryRun;
         request = new(values["--domain"], values["--team"], values["--role"], values["--current-kind"], values["--new-kind"], write);
+        return true;
+    }
+
+    private static bool TryParseUpdateFieldArguments(string[] args, out SessionLayerTopologyFieldUpdateRequest? request, out string error)
+    {
+        request = null; error = string.Empty;
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        var confirm = false; var requestedWrite = false; var requestedDryRun = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--confirm-update-field") { confirm = true; continue; }
+            if (args[i] == "--write") { requestedWrite = true; continue; }
+            if (args[i] == "--dry-run") { requestedDryRun = true; continue; }
+            if (args[i] == "--format")
+            {
+                if (++i >= args.Length || !string.Equals(args[i], FormatJson, StringComparison.Ordinal))
+                { error = "update-field supports only '--format json'."; return false; }
+                continue;
+            }
+            if (args[i] is not ("--domain" or "--team" or "--role" or "--field" or "--current" or "--new") || i + 1 >= args.Length)
+            { error = $"Unknown or incomplete argument '{args[i]}'."; return false; }
+            values[args[i]] = args[++i];
+        }
+        if (!confirm || (!requestedWrite && !requestedDryRun) || values.Keys.Count != 6 || values.Values.Any(string.IsNullOrWhiteSpace))
+        { error = "--domain, --team, --role, --field, --current, --new, --confirm-update-field, and either --write or --dry-run are required."; return false; }
+        // A dry-run is an explicit non-mutating request, irrespective of flag order.
+        var write = requestedWrite && !requestedDryRun;
+        request = new(values["--domain"], values["--team"], values["--role"], values["--field"], values["--current"], values["--new"], write);
         return true;
     }
 
@@ -815,6 +860,56 @@ internal static class SessionLayerTopologyWriter
         }
     }
 
+    public static SessionLayerTopologyFieldUpdateResult UpdateField(string routingRoot, SessionLayerTopologyFieldUpdateRequest request)
+    {
+        var mode = request.Write ? "write" : "dry-run";
+        if (!string.Equals(request.Field, "delivery_method", StringComparison.Ordinal))
+            return new(request.Team, request.Role, request.Field, request.CurrentValue, request.NewValue, mode, false, false, true,
+                $"Field '{request.Field}' is not in the topology update registry. Only 'delivery_method' is allowed.");
+        if (request.NewValue is not ("inline" or "file-backed"))
+            return new(request.Team, request.Role, request.Field, request.CurrentValue, request.NewValue, mode, false, false, true,
+                $"Field 'delivery_method' must be 'inline' or 'file-backed', not '{request.NewValue}'.");
+
+        var path = NotifyRoleTopologyStore.ResolvePath(routingRoot, request.Domain, request.Team);
+        var validation = NotifyRoleTopologyStore.Validate(routingRoot, request.Domain, request.Team);
+        if (!validation.Valid)
+            return new(request.Team, request.Role, request.Field, request.CurrentValue, request.NewValue, mode, false, false, true,
+                $"Topology record is invalid; refusing update-field. {string.Join(" ", validation.Findings.Select(f => f.Message))}");
+        try
+        {
+            var root = JsonNode.Parse(File.ReadAllText(path)) as JsonObject ?? throw new JsonException("the root is not an object");
+            if (!TrySelectTeamForWrite(root, request.Team, out var team, out var error)
+                || !TrySelectRolesForWrite(team!, out var roles, out error)
+                || !roles!.TryGetPropertyValue(request.Role, out var roleNode) || roleNode is not JsonObject role)
+                return new(request.Team, request.Role, request.Field, request.CurrentValue, request.NewValue, mode, false, false, true,
+                    $"Role '{request.Role}' is not a valid recorded role. {error}");
+
+            var hasField = role.TryGetPropertyValue(request.Field, out var fieldNode);
+            var actual = hasField ? fieldNode?.GetValue<string>() : null;
+            var matches = string.Equals(request.CurrentValue, "absent", StringComparison.Ordinal)
+                ? !hasField
+                : hasField && string.Equals(actual, request.CurrentValue, StringComparison.Ordinal);
+            if (!matches)
+            {
+                var recorded = hasField ? actual ?? "invalid" : "absent";
+                return new(request.Team, request.Role, request.Field, request.CurrentValue, request.NewValue, mode, false, false, true,
+                    $"Role '{request.Role}' records {request.Field} '{recorded}', not stated current value '{request.CurrentValue}'. Refusing update-field.");
+            }
+
+            role[request.Field] = request.NewValue;
+            if (request.Write) WriteAtomically(path, root.ToJsonString(FileJsonOptions) + Environment.NewLine);
+            return new(request.Team, request.Role, request.Field, request.CurrentValue, request.NewValue, mode, request.Write, true, false,
+                request.Write
+                    ? $"Updated only {request.Field} for role '{request.Role}' in team '{request.Team}'."
+                    : $"Dry-run: would update only {request.Field} for role '{request.Role}'.");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return new(request.Team, request.Role, request.Field, request.CurrentValue, request.NewValue, mode, false, false, true,
+                $"Topology file '{path}' could not be updated: {exception.Message}");
+        }
+    }
+
     public static SessionLayerTopologyLegacyRetireResult RetireLegacy(string routingRoot, SessionLayerTopologyLegacyRetireRequest request)
     {
         var legacyPath = NotifyRoleTopologyStore.ResolvePath(routingRoot);
@@ -1114,6 +1209,8 @@ internal sealed record SessionLayerTopologyRecordResult
 
 internal sealed record SessionLayerTopologyKindUpdateRequest(string Domain, string Team, string Role, string CurrentKind, string NewKind, bool Write);
 internal sealed record SessionLayerTopologyKindUpdateResult(string Team, string Role, string CurrentKind, string NewKind, string Mode, bool Applied, bool Changed, bool Conflict, string Summary);
+internal sealed record SessionLayerTopologyFieldUpdateRequest(string Domain, string Team, string Role, string Field, string CurrentValue, string NewValue, bool Write);
+internal sealed record SessionLayerTopologyFieldUpdateResult(string Team, string Role, string Field, string CurrentValue, string NewValue, string Mode, bool Applied, bool Changed, bool Conflict, string Summary);
 internal sealed record SessionLayerTopologyLegacyRetireRequest(string Domain, string Team, string Evidence);
 internal sealed record SessionLayerTopologyLegacyRetireResult(string Team, bool Retired, bool Conflict, string Summary);
 

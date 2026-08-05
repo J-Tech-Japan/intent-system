@@ -219,8 +219,9 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
   still measures 842 characters over 14 lines and can itself be pasted. It
   reduces duplication, not a paste-sensitive wedge; G619 owns the transport-layer
   remedy.
-- **Task-envelope delivery method.** A paste-sensitive herdr seat declares
-  `delivery_method: file-backed`: `notify` writes the unchanged envelope under
+- **Task-envelope delivery method.** A paste-sensitive herdr seat with an
+  existing record declares `delivery_method: file-backed` through the
+  registry-limited topology field update: `notify` writes the unchanged envelope under
   host `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` before sending
   the pane one line, `Read task envelope: <path>`. Declare `inline` explicitly
   when desired; an absent declaration preserves existing inline delivery.
@@ -410,6 +411,7 @@ by hand:
 intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
 intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
 intent-cli session-layer topology update-kind --domain <domain> --team <team> --role <role> --current-kind <kind> --new-kind <kind> --confirm-update-kind --write
+intent-cli session-layer topology update-field --domain <domain> --team <team> --role <role> --field delivery_method --current <absent|inline|file-backed> --new <inline|file-backed> --confirm-update-field --write
 intent-cli session-layer topology retire-legacy --domain <domain> --team <team> --evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write
 intent-cli session-layer topology validate --domain <domain> --team <team> --format json
 intent-cli session-layer topology show --domain <domain> --team <team> --format json
@@ -418,8 +420,8 @@ intent-cli session-layer topology show --domain <domain> --team <team> --format 
 Agent kind is whatever herdr can start: Claude, Codex, Copilot, Cursor, OpenCode,
 and others are examples, not a supported-set restriction. Logical role defaults
 are `implementation`, `review`, `interview`, and `clarify`; existing explicit
-role mappings, including legacy product-named mappings, remain valid. Both new
-mutation commands emit JSON and support only `--format json`. For `update-kind`,
+role mappings, including legacy product-named mappings, remain valid. The three
+update/retire mutation commands emit JSON and support only `--format json`. For `update-kind`,
 an explicit `--dry-run` takes precedence over `--write` in either flag order and
 never writes.
 
@@ -443,6 +445,16 @@ the mapping exists or herdr-only requires it, and notify topology refusals point
 back to `topology validate` / `record` as the remedy. Invalid state always stays
 fail-closed; these commands add knowledge and a controlled writer, never a
 fallback.
+
+`update-field` is the narrow path for declaring a field that a recorded role
+never carried, or for changing its already recorded value. It requires the
+role, the field name, the stated current value, the new value, explicit
+confirmation, and `--dry-run` or `--write`; state `--current absent` only when
+the field is actually absent. A stale statement is refused in both directions.
+The registry initially permits only `delivery_method`, so an unknown or dotted
+name is refused rather than becoming an arbitrary JSON-path editor. The command
+changes only that field. It does not relax `record`: re-recording a different
+shape still refuses its conflict and has no force flag.
 
 #### Visible, generated mode markers
 
@@ -556,8 +568,10 @@ The measured limit matters: a minimal canonical `notify delegate` envelope is
 duplicated substance; it does not prevent a paste-sensitive seat from wedging.
 G619 owns the transport-layer remedy.
 
-For a paste-sensitive herdr seat, declare `delivery_method: file-backed` in its
-recipe. `notify` writes the unchanged envelope to an addressable durable task
+For a paste-sensitive herdr seat whose recorded role lacks `delivery_method`,
+use `topology update-field` with `--field delivery_method --current absent --new
+file-backed` and explicit confirmation; use the same path with the recorded
+current value for a later allowed change. `notify` writes the unchanged envelope to an addressable durable task
 file under `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` before it
 sends the pane the single-line `Read task envelope: <path>` pointer. The file is
 not deleted, so a restarted recipient can read the same task. Declare `inline`

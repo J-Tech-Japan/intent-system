@@ -118,6 +118,29 @@ public sealed class AgentMessageOrchestrationDocsTests
     }
 
     [Fact]
+    public void BothDocs_DescribeTheRegistryLimitedAbsentFieldUpdate_G620()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        foreach (var doc in new[] { en, ja })
+        {
+            Assert.Contains("topology update-field", doc, StringComparison.Ordinal);
+            Assert.Contains("--field delivery_method", doc, StringComparison.Ordinal);
+            Assert.Contains("--current absent", doc, StringComparison.Ordinal);
+            Assert.Contains("--confirm-update-field", doc, StringComparison.Ordinal);
+            Assert.Contains("force flag", doc, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("registry initially permits only `delivery_method`", en, StringComparison.Ordinal);
+        Assert.Contains("registry が最初に許可するのは `delivery_method` だけ", ja, StringComparison.Ordinal);
+        Assert.Contains("arbitrary JSON-path editor", en, StringComparison.Ordinal);
+        Assert.Contains("任意の JSON path を編集できない", ja, StringComparison.Ordinal);
+        Assert.Contains("stale statement is refused in both directions", en, StringComparison.Ordinal);
+        Assert.Contains("古い認識にもとづく指定は両方向で refuse", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BothDocs_SeparateDeliveryConfigFromLiveAttachment_AndKeepPingAckSoleProof_G549()
     {
         var en = ReadDoc("en");
