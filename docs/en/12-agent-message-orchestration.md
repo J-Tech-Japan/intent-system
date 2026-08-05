@@ -180,6 +180,52 @@ than a per-invocation approval that re-prompts on the next wake.
 > If answering would grant access, widen a permission mode, or accept a security
 > warning, it is the operator's call.
 
+### 3a. Unattended-launch recipes (agent-neutral) (G617)
+
+An unattended-launch recipe is agent-neutral: it states the launch invocation,
+the bounded allowed roots derived from that role's actual work, the autonomous
+continuation bound, the startup gates the operator must answer, and the denial
+semantics. A later Cursor or opencode recipe adds an entry with those same
+fields; it does not restate or weaken the central rule below.
+
+> **Central autopilot supervision rule.** In an unattended autopilot seat, an
+> action outside the launch allowlist is silently auto-denied rather than
+> surfaced as a G550 supervision dialog. Derive and **record** the allowlist
+> from role needs. READY must prove an expected allowed action, reachability of
+> the role's canonical reporting surface, and an out-of-scope denial. Review
+> evidence must inspect command outputs and the transcript for denials; liveness
+> is not proof that a denied step ran. This changes supervision evidence only:
+> G556 liveness and notify/delivery semantics are unchanged.
+
+#### Copilot — measured first recipe
+
+```text
+herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model claude-opus-5 --mode autopilot --allow-all-tools --add-dir <role-work-root> [--add-dir <host-routing-root>] --max-autopilot-continues 10
+```
+
+- **Role-derived roots.** Give every role one bounded `--add-dir <role-work-root>`
+  for its checkout or worktree. A reviewer also needs `--add-dir
+  <host-routing-root>` because `intent-cli notify report` is its canonical
+  reporting surface. Do not add unrelated developer-machine roots.
+- **Continuation bound.** Keep `--max-autopilot-continues 10` explicit. Any
+  different bound is an operator decision recorded with the recipe.
+- **Startup gates.** Folder trust and autopilot-enable are operator provisioning
+  gates; launch flags bypass neither. The autopilot-enable dialog appears at the
+  **first task** even when launch used `--mode autopilot`. With
+  `--allow-all-tools` and bounded roots, choose `Continue with limited
+  permissions`; never choose `Enable all permissions`, which discards the
+  boundary.
+- **Prohibited blanket permissions.** `--yolo` and `--allow-all-paths` are
+  **prohibited** for unattended seats on developer machines. Use bounded
+  `--add-dir` roots instead.
+
+**Unattended READY branch.** Run the normal G556 liveness checks and prove all
+three additional facts: an expected action inside the recorded roots succeeds;
+the role reaches its canonical reporting surface (for review, `intent-cli notify
+report` through its host routing root); and a deliberately out-of-scope action
+is denied. Capture that denial for review. A live pane or a successful allowed
+action alone is **not** READY.
+
 **4. Role initialization.** Type the actas form matching the pane's CLI —
 `/agmsg actas <role>` for claude, `$agmsg actas <role>` for codex — then confirm
 readiness in **three layers that must not be collapsed**:

@@ -2183,6 +2183,58 @@ internal static class GuideOrchestratorThreadCommand
                     + "the operator: if answering the dialog would grant access, widen a permission mode, or accept a "
                     + "security warning, it is the operator's call, not the design thread's.",
             },
+            UnattendedLaunchRecipes = new OrchestratorUnattendedLaunchRecipes
+            {
+                Summary =
+                    "Agent-neutral recipes make an unattended launch reviewable rather than broad by default. Every "
+                    + "recipe states the invocation, bounded `--add-dir` roots derived from that role's real work, "
+                    + "the continuation bound, the startup gates the operator must answer, and the denial semantics. "
+                    + "Later agent recipes inherit the central rule below; do not duplicate or weaken it per agent.",
+                RequiredRecipeFields = new[]
+                {
+                    "the launch invocation and agent kind",
+                    "bounded allowed roots derived from the logical role's actual needs (not a product-wide path)",
+                    "the maximum autonomous continuation bound",
+                    "startup trust and autopilot/permission gates the operator must answer",
+                    "the silent-denial semantics and the READY/review evidence that proves them",
+                },
+                CentralAutopilotSupervisionRule =
+                    "AUTHORITATIVE AUTOPILOT SUPERVISION RULE — in an unattended autopilot seat, an action outside "
+                    + "the launch allowlist is silently auto-denied rather than surfaced as a G550 supervision dialog. "
+                    + "Derive and RECORD the allowlist from role needs. READY must prove an expected allowed action, "
+                    + "reachability of that role's canonical reporting surface, and an out-of-scope denial. Review "
+                    + "evidence MUST inspect outputs and the transcript for denials; liveness is not evidence that a "
+                    + "denied step ran. This changes supervision evidence only — G556 liveness and notify/delivery "
+                    + "semantics are unchanged.",
+                CopilotRecipe = new OrchestratorCopilotUnattendedRecipe
+                {
+                    Invocation =
+                        "herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model claude-opus-5 "
+                        + "--mode autopilot --allow-all-tools --add-dir <role-work-root> [--add-dir <host-routing-root>] "
+                        + "--max-autopilot-continues 10",
+                    RoleDerivedRoots =
+                        "Use one bounded `--add-dir <role-work-root>` for the role's checkout/worktree. A review "
+                        + "role additionally receives `--add-dir <host-routing-root>` because `intent-cli notify report` "
+                        + "is its canonical reporting surface. Do not add unrelated developer-machine roots.",
+                    ContinuationBound =
+                        "Keep `--max-autopilot-continues 10` explicit; changing the bound is an operator decision "
+                        + "recorded with the recipe, not an agent default.",
+                    StartupGates =
+                        "Folder trust and autopilot-enable are operator provisioning gates; neither is bypassed by "
+                        + "launch flags. The autopilot-enable dialog appears at the FIRST TASK even when `--mode autopilot` "
+                        + "was passed at launch. With `--allow-all-tools` plus bounded roots, choose `Continue with limited "
+                        + "permissions`; NEVER choose `Enable all permissions`, which discards the boundary.",
+                    ProhibitedBlanket =
+                        "For unattended developer-machine seats, `--yolo` and `--allow-all-paths` are PROHIBITED. "
+                        + "They discard the role-derived boundary; bounded `--add-dir` roots are the required alternative.",
+                },
+                ReadyBranch =
+                    "For an unattended seat, run the normal G556 liveness checks AND prove all three recipe-specific "
+                    + "facts: an expected action inside the recorded roots succeeds, the role can reach its canonical "
+                    + "reporting surface (for review, `intent-cli notify report` through its host routing root), and a "
+                    + "deliberately out-of-scope action is denied. Capture the denied result for review; a live pane or "
+                    + "successful allowed action alone is NOT READY.",
+            },
             RoleInitialization = new OrchestratorProvisioningRoleInitialization
             {
                 Summary = Fill(
@@ -3429,6 +3481,34 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"> **Warning:** {provisioning.LaunchRules.CodexDirectSpawnWarning}");
         writer.WriteLine();
         writer.WriteLine($"> **Authority boundary:** {provisioning.LaunchRules.AuthorityBoundary}");
+        writer.WriteLine();
+
+        var unattended = provisioning.UnattendedLaunchRecipes;
+        writer.WriteLine("### 3a. Unattended-launch recipes (agent-neutral) (G617)");
+        writer.WriteLine();
+        writer.WriteLine(unattended.Summary);
+        writer.WriteLine();
+        writer.WriteLine("Every recipe must state:");
+        writer.WriteLine();
+        foreach (var field in unattended.RequiredRecipeFields)
+        {
+            writer.WriteLine($"- {field}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"> **Central rule:** {unattended.CentralAutopilotSupervisionRule}");
+        writer.WriteLine();
+        writer.WriteLine("#### Copilot (measured first recipe)");
+        writer.WriteLine();
+        writer.WriteLine("```text");
+        writer.WriteLine(unattended.CopilotRecipe.Invocation);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine($"- **role-derived roots** — {unattended.CopilotRecipe.RoleDerivedRoots}");
+        writer.WriteLine($"- **continuation bound** — {unattended.CopilotRecipe.ContinuationBound}");
+        writer.WriteLine($"- **startup gates** — {unattended.CopilotRecipe.StartupGates}");
+        writer.WriteLine($"- **prohibited blanket permissions** — {unattended.CopilotRecipe.ProhibitedBlanket}");
+        writer.WriteLine();
+        writer.WriteLine($"> **Unattended READY branch:** {unattended.ReadyBranch}");
         writer.WriteLine();
 
         writer.WriteLine("### 4. Role initialization (actas and readiness)");
@@ -4938,6 +5018,9 @@ internal sealed record OrchestratorTerminalWorkspaceProvisioning
     [JsonPropertyName("launch_rules")]
     public required OrchestratorProvisioningLaunchRules LaunchRules { get; init; }
 
+    [JsonPropertyName("unattended_launch_recipes")]
+    public required OrchestratorUnattendedLaunchRecipes UnattendedLaunchRecipes { get; init; }
+
     [JsonPropertyName("role_initialization")]
     public required OrchestratorProvisioningRoleInitialization RoleInitialization { get; init; }
 
@@ -5384,6 +5467,47 @@ internal sealed record OrchestratorProvisioningLaunchRules
     /// </summary>
     [JsonPropertyName("authority_boundary")]
     public required string AuthorityBoundary { get; init; }
+}
+
+/// <summary>
+/// G617: agent-neutral unattended launch requirements plus the first measured
+/// Copilot recipe. This is guidance only: it adds no agent-specific delivery,
+/// liveness, or runtime branching.
+/// </summary>
+internal sealed record OrchestratorUnattendedLaunchRecipes
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("required_recipe_fields")]
+    public required IReadOnlyList<string> RequiredRecipeFields { get; init; }
+
+    [JsonPropertyName("central_autopilot_supervision_rule")]
+    public required string CentralAutopilotSupervisionRule { get; init; }
+
+    [JsonPropertyName("copilot_recipe")]
+    public required OrchestratorCopilotUnattendedRecipe CopilotRecipe { get; init; }
+
+    [JsonPropertyName("ready_branch")]
+    public required string ReadyBranch { get; init; }
+}
+
+internal sealed record OrchestratorCopilotUnattendedRecipe
+{
+    [JsonPropertyName("invocation")]
+    public required string Invocation { get; init; }
+
+    [JsonPropertyName("role_derived_roots")]
+    public required string RoleDerivedRoots { get; init; }
+
+    [JsonPropertyName("continuation_bound")]
+    public required string ContinuationBound { get; init; }
+
+    [JsonPropertyName("startup_gates")]
+    public required string StartupGates { get; init; }
+
+    [JsonPropertyName("prohibited_blanket")]
+    public required string ProhibitedBlanket { get; init; }
 }
 
 internal sealed record OrchestratorProvisioningRoleInitialization
