@@ -137,7 +137,7 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("arbitrary JSON-path editor", en, StringComparison.Ordinal);
         Assert.Contains("任意の JSON path を編集できない", ja, StringComparison.Ordinal);
         Assert.Contains("stale statement is refused in both directions", en, StringComparison.Ordinal);
-        Assert.Contains("古い認識にもとづく指定は両方向で refuse", ja, StringComparison.Ordinal);
+        Assert.Contains("古い認識にもとづく指定は両方向で拒否", ja, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -308,7 +308,8 @@ public sealed class AgentMessageOrchestrationDocsTests
         var ja = ReadDoc("ja");
 
         Assert.Contains("## Design-decision holds and bounded authority", en, StringComparison.Ordinal);
-        Assert.Contains("## design 判断による hold と bounded authority", ja, StringComparison.Ordinal);
+        Assert.Contains("## design 判断による hold と限定された権限", ja, StringComparison.Ordinal);
+        Assert.Contains("id=\"design-判断による-hold-と-bounded-authority\"", ja, StringComparison.Ordinal);
 
         // The clarification-backed hold rule, with the contract-violation
         // sentence that makes an agmsg-only hold a violation rather than a
@@ -319,7 +320,7 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("you are not waiting, you are stalled", en, StringComparison.Ordinal);
         Assert.Contains("clarification artifact を記録**", ja, StringComparison.Ordinal);
         Assert.Contains("**agmsg だけの hold は contract violation です。**", ja, StringComparison.Ordinal);
-        Assert.Contains("待っているのではなく stall しています", ja, StringComparison.Ordinal);
+        Assert.Contains("待っているのではなく停止しています", ja, StringComparison.Ordinal);
 
         // G552 repair: the paste-ready `clarify open` invocation that persists
         // the real question and its recommendation/evidence in the OPEN
@@ -332,7 +333,7 @@ public sealed class AgentMessageOrchestrationDocsTests
 
         Assert.Contains("can never substitute for the durable record", en, StringComparison.Ordinal);
         Assert.Contains("**No clarification schema change.**", en, StringComparison.Ordinal);
-        Assert.Contains("durable な記録の代わりには決してなりません", ja, StringComparison.Ordinal);
+        Assert.Contains("永続的な記録の代わりには決してなりません", ja, StringComparison.Ordinal);
         Assert.Contains("**clarification の schema 変更はありません。**", ja, StringComparison.Ordinal);
 
         // The refined reviewer hold rule — no untracked third option.
@@ -366,7 +367,7 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("Whoever supplies the judgment **must resolve**", en, StringComparison.Ordinal);
         Assert.Contains("An answered-but-open record is a lie", en, StringComparison.Ordinal);
         Assert.Contains("operator-attention record を開くことは任意ではなく義務です", ja, StringComparison.Ordinal);
-        Assert.Contains("回答した人は、その回答と evidence を添えて同じ record を**必ず resolve**", ja, StringComparison.Ordinal);
+        Assert.Contains("回答した人は、その回答と evidence を添えて同じ record を**必ず解決**", ja, StringComparison.Ordinal);
         Assert.Contains("回答済みで open のままの record は嘘です", ja, StringComparison.Ordinal);
 
         Assert.Contains("## Role boundary — design authors, orchestrator coordinates", en, StringComparison.Ordinal);
@@ -629,7 +630,7 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("never act on a process you cannot attribute", en, StringComparison.Ordinal);
 
         Assert.Contains("**共有 app-server の death mode。**", ja, StringComparison.Ordinal);
-        Assert.Contains("**attach している すべての TUI が一斉に落ちます**", ja, StringComparison.Ordinal);
+        Assert.Contains("**接続している すべての TUI が一斉に落ちます**", ja, StringComparison.Ordinal);
         Assert.Contains("attribute できないプロセスには 手を出さないこと", ja, StringComparison.Ordinal);
     }
 

@@ -22,6 +22,7 @@ public sealed class JapaneseTerminologyGuardG613Tests
         "docs/ja/04-packets-issues.md",
         "docs/ja/07-recovery.md",
         "docs/ja/09-developer-reference.md",
+        "docs/ja/12-agent-message-orchestration.md",
     };
 
     // Closed list from the G613 measured reader-path sweep. Do not make this a
@@ -49,6 +50,9 @@ public sealed class JapaneseTerminologyGuardG613Tests
     private static readonly Regex BareUrl = new(@"\b(?:https?|mailto):\S+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex HtmlId = new("""\bid\s*=\s*(['\"]).*?\1""", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex HtmlComment = new(@"<!--.*?-->", RegexOptions.Compiled);
+    private static readonly Regex EnglishVerbWithJapaneseAuxiliary = new(
+        @"(?<![\p{L}\p{N}_])[a-z][a-z-]*(?![\p{L}\p{N}_-])(?=\s*(?:し|します|した|して|され|せず|しない))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     [Fact]
     public void ReviewedJapaneseReaderPath_HasNoClosedListOrdinaryEnglish_G613()
@@ -56,7 +60,7 @@ public sealed class JapaneseTerminologyGuardG613Tests
         var root = RepoVersionPolicySource.RepoRoot();
         var failures = new List<string>();
 
-        Assert.Equal(12, ReviewedReaderPath.Count);
+        Assert.Equal(13, ReviewedReaderPath.Count);
         foreach (var relativePath in ReviewedReaderPath.OrderBy(path => path, StringComparer.Ordinal))
         {
             var path = Path.Combine(root, relativePath);
@@ -104,6 +108,75 @@ public sealed class JapaneseTerminologyGuardG613Tests
         Assert.Contains("### operator attention の永続状態 (G596)", content, StringComparison.Ordinal);
         Assert.DoesNotMatch(new Regex("durable", RegexOptions.IgnoreCase), unglossedProse);
         Assert.Contains("durable state（永続状態）", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OrchestrationReferenceG621_AppliesDurableAndAuthorityBySense()
+    {
+        const int measuredDurableOccurrences = 13;
+        const int keptDurableOccurrences = 1;
+        const int translatedDurableOccurrences = 12;
+        var path = Path.Combine(RepoVersionPolicySource.RepoRoot(), "docs", "ja", "12-agent-message-orchestration.md");
+        var content = File.ReadAllText(path);
+        var fenced = false;
+        var proseLines = new List<string>();
+        foreach (var line in File.ReadLines(path))
+        {
+            if (Fence.IsMatch(line))
+            {
+                fenced = !fenced;
+                continue;
+            }
+            if (!fenced)
+                proseLines.Add(line);
+        }
+        var prose = InlineCode.Replace(string.Join(Environment.NewLine, proseLines), string.Empty);
+        prose = HtmlId.Replace(prose, string.Empty);
+        var unglossedProse = prose.Replace("durable state（永続状態）", string.Empty, StringComparison.Ordinal);
+
+        Assert.Equal(measuredDurableOccurrences, keptDurableOccurrences + translatedDurableOccurrences);
+        Assert.Single(Regex.Matches(content, "durable", RegexOptions.IgnoreCase).Cast<Match>());
+        Assert.Contains("durable state（永続状態）", content, StringComparison.Ordinal);
+        Assert.DoesNotMatch(new Regex("durable", RegexOptions.IgnoreCase), unglossedProse);
+
+        Assert.DoesNotMatch(new Regex("authority", RegexOptions.IgnoreCase), prose);
+        Assert.Contains("正本となる定義", content, StringComparison.Ordinal);
+        Assert.Contains("限定された既定権限", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OrchestrationReferenceG621_UsesJapaneseVerbFramesOutsideLiteralPaneSplit()
+    {
+        var path = Path.Combine(RepoVersionPolicySource.RepoRoot(), "docs", "ja", "12-agent-message-orchestration.md");
+        var fenced = false;
+        var proseLines = new List<string>();
+        foreach (var line in File.ReadLines(path))
+        {
+            if (Fence.IsMatch(line))
+            {
+                fenced = !fenced;
+                continue;
+            }
+
+            if (!fenced)
+                proseLines.Add(line);
+        }
+
+        var prose = InlineCode.Replace(string.Join(Environment.NewLine, proseLines), string.Empty);
+        var matches = EnglishVerbWithJapaneseAuxiliary.Matches(prose).Cast<Match>().ToList();
+
+        Assert.Single(matches);
+        Assert.Equal("split", matches[0].Value, ignoreCase: true);
+    }
+
+    [Fact]
+    public void OrchestrationReferenceG621_VerbFrameGuardSeesSoftWrappedProse()
+    {
+        var wrappedProse = $"mapping を seed{Environment.NewLine}し、次の pane を作成します。";
+        var matches = EnglishVerbWithJapaneseAuxiliary.Matches(wrappedProse).Cast<Match>().ToList();
+
+        Assert.Single(matches);
+        Assert.Equal("seed", matches[0].Value, ignoreCase: true);
     }
 
     private static IReadOnlyList<string> FindOrdinaryEnglish(string relativePath, IReadOnlyList<string> lines)
