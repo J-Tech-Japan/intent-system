@@ -15,7 +15,7 @@ internal static class SessionLayerTopologyCommand
     private const string FormatMarkdown = "markdown";
 
     private const string Usage =
-        "Usage: intent-cli session-layer topology record|show|validate [options]";
+        "Usage: intent-cli session-layer topology record|show|validate|update-kind|retire-legacy [options]";
     private const string RecordUsage =
         "Usage: intent-cli session-layer topology record --domain <name> --team <name> --role <name> --resident herdr "
         + "--workspace-id <id> --pane-id <id> --cwd <path> [--kind <kind>] [--dry-run|--write] "
@@ -27,6 +27,12 @@ internal static class SessionLayerTopologyCommand
         "Usage: intent-cli session-layer topology show --domain <name> --team <name> [--format markdown|json]";
     private const string ValidateUsage =
         "Usage: intent-cli session-layer topology validate --domain <name> --team <name> [--format markdown|json]";
+    private const string UpdateKindUsage =
+        "Usage: intent-cli session-layer topology update-kind --domain <name> --team <name> --role <name> "
+        + "--current-kind <kind> --new-kind <kind> --confirm-update-kind [--dry-run|--write] [--format markdown|json]";
+    private const string RetireLegacyUsage =
+        "Usage: intent-cli session-layer topology retire-legacy --domain <name> --team <name> "
+        + "--evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write [--format markdown|json]";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -47,6 +53,8 @@ internal static class SessionLayerTopologyCommand
             writer.WriteLine(RecordUsage);
             writer.WriteLine(ShowUsage);
             writer.WriteLine(ValidateUsage);
+            writer.WriteLine(UpdateKindUsage);
+            writer.WriteLine(RetireLegacyUsage);
             return args.Length == 0 ? 1 : 0;
         }
 
@@ -55,6 +63,8 @@ internal static class SessionLayerTopologyCommand
             "record" => ExecuteRecord(context, args[1..], writer),
             "show" => ExecuteShow(context, args[1..], writer),
             "validate" => ExecuteValidate(context, args[1..], writer),
+            "update-kind" => ExecuteUpdateKind(context, args[1..], writer),
+            "retire-legacy" => ExecuteRetireLegacy(context, args[1..], writer),
             _ => UnknownSubcommand(args[0], writer),
         };
     }
@@ -223,6 +233,68 @@ internal static class SessionLayerTopologyCommand
         var result = SessionLayerTopologyWriter.Record(context.RepoRoot, request!);
         EmitRecord(writer, request!.Format, result);
         return result.Conflict ? 1 : 0;
+    }
+
+    internal static int ExecuteUpdateKind(CliContext context, string[] args, TextWriter writer)
+    {
+        if (!TryParseUpdateKindArguments(args, out var request, out var error))
+        {
+            writer.WriteLine(error); writer.WriteLine(UpdateKindUsage); return 1;
+        }
+        var result = SessionLayerTopologyWriter.UpdateKind(context.RepoRoot, request!);
+        WriteJson(writer, result);
+        return result.Conflict ? 1 : 0;
+    }
+
+    internal static int ExecuteRetireLegacy(CliContext context, string[] args, TextWriter writer)
+    {
+        if (!TryParseRetireLegacyArguments(args, out var request, out var error))
+        {
+            writer.WriteLine(error); writer.WriteLine(RetireLegacyUsage); return 1;
+        }
+        var result = SessionLayerTopologyWriter.RetireLegacy(context.RepoRoot, request!);
+        WriteJson(writer, result);
+        return result.Conflict ? 1 : 0;
+    }
+
+    private static bool TryParseUpdateKindArguments(string[] args, out SessionLayerTopologyKindUpdateRequest? request, out string error)
+    {
+        request = null; error = string.Empty;
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        var confirm = false; var write = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--confirm-update-kind") { confirm = true; continue; }
+            if (args[i] == "--write") { write = true; continue; }
+            if (args[i] == "--dry-run") { write = false; continue; }
+            if (args[i] == "--format") { i++; continue; }
+            if (args[i] is not ("--domain" or "--team" or "--role" or "--current-kind" or "--new-kind") || i + 1 >= args.Length)
+            { error = $"Unknown or incomplete argument '{args[i]}'."; return false; }
+            values[args[i]] = args[++i];
+        }
+        if (!confirm || !write || values.Keys.Count != 5 || values.Values.Any(string.IsNullOrWhiteSpace))
+        { error = "--domain, --team, --role, --current-kind, --new-kind, --confirm-update-kind, and --write are required."; return false; }
+        request = new(values["--domain"], values["--team"], values["--role"], values["--current-kind"], values["--new-kind"], write);
+        return true;
+    }
+
+    private static bool TryParseRetireLegacyArguments(string[] args, out SessionLayerTopologyLegacyRetireRequest? request, out string error)
+    {
+        request = null; error = string.Empty;
+        var values = new Dictionary<string, string>(StringComparer.Ordinal); var confirm = false; var write = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--confirm-retire-legacy") { confirm = true; continue; }
+            if (args[i] == "--write") { write = true; continue; }
+            if (args[i] == "--format") { i++; continue; }
+            if (args[i] is not ("--domain" or "--team" or "--evidence") || i + 1 >= args.Length)
+            { error = $"Unknown or incomplete argument '{args[i]}'."; return false; }
+            values[args[i]] = args[++i];
+        }
+        if (!confirm || !write || values.Keys.Count != 3 || values.Values.Any(string.IsNullOrWhiteSpace))
+        { error = "--domain, --team, --evidence, --confirm-retire-legacy, and --write are required."; return false; }
+        request = new(values["--domain"], values["--team"], values["--evidence"]);
+        return true;
     }
 
     private static bool TryParseReadArguments(
@@ -689,6 +761,75 @@ internal static class SessionLayerTopologyWriter
         };
     }
 
+    public static SessionLayerTopologyKindUpdateResult UpdateKind(string routingRoot, SessionLayerTopologyKindUpdateRequest request)
+    {
+        var path = NotifyRoleTopologyStore.ResolvePath(routingRoot, request.Domain, request.Team);
+        var validation = NotifyRoleTopologyStore.Validate(routingRoot, request.Domain, request.Team);
+        if (!validation.Valid)
+            return new(request.Team, request.Role, request.CurrentKind, request.NewKind, request.Write ? "write" : "dry-run", false, false, true,
+                $"Topology record is invalid; refusing update-kind. {string.Join(" ", validation.Findings.Select(f => f.Message))}");
+        try
+        {
+            var root = JsonNode.Parse(File.ReadAllText(path)) as JsonObject ?? throw new JsonException("the root is not an object");
+            if (!TrySelectTeamForWrite(root, request.Team, out var team, out var error)
+                || !TrySelectRolesForWrite(team!, out var roles, out error)
+                || !roles!.TryGetPropertyValue(request.Role, out var roleNode) || roleNode is not JsonObject role)
+                return new(request.Team, request.Role, request.CurrentKind, request.NewKind, request.Write ? "write" : "dry-run", false, false, true,
+                    $"Role '{request.Role}' is not a valid recorded role. {error}");
+            var current = ReadString(role, "kind");
+            if (!string.Equals(current, request.CurrentKind, StringComparison.Ordinal))
+                return new(request.Team, request.Role, request.CurrentKind, request.NewKind, request.Write ? "write" : "dry-run", false, false, true,
+                    $"Role '{request.Role}' records kind '{current ?? "missing"}', not stated current kind '{request.CurrentKind}'. Refusing update-kind.");
+            role["kind"] = request.NewKind;
+            if (request.Write) WriteAtomically(path, root.ToJsonString(FileJsonOptions) + Environment.NewLine);
+            return new(request.Team, request.Role, request.CurrentKind, request.NewKind, request.Write ? "write" : "dry-run", request.Write, true, false,
+                request.Write ? $"Updated only kind for role '{request.Role}' in team '{request.Team}'." : $"Dry-run: would update only kind for role '{request.Role}'.");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return new(request.Team, request.Role, request.CurrentKind, request.NewKind, request.Write ? "write" : "dry-run", false, false, true,
+                $"Topology file '{path}' could not be updated: {exception.Message}");
+        }
+    }
+
+    public static SessionLayerTopologyLegacyRetireResult RetireLegacy(string routingRoot, SessionLayerTopologyLegacyRetireRequest request)
+    {
+        var legacyPath = NotifyRoleTopologyStore.ResolvePath(routingRoot);
+        if (!TryValidateCurrentRecord(routingRoot, request.Domain, request.Team, out var validationError))
+            return new(request.Team, false, true, $"A valid per-team record is required before retiring legacy topology. {validationError}");
+        if (!File.Exists(legacyPath))
+            return new(request.Team, false, true, $"Legacy topology file '{legacyPath}' is absent; nothing was retired.");
+        try
+        {
+            var evidencePath = Path.Combine(routingRoot, ".intent-cli", "topology", "legacy-retirements.jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
+            File.AppendAllText(evidencePath, JsonSerializer.Serialize(new { domain = request.Domain, team = request.Team, retired_path = NotifyRoleTopologyStore.LegacyRelativePath, evidence = request.Evidence }) + Environment.NewLine);
+            File.Delete(legacyPath);
+            return new(request.Team, true, false, $"Retired '{NotifyRoleTopologyStore.LegacyRelativePath}' with named migration evidence.");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        { return new(request.Team, false, true, $"Legacy topology could not be retired: {exception.Message}"); }
+    }
+
+    private static bool TryValidateCurrentRecord(string routingRoot, string domain, string team, out string error)
+    {
+        error = string.Empty;
+        var path = NotifyRoleTopologyStore.ResolvePath(routingRoot, domain, team);
+        if (!File.Exists(path)) { error = $"Current per-team record '{path}' is absent."; return false; }
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("domain", out var domainValue) || !string.Equals(domainValue.GetString(), domain, StringComparison.Ordinal)
+                || !root.TryGetProperty("team", out var teamValue) || !string.Equals(teamValue.GetString(), team, StringComparison.Ordinal)
+                || !root.TryGetProperty("roles", out var roles) || roles.ValueKind != JsonValueKind.Object || !roles.EnumerateObject().Any())
+            { error = $"Current per-team record '{path}' is invalid."; return false; }
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        { error = $"Current per-team record '{path}' is unreadable: {exception.Message}"; return false; }
+    }
+
     private static bool TrySelectTeamForWrite(
         JsonObject root,
         string teamName,
@@ -923,6 +1064,11 @@ internal sealed record SessionLayerTopologyRecordResult
     public required bool Conflict { get; init; }
     public required string Summary { get; init; }
 }
+
+internal sealed record SessionLayerTopologyKindUpdateRequest(string Domain, string Team, string Role, string CurrentKind, string NewKind, bool Write);
+internal sealed record SessionLayerTopologyKindUpdateResult(string Team, string Role, string CurrentKind, string NewKind, string Mode, bool Applied, bool Changed, bool Conflict, string Summary);
+internal sealed record SessionLayerTopologyLegacyRetireRequest(string Domain, string Team, string Evidence);
+internal sealed record SessionLayerTopologyLegacyRetireResult(string Team, bool Retired, bool Conflict, string Summary);
 
 internal sealed record SessionLayerTopologyValidationResult
 {

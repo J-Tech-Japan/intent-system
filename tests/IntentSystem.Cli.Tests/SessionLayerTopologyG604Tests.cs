@@ -159,6 +159,57 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
         }
     }
 
+    [Fact]
+    public void UpdateKind_RequiresMatchConfirmationAndOnlyChangesKind_G614()
+    {
+        const string team = "intent-cli-dev";
+        Assert.True(Record(team, "review", "w1:p1").Applied);
+        var context = CreateContext(Domain);
+        var path = NotifyRoleTopologyStore.ResolvePath(root, Domain, team);
+        var before = File.ReadAllText(path);
+
+        using var missingConfirmation = new StringWriter();
+        Assert.Equal(1, SessionLayerTopologyCommand.ExecuteUpdateKind(context,
+            ["--domain", Domain, "--team", team, "--role", "review", "--current-kind", "codex", "--new-kind", "copilot", "--write"], missingConfirmation));
+        using var mismatch = new StringWriter();
+        Assert.Equal(1, SessionLayerTopologyCommand.ExecuteUpdateKind(context,
+            ["--domain", Domain, "--team", team, "--role", "review", "--current-kind", "claude", "--new-kind", "copilot", "--confirm-update-kind", "--write"], mismatch));
+        Assert.Equal(before, File.ReadAllText(path));
+
+        using var updated = new StringWriter();
+        Assert.Equal(0, SessionLayerTopologyCommand.ExecuteUpdateKind(context,
+            ["--domain", Domain, "--team", team, "--role", "review", "--current-kind", "codex", "--new-kind", "copilot", "--confirm-update-kind", "--write"], updated));
+        using var beforeJson = JsonDocument.Parse(before);
+        using var afterJson = JsonDocument.Parse(File.ReadAllText(path));
+        Assert.Equal("copilot", afterJson.RootElement.GetProperty("roles").GetProperty("review").GetProperty("kind").GetString());
+        Assert.Equal(beforeJson.RootElement.GetProperty("roles").GetProperty("review").GetProperty("pane_id").GetString(), afterJson.RootElement.GetProperty("roles").GetProperty("review").GetProperty("pane_id").GetString());
+        Assert.Equal(beforeJson.RootElement.GetProperty("roles").GetProperty("review").GetProperty("cwd").GetString(), afterJson.RootElement.GetProperty("roles").GetProperty("review").GetProperty("cwd").GetString());
+    }
+
+    [Fact]
+    public void RetireLegacy_RequiresCurrentRecordConfirmationAndEvidence_G614()
+    {
+        const string team = "intent-cli-dev";
+        var context = CreateContext(Domain);
+        using var missing = new StringWriter();
+        Assert.Equal(1, SessionLayerTopologyCommand.ExecuteRetireLegacy(context,
+            ["--domain", Domain, "--team", team, "--evidence", "fleet:zero4racer", "--confirm-retire-legacy", "--write"], missing));
+
+        Assert.True(Record(team, "review", "w1:p1").Applied);
+        var legacy = NotifyRoleTopologyStore.ResolvePath(root);
+        Directory.CreateDirectory(Path.GetDirectoryName(legacy)!);
+        File.WriteAllText(legacy, "{ \"team\": \"intent-cli-dev\", \"workspace_id\": \"w1\", \"roles\": {} }");
+        using var noConfirmation = new StringWriter();
+        Assert.Equal(1, SessionLayerTopologyCommand.ExecuteRetireLegacy(context,
+            ["--domain", Domain, "--team", team, "--evidence", "fleet:zero4racer", "--write"], noConfirmation));
+        Assert.True(File.Exists(legacy));
+        using var retired = new StringWriter();
+        Assert.Equal(0, SessionLayerTopologyCommand.ExecuteRetireLegacy(context,
+            ["--domain", Domain, "--team", team, "--evidence", "fleet:zero4racer", "--confirm-retire-legacy", "--write"], retired));
+        Assert.False(File.Exists(legacy));
+        Assert.Contains("fleet:zero4racer", File.ReadAllText(Path.Combine(root, ".intent-cli", "topology", "legacy-retirements.jsonl")), StringComparison.Ordinal);
+    }
+
     private CliContext CreateContext(string defaultDomain) => new()
     {
         RepoRoot = root,
