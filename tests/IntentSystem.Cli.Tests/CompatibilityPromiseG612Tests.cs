@@ -65,6 +65,24 @@ public sealed class CompatibilityPromiseG612Tests
     }
 
     [Theory]
+    [InlineData("en", "all machine-emitted `cause` values", "Every `cause` value actually emitted")]
+    [InlineData("ja", "machine-consumed JSON payload で実際に emit されるすべての `cause` value", "実際に emit されるすべての `cause` value")]
+    public void PromiseAndLedger_CoverEveryMachineEmittedCauseValue_G612(
+        string language,
+        string promiseCoverage,
+        string ledgerCoverage)
+    {
+        var promise = Read(language, "1.0-compatibility-promise.md");
+        var ledger = Read(language, "1.0-compatibility-ledger.md");
+
+        Assert.Contains(promiseCoverage, promise, StringComparison.Ordinal);
+        Assert.Contains(ledgerCoverage, ledger, StringComparison.Ordinal);
+        Assert.DoesNotContain("documented `cause`", promise, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("documented `cause`", ledger, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("topology-location-conflict", ledger, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("en")]
     [InlineData("ja")]
     public void Promise_RecordsEvidenceGatedRoadAndLinksTheAdr_G612(string language)
@@ -103,6 +121,8 @@ public sealed class CompatibilityPromiseG612Tests
         Assert.Contains("structured warning", adr, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("next major", adr, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("operator-attention", adr, StringComparison.Ordinal);
+        Assert.Contains("every machine-emitted cause value", adr, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("topology-location-conflict", adr, StringComparison.Ordinal);
     }
 
     [Theory]

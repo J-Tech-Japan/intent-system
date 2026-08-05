@@ -15,9 +15,14 @@ tell an API from presentation text or decide when an old surface can retire.
 ## Decision
 
 Starting at 1.0, command and flag names; machine-consumed JSON field semantics
-and documented cause values; exit codes; and durable-record schemas and state
+and every machine-emitted cause value; exit codes; and durable-record schemas and state
 transitions are covered compatibility surfaces. Prose/layout and unstructured
 diagnostics are explicitly outside the promise.
+
+Cause coverage follows machine emission, not whether prose currently documents
+an individual value. Therefore an automation-consumed value such as
+`topology-location-conflict` is covered even when it is not individually
+listed in human-facing guidance.
 
 The repository keeps a reviewable compatibility ledger of the v0.11.1
 machine-consumed baseline. Every registered command/subcommand has a
