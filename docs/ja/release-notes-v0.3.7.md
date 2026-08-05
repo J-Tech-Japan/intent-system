@@ -120,5 +120,5 @@ v0.3.6 からの破壊的変更はありません。
    - [ ] バイナリアーティファクトの smoke check: プラットフォームアーカイブをダウンロードし、
          `.sha256` を検証、展開して `./intent-cli --version` → `0.3.7`。
    - [ ] ローカル preview/dry-run のバージョンメタデータが `0.3.7` 後の次の開発ラインを
-         使う（[Version flow](09-developer-reference.md#version-flow) のリリース後手順に
+         使う（[バージョンフロー](09-developer-reference.md#バージョンフロー) のリリース後手順に
          従い `eng/version.json` を bump）: `stableVersion → 0.3.7`, `nextVersion → 0.3.8`。

@@ -119,5 +119,5 @@ v0.3.4 からの破壊的変更はありません。
    - [ ] `dotnet tool update -g JTechJapan.IntentSystem.Cli` 後に
          `intent-cli --version` が `0.3.5` を報告。
    - [ ] ローカル preview/dry-run のバージョンメタデータが `0.3.5` の次の開発ラインを
-         使う（[Version flow](09-developer-reference.md#version-flow) のリリース後手順に
+         使う（[バージョンフロー](09-developer-reference.md#バージョンフロー) のリリース後手順に
          従って `eng/version.json` を bump）。

@@ -5,7 +5,7 @@
 > GitHub Release の publish が `.github/workflows/release.yml`(`on: release: published`)を発火させ、
 > NuGet package とプラットフォームバイナリ成果物を build・publish します。本パケットは
 > **prepare-only** で、version メタデータと docs をバンプするだけで publish ステップを **追加しません**。
-> [マージ前 リリース準備ゲート](#リリース準備ゲート-g538) と
+> [マージ前 リリース準備ゲート](#リリース準備ゲートg538) と
 > [v0.5.0 の publish](#v050-の-publish) を参照。
 
 ## v0.5.0 の内容

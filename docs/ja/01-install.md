@@ -40,10 +40,10 @@ intent-cli --version
 **.NET SDK が無い場合**は、各プラットフォーム向けの self-contained バイナリを
 [最新 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/latest)
 から取得（ランタイム同梱）。使用前に `.sha256` を検証する。手順は
-[ルート README](../../README.md#install-without-a-net-sdk) を参照。
+[開発者リファレンス](09-developer-reference.md#net-sdk-なしでインストール) を参照。
 
 **プレビューチャンネルユーザー**（`preview-pack` アーティファクト利用）は
-[ルート README のプレビューセクション](../../README.md#preview-install)
+[開発者リファレンスのプレビューセクション](09-developer-reference.md#preview-インストール)
 を参照。
 
 ## 次へ
