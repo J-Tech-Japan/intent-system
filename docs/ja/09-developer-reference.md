@@ -672,7 +672,7 @@ kind では `— FYI:` prose `` で終わります — そのため読み手（�
 orchestrator でも）が「transition は不要」を actionable な次コマンドと
 取り違えることはありません。
 
-### operator attention の永続状態 (G596)
+### operator attention の durable state (G596)
 
 人間にしか処理できない作業は、流れて消える通知ではなく state です。次の
 明示的な lifecycle surface を使います。

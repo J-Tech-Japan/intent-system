@@ -92,15 +92,18 @@ public sealed class JapaneseTerminologyGuardG613Tests
     public void DeveloperReferenceG616_LeavesDurableOnlyAsGlossedConceptOrIdentifiers_G616()
     {
         const int measuredOccurrences = 25;
-        const int keptOccurrences = 8;
-        const int translatedOccurrences = 17;
+        const int keptOccurrences = 9;
+        const int translatedOccurrences = 16;
         var path = Path.Combine(RepoVersionPolicySource.RepoRoot(), "docs", "ja", "09-developer-reference.md");
         var content = File.ReadAllText(path);
         var prose = InlineCode.Replace(content, string.Empty);
-        var unglossedProse = prose.Replace("durable state（永続状態）", string.Empty, StringComparison.Ordinal);
+        var unglossedProse = prose
+            .Replace("durable state（永続状態）", string.Empty, StringComparison.Ordinal)
+            .Replace("### operator attention の durable state (G596)", string.Empty, StringComparison.Ordinal);
 
         Assert.Equal(measuredOccurrences, keptOccurrences + translatedOccurrences);
         Assert.Equal(keptOccurrences, Regex.Matches(content, "durable", RegexOptions.IgnoreCase).Count);
+        Assert.Contains("### operator attention の durable state (G596)", content, StringComparison.Ordinal);
         Assert.DoesNotMatch(new Regex("durable", RegexOptions.IgnoreCase), unglossedProse);
         Assert.Contains("durable state（永続状態）", content, StringComparison.Ordinal);
     }
