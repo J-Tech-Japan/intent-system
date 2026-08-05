@@ -2624,7 +2624,7 @@ to keep in sync, and it goes stale on exactly the roll nobody is watching.
 ### Next release readiness (v0.12.0)
 
 **`v0.11.1` shipped** (GitHub Release + NuGet), and the next prepared line is
-`0.12.0`. [The real v0.12.0 notes](release-notes-v0.12.0.md) cover G611–G621
+`0.12.0`. [The real v0.12.0 notes](release-notes-v0.12.0.md) cover G610–G621
 and the verified minor-bump rationale. See
 [release-notes-v0.11.1.md](release-notes-v0.11.1.md) for the preceding shipped
 scope.
@@ -2648,7 +2648,7 @@ ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.12.0.nupkg
 # 4. Confirm G475, the v0.12.0 release-note check, and the release/version guards.
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
-  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0112DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0120DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 
 # 5. Run the complete Release suite.
 dotnet test IntentSystem.sln -c Release

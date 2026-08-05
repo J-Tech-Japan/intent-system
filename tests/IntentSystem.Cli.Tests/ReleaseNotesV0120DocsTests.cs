@@ -5,12 +5,13 @@ namespace IntentSystem.Cli.Tests;
 
 /// <summary>
 /// G622 keeps the v0.12.0 prepare-only notes complete, bilingual, and bounded
-/// to the eleven merges selected for this minor release.
+/// to the twelve merges selected for this minor release.
 /// </summary>
 public sealed class ReleaseNotesV0120DocsTests
 {
     private static readonly (string Unit, string Pr, string Merge)[] ReleasedUnits =
     [
+        ("G610", "#1324", "48204646"),
         ("G611", "#1328", "4f4106f947e5"),
         ("G612", "#1326", "1b1206a56e71"),
         ("G613", "#1330", "f3d0838a1da0"),
@@ -27,7 +28,7 @@ public sealed class ReleaseNotesV0120DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void ReleaseNotes_CoverExactlyG611ThroughG621_WithVerifiedMerges_G622(string language)
+    public void ReleaseNotes_CoverExactlyG610ThroughG621_WithVerifiedMerges_G622(string language)
     {
         var notes = Read(language);
         var listedUnits = Regex.Matches(notes, @"(?m)^- (G\d+) —")
@@ -35,6 +36,7 @@ public sealed class ReleaseNotesV0120DocsTests
             .ToArray();
 
         Assert.Equal(ReleasedUnits.Select(unit => unit.Unit), listedUnits);
+        Assert.Equal(12, listedUnits.Length);
         foreach (var unit in ReleasedUnits)
         {
             Assert.Contains(unit.Pr, notes, StringComparison.Ordinal);

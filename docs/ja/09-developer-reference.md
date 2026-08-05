@@ -2698,7 +2698,7 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 ### 次リリース準備(v0.12.0)
 
 **`v0.11.1` は出荷済み**(GitHub Release + NuGet)で、次に準備するラインは
-`0.12.0` です。[実際の v0.12.0 ノート](release-notes-v0.12.0.md)は G611–G621 と
+`0.12.0` です。[実際の v0.12.0 ノート](release-notes-v0.12.0.md)は G610–G621 と
 検証済みの minor-bump 根拠を記載します。
 直前の出荷範囲は [release-notes-v0.11.1.md](release-notes-v0.11.1.md) を参照してください。
 
@@ -2720,7 +2720,7 @@ ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.12.0.nupkg
 # 4. G475、v0.12.0 release-note check、release/version guard を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
-  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0112DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0120DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 
 # 5. Release suite を完全実行。
 dotnet test IntentSystem.sln -c Release

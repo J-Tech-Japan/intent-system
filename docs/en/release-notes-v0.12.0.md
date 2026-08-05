@@ -8,6 +8,7 @@
 
 This minor release contains exactly these verified `main` merges:
 
+- G610 — [PR #1324](https://github.com/J-Tech-Japan/intent-system/pull/1324), merge `48204646`.
 - G611 — [PR #1328](https://github.com/J-Tech-Japan/intent-system/pull/1328), merge `4f4106f947e5`.
 - G612 — [PR #1326](https://github.com/J-Tech-Japan/intent-system/pull/1326), merge `1b1206a56e71`.
 - G613 — [PR #1330](https://github.com/J-Tech-Japan/intent-system/pull/1330), merge `f3d0838a1da0`.
@@ -66,7 +67,7 @@ dotnet tool install -g JTechJapan.IntentSystem.Cli --version 0.12.0
 ## Release-readiness gate
 
 - [ ] `eng/version.json` is `stableVersion` `0.11.1` / `nextVersion` `0.12.0`.
-- [ ] These EN/JA notes name exactly G611–G621 with the verified PRs and merge
+- [ ] These EN/JA notes name exactly G610–G621 with the verified PRs and merge
       commits above.
 - [ ] The minor comparison confirms the three topology subcommands and declared
       `delivery_method` are absent from `v0.11.1`.

@@ -6,8 +6,9 @@
 
 ## 対象範囲
 
-この minor release に含まれる検証済み `main` merge は次の十一件だけです。
+この minor release に含まれる検証済み `main` merge は次の十二件だけです。
 
+- G610 — [PR #1324](https://github.com/J-Tech-Japan/intent-system/pull/1324)、merge `48204646`。
 - G611 — [PR #1328](https://github.com/J-Tech-Japan/intent-system/pull/1328)、merge `4f4106f947e5`。
 - G612 — [PR #1326](https://github.com/J-Tech-Japan/intent-system/pull/1326)、merge `1b1206a56e71`。
 - G613 — [PR #1330](https://github.com/J-Tech-Japan/intent-system/pull/1330)、merge `f3d0838a1da0`。
@@ -62,7 +63,7 @@ dotnet tool install -g JTechJapan.IntentSystem.Cli --version 0.12.0
 ## リリース準備ゲート
 
 - [ ] `eng/version.json` は `stableVersion` `0.11.1` / `nextVersion` `0.12.0`。
-- [ ] EN/JA notes は上記の verified PR と merge commit を持つ G611–G621 だけを記載。
+- [ ] EN/JA notes は上記の verified PR と merge commit を持つ G610–G621 だけを記載。
 - [ ] minor 比較で、三つの topology subcommand と宣言済み `delivery_method` が `v0.11.1` に
       無いことを確認。
 - [ ] G475、focused release-note check、full suite、diff check、exact-head CI が green。
