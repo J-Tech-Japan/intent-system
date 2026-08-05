@@ -213,6 +213,12 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
   declares `inline_payload_warning_chars: 4096`. It is advisory only: a payload
   above it is likely pasted rather than typed, while a payload below it is not
   promised safe because the real limit is terminal- and agent-dependent.
+- **Reference-first limit.** Keep repeated review substance in committed
+  `review-context.md` and delegate a terse pointer, but do not present that
+  discipline as the paste remedy: a minimal canonical `notify delegate` envelope
+  still measures 842 characters over 14 lines and can itself be pasted. It
+  reduces duplication, not a paste-sensitive wedge; G619 owns the transport-layer
+  remedy.
 - **Startup gates.** Folder trust and autopilot-enable are operator provisioning
   gates; launch flags bypass neither. The autopilot-enable dialog appears at the
   **first task** even when launch used `--mode autopilot`. With
@@ -539,6 +545,11 @@ task block; do not hand-write `herdr agent prompt`.
 consideration outside the packet to `review-context.md`, push it, then reference
 it — do not inline the substance into a pane prompt. This is the packet structure
 working as intended, not a new packet meaning.
+
+The measured limit matters: a minimal canonical `notify delegate` envelope is
+842 characters over 14 lines and is itself a paste. Reference-first reduces
+duplicated substance; it does not prevent a paste-sensitive seat from wedging.
+G619 owns the transport-layer remedy.
 
 The recipient recipe's `inline_payload_warning_chars` profile is **advisory**,
 not a universal safe-paste limit. When a delegate's inline payload exceeds its

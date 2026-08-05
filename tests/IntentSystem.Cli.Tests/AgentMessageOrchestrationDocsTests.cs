@@ -100,10 +100,14 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("Reference-first dispatch", en, StringComparison.Ordinal);
         Assert.Contains("committed canonical", en, StringComparison.Ordinal);
         Assert.Contains("`review-context.md`", en, StringComparison.Ordinal);
+        Assert.Contains("842 characters over 14 lines", en, StringComparison.Ordinal);
+        Assert.Contains("G619 owns the transport-layer remedy", en, StringComparison.Ordinal);
         Assert.Contains("never refuses or truncates", en, StringComparison.Ordinal);
         Assert.Contains("broken bracketed-paste", en, StringComparison.Ordinal);
         Assert.Contains("reference-first dispatch", ja, StringComparison.Ordinal);
         Assert.Contains("committed canonical な `review-context.md`", ja, StringComparison.Ordinal);
+        Assert.Contains("842 文字・14 行", ja, StringComparison.Ordinal);
+        Assert.Contains("transport-layer の remedy は G619 が担当", ja, StringComparison.Ordinal);
         Assert.Contains("refuse も truncate もしません", ja, StringComparison.Ordinal);
         Assert.Contains("broken bracketed-paste state", ja, StringComparison.Ordinal);
     }

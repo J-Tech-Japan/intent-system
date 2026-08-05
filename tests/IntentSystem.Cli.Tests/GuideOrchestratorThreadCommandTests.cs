@@ -2006,6 +2006,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("--max-autopilot-continues 10", output, StringComparison.Ordinal);
         Assert.Contains("inline_payload_warning_chars: 4096", output, StringComparison.Ordinal);
         Assert.Contains("ADVISORY only", output, StringComparison.Ordinal);
+        Assert.Contains("842 characters over 14 lines", output, StringComparison.Ordinal);
+        Assert.Contains("G619 owns the transport-layer remedy", output, StringComparison.Ordinal);
         Assert.Contains("FIRST TASK", output, StringComparison.Ordinal);
         Assert.Contains("Continue with limited permissions", output, StringComparison.Ordinal);
         Assert.Contains("NEVER choose `Enable all permissions`", output, StringComparison.Ordinal);
@@ -2083,6 +2085,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("intent-cli notify report", unattended.GetProperty("copilot_recipe").GetProperty("role_derived_roots").GetString(), StringComparison.Ordinal);
         Assert.Contains("--yolo", unattended.GetProperty("copilot_recipe").GetProperty("prohibited_blanket").GetString(), StringComparison.Ordinal);
         Assert.Contains("inline_payload_warning_chars: 4096", unattended.GetProperty("copilot_recipe").GetProperty("inline_payload_warning_profile").GetString(), StringComparison.Ordinal);
+        Assert.Contains("842 characters over 14 lines", unattended.GetProperty("copilot_recipe").GetProperty("inline_payload_warning_profile").GetString(), StringComparison.Ordinal);
+        Assert.Contains("G619 owns the transport-layer remedy", unattended.GetProperty("copilot_recipe").GetProperty("inline_payload_warning_profile").GetString(), StringComparison.Ordinal);
         Assert.Contains("out-of-scope action is denied", unattended.GetProperty("ready_branch").GetString(), StringComparison.Ordinal);
 
         var roleInitialization = provisioning.GetProperty("role_initialization");

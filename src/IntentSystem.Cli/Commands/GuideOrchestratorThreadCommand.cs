@@ -2223,7 +2223,10 @@ internal static class GuideOrchestratorThreadCommand
                     InlinePayloadWarningProfile =
                         "Profile `copilot-autopilot-observed-paste-risk` declares `inline_payload_warning_chars: 4096`. "
                         + "It is ADVISORY only: a payload above it is likely pasted rather than typed, while a payload "
-                        + "below it is not promised safe because the real limit is terminal- and agent-dependent.",
+                        + "below it is not promised safe because the real limit is terminal- and agent-dependent. "
+                        + "Reference-first dispatch keeps repeated review substance in committed `review-context.md`, but a "
+                        + "minimal canonical `notify delegate` envelope still measures 842 characters over 14 lines and can "
+                        + "itself be pasted: it reduces duplication, not a paste-sensitive wedge. G619 owns the transport-layer remedy.",
                     StartupGates =
                         "Folder trust and autopilot-enable are operator provisioning gates; neither is bypassed by "
                         + "launch flags. The autopilot-enable dialog appears at the FIRST TASK even when `--mode autopilot` "

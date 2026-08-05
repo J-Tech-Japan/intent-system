@@ -201,6 +201,11 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
   `inline_payload_warning_chars: 4096` を宣言します。これは advisory にすぎません。これを
   超える payload は type ではなく paste されやすいという目安であり、下回れば安全という保証には
   なりません。実際の限界は terminal と agent に依存します。
+- **reference-first の限界。** 繰り返す review の実体は committed canonical な
+  `review-context.md` に置き、delegate には短い pointer だけを載せます。ただし、これを paste の
+  remedy として扱ってはいけません。最小の canonical `notify delegate` envelope でも 842 文字・14 行で、
+  これ自体が paste になります。これは重複を減らす discipline であり、paste-sensitive な wedge を防ぐ
+  ものではありません。transport-layer の remedy は G619 が担当します。
 - **startup gate。** folder trust と autopilot-enable は operator provisioning gate であり、
   launch flag ではどちらも bypass できません。`--mode autopilot` を launch 時に渡しても、
   autopilot-enable dialog は **最初の task** で現れます。`--allow-all-tools` と境界付き root
@@ -492,6 +497,10 @@ herdr-only を内部解決し、role mapping を検証して structured task blo
 置き、delegate にはその file への短い pointer だけを載せます。packet にない consideration は
 `review-context.md` に追加して push し、それを reference します。pane prompt に実体を inline
 してはいけません。これは packet structure を変えるものではなく、意図どおりに使う discipline です。
+
+測定済みの限界も重要です。最小の canonical `notify delegate` envelope でも 842 文字・14 行であり、
+これ自体が paste になります。reference-first は重複する実体を減らしますが、paste-sensitive な seat の
+wedge を防ぐものではありません。transport-layer の remedy は G619 が担当します。
 
 recipient recipe の `inline_payload_warning_chars` profile は **advisory** であり、universal な
 safe-paste limit ではありません。delegate の inline payload が resolved threshold を超えると、
