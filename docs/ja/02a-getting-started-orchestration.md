@@ -23,9 +23,9 @@
 mode と現在のインストール済みガイドに従います。
 
 このページは最小開始から最初の公開 packet までの **orchestration-first** 経路です。
-[プロジェクト開始](02-project-start.md) はトポロジーの権限、[agent メッセージ
+[プロジェクト開始](02-project-start.md) はトポロジーの正本となる定義であり、[agent メッセージ
 オーケストレーション contract](12-agent-message-orchestration.md) はセッションレイヤーの意味の
-権限として残ります。
+正本となる定義として残ります。
 
 ## これから設定するもの
 
