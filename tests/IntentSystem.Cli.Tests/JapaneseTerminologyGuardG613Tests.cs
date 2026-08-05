@@ -50,6 +50,9 @@ public sealed class JapaneseTerminologyGuardG613Tests
     private static readonly Regex BareUrl = new(@"\b(?:https?|mailto):\S+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex HtmlId = new("""\bid\s*=\s*(['\"]).*?\1""", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex HtmlComment = new(@"<!--.*?-->", RegexOptions.Compiled);
+    private static readonly Regex EnglishVerbWithJapaneseAuxiliary = new(
+        @"(?<![\p{L}\p{N}_])[a-z][a-z-]*(?![\p{L}\p{N}_-])(?=[ \t]*(?:し|します|した|して|され|せず|しない))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     [Fact]
     public void ReviewedJapaneseReaderPath_HasNoClosedListOrdinaryEnglish_G613()
@@ -139,6 +142,31 @@ public sealed class JapaneseTerminologyGuardG613Tests
         Assert.DoesNotMatch(new Regex("authority", RegexOptions.IgnoreCase), prose);
         Assert.Contains("正本となる定義", content, StringComparison.Ordinal);
         Assert.Contains("限定された既定権限", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OrchestrationReferenceG621_UsesJapaneseVerbFramesOutsideLiteralPaneSplit()
+    {
+        var path = Path.Combine(RepoVersionPolicySource.RepoRoot(), "docs", "ja", "12-agent-message-orchestration.md");
+        var fenced = false;
+        var proseLines = new List<string>();
+        foreach (var line in File.ReadLines(path))
+        {
+            if (Fence.IsMatch(line))
+            {
+                fenced = !fenced;
+                continue;
+            }
+
+            if (!fenced)
+                proseLines.Add(line);
+        }
+
+        var prose = InlineCode.Replace(string.Join(Environment.NewLine, proseLines), string.Empty);
+        var matches = EnglishVerbWithJapaneseAuxiliary.Matches(prose).Cast<Match>().ToList();
+
+        Assert.Single(matches);
+        Assert.Equal("split", matches[0].Value, ignoreCase: true);
     }
 
     private static IReadOnlyList<string> FindOrdinaryEnglish(string relativePath, IReadOnlyList<string> lines)

@@ -4,10 +4,10 @@
 
 このページは **主要な 4 スレッドモデル**（design / orchestrator / implementation /
 review）と、特に 1 つのホストリポジトリが **複数の intent ドメイン** を保持する場合に
-それを安全に保つ方法を説明します。1 台のマシンに同居するチームは、対応する
+それを安全に保つ方法を説明します。1 台のマシンに同居するチームは、サポート対象の
 `herdr-only` トランスポートを最初に選びます（**PREVIEW** は成熟度に関する注記です）。
-分散したチームまたは既存の agmsg 投資があるチームには、対応する `agmsg` + herdr を選びます。選択は
-`session-layer set` で記録し、どちらのトランスポートも 4 スレッドモデルの主要性を変えません。正本となる
+分散したチームまたは既存の agmsg 投資があるチームには、サポート対象の `agmsg` + herdr を選びます。選択は
+`session-layer set` で記録し、どちらのトランスポートも主要ではありません。正本となる
 貼り付け可能なプロンプトはインストール済みの intent-cli ガイダンスから生成され、このページの
 プロンプトを手で写してはいけません。現在のプロンプトは次で生成します:
 
@@ -46,14 +46,14 @@ intent-cli notify escalate --domain <domain> --team <team> --from <sender-role> 
 checkout から必要な transport-neutral `--routing-root` を含む完全な canonical report
 command を配信 task に埋め込みます。receiver は他のすべての作業後、その report
 command を final step として実行するため、herdr-only の完了が receiver pane に表示される
-だけで終わらず orchestration role を能動的に wake します。herdr-only mode の source of truth は
+だけで終わらず orchestration role を能動的に呼び起こします。herdr-only mode の source of truth は
 `<routing-root>/.intent-cli/topology/<domain>/<team>.json` です。sender、recipient、delegate の
 `report-to` はすべてその team の recorded roster に存在する必要がありますが、**only the
 recipient must be deliverable** です。このため `resident: external` role は pane なしで sender
 および `report-to` になれます。その external role が recipient の場合、`delegate` / `report`
 は安全な routing-root-relative の recorded `reader` へ変更されていない 6-field event を正確に
-1 件 append して配信します（`delegate` は `question`、`report` は status
-`completed|blocked|question` を event kind `completion|blocked|question` へ map します）。
+1 件追記して配信します（`delegate` は `question`、`report` は status
+`completed|blocked|question` を event kind `completion|blocked|question` へ対応付けします）。
 そして `eventAppended: true` を返します。herdr-resident recipient は team の recorded workspace
 内にある明示的な recorded pane を target にします。他 workspace にだけ存在する agent は
 決して eligible ではありません。
@@ -62,7 +62,7 @@ recipient must be deliverable** です。このため `resident: external` role 
 実行し、prompt / append の副作用なしで同じ refusal verdict と cause を返します。unknown-role
 failure は実際に参照した source、team/workspace scope、その scope で見つかった role、corrective
 action を明示します。resolution はすべて fail closed で、foreign workspace や別 transport への
-fallback はありません。`notify escalate` は同じ 6-field event schema を引き続き append します。
+fallback はありません。`notify escalate` は同じ 6-field event schema を引き続き追記します。
 いずれも merge / label / publish / queue mutation を行いません。direct transport command は
 provisioning/readiness diagnostics に限り、workflow send instruction には使いません。
 
@@ -115,7 +115,7 @@ intake の後に、完全なリファレンスチェックリストが続きま�
    （RECOMMENDED なデフォルトのセーフティネットは
    [design-thread watchdog](#design-thread-watchdog推奨されるセーフティネット) を参照）。
 8. **クリーンアップ** — 終了時は agmsg スクリプト（`leave.sh` / `despawn.sh`）でロールを
-   leave/despawn し、inbox watcher を停止する。
+   離脱/終了し、inbox watcher を停止する。
 
 > **警告:** agmsg のデータベースや team ファイルを直接編集しないでください — provision・
 > diagnose・cleanup は agmsg script を使い、workflow notification は adapter を呼ぶ
@@ -152,7 +152,7 @@ intake の後に、完全なリファレンスチェックリストが続きま�
 **3. 起動ルール。** すべての agent は pane の **対話シェルにタイプして**
 （send-text + enter）起動します。codex では必須です: `codex()` シェル shim が agmsg
 monitor bridge を arm する（G521）ため、canonical な実行ファイルを直接 exec する
-ワークスペースマネージャーはこれを bypass し、セッションは健全に見えるのにメッセージが
+ワークスペースマネージャーはこれを迂回し、セッションは健全に見えるのにメッセージが
 一切配信されません。claude は **オペレーター** が選んだ permission mode で起動します。
 各 pane の初回起動には **必ず立ち会って** ください: trust 画面と permission プロンプトは
 回答されるまでセッションをブロックします。設計スレッドが回答を認可されている場合、その回答は
@@ -199,7 +199,7 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
   ともに記録する operator の判断です。
 - **inline-payload の advisory。** `copilot-autopilot-observed-paste-risk` profile は
   `inline_payload_warning_chars: 4096` を宣言します。これは advisory にすぎません。これを
-  超える payload は type ではなく paste されやすいという目安であり、下回れば安全という保証には
+  超える payload は type ではなく貼り付けられやすいという目安であり、下回れば安全という保証には
   なりません。実際の限界は terminal と agent に依存します。
 - **reference-first の限界。** 繰り返す review の実体は committed canonical な
   `review-context.md` に置き、delegate には短い pointer だけを載せます。ただし、これを paste の
@@ -230,7 +230,7 @@ out-of-scope にした action が拒否されることです。その拒否を r
 **混同してはいけない 3 つのレイヤー** で確認します:
 
 1. **delivery 設定** — `delivery.sh status` がモード（例: `mode=monitor`）を報告することは、
-   登録と設定を証明するだけです。watcher が生きていることも、セッションが attach されている
+   登録と設定を証明するだけです。watcher が生きていることも、セッションに接続されている
    ことも **証明しません**。`mode=monitor` を報告しながら何もストリームされていない receiver は
    ありえます。逆も成り立ちます: trust 画面のままの pane は **live-attached でも
    session-active でもありません** が、起動前に `delivery.sh` で設定した delivery 設定は
@@ -243,7 +243,7 @@ out-of-scope にした action が拒否されることです。その拒否を r
    `Monitor event` 行（[Monitor ツールと delivery-mode](#monitor-リカバリ) を参照）。
    **codex** では、bridge が適用される場合の bridge-alive マーカー:
    `delivery.sh status` の `Codex bridge: <team>/<role> alive (pid N)`。bridge は codex 起動時
-   ではなくセッションへの **最初の turn** で arm される点に注意してください。
+   ではなくセッションへの **最初の turn** で有効化される点に注意してください。
 3. **end-to-end** — [ping テスト](#receiver-の準備状態readiness) の ack が **唯一の**
    end-to-end の証明です。レイヤー 1・2 は前提条件であって代替ではありません。live マーカーが
    得られない場合は明示的にフォールバックし（`turn` delivery または手動 `inbox.sh`）、その旨を
@@ -255,16 +255,16 @@ startup report が届き **かつ**、**settle delay** の後に次の 3 つが�
 場合です:
 
 1. **pane が依然として agent の TUI をホストしている** — pane を読みます。shell
-   プロンプトが出ていれば、どれほど直前に report していても agent は終了しています。
+   プロンプトが出ていれば、どれほど直前に報告していても agent は終了しています。
    pane が ground truth であり、メッセージは過去についての主張にすぎません。
-2. **agmsg の ping-pong 往復が成功する** — 今 ping し、今 pong を要求します。先ほどの
+2. **agmsg の ping-pong 往復が成功する** — 今疎通確認し、今 pong を要求します。先ほどの
    readiness ack が証明するのは「その時点で」生きていたことだけです。
 3. **codex では bridge が armed で app-server attachment が安定している** — codex の
    TUI は per-folder の app-server に `--remote` websocket で attach するため、pane も
    bridge も直前まで正常に見えていたのに attachment だけが死ぬことがあります。
 
 > **startup report は readiness ではありません。** field incident(2026-07-29):
-> 2 体の codex agent が startup-complete を report した **数秒後** に、共有していた
+> 2 体の codex agent が startup-complete を報告した **数秒後** に、共有していた
 > app-server の喪失で死亡しました。それでも監督スレッドは「startup report を待っている」
 > と言い続け、その時点で全 agent は既に死んでいました。report だけで provisioning を
 > 完了と結論してはいけません。
@@ -279,17 +279,17 @@ resume ヒントを画面に残す)ことです。ただの端末に見える pa
 探すスキャンでは見逃します。チェックが失敗したら **再チェックして復旧します。次の report を
 待ってはいけません** — 死んだ agent は何も送らないので、待つことは永遠に待つことです。
 
-> **共有 app-server の death mode。** app-server を kill すると、**attach している
+> **共有 app-server の death mode。** app-server を kill すると、**接続している
 > すべての TUI が一斉に落ちます** — kill の理由と無関係な、他チームの agent も含めて。
 > 2026-07-29 の 2 体同時死はまさにこれでした。予防策は下記の attribution ルールです:
 > app-server を停止する前にプロセス自身の cwd を確認し、attribute できないプロセスには
-> 手を出さないこと。これは attribution 違反の二次被害です — 被害者は kill したプロセス
-> ではなく、それに attach していたすべてです。
+> 手を出さないこと。これは attribution 違反の二次被害です — 被害者は終了したプロセス
+> ではなく、それに接続していたすべてです。
 
 **5. 排他性とハンドオーバー。** 1 つのロールを保持できる生きたセッションはちょうど 1 つで、
 2 番目の actas は拒否されます — その拒否が正しい挙動です。セッションの置き換えは
-**graceful drop** を通します: 現保持者が（オペレーター確認つきで）ロールを drop し、
-その後にはじめて後継が claim し、readiness + ping テストを再実行します。
+**graceful drop** を通します: 現保持者が（オペレーター確認つきで）ロールを解放し、
+その後にはじめて後継が取得し、readiness + ping テストを再実行します。
 
 **6. 参照ワークスペースマネージャーは herdr。** 設計スレッドが駆動する surface は
 `workspace create`、`pane split`、`pane send-text` / `send-keys`、`agent prompt`、
@@ -340,7 +340,7 @@ design / orchestrator には `<host-repo>`、implementation には child checkou
 隔離した review cwd/worktree を使い、各 pane creation result から mapping を更新します。
 `herdr tab create --workspace <workspace-id> --cwd <role-cwd> --label <logical-role> --no-focus`
 は primary path ではありません。tab-level lifecycle isolation を simultaneous visibility より
-優先する場合など、文書化した理由で separate role tab を operator が明示的に authorize した
+優先する場合など、文書化した理由で separate role tab を operator が明示的に認可した
 ときだけ例外として使います。
 
 同じ tab 内の `herdr pane move` は未サポートです。同じ tab の layout を変えるときは、影響する
@@ -348,7 +348,7 @@ pane を作り直して logical-role mapping を更新し、in-place の move �
 考えません。
 
 operator-visible な logical-role→pane-id/cwd mapping を記録し、workflow は pane/workspace id を
-hard-code しません。initial workspace creation が最初の id を返した後、すべての provisioning /
+固定指定しません。initial workspace creation が最初の id を返した後、すべての provisioning /
 mutation command は実行直前に記録済み mapping から明示的で空でない pane/workspace target id
 を解決し、command にその id を必ず指定します。解決結果が missing または empty なら fail
 closed とし、command を実行しません。そうしないと herdr が focus-default で他チームの
@@ -357,10 +357,10 @@ rules が変わらず authoritative であり、別の attribution policy を再
 します。herdr 外の design frontend は架空 pane ではなく reader type として記録します。
 
 この machine-scoped かつ team ごとの topology は
-`<host-repo>/.intent-cli/topology/<domain>/<team>.json` に persist します。CLI は
+`<host-repo>/.intent-cli/topology/<domain>/<team>.json` に永続的に保存します。CLI は
 `.intent-cli/topology` 内だけに directory-local ignore を書くため、pane id と absolute path
 は machine local のままで root `.gitignore` を編集しません。各 record は `domain` と `team`
-を自身に持ち、path と identity が食い違う copy は fail closed します。
+を自身に持ち、path と identity が食い違う copy はフェイルクローズします。
 `session-layer-mode.json` はこれまで通り tracked な multi-team truth です。machine truth を
 移す方法は値の copy ではなく destination machine での re-record です。team の
 `workspace_id` を記録し、`roles` 配下で pane-backed role には `resident: herdr` と明示的な
@@ -371,9 +371,9 @@ workspace の recorded pane で running agent が必要です。external residen
 を通して canonical delegate/report event を受け取ります。missing/unsafe reader、stale pane、
 foreign-workspace-only name、ambiguous mapping は prompt / append なしで fail closed になります。
 
-新しい per-team file が absent のときだけ legacy fixed file を compatibility read し、
+新しい per-team file が absent のときだけ legacy fixed file を互換性のために読み出し、
 `topology record` を名指しする deprecation warning を出します。両方が存在して内容が
-食い違う場合は、どちらも優先せず fail closed します。
+食い違う場合は、どちらも優先せずフェイルクローズします。
 
 この artifact は手編集せず、canonical topology surface で記録・検査します。
 
@@ -396,13 +396,13 @@ agent kind は herdr が起動できる任意の kind です。Claude、Codex、
 
 `retire-legacy` が成功すると、CLI は ignored な machine-local topology directory の外にある
 `<host-repo>/.intent-cli/legacy-topology-retirements.jsonl` へ fleet-wide decision から引用可能な
-entry を 1 件 append します。定義済みの field は `timestamp_utc`、`host`、`domain`、`team`、
+entry を 1 件追記します。定義済みの field は `timestamp_utc`、`host`、`domain`、`team`、
 `retired_path`、名前付きの `evidence` です。これにより、現在の legacy reader disposition を
 変更せずに、後続の ledger decision が累積した retirement を引用できます。
 
 `record` が使う値は operator が供給したものだけです。herdr query、id の guess、resource の
 provision、既存 conflict の repair は行いません。完全一致は idempotent no-op、異なる既存 role
-は file を書き換えず refuse します。read-only の `validate` は `valid: true|false` と全 finding
+は file を書き換えず拒否します。read-only の `validate` は `valid: true|false` と全 finding
 を一度に返し、missing/unsupported residence、missing `pane_id`、unsafe reader、team-workspace
 mismatch を含む各 finding に role、field、cause、message を記載します。`show` も read-only
 であり、`notify` と同じ delivery-target 関数を通して各 pane / reader を解決し、prompt、append、
@@ -414,10 +414,10 @@ herdr query を行いません。mapping が存在するか herdr-only が必要
 `update-field` は、recorded role が一度も持たなかった field を宣言する場合、または既に記録された値を
 変更する場合のための狭い経路です。role、field 名、stated current value、新しい値、explicit confirmation、
 `--dry-run` または `--write` が必要です。field が実際に absent の場合に限り `--current absent` と指定します。
-古い認識にもとづく指定は両方向で refuse されます。registry が最初に許可するのは `delivery_method` だけなので、
-unknown または dotted name は任意の JSON path を編集できないよう refuse されます。この command が
+古い認識にもとづく指定は両方向で拒否されます。registry が最初に許可するのは `delivery_method` だけなので、
+unknown または dotted name は任意の JSON path を編集できないよう拒否されます。この command が
 変更するのはその field だけです。`record` の conflict refusal は緩和されず、異なる shape の re-record は
-引き続き refuse され、force flag もありません。
+引き続き拒否され、force flag もありません。
 
 #### 可視な生成済み mode marker
 
@@ -435,13 +435,13 @@ intent-cli session-layer marker generate --domain <domain> --team <team> --file 
 生成済み block は domain、team、mode、canonical な `session-layer show` verification command、
 resolved canonical record の hash を持ちます。host-global または bare な mode claim にはなりません。
 writer は record だけを読み、その delimited block だけを更新します。unrecorded team（`session-layer
-set ... --write` を明記）、absent block、malformed marker は refuse し、
+set ... --write` を明記）、absent block、malformed marker は拒否し、
 `session-layer-mode.json` を書きません。
 
 shared preflight は `AGENTS.md` / `CLAUDE.md` 内の managed marker を発見します。recorded team に
 marker がなければ generating command を含む informational な `marker-not-generated` です。mode または
 record hash が異なる marker は file、claim、canonical truth を明記する `marker-drift` となり、verdict を
-`configuration-incomplete` にします。mode switch の後は regenerate してください。marker は signpost であり、
+`configuration-incomplete` にします。mode switch の後は再生成してください。marker は signpost であり、
 canonical record の代わりにはなりません。
 
 herdr workspace を provision するときは、recorded mode を workspace label に含めます（例:
@@ -451,25 +451,25 @@ state を書かず、label を mode evidence として読みません。
 #### mode switch 後の manual migration review
 
 `session-layer set --write` が recorded mode を実際に変更したときは、順序付きの **manual migration
-plan** を出力します。other mode の session hooks、inbox watchers / monitors を review し、続けて G601
-visibility marker を regenerate してください。各項目は operator action です。intent-cli は user
-configuration を delete、rewrite、disable しません。no-op の set は plan を出しません。
+plan** を出力します。other mode の session hooks、inbox watchers / monitors をレビュー し、続けて G601
+visibility marker を再生成してください。各項目は operator action です。intent-cli は user
+configuration を delete、rewrite、無効化しません。no-op の set は plan を出しません。
 
 shared preflight は declared location だけで known other-mode residue を確認します。たとえば
 herdr-only team 上の `.codex/hooks.json` にある project-level agmsg session hooks は報告対象です。
 `other-mode-residue` finding は path と owning mode、one-mode exclusivity contract、removal guidance を
 明記しますが advisory のままです。residue は active mixing の証明ではなく hazard であり、canonical
-mode record を infer、flip、override しません。
+mode record を infer、flip、上書きしません。
 
 #### shared record-first session-layer preflight
 
 `automation doctor`、guide の READY definition、`notify` は、同じ production predicate が返す
-1 つの machine-readable `session_layer_preflight` result を consume します。似た predicate を
+1 つの machine-readable `session_layer_preflight` result を消費します。似た predicate を
 3 個持つのではありません。passive structural phase は receiver に接触せず、active receiver
 phase は別に報告されます。active phase の skip は、passing な passive verdict を無効にしません。
 
 named team に mode record がない場合は `configuration-incomplete`、すなわち check-not-completed
-であり、決して `not-required` ではありません。intended mode を明示的に record してから検証します。
+であり、決して `not-required` ではありません。intended mode を明示的に記録してから検証します。
 
 ```text
 intent-cli session-layer set --domain <domain> --team <team> --mode agmsg|herdr-only --write
@@ -478,7 +478,7 @@ intent-cli automation doctor --domain <domain> --team <team> --format json
 
 bare anonymous root は expected domain/team を宣言するまで `unjudged` のままです。
 `cannot-determine` は決して green ではありません。preflight は live herdr state から mode を infer
-または repair しません。mode が record 済みなら、その transport だけを probe し、contradiction
+または修正しません。mode が record 済みなら、その transport だけを確認し、contradiction
 evidence は diagnostic detail にとどめます。role-pane topology が記述する mode は `herdr-only`
 です。team の recorded mode が `agmsg` なら、team、recorded mode、topology mode を明記した
 mismatch を返します。このため agmsg team に herdr install は要求されません。
@@ -509,7 +509,7 @@ herdr-only を内部解決し、role mapping を検証して structured task blo
 
 **reference-first dispatch。** review の実体は committed canonical な `review-context.md` に
 置き、delegate にはその file への短い pointer だけを載せます。packet にない consideration は
-`review-context.md` に追加して push し、それを reference します。pane prompt に実体を inline
+`review-context.md` に追加してプッシュし、それを参照します。pane prompt に実体を inline
 してはいけません。これは packet structure を変えるものではなく、意図どおりに使う discipline です。
 
 測定済みの限界も重要です。最小の canonical `notify delegate` envelope でも 842 文字・14 行であり、
@@ -530,7 +530,7 @@ safe-paste limit ではありません。delegate の inline payload が resolve
 `notify` は payload size、threshold、reference-first remedy を human と machine の両方に warning
 として出しますが、同じ payload の delivery は続行します。refuse も truncate もしません。別 team
 での観測では、大きな paste が terminal に broken bracketed-paste state を残し、一部の agent process
-を terminate することがあります。fresh agent start で recovery します。これは観測事実であり、
+を terminate することがあります。fresh agent start で復旧します。これは観測事実であり、
 すべての terminal や agent に universal な size limit があるという主張ではありません。
 
 settled pane では、notify は最初に bounded `agent prompt --wait --until working` を使い、続けて
@@ -540,14 +540,14 @@ transition が delivery verdict です。一度これを観測したら、後続
 `observed`、`not-observed-within-bound`、`not-applicable` と報告し、機械可読な retry verdict は
 `resend_permitted` です。idle のままなら `receiver_state_outcome: idle-stays-idle`、
 `working_transition: not-observed`、`settle_outcome: not-applicable` で未配達のため
-`resend_permitted: true` です。working には入ったが bound 内に settle しない場合は
+`resend_permitted: true` です。working には入ったが bound 内に安定しない場合は
 `receiver_state_outcome: working-did-not-settle`、配達済み、
 `settle_outcome: not-observed-within-bound`、`resend_permitted: false` となります。receiver が
 まだ作業中であり得るため automation は再送してはいけません。notify 開始時にすでに working の pane は
 prompt submission 成功後に delivered としますが、`receiver_state_outcome: already-working`、
 `working_transition: unobservable`、`settle_outcome: not-applicable`、`resend_permitted: false` と
 報告し、active turn を新 prompt の transition と誤認しません。dry-run は active phase を `skipped`
-のままにして prompt しません。
+のままにしてプロンプトしません。
 
 `--to` は引き続き topology の logical role を指定しますが、logical role name は globally unique な
 herdr agent name から独立しています。recipient identity は recorded workspace と pane の組です。
@@ -558,8 +558,8 @@ fail closed にし、agent-name match fallback は決して行いません。
 
 dispatch ごとに fresh で予測不能な nonce を生成し、再利用や task id 単独での代用をしません。
 `pane wait-output` は既存 output を即座に検索するため、task block 内の precomposed wait needle
-が echo され、作業開始前に false match することがあります。split field により、その literal を
-生成された split field により、その literal を配信対象から除外します。handoff は file、commit、PR、verification log などの検査可能な
+がエコー され、作業開始前に false match することがあります。生成された split field により、その literal を
+配信対象から除外します。handoff は file、commit、PR、verification log などの検査可能な
 artifact です。screen prose はそれを指す signal にすぎません。repair は現在の pane mapping を
 解決した後、同じ logical role に task id と具体的 delta を添えて戻します。どの buffer 由来でも
 marker match だけでは不十分で、named artifact の存在と verification が必要です。repair も
@@ -583,7 +583,7 @@ subscription entry を含めます。
 ```
 
 各 `<resolved-pane-id>` は subscribe 時と re-provision 後に、記録済み
-logical-role→pane mapping から解決し、pane id を hard-code してはいけません。event frame は
+logical-role→pane mapping から解決し、pane id を固定指定してはいけません。event frame は
 `agent`、`agent_status`、`pane_id`、`workspace_id` を運びます。
 
 ```json
@@ -591,13 +591,13 @@ logical-role→pane mapping から解決し、pane id を hard-code してはい
 ```
 
 直前の status は logical role ごとに独立して追跡します。その role が `working` から
-settled (`idle`、`done`、`blocked`) へ遷移した場合だけ wake します。最初から settled の
-sample、`unknown`、settled→settled の変化では wake しません。wake 前に settle delay を置き、
+settled (`idle`、`done`、`blocked`) へ遷移した場合だけ起動を促します。最初から settled の
+sample、`unknown`、settled→settled の変化では起動を促しません。wake 前に settle delay を置き、
 per-role dedupe により burst から生じる wake を、その観測済み transition につき 1 回にします。
-新しい `working` の観測で、その role を re-arm します。
+新しい `working` の観測で、その role を再有効化します。
 
 **state change は何かが起きたことだけを意味し、task が成功したことを決して意味しません。**
-どちらの source から wake した後も毎回、orchestration は現在の herdr state と pending
+どちらの source から起動を促した後も毎回、orchestration は現在の herdr state と pending
 approval/question pause、正確で fresh な completion marker と status、検証済み named
 artifact、fresh な canonical intent-cli/GitHub facts を確認します。2 つの source は相補的です:
 notify report は最も情報量が多い一方で worker の協力に依存し、state change は herdr の観測
@@ -618,10 +618,10 @@ herdr pane wait-output --match "ORCH_RESULT <fresh-per-dispatch-nonce>" --source
 
 `idle`、`done`、`blocked`、marker match、timeout を含む EVERY wait return 後に
 `herdr pane read --source recent-unwrapped <pane-id>` を実行し、pending approval / question を
-inspect します。`idle` は approval-paused の場合があります。結果を settled、
+確認します。`idle` は approval-paused の場合があります。結果を settled、
 approval/question-paused、timeout に分類します。pause では pane から読んだ G550 MAY class
-だけを回答し、それ以外は escalate してから wake に re-enter し、再度 wait します。timeout も
-re-entry point です。進捗を persist して制御を返し、後続 wake で再開します。長い flow には
+だけを回答し、それ以外はエスカレーションしてから wake に戻り、再度待機します。timeout も
+re-entry point です。進捗を永続的に保存して制御を返し、後続 wake で再開します。長い flow には
 cursor を永続化する deterministic script を推奨します。success は pending
 approval/question のない settled state + 正確な fresh-nonce marker と status + 存在して検証済みの
 artifact + fresh な canonical intent-cli/GitHub facts の合成判定です。artifact verification と
@@ -633,12 +633,12 @@ host root を実行時に解決し、`<host-repo>/.intent-cli/events/<team>.json
 `<team>` は agmsg/herdr team name を verbatim にした flat filename（例:
 `intent-cli-dev.jsonl`）で、team subdirectory と absolute path の hard-code は禁止です。
 path 構築前に、空文字、先頭 dot、`/` または `\`、任意の `..` sequence を fail closed で
-拒否します。不正名を sanitize してはいけません。
+拒否します。不正名を無害化してはいけません。
 
-canonical `intent-cli notify` surface だけが writer で、caller は手動 append しません。
+canonical `intent-cli notify` surface だけが writer で、caller は手動追記しません。
 通常は orchestrator が delegate/escalate event を書き、recorded recipient が external の場合は
 receiver の canonical report も append できます。`O_APPEND` で開き、1 行に完全な JSON object
-を 1 つ append し、embedded newline を許さず、`summary` を 1 行へ normalize します。必須 schema:
+を 1 つ追記し、embedded newline を許さず、`summary` を 1 行へ正規化します。必須 schema:
 
 ```json
 {"timestamp":"<RFC3339>","team":"<team>","kind":"completion|blocked|question|escalation","unit":"<execution-unit-or-task-id>","summary":"<one-line-summary>","artifact":"<repo-relative-path-or-URL>"}
@@ -647,8 +647,8 @@ receiver の canonical report も append できます。`O_APPEND` で開き、1
 recorded external reader 宛ての canonical notification と、design-relevant な completion /
 blocked / question / escalation だけを書きます。external reader 宛て delegation は `question`、
 external report は `completed|blocked|question` status を event kind
-`completion|blocked|question` へ map します。pane-resident dispatch、
-routine progress、pane output、acknowledgement はここへ mirror しません。この mode-independent
+`completion|blocked|question` へ対応付けします。pane-resident dispatch、
+routine progress、pane output、acknowledgement はここへミラー しません。この mode-independent
 channel は explicit external-reader/design boundary のままで、fallback inter-agent bus ではなく、
 `intent-cli notify`、GitHub、intent-cli workflow state の代替でもありません。
 
@@ -658,19 +658,19 @@ byte / line count が逆戻りしていないことを検証します。
 永続的な byte-offset watermark は必ず file identity と complete-line count と組にし、3 値のどれも
 restart-local にしません。
 rotation、truncation、backwards count、file replacement は operator recovery まで fail closed とします。replay が design
-decision を重複させるため、先頭から silent reset してはいけません。
+decision を重複させるため、先頭から silent リセットしてはいけません。
 
 - Claude app watcher: 永続的な file-identity/byte-offset/complete-line-count watermark より後の
-  完全な未読行だけを tail し、成功後にのみ進め、watcher restart をまたいで保持します。
+  完全な未読行だけを末尾追跡し、成功後にのみ進め、watcher restart をまたいで保持します。
   rotation、truncation、backwards byte/line count、file replacement で fail closed とし、先頭から再開しません。
 - herdr pane の Codex CLI: 通常 coordination では `intent-cli notify delegate` / `report` を使い
-  file poll しません。design-boundary reader として動く場合は同じ永続的で restart-surviving な
+  file ポーリングしません。design-boundary reader として動く場合は同じ永続的で restart-surviving な
   watermark を使い、rotation、truncation、backwards count、file replacement で fail closed とし、
-  先頭へ reset しません。
-- Codex Desktop: one-minute-class（約 1 分）cadence で poll し、永続的で restart-surviving な
+  先頭へリセットしません。
+- Codex Desktop: one-minute-class（約 1 分）cadence でポーリングし、永続的で restart-surviving な
   file-identity/byte-offset/complete-line-count watermark より後の完全な行だけを処理します。
   rotation、truncation、backwards byte/line count、file replacement、malformed JSON で fail closed とし、
-  先頭から reset しません。
+  先頭からリセットしません。
 
 ### Recovery と mode switch
 
@@ -681,38 +681,38 @@ installed herdr help/schema を参照します。
 
 - live server update: running pane を保つ `herdr server live-handoff` を使います。
   `events.subscribe` consumer は stream EOF を error ではなく resubscribe trigger として扱います。
-  handoff 近くで回答した approval は re-present され得るため、pane を re-read し同じ dialog を
-  re-judge します。以前の回答が consumed されたと仮定せず、blind re-answer もしません。pane PTY size
+  handoff 近くで回答した approval は再提示され得るため、pane を再読し同じ dialog を
+  再判断します。以前の回答が消費されたと仮定せず、blind re-answer もしません。pane PTY size
   は TUI client の reattach まで shrink することがあります。read は有効なままで、headless
-  resize/zoom は PTY を restore せず、operator の TUI reattach が remedy です。
+  resize/zoom は PTY を復元せず、operator の TUI reattach が remedy です。
 
-- modifier-chord launch corruption: shell へ戻すか再 provision し、typed な
+- modifier-chord launch corruption: shell へ戻すか再準備し、typed な
   `agent start ... -- <permission-flags>` を使います。
 - reboot 後の dead pty wiring: stopped server の socket command は `server_not_running` を返します。
-  headless server は TUI client を待たず restored agent session を resume します。undetected agent /
+  headless server は TUI client を待たず restored agent session を再開します。undetected agent /
   shell-only pane では artifact を保全して re-provision、mapping 再構築、上記の自己完結した
   settle-and-re-check READY gate 再実行を行います。
 - focus-default cross-team mutation: 明示的な pane/workspace id が missing / empty だと、他チームの
   currently focused pane を mutate する可能性があります。initial workspace creation 後の every
   provisioning/mutation command で記録済み logical-role mapping から non-empty id を解決・明示し、
   解決失敗時は実行しません。既存 G555 attribution rules を変更せず適用します。
-- long-wait turn death: bounded wait、re-entry、persist された deterministic loop を使います。
+- long-wait turn death: bounded wait、re-entry、永続化された deterministic loop を使います。
 - dispatch-echo false match: composed wait needle を task block に入れず、return 後に pane を
-  inspect し、named artifact を独立に検証します。
-- idle と報告された approval/question pause: every wait 後に pane を inspect し、G550 の
-  MAY/escalate 境界を適用して wake に re-enter します。
+  確認し、named artifact を独立に検証します。
+- idle と報告された approval/question pause: every wait 後に pane を確認し、G550 の
+  MAY/escalate 境界を適用して wake に戻ります。
 
 ### Session-layer switch checklist
 
-**agmsg → herdr-only**: work を drain/park、role を graceful drop して watcher/bridge を停止、outgoing
-transport の per-project agmsg hook configuration と delivery mode を turn off または remove し、delivery
+**agmsg → herdr-only**: 作業を排出または保留し、role を **graceful drop** して watcher/bridge を停止、outgoing
+transport の per-project agmsg hook configuration と delivery mode を turn off または削除し、delivery
 不可を検証します。これは cosmetic ではありません。残存 hook が next-launch hook-trust screen を
-発生させ、次の Codex launch を block した実測事象があります。herdr・mapping・検証済み events
+発生させ、次の Codex launch を阻止した実測事象があります。herdr・mapping・検証済み events
 path を provision、G556 と marker/artifact 検出を通し、最後に `intent-cli session-layer set
 --domain <domain> --team <team> --mode herdr-only --write`。
 
-**herdr-only → agmsg**: work を drain/park して必要な final design event を append、operator
-policy に従って workspace を停止または retain/close し delivery を止め、agmsg role と承認済み
+**herdr-only → agmsg**: 作業を排出または保留して必要な final design event を append、operator
+policy に従って workspace を停止または保持・終了し delivery を止め、agmsg role と承認済み
 watcher/bridge を provision、G556 と end-to-end delivery を通し、最後に `intent-cli
 session-layer set --domain <domain> --team <team> --mode agmsg --write`。両方向とも mode flip が
 final canonical step です。
@@ -742,7 +742,7 @@ provisioning（上記）、セッションのライフサイクル、stall の�
 多くは死んでいるのではなくダイアログで止まっています）、delivery の問題とセッションの死を区別し、
 ロールがまだそのセッションに保持されているか確認し、最も侵襲の少ない修復を優先します。置き換えは
 最後の手段です。置き換えは **graceful drop** を通します — 現保持者がロールを解放し、その後に
-後継が claim して readiness と ping テストを再実行 — 全過程で **1 ロール 1 保持者** を守ります。
+後継が取得して readiness と ping テストを再実行 — 全過程で **1 ロール 1 保持者** を守ります。
 drop の確認は **オペレーターに可視** です: 生きたセッションを退役させる判断はオペレーターのもので、
 確認はそれを記録するものです。
 
@@ -750,7 +750,7 @@ drop の確認は **オペレーターに可視** です: 生きたセッショ�
 
 | レイヤー | 目的 | ケイデンス |
 | --- | --- | --- |
-| リアルタイム message monitor | 受信する agmsg の返信・blocker・エスカレーション | 継続的（attach された live stream） |
+| リアルタイム message monitor | 受信する agmsg の返信・blocker・エスカレーション | 継続的（接続された live stream） |
 | blocking-UI の pane スキャン | approval / selection / trust プロンプトで止まった pane、**および agent がいるべき場所に shell プロンプトが出ている pane**(`agent-absent`)— メッセージを一切出さない failure mode | サブ分オーダー |
 | 定期 state watchdog | canonical な intent-cli/GitHub 状態と期待進捗の比較。既存の [design-thread watchdog](#design-thread-watchdog推奨されるセーフティネット) | 数十分オーダー |
 
@@ -767,10 +767,10 @@ drop の確認は **オペレーターに可視** です: 生きたセッショ�
   shift+tab のような modifier chord は忠実に届きません(複数チームで観測)。
 
 > **再起動をまたいだ re-arm。** 監督スケジューラーはセッションスコープです: `/loop`・automation・
-> attach された monitor は、それをホストしている設計セッションと一緒に死に、しかも停止したことを
+> 接続された monitor は、それをホストしている設計セッションと一緒に死に、しかも停止したことを
 > 誰も知らせません。各レイヤーは設計セッションの再起動を生き延びるか、**新しいセッションの最初の
 > 行動として re-arm** されなければなりません。忘れた場合の実測コスト: セッション再起動の窓で
-> claim が失われ、publish 済み issue が **5.5 時間** stall しました — たまたま動いている監督
+> claim が失われ、publish 済み issue が **5.5 時間** 停止しました — たまたま動いている監督
 > レイヤーが 1 つも無かったためです。
 
 **ブロッキングダイアログ — 境界。** ここでは **verified-read ルール** がすべてを支配します:
@@ -831,7 +831,7 @@ permission の待ち** — 事前承認の有無にかかわらず回答不可�
 | --- | --- |
 | workspace label | ワークスペースが **自分の** チーム/プロジェクト名を持つ。自分が作っておらず名前も言えないものは自分のものではない |
 | pane cwd | pane の作業ディレクトリが **自分の** チーム専用ロールフォルダーのいずれかである |
-| process cwd | kill の前に **pid ごとに** cwd を読む — プロセス *名* だけで絞った pid 一覧は何も attribute しない |
+| process cwd | kill の前に **pid ごとに** cwd を読む — プロセス *名* だけで絞った pid 一覧は何も帰属を確認しない |
 | agmsg の `(team, role)` ファイル命名 | run ディレクトリの state ファイルは `(team, role)` 単位で命名される。team セグメントが自分のものでないファイルは、どれほど壊れて見えても他チームの bridge/watcher state である |
 
 > **attribution できない場合は read-only。** 所有を積極的に確定できないなら、見ることと
@@ -889,7 +889,7 @@ domain、ブロックされている execution unit、スレッドの外にい�
 > **agmsg だけの hold は contract violation です。** メッセージ上にしか存在しない
 > ブロックは `stalled-work` にも `heartbeat` にも見えず、したがってあらゆる
 > watchdog とオペレーターの目視からも見えません。design を待っているなら artifact が
-> 存在するはずで、artifact が無いならそれは待っているのではなく stall しています。
+> 存在するはずで、artifact が無いならそれは待っているのではなく停止しています。
 
 その内容を運ぶのは OPEN artifact 自身です — agmsg メッセージは通知はできますが、
 永続的な記録の代わりには決してなりません:
@@ -945,7 +945,7 @@ hold を **可視な pending state** として保ちます。reviewer が単に�
 | 判断クラス | 何が検証するか |
 | --- | --- |
 | 件数・列挙の訂正 | 両スレッドが読めるリポジトリの事実から件数が導出できる(例: マージ済み PR 一覧からのスライス数) |
-| 引用された事実から導かれる wording 訂正 | wording がリポジトリの事実から entail され、reviewer と orchestrator が事実と訂正の両方に合意している |
+| 引用された事実から導かれる wording 訂正 | wording がリポジトリの事実から論理的に導かれ、reviewer と orchestrator が事実と訂正の両方に合意している |
 | 相互参照・リンクの訂正 | 参照先が記載どおり存在する(しない)ことを、読んで検証できる |
 | canonical source との識別子・メタデータ不一致 | canonical source を名指しして読む。canonical source が勝ち、解決はそれを引用する |
 
@@ -1023,14 +1023,14 @@ packet を author/更新する（または明示的に指示する）のを **�
 ```
 
 これは inbox だけに置く state ではなく design judgment の待ちです。開始時に orchestrator は
-`--owner design` つきの operator-attention record を open し、待機中に既存 record を query し、
-回答者が evidence とともに resolve します。完全な lifecycle は
+`--owner design` つきの operator-attention record を開き、待機中に既存 record を照会し、
+回答者が evidence とともに解決します。完全な lifecycle は
 [design 判断待ちの記録義務](#design-判断待ちの記録義務)を参照してください。
 
 **release-prep は design 所有:** design がリリースバージョンとスコープを決め、release-prep
-packet を author します。orchestrator はそれが存在し `issue-cut-ready` になった **後** にのみ
+packet を作成します。orchestrator はそれが存在し `issue-cut-ready` になった **後** にのみ
 publish・coordinate できます — 曖昧な「リリースを準備して」という指示からバージョンを選んだり、
-スコープを決めたり、リリースノート/packet を自分で author してはいけません。
+スコープを決めたり、リリースノート/packet を自分で作成してはいけません。
 
 ## agmsg とは（そして何ではないか）
 
@@ -1093,7 +1093,7 @@ orchestrator がメッセージ駆動で動作する場合でも fallback/legacy
 - GitHub の事実を直接検証: open PR、CI 結論、承認、マージ状態、closeout/label 状態。
 - 停滞ブロッカーと無返信の receiver を検知する。
 - **publish と delegate は SAME WAKE で行う（G524）。** この wake で next-slice issue を
-  publish した場合、存在を検証したうえで、その **同じ wake の中で** implementation
+  公開した場合、存在を検証したうえで、その **同じ wake の中で** implementation
   スレッドへ delegate する — delegate をスケジュールされていない「次の wake」に
   先送りしてはいけない。他に何もそれをトリガーしないためです（フィールドトレースでは
   4 slice にまたがり合計約 60 時間という、測定された中で最大の stall class でした）。
@@ -1136,13 +1136,13 @@ green は古くなっている可能性があります。
   挙動は変更しません。
 - **herdr-only** — pending CI で yield する前に、
   `gh pr checks <pr> --repo <owner/repo> --watch` で exact-head の CI-completion watch を明示的に
-  arm します。intent-cli の外側の controller が watch を所有します。terminal に達したら、team の
-  logical-role mapping から解決した pane ID の recorded orchestration role を wake します。pane ID を
-  hard-code してはいけません。intent-cli はこの background process を起動も管理もしません。この
+  有効化します。intent-cli の外側の controller が watch を所有します。terminal に達したら、team の
+  logical-role mapping から解決した pane ID の recorded orchestration role を起動を促します。pane ID を
+  固定指定してはいけません。intent-cli はこの background process を起動も管理もしません。この
   wake が示すのは待ちが終わったことだけです。成功か失敗かを判定するため、`stalled-work` と
   exact-head の GitHub facts を再読します。
 - **agmsg orchestrator-message** — 明示的に設定した fallback orchestrator timer が再確認を発生
-  させられます。それがない場合は、同じ exact-head `gh pr checks ... --watch` surface を arm します。
+  させられます。それがない場合は、同じ exact-head `gh pr checks ... --watch` surface を有効化します。
   receiver report だけでは CI 完了の証明になりません。
 
 - **pending / running** — 上で名前を付けた producer を使って待つ。メッセージなし、request-update なし、
@@ -1168,18 +1168,18 @@ pass/fail/skip/pending の breakdown、kind + PR + head SHA による安定し�
 ルーチンな next-slice issue の publish は **orchestrator の責務** であり、オペレーターへの
 質問ではありません。intent-cli が候補を `issue-cut-ready` と報告し、すべての安全ゲートを
 通過したら、orchestrator はオペレーターに GitHub issue 作成を依頼して止まるのではなく、
-canonical な intent-cli コマンドで自分で publish します。**1 wake につき最大 1 件** で
-publish し、検証したうえで、**同じ wake の中で** その issue を implementation へ
-delegate します（G524）— publish と delegate は一緒に完了させ、delegate を
+canonical な intent-cli コマンドで自分で公開します。**1 wake につき最大 1 件** で
+公開し、検証したうえで、**同じ wake の中で** その issue を implementation へ
+委譲します（G524）— publish と delegate は一緒に完了させ、delegate を
 スケジュールされていない次の wake に先送りしてはいけません。
 
-次の **すべて** が成り立つときのみ publish します:
+次の **すべて** が成り立つときのみ公開します:
 
 - same-domain コンテキスト、または明示的にルーティングされた multi-domain 委譲
-  （明示ルーティングなしに cross-domain 候補を publish しない）;
+  （明示ルーティングなしに cross-domain 候補を公開しない）;
 - packet contract が完全（必須セクションの欠落なし）;
 - open な clarification や contract の曖昧さがない;
-- 依存が満たされている — 未 cut の依存より先に publish しない;
+- 依存が満たされている — 未 cut の依存より先に公開しない;
 - WIP 上限内;
 - host-sync / preflight がクリーンで、対象 repo/domain が一意。
 
@@ -1192,7 +1192,7 @@ publish は canonical な surface のみ — `intent-cli issue publish-flow` と
 `gh ... --add-label` は使いません。publish 後は intent-cli / GitHub（チャットではなく）で
 issue が期待どおりの body と `intent-target` label を持つこと、永続状態がそれを
 反映していることを検証し、**その同じ wake の中で** agmsg で実装を委譲します（G524）—
-publish した後で止まって将来の wake を待つことはしません。実装 receiver は依然として
+公開した後で止まって将来の wake を待つことはしません。実装 receiver は依然として
 `intent-cli worker next-action` からターゲットを得ます（agmsg テキストからではありません）。
 
 ## end-of-wake チェック（G523/G524）
@@ -1232,7 +1232,7 @@ handwritten transport invocation で検証を迂回したりしてはいけま�
 
 未充足の依存は、明示的かつ解決可能であれば **通常のオーケストレーション作業** であり、
 オペレーターへの停止ではありません。次の候補が未完了の作業に依存している場合、orchestrator は
-オペレーター判断のために止まらず、チェーンを決定論的に計画します — 依存元の候補を hold し、
+オペレーター判断のために止まらず、チェーンを決定論的に計画します — 依存元の候補を保留し、
 この wake のアクションを **最も早い未充足の** same-domain（または明示ルーティングされた）依存に
 向けます。
 
@@ -1249,7 +1249,7 @@ handwritten transport invocation で検証を迂回したりしてはいけま�
   ルートマッピングのない cross-domain）→ 1 件のオペレーター判断にエスカレーション。
 - **dependency-cycle** — 依存が循環している → エスカレーション（fail closed）。
 
-依存元の候補は、すべての依存が完了/cut されるまで hold されます。**エスカレーションは次の場合
+依存元の候補は、すべての依存が完了/切り出されるまで保留されます。**エスカレーションは次の場合
 のみ**: 依存 packet の欠落、依存の循環、ルートマッピングのない cross-domain 依存、GitHub
 linkage の矛盾、破壊的な復旧、認証情報/セキュリティ、または人間のプロダクト/設計判断。
 
@@ -1263,7 +1263,7 @@ receiver がしきい値（デフォルト **30 分**、設定可能）を超え
 
 手順:
 
-1. **非破壊的な status-request を 1 通** 送る — 尋ねるだけで、retry/cancel/reset しない。
+1. **非破壊的な status-request を 1 通** 送る — 尋ねるだけで、retry/cancel/リセットしない。
 2. read-only の intent-cli / GitHub 事実を確認（`worker next-action`、issue/PR 状態、CI、label）。
 3. 事実が進捗を示すなら（新規コミット、PR 更新、CI 実行中）**監視を続ける** — 作業を再送しない。
 4. receiver が `waiting-permission` と返したら、それは **オペレーター通知** — surface する。
@@ -1289,7 +1289,7 @@ status-request は receiver に次のいずれかで返信するよう求めま�
 
 - 通常の進捗 / accepted / in-flight な委譲;
 - CI 待ち（pending チェックはアクティブな待ち状態）。exact head が terminal になったとき、待ちの
-  終了は正当な orchestration wake signal であり、pending wait として dedupe せず green または
+  終了は正当な orchestration wake signal であり、pending wait として重複排除せず green または
   failed に分類する;
 - 成功した実装（PR open、CI green）;
 - 成功したレビュー / 承認;
@@ -1366,7 +1366,7 @@ managed root であり、承認設定を弱めることでは **ありません*
   または dirty/unsafe な stale パスは **決して** オペレーターの `rm -rf` 承認プロンプトには
   なりません — それは orchestrator への **structured blocker** agmsg 返信（`status: blocked`）
   であり、orchestrator が repair としてルーティングできるようにします。reviewer が unmanaged な
-  パスを force-delete して解決するものではありません。
+  パスを強制削除して解決するものではありません。
 
 review 委譲の例（orchestrator → review）:
 
@@ -1410,11 +1410,11 @@ monitor の設定だけでは **不十分** です。team 登録 + delivery mode
 7. その後にのみ最初の実際の委譲を送る。
 
 > **send-before-ready:** receiver が ready になる前に送ったメッセージは agmsg history に保存されて
-> いても、新しく起動/再起動したセッションには **可視に delivery されない** ことがあります。ack の
+> いても、新しく起動/再起動したセッションには **可視に配信されない** ことがあります。ack の
 > ないメッセージは **receiver-not-ready** であり、成功した委譲ではありません。ack 後に resend するか、
 > receiver に `inbox.sh` で queue を読ませて復旧します。
 
-receiver が initial メッセージ送信 **後** に launch された場合に送る、貼り付け可能なオペレーター
+receiver が initial メッセージ送信 **後** に起動された場合に送る、貼り付け可能なオペレーター
 メッセージ:
 
 ```text
@@ -1481,7 +1481,7 @@ agmsg の inbox を確認してください。あなたは `<team>` の design �
 ```
 
 > **pre-start メッセージ:** design receiver の monitor が起動する前に送られたメッセージは
-> agmsg history にあっても可視に delivery されないことがあります — design スレッドは `inbox.sh`
+> agmsg history にあっても可視に配信されないことがあります — design スレッドは `inbox.sh`
 > で inbox を読んで earlier なエスカレーションを拾うべきです。他の receiver と同様です
 > （Receiver readiness / startup order 参照）。
 
@@ -1530,7 +1530,7 @@ resume）します。その後 orchestrator がループを自律的に駆動し
 
 - **autonomous publish** — `intent-cli` が次のスライスを `issue-cut-ready` と報告し、すべての
   publish ゲートが通れば、orchestrator は canonical な intent-cli コマンド（`issue publish-flow` /
-  `automation issue-publish`）で **1 つ** の GitHub issue を自分で作成・publish します — 各ステップを
+  `automation issue-publish`）で **1 つ** の GitHub issue を自分で作成・公開します — 各ステップを
   design に頼みません。1 wake につき最大 1 件。委譲前に検証します。
 - **escalation boundary** — ルーチンな委譲（publish、delegate、CI 待ち、review、closeout）は
   orchestrator↔receivers に留まります。**design** に戻すのは人間が必要な判断のときだけ（product/設計
@@ -1546,7 +1546,7 @@ resume）します。その後 orchestrator がループを自律的に駆動し
 起こしているため、高速な orchestrator ループは冗長です — しかし、メッセージ駆動の
 経路自身が自己報告できないスタールは、依然として何かが検知しなければなりません。
 **RECOMMENDED なデフォルト** のセーフティネット(G539。G526 の外部スケジューラ推奨を
-supersede します)は、**design** スレッドから実行する **30 分クラス** の間隔の
+置換します)は、**design** スレッドから実行する **30 分クラス** の間隔の
 watchdog loop です: `intent-cli automation heartbeat` を唯一の scheduler-agnostic な
 decision surface として呼び出します。各 valid result は `healthy-active-wait`、
 `actionable-stall`、`operator-required`、`cannot-determine` のちょうど一つの verdict を持ちます。
@@ -1554,7 +1554,7 @@ decision surface として呼び出します。各 valid result は `healthy-act
 poll state の永続化をしません。生きた、人間が監視しているエージェント
 セッションの **内側** で動作するため、見えない外部プロセスとは異なり、別途の
 credential/keychain セットアップも不要で(セッションの他の部分と同じ方法で
-authenticate します)、壊れた瞬間にオペレーターの画面上で可視化されます。
+認証します)、壊れた瞬間にオペレーターの画面上で可視化されます。
 
 - **頻度** — 30 分クラス(例: 30 分ごと): 邪魔にならないほど静かで、フィールドトライアル
   で実測されたスタールを大きく下回る上限に収まるだけの頻度です。高速な watchdog
@@ -1567,12 +1567,12 @@ authenticate します)、壊れた瞬間にオペレーターの画面上で可
   `healthy-active-wait` では何も送らず、result が示す awaited condition、observable end signal、有限の
   bound に従って signal または bound 超過時に再評価します。`actionable-stall` では返された canonical
   `intent-cli notify` command をその key に対して最大 **1 回** 実行します。`operator-required` は named
-  record と action を operator に提示し、orchestration を nudge しません。`cannot-determine` は named
-  monitor/routing failure を可視化して repair または escalate し、healthy/silent として扱いません。
+  record と action を operator に提示し、orchestration を促しません。`cannot-determine` は named
+  monitor/routing failure を可視化して repair またはエスカレーションし、healthy/silent として扱いません。
   heartbeat コマンドの実行失敗や不正な/オブジェクトでない出力は
   **決して沈黙しません**: この wake 自身の turn 出力で、生きたこのセッションを
   監視しているオペレーターに見える形で、失敗を明示的に述べます — これこそが、
-  retire された見えない外部スケジューラに対して in-session の watchdog が持つ
+  廃止された見えない外部スケジューラに対して in-session の watchdog が持つ
   正確な優位性です(下記 Retired を参照)— その一方で、壊れた入力から notify の
   nudge を捏造・送信することは決してありません。送信する nudge は
   `actionable-stall` verdict とともに返された canonical notify command の場合だけです。
@@ -1594,7 +1594,7 @@ authenticate します)、壊れた瞬間にオペレーターの画面上で可
   evidence/age basis、stable dedupe key、owner、canonical notify command に統合します。
 - **アクション** — その一つの verdict だけに従います: named signal を bound 内で待ち、
   `actionable-stall` key には返された canonical notify command を最大 1 回実行し、
-  `operator-required` は human に route し、`cannot-determine` は可視化して repair/escalate します。
+  `operator-required` は human に経路指定し、`cannot-determine` は可視化して repair/エスカレーションします。
   他の field から action を推論せず、hand-written transport request を送ってはいけません。
 
   ```json
@@ -1663,8 +1663,8 @@ orchestrator 自身がそのチェックを実行しているからです。
   を実行します。各 wake は通常の orchestrator wake チェックに加えて
   `automation heartbeat` を実行します。`healthy-active-wait` は待機し、
   `actionable-stall` だけが返された canonical notify command を実行し、
-  `operator-required` は operator に route し、`cannot-determine` は可視化して
-  repair/escalate します（G524 の wake contract に従い、dedupe key ごとに最大 1 nudge）。
+  `operator-required` は operator に経路指定し、`cannot-determine` は可視化して
+  repair/エスカレーションします（G524 の wake contract に従い、dedupe key ごとに最大 1 nudge）。
   `stale` や `message_body` から action を推論しません。
 
 ### Retired: 外部 OS スケジューラの heartbeat(G526 → G539)
@@ -1677,7 +1677,7 @@ orchestrator 自身がそのチェックを実行しているからです。
    なく認証情報のステップで失敗します。
 2. **invisible failure** — 失敗した cron の実行は誰も見ない OS ログに書き込まれる
    だけなので、実際にはセーフティネットとして機能していません。
-3. **outside the agmsg model** — intent-cli は agmsg を経由して coordinate し、
+3. **outside the agmsg model** — intent-cli は agmsg を経由して調整し、
    自分自身のスレッドを持ちません。OS スケジューラはそのモデルの完全に外側に
    位置します。
 
@@ -1695,7 +1695,7 @@ scheduler-agnostic です — cron を含む任意のスケジューラが引き
 
 - **monitor が起動しなかった** — receiver セッションを再起動して monitor/watch hook を新しい turn で
   アタッチさせる。`delivery.sh status` と ping/ack で検証。それまでは `inbox.sh` で読む。
-- **メッセージが可視でない** — queue 済みだがライブ delivery されていない可能性。ロールの queue を
+- **メッセージが可視でない** — queue 済みだがライブ配信されていない可能性。ロールの queue を
   `inbox.sh` で読み、`team.sh` / `delivery.sh status` を再確認し、ack 後に resend する。
 - **メッセージ送信後に receiver が開始した** — earlier なメッセージは history にあるがライブ delivery
   されない。`inbox.sh` で読むか、receiver の ack 後に resend する。
@@ -1704,7 +1704,7 @@ scheduler-agnostic です — cron を含む任意のスケジューラが引き
   実行可能項目を報告しているか（host repo に見える別ドメインではない）を確認する。issue-cut-ready で
   安全なら、orchestrator は待たずに自分で 1 つ issue を publish すべき。
 - **`mode=monitor` だがライブストリームがない** — `delivery.sh status` `mode=monitor` は設定にすぎず、
-  Claude Code `Monitor` が attach されている証明ではない。ライブ attach の success marker（`1 monitor` /
+  Claude Code `Monitor` が接続されている証明ではない。ライブ attach の success marker（`1 monitor` /
   `Monitor event`）を検証し、Windows では Git Bash 起動を確認し、bounded なフォールバック段階手順
   （再起動 → trust 検証 → Windows で Git Bash → 既知の正常環境と比較 → `turn`/手動 `inbox.sh` または
   エスカレーション）を実施する。完全なチェックリスト:
@@ -1769,7 +1769,7 @@ bridge launcher は無言でブロックされる。
 ## design traffic-controller プレイブック
 
 design スレッドは実装者ではなく **traffic controller**（交通整理役）として振る舞います。
-orchestrator を通じて調整し、人間が必要な項目だけを surface します。
+orchestrator を通じて調整し、人間が必要な項目だけを表示します。
 
 1. design inbox（`inbox.sh`）を確認し、orchestrator のエスカレーション/サマリーを読む。
 2. intent-cli / GitHub の **read-only** state（`intent status`、`worker next-action`、PR/issue/
@@ -1780,8 +1780,8 @@ orchestrator を通じて調整し、人間が必要な項目だけを surface �
    orchestrator/receivers が intent-cli 経由で行う仕事。
 5. 人間が必要な項目 **だけ** を人間に要約する。ルーチンな進捗は内部に留める。
 6. design judgment を待つことで進行が止まるなら、待つ前にその待ちを永続的に記録します:
-   `--owner design` つきで operator-attention を open し、record を query し、回答を出したら
-   evidence とともに resolve します。回答済みで open のままの record は嘘であり、design handoff
+   `--owner design` つきで operator-attention を開き、record を照会し、回答を出したら
+   evidence とともに解決します。回答済みで open のままの record は嘘であり、design handoff
    は完了していません。
 
 **「orchestrator が idle に見える」診断**（エスカレーション前）: orchestrator がスケジュールされ
@@ -1796,7 +1796,7 @@ queue 済みでライブでない可能性があるので ack 後に resend。in
 ## preflight（3 つの cwd すべて）
 
 何かを変更する前に、**3 つのチェックアウト全部**（orchestrator・implementation・review の cwd）を
-preflight します。receiver が誤った repo・誤ったブランチ・dirty なユーザー作業の上で動くのは、最も
+事前確認します。receiver が誤った repo・誤ったブランチ・dirty なユーザー作業の上で動くのは、最も
 よくあるオーケストレーション失敗です。
 
 - 各 cwd で `git status` が clean であることを確認 — checkout/branch 切替で壊れる uncommitted/
@@ -1820,7 +1820,7 @@ preflight します。receiver が誤った repo・誤ったブランチ・dirty
   で読む）。その後、委譲前に ping/ack で再確認する。
 - **Codex Desktop app スレッドが receiver** — Codex Desktop app スレッドはデフォルトで agmsg monitor
   receiver ではない。手動でのみ受信する。CLI セッションを使うか、Desktop スレッドに `inbox.sh` で読ませる。
-- **receiver の cwd が委譲と異なる repo/domain を見る** — 停止。claim しない。receiver の cwd/worktree・
+- **receiver の cwd が委譲と異なる repo/domain を見る** — 停止。取得しない。receiver の cwd/worktree・
   git remote・委譲された domain がルーティングと一致する必要がある。blocked を返して re-route する。
   execution-unit prefix の不一致だけでは signal にならない — packet/domain メタデータを比較する。
 - **Codex が `rm -rf /tmp/...review...` の承認を求めてくる** — これは **正しい** 安全動作ですが
@@ -1836,8 +1836,8 @@ preflight します。receiver が誤った repo・誤ったブランチ・dirty
 **draft PR は domain guidance によってはレビュー可能** です — domain の review policy が許す場合、
 reviewer は draft に対してレビューフィードバックを行ってよいです。ただし reviewer は **canonical な
 intent-cli review surface**（`review closeout-plan`、`guide review`、`automation pr-transition`、
-`closeout pr`）を使わなければなりません。merge/approval はそれらの surface で gate され続けます。
-draft が手作業や生の label 編集で approve/merge されることはなく、host メタデータ編集を経ることも
+`closeout pr`）を使わなければなりません。merge/approval はそれらの surface で判定され続けます。
+draft が手作業や生の label 編集で approve/マージされることはなく、host メタデータ編集を経ることも
 ありません。
 
 ## single-domain と multi-domain のオーケストレーション
@@ -1851,7 +1851,7 @@ host チェックアウトは正当に **複数** の intent ドメインを含�
 
 - 選択したドメインのみがスコープ内。
 - 同じ host repo に **可視** な他ドメインの queue 項目は **スコープ外** — たとえ
-  同じリポジトリを対象にしていても、publish / delegate / repair してはいけません。
+  同じリポジトリを対象にしていても、publish / delegate / 修正してはいけません。
 - 可視な他ドメイン項目を委譲可能と見なすのではなく、domain/mode を切り替えるよう
   オペレーターにエスカレーションします。
 
@@ -1894,7 +1894,7 @@ host チェックアウトは正当に **複数** の intent ドメインを含�
 
 1. ローカルチェックアウトのコンテキスト — cwd/worktree、git remote repo、委譲された
    domain — が、渡されたルーティングと一致することを検証する。
-2. チェックアウトが委譲された repo/domain と一致しない場合は、claim せずに
+2. チェックアウトが委譲された repo/domain と一致しない場合は、取得せずに
    **停止して blocked を返す**。
 3. prefix の不一致だけでは wrong-repo シグナルにならないことを忘れない。所有権は
    packet/domain メタデータとルーティングコンテキストで確認する。
@@ -1906,7 +1906,7 @@ host チェックアウトは正当に **複数** の intent ドメインを含�
 **orchestrator への completion または blocked の報告は、すべての delegation の
 REQUIRED FINAL STEP です（G524）** — これは任意ではなく、orchestrator が自力で
 silent completion を発見することはできません（orchestrator に報告が届かないまま
-PR が open された場合、それは orchestrator の視点では失われた作業です — フィールドの
+PR が開かれた場合、それは orchestrator の視点では失われた作業です — フィールドの
 ある事例では、手動の GitHub チェックで発見されるまで 88 分間気づかれませんでした）。
 完了時は正確に次の shape を送ってください:
 

@@ -137,7 +137,7 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("arbitrary JSON-path editor", en, StringComparison.Ordinal);
         Assert.Contains("任意の JSON path を編集できない", ja, StringComparison.Ordinal);
         Assert.Contains("stale statement is refused in both directions", en, StringComparison.Ordinal);
-        Assert.Contains("古い認識にもとづく指定は両方向で refuse", ja, StringComparison.Ordinal);
+        Assert.Contains("古い認識にもとづく指定は両方向で拒否", ja, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -320,7 +320,7 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("you are not waiting, you are stalled", en, StringComparison.Ordinal);
         Assert.Contains("clarification artifact を記録**", ja, StringComparison.Ordinal);
         Assert.Contains("**agmsg だけの hold は contract violation です。**", ja, StringComparison.Ordinal);
-        Assert.Contains("待っているのではなく stall しています", ja, StringComparison.Ordinal);
+        Assert.Contains("待っているのではなく停止しています", ja, StringComparison.Ordinal);
 
         // G552 repair: the paste-ready `clarify open` invocation that persists
         // the real question and its recommendation/evidence in the OPEN
@@ -630,7 +630,7 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("never act on a process you cannot attribute", en, StringComparison.Ordinal);
 
         Assert.Contains("**共有 app-server の death mode。**", ja, StringComparison.Ordinal);
-        Assert.Contains("**attach している すべての TUI が一斉に落ちます**", ja, StringComparison.Ordinal);
+        Assert.Contains("**接続している すべての TUI が一斉に落ちます**", ja, StringComparison.Ordinal);
         Assert.Contains("attribute できないプロセスには 手を出さないこと", ja, StringComparison.Ordinal);
     }
 

@@ -87,7 +87,7 @@ public sealed class HerdrPaneTopologyG586Tests : IDisposable
         var tabException = section.IndexOf("herdr tab create --workspace <workspace-id>", StringComparison.Ordinal);
         Assert.True(paneDefault >= 0);
         Assert.True(tabException > paneDefault);
-        Assert.Contains(language == "en" ? "explicitly authorizes" : "明示的に authorize", section, StringComparison.Ordinal);
+        Assert.Contains(language == "en" ? "explicitly authorizes" : "明示的に認可", section, StringComparison.Ordinal);
     }
 
     [Fact]
