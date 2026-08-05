@@ -62,6 +62,52 @@ public sealed class NotifyCommandG578Tests : IDisposable
     }
 
     [Fact]
+    public void Delegate_BelowCopilotInlinePayloadAdvisoryThreshold_HasNoWarning_G618()
+    {
+        workspace.SetMode(SessionLayerMode.HerdrOnly);
+        NotifyCommand.ProcessRunnerFactory = SuccessfulRunner;
+
+        var (exitCode, result) = workspace.Run(DelegateArgs());
+
+        Assert.Equal(0, exitCode);
+        Assert.True(result.GetProperty("delivered").GetBoolean());
+        Assert.False(result.TryGetProperty("inline_payload_warning", out _));
+    }
+
+    [Fact]
+    public void Delegate_AboveCopilotInlinePayloadAdvisoryThreshold_WarnsWithoutChangingDelivery_G618()
+    {
+        workspace.SetMode(SessionLayerMode.HerdrOnly);
+        var runner = SuccessfulRunner();
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        var args = DelegateArgs();
+        args[Array.IndexOf(args, "--objective") + 1] = new string('x', 5_000);
+
+        var (exitCode, result) = workspace.Run(args);
+
+        Assert.Equal(0, exitCode);
+        Assert.True(result.GetProperty("delivered").GetBoolean());
+        var warning = result.GetProperty("inline_payload_warning");
+        Assert.Equal("copilot-autopilot-observed-paste-risk", warning.GetProperty("profile").GetString());
+        Assert.Equal(result.GetProperty("payload").GetString()!.Length, warning.GetProperty("payload_chars").GetInt32());
+        Assert.Equal(4096, warning.GetProperty("threshold_chars").GetInt32());
+        Assert.Contains("review-context.md", warning.GetProperty("remedy").GetString(), StringComparison.Ordinal);
+        Assert.Contains(runner.Calls, call =>
+            call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wH:p2"]));
+
+        var markdownArgs = DelegateArgs();
+        markdownArgs[Array.IndexOf(markdownArgs, "--objective") + 1] = new string('x', 5_000);
+        markdownArgs[^1] = "markdown";
+        var (markdownExitCode, markdown) = workspace.RunRaw(markdownArgs);
+
+        Assert.Equal(0, markdownExitCode);
+        Assert.Contains("inline payload warning", markdown, StringComparison.Ordinal);
+        Assert.Contains("size=", markdown, StringComparison.Ordinal);
+        Assert.Contains("threshold=4096", markdown, StringComparison.Ordinal);
+        Assert.Contains("remedy:", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void UnrecordedMode_IsConfigurationIncompleteBeforeDefaultAgmsgTransport_G594()
     {
         var runner = SuccessfulRunner();
@@ -479,6 +525,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
                     ["implementation"] = new
                     {
                         resident = "herdr",
+                        kind = "copilot",
                         workspace_id = "wH",
                         pane_id = "wH:p2",
                     },
@@ -519,9 +566,15 @@ public sealed class NotifyCommandG578Tests : IDisposable
 
         public (int ExitCode, JsonElement Result) Run(string[] args)
         {
+            var (exitCode, output) = RunRaw(args);
+            return (exitCode, JsonDocument.Parse(output).RootElement.Clone());
+        }
+
+        public (int ExitCode, string Output) RunRaw(string[] args)
+        {
             using var writer = new StringWriter();
             var exitCode = CommandRouter.Execute(args, Context, writer);
-            return (exitCode, JsonDocument.Parse(writer.ToString()).RootElement.Clone());
+            return (exitCode, writer.ToString());
         }
 
         public void Dispose()

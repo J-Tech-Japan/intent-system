@@ -2196,6 +2196,7 @@ internal static class GuideOrchestratorThreadCommand
                     "bounded allowed roots derived from the logical role's actual needs (not a product-wide path)",
                     "the maximum autonomous continuation bound",
                     "startup trust and autopilot/permission gates the operator must answer",
+                    "a named advisory inline-payload warning profile and threshold, never a safe-paste guarantee",
                     "the silent-denial semantics and the READY/review evidence that proves them",
                 },
                 CentralAutopilotSupervisionRule =
@@ -2219,6 +2220,13 @@ internal static class GuideOrchestratorThreadCommand
                     ContinuationBound =
                         "Keep `--max-autopilot-continues 10` explicit; changing the bound is an operator decision "
                         + "recorded with the recipe, not an agent default.",
+                    InlinePayloadWarningProfile =
+                        "Profile `copilot-autopilot-observed-paste-risk` declares `inline_payload_warning_chars: 4096`. "
+                        + "It is ADVISORY only: a payload above it is likely pasted rather than typed, while a payload "
+                        + "below it is not promised safe because the real limit is terminal- and agent-dependent. "
+                        + "Reference-first dispatch keeps repeated review substance in committed `review-context.md`, but a "
+                        + "minimal canonical `notify delegate` envelope still measures 842 characters over 14 lines and can "
+                        + "itself be pasted: it reduces duplication, not a paste-sensitive wedge. G619 owns the transport-layer remedy.",
                     StartupGates =
                         "Folder trust and autopilot-enable are operator provisioning gates; neither is bypassed by "
                         + "launch flags. The autopilot-enable dialog appears at the FIRST TASK even when `--mode autopilot` "
@@ -3505,6 +3513,7 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
         writer.WriteLine($"- **role-derived roots** — {unattended.CopilotRecipe.RoleDerivedRoots}");
         writer.WriteLine($"- **continuation bound** — {unattended.CopilotRecipe.ContinuationBound}");
+        writer.WriteLine($"- **inline-payload advisory** — {unattended.CopilotRecipe.InlinePayloadWarningProfile}");
         writer.WriteLine($"- **startup gates** — {unattended.CopilotRecipe.StartupGates}");
         writer.WriteLine($"- **prohibited blanket permissions** — {unattended.CopilotRecipe.ProhibitedBlanket}");
         writer.WriteLine();
@@ -5502,6 +5511,9 @@ internal sealed record OrchestratorCopilotUnattendedRecipe
 
     [JsonPropertyName("continuation_bound")]
     public required string ContinuationBound { get; init; }
+
+    [JsonPropertyName("inline_payload_warning_profile")]
+    public required string InlinePayloadWarningProfile { get; init; }
 
     [JsonPropertyName("startup_gates")]
     public required string StartupGates { get; init; }

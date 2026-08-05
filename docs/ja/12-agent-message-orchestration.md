@@ -197,6 +197,15 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
   developer-machine の無関係な root は追加しません。
 - **継続上限。** `--max-autopilot-continues 10` を明示したままにします。別の上限は、レシピと
   ともに記録する operator の判断です。
+- **inline-payload の advisory。** `copilot-autopilot-observed-paste-risk` profile は
+  `inline_payload_warning_chars: 4096` を宣言します。これは advisory にすぎません。これを
+  超える payload は type ではなく paste されやすいという目安であり、下回れば安全という保証には
+  なりません。実際の限界は terminal と agent に依存します。
+- **reference-first の限界。** 繰り返す review の実体は committed canonical な
+  `review-context.md` に置き、delegate には短い pointer だけを載せます。ただし、これを paste の
+  remedy として扱ってはいけません。最小の canonical `notify delegate` envelope でも 842 文字・14 行で、
+  これ自体が paste になります。これは重複を減らす discipline であり、paste-sensitive な wedge を防ぐ
+  ものではありません。transport-layer の remedy は G619 が担当します。
 - **startup gate。** folder trust と autopilot-enable は operator provisioning gate であり、
   launch flag ではどちらも bypass できません。`--mode autopilot` を launch 時に渡しても、
   autopilot-enable dialog は **最初の task** で現れます。`--allow-all-tools` と境界付き root
@@ -483,6 +492,23 @@ READY ではありません。herdr-only の role identity は検証済み logic
 `intent-cli notify delegate ...` を target logical role に対して実行します。CLI が
 herdr-only を内部解決し、role mapping を検証して structured task block を生成します。
 `herdr agent prompt` を手書きしてはいけません。
+
+**reference-first dispatch。** review の実体は committed canonical な `review-context.md` に
+置き、delegate にはその file への短い pointer だけを載せます。packet にない consideration は
+`review-context.md` に追加して push し、それを reference します。pane prompt に実体を inline
+してはいけません。これは packet structure を変えるものではなく、意図どおりに使う discipline です。
+
+測定済みの限界も重要です。最小の canonical `notify delegate` envelope でも 842 文字・14 行であり、
+これ自体が paste になります。reference-first は重複する実体を減らしますが、paste-sensitive な seat の
+wedge を防ぐものではありません。transport-layer の remedy は G619 が担当します。
+
+recipient recipe の `inline_payload_warning_chars` profile は **advisory** であり、universal な
+safe-paste limit ではありません。delegate の inline payload が resolved threshold を超えると、
+`notify` は payload size、threshold、reference-first remedy を human と machine の両方に warning
+として出しますが、同じ payload の delivery は続行します。refuse も truncate もしません。別 team
+での観測では、大きな paste が terminal に broken bracketed-paste state を残し、一部の agent process
+を terminate することがあります。fresh agent start で recovery します。これは観測事実であり、
+すべての terminal や agent に universal な size limit があるという主張ではありません。
 
 settled pane では、notify は最初に bounded `agent prompt --wait --until working` を使い、続けて
 idle/done/blocked を待つ別の bounded `agent wait` を実行します。観測された unattended working

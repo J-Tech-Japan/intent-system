@@ -81,6 +81,7 @@ public sealed class AgentMessageOrchestrationDocsTests
             Assert.Contains("--add-dir <host-routing-root>", doc, StringComparison.Ordinal);
             Assert.Contains("intent-cli notify report", doc, StringComparison.Ordinal);
             Assert.Contains("--max-autopilot-continues 10", doc, StringComparison.Ordinal);
+            Assert.Contains("inline_payload_warning_chars: 4096", doc, StringComparison.Ordinal);
             Assert.Contains("--yolo", doc, StringComparison.Ordinal);
             Assert.Contains("--allow-all-paths", doc, StringComparison.Ordinal);
             Assert.Contains("Continue with limited permissions", doc, StringComparison.Ordinal);
@@ -95,6 +96,20 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("out-of-scope にした action が拒否", ja, StringComparison.Ordinal);
         Assert.Contains("transcript for denials", en, StringComparison.Ordinal);
         Assert.Contains("transcript で拒否を調べます", ja, StringComparison.Ordinal);
+
+        Assert.Contains("Reference-first dispatch", en, StringComparison.Ordinal);
+        Assert.Contains("committed canonical", en, StringComparison.Ordinal);
+        Assert.Contains("`review-context.md`", en, StringComparison.Ordinal);
+        Assert.Contains("842 characters over 14 lines", en, StringComparison.Ordinal);
+        Assert.Contains("G619 owns the transport-layer remedy", en, StringComparison.Ordinal);
+        Assert.Contains("never refuses or truncates", en, StringComparison.Ordinal);
+        Assert.Contains("broken bracketed-paste", en, StringComparison.Ordinal);
+        Assert.Contains("reference-first dispatch", ja, StringComparison.Ordinal);
+        Assert.Contains("committed canonical な `review-context.md`", ja, StringComparison.Ordinal);
+        Assert.Contains("842 文字・14 行", ja, StringComparison.Ordinal);
+        Assert.Contains("transport-layer の remedy は G619 が担当", ja, StringComparison.Ordinal);
+        Assert.Contains("refuse も truncate もしません", ja, StringComparison.Ordinal);
+        Assert.Contains("broken bracketed-paste state", ja, StringComparison.Ordinal);
     }
 
     [Fact]
