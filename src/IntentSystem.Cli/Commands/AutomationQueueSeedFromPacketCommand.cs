@@ -261,7 +261,7 @@ internal static class AutomationQueueSeedFromPacketCommand
         // the same as packets enqueued through the standard path.
         // - WorkerRole / ReviewRole default to the host's configured
         //   roles (`context.Config.Roles.Implement` / `Review`,
-        //   which default to "Claude" / "Codex" per
+        //   which default to logical implementation / review roles per
         //   `CliRuntimeContracts.DefaultImplementRole` /
         //   `DefaultReviewRole`).
         // - Priority defaults to "high" to match

@@ -1569,10 +1569,10 @@ internal static class GuideOrchestratorThreadCommand
                 },
                 Defaults = new[]
                 {
-                    "orchestrator = Claude",
-                    "implementer = Claude",
-                    "reviewer = Codex",
-                    "design = manual-inbox Codex",
+                    "orchestrator = operator-chosen herdr-startable kind",
+                    "implementer = operator-chosen herdr-startable kind",
+                    "reviewer = operator-chosen herdr-startable kind",
+                    "design = manual-inbox or monitored, using an operator-chosen herdr-startable kind",
                     "runtime / implementation / review receivers = monitor (when supported)",
                 },
                 DesignDeliveryNote =

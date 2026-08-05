@@ -43,8 +43,8 @@ public sealed class QueueEnqueueCommandTests
             Assert.Equal(["G4"], selectedItem.BlockedBy);
             Assert.Equal("intents/intent-cli/clarifications/open.md", selectedItem.ClarificationReturnPath);
             Assert.Equal(".intent-cli/issues/G38/packet.yaml", selectedItem.PacketPaths.Yaml);
-            Assert.Equal("Claude", selectedItem.WorkerRole);
-            Assert.Equal("Codex", selectedItem.ReviewRole);
+            Assert.Equal(CliRuntimeContracts.DefaultImplementRole, selectedItem.WorkerRole);
+            Assert.Equal(CliRuntimeContracts.DefaultReviewRole, selectedItem.ReviewRole);
             Assert.Equal("high", selectedItem.Priority);
 
             var runEvents = RunLogSerializer.DeserializeAll(

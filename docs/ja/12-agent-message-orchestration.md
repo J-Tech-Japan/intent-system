@@ -288,6 +288,10 @@ design / orchestrator には `<host-repo>`、implementation には child checkou
 優先する場合など、文書化した理由で separate role tab を operator が明示的に authorize した
 ときだけ例外として使います。
 
+同じ tab 内の `herdr pane move` は未サポートです。同じ tab の layout を変えるときは、影響する
+pane を作り直して logical-role mapping を更新し、in-place の move で role の配置を保てるとは
+考えません。
+
 operator-visible な logical-role→pane-id/cwd mapping を記録し、workflow は pane/workspace id を
 hard-code しません。initial workspace creation が最初の id を返した後、すべての provisioning /
 mutation command は実行直前に記録済み mapping から明示的で空でない pane/workspace target id
@@ -321,9 +325,24 @@ foreign-workspace-only name、ambiguous mapping は prompt / append なしで fa
 ```text
 intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
 intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
+intent-cli session-layer topology update-kind --domain <domain> --team <team> --role <role> --current-kind <kind> --new-kind <kind> --confirm-update-kind --write
+intent-cli session-layer topology retire-legacy --domain <domain> --team <team> --evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write
 intent-cli session-layer topology validate --domain <domain> --team <team> --format json
 intent-cli session-layer topology show --domain <domain> --team <team> --format json
 ```
+
+agent kind は herdr が起動できる任意の kind です。Claude、Codex、Copilot、Cursor、OpenCode などは
+例であり、supported-set の制約ではありません。logical role の既定値は `implementation`、`review`、
+`interview`、`clarify` です。legacy の product 名を含め、既存の明示的な role mapping はそのまま
+有効です。新しい 2 つの mutation command は JSON を出力し、`--format json` だけをサポートします。
+`update-kind` では明示した `--dry-run` が flag の順序にかかわらず `--write` より優先され、決して
+書き込みません。
+
+`retire-legacy` が成功すると、CLI は ignored な machine-local topology directory の外にある
+`<host-repo>/.intent-cli/legacy-topology-retirements.jsonl` へ fleet-wide decision から引用可能な
+entry を 1 件 append します。定義済みの field は `timestamp_utc`、`host`、`domain`、`team`、
+`retired_path`、名前付きの `evidence` です。これにより、現在の legacy reader disposition を
+変更せずに、後続の ledger decision が累積した retirement を引用できます。
 
 `record` が使う値は operator が供給したものだけです。herdr query、id の guess、resource の
 provision、既存 conflict の repair は行いません。完全一致は idempotent no-op、異なる既存 role
@@ -1385,11 +1404,15 @@ receiver の cwd + agent type、review receiver の cwd + agent type、design �
 
 入力が不完全なときの推奨デフォルト:
 
-- orchestrator = Claude
-- implementer = Claude
-- reviewer = Codex
-- design = manual-inbox Codex
+- orchestrator = operator-chosen herdr-startable kind
+- implementer = operator-chosen herdr-startable kind
+- reviewer = operator-chosen herdr-startable kind
+- design = manual-inbox または monitored。operator が選ぶ herdr-startable kind を使う
 - runtime / implementation / review receivers = monitor（サポートされる場合）
+
+これは product の組み合わせではなく logical role の既定値です。新しい configuration の既定値は
+`implementation`、`review`、`interview`、`clarify` です。既存で明示した role mapping は、この
+互換性を保つ migration の間もそのまま有効です。
 
 design は manual-inbox receiver（オンデマンドに `inbox.sh` で読む）でも monitored receiver でも
 構いませんが、いずれにせよ受け取るのは **人間が必要な** エスカレーションか明示的なサマリーのみで、
