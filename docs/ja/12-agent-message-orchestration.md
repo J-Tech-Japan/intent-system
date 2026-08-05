@@ -2,12 +2,12 @@
 
 ← [packet 作成と issue 公開](04-packets-issues.md) | [docs インデックス](README.md)
 
-このページは **primary な 4 スレッドモデル**（design / orchestrator / implementation /
-review）と、特に 1 つの host リポジトリが **複数の intent ドメイン** を保持する場合に
-それを安全に保つ方法を説明します。1 台に collocate する team は supported な
-`herdr-only` transport を最初に選びます（**PREVIEW** は maturity note）。distributed team
-または既存 agmsg investment には supported な `agmsg` + herdr を選びます。選択は
-`session-layer set` で record し、どちらの transport も primary ではありません。権威ある
+このページは **主要な 4 スレッドモデル**（design / orchestrator / implementation /
+review）と、特に 1 つのホストリポジトリが **複数の intent ドメイン** を保持する場合に
+それを安全に保つ方法を説明します。1 台のマシンに同居するチームは、対応する
+`herdr-only` トランスポートを最初に選びます（**PREVIEW** は成熟度に関する注記です）。
+分散したチームまたは既存の agmsg 投資があるチームには、対応する `agmsg` + herdr を選びます。選択は
+`session-layer set` で記録し、どちらのトランスポートも 4 スレッドモデルの主要性を変えません。正本となる
 貼り付け可能なプロンプトはインストール済みの intent-cli ガイダンスから生成され、このページの
 プロンプトを手で写してはいけません。現在のプロンプトは次で生成します:
 
@@ -156,7 +156,7 @@ monitor bridge を arm する（G521）ため、canonical な実行ファイル�
 一切配信されません。claude は **オペレーター** が選んだ permission mode で起動します。
 各 pane の初回起動には **必ず立ち会って** ください: trust 画面と permission プロンプトは
 回答されるまでセッションをブロックします。設計スレッドが回答を認可されている場合、その回答は
-次の wake で再プロンプトされる 1 回限りの承認ではなく **durable な** allowlist を生む必要が
+次の wake で再プロンプトされる 1 回限りの承認ではなく、**永続する** allowlist を生む必要が
 あります。
 
 > **権限境界 — 詰まりを解くことは決定することではない。** pane に立ち会うことは、設計
@@ -329,8 +329,8 @@ herdr tab rename <tab-id> <team>
 ```
 
 root pane を host-repo role の 1 つに割り当てます。残る各 herdr-resident role では **pane
-creation が default** です。記録済み mapping から non-empty pane id を resolve し、その
-explicit pane から split して新 role の cwd を指定します。
+creation が default** です。記録済み mapping から空でない pane id を解決し、その
+明示した pane から split して新 role の cwd を指定します。
 
 ```text
 herdr pane split --pane <pane-id> --direction right|down --cwd <role-cwd> --no-focus
@@ -516,12 +516,12 @@ herdr-only を内部解決し、role mapping を検証して structured task blo
 これ自体が paste になります。reference-first は重複する実体を減らしますが、paste-sensitive な seat の
 wedge を防ぐものではありません。transport-layer の remedy は G619 が担当します。
 
-paste-sensitive な herdr seat の recorded role に `delivery_method` がない場合は、
-`--field delivery_method --current absent --new file-backed` と explicit confirmation を付けて
-`topology update-field` を使います。後から許可された値を変更するときも、recorded current value を指定して
-同じ経路を使います。`notify` は unchanged な envelope を addressable で durable な
+貼り付けに弱い herdr seat の記録済みロールに `delivery_method` がない場合は、
+`--field delivery_method --current absent --new file-backed` と明示的な確認を付けて
+`topology update-field` を使います。後から許可された値を変更するときも、記録済みの現在値を指定して
+同じ経路を使います。`notify` は変更しない envelope をアドレス可能で永続的な
 `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` に書いてから、pane へ
-`Read task envelope: <path>` という 1 行の pointer を送ります。file は削除しないため、restart
+`Read task envelope: <path>` という 1 行のポインターを送ります。file は削除しないため、restart
 した recipient も同じ task を読み直せます。明示的に選ぶ場合だけ `inline` を宣言し、宣言がなければ
 確立済みの inline delivery は byte-identical のままです。
 
@@ -559,7 +559,7 @@ fail closed にし、agent-name match fallback は決して行いません。
 dispatch ごとに fresh で予測不能な nonce を生成し、再利用や task id 単独での代用をしません。
 `pane wait-output` は既存 output を即座に検索するため、task block 内の precomposed wait needle
 が echo され、作業開始前に false match することがあります。split field により、その literal を
-生成された split field により、その literal を dispatch から除外します。handoff は file、commit、PR、verification log などの inspectable
+生成された split field により、その literal を配信対象から除外します。handoff は file、commit、PR、verification log などの検査可能な
 artifact です。screen prose はそれを指す signal にすぎません。repair は現在の pane mapping を
 解決した後、同じ logical role に task id と具体的 delta を添えて戻します。どの buffer 由来でも
 marker match だけでは不十分で、named artifact の存在と verification が必要です。repair も
@@ -652,22 +652,22 @@ routine progress、pane output、acknowledgement はここへ mirror しませ�
 channel は explicit external-reader/design boundary のままで、fallback inter-agent bus ではなく、
 `intent-cli notify`、GitHub、intent-cli workflow state の代替でもありません。
 
-すべての reader は watcher restart をまたいで durable watermark を永続化し、file identity、
-byte offset、complete-line count を保持します。各 read 前に同じ file identity であることと、
-byte / line count が backwards になっていないことを検証します。
-durable byte-offset watermark は必ず file identity と complete-line count と組にし、3 値のどれも
+すべての reader は watcher restart をまたいで永続的な watermark を保持し、file identity、
+byte offset、complete-line count を記録します。各 read 前に同じ file identity であることと、
+byte / line count が逆戻りしていないことを検証します。
+永続的な byte-offset watermark は必ず file identity と complete-line count と組にし、3 値のどれも
 restart-local にしません。
 rotation、truncation、backwards count、file replacement は operator recovery まで fail closed とします。replay が design
 decision を重複させるため、先頭から silent reset してはいけません。
 
-- Claude app watcher: durable な file-identity/byte-offset/complete-line-count watermark より後の
+- Claude app watcher: 永続的な file-identity/byte-offset/complete-line-count watermark より後の
   完全な未読行だけを tail し、成功後にのみ進め、watcher restart をまたいで保持します。
   rotation、truncation、backwards byte/line count、file replacement で fail closed とし、先頭から再開しません。
 - herdr pane の Codex CLI: 通常 coordination では `intent-cli notify delegate` / `report` を使い
-  file poll しません。design-boundary reader として動く場合は同じ durable で restart-surviving
+  file poll しません。design-boundary reader として動く場合は同じ永続的で restart-surviving な
   watermark を使い、rotation、truncation、backwards count、file replacement で fail closed とし、
   先頭へ reset しません。
-- Codex Desktop: one-minute-class（約 1 分）cadence で poll し、durable で restart-surviving な
+- Codex Desktop: one-minute-class（約 1 分）cadence で poll し、永続的で restart-surviving な
   file-identity/byte-offset/complete-line-count watermark より後の完全な行だけを処理します。
   rotation、truncation、backwards byte/line count、file replacement、malformed JSON で fail closed とし、
   先頭から reset しません。
@@ -676,7 +676,7 @@ decision を重複させるため、先頭から silent reset してはいけま
 
 運用 baseline は macOS/Linux の latest stable herdr です。Windows support は beta であり、
 この guide では仮定しません。`herdr --skill` は bundled herdr agent skill を見つけるためだけの
-discovery pointer で、intent-cli guide authority より下位です。version-specific detail は引き続き
+discovery pointer で、intent-cli guide の正本となる定義より下位です。version-specific detail は引き続き
 installed herdr help/schema を参照します。
 
 - live server update: running pane を保つ `herdr server live-handoff` を使います。
@@ -802,7 +802,7 @@ permission の待ち** — 事前承認の有無にかかわらず回答不可�
 
 [watchdog の安全ルール](#design-thread-watchdog推奨されるセーフティネット) は監督全体にそのまま
 適用されます: 委譲の重複禁止、permission プロンプトの自動クリア禁止、進行中作業の cancel/reset
-禁止、issue/PR の force-close 禁止、durable state の投機的な手編集禁止。
+禁止、issue/PR の force-close 禁止、durable state（永続状態）の投機的な手編集禁止。
 
 ## 共有マシン上での cross-project isolation
 
@@ -866,7 +866,9 @@ delivery を乗っ取ります。
 
 > **復旧の既定は cleanup ではなく recreate です。**
 
-## design 判断による hold と bounded authority
+<a id="design-判断による-hold-と-bounded-authority"></a>
+
+## design 判断による hold と限定された権限
 
 **design の判断** で止まっている hold は、**可視** かつ **bounded** でなければ
 なりません。どちらも欠けた場合の実測コスト: G551 のレビューは、技術チェックが
@@ -890,7 +892,7 @@ domain、ブロックされている execution unit、スレッドの外にい�
 > 存在するはずで、artifact が無いならそれは待っているのではなく stall しています。
 
 その内容を運ぶのは OPEN artifact 自身です — agmsg メッセージは通知はできますが、
-durable な記録の代わりには決してなりません:
+永続的な記録の代わりには決してなりません:
 
 ```bash
 intent-cli clarify open <execution-unit> \
@@ -920,24 +922,24 @@ intent-cli operator-attention open --record <design-wait-id> \
 intent-cli operator-attention query --domain <domain> --team <team> --format json
 ```
 
-判断を回答した人は、その回答と evidence を添えて同じ record を**必ず resolve**します:
+判断を回答した人は、その回答と evidence を添えて同じ record を**必ず解決**します:
 
 ```bash
 intent-cli operator-attention resolve --record <design-wait-id> \
   --resolution-evidence "<回答と evidence>" --write --format json
 ```
 
-回答済みで open のままの record は嘘です。既存 lifecycle は回答者が resolve するまで完了
+回答済みで open のままの record は嘘です。既存 lifecycle は回答者が解決するまで完了
 しません。これは design 所有の待ちを記録するもので、helper を追加せず、上記 clarification
 lifecycle も変更しません。
 
 **reviewer hold ルール(refined)。** 技術チェックが green で、保留項目が
-非セマンティックかつ機械的に事実確認可能 → bounded default authority のもとで
+非セマンティックかつ機械的に事実確認可能 → 限定された既定権限のもとで
 解決し、検証事実をログに残して先へ進みます。それ以外 → clarification を記録し、
 hold を **可視な pending state** として保ちます。reviewer が単に待ち、それを
 メッセージで述べるだけ、という第 3 の選択肢はありません。
 
-**bounded default authority。** オペレーターは、判断ではなく *リポジトリの事実を
+**限定された既定権限。** オペレーターは、判断ではなく *リポジトリの事実を
 確認する* ことで決着する、少数の列挙された判断クラスを事前委譲できます:
 
 | 判断クラス | 何が検証するか |
@@ -1006,7 +1008,7 @@ contract violation であって、detector のバグではありません。
 orchestrator は黙ってプロダクト/リリース/設計の author になっては **いけません**。
 
 - **design が所有** — intent shaping と clarification; ADR と設計判断; リリーススコープと
-  バージョン選択; packet 内容と受け入れ基準（durable な packet ファイル）。
+  バージョン選択; packet 内容と受け入れ基準（永続的な packet ファイル）。
 - **orchestrator が所有** — canonical な intent-cli/GitHub state の検査; **1 wake につき
   既に authoring 済みの `issue-cut-ready` packet を 1 件だけ** publish; implementation/review
   への委譲; CI/review の待機; canonical review surface 経由の approved PR の closeout;
@@ -1188,7 +1190,7 @@ delegate します（G524）— publish と delegate は一緒に完了させ、
 publish は canonical な surface のみ — `intent-cli issue publish-flow` と
 `intent-cli automation issue-publish` — を使い、生の `gh issue create` や
 `gh ... --add-label` は使いません。publish 後は intent-cli / GitHub（チャットではなく）で
-issue が期待どおりの body と `intent-target` label を持つこと、durable state がそれを
+issue が期待どおりの body と `intent-target` label を持つこと、永続状態がそれを
 反映していることを検証し、**その同じ wake の中で** agmsg で実装を委譲します（G524）—
 publish した後で止まって将来の wake を待つことはしません。実装 receiver は依然として
 `intent-cli worker next-action` からターゲットを得ます（agmsg テキストからではありません）。
@@ -1610,7 +1612,7 @@ watchdog の安全ルールは次を **禁止** します(変更なし・逐語�
   通知であり、watchdog が自動でクリアすることはありません。
 - 進行中の作業のキャンセルやリセット。
 - issue/PR やその他の終端アクションの強制クローズ。
-- 推測的な durable-state の手術 — label、queue-state、host metadata の手編集は
+- 推測的な永続状態の手術 — label、queue-state、ホストメタデータの手編集は
   行いません。
 
 明示的な orchestrator タイマー(Codex automation 5 分ごと、または Claude 同一スレッド
@@ -1777,7 +1779,7 @@ orchestrator を通じて調整し、人間が必要な項目だけを surface �
 4. implementation/review の作業・labels・host メタデータを直接 **変更しない** — それは
    orchestrator/receivers が intent-cli 経由で行う仕事。
 5. 人間が必要な項目 **だけ** を人間に要約する。ルーチンな進捗は内部に留める。
-6. design judgment を待つことで進行が止まるなら、待つ前にその待ちを durable にします:
+6. design judgment を待つことで進行が止まるなら、待つ前にその待ちを永続的に記録します:
    `--owner design` つきで operator-attention を open し、record を query し、回答を出したら
    evidence とともに resolve します。回答済みで open のままの record は嘘であり、design handoff
    は完了していません。
@@ -1850,7 +1852,7 @@ host チェックアウトは正当に **複数** の intent ドメインを含�
 - 選択したドメインのみがスコープ内。
 - 同じ host repo に **可視** な他ドメインの queue 項目は **スコープ外** — たとえ
   同じリポジトリを対象にしていても、publish / delegate / repair してはいけません。
-- 可視な他ドメイン項目を delegate 可能と見なすのではなく、domain/mode を切り替えるよう
+- 可視な他ドメイン項目を委譲可能と見なすのではなく、domain/mode を切り替えるよう
   オペレーターにエスカレーションします。
 
 ### multi-domain orchestrator

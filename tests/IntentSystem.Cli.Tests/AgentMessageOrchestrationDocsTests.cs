@@ -308,7 +308,8 @@ public sealed class AgentMessageOrchestrationDocsTests
         var ja = ReadDoc("ja");
 
         Assert.Contains("## Design-decision holds and bounded authority", en, StringComparison.Ordinal);
-        Assert.Contains("## design 判断による hold と bounded authority", ja, StringComparison.Ordinal);
+        Assert.Contains("## design 判断による hold と限定された権限", ja, StringComparison.Ordinal);
+        Assert.Contains("id=\"design-判断による-hold-と-bounded-authority\"", ja, StringComparison.Ordinal);
 
         // The clarification-backed hold rule, with the contract-violation
         // sentence that makes an agmsg-only hold a violation rather than a
@@ -332,7 +333,7 @@ public sealed class AgentMessageOrchestrationDocsTests
 
         Assert.Contains("can never substitute for the durable record", en, StringComparison.Ordinal);
         Assert.Contains("**No clarification schema change.**", en, StringComparison.Ordinal);
-        Assert.Contains("durable な記録の代わりには決してなりません", ja, StringComparison.Ordinal);
+        Assert.Contains("永続的な記録の代わりには決してなりません", ja, StringComparison.Ordinal);
         Assert.Contains("**clarification の schema 変更はありません。**", ja, StringComparison.Ordinal);
 
         // The refined reviewer hold rule — no untracked third option.
@@ -366,7 +367,7 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("Whoever supplies the judgment **must resolve**", en, StringComparison.Ordinal);
         Assert.Contains("An answered-but-open record is a lie", en, StringComparison.Ordinal);
         Assert.Contains("operator-attention record を開くことは任意ではなく義務です", ja, StringComparison.Ordinal);
-        Assert.Contains("回答した人は、その回答と evidence を添えて同じ record を**必ず resolve**", ja, StringComparison.Ordinal);
+        Assert.Contains("回答した人は、その回答と evidence を添えて同じ record を**必ず解決**", ja, StringComparison.Ordinal);
         Assert.Contains("回答済みで open のままの record は嘘です", ja, StringComparison.Ordinal);
 
         Assert.Contains("## Role boundary — design authors, orchestrator coordinates", en, StringComparison.Ordinal);
