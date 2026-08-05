@@ -10,7 +10,7 @@ namespace IntentSystem.Cli.Tests;
 public sealed class HerdrWakeSourcesG581Tests : IDisposable
 {
     private const string G594AgmsgGuideSha256 =
-        "B6E2F69C7840D359E833645056A5C10D42A450141C97169B8C0BB330A8F490F9";
+        "6CCD31391485C6205EEAF746750C40E360316CF296621AFCE138E88DEB19749E";
 
     private readonly string root = Directory.CreateTempSubdirectory("herdr-wake-g581-").FullName;
 

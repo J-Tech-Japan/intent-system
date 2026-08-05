@@ -65,6 +65,39 @@ public sealed class AgentMessageOrchestrationDocsTests
     }
 
     [Fact]
+    public void BothDocs_CarryAgentNeutralUnattendedRecipes_AndDenialAwareReady_G617()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        Assert.Contains("### 3a. Unattended-launch recipes (agent-neutral) (G617)", en, StringComparison.Ordinal);
+        Assert.Contains("### 3a. unattended 起動レシピ（agent-neutral）(G617)", ja, StringComparison.Ordinal);
+
+        foreach (var doc in new[] { en, ja })
+        {
+            Assert.Contains("--kind copilot", doc, StringComparison.Ordinal);
+            Assert.Contains("--allow-all-tools", doc, StringComparison.Ordinal);
+            Assert.Contains("--add-dir <role-work-root>", doc, StringComparison.Ordinal);
+            Assert.Contains("--add-dir <host-routing-root>", doc, StringComparison.Ordinal);
+            Assert.Contains("intent-cli notify report", doc, StringComparison.Ordinal);
+            Assert.Contains("--max-autopilot-continues 10", doc, StringComparison.Ordinal);
+            Assert.Contains("--yolo", doc, StringComparison.Ordinal);
+            Assert.Contains("--allow-all-paths", doc, StringComparison.Ordinal);
+            Assert.Contains("Continue with limited permissions", doc, StringComparison.Ordinal);
+            Assert.Contains("Enable all permissions", doc, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("silently auto-denied", en, StringComparison.Ordinal);
+        Assert.Contains("静かに自動拒否", ja, StringComparison.Ordinal);
+        Assert.Contains("G556 liveness and notify/delivery semantics are unchanged", en, StringComparison.Ordinal);
+        Assert.Contains("G556 の liveness と notify/delivery semantics は変わりません", ja, StringComparison.Ordinal);
+        Assert.Contains("out-of-scope action is denied", en, StringComparison.Ordinal);
+        Assert.Contains("out-of-scope にした action が拒否", ja, StringComparison.Ordinal);
+        Assert.Contains("transcript for denials", en, StringComparison.Ordinal);
+        Assert.Contains("transcript で拒否を調べます", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BothDocs_SeparateDeliveryConfigFromLiveAttachment_AndKeepPingAckSoleProof_G549()
     {
         var en = ReadDoc("en");

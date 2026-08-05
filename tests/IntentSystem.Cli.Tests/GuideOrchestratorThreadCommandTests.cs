@@ -1990,6 +1990,31 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_UnattendedLaunchRecipes_KeepBoundedCopilotAndDenialEvidence_G617()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("### 3a. Unattended-launch recipes (agent-neutral) (G617)", output, StringComparison.Ordinal);
+        Assert.Contains("AUTHORITATIVE AUTOPILOT SUPERVISION RULE", output, StringComparison.Ordinal);
+        Assert.Contains("silently auto-denied", output, StringComparison.Ordinal);
+        Assert.Contains("Derive and RECORD the allowlist from role needs", output, StringComparison.Ordinal);
+        Assert.Contains("outputs and the transcript for denials", output, StringComparison.Ordinal);
+
+        Assert.Contains("herdr agent start <logical-role> --kind copilot", output, StringComparison.Ordinal);
+        Assert.Contains("--allow-all-tools --add-dir <role-work-root> [--add-dir <host-routing-root>]", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli notify report", output, StringComparison.Ordinal);
+        Assert.Contains("--max-autopilot-continues 10", output, StringComparison.Ordinal);
+        Assert.Contains("FIRST TASK", output, StringComparison.Ordinal);
+        Assert.Contains("Continue with limited permissions", output, StringComparison.Ordinal);
+        Assert.Contains("NEVER choose `Enable all permissions`", output, StringComparison.Ordinal);
+        Assert.Contains("`--yolo` and `--allow-all-paths` are PROHIBITED", output, StringComparison.Ordinal);
+
+        Assert.Contains("normal G556 liveness checks AND prove all three", output, StringComparison.Ordinal);
+        Assert.Contains("deliberately out-of-scope action is denied", output, StringComparison.Ordinal);
+        Assert.Contains("successful allowed action alone is NOT READY", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_Markdown_Provisioning_NamesHerdrSurfaces_AndLinksOutInternals_G549()
     {
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
@@ -2048,6 +2073,14 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("NEVER answerable", authorityBoundary, StringComparison.Ordinal);
         Assert.Contains("ALWAYS ESCALATED to the operator", authorityBoundary, StringComparison.Ordinal);
         Assert.Contains("no authorization makes them answerable", authorityBoundary, StringComparison.Ordinal);
+
+        var unattended = provisioning.GetProperty("unattended_launch_recipes");
+        Assert.Equal(5, unattended.GetProperty("required_recipe_fields").GetArrayLength());
+        Assert.Contains("silently auto-denied", unattended.GetProperty("central_autopilot_supervision_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("--add-dir <role-work-root>", unattended.GetProperty("copilot_recipe").GetProperty("invocation").GetString(), StringComparison.Ordinal);
+        Assert.Contains("intent-cli notify report", unattended.GetProperty("copilot_recipe").GetProperty("role_derived_roots").GetString(), StringComparison.Ordinal);
+        Assert.Contains("--yolo", unattended.GetProperty("copilot_recipe").GetProperty("prohibited_blanket").GetString(), StringComparison.Ordinal);
+        Assert.Contains("out-of-scope action is denied", unattended.GetProperty("ready_branch").GetString(), StringComparison.Ordinal);
 
         var roleInitialization = provisioning.GetProperty("role_initialization");
         Assert.NotEmpty(roleInitialization.GetProperty("actas_forms").EnumerateArray());
