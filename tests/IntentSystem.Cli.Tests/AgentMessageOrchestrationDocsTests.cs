@@ -82,6 +82,7 @@ public sealed class AgentMessageOrchestrationDocsTests
             Assert.Contains("intent-cli notify report", doc, StringComparison.Ordinal);
             Assert.Contains("--max-autopilot-continues 10", doc, StringComparison.Ordinal);
             Assert.Contains("inline_payload_warning_chars: 4096", doc, StringComparison.Ordinal);
+            Assert.Contains("delivery_method: file-backed", doc, StringComparison.Ordinal);
             Assert.Contains("--yolo", doc, StringComparison.Ordinal);
             Assert.Contains("--allow-all-paths", doc, StringComparison.Ordinal);
             Assert.Contains("Continue with limited permissions", doc, StringComparison.Ordinal);
@@ -102,12 +103,16 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("`review-context.md`", en, StringComparison.Ordinal);
         Assert.Contains("842 characters over 14 lines", en, StringComparison.Ordinal);
         Assert.Contains("G619 owns the transport-layer remedy", en, StringComparison.Ordinal);
+        Assert.Contains("Read task envelope: <path>", en, StringComparison.Ordinal);
+        Assert.Contains("absent declaration preserves existing inline delivery", en, StringComparison.Ordinal);
         Assert.Contains("never refuses or truncates", en, StringComparison.Ordinal);
         Assert.Contains("broken bracketed-paste", en, StringComparison.Ordinal);
         Assert.Contains("reference-first dispatch", ja, StringComparison.Ordinal);
         Assert.Contains("committed canonical な `review-context.md`", ja, StringComparison.Ordinal);
         Assert.Contains("842 文字・14 行", ja, StringComparison.Ordinal);
         Assert.Contains("transport-layer の remedy は G619 が担当", ja, StringComparison.Ordinal);
+        Assert.Contains("Read task envelope: <path>", ja, StringComparison.Ordinal);
+        Assert.Contains("宣言がなければ既存の inline delivery をそのまま維持", ja, StringComparison.Ordinal);
         Assert.Contains("refuse も truncate もしません", ja, StringComparison.Ordinal);
         Assert.Contains("broken bracketed-paste state", ja, StringComparison.Ordinal);
     }

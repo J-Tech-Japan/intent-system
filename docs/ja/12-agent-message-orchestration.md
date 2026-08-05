@@ -206,6 +206,11 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
   remedy として扱ってはいけません。最小の canonical `notify delegate` envelope でも 842 文字・14 行で、
   これ自体が paste になります。これは重複を減らす discipline であり、paste-sensitive な wedge を防ぐ
   ものではありません。transport-layer の remedy は G619 が担当します。
+- **task-envelope delivery method。** paste-sensitive な herdr seat には
+  `delivery_method: file-backed` を宣言します。`notify` は unchanged な envelope を host の
+  `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` に書いてから、pane には
+  `Read task envelope: <path>` という 1 行だけを送ります。明示的に選ぶなら `inline` を宣言します。
+  宣言がなければ既存の inline delivery をそのまま維持します。
 - **startup gate。** folder trust と autopilot-enable は operator provisioning gate であり、
   launch flag ではどちらも bypass できません。`--mode autopilot` を launch 時に渡しても、
   autopilot-enable dialog は **最初の task** で現れます。`--allow-all-tools` と境界付き root
@@ -501,6 +506,13 @@ herdr-only を内部解決し、role mapping を検証して structured task blo
 測定済みの限界も重要です。最小の canonical `notify delegate` envelope でも 842 文字・14 行であり、
 これ自体が paste になります。reference-first は重複する実体を減らしますが、paste-sensitive な seat の
 wedge を防ぐものではありません。transport-layer の remedy は G619 が担当します。
+
+paste-sensitive な herdr seat では、その recipe に `delivery_method: file-backed` を宣言します。
+`notify` は unchanged な envelope を addressable で durable な
+`.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` に書いてから、pane へ
+`Read task envelope: <path>` という 1 行の pointer を送ります。file は削除しないため、restart
+した recipient も同じ task を読み直せます。明示的に選ぶ場合だけ `inline` を宣言し、宣言がなければ
+確立済みの inline delivery は byte-identical のままです。
 
 recipient recipe の `inline_payload_warning_chars` profile は **advisory** であり、universal な
 safe-paste limit ではありません。delegate の inline payload が resolved threshold を超えると、

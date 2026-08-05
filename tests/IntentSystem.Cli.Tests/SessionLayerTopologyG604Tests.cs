@@ -113,6 +113,26 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
     }
 
     [Fact]
+    public void Record_HerdrRecipeMayDeclareFileBackedEnvelopeDelivery_G619()
+    {
+        const string team = "intent-cli-dev";
+        var context = CreateContext(Domain);
+        using var writer = new StringWriter();
+
+        Assert.Equal(0, SessionLayerTopologyCommand.ExecuteRecord(context,
+            ["--domain", Domain, "--team", team, "--role", "implementation", "--resident", "herdr",
+                "--workspace-id", "w1", "--pane-id", "w1:p2", "--cwd", "/machine-local", "--kind", "copilot",
+                "--delivery-method", "file-backed", "--write", "--format", "json"], writer));
+
+        var resolution = NotifyRoleTopologyStore.Resolve(root, Domain, team);
+        Assert.True(resolution.Resolved);
+        Assert.Equal("file-backed", resolution.Topology!.Roles["implementation"].DeliveryMethod);
+        using var record = JsonDocument.Parse(File.ReadAllText(NotifyRoleTopologyStore.ResolvePath(root, Domain, team)));
+        Assert.Equal("file-backed", record.RootElement.GetProperty("roles").GetProperty("implementation")
+            .GetProperty("delivery_method").GetString());
+    }
+
+    [Fact]
     public void DualLocationConflict_BlocksValidatePreflightAndAutomationDoctor_G604()
     {
         const string team = "intent-cli-dev";

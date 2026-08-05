@@ -18,7 +18,7 @@ internal static class SessionLayerTopologyCommand
         "Usage: intent-cli session-layer topology record|show|validate|update-kind|retire-legacy [options]";
     private const string RecordUsage =
         "Usage: intent-cli session-layer topology record --domain <name> --team <name> --role <name> --resident herdr "
-        + "--workspace-id <id> --pane-id <id> --cwd <path> [--kind <kind>] [--dry-run|--write] "
+        + "--workspace-id <id> --pane-id <id> --cwd <path> [--kind <kind>] [--delivery-method inline|file-backed] [--dry-run|--write] "
         + "[--format markdown|json]\n"
         + "   or: intent-cli session-layer topology record --domain <name> --team <name> --role <name> --resident external "
         + "--reader <routing-root-relative-path> [--frontend <name>] [--dry-run|--write] "
@@ -377,6 +377,7 @@ internal static class SessionLayerTopologyCommand
         string? paneId = null;
         string? cwd = null;
         string? kind = null;
+        string? deliveryMethod = null;
         string? reader = null;
         string? frontend = null;
         var write = false;
@@ -410,6 +411,9 @@ internal static class SessionLayerTopologyCommand
                     break;
                 case "--kind":
                     if (!TryReadValue(args, ref index, option, out kind, out error)) return false;
+                    break;
+                case "--delivery-method":
+                    if (!TryReadValue(args, ref index, option, out deliveryMethod, out error)) return false;
                     break;
                 case "--reader":
                     if (!TryReadValue(args, ref index, option, out reader, out error)) return false;
@@ -469,6 +473,12 @@ internal static class SessionLayerTopologyCommand
                 return false;
             }
 
+            if (deliveryMethod is not null && deliveryMethod is not ("inline" or "file-backed"))
+            {
+                error = "--delivery-method must be inline or file-backed when supplied.";
+                return false;
+            }
+
             var paneWorkspace = WorkspaceFromPane(paneId);
             if (paneWorkspace is not null
                 && !string.Equals(paneWorkspace, workspaceId, StringComparison.Ordinal))
@@ -486,9 +496,9 @@ internal static class SessionLayerTopologyCommand
                 return false;
             }
 
-            if (workspaceId is not null || paneId is not null || cwd is not null || kind is not null)
+            if (workspaceId is not null || paneId is not null || cwd is not null || kind is not null || deliveryMethod is not null)
             {
-                error = "An external resident does not accept --workspace-id, --pane-id, --cwd, or --kind.";
+                error = "An external resident does not accept --workspace-id, --pane-id, --cwd, --kind, or --delivery-method.";
                 return false;
             }
         }
@@ -503,6 +513,7 @@ internal static class SessionLayerTopologyCommand
             PaneId = paneId,
             Cwd = cwd,
             Kind = kind,
+            DeliveryMethod = deliveryMethod,
             Reader = reader,
             Frontend = frontend,
             Write = write,
@@ -629,7 +640,7 @@ internal static class SessionLayerTopologyWriter
 
     private static readonly string[] KnownRoleFields =
     [
-        "resident", "workspace_id", "pane_id", "cwd", "kind", "reader", "frontend",
+        "resident", "workspace_id", "pane_id", "cwd", "kind", "delivery_method", "reader", "frontend",
     ];
 
     public static SessionLayerTopologyRecordResult Record(
@@ -957,6 +968,7 @@ internal static class SessionLayerTopologyWriter
         Add(role, "pane_id", request.PaneId);
         Add(role, "cwd", request.Cwd);
         Add(role, "kind", request.Kind);
+        Add(role, "delivery_method", request.DeliveryMethod);
         Add(role, "reader", request.Reader);
         Add(role, "frontend", request.Frontend);
         return role;
@@ -1079,6 +1091,7 @@ internal sealed record SessionLayerTopologyRecordRequest
     public string? PaneId { get; init; }
     public string? Cwd { get; init; }
     public string? Kind { get; init; }
+    public string? DeliveryMethod { get; init; }
     public string? Reader { get; init; }
     public string? Frontend { get; init; }
     public required bool Write { get; init; }
