@@ -1,27 +1,27 @@
 # intent-cli ドキュメント（日本語）
 
-> English version: [`../en/README.md`](../en/README.md)
+> 英語版: [`../en/README.md`](../en/README.md)
 
 > **公式サイト:** [intent-driven-development.com（日本語）](https://www.intent-driven-development.com/jp) — J-Tech Japan が運営する Intent-Driven Development のコンセプト・intent-system サービスサイトです。Intent-Driven Development の考え方や intent-system の概要を扱います。GitHub リポジトリは引き続きコード・リリース・インストール・詳細ドキュメントの提供元です。
 
 `intent-cli` は、AI agent に Intent System の正規手順を確認させながら Intent-Driven Development を進めるための **決定論的なサポートツール** です。
 
-最初に [自己完結した onboarding pattern](02a-getting-started-orchestration.md) を選びます。
-separate host repository / same-repository metadata branch と、brand-new / existing project を
-掛け合わせます。各 pattern には貼り付け可能な initial prompt が 2 つあります。1 台に
-collocate する team は `herdr-only` を最初の supported choice とします（PREVIEW は maturity
-note）。distributed team または既存の agmsg investment には `agmsg` + herdr を選びます。
-primary なのは transport ではなく 4 スレッドモデルです。
+最初に [自己完結した導入パターン](02a-getting-started-orchestration.md) を選びます。
+別ホストリポジトリ / 同一リポジトリのメタデータ用ブランチと、新規 / 既存プロジェクトを
+掛け合わせます。各パターンには貼り付け可能な最初のプロンプトが 2 つあります。1 台に
+同居するチームでは `herdr-only` を最初のサポート対象の選択肢とします（PREVIEW は成熟度の
+注記です）。分散チームまたは既存の agmsg 投資があるチームには `agmsg` + herdr を選びます。
+primary なのはトランスポートではなく 4 スレッドモデルです。
 
 ## ページ一覧
 
 1. [インストール](01-install.md)
 2. [プロジェクト開始](02-project-start.md)
-2a. [はじめに: 最初の packet までの道のり](02a-getting-started-orchestration.md) — minimal start と primary な 4 スレッドモデル。collocate する `herdr-only` は supported（PREVIEW は maturity note）
-   - [Separate host × brand-new](02b-separate-host-brand-new.md)
-   - [Separate host × existing](02c-separate-host-existing.md)
-   - [Same repo × brand-new](02d-same-repo-brand-new.md)
-   - [Same repo × existing](02e-same-repo-existing.md)
+2a. [はじめに: 最初の packet までの道のり](02a-getting-started-orchestration.md) — 最小開始と primary な 4 スレッドモデル。同居する `herdr-only` はサポート対象（PREVIEW は成熟度の注記）
+   - [別ホスト × 新規](02b-separate-host-brand-new.md)
+   - [別ホスト × 既存](02c-separate-host-existing.md)
+   - [同一リポジトリ × 新規](02d-same-repo-brand-new.md)
+   - [同一リポジトリ × 既存](02e-same-repo-existing.md)
 3. [Intent Storming と intent の整理](03-intents.md)
 4. [packet 作成と issue 公開](04-packets-issues.md)
 4a. [GitHub ワークフローラベルで見る現在地](04a-workflow-labels.md) — ラベルの意味と読み方
@@ -37,7 +37,8 @@ primary なのは transport ではなく 4 スレッドモデルです。
 7. [ループがおかしいときの復旧](07-recovery.md)
 8. [コマンドリファレンス](08-command-reference.md) — agent 向け・パワーユーザー向けコマンド一覧
 9. [開発者リファレンス](09-developer-reference.md) — パッケージ化された実行、preview チャンネル、バージョンフロー
-10. [1.0 compatibility promise](1.0-compatibility-promise.md) — covered machine surface、deprecation rule、ledger
+10. [1.0 互換性の約束](1.0-compatibility-promise.md) — 対象となる機械向けサーフェス、廃止規則、ledger
+11. [日本語ドキュメントの用語ポリシー](00-terminology-policy.md)
 
 ## Intent Storming とは
 
@@ -49,14 +50,14 @@ primary なのは transport ではなく 4 スレッドモデルです。
 
 ## 2 つの agent ロール（最初に一度だけ読む）
 
-| ロール | source of truth | 責務 |
+| ロール | 正本となる定義 | 責務 |
 | --- | --- | --- |
-| **Host / review agent** | 親 host の `.intent-cli/` 状態 + intent tree | issue 公開、`intent-target` 付与、review/approve/merge、next slice 切り出し、`intent-cli automation` 経由の label 遷移 |
-| **Child implementation agent** | **GitHub の issue/PR + repo ローカルのコード**（host metadata ではない） | issue 契約の実装、PR の作成/更新、`intent-cli worker` での結果記録 |
+| **host / review agent** | 親ホストの `.intent-cli/` 状態 + intent tree | issue 公開、`intent-target` 付与、review/approve/merge、次の作業スライスの切り出し、`intent-cli automation` 経由の label 遷移 |
+| **子実装 agent** | **GitHub の issue/PR + リポジトリローカルのコード**（ホストメタデータではない） | issue 契約の実装、PR の作成/更新、`intent-cli worker` での結果記録 |
 
-Child implementation agent は **GitHub-contract-only**: host の `.intent-cli/`、queue-state、metadata branch、`intents/**` を読んだり変更したりしない。
+子実装 agent は **GitHub-contract-only**: ホストの `.intent-cli/`、queue-state、メタデータ用ブランチ、`intents/**` を読んだり変更したりしない。
 
-host は **別の host リポジトリ** に置くこともできますし、**同じリポジトリの専用 metadata ブランチ**（例: `main-metadata`）に置くこともできます。詳しくは [プロジェクト開始 → リポジトリトポロジーの選択](02-project-start.md#リポジトリトポロジーの選択) を参照してください。
+ホストは **別のホストリポジトリ** に置くことも、**同じリポジトリの専用メタデータ用ブランチ**（例: `main-metadata`）に置くこともできます。詳しくは [プロジェクト開始 → リポジトリトポロジーの選択](02-project-start.md#リポジトリトポロジーの選択) を参照してください。
 
 ## コミュニティ
 

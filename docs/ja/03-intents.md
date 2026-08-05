@@ -96,7 +96,7 @@ AI agent の質問はこの形をとります:
 
 - interview/draft アーティファクトは `intent-cli interview …` 経由で書き込む
   （ここでの変更は `record-answer` のみ）。永続 Q/A ファイルを手編集しない。
-- child implementation agent は intent tree（`intents/**`）や host metadata を
+- 子実装 agent は intent tree（`intents/**`）やホストメタデータを
   **読まない** — これは host/design の領域。
 
 ## Intent ナレッジツリーレイアウト (tree-v1)

@@ -2,42 +2,45 @@
 
 ← [プロジェクト開始](02-project-start.md) | [ドキュメント索引](README.md) | → [intent の整理・保守](03-intents.md)
 
-## 最初の decision: 2×2 onboarding pattern を選ぶ
+<a id="最初の-decision-2×2-onboarding-pattern-を選ぶ"></a>
+## 最初の選択: 2×2 の導入パターンを選ぶ
 
-host metadata の置き場と project が brand-new / existing のどちらかを最初に選びます。
-各リンク先は意図的に自己完結しており、2 つの pattern の手順を混ぜる必要はありません。
+ホストメタデータの置き場とプロジェクトが新規 / 既存のどちらかを最初に選びます。
+各リンク先は意図的に自己完結しており、2 つのパターンの手順を混ぜる必要はありません。
 
-| Host metadata | Brand-new project | Existing project に intent-cli を追加 |
+| ホストメタデータ | 新規プロジェクト | 既存プロジェクトに intent-cli を追加 |
 | --- | --- | --- |
-| Separate host repository | [Separate host × brand-new](02b-separate-host-brand-new.md) | [Separate host × existing](02c-separate-host-existing.md) |
-| Same repository, metadata branch | [Same repo × brand-new](02d-same-repo-brand-new.md) | [Same repo × existing](02e-same-repo-existing.md) |
+| 別ホストリポジトリ | [別ホスト × 新規](02b-separate-host-brand-new.md) | [別ホスト × 既存](02c-separate-host-existing.md) |
+| 同一リポジトリ、メタデータ用ブランチ | [同一リポジトリ × 新規](02d-same-repo-brand-new.md) | [同一リポジトリ × 既存](02e-same-repo-existing.md) |
 
-各 pattern は共存する貼り付け可能な initial prompt をちょうど 2 つ提示します。4 agent 全員が
-1 台に collocate する場合は `herdr-only` を最初に選びます。**PREVIEW** は maturity note です。
-distributed team または既存 agmsg investment には `agmsg` + herdr を選びます。どちらも
-supported choice で、`session-layer set` で record します。primary なのは transport ではなく
-**4 スレッドモデル**です。initial prompt の後は transport 固有の手順を混ぜず、record された
-mode と current installed guides に従います。
+<!-- G608 chooser identities: Separate host / Same repo; brand-new / existing. -->
 
-このページは minimal start から最初の公開 packet までの **orchestration-first** 経路です。
-[プロジェクト開始](02-project-start.md) は topology の authority、[agent メッセージ
-オーケストレーション contract](12-agent-message-orchestration.md) は session-layer semantics の
-authority として残ります。
+各パターンは共存する貼り付け可能な最初のプロンプトをちょうど 2 つ提示します。4 agent 全員が
+1 台に同居する場合は `herdr-only` を最初に選びます。**PREVIEW** は成熟度の注記です。
+分散チームまたは既存の agmsg 投資があるチームには `agmsg` + herdr を選びます。どちらも
+サポート対象の選択肢で、`session-layer set` で記録します。primary なのはトランスポートではなく
+**4 スレッドモデル**です。最初のプロンプトの後はトランスポート固有の手順を混ぜず、記録された
+mode と現在のインストール済みガイドに従います。
+
+このページは最小開始から最初の公開 packet までの **orchestration-first** 経路です。
+[プロジェクト開始](02-project-start.md) はトポロジーの権限、[agent メッセージ
+オーケストレーション contract](12-agent-message-orchestration.md) はセッションレイヤーの意味の
+権限として残ります。
 
 ## これから設定するもの
 
-4 スレッドモデルが **primary** です。design は intent を author し、orchestration は
-coordinate し、implementation は child PR を deliver し、review は確認します。1 台の
-machine に collocate する team には、この経路では `herdr-only` transport を推奨します。
-`herdr-only` が **PREVIEW** なのは transport だけで、4 スレッドモデルではありません。
+4 スレッドモデルが **primary** です。design は intent を作成し、orchestration は
+調整し、implementation は子 PR を届け、review は確認します。1 台の
+マシンに同居するチームには、この経路では `herdr-only` トランスポートを推奨します。
+`herdr-only` が **PREVIEW** なのはトランスポートだけで、4 スレッドモデルではありません。
 
 ## 1. repository と folder を選ぶ
 
-まず [02 の repository topology 比較](02-project-start.md#リポジトリトポロジーの選択)で
-topology A/B を選びます。ここには table を複写しません。durable host state の置き場は
+まず [02 のリポジトリトポロジー比較](02-project-start.md#リポジトリトポロジーの選択)で
+トポロジー A/B を選びます。ここには表を複写しません。永続化されたホスト状態の置き場は
 02 が決めます。
 
-別 host repository を使う場合の実用的な 4-role layout は次のとおりです。
+別ホストリポジトリを使う場合の実用的な 4 ロール構成は次のとおりです。
 
 ```text
 ~/work/my-project-host/          # design と orchestration がこの host checkout を開く
@@ -45,31 +48,31 @@ topology A/B を選びます。ここには table を複写しません。durabl
 ~/work/my-project-review/        # review がこの分離した target-repo checkout を開く
 ```
 
-design と orchestration は host-side intent / workflow decision を所有するため host checkout を
-共有します。implementation は implementation checkout だけを開き、GitHub issue/PR contract に
-従います。review は inspection、test artifact、必要になった repair が active な implementation
-worktree を乱さないよう独立 checkout を使います。
+design と orchestration はホスト側の intent / workflow の決定を所有するためホストの checkout を
+共有します。implementation は実装用 checkout だけを開き、GitHub issue/PR contract に
+従います。review は検査、テスト成果物、必要になった修復が進行中の implementation
+worktree を乱さないよう独立した checkout を使います。
 
-## 2. host を install・initialize する
+## 2. ホストをインストール・初期化する
 
-[インストール](01-install.md) に従い、host checkout から [02 の初期化フロー](02-project-start.md#agent-が実行するコマンドメンテナトラブルシューティング向け)
-を実行します。host check が済んだら、**新しい** team を次の順で stand-up します。
+[インストール](01-install.md) に従い、ホストの checkout から [02 の初期化フロー](02-project-start.md#agent-が実行するコマンドメンテナトラブルシューティング向け)
+を実行します。ホストの確認が済んだら、**新しい**チームを次の順で立ち上げます。
 
-> **新規 team 専用。** この順番は new truth を表示する前に record します。transport を変更する
-> 既存 team は、`session-layer set --write` が final canonical step になる
-> [doc 12 の Session-layer switch checklist](12-agent-message-orchestration.md#session-layer-switch-checklist)
-> に従います。新規 team の順番を transport switch の手順として使わないでください。
+> **新規チーム専用。** この順番は新しい状態を表示する前に記録します。トランスポートを変更する
+> 既存チームは、`session-layer set --write` が最終の正本となる手順になる
+> [doc 12 のセッションレイヤー切替チェックリスト](12-agent-message-orchestration.md#session-layer-switch-checklist)
+> に従います。新規チームの順番をトランスポート切替の手順として使わないでください。
 
-### 2.1 transport を record する
+### 2.1 トランスポートを記録する
 
-design/orchestration agent に次の prompt を貼り付けます。
+design/orchestration agent に次のプロンプトを貼り付けます。
 
-> host checkout で domain `<domain>` の新規 team `<team>` に `herdr-only` を record してください。
+> ホストの checkout で domain `<domain>` の新規チーム `<team>` に `herdr-only` を記録してください。
 > `intent-cli session-layer set --domain <domain> --team <team> --mode herdr-only --write --format json`
-> を実行し、返った JSON を表示してください。residue や workspace から mode を infer してはいけません。
+> を実行し、返った JSON を表示してください。残留物やワークスペースから mode を推測してはいけません。
 
-隔離 scratch host で shipped `intent-cli 0.11.0-7b3800e-G606` を実行したときの success shape は
-次のとおりです（dynamic timestamp と migration item は省略）。
+隔離した scratch host で出荷済みの `intent-cli 0.11.0-7b3800e-G606` を実行したときの成功時の形は
+次のとおりです（動的な timestamp と移行項目は省略）。
 
 ```json
 {
@@ -84,19 +87,19 @@ design/orchestration agent に次の prompt を貼り付けます。
 }
 ```
 
-この初回 record は `migration_plan` array も返しました。これは mode change の出力です。既存 team の
-migration procedure はこのページではなく doc 12 を使用してください。
+この初回の記録は `migration_plan` array も返しました。これは mode change の出力です。既存チームの
+移行手順はこのページではなく doc 12 を使用してください。
 
-### 2.2 すべての role の topology を record する
+### 2.2 すべてのロールのトポロジーを記録する
 
-実際の herdr workspace/pane ID が分かった後、design/orchestration agent に次の prompt を貼り付けます。
+実際の herdr ワークスペース/pane ID が分かった後、design/orchestration agent に次のプロンプトを貼り付けます。
 
 > domain `<domain>`、team `<team>` に `design`、`orchestration`、`implementation`、`review`
-> role を record してください。各 role に対して `intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> --write --format json` を実行してください。明示的な domain、operator が
-> supplied した workspace/pane ID、上記 layout の folder を渡し、ID を推測したり topology file を
+> ロールを記録してください。各ロールに対して `intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> --write --format json` を実行してください。明示的な domain、operator が
+> 与えた workspace/pane ID、上記の構成のフォルダを渡し、ID を推測したりトポロジーファイルを
 > 手編集したりしてはいけません。
 
-scratch host の各 run は、record した role を `role` に持つ同じ success shape を返しました。
+scratch host の各実行は、記録したロールを `role` に持つ同じ成功時の形を返しました。
 
 ```json
 {
@@ -113,20 +116,20 @@ scratch host の各 run は、record した role を `role` に持つ同じ succ
 }
 ```
 
-観測では継続前に 4 role すべてを record しました。record command は controlled writer です。
-residency variant と validation rule の詳細は [doc 12](12-agent-message-orchestration.md) に残します。
+観測では継続前に 4 ロールすべてを記録しました。記録コマンドは制御された writer です。
+residency の選択肢と検証規則の詳細は [doc 12](12-agent-message-orchestration.md) に残します。
 
-### 2.3 visible marker を generate する
+### 2.3 可視の marker を生成する
 
-generate の前に、domain/team 用の空の managed marker block を `AGENTS.md` または `CLAUDE.md` に
-[doc 12 の generated marker 節](12-agent-message-orchestration.md#可視な生成済み-mode-marker)の
-指定どおり 1 つ置きます。続けて次の prompt を貼り付けます。
+生成の前に、domain/team 用の空の managed marker block を `AGENTS.md` または `CLAUDE.md` に
+[doc 12 の生成済み marker 節](12-agent-message-orchestration.md#可視な生成済み-mode-marker)の
+指定どおり 1 つ置きます。続けて次のプロンプトを貼り付けます。
 
-> recorded domain `<domain>`、team `<team>` の marker を generate してください。
+> 記録済み domain `<domain>`、team `<team>` の marker を生成してください。
 > `intent-cli session-layer marker generate --domain <domain> --team <team> --file AGENTS.md --write --format json`
 > を実行して JSON を表示してください。managed marker block だけを変更してください。
 
-scratch-host run の success shape は次のとおりです（record hash は dynamic）。
+scratch-host の実行時の成功形は次のとおりです（記録 hash は動的）。
 
 ```json
 {
@@ -140,15 +143,15 @@ scratch-host run の success shape は次のとおりです（record hash は dy
 }
 ```
 
-### 2.4 structural readiness を確認する
+### 2.4 構造上の準備状態を確認する
 
-design/orchestration agent に次の prompt を貼り付けます。
+design/orchestration agent に次のプロンプトを貼り付けます。
 
-> `intent-cli automation doctor --domain <domain> --team <team> --format json` で新しい team の
-> shared preflight を確認してください。`session_layer_preflight` result を報告し、doctor だけから
-> delivery readiness を主張しないでください。
+> `intent-cli automation doctor --domain <domain> --team <team> --format json` で新しいチームの
+> 共有 preflight を確認してください。`session_layer_preflight` の結果を報告し、doctor だけから
+> delivery の準備状態を主張しないでください。
 
-scratch-host run は structural ready でした。
+scratch-host の実行では構造上 ready でした。
 
 ```json
 {
@@ -163,22 +166,22 @@ scratch-host run は structural ready でした。
 }
 ```
 
-ここでの `ready` は shared **passive structural** verdict です。delivery surface は delivery を
+ここでの `ready` は共有の **passive structural** verdict です。delivery surface は delivery を
 claim する前に自身の bounded receiver check を実行します。
 
 ## 3. 最初の packet を作る
 
-session layer は record され visibility も得ました。[intent の整理・保守](03-intents.md)、続けて
+セッションレイヤーは記録され、可視性も得ました。[intent の整理・保守](03-intents.md)、続けて
 [packet 作成と issue 公開](04-packets-issues.md) に進んでください。最初の packet が公開可能になった
 時点から、それらのページが引き継ぎます。
 
 ## 代替経路
 
-- **agmsg + herdr:** distributed または既存 agmsg の選択では [agent message
-  orchestration contract](12-agent-message-orchestration.md) を使います。
+- **agmsg + herdr:** 分散または既存 agmsg の選択では [agent メッセージ
+  オーケストレーション contract](12-agent-message-orchestration.md) を使います。
 - **timer-loop:** [実装ループの設定](05-implementation-loop.md) と
   [レビュー / next-slice ループの設定](06-review-next-slice-loop.md) を使います。上の
-  orchestration-first route の alternative です。
+  orchestration-first 経路の alternative です。
 
 ## 次へ
 

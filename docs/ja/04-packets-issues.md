@@ -2,13 +2,13 @@
 
 ← [intent の整理・保守](03-intents.md) | [ドキュメント索引](README.md) | → [agent メッセージオーケストレーション](12-agent-message-orchestration.md)
 
-これは **host/design** 作業です。intent が十分に固まったら、デザインスレッドがそれを **packet**（実行可能な実装単位）に分割し、1つずつ GitHub Issue として公開します。child implementation agent がその issue を受け取って実装します。
+これは **host/design** 作業です。intent が十分に固まったら、デザインスレッドがそれを **packet**（実行可能な実装単位）に分割し、1つずつ GitHub Issue として公開します。子実装 agent がその issue を受け取って実装します。
 
 ## packet とは
 
 **packet** は、intent から切り出された焦点の絞られた実装スライスです。デザインスレッドが正本ファイル一式（`packet.yaml`、`implementation.md`、`review-context.md`、`github-body.md`）を scaffold します。これにより、何を作るかが明確に定義されます。`review-context.md` には、その packet の `intent_references` と overlap する G529 semantic-facet node（vocabulary/invariant/decider/acceptance-property）を一覧化した、生成済みの **Facet context** セクションが含まれます — 詳細は [facet を意識した context 供給 (G530)](09-developer-reference.md#facet-を意識した-context-供給-g530) を参照してください。
 
-**issue 公開**はレビュー済みの packet を GitHub Issue に変換します。この issue は **Standalone Child Issue Contract** であり、child implementation agent が実装に必要な唯一の情報源です。child agent は issue 本文とリポジトリのコードを参照するだけです。host metadata にはアクセスしません。
+**issue 公開**はレビュー済みの packet を GitHub Issue に変換します。この issue は **Standalone Child Issue Contract** であり、子実装 agent が実装に必要な唯一の情報源です。子 agent は issue 本文とリポジトリのコードを参照するだけです。ホストメタデータにはアクセスしません。
 
 ## デザインスレッドプロンプト
 
@@ -33,9 +33,9 @@ AI agent が行うこと:
 ## metadata / label の安全境界
 
 - **`intent-target` は公開境界コマンドが付与する。手作業では付けない**。
-  child implementation agent も付けない。
-- issue 本文は **standalone contract** であること — child agent はそれを唯一の
-  source of truth として扱う（host metadata にはアクセスしない）。
+  子実装 agent も付けない。
+- issue 本文は **standalone contract** であること — 子 agent はそれを唯一の
+  正本となる定義として扱う（ホストメタデータにはアクセスしない）。
 
 ## コマンドリファレンス（agent・メンテナ・トラブルシューティング向け）
 

@@ -37,7 +37,7 @@ intent-cli --version
 `~/.dotnet/tools`（macOS/Linux）または `%USERPROFILE%\.dotnet\tools`（Windows）が
 `PATH` に無い場合、インストール出力に追加すべき行が表示されます。
 
-**.NET SDK が無い場合**は、各プラットフォーム向けの self-contained バイナリを
+**.NET SDK が無い場合**は、各プラットフォーム向けの `self-contained`（ランタイム同梱）バイナリを
 [最新 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/latest)
 から取得（ランタイム同梱）。使用前に `.sha256` を検証する。手順は
 [開発者リファレンス](09-developer-reference.md#net-sdk-なしでインストール) を参照。
