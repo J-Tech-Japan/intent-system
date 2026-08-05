@@ -496,7 +496,7 @@ canonical で bounded な transition** です:
 
 - **queue-state** — `state=blocked` と `blocked_by: ["<reason>"]`。既存の
   変更されていない `QueueManager` の blocking transition(`queue transition
-  <unit> blocked` と同じ機構)経由で適用し、あわせて durable な
+  <unit> blocked` と同じ機構)経由で適用し、あわせて永続化された
   `runs.jsonl` audit event(`event: blocked` / `queued`、`by: intent-cli
   automation issue-block`、reason 付き)を追記します。
 - **GitHub** — `intent-issue-blocked` label。`worker claim`/`worker complete`
@@ -672,7 +672,7 @@ kind では `— FYI:` prose `` で終わります — そのため読み手（�
 orchestrator でも）が「transition は不要」を actionable な次コマンドと
 取り違えることはありません。
 
-### operator attention の durable state (G596)
+### operator attention の永続状態 (G596)
 
 人間にしか処理できない作業は、流れて消える通知ではなく state です。次の
 明示的な lifecycle surface を使います。
@@ -698,7 +698,7 @@ superseded は回答済みではなく、`resolution_evidence` を持ちませ�
 再発した場合、古い record をまず supersede し、`--supersedes` でそれを参照する
 新しい ID を open します。terminal な古い record を変更したり reopen したりは
 しません。全 transition と evidence/timestamp は
-`.intent-cli/operator-attention.json` に残り、共有 atomic durable writer で
+`.intent-cli/operator-attention.json` に残り、共有 atomic な永続 writer で
 publish されます。
 
 store を write/transition するのはこれらの明示 command だけです。pane text、
@@ -728,11 +728,11 @@ polling loop、process launch、automatic open/resolve path は追加しませ�
 会話する **session layer** は別の話です。2026-08-01 のオペレーター裁定により、後者は
 固定ではなく**選択可能**になりました。
 
-- **`herdr-only`（PREVIEW maturity）** — team agent 全員が 1 台に collocate する場合の
-  supported な最初の選択です。herdr が terminal controller になり、別立ての message bridge
+- **`herdr-only`（PREVIEW maturity）** — team agent 全員が 1 台に常駐する場合に
+  最初に選べるサポート対象の選択肢です。herdr が terminal controller になり、別立ての message bridge
   を動かしません。**PREVIEW という限定詞は transport のみ**に掛かります。
 - **`agmsg` + herdr** — team member が複数 machine に分散する場合、または既存の agmsg
-  investment がある場合の supported choice です。記録が無いときは `agmsg` が既定値です。
+  investment がある場合のサポートされた選択肢です。記録が無いときは `agmsg` が既定値です。
 - **primary で無限定なのは 4 スレッドモデル**であり、両モードで変わりません（G540 の裁定
   どおり）。transport を選んでもモデルが暫定的になることはありません。
 - **1 チーム 1 モード。** 1 つのチーム内で agmsg と herdr-only の配送を混在させることは
@@ -745,8 +745,8 @@ polling loop、process launch、automatic open/resolve path は追加しませ�
   記録します。team 単位の記録が domain 全体の記録に優先します(より狭い言明だからです)。
 - **既定** — 記録が無ければ `agmsg`。`show` は決して書きません。
 - **永続化** — `.intent-cli/session-layer-mode.json`。書き込むのは
-  `session-layer set --write` **のみ**です(G548 の系譜: durable state は canonical な
-  コマンド経由でのみ変更し、手編集はしない)。
+  `session-layer set --write` **のみ**です(G548 の系譜: durable state（永続状態）という
+  正本となる定義は、正本のコマンド経由でのみ変更し、手編集はしない)。
 - **冪等** — 同一スコープで既に有効なモードを再記録しても no-op で、transition も
   記録しません。セットアップスクリプトがモードを表明しても、trail が「決定の記録」から
   「実行の記録」に変質しません。
@@ -989,7 +989,7 @@ item にも適用されます — misleading な title prefix だけでは、pac
 
 **冪等**: queue-state エントリが既に `retired` になっている execution
 unit に対して再実行しても安全な no-op です — 冪等性の判断根拠は
-（不安定な GitHub 状態の再チェックではなく）durable state です。`--write`
+（不安定な GitHub 状態の再チェックではなく）永続状態です。`--write`
 を使った際、queue-state は既に retired だが直前の partial write による
 `runs.jsonl` イベントが欠落している場合、再実行はその欠落したステップ
 だけを(GitHub 呼び出しゼロで)完了させます — 永久に黙って失われることは
@@ -997,7 +997,7 @@ unit に対して再実行しても安全な no-op です — 冪等性の判断
 削除もしません。
 
 retired になった item は自動的に WIP gating から外れます:
-`automation host-review-preflight` の in-flight スキャンは OPEN で
+`automation host-review-preflight` の進行中項目スキャンは OPEN で
 `intent-target` ラベル付きの GitHub issue/PR をライブに読むため、close
 されて label が外れた issue は単にそこから消えるだけです — 別途コード
 パスは不要です。
@@ -1006,14 +1006,14 @@ retired になった item は自動的に WIP gating から外れます:
 work が WIP から外れる経路は retirement だけではなく、*parked*(意図的に脇へ
 置く)ももう 1 つの経路です。queue item が **converged blocked state** —
 queue `state=blocked` **かつ** `blocked_by` が非空 — にある issue は
-`in_flight_issues` にカウントされなくなり、in-flight が blocked のものだけに
+`in_flight_issues` にカウントされなくなり、進行中で blocked 状態のものだけに
 なった時点で next-slice candidate は `skip-next-slice-due-to-wip` から
 `candidate-ready` に切り替わります。blocked のユニットは設計上 parked で
 あり、unblock されるまで進行できません。それをカウントすることは、
 オペレーターが意図的に work を脇に置いたまさにそのときに publish を
 枯渇させます。field finding(sekiban-as-a-service、2026-07-26、0.5.0 上):
 gate が issue #1783 を挙げて publish を抑止しましたが、そのユニット
-SKS-G818 は claim を保持したままの supported な block transition で
+SKS-G818 は claim を保持したままのサポート対象の block transition で
 parked されていました — G545 は blocked ユニットを `claimed-but-silent`
 から除外しましたが、この gate はカバーされていませんでした。
 
@@ -1248,7 +1248,7 @@ refuse されます。
 
 ---
 
-### `issue publish-flow` の idempotent rerun が 3 つの durable artifact すべてを独立に検証・復元する (G536)
+### `issue publish-flow` の idempotent rerun が 3 つの永続 artifact すべてを独立に検証・復元する (G536)
 
 Field incident(2026-07-19、G530 を issue #1164、G531 を issue #1166 として
 publish 中): それぞれの GitHub issue 作成後に host `main` が並行して
@@ -1268,11 +1268,11 @@ GitHub issue** を作成しかねない状態でした — これが今回の re
 
 **単一の共有 analyzer `PublishDurableArtifactAnalyzer` が、`issue
 publish-flow` の idempotent rerun と `automation publish-recovery` の
-両方を今や支えています。** この analyzer は 3 つの durable artifact —
+両方を今や支えています。** この analyzer は 3 つの永続 artifact —
 `queue-state.json` の `linked_issue`、`publish.yaml` の `issue-created`
 record、`runs.jsonl` 内のすべての canonical `issue-created` event — を
 独立に parse し、単一の canonical issue identity を解決するか、fail
-closed します。両方のコマンドは、同じ durable-state の形状に対して
+closed します。両方のコマンドは、同じ永続状態の形状に対して
 まったく同じ、安定した gap identifier
 (`queue_linked_issue_missing`、`publish_yaml_missing`、
 `runs_event_missing`)を報告するため、2 つの surface が何が欠けている
@@ -1356,7 +1356,7 @@ unsafe stop は今や `durable_artifact_gaps` field を持ちます —
 同じ execution unit・同じ path に対して呼び出された、同一の共有
 analyzer の出力です。これにより operator(あるいは test)は、
 `publish-recovery` の unsafe stop と、`issue publish-flow` 自身の
-rerun が同一の durable state に対して独立に検出・復元するものとを、
+rerun が同一の永続状態に対して独立に検出・復元するものとを、
 直接比較できます。
 
 **Round-4 review repair — canonical identity は number だけでなく完全な
@@ -1600,9 +1600,9 @@ blocked-by gate を再適用しておらず、その unit を `issue-cut-ready` 
 この同じ selector が誤って `issue-cut-ready` を報告しないことに依存
 していたために顕在化しました。
 
-`QueueItem.Priority` は schema level では引き続き単なる、validate
+`QueueItem.Priority` は schema level では引き続き単なる、検証
 されない `string` です(変更なし)——`queue reprioritize` だけが
-それを normalize・validate します(`high`/`normal`/`low`、
+それを正規化・検証します(`high`/`normal`/`low`、
 case-insensitive)。`next-slice` の ranking function は、認識できない
 値や欠けている値をすべて `normal` として扱い、error にはしません。
 そのため、手作業で書かれた、あるいは historical な `queue-state.json`
@@ -1636,7 +1636,7 @@ enum 自体は `medium` などの legacy 値を含むように拡張**しませ�
 - **Migration recipe(新規 command は不要)**: `queue reprioritize
   <execution-unit> --priority <high|normal|low> --reason <text> --write`
   は、legacy 値からの canonical な migration path としてすでに機能して
-  います——validate されるのは *requested* 値だけで、documented enum に
+  います——検証されるのは *requested* 値だけで、documented enum に
   対して検証されます。*既存の* 値は validation 無しに読み取られ、
   report され(`old_priority`)、比較されます。そのため `medium`(他の
   legacy 値も同様)にある item は、`queue-state.json` を hand-edit する
@@ -1660,12 +1660,12 @@ enum 自体は `medium` などの legacy 値を含むように拡張**しませ�
 **Review repair — `queue reprioritize --write` は fail-closed かつ
 repairable な write 順序を使います。** `queue-state.json` を必須の
 `priority-changed` runs event の追記より先に書き込むと、追記 step が
-その後失敗した場合に、audit record の無い durable な priority mutation
+その後失敗した場合に、audit record の無い永続化された priority mutation
 が残ってしまう可能性がありました。順序は逆にされています——runs
 event を**先に**追記し、`queue-state.json` は**後で**書き込みます:
 
 - event の追記が失敗した場合、`queue-state.json` は一切触れられません
-  ——durable な変更は何も起きておらず、単純な retry がまっさらな状態
+  ——永続化された変更は何も起きておらず、単純な retry がまっさらな状態
   から始まります。
 - event の追記が成功した後で `queue-state.json` の書き込みが失敗した
   場合、state file がまだそれを反映していなくても、audit trail は
@@ -1694,7 +1694,7 @@ wall-clock への依存を完全に排除するためでした。
 
 **Round-4 review repair — content fingerprint は bytes を識別するもの
 であり、この state machine は同一の bytes を再訪しうる。dedup token は
-今や、何かの fingerprint ではなく、durable かつ injective な
+今や、何かの fingerprint ではなく、永続的かつ injective な
 `priority_revision` counter です。** round 3 の fingerprint は異なる
 content に対しては collision-resistant ですが、genuinely revisit
 可能です: 1 つの固定 clock のもとで `normal→high(R)`、続いて
@@ -1719,10 +1719,10 @@ unit + event name)への exact match のままです——変わったのは tag
 
 - `toRevision` は、同一 item に対する 2 つの異なる成功した mutation
   によって生成されることが数学的に決してありません: 各 mutation は、
-  durable に永続化された sequence の「次」の整数を厳密に消費し、一度
+  永続的に記録された sequence の「次」の整数を厳密に消費し、一度
   消費されると二度と「次」にはなりません——**`queue-state.json` の
   他のすべての field が後で byte-identical な content に戻っても
-  関係ありません**。counter 自身がその同じ durable な content の一部
+  関係ありません**。counter 自身がその同じ永続的な content の一部
   であり、常に前にしか進まないためです。
 - 本物の retry(失敗した queue-state write の後の re-run)は、両方の
   試行で、依然として未 mutate な file から同じ `fromRevision` を
@@ -1743,7 +1743,7 @@ concurrent writer に対する保護が必要でした。**
   arithmetic であり、`int.MaxValue` で silently に `int.MinValue` へと
   wrap し、monotonic/injective という invariant に直接違反していました。
   dry-run と `--write` の両方が、今や何かを preview・mutate する**前**
-  に `PriorityRevision >= 0` を validate し、`checked` arithmetic で
+  に `PriorityRevision >= 0` を検証し、`checked` arithmetic で
   `toRevision` を計算します——negative あるいは exhausted な revision
   は、event も queue-state の write も無く fail closed し、手動の
   修復を要求します。
@@ -2187,7 +2187,7 @@ ping だけがそれを表面化させました。`intent-cli guide orchestrator
   見えない外部プロセスとは異なり、別途の credential/keychain セットアップも
   不要で、壊れた瞬間にオペレーターの画面上で可視化されます。既存の watchdog
   安全ルール(delegation を重複させない、permission プロンプトをクリアしない、
-  進行中の作業をキャンセルしない、強制クローズしない、durable state を
+  進行中の作業をキャンセルしない、強制クローズしない、永続状態を
   手編集しない)と停止条件は逐語的に維持されます。
 - **failure visibility は staleness とは異なります。** 沈黙は健全な
   `stale=false` の heartbeat 結果にのみ許されます。heartbeat コマンドの
@@ -2225,7 +2225,7 @@ ping だけがそれを表面化させました。`intent-cli guide orchestrator
 
 フィールドインシデント、2026-07-20: G539(domain `intent-cli`)の publish が、
 **sekiban-as-a-service** domain に属するレガシーな `runs.jsonl` の行によって
-durable-state 分析で **2 回** 拒否されました — 最初は `ts`/`by` が欠落した 1 行、
+永続状態分析で **2 回** 拒否されました — 最初は `ts`/`by` が欠落した 1 行、
 次に `execution_unit` が欠落した 16 行。G542 以前の validator
 (`RunLogSerializer.DeserializeAll`)はファイル全体を 1 回の呼び出しでパースし、
 domain に関わらずファイル中の **最初の** malformed な行で例外を投げるため、
@@ -2270,7 +2270,7 @@ within-record のソースが **無い** フィールド(最も典型的には `
   `execution_unit` 自体が欠落しており within-record のソースが無い行は、
   `--write` の下では(その行の他の導出可能なフィールドも含めて)完全に拒否
   されます — `runs-repair` audit event を紐づけるための安全な unit が無く、
-  "unknown" を捏造することはそれ自体が durable trail 上の推測になってしまう
+  "unknown" を捏造することはそれ自体が永続的な trail 上の推測になってしまう
   ためです。
 - **`--apply-inferred`**(独立した明示的なフラグで、`--write` だけでは
   決して implied されず、`--write` なしで渡された場合は usage error として
@@ -2284,7 +2284,7 @@ within-record のソースが **無い** フィールド(最も典型的には `
   決して修復されません。
 - 何も malformed でなければ clean report + exit `0`。
 
-**`issue publish-flow` の durable-state 分析は domain-scoped になりました。**
+**`issue publish-flow` の永続状態分析は domain-scoped になりました。**
 共有される `PublishDurableArtifactAnalyzer`(G536)は、1 回の whole-file な
 `DeserializeAll` 呼び出しの代わりに、今や `runs.jsonl` を **行単位** で
 パースし、各 malformed な行の owning domain を `runs-audit` と同じ方法で

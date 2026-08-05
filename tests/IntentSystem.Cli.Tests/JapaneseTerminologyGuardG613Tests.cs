@@ -21,6 +21,7 @@ public sealed class JapaneseTerminologyGuardG613Tests
         "docs/ja/03-intents.md",
         "docs/ja/04-packets-issues.md",
         "docs/ja/07-recovery.md",
+        "docs/ja/09-developer-reference.md",
     };
 
     // Closed list from the G613 measured reader-path sweep. Do not make this a
@@ -55,7 +56,7 @@ public sealed class JapaneseTerminologyGuardG613Tests
         var root = RepoVersionPolicySource.RepoRoot();
         var failures = new List<string>();
 
-        Assert.Equal(11, ReviewedReaderPath.Count);
+        Assert.Equal(12, ReviewedReaderPath.Count);
         foreach (var relativePath in ReviewedReaderPath.OrderBy(path => path, StringComparer.Ordinal))
         {
             var path = Path.Combine(root, relativePath);
@@ -85,6 +86,23 @@ public sealed class JapaneseTerminologyGuardG613Tests
         Assert.Contains(failures, failure => failure.Contains(":1:", StringComparison.Ordinal));
         Assert.Contains(failures, failure => failure.Contains(":2:", StringComparison.Ordinal));
         Assert.Contains(failures, failure => failure.Contains(":3:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void DeveloperReferenceG616_LeavesDurableOnlyAsGlossedConceptOrIdentifiers_G616()
+    {
+        const int measuredOccurrences = 25;
+        const int keptOccurrences = 8;
+        const int translatedOccurrences = 17;
+        var path = Path.Combine(RepoVersionPolicySource.RepoRoot(), "docs", "ja", "09-developer-reference.md");
+        var content = File.ReadAllText(path);
+        var prose = InlineCode.Replace(content, string.Empty);
+        var unglossedProse = prose.Replace("durable state（永続状態）", string.Empty, StringComparison.Ordinal);
+
+        Assert.Equal(measuredOccurrences, keptOccurrences + translatedOccurrences);
+        Assert.Equal(keptOccurrences, Regex.Matches(content, "durable", RegexOptions.IgnoreCase).Count);
+        Assert.DoesNotMatch(new Regex("durable", RegexOptions.IgnoreCase), unglossedProse);
+        Assert.Contains("durable state（永続状態）", content, StringComparison.Ordinal);
     }
 
     private static IReadOnlyList<string> FindOrdinaryEnglish(string relativePath, IReadOnlyList<string> lines)
