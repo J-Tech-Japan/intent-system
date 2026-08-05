@@ -1,28 +1,31 @@
-# Pattern: same repository metadata branch × brand-new project
+<a id="pattern-same-repository-metadata-branch-brand-new-project"></a>
+# パターン: 同一リポジトリのメタデータ用ブランチ × 新規プロジェクト
 
-← [onboarding pattern を選ぶ](02a-getting-started-orchestration.md) | [docs インデックス](README.md)
+← [導入パターンを選ぶ](02a-getting-started-orchestration.md) | [ドキュメント索引](README.md)
 
 ## この setup
 
-新しい `<owner>/<implementation-repo>` に intended implementation base branch を作り、初期化前にそこから metadata branch（例: `main-metadata`）を作成します。この session では **その metadata-branch checkout だけを**開きます。product code と child PR は implementation base branch、host metadata は metadata branch に置きます。
+新しい `<owner>/<implementation-repo>` に想定する実装ベースブランチを作り、初期化前にそこからメタデータ用ブランチ（例: `main-metadata`）を作成します。このセッションでは **そのメタデータ用ブランチの checkout だけを**開きます。プロダクトコードと子 PR は実装ベースブランチ、ホストメタデータはメタデータ用ブランチに置きます。
 
-## Initial prompt — ちょうど 1 つを選ぶ
+## 最初のプロンプト — ちょうど 1 つを選ぶ
 
 ### Herdr-only
 
-> 新しい repository `<owner>/<implementation-repo>` 用に intent-cli を設定します。metadata-branch checkout だけを開いています。まず installed guidance で intent-cli を理解し、この host を初期化して collocate した single-machine 4 スレッド team 用に `herdr-only` を record してください。
+> 新しいリポジトリ `<owner>/<implementation-repo>` 用に intent-cli を設定します。メタデータ用ブランチの checkout だけを開いています。まずインストール済みのガイドで intent-cli を理解し、このホストを初期化して同居する単一マシンの 4 スレッドチーム用に `herdr-only` を記録してください。
 
 ### Agmsg + herdr
 
-> 新しい repository `<owner>/<implementation-repo>` 用に intent-cli を設定します。metadata-branch checkout だけを開いています。まず installed guidance で intent-cli を理解し、この host を初期化して distributed team または既存 agmsg investment 用に `agmsg` を record してください。
+> 新しいリポジトリ `<owner>/<implementation-repo>` 用に intent-cli を設定します。メタデータ用ブランチの checkout だけを開いています。まずインストール済みのガイドで intent-cli を理解し、このホストを初期化して分散チームまたは既存の agmsg 投資があるチーム用に `agmsg` を記録してください。
 
 ## agent が行うこと
 
-shipped skill は `guide onboarding` に dispatch します。agent は version を確認し、`guide model` を読み、`intent init` を dry-run し、`init --write` を適用して host が ok か確認します。それから session layer を `intent-cli session-layer set` で record し、current guide で 4 スレッド team を provision します。新規 v0.11.0 write は 9 files を作ります。違うのは initial prompt だけで、以降は recorded mode に従います。
+インストール済み skill は `guide onboarding` に進みます。agent は version を確認し、`guide model` を読み、`intent init` を dry-run し、`init --write` を適用してホストが ok か確認します。それからセッションレイヤーを `intent-cli session-layer set` で記録し、現在のガイドで 4 スレッドチームを準備します。新規 v0.11.0 の write は 9 個のファイルを作ります。違うのは最初のプロンプトだけで、以降は記録済みの mode に従います。
+
+<!-- G608 observed write count: 9 files. -->
 
 ## 残る human decision
 
-base-branch policy、transport の選択（collocation は herdr-only を最初に、distributed / existing-agmsg team は agmsg + herdr）、各 role の agent kind を確認します。
+base-branch policy、トランスポートの選択（同居では herdr-only を最初に、分散 / 既存 agmsg のチームでは agmsg + herdr）、各ロールの agent kind を確認します。
 
 ## 次へ
 

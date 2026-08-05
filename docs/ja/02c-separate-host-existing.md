@@ -1,28 +1,31 @@
-# Pattern: separate host × existing project
+<a id="pattern-separate-host-existing-project"></a>
+# パターン: 別ホスト × 既存プロジェクト
 
-← [onboarding pattern を選ぶ](02a-getting-started-orchestration.md) | [docs インデックス](README.md)
+← [導入パターンを選ぶ](02a-getting-started-orchestration.md) | [ドキュメント索引](README.md)
 
 ## この setup
 
-既存の `<owner>/<implementation-repo>` は変更しません。host metadata 用に空の `<owner>/<intents-host-repo>` を別に作り、最初の session では **その host repository だけを** checkout します。既存 implementation repository は prompt で指定し、ここで host checkout と混ぜません。
+既存の `<owner>/<implementation-repo>` は変更しません。ホストメタデータ用に空の `<owner>/<intents-host-repo>` を別に作り、最初のセッションでは **そのホストリポジトリだけを** checkout します。既存の実装リポジトリはプロンプトで指定し、ここでホストの checkout と混ぜません。
 
-## Initial prompt — ちょうど 1 つを選ぶ
+## 最初のプロンプト — ちょうど 1 つを選ぶ
 
 ### Herdr-only
 
-> 既存 target implementation repository `<owner>/<implementation-repo>` に intent-cli を追加します。空の separate intents host repository だけを開いています。まず installed guidance で intent-cli を理解し、host を初期化して collocate した single-machine team 用に `herdr-only` を record してください。
+> 既存の対象実装リポジトリ `<owner>/<implementation-repo>` に intent-cli を追加します。空の分離した intent 用ホストリポジトリだけを開いています。まずインストール済みのガイドで intent-cli を理解し、ホストを初期化して同居する単一マシンのチーム用に `herdr-only` を記録してください。
 
 ### Agmsg + herdr
 
-> 既存 target implementation repository `<owner>/<implementation-repo>` に intent-cli を追加します。空の separate intents host repository だけを開いています。まず installed guidance で intent-cli を理解し、host を初期化して distributed または existing-agmsg team 用に `agmsg` を record してください。
+> 既存の対象実装リポジトリ `<owner>/<implementation-repo>` に intent-cli を追加します。空の分離した intent 用ホストリポジトリだけを開いています。まずインストール済みのガイドで intent-cli を理解し、ホストを初期化して分散チームまたは既存の agmsg チーム用に `agmsg` を記録してください。
 
 ## agent が行うこと
 
-shipped skill は `guide onboarding` に進みます。agent は version を確認し、`guide model` を読み、`intent init` を dry-run し、`init --write` を適用して host が ok であることを確認します。その後 session layer を `intent-cli session-layer set` で record し、current guide で 4 スレッド team を provision します。新規 v0.11.0 host write は 9 files を作ります。prompt variant は最初の transport だけを選び、下流の手順を混ぜません。
+インストール済み skill は `guide onboarding` に進みます。agent は version を確認し、`guide model` を読み、`intent init` を dry-run し、`init --write` を適用してホストが ok であることを確認します。その後セッションレイヤーを `intent-cli session-layer set` で記録し、現在のガイドで 4 スレッドチームを準備します。新規 v0.11.0 のホスト write は 9 個のファイルを作ります。プロンプトの違いは最初のトランスポートだけで、下流の手順を混ぜません。
+
+<!-- G608 observed write count: 9 files. -->
 
 ## 残る human decision
 
-child PR 用の base-branch policy、transport の選択（collocation は herdr-only を最初に、distributed / existing-agmsg team は agmsg + herdr）、各 role の agent kind を確認します。
+子 PR 用の base-branch policy、トランスポートの選択（同居では herdr-only を最初に、分散 / 既存 agmsg のチームでは agmsg + herdr）、各ロールの agent kind を確認します。
 
 ## 次へ
 
