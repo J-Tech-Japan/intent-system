@@ -22,8 +22,8 @@ public sealed class CliConfigLoaderTests
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
         Assert.Equal("../Sekiban-dcb/dcb", config.Project.WorkRepoPath);
         Assert.Equal("../MyIntentHost", config.Project.ParentIntentRepoRoot);
-        Assert.Equal("Claude", config.Roles.Implement);
-        Assert.Equal("Codex", config.Roles.Review);
+        Assert.Equal("implementation", config.Roles.Implement);
+        Assert.Equal("review", config.Roles.Review);
         Assert.Equal(".intent-cli/supervision", config.Supervision.ArtifactRoot);
         Assert.Equal(15, config.Supervision.StaleHeartbeatTimeoutMinutes);
         Assert.Equal(5, config.Supervision.RetryDelayMinutes);
@@ -57,7 +57,7 @@ public sealed class CliConfigLoaderTests
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
         Assert.Equal("../Sekiban-dcb/dcb", config.Project.WorkRepoPath);
         Assert.Equal("../MyIntentHost", config.Project.ParentIntentRepoRoot);
-        Assert.Equal("Claude", config.Roles.Implement);
+        Assert.Equal("implementation", config.Roles.Implement);
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public sealed class CliConfigLoaderTests
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
         Assert.Equal("../Sekiban-dcb/dcb", config.Project.WorkRepoPath);
         Assert.Equal("../MyIntentHost", config.Project.ParentIntentRepoRoot);
-        Assert.Equal("Claude", config.Roles.Implement);
+        Assert.Equal("implementation", config.Roles.Implement);
     }
 
     [Fact]

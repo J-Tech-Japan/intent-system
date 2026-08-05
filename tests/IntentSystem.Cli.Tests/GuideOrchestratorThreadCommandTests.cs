@@ -1539,10 +1539,10 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("orchestrator cwd + agent type", output, StringComparison.Ordinal);
         Assert.Contains("design cwd + agent type, and whether design is manual-inbox or monitored", output, StringComparison.Ordinal);
         Assert.Contains("delivery mode per role", output, StringComparison.Ordinal);
-        // Recommended defaults: orchestrator=Claude, implementer=Claude, reviewer=Codex, design=manual Codex, receivers=monitor.
-        Assert.Contains("orchestrator = Claude", output, StringComparison.Ordinal);
-        Assert.Contains("reviewer = Codex", output, StringComparison.Ordinal);
-        Assert.Contains("design = manual-inbox Codex", output, StringComparison.Ordinal);
+        // Defaults select a supported kind without coupling roles to a product pair.
+        Assert.Contains("orchestrator = operator-chosen herdr-startable kind", output, StringComparison.Ordinal);
+        Assert.Contains("reviewer = operator-chosen herdr-startable kind", output, StringComparison.Ordinal);
+        Assert.Contains("design = manual-inbox or monitored", output, StringComparison.Ordinal);
         Assert.Contains("receivers = monitor", output, StringComparison.Ordinal);
         // Role startup messages: Claude /agmsg actas vs Codex $agmsg actas.
         Assert.Contains("`/agmsg actas <role>`", output, StringComparison.Ordinal);

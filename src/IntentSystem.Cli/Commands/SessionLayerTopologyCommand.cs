@@ -29,10 +29,10 @@ internal static class SessionLayerTopologyCommand
         "Usage: intent-cli session-layer topology validate --domain <name> --team <name> [--format markdown|json]";
     private const string UpdateKindUsage =
         "Usage: intent-cli session-layer topology update-kind --domain <name> --team <name> --role <name> "
-        + "--current-kind <kind> --new-kind <kind> --confirm-update-kind [--dry-run|--write] [--format markdown|json]";
+        + "--current-kind <kind> --new-kind <kind> --confirm-update-kind [--dry-run|--write] [--format json]";
     private const string RetireLegacyUsage =
         "Usage: intent-cli session-layer topology retire-legacy --domain <name> --team <name> "
-        + "--evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write [--format markdown|json]";
+        + "--evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write [--format json]";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -261,19 +261,26 @@ internal static class SessionLayerTopologyCommand
     {
         request = null; error = string.Empty;
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
-        var confirm = false; var write = false;
+        var confirm = false; var requestedWrite = false; var requestedDryRun = false;
         for (var i = 0; i < args.Length; i++)
         {
             if (args[i] == "--confirm-update-kind") { confirm = true; continue; }
-            if (args[i] == "--write") { write = true; continue; }
-            if (args[i] == "--dry-run") { write = false; continue; }
-            if (args[i] == "--format") { i++; continue; }
+            if (args[i] == "--write") { requestedWrite = true; continue; }
+            if (args[i] == "--dry-run") { requestedDryRun = true; continue; }
+            if (args[i] == "--format")
+            {
+                if (++i >= args.Length || !string.Equals(args[i], FormatJson, StringComparison.Ordinal))
+                { error = "update-kind supports only '--format json'."; return false; }
+                continue;
+            }
             if (args[i] is not ("--domain" or "--team" or "--role" or "--current-kind" or "--new-kind") || i + 1 >= args.Length)
             { error = $"Unknown or incomplete argument '{args[i]}'."; return false; }
             values[args[i]] = args[++i];
         }
-        if (!confirm || !write || values.Keys.Count != 5 || values.Values.Any(string.IsNullOrWhiteSpace))
-        { error = "--domain, --team, --role, --current-kind, --new-kind, --confirm-update-kind, and --write are required."; return false; }
+        if (!confirm || (!requestedWrite && !requestedDryRun) || values.Keys.Count != 5 || values.Values.Any(string.IsNullOrWhiteSpace))
+        { error = "--domain, --team, --role, --current-kind, --new-kind, --confirm-update-kind, and either --write or --dry-run are required."; return false; }
+        // A dry-run is an explicit non-mutating request, irrespective of flag order.
+        var write = requestedWrite && !requestedDryRun;
         request = new(values["--domain"], values["--team"], values["--role"], values["--current-kind"], values["--new-kind"], write);
         return true;
     }
@@ -286,7 +293,12 @@ internal static class SessionLayerTopologyCommand
         {
             if (args[i] == "--confirm-retire-legacy") { confirm = true; continue; }
             if (args[i] == "--write") { write = true; continue; }
-            if (args[i] == "--format") { i++; continue; }
+            if (args[i] == "--format")
+            {
+                if (++i >= args.Length || !string.Equals(args[i], FormatJson, StringComparison.Ordinal))
+                { error = "retire-legacy supports only '--format json'."; return false; }
+                continue;
+            }
             if (args[i] is not ("--domain" or "--team" or "--evidence") || i + 1 >= args.Length)
             { error = $"Unknown or incomplete argument '{args[i]}'."; return false; }
             values[args[i]] = args[++i];
@@ -801,9 +813,17 @@ internal static class SessionLayerTopologyWriter
             return new(request.Team, false, true, $"Legacy topology file '{legacyPath}' is absent; nothing was retired.");
         try
         {
-            var evidencePath = Path.Combine(routingRoot, ".intent-cli", "topology", "legacy-retirements.jsonl");
+            var evidencePath = SessionLayerTopologyRetirementEvidence.ResolvePath(routingRoot);
             Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
-            File.AppendAllText(evidencePath, JsonSerializer.Serialize(new { domain = request.Domain, team = request.Team, retired_path = NotifyRoleTopologyStore.LegacyRelativePath, evidence = request.Evidence }) + Environment.NewLine);
+            File.AppendAllText(evidencePath, JsonSerializer.Serialize(new
+            {
+                timestamp_utc = DateTimeOffset.UtcNow,
+                host = Environment.MachineName,
+                domain = request.Domain,
+                team = request.Team,
+                retired_path = NotifyRoleTopologyStore.LegacyRelativePath,
+                evidence = request.Evidence,
+            }) + Environment.NewLine);
             File.Delete(legacyPath);
             return new(request.Team, true, false, $"Retired '{NotifyRoleTopologyStore.LegacyRelativePath}' with named migration evidence.");
         }
@@ -1033,6 +1053,20 @@ internal static class SessionLayerTopologyWriter
             Conflict = true,
             Summary = summary,
         };
+}
+
+/// <summary>
+/// G614: tracked, fleet-citable retirement evidence. This deliberately lives
+/// outside the machine-local, ignored topology directory so a later ledger
+/// decision can cite entries accumulated across hosts.
+/// </summary>
+internal static class SessionLayerTopologyRetirementEvidence
+{
+    public const string RelativePath = ".intent-cli/legacy-topology-retirements.jsonl";
+
+    public static string ResolvePath(string routingRoot) => Path.GetFullPath(Path.Combine(
+        routingRoot,
+        RelativePath.Replace('/', Path.DirectorySeparatorChar)));
 }
 
 internal sealed record SessionLayerTopologyRecordRequest

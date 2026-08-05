@@ -79,10 +79,13 @@ internal static class CliRuntimeContracts
     public const int DefaultSupervisionStaleHeartbeatTimeoutMinutes = 15;
     public const int DefaultSupervisionRetryDelayMinutes = 5;
     public const int DefaultSupervisionRetryBudget = 3;
-    public const string DefaultImplementRole = "Claude";
-    public const string DefaultReviewRole = "Codex";
-    public const string DefaultInterviewRole = "Claude";
-    public const string DefaultClarifyRole = "Codex";
+    // G614: role routing defaults are logical roles, not product names. Existing
+    // explicit [roles] values (including legacy Claude/Codex mappings) remain
+    // valid and are preserved by CliConfigLoader.
+    public const string DefaultImplementRole = "implementation";
+    public const string DefaultReviewRole = "review";
+    public const string DefaultInterviewRole = "interview";
+    public const string DefaultClarifyRole = "clarify";
     public const string ConfirmPostFixWorktreeProgressPolicy = "confirm";
     public const string AutoContinuePostFixWorktreeProgressPolicy = "auto-continue";
     public const string DefaultPostFixWorktreeProgressPolicy = ConfirmPostFixWorktreeProgressPolicy;

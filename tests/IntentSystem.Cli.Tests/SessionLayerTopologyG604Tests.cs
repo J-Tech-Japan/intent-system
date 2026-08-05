@@ -186,6 +186,71 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
         Assert.Equal(beforeJson.RootElement.GetProperty("roles").GetProperty("review").GetProperty("cwd").GetString(), afterJson.RootElement.GetProperty("roles").GetProperty("review").GetProperty("cwd").GetString());
     }
 
+    [Theory]
+    [InlineData("--dry-run", "--write")]
+    [InlineData("--write", "--dry-run")]
+    public void UpdateKind_DryRunAlwaysWinsOverWriteAndPreservesRecord_G614(string firstModeFlag, string secondModeFlag)
+    {
+        const string team = "intent-cli-dev";
+        Assert.True(Record(team, "review", "w1:p1").Applied);
+        var context = CreateContext(Domain);
+        var path = NotifyRoleTopologyStore.ResolvePath(root, Domain, team);
+        var before = File.ReadAllText(path);
+
+        using var output = new StringWriter();
+        Assert.Equal(0, SessionLayerTopologyCommand.ExecuteUpdateKind(context,
+            ["--domain", Domain, "--team", team, "--role", "review", "--current-kind", "codex", "--new-kind", "copilot", "--confirm-update-kind", firstModeFlag, secondModeFlag], output));
+
+        Assert.Equal(before, File.ReadAllText(path));
+        using var result = JsonDocument.Parse(output.ToString());
+        Assert.Equal("dry-run", result.RootElement.GetProperty("mode").GetString());
+        Assert.False(result.RootElement.GetProperty("applied").GetBoolean());
+        Assert.True(result.RootElement.GetProperty("changed").GetBoolean());
+    }
+
+    [Fact]
+    public void NewTopologyMutations_OnlyAdvertiseAndAcceptJsonFormat_G614()
+    {
+        const string team = "intent-cli-dev";
+        Assert.True(Record(team, "review", "w1:p1").Applied);
+        var context = CreateContext(Domain);
+        var path = NotifyRoleTopologyStore.ResolvePath(root, Domain, team);
+        var before = File.ReadAllText(path);
+
+        using var updateMarkdown = new StringWriter();
+        Assert.Equal(1, SessionLayerTopologyCommand.ExecuteUpdateKind(context,
+            ["--domain", Domain, "--team", team, "--role", "review", "--current-kind", "codex", "--new-kind", "copilot", "--confirm-update-kind", "--dry-run", "--format", "markdown"], updateMarkdown));
+        Assert.Contains("only '--format json'", updateMarkdown.ToString(), StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllText(path));
+
+        using var retireMarkdown = new StringWriter();
+        Assert.Equal(1, SessionLayerTopologyCommand.ExecuteRetireLegacy(context,
+            ["--domain", Domain, "--team", team, "--evidence", "fleet:zero4racer", "--confirm-retire-legacy", "--write", "--format", "markdown"], retireMarkdown));
+        Assert.Contains("only '--format json'", retireMarkdown.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void G614_DocumentationAndRenderedGuideKeepAgentKindsNeutral_G614()
+    {
+        var repo = RepoVersionPolicySource.RepoRoot();
+        var english = File.ReadAllText(Path.Combine(repo, "docs", "en", "12-agent-message-orchestration.md"));
+        var japanese = File.ReadAllText(Path.Combine(repo, "docs", "ja", "12-agent-message-orchestration.md"));
+        var guide = HerdrOnlyOperatingGuide.RenderMarkdown([]);
+
+        foreach (var content in new[] { english, japanese })
+        {
+            Assert.Contains("pane move", content, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("legacy-topology-retirements.jsonl", content, StringComparison.Ordinal);
+            Assert.Contains("implementation", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("orchestrator = Claude", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("reviewer = Codex", content, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("Same-tab `herdr pane move` is unsupported", guide, StringComparison.Ordinal);
+        Assert.Contains("legacy-topology-retirements.jsonl", guide, StringComparison.Ordinal);
+        Assert.Contains("Logical role defaults are `implementation`", guide, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void RetireLegacy_RequiresCurrentRecordConfirmationAndEvidence_G614()
     {
@@ -207,7 +272,13 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
         Assert.Equal(0, SessionLayerTopologyCommand.ExecuteRetireLegacy(context,
             ["--domain", Domain, "--team", team, "--evidence", "fleet:zero4racer", "--confirm-retire-legacy", "--write"], retired));
         Assert.False(File.Exists(legacy));
-        Assert.Contains("fleet:zero4racer", File.ReadAllText(Path.Combine(root, ".intent-cli", "topology", "legacy-retirements.jsonl")), StringComparison.Ordinal);
+        var evidencePath = SessionLayerTopologyRetirementEvidence.ResolvePath(root);
+        Assert.Equal(Path.Combine(root, ".intent-cli", "legacy-topology-retirements.jsonl"), evidencePath);
+        Assert.DoesNotContain(Path.DirectorySeparatorChar + "topology" + Path.DirectorySeparatorChar, evidencePath, StringComparison.Ordinal);
+        using var evidence = JsonDocument.Parse(File.ReadAllText(evidencePath));
+        Assert.Equal("fleet:zero4racer", evidence.RootElement.GetProperty("evidence").GetString());
+        Assert.Equal(Environment.MachineName, evidence.RootElement.GetProperty("host").GetString());
+        Assert.True(evidence.RootElement.GetProperty("timestamp_utc").GetDateTimeOffset() <= DateTimeOffset.UtcNow);
     }
 
     private CliContext CreateContext(string defaultDomain) => new()

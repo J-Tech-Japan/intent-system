@@ -305,6 +305,10 @@ it only when the operator explicitly authorizes a separate role tab for a
 documented reason, such as requiring tab-level lifecycle isolation instead of
 simultaneous visibility.
 
+Same-tab `herdr pane move` is unsupported. To change a same-tab layout, recreate
+the affected pane and update the logical-role mapping; do not assume an in-place
+move preserves the role's placement.
+
 Record an operator-visible logical-role→pane-id/cwd mapping; workflows never
 hard-code pane/workspace ids. After initial workspace creation returns the first
 ids, every provisioning or mutation command must resolve its explicit non-empty
@@ -349,6 +353,21 @@ intent-cli session-layer topology retire-legacy --domain <domain> --team <team> 
 intent-cli session-layer topology validate --domain <domain> --team <team> --format json
 intent-cli session-layer topology show --domain <domain> --team <team> --format json
 ```
+
+Agent kind is whatever herdr can start: Claude, Codex, Copilot, Cursor, OpenCode,
+and others are examples, not a supported-set restriction. Logical role defaults
+are `implementation`, `review`, `interview`, and `clarify`; existing explicit
+role mappings, including legacy product-named mappings, remain valid. Both new
+mutation commands emit JSON and support only `--format json`. For `update-kind`,
+an explicit `--dry-run` takes precedence over `--write` in either flag order and
+never writes.
+
+After a successful `retire-legacy`, the CLI appends one fleet-citable entry to
+`<host-repo>/.intent-cli/legacy-topology-retirements.jsonl`, outside the ignored
+machine-local topology directory. Its defined fields are `timestamp_utc`, `host`,
+`domain`, `team`, `retired_path`, and named `evidence`, so a later ledger decision
+can cite accumulated retirements without changing the current legacy-reader
+disposition.
 
 `record` uses only values supplied by the operator. It never queries herdr,
 guesses ids, provisions resources, or repairs an existing conflict: an exact
@@ -1523,11 +1542,15 @@ delivery mode per role.
 
 Recommended defaults when inputs are incomplete:
 
-- orchestrator = Claude
-- implementer = Claude
-- reviewer = Codex
-- design = manual-inbox Codex
+- orchestrator = operator-chosen herdr-startable kind
+- implementer = operator-chosen herdr-startable kind
+- reviewer = operator-chosen herdr-startable kind
+- design = manual-inbox or monitored, using an operator-chosen herdr-startable kind
 - runtime / implementation / review receivers = monitor (when supported)
+
+These are logical-role defaults, not a product pairing. New configuration
+defaults are `implementation`, `review`, `interview`, and `clarify`; any
+existing explicit role mapping remains valid during this compatible migration.
 
 Design may be a manual-inbox receiver (reads with `inbox.sh` on demand) or a
 monitored receiver; either way it receives **only** human-decision escalations or
