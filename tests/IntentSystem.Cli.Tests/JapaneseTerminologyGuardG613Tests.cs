@@ -51,7 +51,7 @@ public sealed class JapaneseTerminologyGuardG613Tests
     private static readonly Regex HtmlId = new("""\bid\s*=\s*(['\"]).*?\1""", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex HtmlComment = new(@"<!--.*?-->", RegexOptions.Compiled);
     private static readonly Regex EnglishVerbWithJapaneseAuxiliary = new(
-        @"(?<![\p{L}\p{N}_])[a-z][a-z-]*(?![\p{L}\p{N}_-])(?=[ \t]*(?:し|します|した|して|され|せず|しない))",
+        @"(?<![\p{L}\p{N}_])[a-z][a-z-]*(?![\p{L}\p{N}_-])(?=\s*(?:し|します|した|して|され|せず|しない))",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     [Fact]
@@ -167,6 +167,16 @@ public sealed class JapaneseTerminologyGuardG613Tests
 
         Assert.Single(matches);
         Assert.Equal("split", matches[0].Value, ignoreCase: true);
+    }
+
+    [Fact]
+    public void OrchestrationReferenceG621_VerbFrameGuardSeesSoftWrappedProse()
+    {
+        var wrappedProse = $"mapping を seed{Environment.NewLine}し、次の pane を作成します。";
+        var matches = EnglishVerbWithJapaneseAuxiliary.Matches(wrappedProse).Cast<Match>().ToList();
+
+        Assert.Single(matches);
+        Assert.Equal("seed", matches[0].Value, ignoreCase: true);
     }
 
     private static IReadOnlyList<string> FindOrdinaryEnglish(string relativePath, IReadOnlyList<string> lines)

@@ -320,7 +320,7 @@ herdr workspace create --cwd <host-repo> --label <team> --no-focus
 ```
 
 この host で herdr 0.8.0 にて実測した `workspace_created` result は top-level の `workspace`、`tab`、`root_pane` を
-返すため、`workspace.workspace_id`、`tab.tab_id`、`root_pane.pane_id` から mapping を seed
+返すため、`workspace.workspace_id`、`tab.tab_id`、`root_pane.pane_id` から mapping を初期化
 し、`root_pane.cwd` を検証します。返された tab が team の通常唯一の tab です。その名前が
 `<team>` であることを保証し、必要なら返された explicit tab id を使います。
 
@@ -353,7 +353,7 @@ mutation command は実行直前に記録済み mapping から明示的で空で
 を解決し、command にその id を必ず指定します。解決結果が missing または empty なら fail
 closed とし、command を実行しません。そうしないと herdr が focus-default で他チームの
 currently focused pane を mutate する可能性があります。既存 G555 cross-project attribution
-rules が変わらず authoritative であり、別の attribution policy を再定義せずそれを reference
+rules が変わらず authoritative であり、別の attribution policy を再定義せずそれを参照
 します。herdr 外の design frontend は架空 pane ではなく reader type として記録します。
 
 この machine-scoped かつ team ごとの topology は
@@ -451,7 +451,7 @@ state を書かず、label を mode evidence として読みません。
 #### mode switch 後の manual migration review
 
 `session-layer set --write` が recorded mode を実際に変更したときは、順序付きの **manual migration
-plan** を出力します。other mode の session hooks、inbox watchers / monitors をレビュー し、続けて G601
+plan** を出力します。other mode の session hooks、inbox watchers / monitors をレビューし、続けて G601
 visibility marker を再生成してください。各項目は operator action です。intent-cli は user
 configuration を delete、rewrite、無効化しません。no-op の set は plan を出しません。
 
@@ -509,8 +509,8 @@ herdr-only を内部解決し、role mapping を検証して structured task blo
 
 **reference-first dispatch。** review の実体は committed canonical な `review-context.md` に
 置き、delegate にはその file への短い pointer だけを載せます。packet にない consideration は
-`review-context.md` に追加してプッシュし、それを参照します。pane prompt に実体を inline
-してはいけません。これは packet structure を変えるものではなく、意図どおりに使う discipline です。
+`review-context.md` に追加してプッシュし、それを参照します。pane prompt に実体をインラインで
+書いてはいけません。これは packet structure を変えるものではなく、意図どおりに使う discipline です。
 
 測定済みの限界も重要です。最小の canonical `notify delegate` envelope でも 842 文字・14 行であり、
 これ自体が paste になります。reference-first は重複する実体を減らしますが、paste-sensitive な seat の
@@ -521,7 +521,7 @@ wedge を防ぐものではありません。transport-layer の remedy は G619
 `topology update-field` を使います。後から許可された値を変更するときも、記録済みの現在値を指定して
 同じ経路を使います。`notify` は変更しない envelope をアドレス可能で永続的な
 `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` に書いてから、pane へ
-`Read task envelope: <path>` という 1 行のポインターを送ります。file は削除しないため、restart
+`Read task envelope: <path>` という 1 行のポインターを送ります。file は削除しないため、再起動
 した recipient も同じ task を読み直せます。明示的に選ぶ場合だけ `inline` を宣言し、宣言がなければ
 確立済みの inline delivery は byte-identical のままです。
 
@@ -558,7 +558,7 @@ fail closed にし、agent-name match fallback は決して行いません。
 
 dispatch ごとに fresh で予測不能な nonce を生成し、再利用や task id 単独での代用をしません。
 `pane wait-output` は既存 output を即座に検索するため、task block 内の precomposed wait needle
-がエコー され、作業開始前に false match することがあります。生成された split field により、その literal を
+がエコーされ、作業開始前に false match することがあります。生成された split field により、その literal を
 配信対象から除外します。handoff は file、commit、PR、verification log などの検査可能な
 artifact です。screen prose はそれを指す signal にすぎません。repair は現在の pane mapping を
 解決した後、同じ logical role に task id と具体的 delta を添えて戻します。どの buffer 由来でも
@@ -648,7 +648,7 @@ recorded external reader 宛ての canonical notification と、design-relevant 
 blocked / question / escalation だけを書きます。external reader 宛て delegation は `question`、
 external report は `completed|blocked|question` status を event kind
 `completion|blocked|question` へ対応付けします。pane-resident dispatch、
-routine progress、pane output、acknowledgement はここへミラー しません。この mode-independent
+routine progress、pane output、acknowledgement はここへミラーしません。この mode-independent
 channel は explicit external-reader/design boundary のままで、fallback inter-agent bus ではなく、
 `intent-cli notify`、GitHub、intent-cli workflow state の代替でもありません。
 
@@ -1669,7 +1669,7 @@ orchestrator 自身がそのチェックを実行しているからです。
 
 ### Retired: 外部 OS スケジューラの heartbeat(G526 → G539)
 
-**Retired。** G526 が追加した外部 cron/launchd の OS スケジューラ推奨は retire
+**Retired。** G526 が追加した外部 cron/launchd の OS スケジューラ推奨は廃止
 されました。理由:
 
 1. **credential-store access** — ラッパーの `gh`/agmsg 認証は、多くの場合ログイン
@@ -1697,7 +1697,7 @@ scheduler-agnostic です — cron を含む任意のスケジューラが引き
   アタッチさせる。`delivery.sh status` と ping/ack で検証。それまでは `inbox.sh` で読む。
 - **メッセージが可視でない** — queue 済みだがライブ配信されていない可能性。ロールの queue を
   `inbox.sh` で読み、`team.sh` / `delivery.sh status` を再確認し、ack 後に resend する。
-- **メッセージ送信後に receiver が開始した** — earlier なメッセージは history にあるがライブ delivery
+- **メッセージ送信後に receiver が開始した** — earlier なメッセージは history にあるがライブ配信
   されない。`inbox.sh` で読むか、receiver の ack 後に resend する。
 - **packet があるのに orchestrator が idle** — orchestrator が design の start/resume メッセージを
   受信したか（`inbox.sh`）、`worker next-action` / `intent status` が **この** domain/repo に対して
