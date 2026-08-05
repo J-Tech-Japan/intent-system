@@ -24,6 +24,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
         NotifyCommand.AgmsgScriptsDirectoryFactory = null;
         NotifyCommand.HerdrExecutableFactory = null;
         NotifyCommand.UtcNowFactory = null;
+        NotifyTaskEnvelopeStore.WriteOverride = null;
         workspace.Dispose();
     }
 
@@ -105,6 +106,70 @@ public sealed class NotifyCommandG578Tests : IDisposable
         Assert.Contains("size=", markdown, StringComparison.Ordinal);
         Assert.Contains("threshold=4096", markdown, StringComparison.Ordinal);
         Assert.Contains("remedy:", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Delegate_FileBackedRecipe_WritesTheUnchangedEnvelopeBeforeSendingOneLinePointer_G619()
+    {
+        workspace.SetMode(SessionLayerMode.HerdrOnly);
+        workspace.SetImplementationDeliveryMethod("file-backed");
+        var runner = SuccessfulRunner();
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+
+        var (exitCode, result) = workspace.Run(DelegateArgs());
+
+        Assert.Equal(0, exitCode);
+        Assert.True(result.GetProperty("delivered").GetBoolean());
+        Assert.Equal("file-backed", result.GetProperty("delivery_method").GetString());
+        var taskFile = result.GetProperty("task_file").GetString()!;
+        var pointer = result.GetProperty("delivery_pointer").GetString()!;
+        Assert.True(File.Exists(taskFile));
+        Assert.Equal(result.GetProperty("payload").GetString(), File.ReadAllText(taskFile));
+        Assert.Contains("G578-demo-demo-nonce.md", taskFile, StringComparison.Ordinal);
+        Assert.Contains("TASK G578-demo", File.ReadAllText(taskFile), StringComparison.Ordinal);
+        Assert.Contains("result-nonce: demo-nonce", File.ReadAllText(taskFile), StringComparison.Ordinal);
+        Assert.StartsWith("Read task envelope: ", pointer, StringComparison.Ordinal);
+        Assert.DoesNotContain('\n', pointer);
+        Assert.DoesNotContain('\r', pointer);
+        var prompt = Assert.Single(runner.Calls, call =>
+            call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wH:p2"]));
+        Assert.Equal(pointer, prompt.Arguments[3]);
+        Assert.DoesNotContain("TASK G578-demo", prompt.Arguments[3], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Delegate_WithoutDeliveryMethod_PreservesInlineEnvelopeByteForByte_G619()
+    {
+        workspace.SetMode(SessionLayerMode.HerdrOnly);
+        var runner = SuccessfulRunner();
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+
+        var (exitCode, result) = workspace.Run(DelegateArgs());
+
+        Assert.Equal(0, exitCode);
+        Assert.False(result.TryGetProperty("delivery_method", out _));
+        Assert.False(result.TryGetProperty("task_file", out _));
+        var prompt = Assert.Single(runner.Calls, call =>
+            call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wH:p2"]));
+        Assert.Equal(result.GetProperty("payload").GetString(), prompt.Arguments[3]);
+    }
+
+    [Fact]
+    public void Delegate_FileBackedRecipe_FailsClosedBeforeSendingPointerWhenTaskFileWriteFails_G619()
+    {
+        workspace.SetMode(SessionLayerMode.HerdrOnly);
+        workspace.SetImplementationDeliveryMethod("file-backed");
+        var runner = SuccessfulRunner();
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        NotifyTaskEnvelopeStore.WriteOverride = (path, _) => new NotifyTaskEnvelopeWriteResult(false, path, "fixture denies task file write");
+
+        var (exitCode, result) = workspace.Run(DelegateArgs());
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("task-file-write-failed", result.GetProperty("cause").GetString());
+        Assert.False(result.GetProperty("delivered").GetBoolean());
+        Assert.Empty(runner.Calls);
+        Assert.False(File.Exists(result.GetProperty("task_file").GetString()!));
     }
 
     [Fact]
@@ -501,6 +566,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
         public string AgmsgScriptsPath { get; }
         public string EventPath => Path.Combine(RootPath, ".intent-cli", "events", $"{Team}.jsonl");
         public CliContext Context { get; }
+        private string? implementationDeliveryMethod;
 
         private void WriteTopology()
         {
@@ -522,13 +588,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
                         workspace_id = "wH",
                         pane_id = "wH:p1",
                     },
-                    ["implementation"] = new
-                    {
-                        resident = "herdr",
-                        kind = "copilot",
-                        workspace_id = "wH",
-                        pane_id = "wH:p2",
-                    },
+                    ["implementation"] = ImplementationRole(),
                     ["review"] = new
                     {
                         resident = "herdr",
@@ -540,6 +600,29 @@ public sealed class NotifyCommandG578Tests : IDisposable
             File.WriteAllText(
                 Path.Combine(RootPath, NotifyRoleTopologyStore.RelativePath.Replace('/', Path.DirectorySeparatorChar)),
                 JsonSerializer.Serialize(topology));
+        }
+
+        public void SetImplementationDeliveryMethod(string? deliveryMethod)
+        {
+            implementationDeliveryMethod = deliveryMethod;
+            WriteTopology();
+        }
+
+        private object ImplementationRole()
+        {
+            var role = new Dictionary<string, object>
+            {
+                ["resident"] = "herdr",
+                ["kind"] = "copilot",
+                ["workspace_id"] = "wH",
+                ["pane_id"] = "wH:p2",
+            };
+            if (implementationDeliveryMethod is not null)
+            {
+                role["delivery_method"] = implementationDeliveryMethod;
+            }
+
+            return role;
         }
 
         public void SetMode(string mode)

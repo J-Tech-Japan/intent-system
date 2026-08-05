@@ -182,6 +182,51 @@ internal static class NotifyCommand
         var inlinePayloadWarning = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? ResolveInlinePayloadWarning(options, payload)
             : null;
+        var envelopeDelivery = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+            ? NotifyTaskEnvelopeDelivery.Resolve(options, payload)
+            : NotifyTaskEnvelopeDelivery.Inline(payload);
+        if (!envelopeDelivery.Resolved)
+        {
+            Emit(writer, options.Format, FailureResult(
+                operation,
+                options,
+                resolution.Mode,
+                envelopeDelivery.Cause!,
+                envelopeDelivery.Summary,
+                payload,
+                reportCommand,
+                modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
+                preflight: preflight,
+                inlinePayloadWarning: inlinePayloadWarning));
+            return 1;
+        }
+
+        if (envelopeDelivery.FileBacked && options.Write)
+        {
+            var write = NotifyTaskEnvelopeStore.Write(
+                options.RoutingRoot!, options.Domain!, options.Team!, options.TaskId!, options.ResultNonce!, payload);
+            if (!write.Written)
+            {
+                Emit(writer, options.Format, FailureResult(
+                    operation,
+                    options,
+                    resolution.Mode,
+                    "task-file-write-failed",
+                    $"Could not write the file-backed task envelope before notifying role '{options.ToRole}': {write.Error} "
+                    + "No pointer was sent; repair host task-file access and retry notify.",
+                    payload,
+                    reportCommand,
+                    modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
+                    preflight: preflight,
+                    inlinePayloadWarning: inlinePayloadWarning,
+                    deliveryMethod: NotifyTaskEnvelopeDelivery.FileBackedMethod,
+                    taskFile: write.Path,
+                    deliveryPointer: envelopeDelivery.Pointer));
+                return 1;
+            }
+
+            envelopeDelivery = envelopeDelivery with { TaskFile = write.Path };
+        }
 
         var runner = ProcessRunnerFactory?.Invoke() ?? new NotifyProcessRunner();
         var transport = string.Equals(resolution.Mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal)
@@ -201,7 +246,7 @@ internal static class NotifyCommand
             options.FromRole!,
             options.ToRole!,
             roles,
-            payload,
+            envelopeDelivery.TransportPayload,
             options.Write);
         var deliveryPreflight = delivery.ActivePhase is null
             ? preflight
@@ -227,7 +272,10 @@ internal static class NotifyCommand
                 workingTransition: delivery.WorkingTransition,
                 settleOutcome: delivery.SettleOutcome,
                 resendPermitted: delivery.ResendPermitted,
-                inlinePayloadWarning: inlinePayloadWarning));
+                inlinePayloadWarning: inlinePayloadWarning,
+                deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
+                taskFile: envelopeDelivery.TaskFile,
+                deliveryPointer: envelopeDelivery.ResultPointer));
             return 1;
         }
 
@@ -252,7 +300,10 @@ internal static class NotifyCommand
                     reportCommand,
                     modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
                     preflight: deliveryPreflight,
-                    inlinePayloadWarning: inlinePayloadWarning));
+                    inlinePayloadWarning: inlinePayloadWarning,
+                    deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
+                    taskFile: envelopeDelivery.TaskFile,
+                    deliveryPointer: envelopeDelivery.ResultPointer));
                 return 1;
             }
         }
@@ -284,7 +335,10 @@ internal static class NotifyCommand
             workingTransition: delivery.WorkingTransition,
             settleOutcome: delivery.SettleOutcome,
             resendPermitted: delivery.ResendPermitted,
-            inlinePayloadWarning: inlinePayloadWarning));
+            inlinePayloadWarning: inlinePayloadWarning,
+            deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
+            taskFile: envelopeDelivery.TaskFile,
+            deliveryPointer: envelopeDelivery.ResultPointer));
         return 0;
     }
 
@@ -467,7 +521,10 @@ internal static class NotifyCommand
         string? workingTransition = null,
         string? settleOutcome = null,
         bool? resendPermitted = null,
-        NotifyInlinePayloadWarning? inlinePayloadWarning = null) => new()
+        NotifyInlinePayloadWarning? inlinePayloadWarning = null,
+        string? deliveryMethod = null,
+        string? taskFile = null,
+        string? deliveryPointer = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot!,
@@ -490,6 +547,9 @@ internal static class NotifyCommand
             SettleOutcome = settleOutcome,
             ResendPermitted = resendPermitted,
             InlinePayloadWarning = inlinePayloadWarning,
+            DeliveryMethod = deliveryMethod,
+            TaskFile = taskFile,
+            DeliveryPointer = deliveryPointer,
             Cause = null,
             Payload = payload,
             ReportCommand = reportCommand,
@@ -510,7 +570,10 @@ internal static class NotifyCommand
         string? workingTransition = null,
         string? settleOutcome = null,
         bool? resendPermitted = null,
-        NotifyInlinePayloadWarning? inlinePayloadWarning = null) => new()
+        NotifyInlinePayloadWarning? inlinePayloadWarning = null,
+        string? deliveryMethod = null,
+        string? taskFile = null,
+        string? deliveryPointer = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot ?? string.Empty,
@@ -533,6 +596,9 @@ internal static class NotifyCommand
             SettleOutcome = settleOutcome,
             ResendPermitted = resendPermitted,
             InlinePayloadWarning = inlinePayloadWarning,
+            DeliveryMethod = deliveryMethod,
+            TaskFile = taskFile,
+            DeliveryPointer = deliveryPointer,
             Cause = cause,
             Payload = payload,
             ReportCommand = reportCommand,
@@ -583,6 +649,12 @@ internal static class NotifyCommand
         {
             writer.WriteLine($"- inline payload warning: profile={warning.Profile}; size={warning.PayloadChars} chars; "
                 + $"threshold={warning.ThresholdChars} chars; remedy: {warning.Remedy}");
+        }
+        if (result.DeliveryMethod is not null)
+        {
+            writer.WriteLine($"- envelope delivery method: {result.DeliveryMethod}");
+            writer.WriteLine($"- task file: `{result.TaskFile}`");
+            writer.WriteLine($"- pane pointer: `{result.DeliveryPointer}`");
         }
         if (result.ReportCommand is not null)
         {
@@ -814,6 +886,9 @@ internal sealed record NotifyResult
     [JsonPropertyName("settle_outcome")] public string? SettleOutcome { get; init; }
     [JsonPropertyName("resend_permitted")] public bool? ResendPermitted { get; init; }
     [JsonPropertyName("inline_payload_warning")] public NotifyInlinePayloadWarning? InlinePayloadWarning { get; init; }
+    [JsonPropertyName("delivery_method")] public string? DeliveryMethod { get; init; }
+    [JsonPropertyName("task_file")] public string? TaskFile { get; init; }
+    [JsonPropertyName("delivery_pointer")] public string? DeliveryPointer { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("payload")] public string? Payload { get; init; }
     [JsonPropertyName("report_command")] public string? ReportCommand { get; init; }

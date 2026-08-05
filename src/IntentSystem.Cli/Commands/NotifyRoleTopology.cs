@@ -10,6 +10,7 @@ internal sealed record NotifyRecordedRole(
     string? Reader,
     string? Cwd,
     string? Kind,
+    string? DeliveryMethod,
     string? Frontend)
 {
     public const string HerdrResident = "herdr";
@@ -249,6 +250,7 @@ internal static class NotifyRoleTopologyStore
                     ReadString(property.Value, "reader"),
                     ReadString(property.Value, "cwd"),
                     ReadString(property.Value, "kind"),
+                    ReadString(property.Value, "delivery_method"),
                     ReadString(property.Value, "frontend")));
             }
 

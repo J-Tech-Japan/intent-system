@@ -219,6 +219,11 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
   still measures 842 characters over 14 lines and can itself be pasted. It
   reduces duplication, not a paste-sensitive wedge; G619 owns the transport-layer
   remedy.
+- **Task-envelope delivery method.** A paste-sensitive herdr seat declares
+  `delivery_method: file-backed`: `notify` writes the unchanged envelope under
+  host `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` before sending
+  the pane one line, `Read task envelope: <path>`. Declare `inline` explicitly
+  when desired; an absent declaration preserves existing inline delivery.
 - **Startup gates.** Folder trust and autopilot-enable are operator provisioning
   gates; launch flags bypass neither. The autopilot-enable dialog appears at the
   **first task** even when launch used `--mode autopilot`. With
@@ -550,6 +555,14 @@ The measured limit matters: a minimal canonical `notify delegate` envelope is
 842 characters over 14 lines and is itself a paste. Reference-first reduces
 duplicated substance; it does not prevent a paste-sensitive seat from wedging.
 G619 owns the transport-layer remedy.
+
+For a paste-sensitive herdr seat, declare `delivery_method: file-backed` in its
+recipe. `notify` writes the unchanged envelope to an addressable durable task
+file under `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` before it
+sends the pane the single-line `Read task envelope: <path>` pointer. The file is
+not deleted, so a restarted recipient can read the same task. Declare `inline`
+only to choose it explicitly: without a declaration, the established inline
+delivery remains byte-identical.
 
 The recipient recipe's `inline_payload_warning_chars` profile is **advisory**,
 not a universal safe-paste limit. When a delegate's inline payload exceeds its

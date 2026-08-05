@@ -2197,6 +2197,7 @@ internal static class GuideOrchestratorThreadCommand
                     "the maximum autonomous continuation bound",
                     "startup trust and autopilot/permission gates the operator must answer",
                     "a named advisory inline-payload warning profile and threshold, never a safe-paste guarantee",
+                    "a declared task-envelope delivery_method (inline or file-backed; undeclared remains inline)",
                     "the silent-denial semantics and the READY/review evidence that proves them",
                 },
                 CentralAutopilotSupervisionRule =
@@ -2227,6 +2228,11 @@ internal static class GuideOrchestratorThreadCommand
                         + "Reference-first dispatch keeps repeated review substance in committed `review-context.md`, but a "
                         + "minimal canonical `notify delegate` envelope still measures 842 characters over 14 lines and can "
                         + "itself be pasted: it reduces duplication, not a paste-sensitive wedge. G619 owns the transport-layer remedy.",
+                    DeliveryMethod =
+                        "Declare `delivery_method: file-backed` for a paste-sensitive herdr seat. `notify` writes the "
+                        + "unchanged envelope to durable host `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` before "
+                        + "sending one line, `Read task envelope: <path>`. Declare `inline` to opt in explicitly; an absent "
+                        + "declaration preserves existing inline delivery.",
                     StartupGates =
                         "Folder trust and autopilot-enable are operator provisioning gates; neither is bypassed by "
                         + "launch flags. The autopilot-enable dialog appears at the FIRST TASK even when `--mode autopilot` "
@@ -3514,6 +3520,7 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **role-derived roots** — {unattended.CopilotRecipe.RoleDerivedRoots}");
         writer.WriteLine($"- **continuation bound** — {unattended.CopilotRecipe.ContinuationBound}");
         writer.WriteLine($"- **inline-payload advisory** — {unattended.CopilotRecipe.InlinePayloadWarningProfile}");
+        writer.WriteLine($"- **task-envelope delivery method** — {unattended.CopilotRecipe.DeliveryMethod}");
         writer.WriteLine($"- **startup gates** — {unattended.CopilotRecipe.StartupGates}");
         writer.WriteLine($"- **prohibited blanket permissions** — {unattended.CopilotRecipe.ProhibitedBlanket}");
         writer.WriteLine();
@@ -5514,6 +5521,9 @@ internal sealed record OrchestratorCopilotUnattendedRecipe
 
     [JsonPropertyName("inline_payload_warning_profile")]
     public required string InlinePayloadWarningProfile { get; init; }
+
+    [JsonPropertyName("delivery_method")]
+    public required string DeliveryMethod { get; init; }
 
     [JsonPropertyName("startup_gates")]
     public required string StartupGates { get; init; }
