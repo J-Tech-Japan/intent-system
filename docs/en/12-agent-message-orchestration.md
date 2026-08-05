@@ -209,6 +209,10 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
   reporting surface. Do not add unrelated developer-machine roots.
 - **Continuation bound.** Keep `--max-autopilot-continues 10` explicit. Any
   different bound is an operator decision recorded with the recipe.
+- **Inline-payload advisory.** Profile `copilot-autopilot-observed-paste-risk`
+  declares `inline_payload_warning_chars: 4096`. It is advisory only: a payload
+  above it is likely pasted rather than typed, while a payload below it is not
+  promised safe because the real limit is terminal- and agent-dependent.
 - **Startup gates.** Folder trust and autopilot-enable are operator provisioning
   gates; launch flags bypass neither. The autopilot-enable dialog appears at the
   **first task** even when launch used `--mode autopilot`. With
@@ -529,6 +533,21 @@ Use the [canonical notify workflow](#canonical-notify-workflow): run
 `intent-cli notify delegate ...` with the target logical role. The CLI resolves
 herdr-only internally, validates the role mapping, and generates the structured
 task block; do not hand-write `herdr agent prompt`.
+
+**Reference-first dispatch.** Review substance belongs in the committed canonical
+`review-context.md`; the delegate carries a terse pointer to that file. Add any
+consideration outside the packet to `review-context.md`, push it, then reference
+it — do not inline the substance into a pane prompt. This is the packet structure
+working as intended, not a new packet meaning.
+
+The recipient recipe's `inline_payload_warning_chars` profile is **advisory**,
+not a universal safe-paste limit. When a delegate's inline payload exceeds its
+resolved threshold, `notify` warns with the payload size, threshold, and the
+reference-first remedy in both human and machine output, but still delivers the
+same payload. It never refuses or truncates it. Observed on a peer team: a large
+paste can leave broken bracketed-paste state in a terminal and terminate some
+agent processes; recover with a fresh agent start. This is an observation, not a
+universal size limit or a claim about every terminal or agent.
 
 For a settled pane, notify first uses bounded `agent prompt --wait --until
 working` semantics, then a separate bounded `agent wait` for

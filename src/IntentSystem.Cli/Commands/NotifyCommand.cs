@@ -15,6 +15,10 @@ internal static class NotifyCommand
     private const string EscalationEventKind = "escalation";
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
+    private const string CopilotObservedPasteRiskProfile = "copilot-autopilot-observed-paste-risk";
+    private const int CopilotObservedPasteRiskWarningChars = 4096;
+    private const string ReferenceFirstRemedy =
+        "Use reference-first dispatch: put review substance in committed canonical review-context.md, push it, and delegate a terse pointer.";
 
     private const string DelegateUsage =
         "Usage: intent-cli notify delegate --domain <d> --team <t> --from <role> --to <role> --report-to <role> "
@@ -175,6 +179,9 @@ internal static class NotifyCommand
         var payload = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? BuildDelegatePayload(options, reportCommand!)
             : BuildReportPayload(options);
+        var inlinePayloadWarning = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+            ? ResolveInlinePayloadWarning(options, payload)
+            : null;
 
         var runner = ProcessRunnerFactory?.Invoke() ?? new NotifyProcessRunner();
         var transport = string.Equals(resolution.Mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal)
@@ -219,7 +226,8 @@ internal static class NotifyCommand
                 receiverStateOutcome: delivery.ReceiverStateOutcome,
                 workingTransition: delivery.WorkingTransition,
                 settleOutcome: delivery.SettleOutcome,
-                resendPermitted: delivery.ResendPermitted));
+                resendPermitted: delivery.ResendPermitted,
+                inlinePayloadWarning: inlinePayloadWarning));
             return 1;
         }
 
@@ -243,7 +251,8 @@ internal static class NotifyCommand
                     payload,
                     reportCommand,
                     modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
-                    preflight: deliveryPreflight));
+                    preflight: deliveryPreflight,
+                    inlinePayloadWarning: inlinePayloadWarning));
                 return 1;
             }
         }
@@ -274,7 +283,8 @@ internal static class NotifyCommand
             receiverStateOutcome: delivery.ReceiverStateOutcome,
             workingTransition: delivery.WorkingTransition,
             settleOutcome: delivery.SettleOutcome,
-            resendPermitted: delivery.ResendPermitted));
+            resendPermitted: delivery.ResendPermitted,
+            inlinePayloadWarning: inlinePayloadWarning));
         return 0;
     }
 
@@ -421,6 +431,27 @@ internal static class NotifyCommand
         summary = NotifyEventWriter.NormalizeSummary(options.Summary!),
     });
 
+    private static NotifyInlinePayloadWarning? ResolveInlinePayloadWarning(NotifyOptions options, string payload)
+    {
+        var topology = NotifyRoleTopologyStore.Resolve(options.RoutingRoot!, options.Domain!, options.Team!);
+        if (!topology.Resolved
+            || topology.Topology is null
+            || !topology.Topology.Roles.TryGetValue(options.ToRole!, out var recipient)
+            || !string.Equals(recipient.Kind, "copilot", StringComparison.OrdinalIgnoreCase)
+            || payload.Length <= CopilotObservedPasteRiskWarningChars)
+        {
+            return null;
+        }
+
+        return new NotifyInlinePayloadWarning
+        {
+            Profile = CopilotObservedPasteRiskProfile,
+            PayloadChars = payload.Length,
+            ThresholdChars = CopilotObservedPasteRiskWarningChars,
+            Remedy = ReferenceFirstRemedy,
+        };
+    }
+
     private static NotifyResult SuccessResult(
         string operation,
         NotifyOptions options,
@@ -435,7 +466,8 @@ internal static class NotifyCommand
         string? receiverStateOutcome = null,
         string? workingTransition = null,
         string? settleOutcome = null,
-        bool? resendPermitted = null) => new()
+        bool? resendPermitted = null,
+        NotifyInlinePayloadWarning? inlinePayloadWarning = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot!,
@@ -457,6 +489,7 @@ internal static class NotifyCommand
             WorkingTransition = workingTransition,
             SettleOutcome = settleOutcome,
             ResendPermitted = resendPermitted,
+            InlinePayloadWarning = inlinePayloadWarning,
             Cause = null,
             Payload = payload,
             ReportCommand = reportCommand,
@@ -476,7 +509,8 @@ internal static class NotifyCommand
         string? receiverStateOutcome = null,
         string? workingTransition = null,
         string? settleOutcome = null,
-        bool? resendPermitted = null) => new()
+        bool? resendPermitted = null,
+        NotifyInlinePayloadWarning? inlinePayloadWarning = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot ?? string.Empty,
@@ -498,6 +532,7 @@ internal static class NotifyCommand
             WorkingTransition = workingTransition,
             SettleOutcome = settleOutcome,
             ResendPermitted = resendPermitted,
+            InlinePayloadWarning = inlinePayloadWarning,
             Cause = cause,
             Payload = payload,
             ReportCommand = reportCommand,
@@ -543,6 +578,11 @@ internal static class NotifyCommand
         if (result.ResendPermitted is not null)
         {
             writer.WriteLine($"- resend permitted: {result.ResendPermitted.Value.ToString().ToLowerInvariant()}");
+        }
+        if (result.InlinePayloadWarning is { } warning)
+        {
+            writer.WriteLine($"- inline payload warning: profile={warning.Profile}; size={warning.PayloadChars} chars; "
+                + $"threshold={warning.ThresholdChars} chars; remedy: {warning.Remedy}");
         }
         if (result.ReportCommand is not null)
         {
@@ -773,10 +813,19 @@ internal sealed record NotifyResult
     [JsonPropertyName("working_transition")] public string? WorkingTransition { get; init; }
     [JsonPropertyName("settle_outcome")] public string? SettleOutcome { get; init; }
     [JsonPropertyName("resend_permitted")] public bool? ResendPermitted { get; init; }
+    [JsonPropertyName("inline_payload_warning")] public NotifyInlinePayloadWarning? InlinePayloadWarning { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("payload")] public string? Payload { get; init; }
     [JsonPropertyName("report_command")] public string? ReportCommand { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
+}
+
+internal sealed record NotifyInlinePayloadWarning
+{
+    [JsonPropertyName("profile")] public required string Profile { get; init; }
+    [JsonPropertyName("payload_chars")] public required int PayloadChars { get; init; }
+    [JsonPropertyName("threshold_chars")] public required int ThresholdChars { get; init; }
+    [JsonPropertyName("remedy")] public required string Remedy { get; init; }
 }
 
 internal static class NotifyEventWriter

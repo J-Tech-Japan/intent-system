@@ -2004,6 +2004,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("--allow-all-tools --add-dir <role-work-root> [--add-dir <host-routing-root>]", output, StringComparison.Ordinal);
         Assert.Contains("intent-cli notify report", output, StringComparison.Ordinal);
         Assert.Contains("--max-autopilot-continues 10", output, StringComparison.Ordinal);
+        Assert.Contains("inline_payload_warning_chars: 4096", output, StringComparison.Ordinal);
+        Assert.Contains("ADVISORY only", output, StringComparison.Ordinal);
         Assert.Contains("FIRST TASK", output, StringComparison.Ordinal);
         Assert.Contains("Continue with limited permissions", output, StringComparison.Ordinal);
         Assert.Contains("NEVER choose `Enable all permissions`", output, StringComparison.Ordinal);
@@ -2075,11 +2077,12 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("no authorization makes them answerable", authorityBoundary, StringComparison.Ordinal);
 
         var unattended = provisioning.GetProperty("unattended_launch_recipes");
-        Assert.Equal(5, unattended.GetProperty("required_recipe_fields").GetArrayLength());
+        Assert.Equal(6, unattended.GetProperty("required_recipe_fields").GetArrayLength());
         Assert.Contains("silently auto-denied", unattended.GetProperty("central_autopilot_supervision_rule").GetString(), StringComparison.Ordinal);
         Assert.Contains("--add-dir <role-work-root>", unattended.GetProperty("copilot_recipe").GetProperty("invocation").GetString(), StringComparison.Ordinal);
         Assert.Contains("intent-cli notify report", unattended.GetProperty("copilot_recipe").GetProperty("role_derived_roots").GetString(), StringComparison.Ordinal);
         Assert.Contains("--yolo", unattended.GetProperty("copilot_recipe").GetProperty("prohibited_blanket").GetString(), StringComparison.Ordinal);
+        Assert.Contains("inline_payload_warning_chars: 4096", unattended.GetProperty("copilot_recipe").GetProperty("inline_payload_warning_profile").GetString(), StringComparison.Ordinal);
         Assert.Contains("out-of-scope action is denied", unattended.GetProperty("ready_branch").GetString(), StringComparison.Ordinal);
 
         var roleInitialization = provisioning.GetProperty("role_initialization");

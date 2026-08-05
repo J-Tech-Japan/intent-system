@@ -12,7 +12,7 @@ public sealed class HerdrPaneTopologyG586Tests : IDisposable
     private const string Domain = "intent-cli";
     private const string Team = "intent-cli-dev";
     private const string Repo = "J-Tech-Japan/intent-system";
-    private const string G594AgmsgBaselineSha256 = "2d8d004cfd829b788a22870c9025cde0b2772fcf069d3307b85e726372c434f1";
+    private const string G594AgmsgBaselineSha256 = "7bd1e0ab22b28311b90a07d9718f1d3df59286950638d7d6037b0af6565fa35c";
 
     private readonly string root = Directory.CreateTempSubdirectory("herdr-topology-g586-").FullName;
 
