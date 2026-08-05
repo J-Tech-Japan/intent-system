@@ -37,6 +37,7 @@ primary なのは transport ではなく 4 スレッドモデルです。
 7. [ループがおかしいときの復旧](07-recovery.md)
 8. [コマンドリファレンス](08-command-reference.md) — agent 向け・パワーユーザー向けコマンド一覧
 9. [開発者リファレンス](09-developer-reference.md) — パッケージ化された実行、preview チャンネル、バージョンフロー
+10. [1.0 compatibility promise](1.0-compatibility-promise.md) — covered machine surface、deprecation rule、ledger
 
 ## Intent Storming とは
 

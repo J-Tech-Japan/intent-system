@@ -38,6 +38,7 @@ model, not either transport.
 7. [Recover when a loop looks wrong](07-recovery.md)
 8. [Command reference](08-command-reference.md) — agent-facing and power-user command surfaces
 9. [Developer reference](09-developer-reference.md) — packaged invocation, preview channel, version flow
+10. [1.0 compatibility promise](1.0-compatibility-promise.md) — covered machine surfaces, deprecation rule, and ledger
 
 ## What is Intent Storming?
 
