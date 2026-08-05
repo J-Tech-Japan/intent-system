@@ -206,6 +206,107 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
         Assert.Equal(beforeJson.RootElement.GetProperty("roles").GetProperty("review").GetProperty("cwd").GetString(), afterJson.RootElement.GetProperty("roles").GetProperty("review").GetProperty("cwd").GetString());
     }
 
+    [Fact]
+    public void UpdateField_DeclaresOnlyAllowedAbsentDeliveryMethodAndPreservesSiblingBytes_G620()
+    {
+        const string team = "intent-cli-dev";
+        Assert.True(Record(team, "review", "w1:p1").Applied);
+        var context = CreateContext(Domain);
+        var path = NotifyRoleTopologyStore.ResolvePath(root, Domain, team);
+        var before = File.ReadAllText(path);
+
+        using var missingConfirmation = new StringWriter();
+        Assert.Equal(1, SessionLayerTopologyCommand.ExecuteUpdateField(context,
+            ["--domain", Domain, "--team", team, "--role", "review", "--field", "delivery_method", "--current", "absent", "--new", "file-backed", "--write"], missingConfirmation));
+        Assert.Equal(before, File.ReadAllText(path));
+
+        using var output = new StringWriter();
+        Assert.Equal(0, SessionLayerTopologyCommand.ExecuteUpdateField(context,
+            ["--domain", Domain, "--team", team, "--role", "review", "--field", "delivery_method", "--current", "absent", "--new", "file-backed", "--confirm-update-field", "--write"], output));
+
+        using var beforeJson = JsonDocument.Parse(before);
+        using var afterJson = JsonDocument.Parse(File.ReadAllText(path));
+        var beforeRole = beforeJson.RootElement.GetProperty("roles").GetProperty("review");
+        var afterRole = afterJson.RootElement.GetProperty("roles").GetProperty("review");
+        Assert.Equal("file-backed", afterRole.GetProperty("delivery_method").GetString());
+        foreach (var sibling in beforeRole.EnumerateObject())
+            Assert.Equal(sibling.Value.GetRawText(), afterRole.GetProperty(sibling.Name).GetRawText());
+
+        using var result = JsonDocument.Parse(output.ToString());
+        Assert.Equal("delivery_method", result.RootElement.GetProperty("field").GetString());
+        Assert.True(result.RootElement.GetProperty("applied").GetBoolean());
+        Assert.False(result.RootElement.GetProperty("conflict").GetBoolean());
+
+        var strictRecord = SessionLayerTopologyWriter.Record(root, new SessionLayerTopologyRecordRequest
+        {
+            Domain = Domain, Team = team, Role = "review", Resident = NotifyRecordedRole.HerdrResident,
+            WorkspaceId = "w1", PaneId = "w1:p1", Cwd = "/machine-local", Kind = "codex",
+            DeliveryMethod = "inline", Write = true, Format = "json",
+        });
+        Assert.True(strictRecord.Conflict);
+        Assert.Contains("conflict", strictRecord.Summary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void UpdateField_RefusesBothStaleCurrentDirectionsAndUnregisteredNames_G620()
+    {
+        const string team = "intent-cli-dev";
+        Assert.True(Record(team, "review", "w1:p1").Applied);
+        var context = CreateContext(Domain);
+        var path = NotifyRoleTopologyStore.ResolvePath(root, Domain, team);
+        var before = File.ReadAllText(path);
+
+        using var valueWhenAbsent = new StringWriter();
+        Assert.Equal(1, SessionLayerTopologyCommand.ExecuteUpdateField(context,
+            ["--domain", Domain, "--team", team, "--role", "review", "--field", "delivery_method", "--current", "inline", "--new", "file-backed", "--confirm-update-field", "--write"], valueWhenAbsent));
+        Assert.Contains("absent", valueWhenAbsent.ToString(), StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllText(path));
+
+        using var declare = new StringWriter();
+        Assert.Equal(0, SessionLayerTopologyCommand.ExecuteUpdateField(context,
+            ["--domain", Domain, "--team", team, "--role", "review", "--field", "delivery_method", "--current", "absent", "--new", "inline", "--confirm-update-field", "--write"], declare));
+        var withDeclaredValue = File.ReadAllText(path);
+
+        using var absentWhenValue = new StringWriter();
+        Assert.Equal(1, SessionLayerTopologyCommand.ExecuteUpdateField(context,
+            ["--domain", Domain, "--team", team, "--role", "review", "--field", "delivery_method", "--current", "absent", "--new", "file-backed", "--confirm-update-field", "--write"], absentWhenValue));
+        Assert.Contains("inline", absentWhenValue.ToString(), StringComparison.Ordinal);
+        Assert.Equal(withDeclaredValue, File.ReadAllText(path));
+
+        foreach (var field in new[] { "kind", "roles.review.delivery_method" })
+        {
+            using var unregistered = new StringWriter();
+            Assert.Equal(1, SessionLayerTopologyCommand.ExecuteUpdateField(context,
+                ["--domain", Domain, "--team", team, "--role", "review", "--field", field, "--current", "absent", "--new", "file-backed", "--confirm-update-field", "--write"], unregistered));
+            using var refusal = JsonDocument.Parse(unregistered.ToString());
+            Assert.Equal(field, refusal.RootElement.GetProperty("field").GetString());
+            Assert.Contains("registry", refusal.RootElement.GetProperty("summary").GetString(), StringComparison.Ordinal);
+            Assert.Equal(withDeclaredValue, File.ReadAllText(path));
+        }
+    }
+
+    [Theory]
+    [InlineData("--dry-run", "--write")]
+    [InlineData("--write", "--dry-run")]
+    public void UpdateField_DryRunAlwaysWinsAndUsesTheSameAbsentComparison_G620(string firstModeFlag, string secondModeFlag)
+    {
+        const string team = "intent-cli-dev";
+        Assert.True(Record(team, "review", "w1:p1").Applied);
+        var context = CreateContext(Domain);
+        var path = NotifyRoleTopologyStore.ResolvePath(root, Domain, team);
+        var before = File.ReadAllText(path);
+
+        using var output = new StringWriter();
+        Assert.Equal(0, SessionLayerTopologyCommand.ExecuteUpdateField(context,
+            ["--domain", Domain, "--team", team, "--role", "review", "--field", "delivery_method", "--current", "absent", "--new", "file-backed", "--confirm-update-field", firstModeFlag, secondModeFlag], output));
+
+        Assert.Equal(before, File.ReadAllText(path));
+        using var result = JsonDocument.Parse(output.ToString());
+        Assert.Equal("dry-run", result.RootElement.GetProperty("mode").GetString());
+        Assert.False(result.RootElement.GetProperty("applied").GetBoolean());
+        Assert.True(result.RootElement.GetProperty("changed").GetBoolean());
+    }
+
     [Theory]
     [InlineData("--dry-run", "--write")]
     [InlineData("--write", "--dry-run")]
@@ -241,6 +342,12 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
         Assert.Equal(1, SessionLayerTopologyCommand.ExecuteUpdateKind(context,
             ["--domain", Domain, "--team", team, "--role", "review", "--current-kind", "codex", "--new-kind", "copilot", "--confirm-update-kind", "--dry-run", "--format", "markdown"], updateMarkdown));
         Assert.Contains("only '--format json'", updateMarkdown.ToString(), StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllText(path));
+
+        using var updateFieldMarkdown = new StringWriter();
+        Assert.Equal(1, SessionLayerTopologyCommand.ExecuteUpdateField(context,
+            ["--domain", Domain, "--team", team, "--role", "review", "--field", "delivery_method", "--current", "absent", "--new", "file-backed", "--confirm-update-field", "--dry-run", "--format", "markdown"], updateFieldMarkdown));
+        Assert.Contains("only '--format json'", updateFieldMarkdown.ToString(), StringComparison.Ordinal);
         Assert.Equal(before, File.ReadAllText(path));
 
         using var retireMarkdown = new StringWriter();

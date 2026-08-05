@@ -206,8 +206,8 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
   remedy として扱ってはいけません。最小の canonical `notify delegate` envelope でも 842 文字・14 行で、
   これ自体が paste になります。これは重複を減らす discipline であり、paste-sensitive な wedge を防ぐ
   ものではありません。transport-layer の remedy は G619 が担当します。
-- **task-envelope delivery method。** paste-sensitive な herdr seat には
-  `delivery_method: file-backed` を宣言します。`notify` は unchanged な envelope を host の
+- **task-envelope delivery method。** existing record を持つ paste-sensitive な herdr seat では、
+  registry-limited topology field update で `delivery_method: file-backed` を宣言します。`notify` は unchanged な envelope を host の
   `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` に書いてから、pane には
   `Read task envelope: <path>` という 1 行だけを送ります。明示的に選ぶなら `inline` を宣言します。
   宣言がなければ既存の inline delivery をそのまま維持します。
@@ -381,6 +381,7 @@ foreign-workspace-only name、ambiguous mapping は prompt / append なしで fa
 intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
 intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
 intent-cli session-layer topology update-kind --domain <domain> --team <team> --role <role> --current-kind <kind> --new-kind <kind> --confirm-update-kind --write
+intent-cli session-layer topology update-field --domain <domain> --team <team> --role <role> --field delivery_method --current <absent|inline|file-backed> --new <inline|file-backed> --confirm-update-field --write
 intent-cli session-layer topology retire-legacy --domain <domain> --team <team> --evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write
 intent-cli session-layer topology validate --domain <domain> --team <team> --format json
 intent-cli session-layer topology show --domain <domain> --team <team> --format json
@@ -389,7 +390,7 @@ intent-cli session-layer topology show --domain <domain> --team <team> --format 
 agent kind は herdr が起動できる任意の kind です。Claude、Codex、Copilot、Cursor、OpenCode などは
 例であり、supported-set の制約ではありません。logical role の既定値は `implementation`、`review`、
 `interview`、`clarify` です。legacy の product 名を含め、既存の明示的な role mapping はそのまま
-有効です。新しい 2 つの mutation command は JSON を出力し、`--format json` だけをサポートします。
+有効です。3 つの update/retire mutation command は JSON を出力し、`--format json` だけをサポートします。
 `update-kind` では明示した `--dry-run` が flag の順序にかかわらず `--write` より優先され、決して
 書き込みません。
 
@@ -409,6 +410,14 @@ herdr query を行いません。mapping が存在するか herdr-only が必要
 もこの health を載せ、notify の topology refusal は remedy として `topology validate` / `record`
 を示します。不正状態は常に fail closed のままです。これらは knowledge と controlled writer を
 追加するものであり、fallback は追加しません。
+
+`update-field` は、recorded role が一度も持たなかった field を宣言する場合、または既に記録された値を
+変更する場合のための狭い経路です。role、field 名、stated current value、新しい値、explicit confirmation、
+`--dry-run` または `--write` が必要です。field が実際に absent の場合に限り `--current absent` と指定します。
+古い認識にもとづく指定は両方向で refuse されます。registry が最初に許可するのは `delivery_method` だけなので、
+unknown または dotted name は任意の JSON path を編集できないよう refuse されます。この command が
+変更するのはその field だけです。`record` の conflict refusal は緩和されず、異なる shape の re-record は
+引き続き refuse され、force flag もありません。
 
 #### 可視な生成済み mode marker
 
@@ -507,8 +516,10 @@ herdr-only を内部解決し、role mapping を検証して structured task blo
 これ自体が paste になります。reference-first は重複する実体を減らしますが、paste-sensitive な seat の
 wedge を防ぐものではありません。transport-layer の remedy は G619 が担当します。
 
-paste-sensitive な herdr seat では、その recipe に `delivery_method: file-backed` を宣言します。
-`notify` は unchanged な envelope を addressable で durable な
+paste-sensitive な herdr seat の recorded role に `delivery_method` がない場合は、
+`--field delivery_method --current absent --new file-backed` と explicit confirmation を付けて
+`topology update-field` を使います。後から許可された値を変更するときも、recorded current value を指定して
+同じ経路を使います。`notify` は unchanged な envelope を addressable で durable な
 `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` に書いてから、pane へ
 `Read task envelope: <path>` という 1 行の pointer を送ります。file は削除しないため、restart
 した recipient も同じ task を読み直せます。明示的に選ぶ場合だけ `inline` を宣言し、宣言がなければ
