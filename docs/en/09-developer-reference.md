@@ -2628,8 +2628,8 @@ to keep in sync, and it goes stale on exactly the roll nobody is watching.
 ### Next release readiness (v0.12.1)
 
 **`v0.12.0` shipped** (GitHub Release + NuGet), and the next prepared line is
-`0.12.1`. [The v0.12.1 notes stub](release-notes-v0.12.1.md) is the required
-prepare-only placeholder. See [release-notes-v0.12.0.md](release-notes-v0.12.0.md)
+`0.12.1`. [The prepared v0.12.1 notes](release-notes-v0.12.1.md) cover exactly
+G631 and G632 and remain prepare-only. See [release-notes-v0.12.0.md](release-notes-v0.12.0.md)
 for the preceding shipped scope.
 
 **Release-readiness verification (run before merging the `v0.12.1`
@@ -2652,6 +2652,10 @@ ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.12.1.nupkg
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
   "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0120DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+
+# 4a. Confirm the v0.12.1 bilingual notes and G634 count guard.
+dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release --filter \
+  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0120DocsTests|FullyQualifiedName~ReleaseNotesV0121DocsTests"
 
 # 5. Run the complete Release suite.
 dotnet test IntentSystem.sln -c Release

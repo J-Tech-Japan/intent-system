@@ -2701,8 +2701,8 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 ### 次リリース準備(v0.12.1)
 
 **`v0.12.0` は出荷済み**(GitHub Release + NuGet)で、次に準備するラインは
-`0.12.1` です。[v0.12.1 notes stub](release-notes-v0.12.1.md) は必須の
-prepare-only placeholder です。直前の出荷範囲は
+`0.12.1` です。[準備済み v0.12.1 notes](release-notes-v0.12.1.md) は G631 と G632 のみを
+扱う prepare-only の内容です。直前の出荷範囲は
 [release-notes-v0.12.0.md](release-notes-v0.12.0.md) を参照してください。
 
 **リリース準備検証(`v0.12.1` release-preparation PR のマージ前に実行):**
@@ -2724,6 +2724,10 @@ ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.12.1.nupkg
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
   "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0120DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+
+# 4a. v0.12.1 の bilingual notes と G634 count guard を確認。
+dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release --filter \
+  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0120DocsTests|FullyQualifiedName~ReleaseNotesV0121DocsTests"
 
 # 5. Release suite を完全実行。
 dotnet test IntentSystem.sln -c Release
