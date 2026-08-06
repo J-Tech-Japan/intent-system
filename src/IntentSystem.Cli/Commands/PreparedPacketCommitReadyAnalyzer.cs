@@ -154,7 +154,8 @@ internal static class PreparedPacketCommitReadyAnalyzer
             Refuse(
                 ReasonMissingCanonicalFile,
                 "missing canonical file(s): " + string.Join(", ", missing),
-                "Author every missing canonical file, preserving the four-file packet contract: "
+                "Run `intent-cli packet draft --execution-unit <id> --target-repo <owner/repo> --format json` to author "
+                    + "the missing canonical files, preserving the four-file packet contract: "
                     + string.Join(", ", missing) + ".");
         }
 

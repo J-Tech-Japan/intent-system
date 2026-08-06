@@ -307,8 +307,15 @@ internal static class CloseoutPrCommand
             nextSteps.Add("Confirm and close the linked issue if one exists (linked_issue not set in queue state).");
         }
 
-        nextSteps.Add($"Sync the parent submodule pointer for {repo} to the merge commit (manual step: git -C submodules/<child> fetch && git -C submodules/<child> reset --hard <merge-sha>; git add submodules/<child>).");
-        nextSteps.Add("Commit and push the parent durable state (queue-state, runs, submodule pointer).");
+        if (HasConfiguredSubmodules(context.RepoRoot))
+        {
+            nextSteps.Add($"Sync the parent submodule pointer for {repo} to the merge commit (manual step: git -C submodules/<child> fetch && git -C submodules/<child> reset --hard <merge-sha>; git add submodules/<child>).");
+            nextSteps.Add("Commit and push the parent durable state (queue-state, runs, submodule pointer).");
+        }
+        else
+        {
+            nextSteps.Add("Commit and push the parent durable state (queue-state, runs).");
+        }
 
         var result = new CloseoutPrResult
         {
@@ -335,6 +342,27 @@ internal static class CloseoutPrCommand
 
         EmitResult(writer, result, format);
         return 0;
+    }
+
+    private static bool HasConfiguredSubmodules(string repoRoot)
+    {
+        var gitmodulesPath = Path.Combine(repoRoot, ".gitmodules");
+        if (!File.Exists(gitmodulesPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            return File.ReadLines(gitmodulesPath)
+                .Any(line => line.TrimStart().StartsWith("[submodule ", StringComparison.Ordinal));
+        }
+        catch (IOException)
+        {
+            // A closeout plan must not claim a submodule sync step it could not
+            // establish from the host layout.
+            return false;
+        }
     }
 
     private static bool MatchesLinkedPr(QueueItem item, string repo, string prToken)

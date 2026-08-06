@@ -243,6 +243,12 @@ internal static class SessionLayerTopologyCommand
 
     internal static int ExecuteUpdateKind(CliContext context, string[] args, TextWriter writer)
     {
+        if (IsHelp(args))
+        {
+            writer.WriteLine(UpdateKindUsage);
+            return 0;
+        }
+
         if (!TryParseUpdateKindArguments(args, out var request, out var error))
         {
             writer.WriteLine(error); writer.WriteLine(UpdateKindUsage); return 1;
@@ -254,6 +260,12 @@ internal static class SessionLayerTopologyCommand
 
     internal static int ExecuteUpdateField(CliContext context, string[] args, TextWriter writer)
     {
+        if (IsHelp(args))
+        {
+            writer.WriteLine(UpdateFieldUsage);
+            return 0;
+        }
+
         if (!TryParseUpdateFieldArguments(args, out var request, out var error))
         {
             writer.WriteLine(error); writer.WriteLine(UpdateFieldUsage); return 1;
@@ -265,6 +277,12 @@ internal static class SessionLayerTopologyCommand
 
     internal static int ExecuteRetireLegacy(CliContext context, string[] args, TextWriter writer)
     {
+        if (IsHelp(args))
+        {
+            writer.WriteLine(RetireLegacyUsage);
+            return 0;
+        }
+
         if (!TryParseRetireLegacyArguments(args, out var request, out var error))
         {
             writer.WriteLine(error); writer.WriteLine(RetireLegacyUsage); return 1;

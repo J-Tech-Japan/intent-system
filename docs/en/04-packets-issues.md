@@ -48,6 +48,9 @@ intent-cli packet draft --execution-unit <id> --target-repo <owner>/<repo> --for
 # Enforce the Standalone Child Issue Contract, then publish
 intent-cli issue validate-body ...
 intent-cli issue publish-flow <id> --repo <owner>/<repo> --write --format json
+# Apply intent-target by either the recorded unit or its issue number
+intent-cli automation issue-publish --execution-unit <id> --write --format json
+# Equivalent alternate when the issue number is already known:
 intent-cli automation issue-publish --issue <n> --write --format json
 ```
 

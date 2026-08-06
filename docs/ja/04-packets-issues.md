@@ -48,6 +48,9 @@ intent-cli packet draft --execution-unit <id> --target-repo <owner>/<repo> --for
 # Standalone Child Issue Contract を検証してから公開
 intent-cli issue validate-body ...
 intent-cli issue publish-flow <id> --repo <owner>/<repo> --write --format json
+# 記録済み unit または issue 番号で intent-target を付与
+intent-cli automation issue-publish --execution-unit <id> --write --format json
+# issue 番号が既知の場合の同等な代替:
 intent-cli automation issue-publish --issue <n> --write --format json
 ```
 

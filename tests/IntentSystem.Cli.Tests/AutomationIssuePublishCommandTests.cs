@@ -186,7 +186,65 @@ public sealed class AutomationIssuePublishCommandTests : IDisposable
             writer);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("--issue is required", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("--issue or --execution-unit is required", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ExecutionUnitResolvesRecordedIssueNumber_G625()
+    {
+        using var workspace = new AutomationIssuePublishWorkspace();
+        workspace.WritePublishArtifact("G625", 557);
+        var mutator = new FakeMutator();
+        AutomationIssuePublishCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationIssuePublishCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--execution-unit", "G625", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationIssuePublishResult>(writer.ToString())!;
+        Assert.Equal(557, result.Issue);
+        Assert.Equal(557, Assert.Single(mutator.AppliedTransitions).Number);
+    }
+
+    [Fact]
+    public void Execute_ExecutionUnitAndIssueDisagreementFailsClosed_G625()
+    {
+        using var workspace = new AutomationIssuePublishWorkspace();
+        workspace.WritePublishArtifact("G625", 557);
+        var mutator = new FakeMutator();
+        AutomationIssuePublishCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationIssuePublishCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--execution-unit", "G625", "--issue", "558"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--issue 558", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("--execution-unit 'G625'", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("created_issue_number 557", writer.ToString(), StringComparison.Ordinal);
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_ExecutionUnitWithoutRecordedIssueRefusesNamingMissingField_G625()
+    {
+        using var workspace = new AutomationIssuePublishWorkspace();
+        workspace.WritePublishArtifact("G625", null);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationIssuePublishCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--execution-unit", "G625"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("G625", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("created_issue_number", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -355,6 +413,22 @@ public sealed class AutomationIssuePublishCommandTests : IDisposable
                 [remote "origin"]
                     url = {remoteUrl}
                 """);
+        }
+
+        public void WritePublishArtifact(string executionUnit, int? createdIssueNumber)
+        {
+            var directory = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit);
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "publish.yaml"), IssuePublishArtifactYaml.Serialize(new IssuePublishArtifact
+            {
+                ExecutionUnit = executionUnit,
+                PublishStatus = "issue-created",
+                PacketPath = $".intent-cli/issues/{executionUnit}/packet.yaml",
+                IssueBodyPath = $".intent-cli/issues/{executionUnit}/github-body.md",
+                CreatedIssueNumber = createdIssueNumber,
+                CreatedIssueUrl = createdIssueNumber is null ? null : $"https://github.com/J-Tech-Japan/intent-system/issues/{createdIssueNumber}",
+                PublishedLabelName = null,
+            }));
         }
 
         public void Dispose()

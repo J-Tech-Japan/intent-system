@@ -550,6 +550,42 @@ public sealed class CloseoutPrCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_WithoutSubmodules_OmitsSubmoduleSteps_G625()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithLinkedIssue("G625", "review", linkedIssueNumber: 639));
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "640", "--issue", "639", "--dry-run", "--format", "json"],
+            writer));
+
+        var nextSteps = JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("next_steps")
+            .EnumerateArray().Select(element => element.GetString()!).ToArray();
+        Assert.DoesNotContain(nextSteps, step => step.Contains("submodule", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(nextSteps, step => step.Contains("queue-state, runs", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_WithSubmodules_IncludesSubmoduleSteps_G625()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithLinkedIssue("G625", "review", linkedIssueNumber: 639));
+        File.WriteAllText(Path.Combine(workspace.Context.RepoRoot, ".gitmodules"), "[submodule \"child\"]\n\tpath = submodules/child\n");
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "640", "--issue", "639", "--dry-run", "--format", "json"],
+            writer));
+
+        var nextSteps = JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("next_steps")
+            .EnumerateArray().Select(element => element.GetString()!).ToArray();
+        Assert.Contains(nextSteps, step => step.Contains("Sync the parent submodule pointer", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Execute_GivenIssueFlagWithBothLinkedPrAndIssuePresent_PrefersLinkedPrMatch()
     {
         using var workspace = new CloseoutPrWorkspace();

@@ -52,6 +52,7 @@ internal static class AutomationIssuePublishCommand
                 out var repo,
                 out var workdir,
                 out var issue,
+                out var executionUnit,
                 out var mode,
                 out var format,
                 out var allowHostOnlyOverride,
@@ -62,6 +63,24 @@ internal static class AutomationIssuePublishCommand
         }
 
         var resolvedWorkdir = WorkdirResolver.Resolve(context, workdir);
+        if (!string.IsNullOrWhiteSpace(executionUnit))
+        {
+            if (!TryResolveIssueFromExecutionUnit(resolvedWorkdir, executionUnit, out var resolvedIssue, out error))
+            {
+                writer.WriteLine(error);
+                return 1;
+            }
+
+            if (issue.HasValue && issue.Value != resolvedIssue)
+            {
+                writer.WriteLine($"--issue {issue.Value} disagrees with --execution-unit '{executionUnit}': "
+                    + $"publish.yaml records created_issue_number {resolvedIssue}.");
+                return 1;
+            }
+
+            issue = resolvedIssue;
+        }
+
         if (string.IsNullOrWhiteSpace(repo)
             && !AutomationCheckCommand.TryInferGitHubRepo(resolvedWorkdir, out repo, out error))
         {
@@ -211,6 +230,7 @@ internal static class AutomationIssuePublishCommand
         out string? repo,
         out string? workdir,
         out int? issue,
+        out string? executionUnit,
         out string mode,
         out string format,
         out bool allowHostOnlyOverride,
@@ -219,6 +239,7 @@ internal static class AutomationIssuePublishCommand
         repo = null;
         workdir = null;
         issue = null;
+        executionUnit = null;
         mode = WorkerClaimCompleteConstants.Modes.DryRun;
         format = FormatText;
         allowHostOnlyOverride = false;
@@ -258,6 +279,16 @@ internal static class AutomationIssuePublishCommand
                     index++;
                     break;
 
+                case "--execution-unit":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--execution-unit requires a value.";
+                        return false;
+                    }
+                    executionUnit = args[index + 1].Trim();
+                    index++;
+                    break;
+
                 case "--write":
                     mode = WorkerClaimCompleteConstants.Modes.Write;
                     break;
@@ -292,17 +323,66 @@ internal static class AutomationIssuePublishCommand
                     return false;
 
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] --issue <n> [--write] [--dry-run] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] (--issue <n>|--execution-unit <id>) [--write] [--dry-run] [--format text|json].";
                     return false;
             }
         }
 
-        if (issue is null)
+        if (issue is null && string.IsNullOrWhiteSpace(executionUnit))
         {
-            error = "--issue is required.";
+            error = "--issue or --execution-unit is required.";
             return false;
         }
 
+        return true;
+    }
+
+    private static bool TryResolveIssueFromExecutionUnit(
+        string workdir,
+        string executionUnit,
+        out int issue,
+        out string error)
+    {
+        issue = 0;
+        if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out error))
+        {
+            return false;
+        }
+
+        var relativeArtifactPath = IssuePublishArtifactPathResolver.Resolve(executionUnit);
+        var artifactPath = Path.Combine(workdir, relativeArtifactPath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(artifactPath))
+        {
+            error = $"--execution-unit '{executionUnit}' has no publish.yaml at '{relativeArtifactPath}'.";
+            return false;
+        }
+
+        IssuePublishArtifact artifact;
+        try
+        {
+            artifact = IssuePublishArtifactYaml.Deserialize(File.ReadAllText(artifactPath));
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or ArgumentException)
+        {
+            error = $"--execution-unit '{executionUnit}' publish.yaml could not be read: {exception.Message}";
+            return false;
+        }
+
+        if (!string.Equals(artifact.ExecutionUnit, executionUnit, StringComparison.Ordinal))
+        {
+            error = $"--execution-unit '{executionUnit}' does not match publish.yaml execution_unit "
+                + $"'{artifact.ExecutionUnit}'.";
+            return false;
+        }
+
+        if (!artifact.CreatedIssueNumber.HasValue || artifact.CreatedIssueNumber.Value <= 0)
+        {
+            error = $"--execution-unit '{executionUnit}' publish.yaml is missing created_issue_number.";
+            return false;
+        }
+
+        issue = artifact.CreatedIssueNumber.Value;
+        error = string.Empty;
         return true;
     }
 
@@ -347,7 +427,7 @@ internal static class AutomationIssuePublishCommand
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("automation issue-publish");
-        writer.WriteLine("Usage: intent-cli automation issue-publish --repo <owner/repo> --issue <n> [--write] [--dry-run] [--format text|json]");
+        writer.WriteLine("Usage: intent-cli automation issue-publish --repo <owner/repo> (--issue <n>|--execution-unit <id>) [--write] [--dry-run] [--format text|json]");
         writer.WriteLine("Publishes a child issue by applying the host-owned intent-target transition.");
     }
 }
