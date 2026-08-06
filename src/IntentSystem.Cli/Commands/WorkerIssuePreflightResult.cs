@@ -34,6 +34,9 @@ internal sealed record WorkerIssuePreflightResult
     [JsonPropertyName("reasons")]
     public required IReadOnlyList<string> Reasons { get; init; }
 
+    [JsonPropertyName("advisories")]
+    public required IReadOnlyList<string> Advisories { get; init; }
+
     [JsonPropertyName("recommended_action")]
     public required string RecommendedAction { get; init; }
 
@@ -69,6 +72,7 @@ internal static class WorkerIssuePreflightConstants
         public const string MissingTargetLabel = "missing-target-label";
         public const string ContractIncomplete = "contract-incomplete";
         public const string TargetMismatch = "target-mismatch";
+        public const string MissingTargetDeclaration = "missing-target-declaration";
         public const string NonActionable = "non-actionable";
 
         /// <summary>

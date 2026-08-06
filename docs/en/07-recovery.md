@@ -123,6 +123,13 @@ intent-cli worker pr-comment-preflight --repo <owner>/<repo> --pr    <n> --forma
 intent-cli automation doctor --format json
 ```
 
+`worker issue-preflight` derives target-mismatch from the issue's declared
+`Repository:` and `Target paths:` fields. A declared child-repository target
+remains actionable even when explanatory prose mentions a host or `submodules/`;
+those mentions are advisory notes only. A declared submodule target still
+blocks when the workdir is outside that submodule, and a missing `Target paths:`
+declaration fails closed instead of guessing from prose.
+
 | Result | Action |
 |--------|--------|
 | `safe_repair_category: child-selector-label-gap` | Apply the one repair `intent-cli` marks safe; retry once |

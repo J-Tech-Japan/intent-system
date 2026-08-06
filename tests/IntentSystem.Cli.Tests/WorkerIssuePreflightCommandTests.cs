@@ -130,6 +130,7 @@ public sealed class WorkerIssuePreflightCommandTests : IDisposable
         // reported as ready-to-implement.
         using var workspace = new WorkerIssuePreflightWorkspace();
         var hostOnlyBody = ValidBody("J-Tech-Japan/intent-system")
+            .Replace("Target paths: `src/Foo`, `tests/IntentSystem.Cli.Tests`\n", string.Empty, StringComparison.Ordinal)
             + "\n\nTarget paths: `intents/intent-cli/intent-tree/purpose/04-product-goal.md`, `intents/intent-cli/intent-tree/00-map.md`, `.intent-cli/issues/G458`\n";
         WorkerIssuePreflightCommand.IssueLookupFactory = () => new FakeLookup(BuildIssue(
             number: 1018,
@@ -262,8 +263,42 @@ public sealed class WorkerIssuePreflightCommandTests : IDisposable
 
         Assert.Equal(0, exitCode);
         var result = JsonSerializer.Deserialize<WorkerIssuePreflightResult>(writer.ToString())!;
+        Assert.Equal(WorkerIssuePreflightConstants.Classifications.ReadyToImplement, result.Classification);
+        Assert.True(result.Actionable);
+        Assert.Contains(result.Advisories, r => r.Contains("submodules", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_GivenDeclaredSubmoduleTargetOutsideWorkdir_BlocksFromDeclaration()
+    {
+        using var workspace = new WorkerIssuePreflightWorkspace();
+        var body = ValidBody("J-Tech-Japan/intent-system")
+            .Replace("Target paths: `src/Foo`, `tests/IntentSystem.Cli.Tests`", "Target paths: `submodules/child/src/Foo`", StringComparison.Ordinal);
+        WorkerIssuePreflightCommand.IssueLookupFactory = () => new FakeLookup(BuildIssue(601, "OPEN", "submodule", body, new[] { "intent-target" }));
+        using var writer = new StringWriter();
+        var exitCode = WorkerIssuePreflightCommand.Execute(workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--issue", "601", "--workdir", "/tmp/host", "--format", "json" }, writer);
+        var result = JsonSerializer.Deserialize<WorkerIssuePreflightResult>(writer.ToString())!;
+        Assert.Equal(0, exitCode);
+        Assert.False(result.Actionable);
         Assert.Equal(WorkerIssuePreflightConstants.Classifications.TargetMismatch, result.Classification);
-        Assert.Contains(result.Reasons, r => r.Contains("submodules", StringComparison.Ordinal));
+        Assert.Contains(result.Reasons, r => r.StartsWith("declaration-derived:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_GivenMissingTargetDeclaration_RefusesToGuess()
+    {
+        using var workspace = new WorkerIssuePreflightWorkspace();
+        var body = ValidBody("J-Tech-Japan/intent-system").Replace("Target paths: `src/Foo`, `tests/IntentSystem.Cli.Tests`\n", string.Empty, StringComparison.Ordinal);
+        WorkerIssuePreflightCommand.IssueLookupFactory = () => new FakeLookup(BuildIssue(602, "OPEN", "missing", body, new[] { "intent-target" }));
+        using var writer = new StringWriter();
+        var exitCode = WorkerIssuePreflightCommand.Execute(workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--issue", "602", "--format", "json" }, writer);
+        var result = JsonSerializer.Deserialize<WorkerIssuePreflightResult>(writer.ToString())!;
+        Assert.Equal(0, exitCode);
+        Assert.False(result.Actionable);
+        Assert.Equal(WorkerIssuePreflightConstants.Classifications.MissingTargetDeclaration, result.Classification);
+        Assert.Contains(result.Reasons, r => r.Contains("Target paths", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -725,7 +760,7 @@ public sealed class WorkerIssuePreflightCommandTests : IDisposable
 
             ## Target Repo / Path / Part
             Repository: {repository}
-            Primary path: src/Foo
+            Target paths: `src/Foo`, `tests/IntentSystem.Cli.Tests`
 
             ## In Scope
             - in scope item

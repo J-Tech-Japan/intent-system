@@ -138,8 +138,19 @@ internal static class WorkerIssuePreflightAnalyzer
                 WorkerIssuePreflightConstants.RecommendedActions.ReleaseFromTarget);
         }
 
+        var declaredPaths = HostOnlyPacketClassifier.ExtractTargetPaths(body);
+        if (declaredPaths.Count == 0)
+        {
+            return Build(
+                lookup, repo, issueNumber, title, state, labels,
+                WorkerIssuePreflightConstants.Classifications.MissingTargetDeclaration,
+                ["declaration-derived: missing `Target paths:` declaration; cannot classify the issue from prose"],
+                actionable: false,
+                WorkerIssuePreflightConstants.RecommendedActions.WaitForClarification);
+        }
+
         // Step 5: target-mismatch.
-        var mismatchReasons = DetectTargetMismatch(body, repo, workdir);
+        var mismatchReasons = DetectTargetMismatch(body, repo, workdir, declaredPaths);
         if (mismatchReasons.Count > 0)
         {
             return Build(
@@ -154,6 +165,8 @@ internal static class WorkerIssuePreflightAnalyzer
                 actionable: false,
                 WorkerIssuePreflightConstants.RecommendedActions.SwitchRepo);
         }
+
+        var advisories = DetectAdvisories(body, declaredPaths);
 
         // Step 6: contract-incomplete (reuse G183 validator).
         var sourcePath = $"github://{repo}/issues/{issueNumber}";
@@ -198,10 +211,11 @@ internal static class WorkerIssuePreflightAnalyzer
             WorkerIssuePreflightConstants.Classifications.ReadyToImplement,
             Array.Empty<string>(),
             actionable: true,
-            WorkerIssuePreflightConstants.RecommendedActions.Implement);
+            WorkerIssuePreflightConstants.RecommendedActions.Implement,
+            advisories);
     }
 
-    private static IReadOnlyList<string> DetectTargetMismatch(string body, string repo, string workdir)
+    private static IReadOnlyList<string> DetectTargetMismatch(string body, string repo, string workdir, IReadOnlyList<string> declaredPaths)
     {
         var reasons = new List<string>();
         if (string.IsNullOrEmpty(body))
@@ -222,32 +236,34 @@ internal static class WorkerIssuePreflightAnalyzer
             }
         }
 
-        // Heuristic 2: body mentions a `submodules/...` path while --workdir is
-        // not under a `submodules/` location.
-        if (body.Contains("submodules/", StringComparison.OrdinalIgnoreCase))
+        // Declaration-derived: a target inside a submodule must run in that
+        // submodule worktree. Prose mentions are advisory only.
+        if (declaredPaths.Any(p => p.Replace('\\', '/').TrimStart('/').StartsWith("submodules/", StringComparison.OrdinalIgnoreCase)))
         {
             var workdirNormalized = workdir.Replace('\\', '/');
             if (workdirNormalized.IndexOf("submodules/", StringComparison.OrdinalIgnoreCase) < 0)
             {
                 reasons.Add(
-                    "issue body references a submodules/ path but --workdir does not point inside a submodules/ tree");
+                    "declaration-derived: declared target paths are inside submodules/ but --workdir is outside a submodules/ tree");
             }
         }
 
-        // Heuristic 3: body literally mentions parent-host markers while --repo
-        // is a child-style owner/repo (i.e. not the parent host repo). We treat
-        // any --repo value as child-side here because the parent-host repo is
-        // not named in the precedence rules; mention of `parent-host` or
-        // `MyIntentHost` in a child-issue body is itself a mismatch signal.
-        var mentionsParentHost = body.Contains("parent-host", StringComparison.OrdinalIgnoreCase)
-            || body.Contains("MyIntentHost", StringComparison.Ordinal);
-        if (mentionsParentHost)
-        {
-            reasons.Add(
-                $"issue body references parent-host/MyIntentHost execution path which conflicts with child --repo {repo}");
-        }
-
         return reasons;
+    }
+
+    private static IReadOnlyList<string> DetectAdvisories(string body, IReadOnlyList<string> declaredPaths)
+    {
+        var advisories = new List<string>();
+        var declaredChild = declaredPaths.Any(p => !p.Replace('\\', '/').TrimStart('/').StartsWith("submodules/", StringComparison.OrdinalIgnoreCase));
+        if (declaredChild && body.Contains("submodules/", StringComparison.OrdinalIgnoreCase))
+        {
+            advisories.Add("advisory-derived: prose mentions a submodules/ path, but the declared target is the child repository");
+        }
+        if (declaredChild && (body.Contains("parent-host", StringComparison.OrdinalIgnoreCase) || body.Contains("MyIntentHost", StringComparison.Ordinal)))
+        {
+            advisories.Add("advisory-derived: prose mentions parent-host/MyIntentHost, but the declared target is the child repository");
+        }
+        return advisories;
     }
 
     private static WorkerIssuePreflightResult Build(
@@ -260,7 +276,8 @@ internal static class WorkerIssuePreflightAnalyzer
         string classification,
         IReadOnlyList<string> reasons,
         bool actionable,
-        string recommendedAction)
+        string recommendedAction,
+        IReadOnlyList<string>? advisories = null)
     {
         _ = lookup;
         var summaryLine =
@@ -276,6 +293,7 @@ internal static class WorkerIssuePreflightAnalyzer
             IssueState = state,
             Labels = labels,
             Reasons = reasons,
+            Advisories = advisories ?? Array.Empty<string>(),
             RecommendedAction = recommendedAction,
             SummaryLine = summaryLine
         };

@@ -153,6 +153,20 @@ internal static class WorkerIssuePreflightCommand
         }
         writer.WriteLine();
 
+        writer.WriteLine("## Advisories");
+        if (result.Advisories.Count == 0)
+        {
+            writer.WriteLine("- (none)");
+        }
+        else
+        {
+            foreach (var advisory in result.Advisories)
+            {
+                writer.WriteLine($"- {advisory}");
+            }
+        }
+        writer.WriteLine();
+
         writer.WriteLine(result.SummaryLine);
     }
 
