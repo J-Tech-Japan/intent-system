@@ -6,7 +6,7 @@
 
 ## 対象範囲
 
-この minor release に含まれる検証済み `main` merge は次の十二件だけです。
+この minor release に含まれる検証済み `main` merge は次のとおりです。
 
 - G610 — [PR #1324](https://github.com/J-Tech-Japan/intent-system/pull/1324)、merge `48204646`。
 - G611 — [PR #1328](https://github.com/J-Tech-Japan/intent-system/pull/1328)、merge `4f4106f947e5`。
