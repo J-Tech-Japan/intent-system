@@ -2707,6 +2707,21 @@ public sealed class GuideOrchestratorThreadCommandTests
     private static string RunMarkdown(string[] args)
         => RunMarkdown(CreateContext(), args);
 
+    [Fact]
+    public void Execute_WithoutDomainReportsSessionLayerNotResolved_G625()
+    {
+        using var workspace = new RecordedGuideWorkspace("intent-cli", "intent-cli-dev");
+
+        var output = RunMarkdown(workspace.Context,
+            ["--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+        var sessionLayer = SectionFrom(output, "## Session layer");
+
+        Assert.Contains("Session layer: not resolved", sessionLayer, StringComparison.Ordinal);
+        Assert.Contains("--domain <name>", sessionLayer, StringComparison.Ordinal);
+        Assert.DoesNotContain("no selection recorded, so the default is in force", sessionLayer, StringComparison.Ordinal);
+        Assert.DoesNotContain("recorded for this domain/team", sessionLayer, StringComparison.Ordinal);
+    }
+
     private static string RunMarkdown(CliContext context, string[] args)
     {
         using var writer = new StringWriter();

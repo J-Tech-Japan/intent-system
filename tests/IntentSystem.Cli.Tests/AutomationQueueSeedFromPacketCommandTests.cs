@@ -248,6 +248,10 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
         Assert.Equal(
             PreparedPacketCommitReadyAnalyzer.ReasonMissingCanonicalFile,
             doc.RootElement.GetProperty("unsafe_reason").GetString());
+        Assert.Contains(
+            "intent-cli packet draft --execution-unit <id>",
+            string.Join(' ', doc.RootElement.GetProperty("recommended_actions").EnumerateArray().Select(action => action.GetString())),
+            StringComparison.Ordinal);
     }
 
     [Fact]

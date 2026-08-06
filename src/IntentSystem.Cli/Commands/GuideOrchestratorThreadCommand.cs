@@ -94,10 +94,10 @@ internal static class GuideOrchestratorThreadCommand
         var requestedDomain = string.Equals(values["<domain>"], "<domain>", StringComparison.Ordinal)
             ? null
             : values["<domain>"];
-        var preflight = SessionLayerPreflight.Analyze(
-            context.RepoRoot,
-            requestedDomain,
-            requestedTeam);
+        var modeResolved = requestedDomain is not null;
+        var preflight = modeResolved
+            ? SessionLayerPreflight.Analyze(context.RepoRoot, requestedDomain, requestedTeam)
+            : SessionLayerPreflight.AnonymousUnjudged();
         if (string.Equals(preflight.Verdict, SessionLayerPreflight.CannotDetermine, StringComparison.Ordinal))
         {
             writer.WriteLine($"session-layer-mode-unreadable: {preflight.Summary}");
@@ -110,7 +110,18 @@ internal static class GuideOrchestratorThreadCommand
         }
 
         SessionLayerModeResolution sessionLayer;
-        if (requestedTeam is not null)
+        if (!modeResolved)
+        {
+            // The generic document remains useful for non-transport duties,
+            // but a missing scope must not be represented as a resolved
+            // default or as the host's recorded mode.
+            sessionLayer = new SessionLayerModeResolution
+            {
+                Mode = SessionLayerMode.Default,
+                Source = SessionLayerModeSource.Default,
+            };
+        }
+        else if (requestedTeam is not null)
         {
             sessionLayer = preflight.Scopes.Single().Resolution!;
         }
@@ -123,7 +134,8 @@ internal static class GuideOrchestratorThreadCommand
             BuildGuide(values, sessionLayer.IsHerdrOnly),
             sessionLayer,
             values,
-            preflight);
+            preflight,
+            modeResolved);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -160,7 +172,8 @@ internal static class GuideOrchestratorThreadCommand
         OrchestratorThreadGuide guide,
         SessionLayerModeResolution sessionLayer,
         IReadOnlyDictionary<string, string> values,
-        SessionLayerPreflightResult? preflight = null)
+        SessionLayerPreflightResult? preflight = null,
+        bool modeResolved = true)
     {
         preflight ??= SessionLayerPreflight.AnonymousUnjudged();
         var teamOmission = SessionLayerTeamOmissionDisclosure.Create(
@@ -171,9 +184,14 @@ internal static class GuideOrchestratorThreadCommand
                 + $"--target-repo {values["<owner/repo>"]} --agent {values["<agent>"]} --team {entry.Team}");
         var block = new OrchestratorSessionLayer
         {
-            Mode = sessionLayer.Mode,
-            Source = sessionLayer.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
-            Summary = teamOmission is not null
+            Mode = modeResolved ? sessionLayer.Mode : "not-resolved",
+            Source = modeResolved
+                ? sessionLayer.Source == SessionLayerModeSource.Recorded ? "recorded" : "default"
+                : "not-resolved",
+            Summary = !modeResolved
+                ? "Session layer: not resolved — no `--domain` was supplied, so this guide did not consult a recorded "
+                    + "mode or assert a default. Pass `--domain <name>` to render transport-specific guidance."
+                : teamOmission is not null
                 ? $"Session layer: {SessionLayerMode.Describe(sessionLayer.Mode)} — in force for this invocation "
                     + "because no team scope was supplied; team-scoped records are disclosed below."
                 : sessionLayer.Source == SessionLayerModeSource.Recorded
@@ -194,7 +212,10 @@ internal static class GuideOrchestratorThreadCommand
                 + " --mode agmsg|herdr-only --write` changes it, "
                 + "reversibly, in both directions.",
             Preflight = preflight,
-            ResidualAgmsgMechanics = sessionLayer.IsHerdrOnly
+            ResidualAgmsgMechanics = !modeResolved
+                ? "UNRESOLVED SESSION LAYER: do not treat any transport-specific section in this unscoped guide as "
+                    + "operative. Re-run with `--domain <name>` before following a session-layer procedure."
+                : sessionLayer.IsHerdrOnly
                 ? "HERDR-ONLY: the agmsg-only sections of this guide are REPLACED, whole, by the concrete herdr-only "
                     + "operating sections below. Retained sections carry mode-independent duties, but transport-specific "
                     + "examples in them govern only their named transport; the concrete herdr-only counterparts below "

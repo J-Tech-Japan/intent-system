@@ -356,6 +356,24 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
         Assert.Contains("only '--format json'", retireMarkdown.ToString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("record", "Usage: intent-cli session-layer topology record")]
+    [InlineData("show", "Usage: intent-cli session-layer topology show")]
+    [InlineData("validate", "Usage: intent-cli session-layer topology validate")]
+    [InlineData("update-kind", "Usage: intent-cli session-layer topology update-kind")]
+    [InlineData("update-field", "Usage: intent-cli session-layer topology update-field")]
+    [InlineData("retire-legacy", "Usage: intent-cli session-layer topology retire-legacy")]
+    public void TopologySubcommands_AcceptHelpWithoutError_G625(string subcommand, string usage)
+    {
+        using var writer = new StringWriter();
+
+        var exitCode = SessionLayerTopologyCommand.Execute(CreateContext(Domain), [subcommand, "--help"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(usage, writer.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Unknown", writer.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void G614_DocumentationAndRenderedGuideKeepAgentKindsNeutral_G614()
     {
