@@ -51,6 +51,20 @@ public sealed class ReleaseNotesV0120DocsTests
 
         Assert.Contains("release-notes-v0.11.1.md", notes, StringComparison.Ordinal);
         Assert.Contains("release-notes-v0.11.0.md", notes, StringComparison.Ordinal);
+        Assert.Empty(CountMismatches(notes, language));
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void ReleaseNotes_UnitCountGuardRejectsAStatedMismatch_G634(string language)
+    {
+        var notes = Read(language);
+        var wrong = language == "en"
+            ? notes.Replace("eighteen units", "seventeen units", StringComparison.Ordinal)
+            : notes.Replace("十八件", "十七件", StringComparison.Ordinal);
+
+        Assert.NotEmpty(CountMismatches(wrong, language));
     }
 
     [Theory]
@@ -110,4 +124,58 @@ public sealed class ReleaseNotesV0120DocsTests
 
     private static string Read(string language) =>
         File.ReadAllText(Path.Combine(RepoVersionPolicySource.RepoRoot(), "docs", language, "release-notes-v0.12.0.md"));
+
+    private static IReadOnlyList<string> CountMismatches(string notes, string language)
+    {
+        var listedUnits = Regex.Matches(notes, @"(?m)^- (G\d+) —")
+            .Select(match => match.Groups[1].Value)
+            .ToArray();
+        var statedCounts = language == "en"
+            ? Regex.Matches(notes, @"\b(?<count>zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+(?:units|merges)\b", RegexOptions.IgnoreCase)
+                .Select(match => (Text: match.Groups["count"].Value, Value: EnglishCount(match.Groups["count"].Value)))
+            : Regex.Matches(notes, @"(?<count>[一二三四五六七八九十百〇零]+)件")
+                .Select(match => (Text: match.Groups["count"].Value, Value: JapaneseCount(match.Groups["count"].Value)));
+
+        return statedCounts
+            .Where(count => count.Value != listedUnits.Length)
+            .Select(count => $"{language} stated {count.Text} ({count.Value}) units, but lists {listedUnits.Length}.")
+            .ToArray();
+    }
+
+    private static int EnglishCount(string text) => text.ToLowerInvariant() switch
+    {
+        "zero" => 0, "one" => 1, "two" => 2, "three" => 3, "four" => 4,
+        "five" => 5, "six" => 6, "seven" => 7, "eight" => 8, "nine" => 9,
+        "ten" => 10, "eleven" => 11, "twelve" => 12, "thirteen" => 13,
+        "fourteen" => 14, "fifteen" => 15, "sixteen" => 16, "seventeen" => 17,
+        "eighteen" => 18, "nineteen" => 19, "twenty" => 20,
+        _ => throw new ArgumentOutOfRangeException(nameof(text), text, "unsupported count")
+    };
+
+    private static int JapaneseCount(string text)
+    {
+        var values = new Dictionary<char, int>
+        {
+            ['〇'] = 0, ['零'] = 0, ['一'] = 1, ['二'] = 2, ['三'] = 3, ['四'] = 4,
+            ['五'] = 5, ['六'] = 6, ['七'] = 7, ['八'] = 8, ['九'] = 9, ['十'] = 10,
+            ['百'] = 100,
+        };
+        var total = 0;
+        var pending = 0;
+        foreach (var character in text)
+        {
+            var value = values[character];
+            if (value is 10 or 100)
+            {
+                total += (pending == 0 ? 1 : pending) * value;
+                pending = 0;
+            }
+            else
+            {
+                pending = value;
+            }
+        }
+
+        return total + pending;
+    }
 }
