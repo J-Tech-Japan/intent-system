@@ -7,31 +7,69 @@ public sealed class ChildProcessEncodingGuardTests
     {
         var root = FindRepositoryRoot();
         var offenders = new List<string>();
-        foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-                     .Where(path =>
-                     {
-                         var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
-                         return relative.StartsWith("src/IntentSystem.Cli/", StringComparison.Ordinal)
-                             || relative.StartsWith("src/IntentSystem.Review/", StringComparison.Ordinal);
-                     }))
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories))
         {
             var lines = File.ReadAllLines(file);
+            var source = File.ReadAllText(file);
             for (var i = 0; i < lines.Length; i++)
             {
-                if (!lines[i].Contains("RedirectStandardOutput", StringComparison.Ordinal)
-                    && !lines[i].Contains("RedirectStandardError", StringComparison.Ordinal))
+                if (!lines[i].Contains("process.StartInfo.RedirectStandard", StringComparison.Ordinal))
                 {
                     continue;
                 }
 
-                var start = Math.Max(0, i - 12);
-                var end = Math.Min(lines.Length, i + 13);
+                var start = Math.Max(0, i - 3);
+                var end = Math.Min(lines.Length, i + 4);
                 var window = string.Join('\n', lines[start..end]);
                 if (!window.Contains("StandardOutputEncoding", StringComparison.Ordinal)
                     || !window.Contains("StandardErrorEncoding", StringComparison.Ordinal))
                 {
                     offenders.Add($"{Path.GetRelativePath(root, file)}:{i + 1}");
                 }
+            }
+
+            for (var search = 0; ;)
+            {
+                var marker = source.IndexOf("new ProcessStartInfo", search, StringComparison.Ordinal);
+                if (marker < 0)
+                {
+                    break;
+                }
+
+                var open = source.IndexOf('{', marker);
+                if (open < 0)
+                {
+                    break;
+                }
+
+                var depth = 0;
+                var close = -1;
+                for (var index = open; index < source.Length; index++)
+                {
+                    if (source[index] == '{') depth++;
+                    if (source[index] == '}' && --depth == 0)
+                    {
+                        close = index;
+                        break;
+                    }
+                }
+
+                if (close < 0)
+                {
+                    break;
+                }
+
+                var initializer = source[(open + 1)..close];
+                if ((initializer.Contains("RedirectStandardOutput", StringComparison.Ordinal)
+                        || initializer.Contains("RedirectStandardError", StringComparison.Ordinal))
+                    && (!initializer.Contains("StandardOutputEncoding", StringComparison.Ordinal)
+                        || !initializer.Contains("StandardErrorEncoding", StringComparison.Ordinal)))
+                {
+                    var line = source[..marker].Count(c => c == '\n') + 1;
+                    offenders.Add($"{Path.GetRelativePath(root, file)}:{line}");
+                }
+
+                search = close + 1;
             }
         }
 
