@@ -96,7 +96,9 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("recipe that stops at the command line is incomplete", en, StringComparison.Ordinal);
         Assert.Contains("command line で止まるレシピは不完全", ja, StringComparison.Ordinal);
         Assert.Contains("default `Enable all permissions` answer is unsafe", en, StringComparison.Ordinal);
+        Assert.Contains("`default_is_safe: false`", en, StringComparison.Ordinal);
         Assert.Contains("default の `Enable all permissions` は unsafe", ja, StringComparison.Ordinal);
+        Assert.Contains("`default_is_safe: false`", ja, StringComparison.Ordinal);
         Assert.Contains("supervision failure, not a shortcut", en, StringComparison.Ordinal);
         Assert.Contains("supervision failure です", ja, StringComparison.Ordinal);
         Assert.Contains("G556 liveness and notify/delivery semantics are unchanged", en, StringComparison.Ordinal);

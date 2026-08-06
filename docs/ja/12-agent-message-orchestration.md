@@ -223,7 +223,8 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
   `1. Enable all permissions (recommended)` / `2. Continue with limited permissions` /
   `3. Cancel` を表示し、cursor は option 1 にあります。宣言した `--add-dir` 境界を維持するには
   `Continue with limited permissions` を選びます。default の `Enable all permissions` は unsafe です。
-  restart でこれを受け入れるのは shortcut ではなく supervision failure です。
+  recipe には `default_is_safe: false` と記録し、restart でこれを受け入れるのは shortcut ではなく
+  supervision failure です。
 - **startup gate。** folder trust と autopilot-enable は operator provisioning gate であり、
   launch flag ではどちらも bypass できません。`--mode autopilot` を launch 時に渡しても、
   autopilot-enable dialog は **最初の task** で現れます。`--allow-all-tools` と境界付き root

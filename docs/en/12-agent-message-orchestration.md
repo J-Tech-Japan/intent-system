@@ -240,7 +240,8 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
   `2. Continue with limited permissions` / `3. Cancel`, with the cursor on
   option 1. Answer `Continue with limited permissions` to preserve the bounded
   `--add-dir` envelope. The default `Enable all permissions` answer is unsafe;
-  accepting it on restart is a supervision failure, not a shortcut.
+  the recipe records `default_is_safe: false`, and accepting it on restart is a
+  supervision failure, not a shortcut.
 - **Startup gates.** Folder trust and autopilot-enable are operator provisioning
   gates; launch flags bypass neither. The autopilot-enable dialog appears at the
   **first task** even when launch used `--mode autopilot`. With
