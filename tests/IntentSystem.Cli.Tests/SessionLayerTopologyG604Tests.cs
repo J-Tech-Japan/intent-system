@@ -33,7 +33,7 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
     }
 
     [Fact]
-    public void Resolve_CopiedNewRecordAndDualLocationConflictFailClosed_G604()
+    public void Resolve_CopiedNewRecordFailsIdentityAndIgnoresLegacyFile_G627()
     {
         Assert.True(Record("intent-cli-dev", "orchestration", "w1:p1").Applied);
         var source = NotifyRoleTopologyStore.ResolvePath(root, Domain, "intent-cli-dev");
@@ -54,15 +54,12 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
                 "orchestration": { "resident": "herdr", "workspace_id": "other", "pane_id": "other:p1" }
             }}
             """);
-        var conflict = NotifyRoleTopologyStore.Resolve(root, Domain, "intent-cli-dev");
-        Assert.False(conflict.Resolved);
-        Assert.Equal("topology-location-conflict", conflict.Cause);
-        Assert.Contains(NotifyRoleTopologyStore.ResolvePath(root, Domain, "intent-cli-dev"), conflict.Summary, StringComparison.Ordinal);
-        Assert.Contains(NotifyRoleTopologyStore.ResolvePath(root), conflict.Summary, StringComparison.Ordinal);
+        var current = NotifyRoleTopologyStore.Resolve(root, Domain, "intent-cli-dev");
+        Assert.True(current.Resolved);
     }
 
     [Fact]
-    public void Resolve_LegacyOnlyWarnsAndModeOnlyPreflightIsConfigurationIncomplete_G604()
+    public void Resolve_LegacyOnlyFailsClosedAndNeitherRemainsConfigurationIncomplete_G627()
     {
         var legacyPath = NotifyRoleTopologyStore.ResolvePath(root);
         Directory.CreateDirectory(Path.GetDirectoryName(legacyPath)!);
@@ -73,8 +70,11 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
             }}
             """);
         var compatibility = NotifyRoleTopologyStore.Resolve(root, Domain, "intent-cli-dev");
-        Assert.True(compatibility.Resolved);
-        Assert.Contains(compatibility.Warnings, warning => warning.Contains("topology record", StringComparison.Ordinal));
+        Assert.False(compatibility.Resolved);
+        Assert.Equal("legacy-topology-compatibility-removed", compatibility.Cause);
+        Assert.Contains(legacyPath, compatibility.Summary, StringComparison.Ordinal);
+        Assert.Contains("topology record", compatibility.Summary, StringComparison.Ordinal);
+        Assert.Contains("retire-legacy", compatibility.Summary, StringComparison.Ordinal);
 
         File.Delete(legacyPath);
         using var writer = new StringWriter();
@@ -133,7 +133,7 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
     }
 
     [Fact]
-    public void DualLocationConflict_BlocksValidatePreflightAndAutomationDoctor_G604()
+    public void LegacyAlongsideCurrentRecord_DoesNotAffectReaders_G627()
     {
         const string team = "intent-cli-dev";
         Assert.True(Record(team, "orchestration", "w1:p1").Applied);
@@ -151,17 +151,15 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
         Assert.Equal(0, SessionLayerCommand.ExecuteSet(context,
             ["--domain", Domain, "--team", team, "--mode", "herdr-only", "--write", "--format", "json"], modeWriter));
         using var validateWriter = new StringWriter();
-        Assert.Equal(1, SessionLayerTopologyCommand.ExecuteValidate(context,
+        Assert.Equal(0, SessionLayerTopologyCommand.ExecuteValidate(context,
             ["--domain", Domain, "--team", team, "--format", "json"], validateWriter));
         using (var validate = JsonDocument.Parse(validateWriter.ToString()))
         {
-            Assert.Contains(validate.RootElement.GetProperty("findings").EnumerateArray(), finding =>
-                finding.GetProperty("cause").GetString() == "topology-location-conflict");
+            Assert.True(validate.RootElement.GetProperty("valid").GetBoolean());
         }
 
         var preflight = SessionLayerPreflight.Analyze(root, Domain, team);
-        Assert.False(preflight.Ready);
-        Assert.Contains(preflight.Scopes.Single().Findings, finding => finding.Cause == "topology-location-conflict");
+        Assert.True(preflight.Ready);
 
         AutomationInstalledCliSurfaceProbe.PathResolver = _ => null;
         try
@@ -171,7 +169,7 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
             using var doctor = JsonDocument.Parse(doctorWriter.ToString());
             var findings = doctor.RootElement.GetProperty("topology_health").GetProperty("teams")[0]
                 .GetProperty("findings").EnumerateArray();
-            Assert.Contains(findings, finding => finding.GetProperty("cause").GetString() == "topology-location-conflict");
+            Assert.DoesNotContain(findings, finding => finding.GetProperty("cause").GetString() == "topology-location-conflict");
         }
         finally
         {

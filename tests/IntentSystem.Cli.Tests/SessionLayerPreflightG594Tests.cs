@@ -558,10 +558,11 @@ public sealed class SessionLayerPreflightG594Tests : IDisposable
                 writer);
             Assert.True(exitCode == 0, writer.ToString());
 
-            var topologyPath = NotifyRoleTopologyStore.ResolvePath(RootPath);
+            var topologyPath = NotifyRoleTopologyStore.ResolvePath(RootPath, Workspace.Domain, team);
             Directory.CreateDirectory(Path.GetDirectoryName(topologyPath)!);
             File.WriteAllText(topologyPath, JsonSerializer.Serialize(new
             {
+                domain = Workspace.Domain,
                 team,
                 workspace_id = workspaceId,
                 roles = new Dictionary<string, object>
@@ -670,10 +671,11 @@ public sealed class SessionLayerPreflightG594Tests : IDisposable
 
         public void WriteTopology()
         {
-            var path = NotifyRoleTopologyStore.ResolvePath(RootPath);
+            var path = NotifyRoleTopologyStore.ResolvePath(RootPath, Domain, Team);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, JsonSerializer.Serialize(new
             {
+                domain = Domain,
                 team = Team,
                 workspace_id = "wH",
                 roles = new Dictionary<string, object>
