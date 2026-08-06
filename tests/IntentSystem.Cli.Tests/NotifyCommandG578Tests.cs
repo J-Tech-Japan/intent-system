@@ -572,6 +572,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
         {
             var topology = new
             {
+                domain = Domain,
                 team = Team,
                 workspace_id = "wH",
                 roles = new Dictionary<string, object>
@@ -597,9 +598,9 @@ public sealed class NotifyCommandG578Tests : IDisposable
                     },
                 },
             };
-            File.WriteAllText(
-                Path.Combine(RootPath, NotifyRoleTopologyStore.RelativePath.Replace('/', Path.DirectorySeparatorChar)),
-                JsonSerializer.Serialize(topology));
+            var topologyPath = NotifyRoleTopologyStore.ResolvePath(RootPath, Domain, Team);
+            Directory.CreateDirectory(Path.GetDirectoryName(topologyPath)!);
+            File.WriteAllText(topologyPath, JsonSerializer.Serialize(topology));
         }
 
         public void SetImplementationDeliveryMethod(string? deliveryMethod)
@@ -627,9 +628,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
 
         public void SetMode(string mode)
         {
-            var topologyPath = Path.Combine(
-                RootPath,
-                NotifyRoleTopologyStore.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+            var topologyPath = NotifyRoleTopologyStore.ResolvePath(RootPath, Domain, Team);
             if (string.Equals(mode, SessionLayerMode.Agmsg, StringComparison.Ordinal))
             {
                 File.Delete(topologyPath);

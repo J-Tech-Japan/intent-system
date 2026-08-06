@@ -394,7 +394,7 @@ agent kind は herdr が起動できる任意の kind です。Claude、Codex、
 `update-kind` では明示した `--dry-run` が flag の順序にかかわらず `--write` より優先され、決して
 書き込みません。
 
-`retire-legacy` が成功すると、CLI は ignored な machine-local topology directory の外にある
+legacy fixed `role-pane-mapping.json` の compatibility read は削除済みです。この file が残り per-team record がない host では reader は安全側に停止し、`topology record --domain <domain> --team <team> ... --write` と `topology retire-legacy --domain <domain> --team <team> --evidence <evidence> --confirm-retire-legacy --write` を示します。reader は自動移行しません。`retire-legacy` が成功すると、CLI は ignored な machine-local topology directory の外にある
 `<host-repo>/.intent-cli/legacy-topology-retirements.jsonl` へ fleet-wide decision から引用可能な
 entry を 1 件追記します。定義済みの field は `timestamp_utc`、`host`、`domain`、`team`、
 `retired_path`、名前付きの `evidence` です。これにより、現在の legacy reader disposition を

@@ -194,7 +194,10 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
         Assert.Equal(1, exitCode);
         Assert.Equal("unknown-role", result.GetProperty("cause").GetString());
         var summary = result.GetProperty("summary").GetString()!;
-        Assert.Contains(NotifyRoleTopologyStore.RelativePath, summary, StringComparison.Ordinal);
+        Assert.Contains(
+            NotifyRoleTopologyStore.ResolvePath(workspace.RootPath, Workspace.Domain, Workspace.Team),
+            summary,
+            StringComparison.Ordinal);
         Assert.Contains("team 'intent-cli-dev' workspace 'wH'", summary, StringComparison.Ordinal);
         Assert.Contains(
             "found in that team scope: design, implementation, orchestration, review",
@@ -394,10 +397,11 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
 
         public void WriteTopology(string? externalReader)
         {
-            File.WriteAllText(
-                Path.Combine(RootPath, NotifyRoleTopologyStore.RelativePath.Replace('/', Path.DirectorySeparatorChar)),
-                JsonSerializer.Serialize(new
+            var topologyPath = NotifyRoleTopologyStore.ResolvePath(RootPath, Domain, Team);
+            Directory.CreateDirectory(Path.GetDirectoryName(topologyPath)!);
+            File.WriteAllText(topologyPath, JsonSerializer.Serialize(new
                 {
+                    domain = Domain,
                     team = Team,
                     workspace_id = "wH",
                     roles = new Dictionary<string, object>

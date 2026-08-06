@@ -175,10 +175,11 @@ public sealed class SessionLayerMigrationG602Tests : IDisposable
 
         public void WriteTopology()
         {
-            var path = NotifyRoleTopologyStore.ResolvePath(RootPath);
+            var path = NotifyRoleTopologyStore.ResolvePath(RootPath, Domain, Team);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, JsonSerializer.Serialize(new
             {
+                domain = Domain,
                 team = Team,
                 workspace_id = "w",
                 roles = new

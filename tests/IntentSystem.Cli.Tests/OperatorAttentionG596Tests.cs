@@ -447,10 +447,11 @@ public sealed class OperatorAttentionG596Tests : IDisposable
 
         public void WriteTopology()
         {
-            var path = NotifyRoleTopologyStore.ResolvePath(RootPath);
+            var path = NotifyRoleTopologyStore.ResolvePath(RootPath, "intent-cli", "intent-cli-dev");
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, JsonSerializer.Serialize(new
             {
+                domain = "intent-cli",
                 team = "intent-cli-dev", workspace_id = "workspace", roles = new Dictionary<string, object>
                 {
                     ["design"] = new { resident = "herdr", workspace_id = "workspace", pane_id = "workspace:p1" },

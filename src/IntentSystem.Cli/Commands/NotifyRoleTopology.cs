@@ -95,6 +95,15 @@ internal static class NotifyRoleTopologyStore
         $"Run `intent-cli session-layer topology validate --domain <domain> --team {team} --format json`, then use "
         + "`session-layer topology record --domain <domain> ... --write` to record the operator-supplied correction.";
 
+    private static NotifyTopologyResolution LegacyCompatibilityReadRemoved(string legacyPath, string? domain, string team) =>
+        Failure(
+            "legacy-topology-compatibility-removed",
+            $"Legacy topology file '{legacyPath}' was found for team '{team}', but the compatibility read has been removed. "
+            + $"Run `intent-cli session-layer topology record --domain {domain ?? "<domain>"} --team {team} ... --write` "
+            + "to declare the current shape, or run "
+            + $"`intent-cli session-layer topology retire-legacy --domain {domain ?? "<domain>"} --team {team} "
+            + "--evidence <evidence> --confirm-retire-legacy --write` to retire the legacy file with evidence.");
+
     public static NotifyTopologyResolution Resolve(string routingRoot, string team) =>
         Resolve(routingRoot, domain: null, team);
 
@@ -103,15 +112,12 @@ internal static class NotifyRoleTopologyStore
         if (string.IsNullOrWhiteSpace(domain))
         {
             var legacyOnlyPath = ResolvePath(routingRoot);
-            if (File.Exists(legacyOnlyPath))
-            {
-                return ResolveFromPath(legacyOnlyPath, null, team, requireIdentity: false);
-            }
-
             var matches = FindNewTopologyPaths(routingRoot, team).ToArray();
             return matches.Length == 1
                 ? ResolveFromPath(matches[0], expectedDomain: null, team, requireIdentity: false)
-                : ResolveFromPath(legacyOnlyPath, null, team, requireIdentity: false);
+                : File.Exists(legacyOnlyPath)
+                    ? LegacyCompatibilityReadRemoved(legacyOnlyPath, null, team)
+                    : ResolveFromPath(legacyOnlyPath, null, team, requireIdentity: false);
         }
 
         string newPath;
@@ -124,49 +130,22 @@ internal static class NotifyRoleTopologyStore
             return Failure("topology-invalid", exception.Message);
         }
 
-        var legacyPath = ResolvePath(routingRoot);
         if (!File.Exists(newPath))
         {
-            var legacy = ResolveFromPath(legacyPath, null, team, requireIdentity: false);
-            if (!legacy.Resolved)
+            var legacyPath = ResolvePath(routingRoot);
+            if (File.Exists(legacyPath))
             {
-                return Failure(
-                    "topology-missing",
-                    $"Recorded role topology for domain '{domain}' team '{team}' was not found at '{newPath}'. "
-                    + $"Provision and record the team's workspace, roles, residences, panes/readers, then retry "
-                    + $"notify. {TopologyRemedy(team)}");
+                return LegacyCompatibilityReadRemoved(legacyPath, domain, team);
             }
 
-            return legacy with
-            {
-                Warnings =
-                [
-                    $"Deprecated topology compatibility read from '{legacyPath}'; run "
-                    + $"`intent-cli session-layer topology record --domain {domain} --team {team} ... --write` to record this "
-                    + "machine's topology at its per-team local path.",
-                ],
-                Summary = legacy.Summary + " Deprecated legacy topology compatibility read; re-record with "
-                    + $"`intent-cli session-layer topology record --domain {domain} --team {team} ... --write`.",
-            };
-        }
-
-        var current = ResolveFromPath(newPath, domain, team, requireIdentity: true);
-        if (!current.Resolved || !File.Exists(legacyPath))
-        {
-            return current;
-        }
-
-        var legacyForComparison = ResolveFromPath(legacyPath, null, team, requireIdentity: false);
-        if (!legacyForComparison.Resolved || !Equivalent(current.Topology!, legacyForComparison.Topology!))
-        {
             return Failure(
-                "topology-location-conflict",
-                $"Topology records for domain '{domain}' team '{team}' disagree between new path '{newPath}' and "
-                + $"legacy path '{legacyPath}'. Refusing to prefer either machine topology. "
-                + TopologyRemedy(team));
+                "topology-missing",
+                $"Recorded role topology for domain '{domain}' team '{team}' was not found at '{newPath}'. "
+                + $"Provision and record the team's workspace, roles, residences, panes/readers, then retry "
+                + $"notify. {TopologyRemedy(team)}");
         }
 
-        return current;
+        return ResolveFromPath(newPath, domain, team, requireIdentity: true);
     }
 
     private static NotifyTopologyResolution ResolveFromPath(
@@ -385,40 +364,22 @@ internal static class NotifyRoleTopologyStore
                 path = matches[0];
             }
         }
-        if (!File.Exists(path) && !string.IsNullOrWhiteSpace(domain) && File.Exists(ResolvePath(routingRoot)))
+        if (!File.Exists(path) && !string.IsNullOrWhiteSpace(domain))
         {
-            path = ResolvePath(routingRoot);
-        }
-
-        if (!string.IsNullOrWhiteSpace(domain)
-            && File.Exists(ResolvePath(routingRoot, domain, team))
-            && File.Exists(ResolvePath(routingRoot)))
-        {
-            var dualLocation = Resolve(routingRoot, domain, team);
-            if (!dualLocation.Resolved
-                && string.Equals(dualLocation.Cause, "topology-location-conflict", StringComparison.Ordinal))
+            var legacyPath = ResolvePath(routingRoot);
+            if (File.Exists(legacyPath))
             {
-                findings.Add(Finding("<topology>", "location", dualLocation.Cause!, dualLocation.Summary));
+                var compatibility = LegacyCompatibilityReadRemoved(legacyPath, domain, team);
+                findings.Add(Finding("<topology>", "file", compatibility.Cause!, compatibility.Summary));
                 return Validation(team, path, findings);
             }
         }
-
-        var warnings = !string.IsNullOrWhiteSpace(domain)
-            && string.Equals(path, ResolvePath(routingRoot), StringComparison.Ordinal)
-            && File.Exists(path)
-                ? new[]
-                {
-                    $"Deprecated topology compatibility read from '{path}'; run "
-                    + $"`intent-cli session-layer topology record --domain {domain} --team {team} ... --write` to re-record this "
-                    + "machine's topology at its per-team local path.",
-                }
-                : [];
 
         if (!File.Exists(path))
         {
             var resolution = Resolve(routingRoot, domain, team);
             findings.Add(Finding("<topology>", "file", resolution.Cause!, resolution.Summary));
-            return Validation(team, path, findings, warnings);
+            return Validation(team, path, findings);
         }
 
         if (!string.IsNullOrWhiteSpace(domain) && !string.Equals(path, ResolvePath(routingRoot), StringComparison.Ordinal))
@@ -435,7 +396,7 @@ internal static class NotifyRoleTopologyStore
                         $"Topology file '{path}' identifies domain '{recordedDomain ?? "missing"}' team "
                         + $"'{recordedTeam ?? "missing"}', but its path was requested for domain '{domain}' "
                         + $"team '{team}'. Refusing the copied or misplaced machine record."));
-                    return Validation(team, path, findings, warnings);
+                    return Validation(team, path, findings);
                 }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
@@ -451,7 +412,7 @@ internal static class NotifyRoleTopologyStore
             {
                 findings.Add(Finding("<topology>", "team", "topology-team-missing",
                     $"Topology file '{path}' {teamError}"));
-                return Validation(team, path, findings, warnings);
+                return Validation(team, path, findings);
             }
 
             var rolesElement = teamElement.TryGetProperty("roles", out var nestedRoles)
@@ -461,7 +422,7 @@ internal static class NotifyRoleTopologyStore
             {
                 findings.Add(Finding("<topology>", "roles", "topology-invalid",
                     $"Team '{team}' has no object-valued roles field."));
-                return Validation(team, path, findings, warnings);
+                return Validation(team, path, findings);
             }
 
             var teamWorkspaceId = ReadString(teamElement, "workspace_id")
@@ -549,7 +510,7 @@ internal static class NotifyRoleTopologyStore
                 $"Topology file '{path}' is unreadable: {exception.Message}"));
         }
 
-        return Validation(team, path, findings, warnings);
+        return Validation(team, path, findings);
     }
 
     public static bool TryResolveReaderPath(

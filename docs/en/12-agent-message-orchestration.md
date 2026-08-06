@@ -426,7 +426,11 @@ update/retire mutation commands emit JSON and support only `--format json`. For 
 an explicit `--dry-run` takes precedence over `--write` in either flag order and
 never writes.
 
-After a successful `retire-legacy`, the CLI appends one fleet-citable entry to
+The legacy fixed `role-pane-mapping.json` compatibility read is removed. If a
+host still has that file but lacks its per-team record, readers fail closed and
+name `topology record --domain <domain> --team <team> ... --write` and
+`topology retire-legacy --domain <domain> --team <team> --evidence <evidence>
+--confirm-retire-legacy --write`; no reader auto-migrates it. After a successful `retire-legacy`, the CLI appends one fleet-citable entry to
 `<host-repo>/.intent-cli/legacy-topology-retirements.jsonl`, outside the ignored
 machine-local topology directory. Its defined fields are `timestamp_utc`, `host`,
 `domain`, `team`, `retired_path`, and named `evidence`, so a later ledger decision
