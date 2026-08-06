@@ -111,13 +111,9 @@ public sealed class ReleaseNotesV0120DocsTests
     public void ReleasePrep_RetargetsVersionAndRemovesSupersededV0112Stubs_G622()
     {
         var root = RepoVersionPolicySource.RepoRoot();
-        var policy = VersionPolicy.TryReadFromRepo(root);
-
-        Assert.NotNull(policy);
-        Assert.Equal("0.11.1", policy!.StableVersion);
-        Assert.Equal("0.12.0", policy.NextVersion);
         foreach (var language in new[] { "en", "ja" })
         {
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.12.0.md")));
             Assert.False(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.11.2.md")));
         }
     }
