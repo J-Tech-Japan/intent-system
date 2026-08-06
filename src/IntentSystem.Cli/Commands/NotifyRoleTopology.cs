@@ -364,40 +364,22 @@ internal static class NotifyRoleTopologyStore
                 path = matches[0];
             }
         }
-        if (!File.Exists(path) && !string.IsNullOrWhiteSpace(domain) && File.Exists(ResolvePath(routingRoot)))
+        if (!File.Exists(path) && !string.IsNullOrWhiteSpace(domain))
         {
-            path = ResolvePath(routingRoot);
-        }
-
-        if (!string.IsNullOrWhiteSpace(domain)
-            && File.Exists(ResolvePath(routingRoot, domain, team))
-            && File.Exists(ResolvePath(routingRoot)))
-        {
-            var dualLocation = Resolve(routingRoot, domain, team);
-            if (!dualLocation.Resolved
-                && string.Equals(dualLocation.Cause, "topology-location-conflict", StringComparison.Ordinal))
+            var legacyPath = ResolvePath(routingRoot);
+            if (File.Exists(legacyPath))
             {
-                findings.Add(Finding("<topology>", "location", dualLocation.Cause!, dualLocation.Summary));
+                var compatibility = LegacyCompatibilityReadRemoved(legacyPath, domain, team);
+                findings.Add(Finding("<topology>", "file", compatibility.Cause!, compatibility.Summary));
                 return Validation(team, path, findings);
             }
         }
-
-        var warnings = !string.IsNullOrWhiteSpace(domain)
-            && string.Equals(path, ResolvePath(routingRoot), StringComparison.Ordinal)
-            && File.Exists(path)
-                ? new[]
-                {
-                    $"Deprecated topology compatibility read from '{path}'; run "
-                    + $"`intent-cli session-layer topology record --domain {domain} --team {team} ... --write` to re-record this "
-                    + "machine's topology at its per-team local path.",
-                }
-                : [];
 
         if (!File.Exists(path))
         {
             var resolution = Resolve(routingRoot, domain, team);
             findings.Add(Finding("<topology>", "file", resolution.Cause!, resolution.Summary));
-            return Validation(team, path, findings, warnings);
+            return Validation(team, path, findings);
         }
 
         if (!string.IsNullOrWhiteSpace(domain) && !string.Equals(path, ResolvePath(routingRoot), StringComparison.Ordinal))
@@ -414,7 +396,7 @@ internal static class NotifyRoleTopologyStore
                         $"Topology file '{path}' identifies domain '{recordedDomain ?? "missing"}' team "
                         + $"'{recordedTeam ?? "missing"}', but its path was requested for domain '{domain}' "
                         + $"team '{team}'. Refusing the copied or misplaced machine record."));
-                    return Validation(team, path, findings, warnings);
+                    return Validation(team, path, findings);
                 }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
@@ -430,7 +412,7 @@ internal static class NotifyRoleTopologyStore
             {
                 findings.Add(Finding("<topology>", "team", "topology-team-missing",
                     $"Topology file '{path}' {teamError}"));
-                return Validation(team, path, findings, warnings);
+                return Validation(team, path, findings);
             }
 
             var rolesElement = teamElement.TryGetProperty("roles", out var nestedRoles)
@@ -440,7 +422,7 @@ internal static class NotifyRoleTopologyStore
             {
                 findings.Add(Finding("<topology>", "roles", "topology-invalid",
                     $"Team '{team}' has no object-valued roles field."));
-                return Validation(team, path, findings, warnings);
+                return Validation(team, path, findings);
             }
 
             var teamWorkspaceId = ReadString(teamElement, "workspace_id")
@@ -528,7 +510,7 @@ internal static class NotifyRoleTopologyStore
                 $"Topology file '{path}' is unreadable: {exception.Message}"));
         }
 
-        return Validation(team, path, findings, warnings);
+        return Validation(team, path, findings);
     }
 
     public static bool TryResolveReaderPath(

@@ -92,6 +92,42 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
     }
 
     [Fact]
+    public void ValidateAndPreflight_LegacyOnlyFailClosed_G627()
+    {
+        const string team = "intent-cli-dev";
+        var context = CreateContext(Domain);
+        using var modeWriter = new StringWriter();
+        Assert.Equal(0, SessionLayerCommand.ExecuteSet(context,
+            ["--domain", Domain, "--team", team, "--mode", "herdr-only", "--write", "--format", "json"], modeWriter));
+
+        var legacyPath = NotifyRoleTopologyStore.ResolvePath(root);
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyPath)!);
+        File.WriteAllText(legacyPath,
+            """
+            { "team": "intent-cli-dev", "workspace_id": "w1", "roles": {
+                "orchestration": { "resident": "herdr", "workspace_id": "w1", "pane_id": "w1:p1" }
+            }}
+            """);
+
+        using var validateWriter = new StringWriter();
+        Assert.Equal(1, SessionLayerTopologyCommand.ExecuteValidate(context,
+            ["--domain", Domain, "--team", team, "--format", "json"], validateWriter));
+        using var validation = JsonDocument.Parse(validateWriter.ToString());
+        Assert.False(validation.RootElement.GetProperty("valid").GetBoolean());
+        var finding = Assert.Single(validation.RootElement.GetProperty("findings").EnumerateArray());
+        Assert.Equal("legacy-topology-compatibility-removed", finding.GetProperty("cause").GetString());
+        Assert.Contains("topology record", finding.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.Contains("retire-legacy", finding.GetProperty("message").GetString(), StringComparison.Ordinal);
+
+        var preflight = SessionLayerPreflight.Analyze(root, Domain, team);
+        Assert.Equal(SessionLayerPreflight.ConfigurationIncomplete, preflight.Verdict);
+        var preflightFinding = Assert.Single(preflight.Scopes.Single().Findings,
+            item => item.Cause == "legacy-topology-compatibility-removed");
+        Assert.Contains("topology record", preflightFinding.Message, StringComparison.Ordinal);
+        Assert.Contains("retire-legacy", preflightFinding.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TopologyCommands_RequireExplicitNonDefaultDomainForRecordAndValidate_G604()
     {
         var context = CreateContext("sekiban-as-a-service");
