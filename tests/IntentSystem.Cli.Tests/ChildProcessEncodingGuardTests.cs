@@ -11,6 +11,15 @@ public sealed class ChildProcessEncodingGuardTests
         {
             var lines = File.ReadAllLines(file);
             var source = File.ReadAllText(file);
+            var outputRedirects = lines.Count(line => line.Contains("RedirectStandardOutput =", StringComparison.Ordinal));
+            var outputEncodings = lines.Count(line => line.Contains("StandardOutputEncoding =", StringComparison.Ordinal));
+            var errorRedirects = lines.Count(line => line.Contains("RedirectStandardError =", StringComparison.Ordinal));
+            var errorEncodings = lines.Count(line => line.Contains("StandardErrorEncoding =", StringComparison.Ordinal));
+            if (outputRedirects != outputEncodings || errorRedirects != errorEncodings)
+            {
+                offenders.Add($"{Path.GetRelativePath(root, file)}:redirect/encoding counts {outputRedirects}/{outputEncodings}, {errorRedirects}/{errorEncodings}");
+            }
+
             for (var i = 0; i < lines.Length; i++)
             {
                 if (!lines[i].Contains("process.StartInfo.RedirectStandard", StringComparison.Ordinal))
