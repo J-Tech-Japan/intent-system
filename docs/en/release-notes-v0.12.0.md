@@ -20,8 +20,17 @@ This minor release contains exactly these verified `main` merges:
 - G619 — [PR #1342](https://github.com/J-Tech-Japan/intent-system/pull/1342), merge `36b89ac9fbfc`.
 - G620 — [PR #1344](https://github.com/J-Tech-Japan/intent-system/pull/1344), merge `72878b63ff97`.
 - G621 — [PR #1346](https://github.com/J-Tech-Japan/intent-system/pull/1346), merge `a1886218f56c`.
+- G623 — [PR #1350](https://github.com/J-Tech-Japan/intent-system/pull/1350), merge `c04e137`.
+- G624 — [PR #1352](https://github.com/J-Tech-Japan/intent-system/pull/1352), merge `ccd4f29`.
+- G625 — [PR #1354](https://github.com/J-Tech-Japan/intent-system/pull/1354), merge `06f1a71`.
+- G626 — [PR #1356](https://github.com/J-Tech-Japan/intent-system/pull/1356), merge `2bb20d3`.
+- G627 — [PR #1358](https://github.com/J-Tech-Japan/intent-system/pull/1358), merge `5b86977`.
+- G628 — [PR #1360](https://github.com/J-Tech-Japan/intent-system/pull/1360), merge `f464a04`.
 
-Each commit resolves on `main`; no other slice is included. See
+These eighteen units were enumerated by running `git log v0.11.1..main`, not
+by hand. Every commit in that range is accounted for as one of these eighteen
+unit merges, G622's prepare-only notes authoring commit (excluded as the
+prepare-only slice), or the residual version roll and guard-fix commits. See
 [v0.11.1](release-notes-v0.11.1.md) and [v0.11.0](release-notes-v0.11.0.md)
 for the preceding shipped scopes.
 
@@ -29,7 +38,8 @@ for the preceding shipped scopes.
 
 This is a verifiable minor bump. Compared with `v0.11.1`, the command surfaces
 `session-layer topology update-kind`, `session-layer topology retire-legacy`,
-and `session-layer topology update-field` are new, and a recipe can newly
+`session-layer topology update-field`, `judgment-wait`, and
+`automation issue-publish --execution-unit` are new, and a recipe can newly
 declare `delivery_method: file-backed`. None of those surfaces exists at
 `v0.11.1`; the version policy reserves a minor bump for new command surface.
 
@@ -50,6 +60,37 @@ declare `delivery_method: file-backed`. None of those surfaces exists at
    success.
 4. **Documentation guards.** The repository-wide Markdown link/anchor guard
    and rolling Japanese terminology guard now fail CI on regressions.
+
+## Further behaviour changes in G623–G628
+
+5. **Judgment vocabulary (G623).** `judgment-wait` replaces
+   `operator-attention`. The old command remains a `deprecate-with-alias`
+   compatibility alias through 1.x; its machine output carries a
+   `deprecation_warning` naming `judgment-wait`, and removal is only allowed in
+   the next MAJOR release.
+6. **Transport graduation (G624).** `herdr-only` is no longer preview and is
+   preferred because it has fewer dependencies. `agmsg + herdr` remains
+   supported and explicitly is not retired; neither transport is called
+   primary.
+7. **Dispatch outcome vocabulary (G625–G626).** `issue-publish` accepts
+   `--execution-unit`, and unresolved work is reported as unresolved. A
+   delivery that reaches an observed working transition now reports a
+   successful non-terminal state instead of `working-did-not-settle` or
+   `not-observed-within-bound`. A caller matching either old name will
+   **silently stop matching**; update it to match the machine's
+   `working_transition` field.
+
+### Breaking change: legacy fixed-path topology read removed (G627)
+
+Hosts that have only the legacy `role-pane-mapping.json` and no per-team
+record now fail closed. The diagnostic names `topology record` and
+`topology retire-legacy` as recovery commands; no automatic migration occurs.
+This is a breaking change for that legacy-only host population.
+
+8. **Versioning policy (G628).** The 1.0 feature set is frozen at v0.12.0.
+   A surface added after the freeze ships as `preview`, is recorded in the
+   ledger as `preview-through-1.x`, sits outside the 1.0 compatibility promise,
+   and is formalised at a later MAJOR release.
 
 ## Operational purpose
 
@@ -73,10 +114,15 @@ dotnet tool install -g JTechJapan.IntentSystem.Cli --version 0.12.0
 ## Release-readiness gate
 
 - [ ] `eng/version.json` is `stableVersion` `0.11.1` / `nextVersion` `0.12.0`.
-- [ ] These EN/JA notes name exactly G610–G621 with the verified PRs and merge
-      commits above.
-- [ ] The minor comparison confirms the three topology subcommands and declared
-      `delivery_method` are absent from `v0.11.1`.
+- [ ] These EN/JA notes name exactly the eighteen units G610–G621 and G623–G628,
+      with the verified PRs and merge commits above; the enumeration comes from
+      `git log v0.11.1..main`.
+- [ ] The minor comparison confirms `judgment-wait`,
+      `automation issue-publish --execution-unit`, the three topology
+      subcommands, and declared `delivery_method` are absent from `v0.11.1`.
+- [ ] Verify the G627 breaking change is understood: legacy-only hosts fail
+      closed and must use `topology record` or `topology retire-legacy`; verify
+      the v0.12.0 freeze and preview policy before creating the Release.
 - [ ] G475, focused release-note checks, full suite, diff check, and exact-head
       CI are green.
 - [ ] The operator explicitly approves creating and publishing the v0.12.0 GitHub Release.

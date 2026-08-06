@@ -4,8 +4,8 @@ using IntentSystem.Cli.Infrastructure;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G622 keeps the v0.12.0 prepare-only notes complete, bilingual, and bounded
-/// to the twelve merges selected for this minor release.
+/// G633 keeps the v0.12.0 prepare-only notes complete, bilingual, and bounded
+/// to the eighteen merged units selected for this minor release.
 /// </summary>
 public sealed class ReleaseNotesV0120DocsTests
 {
@@ -23,12 +23,18 @@ public sealed class ReleaseNotesV0120DocsTests
         ("G619", "#1342", "36b89ac9fbfc"),
         ("G620", "#1344", "72878b63ff97"),
         ("G621", "#1346", "a1886218f56c"),
+        ("G623", "#1350", "c04e137"),
+        ("G624", "#1352", "ccd4f29"),
+        ("G625", "#1354", "06f1a71"),
+        ("G626", "#1356", "2bb20d3"),
+        ("G627", "#1358", "5b86977"),
+        ("G628", "#1360", "f464a04"),
     ];
 
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void ReleaseNotes_CoverExactlyG610ThroughG621_WithVerifiedMerges_G622(string language)
+    public void ReleaseNotes_CoverExactlyEighteenUnits_WithVerifiedMerges_G633(string language)
     {
         var notes = Read(language);
         var listedUnits = Regex.Matches(notes, @"(?m)^- (G\d+) —")
@@ -36,7 +42,7 @@ public sealed class ReleaseNotesV0120DocsTests
             .ToArray();
 
         Assert.Equal(ReleasedUnits.Select(unit => unit.Unit), listedUnits);
-        Assert.Equal(12, listedUnits.Length);
+        Assert.Equal(18, listedUnits.Length);
         foreach (var unit in ReleasedUnits)
         {
             Assert.Contains(unit.Pr, notes, StringComparison.Ordinal);
@@ -73,6 +79,18 @@ public sealed class ReleaseNotesV0120DocsTests
         Assert.Contains("Release", notes, StringComparison.Ordinal);
         Assert.Contains("tag", notes, StringComparison.Ordinal);
         Assert.Contains("publish", notes, StringComparison.Ordinal);
+        foreach (var surface in new[] { "judgment-wait", "execution-unit", "preview-through-1.x" })
+        {
+            Assert.Contains(surface, notes, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("working-did-not-settle", notes, StringComparison.Ordinal);
+        Assert.Contains("not-observed-within-bound", notes, StringComparison.Ordinal);
+        Assert.Contains(language == "en" ? "silently" : "silent", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("working_transition", notes, StringComparison.Ordinal);
+        Assert.Contains("breaking", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("topology record", notes, StringComparison.Ordinal);
+        Assert.Contains("topology retire-legacy", notes, StringComparison.Ordinal);
     }
 
     [Fact]
