@@ -92,7 +92,9 @@ public sealed class GettingStartedOrchestrationDocsG607Tests
         Assert.Contains("Choose your onboarding pattern", root, StringComparison.Ordinal);
         Assert.Contains("Separate host × brand-new", root, StringComparison.Ordinal);
         Assert.Contains("Same repo × existing", root, StringComparison.Ordinal);
-        Assert.Contains("PREVIEW** label is a maturity note", root, StringComparison.Ordinal);
+        Assert.Contains("`herdr-only` for a collocated single-machine team", root, StringComparison.Ordinal);
+        Assert.Contains("supported, non-retired `agmsg` + herdr", root, StringComparison.Ordinal);
+        Assert.DoesNotContain("**PREVIEW** label is a maturity note", root, StringComparison.Ordinal);
         Assert.Contains("Timer-loop alternative", root, StringComparison.Ordinal);
     }
 

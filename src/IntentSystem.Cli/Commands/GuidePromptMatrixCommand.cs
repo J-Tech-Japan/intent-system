@@ -1488,7 +1488,7 @@ Hard rules:
     {
         writer.WriteLine("# Guide prompt matrix");
         writer.WriteLine();
-        writer.WriteLine("> **PRIMARY for multi-thread setups:** the four-thread agmsg **orchestrator-message mode**");
+        writer.WriteLine("> **PRIMARY for multi-thread setups:** the four-thread **orchestrator-message model** over the selected session transport");
         writer.WriteLine("> (design / orchestrator / implementation / review) is the practiced, maintained model — a");
         writer.WriteLine("> single orchestrator thread paces loopless implementation/review receivers over agmsg instead");
         writer.WriteLine("> of independent timers. Generate its setup/startup/troubleshooting guidance with");

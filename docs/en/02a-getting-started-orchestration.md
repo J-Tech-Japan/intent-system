@@ -14,9 +14,9 @@ you never combine instructions from two patterns.
 | Same repository, metadata branch | [Same repo × brand-new](02d-same-repo-brand-new.md) | [Same repo × existing](02e-same-repo-existing.md) |
 
 Each pattern starts with exactly two coexisting paste-ready initial prompts.
-Choose `herdr-only` first when all four agents are collocated on one machine;
-its **PREVIEW** status is a maturity note. Choose `agmsg` + herdr for a
-distributed team or an existing agmsg investment. Both are supported choices,
+Prefer `herdr-only` when all four agents are collocated on one machine because
+it has fewer dependencies. Choose the supported, non-retired `agmsg` + herdr
+transport for a distributed team or an existing agmsg investment. Both are
 recorded with `session-layer set`; the **four-thread model** is primary, never
 either transport. After the initial prompt, follow the recorded mode and the
 current installed guides instead of combining transport-specific instructions.
@@ -31,8 +31,9 @@ remains authoritative for session-layer semantics.
 The four-thread model is the **primary** model: design authors intent,
 orchestration coordinates, implementation delivers the child PR, and review
 checks it. For a collocated team on one machine, this route recommends the
-`herdr-only` transport. `herdr-only` is **PREVIEW only as a transport**; the
-four-thread model is not preview.
+`herdr-only` transport because it has fewer dependencies. `agmsg` + herdr
+remains supported and is not retired for its distributed/existing-agmsg fit;
+the four-thread model is primary, not either transport.
 
 ## 1. Choose repositories and folders
 
@@ -85,7 +86,7 @@ returned this success shape (dynamic timestamps and migration items omitted):
   "command_mode": "write",
   "applied": true,
   "changed": true,
-  "summary": "team `docs-team` in domain `onboarding`: session layer is herdr-only (PREVIEW — session transport only) (recorded)."
+  "summary": "team `docs-team` in domain `onboarding`: session layer is herdr-only (preferred — fewer dependencies) (recorded)."
 }
 ```
 

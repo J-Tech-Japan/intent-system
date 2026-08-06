@@ -29,16 +29,12 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("ALTERNATIVE — fully supported", output, StringComparison.Ordinal);
         Assert.DoesNotContain("Opt-in mode", output, StringComparison.Ordinal);
 
-        // G570 scoped this to the section it rules, and did not weaken it. G540
-        // forbids qualifying the four-thread MODEL and its timer-loop
-        // alternative; the assertion was document-wide only because the
-        // document discussed nothing else. It now also names the SESSION LAYER,
-        // where `herdr-only` is honestly a preview — so the ban applies to the
-        // mode-separation section, and the qualifier must carry its own scoping
-        // sentence wherever it does appear.
+        // G624 graduates herdr-only; the four-thread MODEL and its timer-loop
+        // alternative remain unqualified independently of transport choice.
         var modeSeparation = SectionFrom(output, "## Mode separation");
         Assert.DoesNotContain("preview", modeSeparation, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("PREVIEW here scopes the SESSION TRANSPORT only", output, StringComparison.Ordinal);
+        Assert.Contains(SessionLayerMode.TransportPreferenceSentence, output, StringComparison.Ordinal);
+        Assert.DoesNotContain("PREVIEW", output, StringComparison.Ordinal);
         // Mixed-mode timer race is explicitly forbidden.
         Assert.Contains("do NOT launch the implementation/review recurring timer loops", output, StringComparison.Ordinal);
         // agmsg is signal-only; intent-cli/GitHub authoritative.

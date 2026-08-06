@@ -9,15 +9,15 @@
 最初に [自己完結した導入パターン](02a-getting-started-orchestration.md) を選びます。
 別ホストリポジトリ / 同一リポジトリのメタデータ用ブランチと、新規 / 既存プロジェクトを
 掛け合わせます。各パターンには貼り付け可能な最初のプロンプトが 2 つあります。1 台に
-同居するチームでは `herdr-only` を最初のサポート対象の選択肢とします（PREVIEW は成熟度の
-注記です）。分散チームまたは既存の agmsg 投資があるチームには `agmsg` + herdr を選びます。
-primary なのはトランスポートではなく 4 スレッドモデルです。
+同居するチームでは、依存関係が少ない `herdr-only` を優先します。分散チームまたは既存の
+agmsg 投資があるチームには、サポート対象で廃止されない `agmsg` + herdr を選びます。primary
+なのはトランスポートではなく 4 スレッドモデルです。
 
 ## ページ一覧
 
 1. [インストール](01-install.md)
 2. [プロジェクト開始](02-project-start.md)
-2a. [はじめに: 最初の packet までの道のり](02a-getting-started-orchestration.md) — 最小開始と primary な 4 スレッドモデル。同居する `herdr-only` はサポート対象（PREVIEW は成熟度の注記）
+2a. [はじめに: 最初の packet までの道のり](02a-getting-started-orchestration.md) — 最小開始と primary な 4 スレッドモデル。同居する `herdr-only` は依存関係が少ないため優先
    - [別ホスト × 新規](02b-separate-host-brand-new.md)
    - [別ホスト × 既存](02c-separate-host-existing.md)
    - [同一リポジトリ × 新規](02d-same-repo-brand-new.md)

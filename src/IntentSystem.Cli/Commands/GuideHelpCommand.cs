@@ -282,11 +282,12 @@ internal static class GuideHelpCommand
             Purpose = "G438 AI-agent-facing guidance for importing external GitHub issues and PRs. Three lanes: external-issue (issue intake before intent-target), external-pr-review (PR review before transitions), external-pr-adopt (rare explicit host adoption). Each lane requires lightweight packet/review-context metadata before any label mutation.",
             Example = "intent-cli guide artifact-intake --lane external-issue --repo <owner/repo> --format markdown"
         },
-        // G487/G540: PRIMARY agmsg-backed four-thread orchestrator-thread guidance.
+        // G487/G540: PRIMARY four-thread orchestrator-thread guidance over the
+        // selected session transport.
         new GuideSubcommandEntry
         {
             Name = "orchestrator-thread",
-            Purpose = "G487/G540 paste-ready prompts for the PRIMARY agmsg-backed four-thread orchestrator model (design/orchestrator/implementation/review) plus the implementation/review threads it delegates to. agmsg is a message/progress/completion signal layer only; intent-cli and GitHub stay authoritative. Distinguishes the primary orchestrator-message mode from the simpler timer-loop alternative (no mixed-mode timer races), pins the structured reply contract, the design-orchestrator double-check rule, an orchestrator first-wake, and safety boundaries. Timer-loop mode remains fully supported, not replaced.",
+            Purpose = "G487/G540 paste-ready prompts for the PRIMARY four-thread orchestrator model (design/orchestrator/implementation/review) over its selected session transport, plus the implementation/review threads it delegates to. agmsg is a message/progress/completion signal layer only; intent-cli and GitHub stay authoritative. Distinguishes the primary orchestrator-message model from the simpler timer-loop alternative (no mixed-mode timer races), pins the structured reply contract, the design-orchestrator double-check rule, an orchestrator first-wake, and safety boundaries. Timer-loop mode remains fully supported, not replaced.",
             Example = "intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --format markdown"
         },
         // G563: G488's renderer is retired to a pointer — `intent-cli skill`

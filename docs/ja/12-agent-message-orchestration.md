@@ -4,9 +4,9 @@
 
 このページは **主要な 4 スレッドモデル**（design / orchestrator / implementation /
 review）と、特に 1 つのホストリポジトリが **複数の intent ドメイン** を保持する場合に
-それを安全に保つ方法を説明します。1 台のマシンに同居するチームは、サポート対象の
-`herdr-only` トランスポートを最初に選びます（**PREVIEW** は成熟度に関する注記です）。
-分散したチームまたは既存の agmsg 投資があるチームには、サポート対象の `agmsg` + herdr を選びます。選択は
+それを安全に保つ方法を説明します。1 台のマシンに同居するチームは、依存関係が少ない
+`herdr-only` トランスポートを優先します。分散したチームまたは既存の agmsg 投資があるチームには、
+サポート対象で廃止されない `agmsg` + herdr を選びます。選択は
 `session-layer set` で記録し、どちらのトランスポートも主要ではありません。正本となる
 貼り付け可能なプロンプトはインストール済みの intent-cli ガイダンスから生成され、このページの
 プロンプトを手で写してはいけません。現在のプロンプトは次で生成します:
@@ -299,12 +299,12 @@ agmsg internals と同じくリンクアウトし、herdr 自身のドキュメ�
 立ち会う、ping テスト前の actas + readiness、1 ロール 1 保持者と handover 時の graceful
 drop）が満たされるなら、**任意の** 同等なワークスペースマネージャーで置き換えられます。
 
-## herdr-only の運用手順（PREVIEW maturity）
+## herdr-only の運用手順（preferred — fewer dependencies）
 
 この節はチームが `herdr-only` を記録している場合だけ operative です。agmsg の
-provisioning / receiver 節に対する具体的な counterpart です。PREVIEW が限定するのは
-transport であり、4 スレッドモデルではありません。1 チームでは transport を 1 つだけ
-動かし、agmsg と herdr の mixed delivery は contract violation です。
+provisioning / receiver 節に対する具体的な counterpart です。依存関係が少ないため優先しますが、
+agmsg + herdr はサポート対象で廃止されません。1 チームでは transport を 1 つだけ動かし、
+agmsg と herdr の mixed delivery は contract violation です。
 
 ### Provisioning と READY の証明
 
@@ -1046,7 +1046,7 @@ orchestrator はそれに従って行動する前に、すべての主張を int
 
 | モード | ドライバー | 備考 |
 |---|---|---|
-| **orchestrator-message モード** | 4 つ目の orchestrator スレッド | **PRIMARY。** 実践され、メンテナンスされているモデル。orchestrator が agmsg 経由で実装/レビュースレッドをペース配分する。定常状態はメッセージ駆動で、30 分クラスの design-thread watchdog loop を RECOMMENDED なデフォルトのセーフティネットとする(orchestrator-side の長間隔 automation は選択可能な alternative)。明示的な 5 分の orchestrator タイマーは fallback/legacy オプションとして引き続きサポートされる。 |
+| **orchestrator-message モード** | 4 つ目の orchestrator スレッド | **PRIMARY な 4 スレッドモデル。** 実践され、メンテナンスされているモデル。記録済みトランスポートが agmsg + herdr の場合、orchestrator が agmsg 経由で実装/レビュースレッドをペース配分する。定常状態はメッセージ駆動で、30 分クラスの design-thread watchdog loop を RECOMMENDED なデフォルトのセーフティネットとする(orchestrator-side の長間隔 automation は選択可能な alternative)。明示的な 5 分の orchestrator タイマーは fallback/legacy オプションとして引き続きサポートされる。 |
 | **timer-loop モード** | 定期タイマー | **ALTERNATIVE。** orchestrator スレッドを実行しない domain/repo 向けの、完全サポートされたよりシンプルなセットアップ。実装/レビュースレッドが自己スケジュールし、`worker next-action` / host review-next-slice を読む。orchestrator は不要。 |
 
 同じ domain/repo に対して両モードを同時に実行しては **いけません**。

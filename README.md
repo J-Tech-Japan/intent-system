@@ -63,10 +63,10 @@ metadata live, and are you starting a new project or adding intent-cli to one?
 | Separate host repository | [Separate host × brand-new](docs/en/02b-separate-host-brand-new.md) | [Separate host × existing](docs/en/02c-separate-host-existing.md) |
 | Same repository, metadata branch | [Same repo × brand-new](docs/en/02d-same-repo-brand-new.md) | [Same repo × existing](docs/en/02e-same-repo-existing.md) |
 
-Each pattern is self-contained and gives two paste-ready initial prompts: choose
-supported `herdr-only` first for a collocated single-machine team (its
-**PREVIEW** label is a maturity note), or choose supported `agmsg` + herdr for
-a distributed/multi-machine team or an existing agmsg investment. Record the
+Each pattern is self-contained and gives two paste-ready initial prompts: prefer
+`herdr-only` for a collocated single-machine team because it has fewer
+dependencies, or choose supported, non-retired `agmsg` + herdr for a
+distributed/multi-machine team or an existing agmsg investment. Record the
 choice with `intent-cli session-layer set`; the **four-thread model**, not a
 transport, is primary.
 

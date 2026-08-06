@@ -237,7 +237,7 @@ internal static class SessionLayerCommand
             RecordPath = SessionLayerModeStore.RelativePath,
             SwitchChecklist = SwitchChecklistSection,
             Exclusivity = SessionLayerMode.ExclusivitySentence,
-            PreviewScoping = SessionLayerMode.PreviewScopingSentence,
+            PreviewScoping = SessionLayerMode.TransportPreferenceSentence,
             Summary = summary,
         };
     }

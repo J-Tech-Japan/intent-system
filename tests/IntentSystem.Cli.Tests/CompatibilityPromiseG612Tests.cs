@@ -97,13 +97,13 @@ public sealed class CompatibilityPromiseG612Tests
         var criteria = language == "en"
             ? new[]
             {
-                "four teams", "20 active days", "30-day window", "zero unresolved transport-caused incidents",
+                "operator's", "2026-08-05", "zero unresolved transport-caused incidents",
                 "fresh provisioning", "headless resume", "EOF", "topology", "routing recovery"
             }
             : new[]
             {
-                "4 team", "20 active days", "30-day window", "zero unresolved transport-caused incidents",
-                "fresh provisioning", "headless resume", "EOF", "topology", "routing recovery"
+                "operator decision", "2026-08-05", "zero unresolved", "fresh provisioning",
+                "headless resume", "EOF", "topology", "routing"
             };
         foreach (var criterion in criteria)
         {
