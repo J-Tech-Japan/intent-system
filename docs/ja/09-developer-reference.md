@@ -672,16 +672,17 @@ kind では `— FYI:` prose `` で終わります — そのため読み手（�
 orchestrator でも）が「transition は不要」を actionable な次コマンドと
 取り違えることはありません。
 
-### operator attention の永続状態 (G596)
+### 判断待ちの永続記録 (G596, G623)
 
-人間にしか処理できない作業は、流れて消える通知ではなく state です。次の
-明示的な lifecycle surface を使います。
+進行を止める判断は、流れて消える通知ではなく state です。判断を担う party が
+human operator、design、または別の recorded owner のどれであっても、次の明示的な
+lifecycle surface を使います。
 
 ```text
-intent-cli operator-attention open --record <id> --domain <d> --team <t> --owner <owner> --blocking-reference <issue|pr|unit|release> --action-needed <action> --evidence <evidence> [--supersedes <id>] --write --format json
-intent-cli operator-attention resolve --record <id> --resolution-evidence <evidence> --write --format json
-intent-cli operator-attention supersede --record <id> --evidence <evidence> --write --format json
-intent-cli operator-attention query [--domain <d>] [--team <t>] --format json
+intent-cli judgment-wait open --record <id> --domain <d> --team <t> --owner <owner> --blocking-reference <issue|pr|unit|release> --action-needed <action> --evidence <evidence> [--supersedes <id>] --write --format json
+intent-cli judgment-wait resolve --record <id> --resolution-evidence <evidence> --write --format json
+intent-cli judgment-wait supersede --record <id> --evidence <evidence> --write --format json
+intent-cli judgment-wait query [--domain <d>] [--team <t>] --format json
 ```
 
 進行が別の party の判断待ちで止まっており、かつ既存の clarification
@@ -690,7 +691,7 @@ open します。party は human operator でも design のような logical thr
 特に design の ruling が必要な thread は、GitHub comment だけを投稿せず、この record を open
 します。open した thread は owner、blocking reference、chat を再構成せず
 実行できる具体的 action、establishing evidence を記録しなければなりません。
-その record を operator に route し、後で evidence 付きの明示的 terminal
+その record を記録済み owner に route し、後で evidence 付きの明示的 terminal
 command を実行することも、その thread の責務です。
 
 lifecycle は厳密に `open`、`resolved`、`superseded` の 3 つです。
@@ -710,7 +711,10 @@ scope に履歴が無ければ `check-not-completed`、malformed または unrea
 `cannot-determine` であり、
 `no-attention-pending` には決してなりません。
 
-`operator-attention` は、この obligation に対しては狭い compatibility name です。open record は既存の
+`operator-attention` は 1.x line を通じて残る deprecated compatibility alias です。
+`judgment-wait` と同じ結果を返し、replacement `judgment-wait` と removal `next-major` を持つ
+structured な `deprecation_warning` field を追加します。新しい name の出力にはこの field はありません。
+on-disk record は `.intent-cli/operator-attention.json` のままで identifier も変わりません。open record は既存の
 `automation stalled-work` と `automation heartbeat` に `operator-attention-pending` として即時に現れます。
 item は record を名指しし、recorded `required_actor` と `orchestrator_actionable: false` を持ちます。その
 record だけが item の heartbeat は recorded owner の `route_to` と

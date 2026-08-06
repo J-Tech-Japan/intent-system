@@ -657,16 +657,17 @@ wake procedure and from an external heartbeat are separate follow-up slices.
 informational one, so a reader (human or orchestrator) can never mistake
 "no transition needed" for an actionable next command.
 
-### Durable operator attention (G596)
+### Durable judgment waits (G596, G623)
 
-Human-required work is state, not a notification that may scroll past. Use
-the explicit lifecycle surface:
+A judgment that blocks progress is state, not a notification that may scroll
+past. Use the explicit lifecycle surface, regardless of whether the judging
+party is a human operator, design, or another recorded owner:
 
 ```text
-intent-cli operator-attention open --record <id> --domain <d> --team <t> --owner <owner> --blocking-reference <issue|pr|unit|release> --action-needed <action> --evidence <evidence> [--supersedes <id>] --write --format json
-intent-cli operator-attention resolve --record <id> --resolution-evidence <evidence> --write --format json
-intent-cli operator-attention supersede --record <id> --evidence <evidence> --write --format json
-intent-cli operator-attention query [--domain <d>] [--team <t>] --format json
+intent-cli judgment-wait open --record <id> --domain <d> --team <t> --owner <owner> --blocking-reference <issue|pr|unit|release> --action-needed <action> --evidence <evidence> [--supersedes <id>] --write --format json
+intent-cli judgment-wait resolve --record <id> --resolution-evidence <evidence> --write --format json
+intent-cli judgment-wait supersede --record <id> --evidence <evidence> --write --format json
+intent-cli judgment-wait query [--domain <d>] [--team <t>] --format json
 ```
 
 Open a record whenever progress is blocked awaiting another party's judgment —
@@ -676,8 +677,8 @@ that needs a design ruling opens this record rather than posting the question
 only as a GitHub comment.
 The opening thread must name an owner, the blocking reference, a specific
 action a reader can perform without reconstructing chat, and establishing
-evidence. It remains that thread's obligation to route the record to the
-operator and later run an explicit terminal command with evidence.
+evidence. It remains that thread's obligation to route the record to its
+recorded owner and later run an explicit terminal command with evidence.
 
 The lifecycle is exactly `open`, `resolved`, and `superseded`. Superseded does
 not mean answered: it carries no `resolution_evidence`. If the obligation
@@ -694,9 +695,13 @@ the current open set, and age since opening. A missing store or no history at
 the selected scope returns `check-not-completed`; malformed or unreadable
 state returns `cannot-determine`, never `no-attention-pending`.
 
-The compatibility name `operator-attention` is narrower than the obligation it
-carries. An open record appears immediately in the existing `automation
-stalled-work` and `automation heartbeat` output as `operator-attention-pending`.
+`operator-attention` remains a deprecated compatibility alias through the 1.x
+line. It produces the same result as `judgment-wait` and adds the structured
+`deprecation_warning` field with replacement `judgment-wait` and removal
+`next-major`; new-name output has no such field. The on-disk record remains
+`.intent-cli/operator-attention.json` and its identifiers do not change. An
+open record appears immediately in the existing `automation stalled-work` and
+`automation heartbeat` output as `operator-attention-pending`.
 The item names the record and carries its recorded `required_actor` plus
 `orchestrator_actionable: false`; a heartbeat whose only item is that record
 sets `route_to` to the recorded owner and says `ROUTE TO <RECORDED OWNER>`,

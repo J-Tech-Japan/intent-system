@@ -600,7 +600,7 @@ internal static class AutomationStalledWorkCommand
         {
             // Missing is deliberately exposed as check-not-completed on the
             // result, but it is not invented into an open obligation. Only an
-            // explicit `operator-attention open --write` may create one.
+            // explicit `judgment-wait open --write` may create one.
             return read;
         }
 

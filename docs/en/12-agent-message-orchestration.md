@@ -998,24 +998,24 @@ packet-derived behavior is unchanged. **No clarification schema change.**
 ### Design-judgment wait recording duty
 
 When progress blocks on a design
-judgment, opening an operator-attention record is a duty, not an option. At the
+judgment, opening a judgment-wait record is a duty, not an option. At the
 start of that wait, record design as the owner; the record is queryable and
 surfaces in `heartbeat` / `stalled-work` instead of living in scrollback:
 
 ```bash
-intent-cli operator-attention open --record <design-wait-id> \
+intent-cli judgment-wait open --record <design-wait-id> \
   --domain <domain> --team <team> --owner design \
   --blocking-reference <issue|pr|unit|release> \
   --action-needed "<design judgment needed>" --evidence "<facts>" \
   --write --format json
-intent-cli operator-attention query --domain <domain> --team <team> --format json
+intent-cli judgment-wait query --domain <domain> --team <team> --format json
 ```
 
 Whoever supplies the judgment **must resolve** that same record with the answer
 and evidence:
 
 ```bash
-intent-cli operator-attention resolve --record <design-wait-id> \
+intent-cli judgment-wait resolve --record <design-wait-id> \
   --resolution-evidence "<answer and evidence>" --write --format json
 ```
 
@@ -1121,7 +1121,7 @@ packet (or give an explicit instruction):
 ```
 
 This is a design-judgment wait, not an inbox-only state: when it starts, the
-orchestrator opens the operator-attention record with `--owner design`, queries
+orchestrator opens the judgment-wait record with `--owner design`, queries
 the existing record while waiting, and whoever answers resolves it with
 evidence. The complete lifecycle is specified in
 [Design-judgment wait recording duty](#design-judgment-wait-recording-duty).
@@ -1746,7 +1746,7 @@ visible on the operator's screen the moment it breaks.
   intent-cli/GitHub facts (`worker next-action --github-only`, open PR/CI/
   label state) compared against the last known orchestrator activity; and,
   as the RECOMMENDED primary check, `intent-cli automation heartbeat`
-  itself — it wraps `automation stalled-work` (G523), operator-attention,
+  itself — it wraps `automation stalled-work` (G523), judgment-wait,
   and recorded topology into one verdict, evidence/age basis, stable dedupe
   key, owner, and canonical notify command.
 - **Action** — act only on that one verdict: wait for the named signal within
@@ -1951,7 +1951,7 @@ coordinates through the orchestrator and only surfaces human-needed items.
 5. Summarize **only** human-needed items to the human; keep routine progress
    internal.
 6. If progress is waiting on a design judgment, make that wait durable before
-   waiting: open operator-attention with `--owner design`, query the record, and
+   waiting: open judgment-wait with `--owner design`, query the record, and
    resolve it with evidence when you supply the answer. An answered-but-open
    record is a lie, not a completed design handoff.
 

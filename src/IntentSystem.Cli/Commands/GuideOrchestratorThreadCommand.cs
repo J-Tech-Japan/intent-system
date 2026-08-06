@@ -821,11 +821,11 @@ internal static class GuideOrchestratorThreadCommand
                     + "packet (or give an explicit instruction). The orchestrator only publishes/coordinates a packet "
                     + "that already exists and is `issue-cut-ready`. When progress blocks on that design judgment, "
                     + "recording the wait is a DUTY, not an option: open "
-                    + "`intent-cli operator-attention open --record <design-wait-id> --domain <domain> --team <team> "
+                    + "`intent-cli judgment-wait open --record <design-wait-id> --domain <domain> --team <team> "
                     + "--owner design --blocking-reference <issue|pr|unit|release> --action-needed <judgment-needed> "
-                    + "--evidence <facts> --write --format json`. Query it with `intent-cli operator-attention query "
+                    + "--evidence <facts> --write --format json`. Query it with `intent-cli judgment-wait query "
                     + "--domain <domain> --team <team> --format json`; whoever supplies the judgment MUST resolve it "
-                    + "with evidence using `intent-cli operator-attention resolve --record <design-wait-id> "
+                    + "with evidence using `intent-cli judgment-wait resolve --record <design-wait-id> "
                     + "--resolution-evidence <answer-and-evidence> --write --format json`. An answered-but-open record "
                     + "is a lie: the lifecycle exists so the wait is queryable and surfaces in heartbeat/stalled-work, "
                     + "not lost in scrollback.",
@@ -1617,7 +1617,7 @@ internal static class GuideOrchestratorThreadCommand
                     // design can discharge it.
                     IntentTreeCoEvolutionDuty.Duty,
                     IntentTreeCoEvolutionDuty.CloseoutCheck,
-                    "When progress blocks on a design judgment, record that wait before waiting: open operator-attention with `--owner design`, query the existing record, and whoever supplies the judgment MUST resolve it with evidence. An answered-but-open record is a lie, not a completed design handoff.",
+                    "When progress blocks on a design judgment, record that wait before waiting: open judgment-wait with `--owner design`, query the existing record, and whoever supplies the judgment MUST resolve it with evidence. An answered-but-open record is a lie, not a completed design handoff.",
                 },
                 IdleDiagnostic = new[]
                 {

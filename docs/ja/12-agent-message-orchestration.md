@@ -908,24 +908,24 @@ intent-cli clarify open <execution-unit> \
 
 ### design 判断待ちの記録義務
 
-進行が design の判断で止まるとき、operator-attention
+進行が design の判断で止まるとき、judgment-wait
 record を開くことは任意ではなく義務です。その待ちが始まった時点で design を owner として
 記録します。record は query でき、scrollback に埋もれず `heartbeat` / `stalled-work` に
 現れます:
 
 ```bash
-intent-cli operator-attention open --record <design-wait-id> \
+intent-cli judgment-wait open --record <design-wait-id> \
   --domain <domain> --team <team> --owner design \
   --blocking-reference <issue|pr|unit|release> \
   --action-needed "<必要な design judgment>" --evidence "<事実>" \
   --write --format json
-intent-cli operator-attention query --domain <domain> --team <team> --format json
+intent-cli judgment-wait query --domain <domain> --team <team> --format json
 ```
 
 判断を回答した人は、その回答と evidence を添えて同じ record を**必ず解決**します:
 
 ```bash
-intent-cli operator-attention resolve --record <design-wait-id> \
+intent-cli judgment-wait resolve --record <design-wait-id> \
   --resolution-evidence "<回答と evidence>" --write --format json
 ```
 
@@ -1023,7 +1023,7 @@ packet を author/更新する（または明示的に指示する）のを **�
 ```
 
 これは inbox だけに置く state ではなく design judgment の待ちです。開始時に orchestrator は
-`--owner design` つきの operator-attention record を開き、待機中に既存 record を照会し、
+`--owner design` つきの judgment-wait record を開き、待機中に既存 record を照会し、
 回答者が evidence とともに解決します。完全な lifecycle は
 [design 判断待ちの記録義務](#design-判断待ちの記録義務)を参照してください。
 
@@ -1590,7 +1590,7 @@ credential/keychain セットアップも不要で(セッションの他の部�
   (`worker next-action --github-only`、open PR/CI/label 状態)を最後に確認した
   orchestrator の活動と比較して orchestrator の停滞を確認、そして RECOMMENDED な
   primary チェックとして `intent-cli automation heartbeat` 自体 — これは
-  `automation stalled-work`(G523)、operator-attention、recorded topology を一つの verdict、
+  `automation stalled-work`(G523)、judgment-wait、recorded topology を一つの verdict、
   evidence/age basis、stable dedupe key、owner、canonical notify command に統合します。
 - **アクション** — その一つの verdict だけに従います: named signal を bound 内で待ち、
   `actionable-stall` key には返された canonical notify command を最大 1 回実行し、
@@ -1780,7 +1780,7 @@ orchestrator を通じて調整し、人間が必要な項目だけを表示し�
    orchestrator/receivers が intent-cli 経由で行う仕事。
 5. 人間が必要な項目 **だけ** を人間に要約する。ルーチンな進捗は内部に留める。
 6. design judgment を待つことで進行が止まるなら、待つ前にその待ちを永続的に記録します:
-   `--owner design` つきで operator-attention を開き、record を照会し、回答を出したら
+   `--owner design` つきで judgment-wait を開き、record を照会し、回答を出したら
    evidence とともに解決します。回答済みで open のままの record は嘘であり、design handoff
    は完了していません。
 

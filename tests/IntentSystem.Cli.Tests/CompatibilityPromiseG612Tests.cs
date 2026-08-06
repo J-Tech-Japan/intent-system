@@ -113,6 +113,28 @@ public sealed class CompatibilityPromiseG612Tests
         Assert.Contains("0002-one-dot-zero-compatibility-promise.md", promise, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void Ledger_RecordsG623JudgmentWaitAndItsOneXAlias_G623(string language)
+    {
+        var ledger = Read(language, "1.0-compatibility-ledger.md");
+        var promise = Read(language, "1.0-compatibility-promise.md");
+
+        foreach (var subcommand in new[] { "open", "query", "resolve", "supersede" })
+        {
+            Assert.Contains($"`judgment-wait {subcommand}`", ledger, StringComparison.Ordinal);
+            Assert.Contains($"`operator-attention {subcommand}`", ledger, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("judgment-wait record", ledger, StringComparison.Ordinal);
+        Assert.Contains("stable-at-1.0", ledger, StringComparison.Ordinal);
+        Assert.Contains("deprecation_warning", ledger, StringComparison.Ordinal);
+        Assert.Contains("next MAJOR", ledger, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("G623", promise, StringComparison.Ordinal);
+        Assert.Contains("judgment-wait", promise, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Adr_RecordsTheSameDecision_G612()
     {

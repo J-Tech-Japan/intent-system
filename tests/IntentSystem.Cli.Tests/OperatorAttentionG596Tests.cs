@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
@@ -39,6 +40,54 @@ public sealed class OperatorAttentionG596Tests : IDisposable
         Assert.Equal(0, result.GetProperty("open_count").GetInt32());
         Assert.Contains("has not been completed", result.GetProperty("error").GetString(), StringComparison.Ordinal);
         Assert.False(File.Exists(workspace.StorePath));
+    }
+
+    [Fact]
+    public void JudgmentWait_CanonicalAndDeprecatedAliasHaveEquivalentJsonContracts_G623()
+    {
+        var openArguments = new[]
+        {
+            "open", "--record", "design-rename", "--domain", "intent-cli", "--team", "intent-cli-dev",
+            "--owner", "design", "--blocking-reference", "issue:1349", "--action-needed", "Choose the replacement",
+            "--evidence", "G599 applies to every judging party", "--dry-run", "--format", "json",
+        };
+        AssertEquivalentExceptDeprecationWarning(
+            workspace.Run(["judgment-wait", .. openArguments]).Result,
+            workspace.Run(["operator-attention", .. openArguments]).Result);
+
+        var oldOpen = workspace.Run(
+            "operator-attention", "open", "--record", "written-under-old-name", "--domain", "intent-cli", "--team", "intent-cli-dev",
+            "--owner", "design", "--blocking-reference", "issue:1349", "--action-needed", "Provide design judgment",
+            "--evidence", "old command remains supported through 1.x", "--write", "--format", "json");
+        Assert.Equal(0, oldOpen.ExitCode);
+        AssertDeprecatedAliasWarning(oldOpen.Result);
+
+        var queryArguments = new[] { "query", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json" };
+        AssertEquivalentExceptDeprecationWarning(
+            workspace.Run(["judgment-wait", .. queryArguments]).Result,
+            workspace.Run(["operator-attention", .. queryArguments]).Result);
+
+        var resolveArguments = new[]
+        {
+            "resolve", "--record", "written-under-old-name", "--resolution-evidence", "design decision recorded", "--dry-run", "--format", "json",
+        };
+        AssertEquivalentExceptDeprecationWarning(
+            workspace.Run(["judgment-wait", .. resolveArguments]).Result,
+            workspace.Run(["operator-attention", .. resolveArguments]).Result);
+
+        var supersedeArguments = new[]
+        {
+            "supersede", "--record", "written-under-old-name", "--evidence", "scope changed", "--dry-run", "--format", "json",
+        };
+        AssertEquivalentExceptDeprecationWarning(
+            workspace.Run(["judgment-wait", .. supersedeArguments]).Result,
+            workspace.Run(["operator-attention", .. supersedeArguments]).Result);
+
+        var canonicalQuery = workspace.Run("judgment-wait", "query", "--domain", "intent-cli", "--format", "json").Result;
+        Assert.Contains(
+            canonicalQuery.GetProperty("records").EnumerateArray(),
+            record => record.GetProperty("record_id").GetString() == "written-under-old-name");
+        Assert.False(canonicalQuery.TryGetProperty("deprecation_warning", out _));
     }
 
     [Fact]
@@ -297,13 +346,33 @@ public sealed class OperatorAttentionG596Tests : IDisposable
         var content = File.ReadAllText(Path.Combine(
             RepoVersionPolicySource.RepoRoot(), "docs", language, "09-developer-reference.md"));
 
-        Assert.Contains("operator-attention open", content, StringComparison.Ordinal);
-        Assert.Contains("operator-attention resolve", content, StringComparison.Ordinal);
-        Assert.Contains("operator-attention supersede", content, StringComparison.Ordinal);
-        Assert.Contains("operator-attention query", content, StringComparison.Ordinal);
+        Assert.Contains("judgment-wait open", content, StringComparison.Ordinal);
+        Assert.Contains("judgment-wait resolve", content, StringComparison.Ordinal);
+        Assert.Contains("judgment-wait supersede", content, StringComparison.Ordinal);
+        Assert.Contains("judgment-wait query", content, StringComparison.Ordinal);
+        Assert.Contains("operator-attention", content, StringComparison.Ordinal);
+        Assert.Contains("deprecation_warning", content, StringComparison.Ordinal);
         Assert.Contains("operator-attention-pending", content, StringComparison.Ordinal);
         Assert.Contains("cannot-determine", content, StringComparison.Ordinal);
         Assert.Contains("events.jsonl", content, StringComparison.Ordinal);
+    }
+
+    private static void AssertEquivalentExceptDeprecationWarning(JsonElement canonical, JsonElement alias)
+    {
+        Assert.False(canonical.TryGetProperty("deprecation_warning", out _));
+        AssertDeprecatedAliasWarning(alias);
+
+        var aliasNode = JsonNode.Parse(alias.GetRawText())!.AsObject();
+        Assert.True(aliasNode.Remove("deprecation_warning"));
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(canonical.GetRawText()), aliasNode));
+    }
+
+    private static void AssertDeprecatedAliasWarning(JsonElement result)
+    {
+        var warning = result.GetProperty("deprecation_warning");
+        Assert.Equal("judgment-wait", warning.GetProperty("replacement").GetString());
+        Assert.Equal("next-major", warning.GetProperty("removal").GetString());
+        Assert.Contains("operator-attention", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
     }
 
     private sealed class EmptyLister : IGitHubAutomationCandidateLister
