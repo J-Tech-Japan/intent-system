@@ -119,6 +119,8 @@ intent-cli worker pr-comment-preflight --repo <owner>/<repo> --pr    <n> --forma
 intent-cli automation doctor --format json
 ```
 
+`worker issue-preflight` の target-mismatch 判定は、本文の推測的な文字列検索ではなく、Issue に宣言された `Repository:` と `Target paths:` を根拠にします。子リポジトリを宣言した Issue は、説明文に host や `submodules/` が現れても actionable のままで、その言及は advisory note として出力されます。宣言された対象が submodule 内で workdir が外側なら従来どおりブロックし、`Target paths:` 宣言がない場合は本文から推測せず fail closed します。
+
 | 結果 | 対応 |
 |------|------|
 | `safe_repair_category: child-selector-label-gap` | `intent-cli` が安全と判断した修復を 1 回適用し、リトライ |
