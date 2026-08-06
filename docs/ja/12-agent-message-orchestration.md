@@ -537,13 +537,13 @@ settled pane では、notify は最初に bounded `agent prompt --wait --until w
 idle/done/blocked を待つ別の bounded `agent wait` を実行します。観測された unattended working
 transition が delivery verdict です。一度これを観測したら、後続の settle check が
 `delivered: true` を否定することはありません。独立した acknowledgement は `settle_outcome` で
-`observed`、`not-observed-within-bound`、`not-applicable` と報告し、機械可読な retry verdict は
+`observed`、`pending`、`not-applicable` と報告し、機械可読な retry verdict は
 `resend_permitted` です。idle のままなら `receiver_state_outcome: idle-stays-idle`、
 `working_transition: not-observed`、`settle_outcome: not-applicable` で未配達のため
-`resend_permitted: true` です。working には入ったが bound 内に安定しない場合は
-`receiver_state_outcome: working-did-not-settle`、配達済み、
-`settle_outcome: not-observed-within-bound`、`resend_permitted: false` となります。receiver が
-まだ作業中であり得るため automation は再送してはいけません。notify 開始時にすでに working の pane は
+`resend_permitted: true` です。working へ入った後、bounded settle observation の終了時にも
+recipient が作業中なら、これは成功した non-terminal dispatch です:
+`receiver_state_outcome: working-observed-in-progress`、`working_transition: observed`、
+`settle_outcome: pending`、`resend_permitted: false` となります。recipient が作業中の間は再送しません。notify 開始時にすでに working の pane は
 prompt submission 成功後に delivered としますが、`receiver_state_outcome: already-working`、
 `working_transition: unobservable`、`settle_outcome: not-applicable`、`resend_permitted: false` と
 報告し、active turn を新 prompt の transition と誤認しません。dry-run は active phase を `skipped`

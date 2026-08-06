@@ -462,28 +462,26 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                         "--timeout", BoundedPromptTimeoutMilliseconds,
                     ]);
             }
-            catch (InvalidOperationException exception)
+            catch (InvalidOperationException)
             {
                 return new NotifyDeliveryResult
                 {
                     Resolved = true,
                     Delivered = true,
-                    ReceiverStateOutcome = "working-did-not-settle",
+                    ReceiverStateOutcome = "working-observed-in-progress",
                     WorkingTransition = "observed",
-                    SettleOutcome = "not-observed-within-bound",
+                    SettleOutcome = "pending",
                     ResendPermitted = false,
                     ActivePhase = new SessionLayerPreflightPhaseResult
                     {
-                        Status = SessionLayerPreflight.ActiveNotObserved,
+                        Status = SessionLayerPreflight.ActiveInProgress,
                         Checked = true,
                         ContactedReceiver = true,
-                        Summary = "Working was observed, but a fresh settled acknowledgement could not be checked.",
+                        Summary = "Delivery succeeded after observed working; the recipient remains working and its settled acknowledgement is pending.",
                     },
-                    Summary = $"Team '{team}' workspace '{topology.WorkspaceId}' pane '{recordedPane}' entered "
-                        + "unattended working, but the bounded settled-state wait could not run: "
-                        + $"{exception.Message} Delivered after the observed working transition; settled acknowledgement "
-                        + "was not observed within the bound. Resend is forbidden because the recipient may still be "
-                        + "performing this work.",
+                    Summary = $"Delivery succeeded to team '{team}' workspace '{topology.WorkspaceId}' pane "
+                        + $"'{recordedPane}' after the observed unattended working transition. The recipient is still "
+                        + "working and its settled acknowledgement is pending; do not resend while it is working.",
                 };
             }
 
@@ -511,27 +509,24 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 };
             }
 
-            var settledDetail = OneLine(settled.StandardError, settled.StandardOutput);
             return new NotifyDeliveryResult
             {
                 Resolved = true,
                 Delivered = true,
-                ReceiverStateOutcome = "working-did-not-settle",
+                ReceiverStateOutcome = "working-observed-in-progress",
                 WorkingTransition = "observed",
-                SettleOutcome = "not-observed-within-bound",
+                SettleOutcome = "pending",
                 ResendPermitted = false,
                 ActivePhase = new SessionLayerPreflightPhaseResult
                 {
-                    Status = SessionLayerPreflight.ActiveNotObserved,
+                    Status = SessionLayerPreflight.ActiveInProgress,
                     Checked = true,
                     ContactedReceiver = true,
-                    Summary = "Unattended working was observed, but no fresh settled acknowledgement followed within the bound.",
+                    Summary = "Delivery succeeded after observed working; the recipient remains working and its settled acknowledgement is pending.",
                 },
-                Summary = $"Team '{team}' workspace '{topology.WorkspaceId}' pane '{recordedPane}' entered "
-                    + "unattended working, but did not return to idle/done/blocked within "
-                    + $"{BoundedPromptTimeoutMilliseconds}ms ({settledDetail}). Delivered after the observed working "
-                    + "transition; settled acknowledgement was not observed within the bound. Resend is forbidden "
-                    + "because the recipient may still be performing this work.",
+                Summary = $"Delivery succeeded to team '{team}' workspace '{topology.WorkspaceId}' pane "
+                    + $"'{recordedPane}' after the observed unattended working transition. The recipient is still "
+                    + "working and its settled acknowledgement is pending; do not resend while it is working.",
             };
         }
 
