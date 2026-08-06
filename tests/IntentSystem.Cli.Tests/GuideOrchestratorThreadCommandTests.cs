@@ -2006,6 +2006,11 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("G619 owns the transport-layer remedy", output, StringComparison.Ordinal);
         Assert.Contains("delivery_method: file-backed", output, StringComparison.Ordinal);
         Assert.Contains("Read task envelope: <path>", output, StringComparison.Ordinal);
+        Assert.Contains("Preview through 1.x (G636)", output, StringComparison.Ordinal);
+        Assert.Contains("post-start interaction", output, StringComparison.Ordinal);
+        Assert.Contains("Copilot 1.0.78 presents", output, StringComparison.Ordinal);
+        Assert.Contains("default `Enable all permissions` answer is unsafe", output, StringComparison.Ordinal);
+        Assert.Contains("supervision failure, not a shortcut", output, StringComparison.Ordinal);
         Assert.Contains("FIRST TASK", output, StringComparison.Ordinal);
         Assert.Contains("Continue with limited permissions", output, StringComparison.Ordinal);
         Assert.Contains("NEVER choose `Enable all permissions`", output, StringComparison.Ordinal);
@@ -2014,6 +2019,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("normal G556 liveness checks AND prove all three", output, StringComparison.Ordinal);
         Assert.Contains("deliberately out-of-scope action is denied", output, StringComparison.Ordinal);
         Assert.Contains("successful allowed action alone is NOT READY", output, StringComparison.Ordinal);
+        Assert.Contains("denial probe unexpectedly succeeds", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2077,7 +2083,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("no authorization makes them answerable", authorityBoundary, StringComparison.Ordinal);
 
         var unattended = provisioning.GetProperty("unattended_launch_recipes");
-        Assert.Equal(7, unattended.GetProperty("required_recipe_fields").GetArrayLength());
+        Assert.Equal(8, unattended.GetProperty("required_recipe_fields").GetArrayLength());
         Assert.Contains("silently auto-denied", unattended.GetProperty("central_autopilot_supervision_rule").GetString(), StringComparison.Ordinal);
         Assert.Contains("--add-dir <role-work-root>", unattended.GetProperty("copilot_recipe").GetProperty("invocation").GetString(), StringComparison.Ordinal);
         Assert.Contains("intent-cli notify report", unattended.GetProperty("copilot_recipe").GetProperty("role_derived_roots").GetString(), StringComparison.Ordinal);
@@ -2087,7 +2093,12 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("G619 owns the transport-layer remedy", unattended.GetProperty("copilot_recipe").GetProperty("inline_payload_warning_profile").GetString(), StringComparison.Ordinal);
         Assert.Contains("delivery_method: file-backed", unattended.GetProperty("copilot_recipe").GetProperty("delivery_method").GetString(), StringComparison.Ordinal);
         Assert.Contains("absent declaration preserves existing inline delivery", unattended.GetProperty("copilot_recipe").GetProperty("delivery_method").GetString(), StringComparison.Ordinal);
+        var postStart = unattended.GetProperty("copilot_recipe").GetProperty("post_start_interaction");
+        Assert.Contains("Copilot 1.0.78 presents", postStart.GetProperty("prompt").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Continue with limited permissions", postStart.GetProperty("answer").GetString(), StringComparison.Ordinal);
+        Assert.False(postStart.GetProperty("default_is_safe").GetBoolean());
         Assert.Contains("out-of-scope action is denied", unattended.GetProperty("ready_branch").GetString(), StringComparison.Ordinal);
+        Assert.Contains("denial probe unexpectedly succeeds", unattended.GetProperty("ready_branch").GetString(), StringComparison.Ordinal);
 
         var roleInitialization = provisioning.GetProperty("role_initialization");
         Assert.NotEmpty(roleInitialization.GetProperty("actas_forms").EnumerateArray());
@@ -2114,6 +2125,27 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Equal("herdr", referenceManager.GetProperty("name").GetString());
         Assert.NotEmpty(referenceManager.GetProperty("surfaces").EnumerateArray());
         Assert.True(referenceManager.GetProperty("substitution_rule").GetString()!.Length > 0);
+    }
+
+    [Fact]
+    public void PostStartInteraction_RepresentsSafeAndUnsafeDefaults_G636()
+    {
+        var safe = new OrchestratorPostStartInteraction
+        {
+            Prompt = "The agent presents a bounded confirmation.",
+            Answer = "Keep the bounded permissions.",
+            DefaultIsSafe = true,
+        };
+        var unsafeDefault = new OrchestratorPostStartInteraction
+        {
+            Prompt = "The agent presents an all-permissions confirmation.",
+            Answer = "Continue with limited permissions.",
+            DefaultIsSafe = false,
+        };
+
+        Assert.True(safe.DefaultIsSafe);
+        Assert.False(unsafeDefault.DefaultIsSafe);
+        Assert.NotEqual(safe.DefaultIsSafe, unsafeDefault.DefaultIsSafe);
     }
 
     [Fact]

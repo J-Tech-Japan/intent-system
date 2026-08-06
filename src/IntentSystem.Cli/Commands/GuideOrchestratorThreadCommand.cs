@@ -2213,7 +2213,11 @@ internal static class GuideOrchestratorThreadCommand
                 Summary =
                     "Agent-neutral recipes make an unattended launch reviewable rather than broad by default. Every "
                     + "recipe states the invocation, bounded `--add-dir` roots derived from that role's real work, "
-                    + "the continuation bound, the startup gates the operator must answer, and the denial semantics. "
+                    + "the continuation bound, the startup gates the operator must answer, the post-start interaction "
+                    + "and answer that preserve the declared envelope, whether the default is safe, and the denial "
+                    + "semantics. A recipe that stops at the command line is incomplete because an agent can negotiate "
+                    + "authority after launch. The post-start interaction field is a G636 preview-through-1.x surface "
+                    + "added after the v0.12.0 freeze and outside the 1.0 compatibility promise. "
                     + "Later agent recipes inherit the central rule below; do not duplicate or weaken it per agent.",
                 RequiredRecipeFields = new[]
                 {
@@ -2221,6 +2225,7 @@ internal static class GuideOrchestratorThreadCommand
                     "bounded allowed roots derived from the logical role's actual needs (not a product-wide path)",
                     "the maximum autonomous continuation bound",
                     "startup trust and autopilot/permission gates the operator must answer",
+                    "a declared post-start interaction: what the agent presents, the envelope-preserving answer, and whether the default is safe",
                     "a named advisory inline-payload warning profile and threshold, never a safe-paste guarantee",
                     "a declared task-envelope delivery_method (inline or file-backed; undeclared remains inline)",
                     "the silent-denial semantics and the READY/review evidence that proves them",
@@ -2258,6 +2263,16 @@ internal static class GuideOrchestratorThreadCommand
                         + "unchanged envelope to durable host `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` before "
                         + "sending one line, `Read task envelope: <path>`. Declare `inline` to opt in explicitly; an absent "
                         + "declaration preserves existing inline delivery.",
+                    PostStartInteraction = new OrchestratorPostStartInteraction
+                    {
+                        Prompt =
+                            "At the first task, Copilot 1.0.78 presents `1. Enable all permissions (recommended)` / "
+                            + "`2. Continue with limited permissions` / `3. Cancel`, with the cursor on option 1.",
+                        Answer =
+                            "Choose `Continue with limited permissions` to preserve the bounded `--add-dir` envelope; "
+                            + "the default `Enable all permissions` answer is unsafe.",
+                        DefaultIsSafe = false,
+                    },
                     StartupGates =
                         "Folder trust and autopilot-enable are operator provisioning gates; neither is bypassed by "
                         + "launch flags. The autopilot-enable dialog appears at the FIRST TASK even when `--mode autopilot` "
@@ -2272,7 +2287,9 @@ internal static class GuideOrchestratorThreadCommand
                     + "facts: an expected action inside the recorded roots succeeds, the role can reach its canonical "
                     + "reporting surface (for review, `intent-cli notify report` through its host routing root), and a "
                     + "deliberately out-of-scope action is denied. Capture the denied result for review; a live pane or "
-                    + "successful allowed action alone is NOT READY.",
+                    + "successful allowed action alone is NOT READY. If a denial probe unexpectedly succeeds, first check "
+                    + "whether the post-start interaction was answered with its default; accepting an unsafe default is a "
+                    + "supervision failure, not a shortcut.",
             },
             RoleInitialization = new OrchestratorProvisioningRoleInitialization
             {
@@ -3527,6 +3544,8 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
         writer.WriteLine(unattended.Summary);
         writer.WriteLine();
+        writer.WriteLine("> **Preview through 1.x (G636).** The post-start interaction field was added after the v0.12.0 freeze; it is outside the 1.0 compatibility promise and may change or be withdrawn during 1.x.");
+        writer.WriteLine();
         writer.WriteLine("Every recipe must state:");
         writer.WriteLine();
         foreach (var field in unattended.RequiredRecipeFields)
@@ -3546,6 +3565,7 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **continuation bound** — {unattended.CopilotRecipe.ContinuationBound}");
         writer.WriteLine($"- **inline-payload advisory** — {unattended.CopilotRecipe.InlinePayloadWarningProfile}");
         writer.WriteLine($"- **task-envelope delivery method** — {unattended.CopilotRecipe.DeliveryMethod}");
+        writer.WriteLine($"- **post-start interaction** — {unattended.CopilotRecipe.PostStartInteraction.Prompt} Answer: {unattended.CopilotRecipe.PostStartInteraction.Answer} Default safe: {unattended.CopilotRecipe.PostStartInteraction.DefaultIsSafe.ToString().ToLowerInvariant()}.");
         writer.WriteLine($"- **startup gates** — {unattended.CopilotRecipe.StartupGates}");
         writer.WriteLine($"- **prohibited blanket permissions** — {unattended.CopilotRecipe.ProhibitedBlanket}");
         writer.WriteLine();
@@ -5511,9 +5531,9 @@ internal sealed record OrchestratorProvisioningLaunchRules
 }
 
 /// <summary>
-/// G617: agent-neutral unattended launch requirements plus the first measured
-/// Copilot recipe. This is guidance only: it adds no agent-specific delivery,
-/// liveness, or runtime branching.
+/// G617/G636: agent-neutral unattended launch requirements plus the first
+/// measured Copilot recipe. This is guidance only: it adds no agent-specific
+/// delivery, liveness, runtime branching, or dialog automation.
 /// </summary>
 internal sealed record OrchestratorUnattendedLaunchRecipes
 {
@@ -5550,11 +5570,32 @@ internal sealed record OrchestratorCopilotUnattendedRecipe
     [JsonPropertyName("delivery_method")]
     public required string DeliveryMethod { get; init; }
 
+    [JsonPropertyName("post_start_interaction")]
+    public required OrchestratorPostStartInteraction PostStartInteraction { get; init; }
+
     [JsonPropertyName("startup_gates")]
     public required string StartupGates { get; init; }
 
     [JsonPropertyName("prohibited_blanket")]
     public required string ProhibitedBlanket { get; init; }
+}
+
+/// <summary>
+/// G636: an unattended recipe records the interaction an agent may present
+/// after launch, the answer that preserves the declared envelope, and whether
+/// accepting the default is safe. It records guidance only; it never drives a
+/// dialog or sends keystrokes.
+/// </summary>
+internal sealed record OrchestratorPostStartInteraction
+{
+    [JsonPropertyName("prompt")]
+    public required string Prompt { get; init; }
+
+    [JsonPropertyName("answer")]
+    public required string Answer { get; init; }
+
+    [JsonPropertyName("default_is_safe")]
+    public required bool DefaultIsSafe { get; init; }
 }
 
 internal sealed record OrchestratorProvisioningRoleInitialization

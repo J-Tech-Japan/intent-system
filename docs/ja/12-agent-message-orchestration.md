@@ -174,8 +174,16 @@ monitor bridge を arm する（G521）ため、canonical な実行ファイル�
 
 unattended 起動レシピは agent-neutral です。起動 invocation、各 role の実際の作業から
 導く境界付き許可 root、自律継続の上限、operator が回答する startup gate、そして denial
-semantics を記します。後から Cursor や opencode のレシピを追加する場合も、同じ field を
-持つ entry を追加するだけで、以下の central rule を再定義・弱化しません。
+semantics に加えて、起動後に agent が提示する post-start interaction、宣言した境界を
+維持するための回答、default answer が安全かどうかを記録します。command line が正しくても
+起動後に agent が権限を交渉できるため、command line で止まるレシピは不完全です。
+後から Cursor や opencode のレシピを追加する場合も、同じ field を持つ entry を追加するだけで、
+以下の central rule を再定義・弱化しません。
+
+> **1.x を通じた preview (G636)。** post-start interaction field は v0.12.0 freeze 後に追加された
+> preview surface です。1.0 compatibility promise の対象外であり、1.x の間に変更・撤回される
+> 可能性があり、正式化は後続 MAJOR release でのみ行います。詳細は
+> [compatibility ledger](1.0-compatibility-ledger.md) の preview row を参照してください。
 
 > **central autopilot supervision rule。** unattended autopilot seat では、launch allowlist
 > の外にある action は G550 の supervision dialog として表示されず、静かに自動拒否されます。
@@ -211,6 +219,11 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
   `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` に書いてから、pane には
   `Read task envelope: <path>` という 1 行だけを送ります。明示的に選ぶなら `inline` を宣言します。
   宣言がなければ既存の inline delivery をそのまま維持します。
+- **post-start interaction (G636, preview-through-1.x)。** 最初の task で Copilot 1.0.78 は
+  `1. Enable all permissions (recommended)` / `2. Continue with limited permissions` /
+  `3. Cancel` を表示し、cursor は option 1 にあります。宣言した `--add-dir` 境界を維持するには
+  `Continue with limited permissions` を選びます。default の `Enable all permissions` は unsafe です。
+  restart でこれを受け入れるのは shortcut ではなく supervision failure です。
 - **startup gate。** folder trust と autopilot-enable は operator provisioning gate であり、
   launch flag ではどちらも bypass できません。`--mode autopilot` を launch 時に渡しても、
   autopilot-enable dialog は **最初の task** で現れます。`--allow-all-tools` と境界付き root
@@ -223,7 +236,9 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
 記録済み root 内の期待される action が成功すること、role が canonical reporting surface
 （review なら host routing root 経由の `intent-cli notify report`）へ到達できること、意図的に
 out-of-scope にした action が拒否されることです。その拒否を review 用に記録します。live pane
-だけ、または許可済み action の成功だけでは **READY ではありません**。
+だけ、または許可済み action の成功だけでは **READY ではありません**。denial probe が予想に反して
+成功した場合は、まず post-start interaction が default で回答されていないか確認します。unsafe な
+default は宣言した境界を捨てます。
 
 **4. ロール初期化。** pane の CLI に合った actas 形式をタイプします — claude は
 `/agmsg actas <role>`、codex は `$agmsg actas <role>`。その後 readiness を
