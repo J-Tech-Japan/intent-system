@@ -7,15 +7,11 @@ namespace IntentSystem.Cli.Commands;
 /// G570: the session-layer transport a team's threads use to talk to each other.
 ///
 /// Operator ruling (2026-08-01, host node 08): the session layer is SELECTABLE
-/// rather than agmsg-replaced. <see cref="Agmsg"/> stays the practiced, primary
-/// transport; <see cref="HerdrOnly"/> is a preview alternative for a setup where
-/// every agent is herdr-resident on one machine.
-///
-/// The qualifier matters and is deliberately narrow: PREVIEW attaches to the
-/// SESSION TRANSPORT, never to the four-thread model itself. G540 ruled that
-/// model unqualified — design / orchestrator / implementation / review is the
-/// primary model in BOTH transports — and this vocabulary must never be read as
-/// re-qualifying it.
+/// rather than agmsg-replaced. G624 graduates <see cref="HerdrOnly"/> as the
+/// preferred transport because it has fewer dependencies, while <see cref="Agmsg"/>
+/// remains a supported, non-retired choice for distributed teams and existing
+/// agmsg investments. G540 ruled that design / orchestrator / implementation /
+/// review is the PRIMARY model in both transports; neither transport is primary.
 /// </summary>
 internal static class SessionLayerMode
 {
@@ -28,14 +24,15 @@ internal static class SessionLayerMode
     public static readonly IReadOnlyList<string> All = [Agmsg, HerdrOnly];
 
     /// <summary>
-    /// The sentence every surface that says PREVIEW must carry. It exists so a
-    /// reader cannot mistake the preview qualifier for a qualifier on the
-    /// four-thread model — which is exactly the confusion G540 ruled out.
+    /// The sentence every transport chooser carries so a reader sees the
+    /// preference without mistaking it for the four-thread model's PRIMARY
+    /// designation.
     /// </summary>
-    public const string PreviewScopingSentence =
-        "PREVIEW here scopes the SESSION TRANSPORT only — how the four threads exchange messages. The four-thread "
-        + "model itself (design / orchestrator / implementation / review) is PRIMARY and unqualified in both modes, "
-        + "exactly as G540 ruled; choosing a transport never makes the model provisional.";
+    public const string TransportPreferenceSentence =
+        "herdr-only is the preferred transport because it has fewer dependencies. agmsg + herdr remains supported "
+        + "and is not retired for distributed teams or an existing agmsg investment. The four-thread model itself "
+        + "(design / orchestrator / implementation / review) is PRIMARY and unqualified in both modes; no transport "
+        + "is primary.";
 
     /// <summary>One team runs one mode; mixed delivery is a contract violation.</summary>
     public const string ExclusivitySentence =
@@ -45,11 +42,11 @@ internal static class SessionLayerMode
     public static bool IsKnown(string? mode) =>
         mode is not null && All.Contains(mode, StringComparer.Ordinal);
 
-    /// <summary>Human-facing label, including the qualifier where one applies.</summary>
+    /// <summary>Human-facing label for the recorded transport.</summary>
     public static string Describe(string mode) => mode switch
     {
-        Agmsg => "agmsg (PRIMARY)",
-        HerdrOnly => "herdr-only (PREVIEW — session transport only)",
+        Agmsg => "agmsg + herdr (supported, not retired)",
+        HerdrOnly => "herdr-only (preferred — fewer dependencies)",
         _ => mode,
     };
 }

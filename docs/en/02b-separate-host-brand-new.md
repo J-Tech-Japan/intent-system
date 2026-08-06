@@ -22,7 +22,7 @@ The shipped skill leads to `guide onboarding`. The agent verifies the version, r
 
 ## Your remaining decisions
 
-Confirm the base-branch policy, the transport selection (herdr-only is first for collocation; agmsg + herdr suits distributed/existing-agmsg teams), and the agent kind for each design, orchestration, implementation, and review role.
+Confirm the base-branch policy, the transport selection (prefer herdr-only for collocation because it has fewer dependencies; agmsg + herdr remains supported and not retired for distributed/existing-agmsg teams), and the agent kind for each design, orchestration, implementation, and review role.
 
 ## Then
 

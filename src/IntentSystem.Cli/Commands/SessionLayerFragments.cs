@@ -134,42 +134,42 @@ internal static class SessionLayerFragments
     [
         Fragment(
             S0,
-            Descriptive("- session layer: Recorded session layer for this setup: agmsg (PRIMARY) (recorded)."),
+            Descriptive("- session layer: Recorded session layer for this setup: agmsg + herdr (supported, not retired) (recorded)."),
             Scaffold(" "),
             Operative("Record or change it with `intent-cli session-layer set --domain __DOMAIN__ --team <team> --mode agmsg|herdr-only --write`."),
             Scaffold(" "),
             Descriptive("A herdr-only request made at first setup is honoured from then on; the choice is reversible in both directions.")),
         Fragment(
             S0,
-            Descriptive("- session layer: Recorded session layer for this setup: agmsg (PRIMARY) (recorded)."),
+            Descriptive("- session layer: Recorded session layer for this setup: agmsg + herdr (supported, not retired) (recorded)."),
             Scaffold(" "),
             Operative("Record or change it with `intent-cli session-layer set --domain __DOMAIN__ --team __TEAM__ --mode agmsg|herdr-only --write`."),
             Scaffold(" "),
             Descriptive("A herdr-only request made at first setup is honoured from then on; the choice is reversible in both directions.")),
         Fragment(
             S0,
-            Descriptive("- session layer: Recorded session layer for this setup: agmsg (PRIMARY) (default — nothing recorded yet)."),
+            Descriptive("- session layer: Recorded session layer for this setup: agmsg + herdr (supported, not retired) (default — nothing recorded yet)."),
             Scaffold(" "),
             Operative("Record or change it with `intent-cli session-layer set --domain __DOMAIN__ --team <team> --mode agmsg|herdr-only --write`."),
             Scaffold(" "),
             Descriptive("A herdr-only request made at first setup is honoured from then on; the choice is reversible in both directions.")),
         Fragment(
             S0,
-            Descriptive("- session layer: Recorded session layer for this setup: agmsg (PRIMARY) (default — nothing recorded yet)."),
+            Descriptive("- session layer: Recorded session layer for this setup: agmsg + herdr (supported, not retired) (default — nothing recorded yet)."),
             Scaffold(" "),
             Operative("Record or change it with `intent-cli session-layer set --domain __DOMAIN__ --team __TEAM__ --mode agmsg|herdr-only --write`."),
             Scaffold(" "),
             Descriptive("A herdr-only request made at first setup is honoured from then on; the choice is reversible in both directions.")),
         Fragment(
             S0,
-            Descriptive("- session layer: Recorded session layer for this setup: herdr-only (PREVIEW — session transport only) (recorded)."),
+            Descriptive("- session layer: Recorded session layer for this setup: herdr-only (preferred — fewer dependencies) (recorded)."),
             Scaffold(" "),
             Operative("Record or change it with `intent-cli session-layer set --domain __DOMAIN__ --team <team> --mode agmsg|herdr-only --write`."),
             Scaffold(" "),
             Descriptive("A herdr-only request made at first setup is honoured from then on; the choice is reversible in both directions.")),
         Fragment(
             S0,
-            Descriptive("- session layer: Recorded session layer for this setup: herdr-only (PREVIEW — session transport only) (recorded)."),
+            Descriptive("- session layer: Recorded session layer for this setup: herdr-only (preferred — fewer dependencies) (recorded)."),
             Scaffold(" "),
             Operative("Record or change it with `intent-cli session-layer set --domain __DOMAIN__ --team __TEAM__ --mode agmsg|herdr-only --write`."),
             Scaffold(" "),
@@ -203,7 +203,7 @@ internal static class SessionLayerFragments
         Fragment(S0, Descriptive("- existing-loop stop policy")),
         Fragment(
             S0,
-            Descriptive("PRIMARY agmsg-backed four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / implementation / review coordinate over agmsg. agmsg carries natural-language delegation / progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, and closeout."),
+            Descriptive("PRIMARY four-thread orchestrator model over agmsg + herdr (ADR-012 / spec-26): design / orchestrator / implementation / review coordinate over agmsg. agmsg carries natural-language delegation / progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, and closeout."),
             Scaffold(" "),
             Descriptive("Timer-loop mode remains fully supported as the simpler ALTERNATIVE for setups without an orchestrator thread (see Mode separation).")),
         Fragment(
@@ -1059,7 +1059,7 @@ internal static class SessionLayerFragments
         Fragment("setup_intake", Operative("missing-inputs — supply the 4 missing field(s) below to get a setup-ready plan.")),
         Fragment(
             "summary",
-            Descriptive("PRIMARY agmsg-backed four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / implementation / review coordinate over agmsg. agmsg carries natural-language delegation / progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, and closeout."),
+            Descriptive("PRIMARY four-thread orchestrator model over agmsg + herdr (ADR-012 / spec-26): design / orchestrator / implementation / review coordinate over agmsg. agmsg carries natural-language delegation / progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, and closeout."),
             Scaffold(" "),
             Descriptive("Timer-loop mode remains fully supported as the simpler ALTERNATIVE for setups without an orchestrator thread (see Mode separation).")),
         Fragment("setup_intake", Descriptive("missing-inputs")),

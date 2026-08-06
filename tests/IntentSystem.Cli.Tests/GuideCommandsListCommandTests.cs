@@ -71,8 +71,8 @@ public sealed class GuideCommandsListCommandTests
         Assert.Equal("support", byName["guide prompt-matrix"].GetProperty("classification").GetString());
 
         var sessionLayerPurpose = byName["session-layer"].GetProperty("purpose").GetString()!;
-        Assert.Contains("supported choice", sessionLayerPurpose, StringComparison.Ordinal);
-        Assert.Contains("`herdr-only` first", sessionLayerPurpose, StringComparison.Ordinal);
+        Assert.Contains("fewer dependencies", sessionLayerPurpose, StringComparison.Ordinal);
+        Assert.Contains("supported, non-retired", sessionLayerPurpose, StringComparison.Ordinal);
         Assert.DoesNotContain("`agmsg` remains PRIMARY", sessionLayerPurpose, StringComparison.Ordinal);
     }
 

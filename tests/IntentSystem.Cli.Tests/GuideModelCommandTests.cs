@@ -52,16 +52,8 @@ public sealed class GuideModelCommandTests
         Assert.Contains("- **alternative** —", output, StringComparison.Ordinal);
         Assert.Contains("Timer-loop mode remains fully supported", output, StringComparison.Ordinal);
 
-        // G570 scoped this assertion to the section it is about, and did not
-        // weaken it. G540 ruled that the four-thread MODEL carries no
-        // qualifier; the assertion was written document-wide because the
-        // document only discussed the model. It now also describes the SESSION
-        // TRANSPORT, where `herdr-only` is honestly a preview — so a
-        // document-wide ban would force the transport to be described
-        // inaccurately to keep a guard green, which is the wrong trade.
-        //
-        // What G540 ruled is asserted exactly: no qualifier appears anywhere in
-        // the execution-orchestration-model section.
+        // G624 graduates herdr-only, and G540's unqualified model designation
+        // remains independent of the transport preference.
         var modelSection = SectionBetween(
             output,
             "## Execution orchestration model (PRIMARY for autonomous multi-thread execution)",
@@ -72,35 +64,18 @@ public sealed class GuideModelCommandTests
     }
 
     /// <summary>
-    /// G570: the preview qualifier is allowed ONLY on the transport, and only
-    /// while it says so in its own words. Without this, scoping the assertion
-    /// above would have left the qualifier free to drift back onto the model.
+    /// G624: the graduated transport must not regain a PREVIEW qualifier.
     /// </summary>
     [Fact]
-    public void Execute_Markdown_PreviewQualifierAppearsOnlyInTheSessionLayerSection_G570()
+    public void Execute_Markdown_GraduatedTransportHasNoPreviewQualifier_G624()
     {
         using var writer = new StringWriter();
         Assert.Equal(0, GuideModelCommand.Execute(CreateContext(), [], writer));
         var output = writer.ToString();
 
-        var sessionLayerIndex = output.IndexOf("## Session layer (transport for the four threads)", StringComparison.Ordinal);
-        Assert.True(sessionLayerIndex > 0, "guide model must carry the session-layer section");
-
-        // Every occurrence of the qualifier is inside that section.
-        var index = output.IndexOf("preview", StringComparison.OrdinalIgnoreCase);
-        Assert.True(index >= 0, "the session-layer section must state the preview qualifier honestly");
-        while (index >= 0)
-        {
-            Assert.True(
-                index > sessionLayerIndex,
-                "a preview/PREVIEW qualifier appears before the session-layer section — G540 rules the four-thread "
-                + "model unqualified, so the qualifier must never attach to it.");
-            index = output.IndexOf("preview", index + 1, StringComparison.OrdinalIgnoreCase);
-        }
-
-        // And the qualifier carries its own scoping sentence, so a reader can
-        // never take it as a statement about the model.
-        Assert.Contains("PREVIEW here scopes the SESSION TRANSPORT only", output, StringComparison.Ordinal);
+        Assert.Contains("## Session layer (transport for the four threads)", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("preview", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(SessionLayerMode.TransportPreferenceSentence, output, StringComparison.Ordinal);
         Assert.Contains("PRIMARY and unqualified in both modes", output, StringComparison.Ordinal);
     }
 
@@ -111,9 +86,9 @@ public sealed class GuideModelCommandTests
         Assert.Equal(0, GuideModelCommand.Execute(CreateContext(), [], writer));
         var output = writer.ToString();
 
-        Assert.Contains("herdr-only (PREVIEW maturity)", output, StringComparison.Ordinal);
-        Assert.Contains("agmsg + herdr", output, StringComparison.Ordinal);
-        Assert.Contains("Both are supported choices.", output, StringComparison.Ordinal);
+        Assert.Contains("herdr-only (preferred — fewer dependencies)", output, StringComparison.Ordinal);
+        Assert.Contains("agmsg + herdr (supported, not retired)", output, StringComparison.Ordinal);
+        Assert.Contains("Prefer herdr-only", output, StringComparison.Ordinal);
         Assert.DoesNotContain("agmsg (PRIMARY)", output, StringComparison.Ordinal);
         Assert.DoesNotContain("Use this unless", output, StringComparison.Ordinal);
     }

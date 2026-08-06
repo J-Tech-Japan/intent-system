@@ -76,7 +76,8 @@ public sealed class GuideOnboardingCommandTests
 
         var orchestratorStep = Assert.Single(steps, s => s.GetProperty("command").GetString()!
             .StartsWith("intent-cli guide orchestrator-thread", StringComparison.Ordinal));
-        Assert.Contains("PRIMARY four-thread agmsg orchestration", orchestratorStep.GetProperty("purpose").GetString(), StringComparison.Ordinal);
+        Assert.Contains("PRIMARY four-thread model", orchestratorStep.GetProperty("purpose").GetString(), StringComparison.Ordinal);
+        Assert.Contains("selected session transport", orchestratorStep.GetProperty("purpose").GetString(), StringComparison.Ordinal);
         Assert.Contains("double-check", orchestratorStep.GetProperty("purpose").GetString(), StringComparison.Ordinal);
 
         // Reachable early in the sequence — right after `guide model`, ahead
@@ -94,8 +95,8 @@ public sealed class GuideOnboardingCommandTests
         var sessionStep = steps.Single(s => s.GetProperty("command").GetString()!
             .StartsWith("intent-cli session-layer show", StringComparison.Ordinal));
         var sessionPurpose = sessionStep.GetProperty("purpose").GetString()!;
-        Assert.Contains("supported `herdr-only` first", sessionPurpose, StringComparison.Ordinal);
-        Assert.Contains("supported `agmsg` + herdr", sessionPurpose, StringComparison.Ordinal);
+        Assert.Contains("fewer dependencies", sessionPurpose, StringComparison.Ordinal);
+        Assert.Contains("supported, non-retired", sessionPurpose, StringComparison.Ordinal);
         Assert.DoesNotContain("agmsg` (PRIMARY", sessionPurpose, StringComparison.Ordinal);
     }
 

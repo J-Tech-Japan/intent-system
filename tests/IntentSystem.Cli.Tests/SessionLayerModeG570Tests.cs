@@ -195,7 +195,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
 
         Assert.Contains("join.sh", output, StringComparison.Ordinal);
         Assert.DoesNotContain("HERDR-ONLY MODE", output, StringComparison.Ordinal);
-        Assert.Contains("Session layer: agmsg (PRIMARY)", output, StringComparison.Ordinal);
+        Assert.Contains("Session layer: agmsg + herdr (supported, not retired)", output, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1829,10 +1829,9 @@ public sealed class SessionLayerModeG570Tests : IDisposable
     // ------------------------------------------------------- the G540 boundary
 
     [Fact]
-    public void EveryPreviewQualifier_CarriesItsScopingSentence_G570()
+    public void GraduatedTransportPresentation_CarriesItsPreferenceSentence_G624()
     {
-        // The qualifier is only safe while it says what it qualifies. These are
-        // the three surfaces that state it.
+        // The preference must be consistently explained on every live guide.
         var model = workspace.Render(["guide", "model"]);
         var onboarding = workspace.Render(["guide", "onboarding"]);
         Assert.Equal(0, workspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
@@ -1846,9 +1845,9 @@ public sealed class SessionLayerModeG570Tests : IDisposable
                  })
         {
             Assert.True(
-                output.Contains(SessionLayerMode.PreviewScopingSentence, StringComparison.Ordinal),
-                $"`{surface}` names the preview qualifier without the sentence scoping it to the session transport — "
-                + "which is exactly the reading G540 ruled out for the four-thread model.");
+                output.Contains(SessionLayerMode.TransportPreferenceSentence, StringComparison.Ordinal),
+                $"`{surface}` must carry the G624 transport-preference explanation.");
+            Assert.DoesNotContain("PREVIEW", output, StringComparison.Ordinal);
         }
     }
 
@@ -1858,10 +1857,10 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         var model = workspace.Render(["guide", "model"]);
 
         Assert.Contains("## Session layer (transport for the four threads)", model, StringComparison.Ordinal);
-        Assert.Contains("herdr-only (PREVIEW maturity)", model, StringComparison.Ordinal);
-        Assert.Contains("agmsg + herdr", model, StringComparison.Ordinal);
+        Assert.Contains("herdr-only (preferred — fewer dependencies)", model, StringComparison.Ordinal);
+        Assert.Contains("agmsg + herdr (supported, not retired)", model, StringComparison.Ordinal);
         Assert.DoesNotContain("agmsg (PRIMARY)", model, StringComparison.Ordinal);
-        Assert.Contains("Both are supported choices.", model, StringComparison.Ordinal);
+        Assert.Contains("Prefer herdr-only", model, StringComparison.Ordinal);
         // The positioning paragraph says when herdr-only is the right call.
         Assert.Contains("herdr-resident on ONE machine", model, StringComparison.Ordinal);
         Assert.Contains(SessionLayerMode.ExclusivitySentence, model, StringComparison.Ordinal);

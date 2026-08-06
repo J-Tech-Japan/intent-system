@@ -160,8 +160,8 @@ internal static class GuideModelCommand
     /// the two questions apart: "which model?" (answered above — four threads,
     /// PRIMARY, unqualified) and "which transport?" (answered here).
     ///
-    /// The preview qualifier lives ONLY in this section, and the section says so
-    /// in its own words, because G540 ruled the model itself unqualified.
+    /// G624 presents the preferred transport separately from G540's PRIMARY
+    /// model designation, because neither transport is primary.
     /// </summary>
     internal static GuideModelSessionLayer BuildSessionLayer() => new()
     {
@@ -171,18 +171,18 @@ internal static class GuideModelCommand
             + "same four threads, the same authority boundaries, the same wake contract in either mode.",
         Modes = new[]
         {
-            "herdr-only (PREVIEW maturity) — the supported first choice when every agent in the team is "
+            "herdr-only (preferred — fewer dependencies) — the preferred choice when every agent in the team is "
                 + "herdr-resident on ONE machine: herdr is the terminal controller and no separate message bridge runs. "
-                + SessionLayerMode.PreviewScopingSentence,
-            "agmsg + herdr — the supported choice when team members are distributed across machines or the team "
-                + "already invests in agmsg: threads register as agmsg roles and exchange delegation / progress / "
-                + "completion / blocker messages.",
+                + SessionLayerMode.TransportPreferenceSentence,
+            "agmsg + herdr (supported, not retired) — the supported choice when team members are distributed across "
+                + "machines or the team already invests in agmsg: threads register as agmsg roles and exchange delegation / "
+                + "progress / completion / blocker messages.",
         },
         WhenToChooseHerdrOnly =
-            "Choose herdr-only when every agent in the team is herdr-resident on ONE machine and you want fewer "
-            + "moving parts: no message-bridge process to keep alive, and the terminal controller you already run "
-            + "carries the delegations. Choose agmsg + herdr when threads live on different machines or the team "
-            + "already invests in agmsg. Both are supported choices.",
+            "Prefer herdr-only when every agent in the team is herdr-resident on ONE machine because it has fewer "
+            + "dependencies: no message-bridge process to keep alive, and the terminal controller you already run carries "
+            + "the delegations. Choose the supported, non-retired agmsg + herdr transport when threads live on different "
+            + "machines or the team already invests in agmsg.",
         Exclusivity = SessionLayerMode.ExclusivitySentence,
         Selection =
             "`intent-cli session-layer show --domain <d> [--team <t>]` reports the mode in force; "
@@ -325,7 +325,7 @@ internal sealed record GuideModelResult
     [JsonPropertyName("primary_model")]
     public required string PrimaryModel { get; init; }
 
-    /// <summary>G540: the PRIMARY model for autonomous, multi-thread execution once intents are authored — four-thread agmsg orchestration, with timer-loop mode as the documented simpler alternative.</summary>
+    /// <summary>G540: the PRIMARY model for autonomous, multi-thread execution once intents are authored — the four-thread model over the selected session transport, with timer-loop mode as the documented simpler alternative.</summary>
     [JsonPropertyName("execution_orchestration_model")]
     public required GuideModelExecutionOrchestration ExecutionOrchestrationModel { get; init; }
 
@@ -374,7 +374,7 @@ internal sealed record GuideModelExecutionOrchestration
 /// G570: the transport half of the collaboration model. Kept separate from
 /// <see cref="GuideModelExecutionOrchestration"/> on purpose — that record
 /// describes the MODEL, which G540 ruled primary and unqualified, and this one
-/// describes the TRANSPORT, where a preview qualifier legitimately applies.
+/// describes the TRANSPORT, where a preference is distinct from model primacy.
 /// </summary>
 internal sealed record GuideModelSessionLayer
 {

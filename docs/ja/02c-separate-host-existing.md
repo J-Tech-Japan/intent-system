@@ -25,7 +25,7 @@
 
 ## 残る human decision
 
-子 PR 用の base-branch policy、トランスポートの選択（同居では herdr-only を最初に、分散 / 既存 agmsg のチームでは agmsg + herdr）、各ロールの agent kind を確認します。
+子 PR 用の base-branch policy、トランスポートの選択（同居では依存関係が少ないため herdr-only を優先し、分散 / 既存 agmsg のチームではサポート対象で廃止されない agmsg + herdr を選ぶ）、各ロールの agent kind を確認します。
 
 ## 次へ
 

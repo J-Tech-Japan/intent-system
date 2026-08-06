@@ -5,9 +5,9 @@
 This page describes the **primary four-thread model** (design / orchestrator /
 implementation / review) and, in particular, how it stays safe when a single
 host repository holds **several intent domains**. Choose the supported
-`herdr-only` transport first for a collocated single-machine team (its
-**PREVIEW** label is a maturity note), or choose supported `agmsg` + herdr for
-a distributed team or an existing agmsg investment. Record the choice with
+`herdr-only` transport for a collocated single-machine team because it has
+fewer dependencies, or choose supported, non-retired `agmsg` + herdr for a
+distributed team or an existing agmsg investment. Record the choice with
 `session-layer set`; neither transport is primary. The authoritative,
 paste-ready prompts come from installed intent-cli guidance — do not copy
 prompts from this page by hand. Generate the current prompts with:
@@ -322,12 +322,13 @@ provided the same rules hold: one dedicated folder per role as the pane cwd,
 shim-safe typed launch, attended first-run prompts, actas + readiness before the
 ping test, and one holder per role with a graceful drop on handover.
 
-## Herdr-only operating procedure (PREVIEW maturity)
+## Herdr-only operating procedure (preferred — fewer dependencies)
 
 This section is operative only when the team has recorded `herdr-only`. It is
-the concrete counterpart to the agmsg provisioning/receiver sections. PREVIEW
-qualifies the transport, not the four-thread model. Exactly one transport runs
-per team; mixed agmsg and herdr delivery is a contract violation.
+the concrete counterpart to the agmsg provisioning/receiver sections. It is
+the preferred transport because it has fewer dependencies; agmsg + herdr
+remains supported and is not retired. Exactly one transport runs per team;
+mixed agmsg and herdr delivery is a contract violation.
 
 ### Provision and prove READY
 
@@ -1146,7 +1147,7 @@ before acting on it. intent-cli never launches Claude/Codex or any AI provider.
 
 | Mode | Driver | Notes |
 |---|---|---|
-| **orchestrator-message mode** | a fourth orchestrator thread | **PRIMARY.** The practiced, maintained model: the orchestrator paces the implementation/review threads over agmsg; at steady state this is message-driven, with a 30-minute-class design-thread watchdog loop as the RECOMMENDED default safety net (an orchestrator-side long-interval automation is the selectable alternative). An explicit 5-minute orchestrator timer remains supported as a fallback/legacy option. |
+| **orchestrator-message mode** | a fourth orchestrator thread | **PRIMARY four-thread model.** The practiced, maintained model: when the recorded transport is agmsg + herdr, the orchestrator paces the implementation/review threads over agmsg; at steady state this is message-driven, with a 30-minute-class design-thread watchdog loop as the RECOMMENDED default safety net (an orchestrator-side long-interval automation is the selectable alternative). An explicit 5-minute orchestrator timer remains supported as a fallback/legacy option. |
 | **timer-loop mode** | recurring timers | **ALTERNATIVE.** Fully supported, simpler setup for a domain/repo that does not run an orchestrator thread. Implementation/review threads self-schedule and read `worker next-action` / host review-next-slice. No orchestrator required. |
 
 Do **not** run both modes for the same domain/repo. In orchestrator-message

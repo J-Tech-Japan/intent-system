@@ -9,8 +9,8 @@
 Start by choosing one [self-contained onboarding pattern](02a-getting-started-orchestration.md):
 separate host repository or same-repository metadata branch, crossed with a
 brand-new or existing project. Each pattern has two paste-ready initial prompts.
-For a collocated single-machine team, `herdr-only` is the first supported
-choice (PREVIEW is a maturity note); choose `agmsg` + herdr for distributed
+For a collocated single-machine team, prefer `herdr-only` because it has fewer
+dependencies; choose supported, non-retired `agmsg` + herdr for distributed
 teams or an existing agmsg investment. The primary thing is the four-thread
 model, not either transport.
 
@@ -18,7 +18,7 @@ model, not either transport.
 
 1. [Install](01-install.md)
 2. [Start a project](02-project-start.md)
-2a. [Getting started: the road to the first packet](02a-getting-started-orchestration.md) — minimal start and the primary four-thread model; collocated `herdr-only` is supported (PREVIEW maturity note)
+2a. [Getting started: the road to the first packet](02a-getting-started-orchestration.md) — minimal start and the primary four-thread model; collocated `herdr-only` is preferred because it has fewer dependencies
    - [Separate host × brand-new](02b-separate-host-brand-new.md)
    - [Separate host × existing](02c-separate-host-existing.md)
    - [Same repo × brand-new](02d-same-repo-brand-new.md)

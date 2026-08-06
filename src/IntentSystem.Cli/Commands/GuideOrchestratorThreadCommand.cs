@@ -4,9 +4,10 @@ using System.Text.Json.Serialization;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G487: read-only guide surface for the PRIMARY agmsg-backed four-thread
+/// G487: read-only guide surface for the PRIMARY four-thread
 /// orchestrator model (design / orchestrator / implementation / review over
-/// agmsg; ADR-012 / spec-26; G540 repositions this as primary, superseding
+/// the selected session transport; ADR-012 / spec-26; G540 repositions the
+/// four-thread model as primary, superseding
 /// the earlier preview/opt-in framing). Renders paste-ready prompts for an
 /// orchestrator thread plus the implementation/review threads it delegates
 /// to, and pins the operating contract: agmsg is a message/progress/
@@ -179,7 +180,7 @@ internal static class GuideOrchestratorThreadCommand
                     ? $"Session layer: {SessionLayerMode.Describe(sessionLayer.Mode)} — recorded for this domain/team."
                     : $"Session layer: {SessionLayerMode.Describe(SessionLayerMode.Default)} — no selection recorded, so the default is in force.",
             Exclusivity = SessionLayerMode.ExclusivitySentence,
-            PreviewScoping = SessionLayerMode.PreviewScopingSentence,
+            PreviewScoping = SessionLayerMode.TransportPreferenceSentence,
             Selection =
                 $"`intent-cli session-layer show --domain {values["<domain>"]}"
                 + (string.IsNullOrWhiteSpace(values["<team>"]) || string.Equals(values["<team>"], "<team>", StringComparison.Ordinal)
@@ -762,7 +763,7 @@ internal static class GuideOrchestratorThreadCommand
                     + "remains fully supported as the simpler ALTERNATIVE for setups without an orchestrator thread "
                     + "(see Mode separation). The concrete herdr-only operating sections below cover provisioning, "
                     + "dispatch, bounded completion detection, the events boundary, recovery, and both switches."
-                : "PRIMARY agmsg-backed four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / "
+                : "PRIMARY four-thread orchestrator model over agmsg + herdr (ADR-012 / spec-26): design / orchestrator / "
                     + "implementation / review coordinate over agmsg. agmsg carries natural-language delegation / "
                     + "progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli "
                     + "and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, "
@@ -4595,7 +4596,7 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine("guide orchestrator-thread");
         writer.WriteLine(UsageLine);
         writer.WriteLine();
-        writer.WriteLine("Renders paste-ready prompts for the PRIMARY agmsg-backed four-thread orchestrator model");
+        writer.WriteLine("Renders paste-ready prompts for the PRIMARY four-thread orchestrator model over the selected session transport");
         writer.WriteLine("(design/orchestrator/implementation/review) plus the implementation/review threads it");
         writer.WriteLine("delegates to. agmsg is a signal layer only; intent-cli and GitHub remain authoritative.");
         writer.WriteLine("Timer-loop mode remains fully supported as the simpler alternative and is not replaced.");

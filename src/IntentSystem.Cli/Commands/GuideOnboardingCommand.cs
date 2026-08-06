@@ -72,7 +72,7 @@ internal static class GuideOnboardingCommand
                 {
                     Order = 2,
                     Command = "intent-cli guide orchestrator-thread --domain <domain> --target-repo <owner/repo> --agent <agent> --format markdown",
-                    Purpose = "G540: reach the full orchestrator-thread setup checklist directly from onboarding — the PRIMARY four-thread agmsg orchestration model's setup intake (missing-inputs / setup-ready / blocked), role prompts, mode separation, role boundary and design↔orchestrator double-check rule, and safety-net guidance. Not required for a single-thread/timer-loop setup (see `guide prompt-matrix` instead).",
+                    Purpose = "G540: reach the full orchestrator-thread setup checklist directly from onboarding — the PRIMARY four-thread model's setup intake over the selected session transport (missing-inputs / setup-ready / blocked), role prompts, mode separation, role boundary and design↔orchestrator double-check rule, and safety-net guidance. Not required for a single-thread/timer-loop setup (see `guide prompt-matrix` instead).",
                     NoMutation = "Pure read; emits a static description and never touches the file system or agmsg state."
                 },
                 // G570: a fresh agent must learn WHICH TRANSPORT this team runs
@@ -85,8 +85,8 @@ internal static class GuideOnboardingCommand
                 {
                     Order = 3,
                     Command = "intent-cli session-layer show --domain <domain> [--team <team>] --format json",
-                    Purpose = "G570: learn which SESSION LAYER this team runs — choose supported `herdr-only` first for a collocated single-machine team (PREVIEW is a maturity note), or supported `agmsg` + herdr for a distributed team or an existing agmsg investment. "
-                        + SessionLayerMode.PreviewScopingSentence
+                    Purpose = "G624: learn which SESSION LAYER this team runs — prefer `herdr-only` for a collocated single-machine team because it has fewer dependencies, or choose supported, non-retired `agmsg` + herdr for a distributed team or an existing agmsg investment. "
+                        + SessionLayerMode.TransportPreferenceSentence
                         + " Absent a record the mode is `agmsg`. The recorded mode selects which operating sections `guide orchestrator-thread` renders, so read it before following any transport-specific setup. Change it with `intent-cli session-layer set --domain <domain> --mode agmsg|herdr-only --write` — reversible in both directions.",
                     NoMutation = "Pure read; `show` never writes. Only `session-layer set --write` records a mode."
                 },

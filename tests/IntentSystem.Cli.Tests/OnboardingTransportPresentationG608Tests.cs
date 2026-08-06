@@ -134,7 +134,10 @@ public sealed class OnboardingTransportPresentationG608Tests
 
         Assert.Contains("herdr-only", presentation, StringComparison.Ordinal);
         Assert.Contains("agmsg", presentation, StringComparison.Ordinal);
-        Assert.Contains("PREVIEW", presentation, StringComparison.Ordinal);
+        Assert.Contains("preferred", presentation, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("fewer dependencies", presentation, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not retired", presentation, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("PREVIEW", presentation, StringComparison.Ordinal);
         Assert.DoesNotContain("agmsg (PRIMARY)", presentation, StringComparison.Ordinal);
         Assert.DoesNotContain("`agmsg` is PRIMARY", presentation, StringComparison.Ordinal);
         Assert.DoesNotContain("`agmsg` が PRIMARY", presentation, StringComparison.Ordinal);

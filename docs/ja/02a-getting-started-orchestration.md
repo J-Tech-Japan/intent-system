@@ -16,9 +16,9 @@
 <!-- G608 chooser identities: Separate host / Same repo; brand-new / existing. -->
 
 各パターンは共存する貼り付け可能な最初のプロンプトをちょうど 2 つ提示します。4 agent 全員が
-1 台に同居する場合は `herdr-only` を最初に選びます。**PREVIEW** は成熟度の注記です。
-分散チームまたは既存の agmsg 投資があるチームには `agmsg` + herdr を選びます。どちらも
-サポート対象の選択肢で、`session-layer set` で記録します。primary なのはトランスポートではなく
+1 台に同居する場合は、依存関係が少ない `herdr-only` を優先します。分散チームまたは既存の
+agmsg 投資があるチームには、サポート対象で廃止されない `agmsg` + herdr を選びます。どちらも
+`session-layer set` で記録します。primary なのはトランスポートではなく
 **4 スレッドモデル**です。最初のプロンプトの後はトランスポート固有の手順を混ぜず、記録された
 mode と現在のインストール済みガイドに従います。
 
@@ -31,8 +31,9 @@ mode と現在のインストール済みガイドに従います。
 
 4 スレッドモデルが **primary** です。design は intent を作成し、orchestration は
 調整し、implementation は子 PR を届け、review は確認します。1 台の
-マシンに同居するチームには、この経路では `herdr-only` トランスポートを推奨します。
-`herdr-only` が **PREVIEW** なのはトランスポートだけで、4 スレッドモデルではありません。
+マシンに同居するチームには、この経路では依存関係が少ない `herdr-only` トランスポートを優先します。
+分散 / 既存 agmsg のチーム向けの `agmsg` + herdr はサポート対象で廃止されません。primary は
+4 スレッドモデルだけであり、どちらのトランスポートでもありません。
 
 ## 1. repository と folder を選ぶ
 
@@ -83,7 +84,7 @@ design/orchestration agent に次のプロンプトを貼り付けます。
   "command_mode": "write",
   "applied": true,
   "changed": true,
-  "summary": "team `docs-team` in domain `onboarding`: session layer is herdr-only (PREVIEW — session transport only) (recorded)."
+  "summary": "team `docs-team` in domain `onboarding`: session layer is herdr-only (preferred — fewer dependencies) (recorded)."
 }
 ```
 
