@@ -942,8 +942,8 @@ internal sealed class GhCliGitHubIssueRetirementMutator : IGitHubIssueRetirement
         var startInfo = new ProcessStartInfo
         {
             FileName = "gh",
-            StandardOutputEncoding = GitHubCliProcessEncoding.Utf8NoBom,
-            StandardErrorEncoding = GitHubCliProcessEncoding.Utf8NoBom,
+            StandardOutputEncoding = ProcessOutputEncoding.Utf8NoBom,
+            StandardErrorEncoding = ProcessOutputEncoding.Utf8NoBom,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,

@@ -20,6 +20,8 @@ internal sealed class NotifyProcessRunner : INotifyProcessRunner
             FileName = fileName,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardOutputEncoding = ProcessOutputEncoding.Utf8NoBom,
+            StandardErrorEncoding = ProcessOutputEncoding.Utf8NoBom,
             UseShellExecute = false,
             CreateNoWindow = true,
         };

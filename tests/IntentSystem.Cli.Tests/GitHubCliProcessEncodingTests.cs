@@ -14,7 +14,7 @@ namespace IntentSystem.Cli.Tests;
 /// the same bytes with a non-UTF-8 code page corrupts them — proving the
 /// encoding choice is what fixes the bug.
 /// </summary>
-public sealed class GitHubCliProcessEncodingTests
+public sealed class ProcessOutputEncodingTests
 {
     // gh issue list --json number,title,labels,url shape, with a Japanese title.
     private const string JapaneseTitle = "G484 日本語タイトルのテスト（cp932 回帰）";
@@ -25,9 +25,9 @@ public sealed class GitHubCliProcessEncodingTests
     [Fact]
     public void Utf8NoBom_IsUtf8WithoutPreamble()
     {
-        Assert.Equal("Unicode (UTF-8)", GitHubCliProcessEncoding.Utf8NoBom.EncodingName);
+        Assert.Equal("Unicode (UTF-8)", ProcessOutputEncoding.Utf8NoBom.EncodingName);
         // No BOM: gh JSON must not be prefixed with a byte-order mark on write.
-        Assert.Empty(GitHubCliProcessEncoding.Utf8NoBom.GetPreamble());
+        Assert.Empty(ProcessOutputEncoding.Utf8NoBom.GetPreamble());
     }
 
     [Fact]
@@ -37,7 +37,7 @@ public sealed class GitHubCliProcessEncodingTests
         var ghStdoutBytes = Encoding.UTF8.GetBytes(JapaneseIssueListJson);
 
         // What the runner does (post-G484): decode with the pinned UTF-8 encoding.
-        var decoded = GitHubCliProcessEncoding.Utf8NoBom.GetString(ghStdoutBytes);
+        var decoded = ProcessOutputEncoding.Utf8NoBom.GetString(ghStdoutBytes);
 
         var extraction = GitHubCliJsonBoundary.ExtractJsonArray(decoded, "`gh issue list` for J-Tech-Japan/intent-system");
         Assert.True(extraction.Succeeded);
@@ -76,7 +76,7 @@ public sealed class GitHubCliProcessEncodingTests
             "[{\"number\":1,\"title\":\"ASCII only title\",\"labels\":[],\"url\":\"https://example/1\"}]";
         var bytes = Encoding.UTF8.GetBytes(asciiJson);
 
-        var decoded = GitHubCliProcessEncoding.Utf8NoBom.GetString(bytes);
+        var decoded = ProcessOutputEncoding.Utf8NoBom.GetString(bytes);
         Assert.Equal(asciiJson, decoded);
 
         var extraction = GitHubCliJsonBoundary.ExtractJsonArray(decoded, "`gh issue list` for owner/repo");

@@ -24,8 +24,8 @@ internal sealed class GhIssueCreator : IGhIssueCreator
             UseShellExecute = false,
             // G484: decode gh stdout/stderr as UTF-8 regardless of the ambient
             // console code page (Windows cp932) so Japanese payloads stay valid.
-            StandardOutputEncoding = GitHubCliProcessEncoding.Utf8NoBom,
-            StandardErrorEncoding = GitHubCliProcessEncoding.Utf8NoBom
+            StandardOutputEncoding = ProcessOutputEncoding.Utf8NoBom,
+            StandardErrorEncoding = ProcessOutputEncoding.Utf8NoBom
         };
 
         startInfo.ArgumentList.Add("issue");

@@ -154,6 +154,8 @@ internal static class AutomationInstalledCliSurfaceProbe
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardOutputEncoding = ProcessOutputEncoding.Utf8NoBom,
+            StandardErrorEncoding = ProcessOutputEncoding.Utf8NoBom,
         };
         startInfo.Environment["INTENT_CLI_SURFACE_PROBE"] = "1";
 

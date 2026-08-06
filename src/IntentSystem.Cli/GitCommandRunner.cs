@@ -15,6 +15,8 @@ internal sealed class GitRemoteCommandRunner : IGitRemoteCommandRunner
             WorkingDirectory = workingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardOutputEncoding = ProcessOutputEncoding.Utf8NoBom,
+            StandardErrorEncoding = ProcessOutputEncoding.Utf8NoBom,
             UseShellExecute = false
         };
 

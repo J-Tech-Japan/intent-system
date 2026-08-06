@@ -675,6 +675,8 @@ internal static class AutomationDurableStatePreflightCommand
         process.StartInfo.WorkingDirectory = workingDirectory;
         process.StartInfo.RedirectStandardOutput = true;
         process.StartInfo.RedirectStandardError = true;
+        process.StartInfo.StandardOutputEncoding = ProcessOutputEncoding.Utf8NoBom;
+        process.StartInfo.StandardErrorEncoding = ProcessOutputEncoding.Utf8NoBom;
         process.StartInfo.UseShellExecute = false;
         process.StartInfo.CreateNoWindow = true;
         process.Start();
