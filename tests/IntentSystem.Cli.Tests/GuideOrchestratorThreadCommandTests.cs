@@ -2710,16 +2710,36 @@ public sealed class GuideOrchestratorThreadCommandTests
     [Fact]
     public void Execute_WithoutDomainReportsSessionLayerNotResolved_G625()
     {
-        using var workspace = new RecordedGuideWorkspace("intent-cli", "intent-cli-dev");
+        using var workspace = new RecordedGuideWorkspace("intent-cli", "intent-cli-dev", SessionLayerMode.HerdrOnly);
 
         var output = RunMarkdown(workspace.Context,
             ["--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
         var sessionLayer = SectionFrom(output, "## Session layer");
+        var setupIntake = SectionFrom(output, "## Setup intake");
 
         Assert.Contains("Session layer: not resolved", sessionLayer, StringComparison.Ordinal);
         Assert.Contains("--domain <name>", sessionLayer, StringComparison.Ordinal);
         Assert.DoesNotContain("no selection recorded, so the default is in force", sessionLayer, StringComparison.Ordinal);
         Assert.DoesNotContain("recorded for this domain/team", sessionLayer, StringComparison.Ordinal);
+        Assert.Contains("Session layer: not resolved", setupIntake, StringComparison.Ordinal);
+        Assert.Contains("--domain <name>", setupIntake, StringComparison.Ordinal);
+        Assert.DoesNotContain("Recorded session layer for this setup", setupIntake, StringComparison.Ordinal);
+        Assert.DoesNotContain("default — nothing recorded yet", setupIntake, StringComparison.Ordinal);
+
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            workspace.Context,
+            ["--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--format", "json"],
+            writer);
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var intake = document.RootElement.GetProperty("setup_intake");
+        Assert.Equal("not-resolved", intake.GetProperty("session_layer_mode").GetString());
+        var intakeNote = intake.GetProperty("session_layer_note").GetString()!;
+        Assert.Contains("Session layer: not resolved", intakeNote, StringComparison.Ordinal);
+        Assert.Contains("--domain <name>", intakeNote, StringComparison.Ordinal);
+        Assert.DoesNotContain("Recorded session layer for this setup", intakeNote, StringComparison.Ordinal);
+        Assert.DoesNotContain("default — nothing recorded yet", intakeNote, StringComparison.Ordinal);
     }
 
     private static string RunMarkdown(CliContext context, string[] args)
@@ -2733,7 +2753,7 @@ public sealed class GuideOrchestratorThreadCommandTests
 
     private sealed class RecordedGuideWorkspace : IDisposable
     {
-        public RecordedGuideWorkspace(string domain, string team)
+        public RecordedGuideWorkspace(string domain, string team, string mode = SessionLayerMode.Agmsg)
         {
             RootPath = Directory.CreateTempSubdirectory("guide-recorded-session-g594-").FullName;
             Context = new CliContext
@@ -2752,7 +2772,7 @@ public sealed class GuideOrchestratorThreadCommandTests
             using var writer = new StringWriter();
             var exitCode = SessionLayerCommand.ExecuteSet(
                 Context,
-                ["--domain", domain, "--team", team, "--mode", SessionLayerMode.Agmsg, "--write", "--format", "json"],
+                ["--domain", domain, "--team", team, "--mode", mode, "--write", "--format", "json"],
                 writer);
             Assert.True(exitCode == 0, writer.ToString());
         }

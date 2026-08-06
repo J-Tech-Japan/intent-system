@@ -224,7 +224,10 @@ internal static class GuideOrchestratorThreadCommand
             TeamOmission = teamOmission,
         };
 
-        var intakeNote = teamOmission is not null
+        var intakeNote = !modeResolved
+            ? "Session layer: not resolved — no `--domain` was supplied, so this guide did not consult a recorded "
+                + "mode or assert a default. Pass `--domain <name>` before following a session-layer procedure."
+            : teamOmission is not null
             ? teamOmission.Summary + " " + string.Join(
                 " ",
                 teamOmission.CorrectiveCommands.Select(correction => $"`{correction.Command}`"))
@@ -256,7 +259,7 @@ internal static class GuideOrchestratorThreadCommand
             SessionLayer = block,
             SetupIntake = setupIntake with
             {
-                SessionLayerMode = sessionLayer.Mode,
+                SessionLayerMode = modeResolved ? sessionLayer.Mode : "not-resolved",
                 SessionLayerNote = intakeNote,
             },
         };
