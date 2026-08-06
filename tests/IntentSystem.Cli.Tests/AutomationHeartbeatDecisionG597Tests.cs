@@ -309,10 +309,11 @@ public sealed class AutomationHeartbeatDecisionG597Tests : IDisposable
 
         public void WriteTopology()
         {
-            var path = NotifyRoleTopologyStore.ResolvePath(RootPath);
+            var path = NotifyRoleTopologyStore.ResolvePath(RootPath, "intent-cli", "intent-cli-dev");
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, JsonSerializer.Serialize(new
             {
+                domain = "intent-cli",
                 team = "intent-cli-dev",
                 workspace_id = "wH",
                 roles = new Dictionary<string, object>

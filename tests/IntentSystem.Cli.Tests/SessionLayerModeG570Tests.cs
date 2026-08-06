@@ -2068,10 +2068,11 @@ public sealed class SessionLayerModeG570Tests : IDisposable
 
         private void WriteSetupTopology()
         {
-            var path = NotifyRoleTopologyStore.ResolvePath(RootPath);
+            var path = NotifyRoleTopologyStore.ResolvePath(RootPath, Domain, "demo-team");
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, JsonSerializer.Serialize(new
             {
+                domain = Domain,
                 team = "demo-team",
                 workspace_id = "w-demo",
                 roles = new Dictionary<string, object>

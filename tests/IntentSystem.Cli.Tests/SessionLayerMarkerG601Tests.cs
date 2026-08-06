@@ -82,7 +82,7 @@ public sealed class SessionLayerMarkerG601Tests : IDisposable
         var file = workspace.WriteStartup(Placeholder("alpha") + "\n");
         Assert.Equal(0, workspace.Generate("alpha", file).ExitCode);
         workspace.Record("alpha", SessionLayerMode.Agmsg);
-        File.Delete(NotifyRoleTopologyStore.ResolvePath(workspace.RootPath));
+        File.Delete(NotifyRoleTopologyStore.ResolvePath(workspace.RootPath, MarkerWorkspace.Domain, "alpha"));
 
         var result = SessionLayerPreflight.Analyze(workspace.RootPath, MarkerWorkspace.Domain, "alpha");
 
@@ -283,10 +283,11 @@ public sealed class SessionLayerMarkerG601Tests : IDisposable
 
         public void WriteTopology(string team)
         {
-            var path = NotifyRoleTopologyStore.ResolvePath(RootPath);
+            var path = NotifyRoleTopologyStore.ResolvePath(RootPath, Domain, team);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, JsonSerializer.Serialize(new
             {
+                domain = Domain,
                 team,
                 workspace_id = "w",
                 roles = new
