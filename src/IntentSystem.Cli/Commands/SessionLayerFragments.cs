@@ -782,7 +782,7 @@ internal static class SessionLayerFragments
             S8,
             Descriptive("8."),
             Scaffold(" "),
-            Operative("When progress blocks on a design judgment, record that wait before waiting: open operator-attention with `--owner design`, query the existing record, and whoever supplies the judgment MUST resolve it with evidence."),
+            Operative("When progress blocks on a design judgment, record that wait before waiting: open judgment-wait with `--owner design`, query the existing record, and whoever supplies the judgment MUST resolve it with evidence."),
             Scaffold(" "),
             Operative("An answered-but-open record is a lie, not a completed design handoff.")),
         Fragment(
@@ -1628,7 +1628,7 @@ internal static class SessionLayerFragments
             Operative("Until it is recorded, the unit stays visible as a `knowledge-writeback-pending` item in `automation stalled-work` / `automation heartbeat` — closing the PR does not clear it, and nothing here writes intent content on design's behalf.")),
         Fragment(
             "design_traffic_controller",
-            Operative("When progress blocks on a design judgment, record that wait before waiting: open operator-attention with `--owner design`, query the existing record, and whoever supplies the judgment MUST resolve it with evidence."),
+            Operative("When progress blocks on a design judgment, record that wait before waiting: open judgment-wait with `--owner design`, query the existing record, and whoever supplies the judgment MUST resolve it with evidence."),
             Scaffold(" "),
             Operative("An answered-but-open record is a lie, not a completed design handoff.")),
         Fragment("design_traffic_controller", Operative("Confirm the orchestrator is actually scheduled and on a fresh turn (its `/loop` or Codex automation is running).")),

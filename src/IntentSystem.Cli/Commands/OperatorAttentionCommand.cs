@@ -5,14 +5,23 @@ using IntentSystem.Supervisor;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G596: explicit command-only lifecycle for durable obligations that require
-/// a human operator. A notification stream can announce one of these records,
-/// but it can never create or transition one.
+/// G623: explicit command-only lifecycle for durable judgment waits. A
+/// notification stream can announce one of these records, but it can never
+/// create or transition one.
 /// </summary>
 internal static class OperatorAttentionCommand
 {
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
+    internal const string CanonicalCommandGroup = "judgment-wait";
+    internal const string DeprecatedAliasCommandGroup = "operator-attention";
+
+    private static readonly OperatorAttentionDeprecationWarning DeprecatedAliasWarning = new()
+    {
+        Replacement = CanonicalCommandGroup,
+        Removal = "next-major",
+        Message = $"`{DeprecatedAliasCommandGroup}` is deprecated; use `{CanonicalCommandGroup}`. The alias remains available through 1.x and may be removed only in the next MAJOR release.",
+    };
 
     internal static Func<DateTimeOffset>? UtcNowFactory { get; set; }
 
@@ -23,6 +32,16 @@ internal static class OperatorAttentionCommand
     };
 
     public static int ExecuteOpen(CliContext context, string[] args, TextWriter writer)
+        => ExecuteOpen(context, args, writer, deprecationWarning: null);
+
+    public static int ExecuteDeprecatedAliasOpen(CliContext context, string[] args, TextWriter writer)
+        => ExecuteOpen(context, args, writer, DeprecatedAliasWarning);
+
+    private static int ExecuteOpen(
+        CliContext context,
+        string[] args,
+        TextWriter writer,
+        OperatorAttentionDeprecationWarning? deprecationWarning)
     {
         if (IsHelp(args))
         {
@@ -37,7 +56,7 @@ internal static class OperatorAttentionCommand
         var read = OperatorAttentionStore.Read(context.RepoRoot);
         if (read.Status == OperatorAttentionReadStatus.CannotDetermine)
         {
-            return EmitMutationFailure(writer, input!, read.Status, read.Error!);
+            return EmitMutationFailure(writer, input!, read.Status, read.Error!, deprecationWarning);
         }
 
         var existingRecords = read.Document?.Records ?? Array.Empty<OperatorAttentionRecord>();
@@ -47,7 +66,8 @@ internal static class OperatorAttentionCommand
                 writer,
                 input!,
                 OperatorAttentionReadStatus.Readable,
-                $"record '{input!.RecordId}' already exists; records are never overwritten or reopened in place.");
+                $"record '{input!.RecordId}' already exists; records are never overwritten or reopened in place.",
+                deprecationWarning);
         }
 
         if (input!.SupersedesRecordId is { } supersededId)
@@ -57,18 +77,21 @@ internal static class OperatorAttentionCommand
             if (superseded is null)
             {
                 return EmitMutationFailure(writer, input, OperatorAttentionReadStatus.Readable,
-                    $"--supersedes names unknown record '{supersededId}'.");
+                    $"--supersedes names unknown record '{supersededId}'.",
+                    deprecationWarning);
             }
             if (!string.Equals(superseded.Status, OperatorAttentionStatus.Superseded, StringComparison.Ordinal))
             {
                 return EmitMutationFailure(writer, input, OperatorAttentionReadStatus.Readable,
-                    $"record '{supersededId}' is '{superseded.Status}', not superseded; reopening is a new record that may reference only a terminal superseded record.");
+                    $"record '{supersededId}' is '{superseded.Status}', not superseded; reopening is a new record that may reference only a terminal superseded record.",
+                    deprecationWarning);
             }
             if (!string.Equals(superseded.Domain, input.Domain, StringComparison.Ordinal)
                 || !string.Equals(superseded.Team, input.Team, StringComparison.Ordinal))
             {
                 return EmitMutationFailure(writer, input, OperatorAttentionReadStatus.Readable,
-                    $"record '{supersededId}' belongs to domain '{superseded.Domain}' / team '{superseded.Team}', not '{input.Domain}' / '{input.Team}'.");
+                    $"record '{supersededId}' belongs to domain '{superseded.Domain}' / team '{superseded.Team}', not '{input.Domain}' / '{input.Team}'.",
+                    deprecationWarning);
             }
         }
 
@@ -99,30 +122,60 @@ internal static class OperatorAttentionCommand
         };
 
         var document = OperatorAttentionStore.BuildUpdated(read.Document, [.. existingRecords, record], now);
-        return ApplyAndEmit(context, writer, input, document, record);
+        return ApplyAndEmit(context, writer, input, document, record, deprecationWarning);
     }
 
     public static int ExecuteResolve(CliContext context, string[] args, TextWriter writer)
+        => ExecuteResolve(context, args, writer, deprecationWarning: null);
+
+    public static int ExecuteDeprecatedAliasResolve(CliContext context, string[] args, TextWriter writer)
+        => ExecuteResolve(context, args, writer, DeprecatedAliasWarning);
+
+    private static int ExecuteResolve(
+        CliContext context,
+        string[] args,
+        TextWriter writer,
+        OperatorAttentionDeprecationWarning? deprecationWarning)
     {
         if (IsHelp(args))
         {
             writer.WriteLine(ResolveUsage);
             return 0;
         }
-        return ExecuteTerminalTransition(context, args, writer, OperatorAttentionOperation.Resolve);
+        return ExecuteTerminalTransition(context, args, writer, OperatorAttentionOperation.Resolve, deprecationWarning);
     }
 
     public static int ExecuteSupersede(CliContext context, string[] args, TextWriter writer)
+        => ExecuteSupersede(context, args, writer, deprecationWarning: null);
+
+    public static int ExecuteDeprecatedAliasSupersede(CliContext context, string[] args, TextWriter writer)
+        => ExecuteSupersede(context, args, writer, DeprecatedAliasWarning);
+
+    private static int ExecuteSupersede(
+        CliContext context,
+        string[] args,
+        TextWriter writer,
+        OperatorAttentionDeprecationWarning? deprecationWarning)
     {
         if (IsHelp(args))
         {
             writer.WriteLine(SupersedeUsage);
             return 0;
         }
-        return ExecuteTerminalTransition(context, args, writer, OperatorAttentionOperation.Supersede);
+        return ExecuteTerminalTransition(context, args, writer, OperatorAttentionOperation.Supersede, deprecationWarning);
     }
 
     public static int ExecuteQuery(CliContext context, string[] args, TextWriter writer)
+        => ExecuteQuery(context, args, writer, deprecationWarning: null);
+
+    public static int ExecuteDeprecatedAliasQuery(CliContext context, string[] args, TextWriter writer)
+        => ExecuteQuery(context, args, writer, DeprecatedAliasWarning);
+
+    private static int ExecuteQuery(
+        CliContext context,
+        string[] args,
+        TextWriter writer,
+        OperatorAttentionDeprecationWarning? deprecationWarning)
     {
         if (IsHelp(args))
         {
@@ -166,6 +219,7 @@ internal static class OperatorAttentionCommand
             OpenRecords = open,
             Records = matched,
             Error = read.Error,
+            DeprecationWarning = deprecationWarning,
         };
 
         EmitQuery(writer, format, result);
@@ -179,7 +233,8 @@ internal static class OperatorAttentionCommand
         CliContext context,
         string[] args,
         TextWriter writer,
-        OperatorAttentionOperation operation)
+        OperatorAttentionOperation operation,
+        OperatorAttentionDeprecationWarning? deprecationWarning)
     {
         var usage = operation == OperatorAttentionOperation.Resolve ? ResolveUsage : SupersedeUsage;
         if (!TryParseMutationArguments(args, operation, out var input, out var error))
@@ -194,7 +249,8 @@ internal static class OperatorAttentionCommand
                 writer,
                 input!,
                 read.Status,
-                read.Error ?? $"operator-attention store is {read.Status}; no transition can be established.");
+                read.Error ?? $"judgment-wait store is {read.Status}; no transition can be established.",
+                deprecationWarning);
         }
 
         var records = read.Document!.Records.ToArray();
@@ -202,7 +258,7 @@ internal static class OperatorAttentionCommand
             string.Equals(record.RecordId, input!.RecordId, StringComparison.Ordinal));
         if (index < 0)
         {
-            return EmitMutationFailure(writer, input!, read.Status, $"record '{input!.RecordId}' was not found.");
+            return EmitMutationFailure(writer, input!, read.Status, $"record '{input!.RecordId}' was not found.", deprecationWarning);
         }
 
         var existing = records[index];
@@ -212,7 +268,8 @@ internal static class OperatorAttentionCommand
                 writer,
                 input!,
                 read.Status,
-                $"record '{existing.RecordId}' is terminal '{existing.Status}' and can never be reopened or transitioned again.");
+                $"record '{existing.RecordId}' is terminal '{existing.Status}' and can never be reopened or transitioned again.",
+                deprecationWarning);
         }
 
         var now = Now();
@@ -241,7 +298,7 @@ internal static class OperatorAttentionCommand
         records[index] = updated;
 
         var document = OperatorAttentionStore.BuildUpdated(read.Document, records, now);
-        return ApplyAndEmit(context, writer, input, document, updated);
+        return ApplyAndEmit(context, writer, input, document, updated, deprecationWarning);
     }
 
     private static int ApplyAndEmit(
@@ -249,7 +306,8 @@ internal static class OperatorAttentionCommand
         TextWriter writer,
         OperatorAttentionMutationInput input,
         OperatorAttentionStoreDocument document,
-        OperatorAttentionRecord record)
+        OperatorAttentionRecord record,
+        OperatorAttentionDeprecationWarning? deprecationWarning)
     {
         if (input.Write)
         {
@@ -265,6 +323,7 @@ internal static class OperatorAttentionCommand
             StorePath = OperatorAttentionStore.RelativePath,
             Record = OperatorAttentionQueryRecord.From(record, Now()),
             Error = null,
+            DeprecationWarning = deprecationWarning,
         };
         EmitMutation(writer, input.Format, result);
         return 0;
@@ -274,7 +333,8 @@ internal static class OperatorAttentionCommand
         TextWriter writer,
         OperatorAttentionMutationInput input,
         string readStatus,
-        string error)
+        string error,
+        OperatorAttentionDeprecationWarning? deprecationWarning)
     {
         var result = new OperatorAttentionMutationResult
         {
@@ -287,6 +347,7 @@ internal static class OperatorAttentionCommand
             StorePath = OperatorAttentionStore.RelativePath,
             Record = null,
             Error = error,
+            DeprecationWarning = deprecationWarning,
         };
         EmitMutation(writer, input.Format, result);
         return 1;
@@ -301,7 +362,7 @@ internal static class OperatorAttentionCommand
             return;
         }
 
-        writer.WriteLine($"# operator-attention {result.Operation}");
+        writer.WriteLine($"# {CanonicalCommandGroup} {result.Operation}");
         writer.WriteLine();
         writer.WriteLine($"- status: {result.Status}");
         writer.WriteLine($"- mode: {result.Mode}");
@@ -315,6 +376,10 @@ internal static class OperatorAttentionCommand
         {
             writer.WriteLine($"- error: {result.Error}");
         }
+        if (result.DeprecationWarning is not null)
+        {
+            writer.WriteLine($"- deprecation_warning: {result.DeprecationWarning.Message}");
+        }
     }
 
     private static void EmitQuery(TextWriter writer, string format, OperatorAttentionQueryResult result)
@@ -326,7 +391,7 @@ internal static class OperatorAttentionCommand
             return;
         }
 
-        writer.WriteLine("# operator-attention query");
+        writer.WriteLine($"# {CanonicalCommandGroup} query");
         writer.WriteLine();
         writer.WriteLine($"- status: {result.Status}");
         writer.WriteLine($"- domain: {result.Domain ?? "(all)"}");
@@ -340,6 +405,10 @@ internal static class OperatorAttentionCommand
         if (result.Error is not null)
         {
             writer.WriteLine($"- error: {result.Error}");
+        }
+        if (result.DeprecationWarning is not null)
+        {
+            writer.WriteLine($"- deprecation_warning: {result.DeprecationWarning.Message}");
         }
     }
 
@@ -502,7 +571,7 @@ internal static class OperatorAttentionCommand
 
         if (domain is null && team is null)
         {
-            error = "operator-attention query requires --domain, --team, or both; an unscoped host-wide answer is refused.";
+            error = "judgment-wait query requires --domain, --team, or both; an unscoped host-wide answer is refused.";
             return false;
         }
         if (domain is not null && !TryValidateIdentifier(domain, "--domain", out error)) return false;
@@ -568,13 +637,13 @@ internal static class OperatorAttentionCommand
     }
 
     private const string OpenUsage =
-        "Usage: intent-cli operator-attention open --record <id> --domain <d> --team <t> --owner <owner> --blocking-reference <ref> --action-needed <text> --evidence <text> [--supersedes <record>] [--dry-run|--write] [--format json|markdown]";
+        "Usage: intent-cli judgment-wait open --record <id> --domain <d> --team <t> --owner <owner> --blocking-reference <ref> --action-needed <text> --evidence <text> [--supersedes <record>] [--dry-run|--write] [--format json|markdown]";
     private const string ResolveUsage =
-        "Usage: intent-cli operator-attention resolve --record <id> --resolution-evidence <text> [--dry-run|--write] [--format json|markdown]";
+        "Usage: intent-cli judgment-wait resolve --record <id> --resolution-evidence <text> [--dry-run|--write] [--format json|markdown]";
     private const string SupersedeUsage =
-        "Usage: intent-cli operator-attention supersede --record <id> --evidence <text> [--dry-run|--write] [--format json|markdown]";
+        "Usage: intent-cli judgment-wait supersede --record <id> --evidence <text> [--dry-run|--write] [--format json|markdown]";
     private const string QueryUsage =
-        "Usage: intent-cli operator-attention query [--domain <d>] [--team <t>] [--format json|markdown]";
+        "Usage: intent-cli judgment-wait query [--domain <d>] [--team <t>] [--format json|markdown]";
 
     private enum OperatorAttentionOperation
     {
@@ -947,6 +1016,9 @@ internal sealed record OperatorAttentionMutationResult
     public required OperatorAttentionQueryRecord? Record { get; init; }
     [JsonPropertyName("error")]
     public required string? Error { get; init; }
+    [JsonPropertyName("deprecation_warning")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public required OperatorAttentionDeprecationWarning? DeprecationWarning { get; init; }
 }
 
 internal sealed record OperatorAttentionQueryResult
@@ -969,4 +1041,17 @@ internal sealed record OperatorAttentionQueryResult
     public required IReadOnlyList<OperatorAttentionQueryRecord> Records { get; init; }
     [JsonPropertyName("error")]
     public required string? Error { get; init; }
+    [JsonPropertyName("deprecation_warning")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public required OperatorAttentionDeprecationWarning? DeprecationWarning { get; init; }
+}
+
+internal sealed record OperatorAttentionDeprecationWarning
+{
+    [JsonPropertyName("replacement")]
+    public required string Replacement { get; init; }
+    [JsonPropertyName("removal")]
+    public required string Removal { get; init; }
+    [JsonPropertyName("message")]
+    public required string Message { get; init; }
 }

@@ -105,7 +105,7 @@ public sealed class JapaneseTerminologyGuardG613Tests
 
         Assert.Equal(measuredOccurrences, keptOccurrences + translatedOccurrences);
         Assert.Equal(keptOccurrences, Regex.Matches(content, "durable", RegexOptions.IgnoreCase).Count);
-        Assert.Contains("### operator attention の永続状態 (G596)", content, StringComparison.Ordinal);
+        Assert.Contains("### 判断待ちの永続記録 (G596, G623)", content, StringComparison.Ordinal);
         Assert.DoesNotMatch(new Regex("durable", RegexOptions.IgnoreCase), unglossedProse);
         Assert.Contains("durable state（永続状態）", content, StringComparison.Ordinal);
     }
