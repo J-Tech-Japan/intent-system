@@ -130,6 +130,14 @@ those mentions are advisory notes only. A declared submodule target still
 blocks when the workdir is outside that submodule, and a missing `Target paths:`
 declaration fails closed instead of guessing from prose.
 
+On Japanese Windows, a redirected child-process decoding failure can appear as
+an intermittent, environment-triggered total stall: ambient non-ASCII bytes
+(for example, a pane title in an unrelated workspace) can stop every transport
+operation at once. Child streams are now pinned to UTF-8, so no workaround that
+avoids non-ASCII text is required after upgrading. On macOS/Linux the Windows
+code-page failure is structurally unreachable; verification is by construction
+and by the source guard.
+
 | Result | Action |
 |--------|--------|
 | `safe_repair_category: child-selector-label-gap` | Apply the one repair `intent-cli` marks safe; retry once |

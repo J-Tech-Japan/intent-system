@@ -15,6 +15,8 @@ public sealed class GitCommandRunner : IGitCommandRunner
             WorkingDirectory = workingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardOutputEncoding = ProcessOutputEncoding.Utf8NoBom,
+            StandardErrorEncoding = ProcessOutputEncoding.Utf8NoBom,
             UseShellExecute = false
         };
 

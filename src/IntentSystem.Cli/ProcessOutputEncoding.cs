@@ -3,7 +3,7 @@ using System.Text;
 namespace IntentSystem.Cli;
 
 /// <summary>
-/// G484: shared decoding contract for <c>gh</c> subprocess output. GitHub CLI
+/// G631: shared decoding contract for redirected child-process output.
 /// always emits UTF-8 (JSON and error text), but when a redirected
 /// <see cref="System.Diagnostics.ProcessStartInfo"/> does not pin
 /// <c>StandardOutputEncoding</c> / <c>StandardErrorEncoding</c>, .NET decodes
@@ -18,7 +18,7 @@ namespace IntentSystem.Cli;
 /// to existing behavior on macOS/Linux (whose console is already UTF-8), so the
 /// fix is a no-op there and only repairs the Windows cp932 path.
 /// </summary>
-internal static class GitHubCliProcessEncoding
+internal static class ProcessOutputEncoding
 {
     /// <summary>
     /// UTF-8 without a byte-order mark. Used as both

@@ -121,6 +121,8 @@ intent-cli automation doctor --format json
 
 `worker issue-preflight` の target-mismatch 判定は、本文の推測的な文字列検索ではなく、Issue に宣言された `Repository:` と `Target paths:` を根拠にします。子リポジトリを宣言した Issue は、説明文に host や `submodules/` が現れても actionable のままで、その言及は advisory note として出力されます。宣言された対象が submodule 内で workdir が外側なら従来どおりブロックし、`Target paths:` 宣言がない場合は本文から推測せず fail closed します。
 
+日本語 Windows では、子プロセスのリダイレクト出力のデコード不良が、間欠的・環境依存の「全 transport が同時に止まる」ストールとして現れることがあります。別 workspace の pane title など、周囲の非 ASCII バイトがきっかけになります。子プロセスの stream は UTF-8 に固定されたため、更新後に非 ASCII を避ける回避策は不要です。macOS/Linux では Windows の code page 起因の失敗は構造上発生せず、構築結果と source guard で検証します。
+
 | 結果 | 対応 |
 |------|------|
 | `safe_repair_category: child-selector-label-gap` | `intent-cli` が安全と判断した修復を 1 回適用し、リトライ |

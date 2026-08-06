@@ -638,8 +638,8 @@ internal sealed class GhCliGitHubLabelMutator : IGitHubLabelMutator, IGitHubLabe
         var startInfo = new ProcessStartInfo
         {
             FileName = "gh",
-            StandardOutputEncoding = GitHubCliProcessEncoding.Utf8NoBom,
-            StandardErrorEncoding = GitHubCliProcessEncoding.Utf8NoBom,
+            StandardOutputEncoding = ProcessOutputEncoding.Utf8NoBom,
+            StandardErrorEncoding = ProcessOutputEncoding.Utf8NoBom,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             RedirectStandardInput = true,
@@ -718,8 +718,8 @@ internal sealed class GhCliGitHubLabelMutator : IGitHubLabelMutator, IGitHubLabe
             FileName = "gh",
             // G484: decode gh stdout/stderr as UTF-8 regardless of the ambient
             // console code page (Windows cp932) so Japanese payloads stay valid.
-            StandardOutputEncoding = GitHubCliProcessEncoding.Utf8NoBom,
-            StandardErrorEncoding = GitHubCliProcessEncoding.Utf8NoBom,
+            StandardOutputEncoding = ProcessOutputEncoding.Utf8NoBom,
+            StandardErrorEncoding = ProcessOutputEncoding.Utf8NoBom,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
