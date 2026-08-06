@@ -54,6 +54,12 @@ v0.12.0 では、team が topology を手編集せずに seat の担当者と宣
 変更でき、paste-sensitive な agent の wedge を避けられます。Japanese documentation は自然な
 日本語として読め、1.0 compatibility promise とその ledger が公開された contract になります。
 
+## Compatibility promise policy
+
+v0.12.0 の freeze と freeze 後の preview lane は [1.0 compatibility promise](1.0-compatibility-promise.md)
+で定義しています。1.x の surface が covered か preview かを判断するときは、この promise と
+ledger を参照してください。
+
 ## インストールまたは更新
 
 ```bash
