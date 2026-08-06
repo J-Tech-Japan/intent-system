@@ -19,6 +19,7 @@ internal static class SessionLayerPreflight
     public const string ActiveSkipped = "skipped";
     public const string ActiveAcknowledged = "acknowledged";
     public const string ActiveObserved = "observed";
+    public const string ActiveInProgress = "in-progress";
     public const string ActiveUnobservable = "unobservable";
     public const string ActiveNotObserved = "not-observed";
     public const string ActiveNotApplicable = "not-applicable";

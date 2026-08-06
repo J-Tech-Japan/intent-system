@@ -593,14 +593,15 @@ working` semantics, then a separate bounded `agent wait` for
 idle/done/blocked. The observed unattended working transition is the delivery
 verdict: once observed, `delivered: true` cannot be negated by the later settle
 check. `settle_outcome` reports that independent acknowledgement as `observed`,
-`not-observed-within-bound`, or `not-applicable`; `resend_permitted` is the
+`pending`, or `not-applicable`; `resend_permitted` is the
 machine-actionable retry verdict. An idle pane that stays idle is
 `receiver_state_outcome: idle-stays-idle`, `working_transition: not-observed`,
 `settle_outcome: not-applicable`, and not delivered, so
-`resend_permitted: true`. A pane that enters working but does not settle in the
-bound is `receiver_state_outcome: working-did-not-settle`, delivered, and has
-`settle_outcome: not-observed-within-bound` plus `resend_permitted: false`;
-automation must not resend because the recipient may still be working. A pane
+`resend_permitted: true`. A pane that enters working and is still working when
+the bounded settle observation ends is a successful non-terminal dispatch:
+`receiver_state_outcome: working-observed-in-progress`,
+`working_transition: observed`, `settle_outcome: pending`, and
+`resend_permitted: false`; do not resend while the recipient is working. A pane
 already working when notify starts is still delivered after prompt submission,
 but reports `receiver_state_outcome: already-working`,
 `working_transition: unobservable`, `settle_outcome: not-applicable`, and

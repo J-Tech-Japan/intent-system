@@ -169,7 +169,7 @@ public sealed class SessionLayerPreflightG594Tests : IDisposable
     [Theory]
     [InlineData("idle-stays-idle", false, "not-observed", "not-applicable", true, SessionLayerPreflight.ActiveNotObserved)]
     [InlineData("idle-transitions", true, "observed", "observed", false, SessionLayerPreflight.ActiveObserved)]
-    [InlineData("working-did-not-settle", true, "observed", "not-observed-within-bound", false, SessionLayerPreflight.ActiveNotObserved)]
+    [InlineData("working-observed-in-progress", true, "observed", "pending", false, SessionLayerPreflight.ActiveInProgress)]
     [InlineData("already-working", true, "unobservable", "not-applicable", false, SessionLayerPreflight.ActiveUnobservable)]
     public void HerdrDelivery_ReportsFourDistinctReceiverOutcomesAndSeparateSettleVerdicts_G598(
         string receiverCase,
@@ -200,7 +200,7 @@ public sealed class SessionLayerPreflightG594Tests : IDisposable
 
             if (arguments.Take(2).SequenceEqual(["agent", "wait"]))
             {
-                return string.Equals(receiverCase, "working-did-not-settle", StringComparison.Ordinal)
+                return string.Equals(receiverCase, "working-observed-in-progress", StringComparison.Ordinal)
                     ? Failure("timeout waiting for settled state")
                     : Success("settled acknowledgement");
             }
@@ -251,7 +251,7 @@ public sealed class SessionLayerPreflightG594Tests : IDisposable
     }
 
     [Fact]
-    public void HerdrDelivery_ObservedWorkingWithoutFreshSettledAck_IsDeliveredAndForbidsResend_G598()
+    public void HerdrDelivery_ObservedWorkingWithoutFreshSettledAck_IsSuccessfulAndInProgress_G626()
     {
         workspace.RecordMode(SessionLayerMode.HerdrOnly);
         workspace.WriteTopology();
@@ -282,13 +282,15 @@ public sealed class SessionLayerPreflightG594Tests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.True(result.GetProperty("delivered").GetBoolean());
         Assert.False(result.GetProperty("resend_permitted").GetBoolean());
-        Assert.Equal("working-did-not-settle", result.GetProperty("receiver_state_outcome").GetString());
+        Assert.Equal("working-observed-in-progress", result.GetProperty("receiver_state_outcome").GetString());
         Assert.Equal("observed", result.GetProperty("working_transition").GetString());
-        Assert.Equal("not-observed-within-bound", result.GetProperty("settle_outcome").GetString());
-        Assert.Contains("Delivered after the observed working transition", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
-        Assert.Contains("Resend is forbidden", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Equal("pending", result.GetProperty("settle_outcome").GetString());
+        Assert.Contains("Delivery succeeded", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("do not resend while it is working", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Resend is forbidden", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("not observed", result.GetProperty("summary").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Equal(
-            SessionLayerPreflight.ActiveNotObserved,
+            SessionLayerPreflight.ActiveInProgress,
             result.GetProperty("session_layer_preflight")
                 .GetProperty("active_phase")
                 .GetProperty("status")
@@ -459,9 +461,9 @@ public sealed class SessionLayerPreflightG594Tests : IDisposable
         Assert.Contains("already-working", content, StringComparison.Ordinal);
         Assert.Contains("unobservable", content, StringComparison.Ordinal);
         Assert.Contains("settle_outcome", content, StringComparison.Ordinal);
-        Assert.Contains("not-observed-within-bound", content, StringComparison.Ordinal);
+        Assert.Contains("pending", content, StringComparison.Ordinal);
         Assert.Contains("resend_permitted", content, StringComparison.Ordinal);
-        Assert.Contains("working-did-not-settle", content, StringComparison.Ordinal);
+        Assert.Contains("working-observed-in-progress", content, StringComparison.Ordinal);
         Assert.Contains("agent prompt --wait", content, StringComparison.Ordinal);
         Assert.Contains("logical role name", content, StringComparison.Ordinal);
         Assert.Contains("agent name", content, StringComparison.Ordinal);
