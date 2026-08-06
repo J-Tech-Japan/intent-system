@@ -58,6 +58,12 @@ hand-editing topology, avoids wedging a paste-sensitive agent, makes the
 Japanese documentation read as Japanese, and publishes the 1.0 compatibility
 promise with its ledger.
 
+## Compatibility promise policy
+
+The v0.12.0 freeze and the post-freeze preview lane are defined in the
+[1.0 compatibility promise](1.0-compatibility-promise.md). Use that promise
+and its ledger to tell whether a 1.x surface is covered or preview.
+
 ## Install or upgrade
 
 ```bash

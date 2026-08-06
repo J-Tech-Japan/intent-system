@@ -40,6 +40,29 @@ public sealed class CompatibilityPromiseG612Tests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
+    public void Promise_RecordsTheV012FreezeAndPreviewReaderTest_G628(string language)
+    {
+        var promise = Read(language, "1.0-compatibility-promise.md");
+
+        Assert.Contains("v0.12.0", promise, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("2026-08-05", promise, StringComparison.Ordinal);
+        Assert.Contains("tomohisa", promise, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("preview", promise, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("preview-through-1.x", promise, StringComparison.Ordinal);
+        var outsideAndWithdrawn = language == "en"
+            ? new[] { "outside", "withdraw" }
+            : new[] { "対象外", "撤回" };
+        foreach (var term in outsideAndWithdrawn)
+        {
+            Assert.Contains(term, promise, StringComparison.OrdinalIgnoreCase);
+        }
+        Assert.Contains("2.0", promise, StringComparison.Ordinal);
+        Assert.Contains("stable-at-1.0", promise, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
     public void Ledger_ContainsEveryRegisteredCommandAndRequiredLegacyDispositions_G612(string language)
     {
         var ledger = Read(language, "1.0-compatibility-ledger.md");
@@ -62,6 +85,28 @@ public sealed class CompatibilityPromiseG612Tests
         Assert.Contains("runtime-state", ledger, StringComparison.Ordinal);
         Assert.Contains("packet-schema", ledger, StringComparison.Ordinal);
         Assert.Contains("field alias", ledger, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void Ledger_EnumeratesThePreviewDispositionAlongsideTheCompletenessGuard_G628(string language)
+    {
+        var ledger = Read(language, "1.0-compatibility-ledger.md");
+
+        var previewRows = ledger.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.StartsWith("| post-freeze preview surface |", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Single(previewRows);
+        Assert.Contains("`preview-through-1.x`", previewRows[0], StringComparison.Ordinal);
+        Assert.Contains("preview", previewRows[0], StringComparison.OrdinalIgnoreCase);
+
+        // Keep the existing registered-command completeness guard exercised in
+        // the same fixture: preview rows are additive and cannot replace it.
+        foreach (var command in RegisteredCommands().Concat(TopLevelAliases))
+        {
+            Assert.Contains($"`{command}`", ledger, StringComparison.Ordinal);
+        }
     }
 
     [Theory]
