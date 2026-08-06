@@ -269,6 +269,40 @@ public sealed class WorkerIssuePreflightCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenG625SentenceWithChildDeclaration_IsActionableWithAdvisory()
+    {
+        using var workspace = new WorkerIssuePreflightWorkspace();
+        var body = ValidBody("J-Tech-Japan/intent-system")
+            + "\nreported from a host with no `.gitmodules` and no `submodules/`\n";
+        WorkerIssuePreflightCommand.IssueLookupFactory = () => new FakeLookup(BuildIssue(603, "OPEN", "G625 sentence", body, new[] { "intent-target" }));
+        using var writer = new StringWriter();
+        var exitCode = WorkerIssuePreflightCommand.Execute(workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--issue", "603", "--format", "json" }, writer);
+        var result = JsonSerializer.Deserialize<WorkerIssuePreflightResult>(writer.ToString())!;
+        Assert.Equal(0, exitCode);
+        Assert.Equal(WorkerIssuePreflightConstants.Classifications.ReadyToImplement, result.Classification);
+        Assert.True(result.Actionable);
+        Assert.Contains(result.Advisories, r => r.Contains("submodules/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_GivenG627SentenceWithChildDeclaration_IsActionableWithAdvisory()
+    {
+        using var workspace = new WorkerIssuePreflightWorkspace();
+        var body = ValidBody("J-Tech-Japan/intent-system")
+            + "\nnaming this machine's host directory as retirement evidence; the parent-host execution path was measured.\n";
+        WorkerIssuePreflightCommand.IssueLookupFactory = () => new FakeLookup(BuildIssue(604, "OPEN", "G627 sentence", body, new[] { "intent-target" }));
+        using var writer = new StringWriter();
+        var exitCode = WorkerIssuePreflightCommand.Execute(workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--issue", "604", "--format", "json" }, writer);
+        var result = JsonSerializer.Deserialize<WorkerIssuePreflightResult>(writer.ToString())!;
+        Assert.Equal(0, exitCode);
+        Assert.Equal(WorkerIssuePreflightConstants.Classifications.ReadyToImplement, result.Classification);
+        Assert.True(result.Actionable);
+        Assert.Contains(result.Advisories, r => r.Contains("parent-host", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Execute_GivenDeclaredSubmoduleTargetOutsideWorkdir_BlocksFromDeclaration()
     {
         using var workspace = new WorkerIssuePreflightWorkspace();

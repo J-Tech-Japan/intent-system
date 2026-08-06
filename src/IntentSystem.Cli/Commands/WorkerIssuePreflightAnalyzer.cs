@@ -232,7 +232,7 @@ internal static class WorkerIssuePreflightAnalyzer
             if (!string.Equals(declared, repo, StringComparison.OrdinalIgnoreCase))
             {
                 reasons.Add(
-                    $"issue body declares Repository: {declared} which does not match --repo {repo}");
+                    $"declaration-derived: declared Repository: {declared} which does not match --repo {repo}");
             }
         }
 
@@ -280,6 +280,8 @@ internal static class WorkerIssuePreflightAnalyzer
         IReadOnlyList<string>? advisories = null)
     {
         _ = lookup;
+        var derivedAdvisories = advisories
+            ?? DetectAdvisories(lookup.Body ?? string.Empty, HostOnlyPacketClassifier.ExtractTargetPaths(lookup.Body));
         var summaryLine =
             $"Worker issue-preflight for {repo}#{issueNumber} — classification={classification}, actionable={actionable.ToString().ToLowerInvariant()}.";
 
@@ -293,7 +295,7 @@ internal static class WorkerIssuePreflightAnalyzer
             IssueState = state,
             Labels = labels,
             Reasons = reasons,
-            Advisories = advisories ?? Array.Empty<string>(),
+            Advisories = derivedAdvisories,
             RecommendedAction = recommendedAction,
             SummaryLine = summaryLine
         };
