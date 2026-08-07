@@ -562,7 +562,8 @@ internal static class NotifyCommand
             options.ToRole!,
             roles,
             envelopeDelivery.TransportPayload,
-            options.Write);
+            options.Write,
+            allowStoppedRecipient: string.Equals(operation, OperationReport, StringComparison.Ordinal));
         var deliveryPreflight = delivery.ActivePhase is null
             ? preflight
             : SessionLayerPreflight.WithActivePhase(
@@ -588,6 +589,7 @@ internal static class NotifyCommand
                 settleOutcome: delivery.SettleOutcome,
                 resendPermitted: delivery.ResendPermitted,
                 inlinePayloadWarning: inlinePayloadWarning,
+                recipientWarning: delivery.RecipientWarning,
                 deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
                 taskFile: envelopeDelivery.TaskFile,
                 deliveryPointer: envelopeDelivery.ResultPointer));
@@ -685,6 +687,7 @@ internal static class NotifyCommand
             settleOutcome: delivery.SettleOutcome,
             resendPermitted: delivery.ResendPermitted,
             inlinePayloadWarning: inlinePayloadWarning,
+            recipientWarning: delivery.RecipientWarning,
             deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
             taskFile: envelopeDelivery.TaskFile,
             deliveryPointer: envelopeDelivery.ResultPointer,
@@ -932,6 +935,7 @@ internal static class NotifyCommand
         string? settleOutcome = null,
         bool? resendPermitted = null,
         NotifyInlinePayloadWarning? inlinePayloadWarning = null,
+        NotifyRecipientWarning? recipientWarning = null,
         string? deliveryMethod = null,
         string? taskFile = null,
         string? deliveryPointer = null,
@@ -958,6 +962,8 @@ internal static class NotifyCommand
             SettleOutcome = settleOutcome,
             ResendPermitted = resendPermitted,
             InlinePayloadWarning = inlinePayloadWarning,
+            RecipientWarning = recipientWarning,
+            Warnings = recipientWarning is null ? null : [recipientWarning.Message],
             DeliveryMethod = deliveryMethod,
             TaskFile = taskFile,
             DeliveryPointer = deliveryPointer,
@@ -983,6 +989,7 @@ internal static class NotifyCommand
         string? settleOutcome = null,
         bool? resendPermitted = null,
         NotifyInlinePayloadWarning? inlinePayloadWarning = null,
+        NotifyRecipientWarning? recipientWarning = null,
         string? deliveryMethod = null,
         string? taskFile = null,
         string? deliveryPointer = null,
@@ -1009,6 +1016,8 @@ internal static class NotifyCommand
             SettleOutcome = settleOutcome,
             ResendPermitted = resendPermitted,
             InlinePayloadWarning = inlinePayloadWarning,
+            RecipientWarning = recipientWarning,
+            Warnings = recipientWarning is null ? null : [recipientWarning.Message],
             DeliveryMethod = deliveryMethod,
             TaskFile = taskFile,
             DeliveryPointer = deliveryPointer,
@@ -1063,6 +1072,10 @@ internal static class NotifyCommand
         {
             writer.WriteLine($"- inline payload warning: profile={warning.Profile}; size={warning.PayloadChars} chars; "
                 + $"threshold={warning.ThresholdChars} chars; remedy: {warning.Remedy}");
+        }
+        if (result.RecipientWarning is { } recipientWarning)
+        {
+            writer.WriteLine($"- recipient warning: role={recipientWarning.Role}; liveness={recipientWarning.ObservedLiveness}; {recipientWarning.Message}");
         }
         if (result.DeliveryMethod is not null)
         {
@@ -1356,6 +1369,8 @@ internal sealed record NotifyResult
     [JsonPropertyName("settle_outcome")] public string? SettleOutcome { get; init; }
     [JsonPropertyName("resend_permitted")] public bool? ResendPermitted { get; init; }
     [JsonPropertyName("inline_payload_warning")] public NotifyInlinePayloadWarning? InlinePayloadWarning { get; init; }
+    [JsonPropertyName("recipient_warning")] public NotifyRecipientWarning? RecipientWarning { get; init; }
+    [JsonPropertyName("warnings")] public IReadOnlyList<string>? Warnings { get; init; }
     [JsonPropertyName("delivery_method")] public string? DeliveryMethod { get; init; }
     [JsonPropertyName("task_file")] public string? TaskFile { get; init; }
     [JsonPropertyName("delivery_pointer")] public string? DeliveryPointer { get; init; }

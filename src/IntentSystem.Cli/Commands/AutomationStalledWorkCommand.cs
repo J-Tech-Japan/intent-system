@@ -158,6 +158,7 @@ internal static class AutomationStalledWorkCommand
     public const string KindCiPending = "ci-pending";
     public const string KindCiAllGreenNotTransitioned = "ci-all-green-not-transitioned";
     public const string KindCiFailedNotTransitioned = "ci-failed-not-transitioned";
+    public const string KindCiHeadMoved = "ci-head-moved";
     public const string KindMergedNotClosedOut = "merged-not-closed-out";
 
     /// <summary>
@@ -512,7 +513,13 @@ internal static class AutomationStalledWorkCommand
 
         CollectPublishedNotDelegated(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
         CollectApprovedNotMerged(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded, warnings);
-        CollectPrCreatedNotReviewing(context, domain, candidateDomains, openIssues, openPrs, repo, now, repairSilentMinutes, items, excluded);
+        var ciWaitRead = CiWaitStore.ReadOpen(context.RepoRoot, domain, repo);
+        if (ciWaitRead.Error is not null)
+        {
+            warnings.Add($"durable CI wait store could not be read at '{ciWaitRead.Path}': {ciWaitRead.Error}");
+        }
+
+        CollectPrCreatedNotReviewing(context, domain, candidateDomains, openIssues, openPrs, repo, now, repairSilentMinutes, ciWaitRead.Records, items, excluded);
         CollectDraftRepairStalled(context, domain, candidateDomains, openIssues, openPrs, repo, now, repairSilentMinutes, items, excluded);
         CollectMergedNotClosedOut(context, domain, candidateDomains, repo, mergedPrs, now, items, excluded, warnings);
         CollectClaimedButSilent(context, domain, candidateDomains, openIssues, openPrs, repo, now, claimedSilentMinutes, items, excluded, warnings);
@@ -535,7 +542,7 @@ internal static class AutomationStalledWorkCommand
             // state are load-bearing immediately; they do not wait for the
             // generic GitHub staleness threshold before becoming visible.
             .Where(item => item.Kind is KindOperatorAttentionPending or KindOperatorAttentionCannotDetermine
-                or KindCiPending or KindCiAllGreenNotTransitioned or KindCiFailedNotTransitioned
+                or KindCiPending or KindCiAllGreenNotTransitioned or KindCiFailedNotTransitioned or KindCiHeadMoved
                 || item.AgeMinutes >= staleMinutes)
             .OrderByDescending(item => item.AgeMinutes)
             .ToArray();
@@ -847,6 +854,7 @@ internal static class AutomationStalledWorkCommand
         string repo,
         DateTimeOffset now,
         int repairSilentMinutes,
+        IReadOnlyList<CiWaitRecord> ciWaits,
         List<StalledWorkItem> items,
         List<StalledWorkExcluded> excluded)
     {
@@ -900,6 +908,12 @@ internal static class AutomationStalledWorkCommand
             bool isInformational;
             string recommendedAction;
             StalledWorkCiProjection? ci = null;
+            var ciWait = ciWaits.FirstOrDefault(wait => wait.Pr == pr.Number
+                && string.Equals(wait.Repo, repo, StringComparison.OrdinalIgnoreCase));
+            var observedHead = ciWait?.ObservedHead;
+            var owedTransition = ciWait?.OwedTransition;
+            var ciWaitState = ciWait is null ? null : "pending";
+            var currentHead = pr.HeadRefOid;
             if (prLabels.Contains(WorkerNextActionConstants.Labels.IntentPrRequestUpdate)
                 || prLabels.Contains(WorkerNextActionConstants.Labels.IntentPrUpdateInProgress))
             {
@@ -919,37 +933,54 @@ internal static class AutomationStalledWorkCommand
             }
             else
             {
-                ci = ProjectCiState(pr);
-                if (ci is { Outcome: StalledWorkCiOutcomes.Pending })
+                if (ciWait is not null
+                    && !string.Equals(ciWait.ObservedHead, pr.HeadRefOid, StringComparison.OrdinalIgnoreCase))
                 {
-                    kind = KindCiPending;
-                    isInformational = true;
-                    recommendedAction =
-                        $"none — CI for PR #{pr.Number} head {pr.HeadRefOid} is still pending; keep it as an active "
-                        + "wait and let the mode-specific CI completion wake producer re-check the exact head.";
-                }
-                else if (ci is { Outcome: StalledWorkCiOutcomes.AllGreen })
-                {
-                    kind = KindCiAllGreenNotTransitioned;
+                    kind = KindCiHeadMoved;
                     isInformational = false;
+                    ciWaitState = "stale-head";
                     recommendedAction =
-                        $"intent-cli automation pr-transition --repo {repo} --pr {pr.Number} --transition review-start --write";
-                }
-                else if (ci is { Outcome: StalledWorkCiOutcomes.Failed })
-                {
-                    kind = KindCiFailedNotTransitioned;
-                    isInformational = false;
-                    recommendedAction =
-                        $"inspect failed checks for PR #{pr.Number} at head {pr.HeadRefOid}; route branch-owned "
-                        + "failures to implementation repair and product/design or canonical failures to escalation; "
-                        + "do not start review.";
+                        $"intent-cli automation ci-wait record --domain {domain} --repo {repo} --pr {pr.Number} "
+                        + $"--head {pr.HeadRefOid} --transition {ciWait.OwedTransition} --write; observed wait head "
+                        + $"{ciWait.ObservedHead} moved to current head {pr.HeadRefOid}; do not infer green from the old head.";
                 }
                 else
                 {
-                    kind = KindPrCreatedNotReviewing;
-                    isInformational = false;
-                    recommendedAction =
-                        $"intent-cli automation pr-transition --repo {repo} --pr {pr.Number} --transition review-start --write";
+                    ci = ProjectCiState(pr);
+                    if (ci is { Outcome: StalledWorkCiOutcomes.Pending })
+                    {
+                        kind = KindCiPending;
+                        isInformational = true;
+                        recommendedAction =
+                            $"none — CI for PR #{pr.Number} head {pr.HeadRefOid} is still pending; keep it as an active "
+                            + "wait and let the mode-specific CI completion wake producer re-check the exact head.";
+                    }
+                    else if (ci is { Outcome: StalledWorkCiOutcomes.AllGreen })
+                    {
+                        kind = KindCiAllGreenNotTransitioned;
+                        isInformational = false;
+                        var transition = owedTransition ?? "review-start";
+                        recommendedAction =
+                            $"intent-cli automation pr-transition --repo {repo} --pr {pr.Number} --transition {transition} --write";
+                        ciWaitState = ciWait is null ? null : "terminal";
+                    }
+                    else if (ci is { Outcome: StalledWorkCiOutcomes.Failed })
+                    {
+                        kind = KindCiFailedNotTransitioned;
+                        isInformational = false;
+                        recommendedAction =
+                            $"inspect failed checks for PR #{pr.Number} at head {pr.HeadRefOid}; route branch-owned "
+                            + "failures to implementation repair and product/design or canonical failures to escalation; "
+                            + "do not start review.";
+                        ciWaitState = ciWait is null ? null : "terminal";
+                    }
+                    else
+                    {
+                        kind = KindPrCreatedNotReviewing;
+                        isInformational = false;
+                        recommendedAction =
+                            $"intent-cli automation pr-transition --repo {repo} --pr {pr.Number} --transition review-start --write";
+                    }
                 }
             }
 
@@ -981,7 +1012,7 @@ internal static class AutomationStalledWorkCommand
             // modification of ANY kind (which may postdate the specific
             // label change) unless a dedicated label-event fetch is added.
             var isRepairLifecycle = kind is KindRepairPending or KindRereviewPending;
-            var ageSource = isRepairLifecycle ? pr.UpdatedAt : pr.CreatedAt;
+            var ageSource = isRepairLifecycle ? pr.UpdatedAt : ciWait?.RecordedAt.ToString("O") ?? pr.CreatedAt;
             var ageMinutes = ComputeAgeMinutes(ageSource, now);
 
             // G546: promote a repair-lifecycle PR that has been observably
@@ -1006,10 +1037,18 @@ internal static class AutomationStalledWorkCommand
                 AgeMinutes = ageMinutes,
                 IsInformational = isInformational,
                 RecommendedAction = recommendedAction,
-                PrHeadSha = ci is null ? null : pr.HeadRefOid,
+                PrHeadSha = ci is null && kind != KindCiHeadMoved ? null : pr.HeadRefOid,
                 CiOutcome = ci?.Outcome,
                 CiBreakdown = ci?.Breakdown,
-                DedupeKey = ci is null ? null : $"{kind}:pr-{pr.Number}:{pr.HeadRefOid}",
+                DedupeKey = ci is null && kind != KindCiHeadMoved
+                    ? null
+                    : ciWait is null
+                        ? $"{kind}:pr-{pr.Number}:{pr.HeadRefOid}"
+                        : $"{kind}:pr-{pr.Number}:{pr.HeadRefOid}:observed-{observedHead}",
+                OwedTransition = owedTransition,
+                ObservedHeadSha = observedHead,
+                CurrentHeadSha = kind == KindCiHeadMoved ? currentHead : null,
+                CiWaitState = ciWaitState,
             });
         }
     }
@@ -3165,6 +3204,22 @@ internal static class AutomationStalledWorkCommand
                 {
                     writer.WriteLine($"- pr_head_sha: {headSha}");
                 }
+                if (item.OwedTransition is { } owedTransition)
+                {
+                    writer.WriteLine($"- owed_transition: {owedTransition}");
+                }
+                if (item.ObservedHeadSha is { } observedHeadSha)
+                {
+                    writer.WriteLine($"- observed_head_sha: {observedHeadSha}");
+                }
+                if (item.CurrentHeadSha is { } currentHeadSha)
+                {
+                    writer.WriteLine($"- current_head_sha: {currentHeadSha}");
+                }
+                if (item.CiWaitState is { } ciWaitState)
+                {
+                    writer.WriteLine($"- ci_wait_state: {ciWaitState}");
+                }
                 if (item.CiOutcome is { } ciOutcome)
                 {
                     writer.WriteLine($"- ci_outcome: {ciOutcome}");
@@ -3355,6 +3410,26 @@ internal sealed record StalledWorkItem
     [JsonPropertyName("dedupe_key")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DedupeKey { get; init; }
+
+    /// <summary>G638: transition owed by a durable CI wait, when present.</summary>
+    [JsonPropertyName("owed_transition")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OwedTransition { get; init; }
+
+    /// <summary>G638: exact head captured when the wait was recorded.</summary>
+    [JsonPropertyName("observed_head_sha")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ObservedHeadSha { get; init; }
+
+    /// <summary>G638: current GitHub head when the recorded wait is stale.</summary>
+    [JsonPropertyName("current_head_sha")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CurrentHeadSha { get; init; }
+
+    /// <summary>G638: pending, terminal, or stale-head durable wait state.</summary>
+    [JsonPropertyName("ci_wait_state")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CiWaitState { get; init; }
 
     /// <summary>
     /// G564: for <see cref="AutomationStalledWorkCommand.KindKnowledgeWritebackPending"/>,

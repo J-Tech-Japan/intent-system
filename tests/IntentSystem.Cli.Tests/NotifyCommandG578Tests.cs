@@ -316,6 +316,35 @@ public sealed class NotifyCommandG578Tests : IDisposable
         using var payload = JsonDocument.Parse(result.GetProperty("payload").GetString()!);
         Assert.Equal("completed", payload.RootElement.GetProperty("status").GetString());
         Assert.Equal("https://example.test/pr/1", payload.RootElement.GetProperty("artifact").GetString());
+        Assert.False(result.TryGetProperty("recipient_warning", out _));
+    }
+
+    [Fact]
+    public void Report_ProceedsWithAdvisoryWarning_WhenRecordedRecipientSeatIsStopped_G638()
+    {
+        workspace.SetMode(SessionLayerMode.HerdrOnly);
+        workspace.SeedPending();
+        var runner = Runner((_, arguments) => arguments.SequenceEqual(["agent", "list"])
+            ? Success(HerdrRoster(orchestrationRunning: false))
+            : Success());
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+
+        var (exitCode, result) = workspace.Run([
+            "notify", "report", "--domain", NotifyWorkspace.Domain, "--team", NotifyWorkspace.Team,
+            "--from", "implementation", "--to", "orchestration", "--task-id", "G578-demo",
+            "--status", "completed", "--artifact", "https://example.test/pr/1",
+            "--summary", "report to a sleeping recipient", "--write", "--format", "json",
+        ]);
+
+        Assert.Equal(0, exitCode);
+        Assert.True(result.GetProperty("delivered").GetBoolean());
+        Assert.Equal("seat-not-running", result.GetProperty("receiver_state_outcome").GetString());
+        Assert.Equal("not-observed", result.GetProperty("working_transition").GetString());
+        Assert.Equal("unread", result.GetProperty("settle_outcome").GetString());
+        var warning = result.GetProperty("recipient_warning");
+        Assert.Equal("orchestration", warning.GetProperty("role").GetString());
+        Assert.Equal("not-running", warning.GetProperty("observed_liveness").GetString());
+        Assert.Contains(runner.Calls, call => call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wH:p1"]));
     }
 
     [Fact]
@@ -487,11 +516,12 @@ public sealed class NotifyCommandG578Tests : IDisposable
     private static string HerdrRoster(
         bool withImplementation = true,
         string? implementationPane = "wH:p2",
-        bool implementationRunning = true)
+        bool implementationRunning = true,
+        bool orchestrationRunning = true)
     {
         var agents = new List<object>
         {
-            HerdrAgent("orchestration", "wH:p1", running: true),
+            HerdrAgent("orchestration", "wH:p1", running: orchestrationRunning),
             HerdrAgent("review", "wH:p3", running: true),
         };
         if (withImplementation)

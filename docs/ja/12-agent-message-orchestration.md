@@ -1267,6 +1267,18 @@ informational な `ci-pending`、すべて terminal で失敗がなければ act
 pass/fail/skip/pending の breakdown、kind + PR + head SHA による安定した `dedupe_key` を含みます。
 この inventory は厳密に read-only であり、delegate、relabel、queue-state write を行いません。
 
+G638 は永続的な **preview-through-1.x** wait record を追加します。check が終了したら、観測した
+exact head と owed transition を記録します:
+`intent-cli automation ci-wait record --domain <d> --repo <owner/repo> --pr <n> --head <sha> --transition <t> --write`。
+これは polling loop ではなく、次の message-driven wake が扱う obligation です。`automation ci-wait show`
+で読み取り、canonical な `automation pr-transition` が transition の適用後に消去します。GitHub が別の
+head を報告した場合、`stalled-work` は actionable な `ci-head-moved` evidence を出し、古い head の green
+を現在の成功とはみなしません。
+
+`notify report` が running でない role の recorded pane を解決した場合、role と observed liveness を示す
+advisory `recipient_warning` を出力したうえで、その pane に report を届けます。report は sleeping role が
+起きるまで unread のままです。liveness だけを理由に report を拒否してはいけません。
+
 ## next-slice の publish
 
 ルーチンな next-slice issue の publish は **orchestrator の責務** であり、オペレーターへの

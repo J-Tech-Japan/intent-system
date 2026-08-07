@@ -97,6 +97,7 @@ internal static class Program
             && string.Equals(args[0], "automation", StringComparison.Ordinal)
             && (string.Equals(args[1], "base-branch-check", StringComparison.Ordinal)
                 || string.Equals(args[1], "check", StringComparison.Ordinal)
+                || string.Equals(args[1], "ci-wait", StringComparison.Ordinal)
                 || string.Equals(args[1], "clarification-stop", StringComparison.Ordinal)
                 || string.Equals(args[1], "closeout-drift-check", StringComparison.Ordinal)
                 || string.Equals(args[1], "complete", StringComparison.Ordinal)
