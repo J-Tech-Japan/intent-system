@@ -44,6 +44,32 @@ intent-cli notify escalate --domain <domain> --team <team> --from <sender-role> 
   --summary <one-line-summary> --write --format json
 ```
 
+```bash
+# Inspect one dispatched task without supervision or re-dispatch.
+intent-cli notify status --task-id <task-id> [--domain <domain> --team <team>] \
+  [--routing-root <host-root>] --format json
+```
+
+`notify delegate --write` first appends a durable pending snapshot at
+`<routing-root>/.intent-cli/notify/<domain>/<team>/pending.jsonl`. The snapshot
+contains the task id, recorded recipient identity, expected artifact, and
+dispatch timestamp. If that write fails, no pane prompt or external reader
+event is attempted. A matching `notify report` appends the resolution; an
+unknown or already-settled task id is refused and the supplied id plus known
+open ids are named. `notify status` reads the same recorded identity and
+liveness judgment as delegate: herdr uses the exact `agent_running` flag at
+the recorded workspace/pane (never the status string), while agmsg uses its
+recorded roster. It reports `live` for a running recipient with no report,
+`settled` after the matching report regardless of current liveness, and
+`lost` only when the recipient is not running and no report arrived. Elapsed
+time never changes the verdict.
+
+> **Preview through 1.x (G629).** Pending-delegation records and `notify
+> status` were added after the v0.12.0 freeze. They are outside the 1.0
+> compatibility promise, may change or be withdrawn during 1.x, and are
+> formalised only by a later MAJOR release. See the [compatibility
+> ledger](1.0-compatibility-ledger.md) preview rows.
+
 `notify delegate` embeds the task id, expected artifacts, fresh marker nonce,
 and complete canonical report command (including the transport-neutral
 `--routing-root` needed from an isolated child checkout) in the delivered task. Running that

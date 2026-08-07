@@ -42,6 +42,29 @@ intent-cli notify escalate --domain <domain> --team <team> --from <sender-role> 
   --summary <one-line-summary> --write --format json
 ```
 
+```bash
+# supervision / re-dispatch をせずに 1 件の委譲を確認する。
+intent-cli notify status --task-id <task-id> [--domain <domain> --team <team>] \
+  [--routing-root <host-root>] --format json
+```
+
+`notify delegate --write` は最初に team-scoped な pending snapshot を
+`<routing-root>/.intent-cli/notify/<domain>/<team>/pending.jsonl` へ追記します。
+snapshot は task id、recorded recipient identity、expected artifact、dispatch timestamp を
+持ちます。write に失敗した場合は pane prompt や external reader event を試みません。
+一致する `notify report` は resolution を追記し、unknown または既に settled の task id は
+拒否して supplied id と known open ids の両方を示します。`notify status` は delegate と同じ
+recorded identity / liveness judgment を読みます。herdr では recorded workspace/pane の
+正確な `agent_running` flag を使い、status string は使いません。agmsg では recorded roster を
+使います。report がなく recipient が running なら `live`、一致する report 後は現在の liveness
+によらず `settled`、recipient が not running かつ report がない場合だけ `lost` です。経過時間
+だけで verdict を変えることはありません。
+
+> **1.x を通じた preview (G629)。** pending-delegation record と `notify status` は
+> v0.12.0 freeze 後に追加されました。1.0 compatibility promise の対象外であり、1.x の間に
+> 変更・撤回できます。後続 MAJOR release でのみ正式化します。[compatibility ledger]
+> (1.0-compatibility-ledger.md) の preview row を参照してください。
+
 `notify delegate` は task id、expected artifact、fresh marker nonce、isolated child
 checkout から必要な transport-neutral `--routing-root` を含む完全な canonical report
 command を配信 task に埋め込みます。receiver は他のすべての作業後、その report

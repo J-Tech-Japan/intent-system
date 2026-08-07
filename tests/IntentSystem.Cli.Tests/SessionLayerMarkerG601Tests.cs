@@ -298,8 +298,28 @@ public sealed class SessionLayerMarkerG601Tests : IDisposable
             }));
         }
 
+        private void SeedPending(string team)
+        {
+            var result = NotifyPendingDelegationStore.WriteDispatch(RootPath, new NotifyPendingDelegation
+            {
+                Domain = Domain,
+                Team = team,
+                TaskId = "G601-ac4",
+                RecipientRole = "implementation",
+                RecipientIdentity = "role=implementation;workspace=w;pane=w:p2",
+                ExpectedArtifact = "https://example.test/pr/1306",
+                DispatchedAt = DateTimeOffset.UtcNow,
+                TransportMode = SessionLayerMode.HerdrOnly,
+                Resident = NotifyRecordedRole.HerdrResident,
+                WorkspaceId = "w",
+                PaneId = "w:p2",
+            });
+            Assert.True(result.Written, result.Error);
+        }
+
         public (int ExitCode, JsonElement Result) RunNotify(string team)
         {
+            SeedPending(team);
             using var writer = new StringWriter();
             var exitCode = CommandRouter.Execute(
                 [

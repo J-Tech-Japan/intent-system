@@ -583,6 +583,25 @@ public sealed class SessionLayerPreflightG594Tests : IDisposable
             }));
         }
 
+        private void SeedPending(string taskId)
+        {
+            var result = NotifyPendingDelegationStore.WriteDispatch(RootPath, new NotifyPendingDelegation
+            {
+                Domain = Workspace.Domain,
+                Team = Team,
+                TaskId = taskId,
+                RecipientRole = "implementation",
+                RecipientIdentity = "role=implementation;workspace=" + WorkspaceId + ";pane=" + PaneId,
+                ExpectedArtifact = "https://example.test/pr/1292",
+                DispatchedAt = DateTimeOffset.UtcNow,
+                TransportMode = SessionLayerMode.HerdrOnly,
+                Resident = NotifyRecordedRole.HerdrResident,
+                WorkspaceId = WorkspaceId,
+                PaneId = PaneId,
+            });
+            Assert.True(result.Written, result.Error);
+        }
+
         public string RootPath { get; }
 
         public string Team { get; }
@@ -593,6 +612,7 @@ public sealed class SessionLayerPreflightG594Tests : IDisposable
 
         public (int ExitCode, JsonElement Result) RunNotify()
         {
+            SeedPending($"G594-{Team}");
             using var writer = new StringWriter();
             var exitCode = CommandRouter.Execute(
                 [
@@ -696,8 +716,28 @@ public sealed class SessionLayerPreflightG594Tests : IDisposable
             }));
         }
 
+        private void SeedPending(string taskId)
+        {
+            var result = NotifyPendingDelegationStore.WriteDispatch(RootPath, new NotifyPendingDelegation
+            {
+                Domain = Workspace.Domain,
+                Team = Team,
+                TaskId = taskId,
+                RecipientRole = "implementation",
+                RecipientIdentity = "role=implementation;workspace=wH;pane=wH:p2",
+                ExpectedArtifact = "https://example.test/pr/1292",
+                DispatchedAt = DateTimeOffset.UtcNow,
+                TransportMode = SessionLayerMode.HerdrOnly,
+                Resident = NotifyRecordedRole.HerdrResident,
+                WorkspaceId = "wH",
+                PaneId = "wH:p2",
+            });
+            Assert.True(result.Written, result.Error);
+        }
+
         public (int ExitCode, JsonElement Result) RunNotify(bool write)
         {
+            SeedPending("G594-demo");
             using var writer = new StringWriter();
             var exitCode = CommandRouter.Execute(
                 [

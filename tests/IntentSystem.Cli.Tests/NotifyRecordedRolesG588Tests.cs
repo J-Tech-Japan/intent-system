@@ -88,6 +88,7 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
         var runner = Runner((_, _) => throw new InvalidOperationException(
             "an external-reader route must not start herdr"));
         NotifyCommand.ProcessRunnerFactory = () => runner;
+        workspace.SeedPending();
 
         var (exitCode, result) = workspace.Run(ReportArgs(from: "implementation", to: "design", write: true));
 
@@ -117,6 +118,7 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
         var reportStatuses = NotifyCommand.SupportedReportStatuses.ToArray();
         foreach (var status in reportStatuses)
         {
+            workspace.SeedPending();
             Assert.Equal(0, workspace.Run(ReportArgs(
                 from: "implementation",
                 to: "design",
@@ -277,6 +279,7 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
 
         var dryArgs = ReportArgs(from: "implementation", to: "design", write: false);
         var writeArgs = ReportArgs(from: "implementation", to: "design", write: true);
+        workspace.SeedPending();
         var (dryExit, dry) = workspace.Run(dryArgs);
         var (writeExit, write) = workspace.Run(writeArgs);
 
@@ -432,6 +435,24 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
                         },
                     },
                 }));
+        }
+
+        public void SeedPending(string taskId = "G588-demo", string recipientRole = "design")
+        {
+            var result = NotifyPendingDelegationStore.WriteDispatch(RootPath, new NotifyPendingDelegation
+            {
+                Domain = Domain,
+                Team = Team,
+                TaskId = taskId,
+                RecipientRole = recipientRole,
+                RecipientIdentity = "role=" + recipientRole + ";reader=" + EventPath,
+                ExpectedArtifact = "draft PR URL",
+                DispatchedAt = FixedNow,
+                TransportMode = SessionLayerMode.HerdrOnly,
+                Resident = NotifyRecordedRole.ExternalResident,
+                Reader = ".intent-cli/events/" + Team + ".jsonl",
+            });
+            Assert.True(result.Written, result.Error);
         }
 
         public (int ExitCode, JsonElement Result) Run(string[] args)
