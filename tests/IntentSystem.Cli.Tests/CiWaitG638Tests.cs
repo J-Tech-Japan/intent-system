@@ -38,6 +38,42 @@ public sealed class CiWaitG638Tests : IDisposable
     }
 
     [Fact]
+    public void Record_RepointsAnOpenWaitWhenTheSameTransitionSeesANewHead()
+    {
+        var original = new CiWaitRecord
+        {
+            Domain = "intent-cli",
+            Repo = "J-Tech-Japan/intent-system",
+            Pr = 1380,
+            ObservedHead = "old-head",
+            OwedTransition = "repair-pushed",
+            RecordedAt = new DateTimeOffset(2026, 8, 7, 0, 0, 0, TimeSpan.Zero),
+        };
+        var moved = original with
+        {
+            ObservedHead = "new-head",
+            RecordedAt = original.RecordedAt.AddMinutes(1),
+        };
+
+        Assert.True(CiWaitStore.Record(root, original, write: true).Applied);
+        var planned = CiWaitStore.Record(root, moved, write: false);
+        Assert.False(planned.Applied);
+        Assert.False(planned.AlreadyConverged);
+        Assert.Null(planned.Error);
+
+        var repointed = CiWaitStore.Record(root, moved, write: true);
+        Assert.True(repointed.Applied);
+        var open = CiWaitStore.ReadOpen(root, original.Domain, original.Repo);
+        Assert.Equal(moved, Assert.Single(open.Records));
+
+        var conflicting = moved with { OwedTransition = "review-start", ObservedHead = "third-head" };
+        var conflict = CiWaitStore.Record(root, conflicting, write: true);
+        Assert.False(conflict.Applied);
+        Assert.False(conflict.AlreadyConverged);
+        Assert.Contains("refusing to overwrite", conflict.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CommandJson_NamesRecordAndClearLifecycle()
     {
         var context = new CliContext

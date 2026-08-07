@@ -281,6 +281,88 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_DurableWait_GreenAndUntaken_UsesTheOwedTransition()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G589", "intent-cli");
+        var issue = BuildIssue(1281, "G589: CI wait must be survivable without a timer",
+            FixedNow.AddDays(-2), "intent-pr-created");
+        const string headSha = "589wait123def4567890abc123def4567890abc12";
+        var wait = new CiWaitRecord
+        {
+            Domain = "intent-cli",
+            Repo = "J-Tech-Japan/intent-system",
+            Pr = 1282,
+            ObservedHead = headSha,
+            OwedTransition = "repair-pushed",
+            RecordedAt = FixedNow.AddMinutes(-5),
+        };
+        Assert.True(CiWaitStore.Record(workspace.RootPath, wait, write: true).Applied);
+        var pr = BuildPr(1282, issue.Title, FixedNow.AddMinutes(-90), "OPEN", issue.Number,
+            headRefOid: headSha,
+            statusCheckRollup:
+            [
+                CheckRun("COMPLETED", "SUCCESS"),
+                CheckRun("COMPLETED", "SKIPPED"),
+            ]);
+
+        var result = RunJson(workspace, issue, pr);
+        Assert.True(result.RootElement.GetProperty("stalled").GetBoolean());
+        var item = Assert.Single(result.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindCiAllGreenNotTransitioned,
+            item.GetProperty("kind").GetString());
+        Assert.Equal("repair-pushed", item.GetProperty("owed_transition").GetString());
+        Assert.Equal("terminal", item.GetProperty("ci_wait_state").GetString());
+        Assert.Contains("--transition repair-pushed", item.GetProperty("recommended_action").GetString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_DurableWait_MovedHeadIsActionableUntilTheWaitIsRepointed()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G589", "intent-cli");
+        var issue = BuildIssue(1281, "G589: CI wait must be survivable without a timer",
+            FixedNow.AddDays(-2), "intent-pr-created");
+        const string oldHead = "589old123def4567890abc123def4567890abc12";
+        const string newHead = "589new123def4567890abc123def4567890abc12";
+        var wait = new CiWaitRecord
+        {
+            Domain = "intent-cli",
+            Repo = "J-Tech-Japan/intent-system",
+            Pr = 1282,
+            ObservedHead = oldHead,
+            OwedTransition = "review-start",
+            RecordedAt = FixedNow.AddMinutes(-5),
+        };
+        Assert.True(CiWaitStore.Record(workspace.RootPath, wait, write: true).Applied);
+        var movedPr = BuildPr(1282, issue.Title, FixedNow.AddMinutes(-90), "OPEN", issue.Number,
+            headRefOid: newHead,
+            statusCheckRollup: [CheckRun("IN_PROGRESS")]);
+
+        var stale = RunJson(workspace, issue, movedPr);
+        Assert.True(stale.RootElement.GetProperty("stalled").GetBoolean());
+        var staleItem = Assert.Single(stale.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindCiHeadMoved, staleItem.GetProperty("kind").GetString());
+        Assert.Equal("stale-head", staleItem.GetProperty("ci_wait_state").GetString());
+        Assert.Equal(oldHead, staleItem.GetProperty("observed_head_sha").GetString());
+        Assert.Equal(newHead, staleItem.GetProperty("current_head_sha").GetString());
+        Assert.False(staleItem.TryGetProperty("ci_outcome", out _));
+        Assert.Contains("--head " + newHead, staleItem.GetProperty("recommended_action").GetString(),
+            StringComparison.Ordinal);
+
+        var repointed = wait with { ObservedHead = newHead, RecordedAt = FixedNow };
+        Assert.True(CiWaitStore.Record(workspace.RootPath, repointed, write: true).Applied);
+        var pending = RunJson(workspace, issue, movedPr);
+        Assert.False(pending.RootElement.GetProperty("stalled").GetBoolean());
+        var pendingItem = Assert.Single(pending.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindCiPending, pendingItem.GetProperty("kind").GetString());
+        Assert.Equal("pending", pendingItem.GetProperty("ci_wait_state").GetString());
+        Assert.Equal(newHead, pendingItem.GetProperty("pr_head_sha").GetString());
+        Assert.Equal("pending", pendingItem.GetProperty("ci_outcome").GetString());
+    }
+
+    [Fact]
     public void LiveLister_RequestsExactHeadAndStatusRollup()
     {
         Assert.Contains("headRefOid", GhCliGitHubAutomationCandidateLister.PrListJsonFields,

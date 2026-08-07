@@ -93,6 +93,35 @@ internal static class CiWaitStore
                 return new CiWaitWriteResult(false, true, path, null);
             }
 
+            // A PR head can legitimately move while the same transition is
+            // still owed.  Keep the store append-only, but let the canonical
+            // stale-head remedy advance the observation to that new exact
+            // head.  A different transition remains a conflict: replacing
+            // it would erase an unrelated lifecycle obligation.
+            if (string.Equals(current.OwedTransition, record.OwedTransition, StringComparison.Ordinal))
+            {
+                if (!write)
+                {
+                    return new CiWaitWriteResult(false, false, path, null);
+                }
+
+                try
+                {
+                    Append(path, new CiWaitEvent
+                    {
+                        Kind = "record",
+                        Repo = record.Repo,
+                        Pr = record.Pr,
+                        Record = record,
+                    });
+                    return new CiWaitWriteResult(true, false, path, null);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    return new CiWaitWriteResult(false, false, path, exception.Message);
+                }
+            }
+
             return new CiWaitWriteResult(
                 false,
                 false,
