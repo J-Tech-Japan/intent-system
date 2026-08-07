@@ -314,6 +314,7 @@ internal sealed record NotifySupervisionCycle
     [JsonPropertyName("started_at")] public required DateTimeOffset StartedAt { get; init; }
     [JsonPropertyName("completed_at")] public required DateTimeOffset CompletedAt { get; init; }
     [JsonPropertyName("interval_seconds")] public required int IntervalSeconds { get; init; }
+    [JsonPropertyName("cadence_interval_seconds")] public int? CadenceIntervalSeconds { get; init; }
     [JsonPropertyName("bound_seconds")] public int? BoundSeconds { get; init; }
     [JsonPropertyName("actual_interval_seconds")] public long? ActualIntervalSeconds { get; init; }
     [JsonPropertyName("bound_met")] public bool? BoundMet { get; init; }

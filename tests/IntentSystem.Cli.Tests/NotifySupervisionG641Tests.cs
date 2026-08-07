@@ -102,11 +102,67 @@ public sealed class NotifySupervisionG641Tests : IDisposable
         Assert.Null(second.Bound.BoundSeconds);
         Assert.Null(second.Bound.BoundMet);
         Assert.True(second.Liveness!.AbsentSinceLastCycle);
-        Assert.Equal(300, second.Liveness.AbsenceThresholdSeconds);
+        Assert.Equal(300, second.Liveness.CadenceIntervalSeconds);
+        Assert.Equal(600, second.Liveness.AbsenceThresholdSeconds);
         Assert.Equal("configured-interval", second.Liveness.AbsenceThresholdKind);
         Assert.DoesNotContain("within the declared", second.Liveness.Summary, StringComparison.Ordinal);
         Assert.DoesNotContain("exceeding the declared", second.Liveness.Summary, StringComparison.Ordinal);
         Assert.Contains(second.Findings, finding => finding.Kind == "supervisor-not-running");
+    }
+
+    [Fact]
+    public void HealthyNoBoundCadenceAcrossThreeCyclesRemainsSilent_G641()
+    {
+        var context = CreateContext();
+        RecordMode(context, SessionLayerMode.HerdrOnly);
+        WriteTopology();
+        var runner = new FakeRunner
+        {
+            AgentsJson = """
+                {"result":{"agents":[
+                  {"name":"orchestration","workspace_id":"wG641","pane_id":"wG641:p1","agent":"fixture","agent_session":{"id":"orchestration"},"agent_status":"working","interactive_ready":true},
+                  {"name":"implementation","workspace_id":"wG641","pane_id":"wG641:p2","agent":"fixture","agent_session":{"id":"implementation"},"agent_status":"working","interactive_ready":true}
+                ]}}
+                """,
+        };
+        var supervisor = CreateSupervisor(context, "unused-agmsg", runner, write: true, boundSeconds: null);
+        var clockReads = 0;
+        NotifyCommand.UtcNowFactory = () =>
+        {
+            var cycleStart = now;
+            return (clockReads++ % 2) == 0
+                ? cycleStart
+                : cycleStart.AddSeconds(5);
+        };
+
+        for (var cycle = 0; cycle < 3; cycle++)
+        {
+            if (cycle > 0)
+            {
+                // Five seconds of realistic cycle work leaves a 300-second
+                // completion-to-start gap at a 300-second loop cadence.
+                now = firstNow.AddSeconds(cycle * 305);
+            }
+
+            var pass = supervisor.RunOnce();
+
+            Assert.True(pass.Silent);
+            Assert.Equal(0, pass.ExitCode);
+            Assert.Empty(pass.Findings);
+            Assert.False(pass.Liveness!.AbsentSinceLastCycle);
+            Assert.Equal(300, pass.Liveness.CadenceIntervalSeconds);
+            Assert.Equal(600, pass.Liveness.AbsenceThresholdSeconds);
+            Assert.Equal("configured-interval", pass.Liveness.AbsenceThresholdKind);
+            if (cycle == 0)
+            {
+                Assert.Null(pass.Liveness.GapSeconds);
+            }
+            else
+            {
+                Assert.Equal(300, pass.Liveness.GapSeconds);
+                Assert.Equal(firstNow.AddSeconds((cycle - 1) * 305 + 5), pass.Liveness.LastCycleAt);
+            }
+        }
     }
 
     [Fact]

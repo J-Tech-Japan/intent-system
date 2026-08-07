@@ -138,9 +138,13 @@ the declared bound was met. A restart gap beyond the bound is reported as
 previous cycle is reported as unknown rather than guessed healthy.
 
 If `--bound` is omitted, no declared bound is inferred or recorded. The
-cycle's persisted `interval_seconds` is used only as the configured interval
-for self-absence detection; `bound_met` remains null and the liveness summary
-states that no detection bound was declared.
+cycle's persisted `interval_seconds` is the measured loop cadence, while the
+fallback self-absence threshold is `max(2 * cadence, cadence + 60s)` so normal
+cycle work and scheduler jitter have headroom. `bound_met` remains null and the
+liveness summary states that no detection bound was declared. `started_at` is
+the cycle-entry timestamp, `completed_at` is stamped at genuine completion,
+and `gap_seconds` measures the previous completion to the current start rather
+than treating normal cycle work as downtime.
 
 Every finding has an append-only recovery record in `stalls.jsonl` with
 `detectable_at`, `surfaced_at`, and `cleared_at`. If a condition is first seen

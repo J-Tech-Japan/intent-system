@@ -123,9 +123,11 @@ agent kind を仮定せず、owed transition を適用しません。`--owner-ro
 `supervisor-not-running` と `absent_since_last_cycle: true` を報告します。直前 cycle がない場合は healthy と推測せず
 unknown とします。
 
-`--bound` を省略した場合、declared bound は推測も記録もせず、cycle に保存した `interval_seconds` を self-absence
-検出用の configured interval としてだけ使います。この場合 `bound_met` は null のままで、liveness summary も detection
-bound が未宣言であることを示します。
+`--bound` を省略した場合、declared bound は推測も記録もせず、cycle に保存した `interval_seconds` を loop の実測 cadence
+として扱います。fallback の self-absence threshold は `max(2 * cadence, cadence + 60s)` とし、通常の cycle 作業時間や
+scheduler の揺らぎに headroom を持たせます。この場合 `bound_met` は null のままで、liveness summary も detection bound が
+未宣言であることを示します。`started_at` は cycle 開始時刻、`completed_at` は実際の完了時刻であり、`gap_seconds` は直前の
+完了から現在の開始までを測るため、通常の cycle 作業を downtime と誤認しません。
 
 各 finding は `stalls.jsonl` に append-only recovery record として残り、`detectable_at`、`surfaced_at`、
 `cleared_at` を持ちます。supervision restart 後に初めて見つかった condition は `detectable_at: null` と

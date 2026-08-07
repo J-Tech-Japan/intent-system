@@ -12,6 +12,8 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal sealed class NotifyMeasuredSupervisor
 {
+    private const int FallbackAbsenceHeadroomSeconds = 60;
+
     private readonly CliContext context;
     private readonly string routingRoot;
     private readonly string domain;
@@ -102,12 +104,16 @@ internal sealed class NotifyMeasuredSupervisor
             BoundMet = boundMet,
         };
         // A team may not have recorded an explicit bound yet, but the loop
-        // still has a configured cadence (persisted on each cycle). Use that
-        // cadence to detect a stopped supervisor without presenting it as a
-        // declared bound. The explicit bound result remains null when no
-        // bound was recorded, so output never claims an unmeasured promise.
+        // still has a configured cadence (persisted on each cycle). Give the
+        // fallback self-absence threshold measured headroom beyond that
+        // cadence: normal cycle work and scheduler jitter must not look like
+        // downtime. The explicit bound result remains null when no bound was
+        // recorded, so output never claims an unmeasured promise.
+        var cadenceIntervalSeconds = previousCycle?.IntervalSeconds is > 0
+            ? previousCycle.IntervalSeconds
+            : intervalSeconds;
         var absenceThresholdSeconds = bound.BoundSeconds
-            ?? (previousCycle?.IntervalSeconds is > 0 ? previousCycle.IntervalSeconds : intervalSeconds);
+            ?? FallbackAbsenceThresholdSeconds(cadenceIntervalSeconds);
         var absenceThresholdKind = bound.BoundSeconds is null
             ? "configured-interval"
             : "declared-bound";
@@ -126,10 +132,11 @@ internal sealed class NotifyMeasuredSupervisor
                 : absentSinceLastCycle
                     ? bound.BoundSeconds is { } declaredSeconds
                         ? $"Supervision restarted after a {gapSeconds}s gap, exceeding the declared {declaredSeconds}s detection bound."
-                        : $"Supervision restarted after a {gapSeconds}s gap, exceeding the configured {absenceThresholdSeconds}s supervision interval; no detection bound was declared."
+                        : $"Supervision restarted after a {gapSeconds}s gap, exceeding the configured {cadenceIntervalSeconds}s cadence's {absenceThresholdSeconds}s self-absence threshold; no detection bound was declared."
                     : bound.BoundSeconds is { }
                         ? $"Supervision is running; the measured {gapSeconds}s cycle gap is within the declared detection bound."
-                        : $"Supervision is running; the measured {gapSeconds}s cycle gap is within the configured {absenceThresholdSeconds}s supervision interval; no detection bound was declared.",
+                        : $"Supervision is running; the measured {gapSeconds}s cycle gap is within the configured {cadenceIntervalSeconds}s cadence and its {absenceThresholdSeconds}s self-absence threshold; no detection bound was declared.",
+            CadenceIntervalSeconds = cadenceIntervalSeconds,
         };
 
         var observations = new List<NotifySupervisionObservation>();
@@ -249,7 +256,7 @@ internal sealed class NotifyMeasuredSupervisor
                 Source = "supervision-cycle",
                 Summary = bound.BoundSeconds is { } absenceDeclaredSeconds
                     ? $"Supervision was absent for {gapSeconds}s, beyond the declared {absenceDeclaredSeconds}s detection bound."
-                    : $"Supervision was absent for {gapSeconds}s, beyond the configured {absenceThresholdSeconds}s supervision interval; no detection bound was declared.",
+                    : $"Supervision was absent for {gapSeconds}s, beyond the configured {cadenceIntervalSeconds}s cadence's {absenceThresholdSeconds}s self-absence threshold; no detection bound was declared.",
                 DetectableAt = null,
                 WakeAlreadyAttempted = false,
                 WakeAlreadyDelivered = false,
@@ -359,12 +366,14 @@ internal sealed class NotifyMeasuredSupervisor
             });
         }
 
+        var completedAt = (NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var cycle = new NotifySupervisionCycle
         {
             CycleId = Guid.NewGuid().ToString("N"),
             StartedAt = now,
-            CompletedAt = now,
+            CompletedAt = completedAt,
             IntervalSeconds = intervalSeconds,
+            CadenceIntervalSeconds = cadenceIntervalSeconds,
             BoundSeconds = bound.BoundSeconds,
             ActualIntervalSeconds = actualIntervalSeconds,
             BoundMet = boundMet,
@@ -468,6 +477,9 @@ internal sealed class NotifyMeasuredSupervisor
                 team),
         });
     }
+
+    private static int FallbackAbsenceThresholdSeconds(int cadenceSeconds) =>
+        Math.Max(cadenceSeconds * 2, cadenceSeconds + FallbackAbsenceHeadroomSeconds);
 
     private NotifySupervisionWakeResult WakeOwner(
         NotifySupervisionObservation observation,
@@ -784,6 +796,9 @@ internal sealed record NotifySupervisionLiveness
 
     [System.Text.Json.Serialization.JsonPropertyName("gap_seconds")]
     public long? GapSeconds { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("cadence_interval_seconds")]
+    public required int CadenceIntervalSeconds { get; init; }
 
     [System.Text.Json.Serialization.JsonPropertyName("absence_threshold_seconds")]
     public required int AbsenceThresholdSeconds { get; init; }
