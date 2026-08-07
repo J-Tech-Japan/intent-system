@@ -58,7 +58,8 @@ internal static class GuideWorkflowTaskInitHostCommand
                 "# Read the canonical capability JSON before any mutation:",
                 "intent-cli automation summary --domain <domain-name> --format json"
             },
-            FirstLoop = "Run `intent-cli guide intent-work --format json` for the issue-publish / next-slice workflow."
+            FirstLoop = "Run `intent-cli guide intent-work --format json` for the issue-publish / next-slice workflow.",
+            SupervisionSetup = SupervisionGuideText.InitHostSetup,
         },
         new HostRoleScaffold
         {
@@ -78,7 +79,8 @@ internal static class GuideWorkflowTaskInitHostCommand
                 "intent-cli automation doctor --format json",
                 "intent-cli automation host-review-preflight --repo <owner/repo> --format json"
             },
-            FirstLoop = "Run `intent-cli guide review --pr <n> --repo <owner/repo> --domain <d> --format json` for the G316 packet-aware review surface; closeout via `intent-cli closeout pr --pr <n> --repo <r> --pr-merged true --write --format json`."
+            FirstLoop = "Run `intent-cli guide review --pr <n> --repo <owner/repo> --domain <d> --format json` for the G316 packet-aware review surface; closeout via `intent-cli closeout pr --pr <n> --repo <r> --pr-merged true --write --format json`.",
+            SupervisionSetup = SupervisionGuideText.InitHostSetup,
         },
         new HostRoleScaffold
         {
@@ -374,6 +376,12 @@ internal static class GuideWorkflowTaskInitHostCommand
             writer.WriteLine();
             writer.WriteLine($"### First loop");
             writer.WriteLine($"- {role.FirstLoop}");
+            if (!string.IsNullOrWhiteSpace(role.SupervisionSetup))
+            {
+                writer.WriteLine();
+                writer.WriteLine("### Supervision setup (preview through 1.x)");
+                writer.WriteLine($"- {role.SupervisionSetup}");
+            }
             writer.WriteLine();
         }
 
@@ -630,6 +638,9 @@ internal sealed record HostRoleScaffold
 
     [JsonPropertyName("first_loop")]
     public required string FirstLoop { get; init; }
+
+    [JsonPropertyName("supervision_setup")]
+    public string? SupervisionSetup { get; init; }
 }
 
 /// <summary>

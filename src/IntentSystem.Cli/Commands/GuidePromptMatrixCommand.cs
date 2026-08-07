@@ -674,6 +674,8 @@ $@"Set up the host review and next-slice loop for domain `{domainPlaceholder}` a
 
 {reviewRoleBoundary}
 
+{SupervisionGuideText.HostLoopSetup(domainPlaceholder, targetRepoPlaceholder)}
+
 If the installed CLI surface is stale or any required automation command is missing, abort the wake before any mutation: `intent-cli automation doctor --format json` (or `automation host-review-preflight` reporting `stale-host-cli`) is the canonical signal — refresh the installed CLI; never fall back to raw `gh` label mutation. The installed CLI may come from a global dotnet tool install on `PATH` (e.g. `$HOME/.dotnet/tools/intent-cli`); that is the default local-testing route and the doctor reports `binary_source: path-global-tool` in that case. A cwd-local `.intent-cli/bin/intent-cli` shim still wins when present (`binary_source: cwd-local-shim`) and `INTENT_CLI_INSTALLED_PATH` pins a specific binary for version-specific tests (`binary_source: explicit-override`).
 
 First-call sequence (read-only; required before any mutation):

@@ -15,7 +15,9 @@ namespace IntentSystem.Cli.Commands;
 ///
 /// next is READ-ONLY by default: it recommends a process, it does not secretly
 /// mutate packets, issues, labels, or queue state, and it never launches an AI
-/// provider. Host-state-free: works from any cwd.
+/// provider. Host-state-free by default: when a domain and team are supplied,
+/// it also reads the recorded supervision cycle for that team without
+/// mutating state.
 /// </summary>
 internal static class GuideNextCommand
 {
@@ -23,7 +25,7 @@ internal static class GuideNextCommand
     private const string FormatMarkdown = "markdown";
 
     private const string UsageLine =
-        "Usage: intent-cli next [--domain <name>] [--target-repo <owner/repo>] [--format markdown|json]  (alias: intent-cli guide next)";
+        "Usage: intent-cli next [--domain <name>] [--team <name>] [--target-repo <owner/repo>] [--format markdown|json]  (alias: intent-cli guide next)";
 
     /// <summary>The shortest natural-language ask that triggers the advisor.</summary>
     public const string ShortPrompt = "intent-cli に聞いて、次に何をしたらいいか教えてください。";
@@ -37,6 +39,7 @@ internal static class GuideNextCommand
     public const string ActionReview = "review";
     public const string ActionRecovery = "recovery";
     public const string ActionIdle = "idle";
+    public const string ActionSupervisionSetup = "supervision-setup";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -50,14 +53,14 @@ internal static class GuideNextCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var domain, out var targetRepo, out var format, out var error))
+        if (!TryParseArguments(args, out var domain, out var team, out var targetRepo, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
             return 1;
         }
 
-        var result = BuildResult(domain, targetRepo);
+        var result = BuildResult(context, domain, team, targetRepo);
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
             writer.Write(JsonSerializer.Serialize(result, JsonOptions));
@@ -72,17 +75,27 @@ internal static class GuideNextCommand
     }
 
     internal static GuideNextResult BuildResult(string? domain, string? targetRepo)
+        => BuildResult(context: null, domain: domain, team: null, targetRepo: targetRepo);
+
+    internal static GuideNextResult BuildResult(
+        CliContext? context,
+        string? domain,
+        string? team,
+        string? targetRepo)
     {
         var domainArg = string.IsNullOrWhiteSpace(domain) ? "<domain>" : domain!;
+        var teamArg = string.IsNullOrWhiteSpace(team) ? "<team>" : team!;
         var repoArg = string.IsNullOrWhiteSpace(targetRepo) ? "<owner/repo>" : targetRepo!;
+        var supervision = ReadSupervisionStatus(context, domain, team);
 
         var prompt =
 $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). This is READ-ONLY: recommend ONE design-side process, do not mutate packets / issues / labels / queue state, and never launch an AI provider.
 
 1. Check the evidence (below) — current intents, open questions, packet backlog, open PRs / review state, and CLI / queue health — before recommending.
-2. Match the situation to exactly one action in the decision set (grill / stack / improve / inspect / issue-publish / review / recovery / idle).
-3. Return the recommendation output shape: the recommended action, the reason tied to the evidence you actually checked, the evidence checked, a paste-ready suggested prompt for that action, and the safety boundary.
-4. Stop there — the user decides whether to run the suggested prompt. next never auto-executes the chosen action.";
+2. When a domain and team are supplied, inspect the recorded supervision cycle and include `supervision-setup` first when no cycle is recorded.
+3. Match the situation to exactly one action in the decision set (supervision-setup when its check is missing, then grill / stack / improve / inspect / issue-publish / review / recovery / idle).
+4. Return the recommendation output shape: the recommended action, the reason tied to the evidence you actually checked, the evidence checked, a paste-ready suggested prompt for that action, and the safety boundary.
+5. Stop there — the user decides whether to run the suggested prompt. next never auto-executes the chosen action.";
 
         var evidenceToCheck = new[]
         {
@@ -92,9 +105,10 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             $"Open PRs and review state — `intent-cli guide review` inputs / GitHub PR labels for {repoArg}: a PR awaiting review pushes toward review; a request-update pushes toward recovery/comment-fix.",
             "CLI / queue health — `intent-cli automation doctor`: a stale CLI or dirty queue pushes toward recovery before anything else.",
             "Drift / short-term-loop signals — repeated corrective packets on the same surface push toward improve.",
+            $"Recorded supervision cycle — when `--domain {domainArg} --team {teamArg}` is supplied, read the team's append-only supervision state; no recorded cycle is a setup gap, while an existing cycle keeps the setup recommendation silent.",
         };
 
-        var decisionSet = new[]
+        var decisionSet = new List<GuideNextAction>
         {
             new GuideNextAction
             {
@@ -146,16 +160,28 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             },
         };
 
+        if (supervision.SetupRecommended)
+        {
+            decisionSet.Insert(0, new GuideNextAction
+            {
+                Action = ActionSupervisionSetup,
+                WhenToChoose = $"No completed supervision cycle is recorded for team `{team}`. Set up the team's standing supervision loop before relying on bounded recovery; the setup guidance states who owns it and where it runs. {SupervisionGuideText.DeploymentBasis}",
+                SuggestedPrompt = SupervisionGuideText.NextAction(domainArg, teamArg, repoArg),
+            });
+        }
+
         return new GuideNextResult
         {
             Process = "design-action-next-advisor",
             Domain = string.IsNullOrWhiteSpace(domain) ? null : domain,
+            Team = string.IsNullOrWhiteSpace(team) ? null : team,
             TargetRepo = string.IsNullOrWhiteSpace(targetRepo) ? null : targetRepo,
+            Supervision = supervision,
             ShortPrompt = ShortPrompt,
             ReadOnly = true,
             Summary =
                 "next is the design-side action advisor: ask it what to do next and it lays out the catalog of design-side "
-                + "processes (grill, stack, improve, inspect, issue-publish, review, recovery, idle), the evidence to check first, "
+                + "processes (supervision-setup when no recorded cycle, grill, stack, improve, inspect, issue-publish, review, recovery, idle), the evidence to check first, "
                 + "and the recommendation output shape. It recommends ONE process tied to the evidence; it is read-only by default "
                 + "and never auto-executes the chosen action — the user decides whether to run the suggested prompt.",
             NotThis = new[]
@@ -164,6 +190,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 "next is READ-ONLY by default — it does not mutate packets, issues, labels, or queue state.",
                 "next does NOT replace the host / review / worker loops — it advises the design thread, it does not drive operational automation.",
                 "intent-cli does NOT launch Claude/Codex/Copilot or any AI provider; the AI agent owns the semantic decision and conversation.",
+                "next does NOT start or manage the supervision process; it only detects a missing recorded cycle and recommends setup.",
             },
             DoNotSubstitute = new[]
             {
@@ -175,7 +202,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             DecisionSet = decisionSet,
             RecommendationOutputShape = new[]
             {
-                new GuideNextOutputField { Field = "recommended_action", Meaning = "Exactly one action id from the decision set (grill / stack / improve / inspect / issue-publish / review / recovery / idle)." },
+                new GuideNextOutputField { Field = "recommended_action", Meaning = "Exactly one action id from the decision set (supervision-setup when no cycle is recorded, or grill / stack / improve / inspect / issue-publish / review / recovery / idle)." },
                 new GuideNextOutputField { Field = "reason", Meaning = "Why this action, tied to the specific evidence checked (cite the intent / packet / PR / health signal that drove it)." },
                 new GuideNextOutputField { Field = "evidence_checked", Meaning = "The evidence actually inspected this run, so the recommendation is auditable." },
                 new GuideNextOutputField { Field = "suggested_prompt", Meaning = "The paste-ready prompt / command for the recommended action that the user can run as-is." },
@@ -186,6 +213,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 "Read-only by default: next inspects evidence and recommends; it does not mutate packets, issues, labels, or queue state.",
                 "No auto-execute: the recommended action runs only when the user chooses to run the suggested prompt.",
                 "Never hand-edit workflow labels, queue-state, or publish metadata from next — those stay in the operational intent-cli surfaces.",
+                "Supervision discovery is read-only: it reads the recorded cycle and never starts, stops, or manages a background process.",
             },
             Prompt = prompt,
         };
@@ -205,8 +233,28 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
         {
             writer.WriteLine($"- target repo: {result.TargetRepo}");
         }
+        if (!string.IsNullOrWhiteSpace(result.Team))
+        {
+            writer.WriteLine($"- team: {result.Team}");
+        }
         writer.WriteLine($"- read-only: {(result.ReadOnly ? "yes" : "no")}");
         writer.WriteLine();
+
+        if (result.Supervision is { Checked: true })
+        {
+            writer.WriteLine("## Supervision setup check");
+            writer.WriteLine();
+            writer.WriteLine(result.Supervision.CycleRecorded
+                ? $"- recorded cycle: yes for `{result.Supervision.Team}`; supervision setup recommendation: silent"
+                : result.Supervision.Error is null
+                    ? $"- recorded cycle: no for `{result.Supervision.Team}`; supervision setup recommendation: **supervision-setup**"
+                    : $"- recorded cycle: unavailable for `{result.Supervision.Team}`; repair the state read before deciding");
+            if (result.Supervision.Error is not null)
+            {
+                writer.WriteLine($"- read error: {result.Supervision.Error}");
+            }
+            writer.WriteLine();
+        }
         writer.WriteLine(result.Summary);
         writer.WriteLine();
 
@@ -260,9 +308,10 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
         }
     }
 
-    private static bool TryParseArguments(string[] args, out string? domain, out string? targetRepo, out string format, out string error)
+    private static bool TryParseArguments(string[] args, out string? domain, out string? team, out string? targetRepo, out string format, out string error)
     {
         domain = null;
+        team = null;
         targetRepo = null;
         format = FormatMarkdown;
         error = string.Empty;
@@ -279,6 +328,16 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                         return false;
                     }
                     domain = args[index + 1].Trim();
+                    index++;
+                    break;
+
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a value.";
+                        return false;
+                    }
+                    team = args[index + 1].Trim();
                     index++;
                     break;
 
@@ -322,8 +381,52 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
     {
         writer.WriteLine("next (alias: guide next)");
         writer.WriteLine(UsageLine);
-        writer.WriteLine("Read-only: design-side action advisor. Lays out the design-side process catalog (grill / stack / improve / inspect / issue-publish / review / recovery / idle), the evidence to check, and the recommendation output shape so an AI agent can answer what to do next. Read-only by default; never auto-executes; never launches an AI provider.");
+        writer.WriteLine("Read-only: design-side action advisor. Lays out the design-side process catalog, and when --domain plus --team are supplied checks whether a supervision cycle is recorded and recommends setup when it is missing. Never auto-executes, starts, or manages a process; never launches an AI provider.");
         writer.WriteLine("Ask it: " + ShortPrompt);
+    }
+
+    private static GuideNextSupervisionStatus ReadSupervisionStatus(
+        CliContext? context,
+        string? domain,
+        string? team)
+    {
+        if (context is null || string.IsNullOrWhiteSpace(domain) || string.IsNullOrWhiteSpace(team))
+        {
+            return new GuideNextSupervisionStatus
+            {
+                Checked = false,
+                Domain = string.IsNullOrWhiteSpace(domain) ? null : domain,
+                Team = string.IsNullOrWhiteSpace(team) ? null : team,
+            };
+        }
+
+        try
+        {
+            var state = NotifySupervisionStore.Read(
+                context.ResolveSupervisionArtifactRootPath(),
+                domain.Trim(),
+                team.Trim());
+            return new GuideNextSupervisionStatus
+            {
+                Checked = true,
+                Domain = domain.Trim(),
+                Team = team.Trim(),
+                CycleRecorded = state.LastCycle is not null,
+                SetupRecommended = state.Resolved && state.LastCycle is null,
+                StateDirectory = state.Directory,
+                Error = state.Resolved ? null : state.Error,
+            };
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return new GuideNextSupervisionStatus
+            {
+                Checked = true,
+                Domain = domain.Trim(),
+                Team = team.Trim(),
+                Error = $"Supervision state could not be read: {exception.Message}",
+            };
+        }
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -342,8 +445,14 @@ internal sealed record GuideNextResult
     [JsonPropertyName("domain")]
     public string? Domain { get; init; }
 
+    [JsonPropertyName("team")]
+    public string? Team { get; init; }
+
     [JsonPropertyName("target_repo")]
     public string? TargetRepo { get; init; }
+
+    [JsonPropertyName("supervision")]
+    public required GuideNextSupervisionStatus Supervision { get; init; }
 
     [JsonPropertyName("short_prompt")]
     public required string ShortPrompt { get; init; }
@@ -374,6 +483,30 @@ internal sealed record GuideNextResult
 
     [JsonPropertyName("prompt")]
     public required string Prompt { get; init; }
+}
+
+internal sealed record GuideNextSupervisionStatus
+{
+    [JsonPropertyName("checked")]
+    public required bool Checked { get; init; }
+
+    [JsonPropertyName("domain")]
+    public string? Domain { get; init; }
+
+    [JsonPropertyName("team")]
+    public string? Team { get; init; }
+
+    [JsonPropertyName("cycle_recorded")]
+    public bool CycleRecorded { get; init; }
+
+    [JsonPropertyName("setup_recommended")]
+    public bool SetupRecommended { get; init; }
+
+    [JsonPropertyName("state_directory")]
+    public string? StateDirectory { get; init; }
+
+    [JsonPropertyName("error")]
+    public string? Error { get; init; }
 }
 
 internal sealed record GuideNextAction

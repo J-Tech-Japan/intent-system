@@ -163,8 +163,8 @@ intent を抽出）・**improve**（systemic drift）・**recovery**（壊れた
 1つを推奨するので、ユーザーは全コマンド名を覚える必要がありません。
 
 ```bash
-intent-cli next --domain <domain> --target-repo <owner/repo> --format markdown
-intent-cli guide next --domain <domain> --target-repo <owner/repo> --format markdown
+intent-cli next --domain <domain> --team <team> --target-repo <owner/repo> --format markdown
+intent-cli guide next --domain <domain> --team <team> --target-repo <owner/repo> --format markdown
 ```
 
 自然言語で `intent-cli に聞いて、次に何をしたらいいか教えてください。` と尋ねれば、
@@ -177,6 +177,13 @@ agent が evidence（現在の intents・open question・packet backlog・open P
 reason・確認した evidence・paste 可能な suggested prompt・safety boundary が含まれ
 ます。`next` はデフォルトで **read-only** で、選択したアクションを自動実行しません。
 実行するかはユーザーが判断します。
+
+`--domain` と `--team` を指定すると、`next` は team に記録された supervision cycle
+も読み取ります。cycle が未記録なら `supervision-setup` を推奨し、cycle があれば
+その推奨を静かにします。host-init と design-side loop の guide が deployment の手順を
+示し、[オーケストレーションのリファレンス](12-agent-message-orchestration.md)へ
+リンクします。この command は未記録を検出するだけで、background process を start・
+manage しません。supervision は compatibility promise 上 1.x までの preview です。
 
 ## Stack — packet backlog 作成 + 最初の issue publish
 
