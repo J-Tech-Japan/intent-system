@@ -11,15 +11,24 @@ internal sealed record NotifyPendingDelegation
     [JsonPropertyName("domain")] public required string Domain { get; init; }
     [JsonPropertyName("team")] public required string Team { get; init; }
     [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+    [JsonPropertyName("delegating_role")] public string? DelegatingRole { get; init; }
     [JsonPropertyName("recipient_role")] public required string RecipientRole { get; init; }
+    [JsonPropertyName("report_to_role")] public string? ReportToRole { get; init; }
     [JsonPropertyName("recipient_identity")] public required string RecipientIdentity { get; init; }
     [JsonPropertyName("expected_artifact")] public required string ExpectedArtifact { get; init; }
+    [JsonPropertyName("expected_artifacts")] public IReadOnlyList<string>? ExpectedArtifacts { get; init; }
+    [JsonPropertyName("objective")] public string? Objective { get; init; }
+    [JsonPropertyName("inputs")] public IReadOnlyList<string>? Inputs { get; init; }
+    [JsonPropertyName("result_nonce")] public string? ResultNonce { get; init; }
     [JsonPropertyName("dispatched_at")] public required DateTimeOffset DispatchedAt { get; init; }
     [JsonPropertyName("transport_mode")] public string? TransportMode { get; init; }
     [JsonPropertyName("resident")] public string? Resident { get; init; }
     [JsonPropertyName("workspace_id")] public string? WorkspaceId { get; init; }
     [JsonPropertyName("pane_id")] public string? PaneId { get; init; }
     [JsonPropertyName("reader")] public string? Reader { get; init; }
+    [JsonPropertyName("cwd")] public string? Cwd { get; init; }
+    [JsonPropertyName("kind")] public string? Kind { get; init; }
+    [JsonPropertyName("launch_args")] public IReadOnlyList<string>? LaunchArguments { get; init; }
     [JsonPropertyName("report_arrived")] public bool ReportArrived { get; init; }
     [JsonPropertyName("report_status")] public string? ReportStatus { get; init; }
     [JsonPropertyName("report_artifact")] public string? ReportArtifact { get; init; }
@@ -244,15 +253,24 @@ internal static class NotifyPendingDelegationStore
             Domain = record.Domain,
             Team = record.Team,
             TaskId = record.TaskId,
+            DelegatingRole = record.DelegatingRole,
             RecipientRole = record.RecipientRole,
+            ReportToRole = record.ReportToRole,
             RecipientIdentity = record.RecipientIdentity,
             ExpectedArtifact = record.ExpectedArtifact,
+            ExpectedArtifacts = record.ExpectedArtifacts,
+            Objective = record.Objective,
+            Inputs = record.Inputs,
+            ResultNonce = record.ResultNonce,
             DispatchedAt = record.DispatchedAt,
             TransportMode = record.TransportMode,
             Resident = record.Resident,
             WorkspaceId = record.WorkspaceId,
             PaneId = record.PaneId,
             Reader = record.Reader,
+            Cwd = record.Cwd,
+            Kind = record.Kind,
+            LaunchArguments = record.LaunchArguments,
             ReportArrived = record.ReportArrived,
             ReportStatus = record.ReportStatus,
             ReportArtifact = record.ReportArtifact,
@@ -380,15 +398,24 @@ internal static class NotifyPendingDelegationStore
         [JsonPropertyName("domain")] public required string Domain { get; init; }
         [JsonPropertyName("team")] public required string Team { get; init; }
         [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+        [JsonPropertyName("delegating_role")] public string? DelegatingRole { get; init; }
         [JsonPropertyName("recipient_role")] public required string RecipientRole { get; init; }
+        [JsonPropertyName("report_to_role")] public string? ReportToRole { get; init; }
         [JsonPropertyName("recipient_identity")] public required string RecipientIdentity { get; init; }
         [JsonPropertyName("expected_artifact")] public required string ExpectedArtifact { get; init; }
+        [JsonPropertyName("expected_artifacts")] public IReadOnlyList<string>? ExpectedArtifacts { get; init; }
+        [JsonPropertyName("objective")] public string? Objective { get; init; }
+        [JsonPropertyName("inputs")] public IReadOnlyList<string>? Inputs { get; init; }
+        [JsonPropertyName("result_nonce")] public string? ResultNonce { get; init; }
         [JsonPropertyName("dispatched_at")] public required DateTimeOffset DispatchedAt { get; init; }
         [JsonPropertyName("transport_mode")] public string? TransportMode { get; init; }
         [JsonPropertyName("resident")] public string? Resident { get; init; }
         [JsonPropertyName("workspace_id")] public string? WorkspaceId { get; init; }
         [JsonPropertyName("pane_id")] public string? PaneId { get; init; }
         [JsonPropertyName("reader")] public string? Reader { get; init; }
+        [JsonPropertyName("cwd")] public string? Cwd { get; init; }
+        [JsonPropertyName("kind")] public string? Kind { get; init; }
+        [JsonPropertyName("launch_args")] public IReadOnlyList<string>? LaunchArguments { get; init; }
         [JsonPropertyName("report_arrived")] public bool ReportArrived { get; init; }
         [JsonPropertyName("report_status")] public string? ReportStatus { get; init; }
         [JsonPropertyName("report_artifact")] public string? ReportArtifact { get; init; }
@@ -400,15 +427,24 @@ internal static class NotifyPendingDelegationStore
             Domain = Domain,
             Team = Team,
             TaskId = TaskId,
+            DelegatingRole = DelegatingRole,
             RecipientRole = RecipientRole,
+            ReportToRole = ReportToRole,
             RecipientIdentity = RecipientIdentity,
             ExpectedArtifact = ExpectedArtifact,
+            ExpectedArtifacts = ExpectedArtifacts,
+            Objective = Objective,
+            Inputs = Inputs,
+            ResultNonce = ResultNonce,
             DispatchedAt = DispatchedAt,
             TransportMode = TransportMode,
             Resident = Resident,
             WorkspaceId = WorkspaceId,
             PaneId = PaneId,
             Reader = Reader,
+            Cwd = Cwd,
+            Kind = Kind,
+            LaunchArguments = LaunchArguments,
             ReportArrived = ReportArrived,
             ReportStatus = ReportStatus,
             ReportArtifact = ReportArtifact,

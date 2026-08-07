@@ -596,6 +596,7 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 var agentWorkspaceId = ReadString(agent, "workspace_id") ?? WorkspaceFromPane(paneId);
                 var agentKind = ReadString(agent, "agent");
                 var status = ReadString(agent, "agent_status");
+                var cwd = ReadString(agent, "cwd") ?? ReadString(agent, "foreground_cwd");
                 var explicitlyNotReady = agent.TryGetProperty("interactive_ready", out var ready)
                     && ready.ValueKind == JsonValueKind.False;
                 var hasSession = agent.TryGetProperty("agent_session", out var session)
@@ -605,7 +606,7 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                     && !explicitlyNotReady
                     && !string.Equals(status, "unknown", StringComparison.Ordinal);
 
-                parsed.Add(new HerdrAgentState(name, agentWorkspaceId, paneId, running, status));
+                parsed.Add(new HerdrAgentState(name, agentWorkspaceId, paneId, running, status, cwd));
             }
 
             return parsed;
@@ -702,7 +703,8 @@ internal sealed record HerdrAgentState(
     string? WorkspaceId,
     string? PaneId,
     bool AgentRunning,
-    string? AgentStatus);
+    string? AgentStatus,
+    string? Cwd = null);
 
 internal static class NotifyTransportPaths
 {

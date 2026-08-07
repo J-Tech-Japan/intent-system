@@ -65,6 +65,35 @@ recorded identity / liveness judgment を読みます。herdr では recorded wo
 > 変更・撤回できます。後続 MAJOR release でのみ正式化します。[compatibility ledger]
 > (1.0-compatibility-ledger.md) の preview row を参照してください。
 
+### bounded な recipient supervision (G630)
+
+```bash
+intent-cli notify supervise --domain <domain> --team <team> \
+  [--interval <seconds>] [--auto-redispatch] [--once] [--dry-run|--write] \
+  [--routing-root <host-root>] --format json
+```
+
+`notify supervise` は open pending delegation を対象に bounded な wake を繰り返します。
+recipient が `live` の場合と record が settled の場合は、意図的に action も output も出しません。
+`lost` の場合だけ、次の順序で recovery を実行します。recorded pane が mid-exit ではなく本当に
+消えたことを確認し、foreground process が記録された role の cwd に属することを検証してから
+旧 process が消えたことを再確認し、記録された unattended 起動レシピで `start` し、register
+用 prompt を送り、response line に nonce が完全一致することを検証します。pane 内のどこかに
+nonce があるだけの場合（composer に未送信の echo が残る場合を含む）は readiness の証拠にしません。
+
+この gate を通過した後だけ、supervisor は delegating role へ 1 件の loss notification を送ります。
+そこには task id、recipient が recovered であること、in-flight task は lost なので再 dispatch が
+必要であることを含めます。`--auto-redispatch` の既定値は off です。指定した場合だけ readiness
+確認後に通常の `notify delegate` 経路で再送し、その結果も通知に含めます。recipe が不明、process
+の帰属が曖昧、旧 process が残存、response line の証拠が得られない場合は、その recipient の
+処理を fail-closed で停止し、未確認の readiness を報告しません。`--once` は bounded な診断 pass
+に使い、`--dry-run` は kill、start、prompt、再 dispatch、追記を一切行いません。
+
+> **1.x を通じた preview (G630)。** supervision、recovery、response-line による readiness の証拠、
+> 任意の再 dispatch は v0.12.0 freeze 後に追加されました。1.0 compatibility promise の対象外であり、
+> 1.x の間に変更・撤回できます。後続 MAJOR release でのみ正式化します。[compatibility ledger]
+> (1.0-compatibility-ledger.md) の preview row を参照してください。
+
 `notify delegate` は task id、expected artifact、fresh marker nonce、isolated child
 checkout から必要な transport-neutral `--routing-root` を含む完全な canonical report
 command を配信 task に埋め込みます。receiver は他のすべての作業後、その report
