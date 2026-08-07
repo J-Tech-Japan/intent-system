@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -44,7 +45,9 @@ internal static class NotifyCommand
 
     private const string SuperviseUsage =
         "Usage: intent-cli notify supervise --domain <d> --team <t> [--interval <seconds>] "
-        + "[--auto-redispatch] [--once] [--routing-root <host-root>] [--dry-run|--write] "
+        + "[--repo <owner/repo>] [--owner-role <role>] [--bound <seconds>] "
+        + "[--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] "
+        + "[--repair-silent-minutes <m>] [--auto-redispatch] [--once] [--routing-root <host-root>] [--dry-run|--write] "
         + "[--format markdown|json]";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -333,29 +336,25 @@ internal static class NotifyCommand
         string routingRoot)
     {
         var runner = ProcessRunnerFactory?.Invoke() ?? new NotifyProcessRunner();
-        var supervisor = new NotifySupervisor(
+        var supervisor = new NotifyMeasuredSupervisor(
             context,
             routingRoot,
             options.Domain!,
             options.Team!,
+            options.Repo,
+            options.OwnerRole ?? "orchestration",
+            options.IntervalSeconds ?? NotifySupervisor.DefaultIntervalSeconds,
+            options.DetectionBoundSeconds,
+            options.StaleMinutes ?? AutomationHeartbeatCommand.DefaultStaleMinutes,
+            options.ClaimedSilentMinutes ?? AutomationStalledWorkCommand.DefaultClaimedSilentMinutes,
+            options.BacklogIdleMinutes ?? AutomationStalledWorkCommand.DefaultBacklogIdleMinutes,
+            options.RepairSilentMinutes ?? AutomationStalledWorkCommand.DefaultRepairSilentMinutes,
             options.AutoRedispatch,
             options.Write,
             options.Format,
             runner,
             HerdrExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveHerdrExecutable(),
             AgmsgScriptsDirectoryFactory?.Invoke() ?? NotifyTransportPaths.ResolveAgmsgScriptsDirectory());
-        var interval = options.IntervalSeconds ?? NotifySupervisor.DefaultIntervalSeconds;
-        if (options.Once)
-        {
-            var pass = supervisor.RunOnce();
-            if (!pass.Silent)
-            {
-                EmitSupervision(writer, pass, options.Domain!, options.Team!, interval, options.AutoRedispatch, options.Write, options.Format);
-            }
-
-            return pass.ExitCode;
-        }
-
         using var cancellation = new CancellationTokenSource();
         ConsoleCancelEventHandler? cancelHandler = null;
         if (!Console.IsOutputRedirected)
@@ -370,7 +369,7 @@ internal static class NotifyCommand
 
         try
         {
-            return supervisor.RunLoop(interval, once: false, writer, cancellation.Token);
+            return supervisor.RunLoop(writer, cancellation.Token, options.Once);
         }
         finally
         {
@@ -412,7 +411,12 @@ internal static class NotifyCommand
                 command_mode = write ? "write" : "dry-run",
                 silent = pass.Silent,
                 error = pass.Error,
+                warnings = pass.Warnings,
+                bound = pass.Bound,
+                liveness = pass.Liveness,
                 actions = pass.Actions,
+                findings = pass.Findings,
+                recovery_records = pass.RecoveryRecords,
             }, JsonOptions));
             return;
         }
@@ -422,13 +426,29 @@ internal static class NotifyCommand
         writer.WriteLine($"- interval: {intervalSeconds}s");
         writer.WriteLine($"- command mode: {(write ? "write" : "dry-run")}");
         writer.WriteLine($"- auto-redispatch: {autoRedispatch.ToString().ToLowerInvariant()}");
+        if (pass.Bound is { } bound)
+        {
+            writer.WriteLine($"- detection bound: {bound.BoundSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unrecorded>"}s ({bound.Status}); actual interval: {bound.ActualIntervalSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unknown>"}s; met: {bound.BoundMet?.ToString().ToLowerInvariant() ?? "<unknown>"}");
+        }
+        if (pass.Liveness is { } liveness)
+        {
+            writer.WriteLine($"- supervisor liveness: running={liveness.Running.ToString().ToLowerInvariant()}; absent since last cycle={liveness.AbsentSinceLastCycle.ToString().ToLowerInvariant()}; gap={liveness.GapSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unknown>"}s");
+        }
         if (pass.Error is not null)
         {
             writer.WriteLine($"- error: {pass.Error}");
         }
+        foreach (var warning in pass.Warnings)
+        {
+            writer.WriteLine($"- warning: {warning}");
+        }
         foreach (var action in pass.Actions)
         {
             writer.WriteLine($"- {action.TaskId}: {action.Outcome} — {action.Summary}");
+        }
+        foreach (var finding in pass.Findings)
+        {
+            writer.WriteLine($"- finding {finding.Key}: {finding.Kind} — {finding.Summary} (wake delivered={finding.WakeDelivered.ToString().ToLowerInvariant()})");
         }
     }
 
@@ -1160,7 +1180,14 @@ internal static class NotifyCommand
         string? artifact = null;
         string? summary = null;
         string? routingRoot = null;
+        string? repo = null;
+        string? ownerRole = null;
         int? intervalSeconds = null;
+        int? detectionBoundSeconds = null;
+        int? staleMinutes = null;
+        int? claimedSilentMinutes = null;
+        int? backlogIdleMinutes = null;
+        int? repairSilentMinutes = null;
         var inputs = new List<string>();
         var expectedArtifacts = new List<string>();
         var write = false;
@@ -1186,6 +1213,8 @@ internal static class NotifyCommand
                 case "--artifact": if (!ReadValue(args, ref index, argument, out artifact, out error)) return false; break;
                 case "--summary": if (!ReadValue(args, ref index, argument, out summary, out error)) return false; break;
                 case "--routing-root": if (!ReadValue(args, ref index, argument, out routingRoot, out error)) return false; break;
+                case "--repo": if (!ReadValue(args, ref index, argument, out repo, out error)) return false; break;
+                case "--owner-role": if (!ReadValue(args, ref index, argument, out ownerRole, out error)) return false; break;
                 case "--interval":
                     if (!ReadValue(args, ref index, argument, out var intervalValue, out error)
                         || !int.TryParse(intervalValue, out var parsedInterval))
@@ -1194,6 +1223,54 @@ internal static class NotifyCommand
                         return false;
                     }
                     intervalSeconds = parsedInterval;
+                    break;
+                case "--bound":
+                case "--detection-bound":
+                case "--bound-seconds":
+                case "--detection-bound-seconds":
+                    if (!ReadValue(args, ref index, argument, out var boundValue, out error)
+                        || !int.TryParse(boundValue, out var parsedBound))
+                    {
+                        error = $"{argument} requires a whole-number seconds value.";
+                        return false;
+                    }
+                    detectionBoundSeconds = parsedBound;
+                    break;
+                case "--stale-minutes":
+                    if (!ReadValue(args, ref index, argument, out var staleValue, out error)
+                        || !int.TryParse(staleValue, out var parsedStale))
+                    {
+                        error = "--stale-minutes requires a whole-number minutes value.";
+                        return false;
+                    }
+                    staleMinutes = parsedStale;
+                    break;
+                case "--claimed-silent-minutes":
+                    if (!ReadValue(args, ref index, argument, out var claimedValue, out error)
+                        || !int.TryParse(claimedValue, out var parsedClaimed))
+                    {
+                        error = "--claimed-silent-minutes requires a whole-number minutes value.";
+                        return false;
+                    }
+                    claimedSilentMinutes = parsedClaimed;
+                    break;
+                case "--backlog-idle-minutes":
+                    if (!ReadValue(args, ref index, argument, out var backlogValue, out error)
+                        || !int.TryParse(backlogValue, out var parsedBacklog))
+                    {
+                        error = "--backlog-idle-minutes requires a whole-number minutes value.";
+                        return false;
+                    }
+                    backlogIdleMinutes = parsedBacklog;
+                    break;
+                case "--repair-silent-minutes":
+                    if (!ReadValue(args, ref index, argument, out var repairValue, out error)
+                        || !int.TryParse(repairValue, out var parsedRepair))
+                    {
+                        error = "--repair-silent-minutes requires a whole-number minutes value.";
+                        return false;
+                    }
+                    repairSilentMinutes = parsedRepair;
                     break;
                 case "--input":
                     if (!ReadValue(args, ref index, argument, out var input, out error)) return false;
@@ -1237,7 +1314,14 @@ internal static class NotifyCommand
             Artifact = artifact,
             Summary = summary,
             RoutingRoot = routingRoot,
+            Repo = repo,
+            OwnerRole = ownerRole,
             IntervalSeconds = intervalSeconds,
+            DetectionBoundSeconds = detectionBoundSeconds,
+            StaleMinutes = staleMinutes,
+            ClaimedSilentMinutes = claimedSilentMinutes,
+            BacklogIdleMinutes = backlogIdleMinutes,
+            RepairSilentMinutes = repairSilentMinutes,
             Write = write,
             AutoRedispatch = autoRedispatch,
             Once = once,
@@ -1299,6 +1383,34 @@ internal static class NotifyCommand
                 error = $"supervise --interval must be between 1 and {NotifySupervisor.MaximumIntervalSeconds} seconds.";
                 return false;
             }
+
+            if (options.DetectionBoundSeconds is not null
+                && (options.DetectionBoundSeconds < 1 || options.DetectionBoundSeconds > 86_400))
+            {
+                error = "supervise --bound must be between 1 and 86400 seconds.";
+                return false;
+            }
+
+            if (options.OwnerRole is not null && !IsSafeIdentity(options.OwnerRole))
+            {
+                error = "supervise --owner-role must be a safe logical-role name.";
+                return false;
+            }
+
+            if (options.Repo is not null && !IsSafeRepository(options.Repo))
+            {
+                error = "supervise --repo must be an owner/repo value without path syntax.";
+                return false;
+            }
+
+            if (options.StaleMinutes is < 0
+                || options.ClaimedSilentMinutes is < 0
+                || options.BacklogIdleMinutes is < 0
+                || options.RepairSilentMinutes is < 0)
+            {
+                error = "supervise minute thresholds cannot be negative.";
+                return false;
+            }
         }
         else if (string.Equals(operation, OperationDelegate, StringComparison.Ordinal))
         {
@@ -1339,6 +1451,19 @@ internal static class NotifyCommand
     private static bool IsSafeIdentity(string? value) =>
         !string.IsNullOrWhiteSpace(value)
         && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or ':' or '-');
+
+    private static bool IsSafeRepository(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var parts = value.Split('/', StringSplitOptions.None);
+        return parts.Length == 2
+            && IsSafeIdentity(parts[0])
+            && IsSafeIdentity(parts[1]);
+    }
 
     private static bool ReadValue(
         string[] args,
@@ -1385,7 +1510,14 @@ internal sealed record NotifyOptions
     public string? Artifact { get; init; }
     public string? Summary { get; init; }
     public string? RoutingRoot { get; init; }
+    public string? Repo { get; init; }
+    public string? OwnerRole { get; init; }
     public int? IntervalSeconds { get; init; }
+    public int? DetectionBoundSeconds { get; init; }
+    public int? StaleMinutes { get; init; }
+    public int? ClaimedSilentMinutes { get; init; }
+    public int? BacklogIdleMinutes { get; init; }
+    public int? RepairSilentMinutes { get; init; }
     public bool AutoRedispatch { get; init; }
     public bool Once { get; init; }
     public bool Write { get; init; }

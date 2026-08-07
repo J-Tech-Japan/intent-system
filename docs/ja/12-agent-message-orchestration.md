@@ -103,6 +103,44 @@ nonce があるだけの場合（composer に未送信の echo が残る場合�
 > 1.x の間に変更・撤回できます。後続 MAJOR release でのみ正式化します。[compatibility ledger]
 > (1.0-compatibility-ledger.md) の preview row を参照してください。
 
+### measured recovery supervision (G641 — preview-through-1.x)
+
+```bash
+intent-cli notify supervise --domain <domain> --team <team> \
+  --repo <owner/repo> --owner-role <logical-role> --bound <seconds> \
+  [--interval <seconds>] [--once] [--dry-run|--write] \
+  [--routing-root <host-root>] --format json
+```
+
+同じ bounded invocation が、既存の recipient-lost、terminal CI wait、queue/write-back、recorded
+seat の inventory をまとめて消費します。healthy team では finding を出しません。condition を検出したら
+team に記録された transport で owner の logical role を起こします。supervisor は transport を発明せず、
+agent kind を仮定せず、owed transition を適用しません。`--owner-role` は recipient 以外の finding の owner
+を指定し、G630 の recipient recovery は記録済みの delegating role を owner として使います。
+
+`--bound` は team の最大 detection interval を
+`.intent-cli/supervision/<domain>/<team>/bound.json` に記録します。各 cycle は `cycles.jsonl` に永続的な記録として残り、直前 cycle からの実測 gap と bound を満たしたかを含みます。restart 後の gap が bound を超えた場合は
+`supervisor-not-running` と `absent_since_last_cycle: true` を報告します。直前 cycle がない場合は healthy と推測せず
+unknown とします。
+
+`--bound` を省略した場合、declared bound は推測も記録もせず、cycle に保存した `interval_seconds` を loop の実測 cadence
+として扱います。fallback の self-absence threshold は `max(2 * cadence, cadence + 60s)` とし、通常の cycle 作業時間や
+scheduler の揺らぎに headroom を持たせます。この場合 `bound_met` は null のままで、liveness summary も detection bound が
+未宣言であることを示します。`started_at` は cycle 開始時刻、`completed_at` は実際の完了時刻であり、`gap_seconds` は直前の
+完了から現在の開始までを測るため、通常の cycle 作業を downtime と誤認しません。
+
+各 finding は `stalls.jsonl` に append-only recovery record として残り、`detectable_at`、`surfaced_at`、
+`cleared_at` を持ちます。supervision restart 後に初めて見つかった condition は `detectable_at: null` と
+`detectable_at_unknown: true` になり、都合のよい duration を作りません。既知の start を持つ record の clear は
+実測 duration を記録します。未配信の `notify escalate` event も finding として扱い、bounded `--once` result には
+loop 自身の liveness を返します。dry-run は同じ class と bound を解決して確認しますが、wake、record、clear はしません。
+undelivered escalation の wake が Delivered になった後は recovery record を acknowledgement として消去し、append-only
+event 自体は残したまま、その key を後続 cycle の finding から除外して healthy silence に戻します。
+
+> **1.x を通じた preview (G641)。** measured supervision、bound と永続 recovery record、undelivered-escalation
+> finding、self-liveness は post-freeze の preview であり、1.0 compatibility promise の対象外です。1.x の間に変更・
+> 撤回でき、後続 MAJOR release でのみ正式化します。[compatibility ledger](1.0-compatibility-ledger.md) を参照してください。
+
 `notify delegate` は task id、expected artifact、fresh marker nonce、isolated child
 checkout から必要な transport-neutral `--routing-root` を含む完全な canonical report
 command を配信 task に埋め込みます。receiver は他のすべての作業後、その report
