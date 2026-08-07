@@ -31,6 +31,7 @@ internal sealed record NotifySupervisorPass
     public int ExitCode => Error is null
         && Actions.All(action => action.Cause is null)
         && Findings.All(finding => finding.Cause is null)
+        && !Findings.Any(finding => string.Equals(finding.Kind, "supervisor-not-running", StringComparison.Ordinal))
         && Bound?.BoundMet is not false
         ? 0
         : 1;

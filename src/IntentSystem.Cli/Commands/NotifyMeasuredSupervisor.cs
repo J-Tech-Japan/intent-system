@@ -12,8 +12,6 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal sealed class NotifyMeasuredSupervisor
 {
-    public const int DefaultDetectionBoundSeconds = 300;
-
     private readonly CliContext context;
     private readonly string routingRoot;
     private readonly string domain;
@@ -95,26 +93,43 @@ internal sealed class NotifyMeasuredSupervisor
             ? null
             : Math.Max(0, (long)(now - previousCycle.CompletedAt).TotalSeconds);
         var actualIntervalSeconds = gapSeconds;
-        bool? boundMet = bound.BoundSeconds is { } declared && actualIntervalSeconds is { } actual
-            ? actual <= declared
+        bool? boundMet = bound.BoundSeconds is { } explicitBoundSeconds && actualIntervalSeconds is { } actual
+            ? actual <= explicitBoundSeconds
             : null;
         bound.Status = bound.Status with
         {
             ActualIntervalSeconds = actualIntervalSeconds,
             BoundMet = boundMet,
         };
-        var absentSinceLastCycle = boundMet is false;
+        // A team may not have recorded an explicit bound yet, but the loop
+        // still has a configured cadence (persisted on each cycle). Use that
+        // cadence to detect a stopped supervisor without presenting it as a
+        // declared bound. The explicit bound result remains null when no
+        // bound was recorded, so output never claims an unmeasured promise.
+        var absenceThresholdSeconds = bound.BoundSeconds
+            ?? (previousCycle?.IntervalSeconds is > 0 ? previousCycle.IntervalSeconds : intervalSeconds);
+        var absenceThresholdKind = bound.BoundSeconds is null
+            ? "configured-interval"
+            : "declared-bound";
+        var absentSinceLastCycle = gapSeconds is { } gap
+            && gap > absenceThresholdSeconds;
         var liveness = new NotifySupervisionLiveness
         {
             Running = true,
             AbsentSinceLastCycle = absentSinceLastCycle,
             LastCycleAt = previousCycle?.CompletedAt,
             GapSeconds = gapSeconds,
+            AbsenceThresholdSeconds = absenceThresholdSeconds,
+            AbsenceThresholdKind = absenceThresholdKind,
             Summary = previousCycle is null
                 ? "Supervision is running; no previous completed cycle exists, so an absence gap is not yet measurable."
                 : absentSinceLastCycle
-                    ? $"Supervision restarted after a {gapSeconds}s gap, exceeding the declared {bound.BoundSeconds}s detection bound."
-                    : $"Supervision is running; the measured {gapSeconds}s cycle gap is within the declared bound.",
+                    ? bound.BoundSeconds is { } declaredSeconds
+                        ? $"Supervision restarted after a {gapSeconds}s gap, exceeding the declared {declaredSeconds}s detection bound."
+                        : $"Supervision restarted after a {gapSeconds}s gap, exceeding the configured {absenceThresholdSeconds}s supervision interval; no detection bound was declared."
+                    : bound.BoundSeconds is { }
+                        ? $"Supervision is running; the measured {gapSeconds}s cycle gap is within the declared detection bound."
+                        : $"Supervision is running; the measured {gapSeconds}s cycle gap is within the configured {absenceThresholdSeconds}s supervision interval; no detection bound was declared.",
         };
 
         var observations = new List<NotifySupervisionObservation>();
@@ -215,10 +230,16 @@ internal sealed class NotifyMeasuredSupervisor
             }
         }
 
-        observations.AddRange(ReadUndeliveredEscalations(now, previousCycle is not null));
+        var acknowledgedEscalations = state.StallHistory
+            .Where(record => string.Equals(record.Kind, "undelivered-escalation", StringComparison.Ordinal)
+                && record.WakeDelivered)
+            .Select(record => record.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        observations.AddRange(ReadUndeliveredEscalations(now, previousCycle is not null)
+            .Where(observation => !acknowledgedEscalations.Contains(observation.Key)));
         observations.AddRange(ReadAbsentSeats(now));
 
-        if (boundMet is false)
+        if (absentSinceLastCycle)
         {
             observations.Add(new NotifySupervisionObservation
             {
@@ -226,7 +247,9 @@ internal sealed class NotifyMeasuredSupervisor
                 Kind = "supervisor-not-running",
                 OwnerRole = ownerRole,
                 Source = "supervision-cycle",
-                Summary = $"Supervision was absent for {gapSeconds}s, beyond the declared {bound.BoundSeconds}s detection bound.",
+                Summary = bound.BoundSeconds is { } absenceDeclaredSeconds
+                    ? $"Supervision was absent for {gapSeconds}s, beyond the declared {absenceDeclaredSeconds}s detection bound."
+                    : $"Supervision was absent for {gapSeconds}s, beyond the configured {absenceThresholdSeconds}s supervision interval; no detection bound was declared.",
                 DetectableAt = null,
                 WakeAlreadyAttempted = false,
                 WakeAlreadyDelivered = false,
@@ -345,6 +368,8 @@ internal sealed class NotifyMeasuredSupervisor
             BoundSeconds = bound.BoundSeconds,
             ActualIntervalSeconds = actualIntervalSeconds,
             BoundMet = boundMet,
+            AbsenceThresholdSeconds = absenceThresholdSeconds,
+            AbsenceThresholdKind = absenceThresholdKind,
             AbsentSinceLastCycle = absentSinceLastCycle,
             GapSeconds = gapSeconds,
         };
@@ -759,6 +784,12 @@ internal sealed record NotifySupervisionLiveness
 
     [System.Text.Json.Serialization.JsonPropertyName("gap_seconds")]
     public long? GapSeconds { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("absence_threshold_seconds")]
+    public required int AbsenceThresholdSeconds { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("absence_threshold_kind")]
+    public required string AbsenceThresholdKind { get; init; }
 
     [System.Text.Json.Serialization.JsonPropertyName("summary")]
     public required string Summary { get; init; }

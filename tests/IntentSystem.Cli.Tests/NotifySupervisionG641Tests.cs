@@ -84,6 +84,72 @@ public sealed class NotifySupervisionG641Tests : IDisposable
     }
 
     [Fact]
+    public void RestartGapReportsSelfAbsenceWithoutClaimingUndeclaredBound_G641()
+    {
+        var context = CreateContext();
+        var supervisor = CreateSupervisor(context, "unused-agmsg", new FakeRunner(), write: true, boundSeconds: null);
+
+        var first = supervisor.RunOnce();
+        Assert.True(first.Silent);
+        Assert.False(first.Bound!.Recorded);
+        Assert.Null(first.Bound.BoundSeconds);
+
+        now = firstNow.AddHours(3);
+        var second = supervisor.RunOnce();
+
+        Assert.False(second.Silent);
+        Assert.False(second.Bound!.Recorded);
+        Assert.Null(second.Bound.BoundSeconds);
+        Assert.Null(second.Bound.BoundMet);
+        Assert.True(second.Liveness!.AbsentSinceLastCycle);
+        Assert.Equal(300, second.Liveness.AbsenceThresholdSeconds);
+        Assert.Equal("configured-interval", second.Liveness.AbsenceThresholdKind);
+        Assert.DoesNotContain("within the declared", second.Liveness.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("exceeding the declared", second.Liveness.Summary, StringComparison.Ordinal);
+        Assert.Contains(second.Findings, finding => finding.Kind == "supervisor-not-running");
+    }
+
+    [Fact]
+    public void DeliveredEscalationClearsAndReturnsToSilence_G641()
+    {
+        var scripts = Path.Combine(root, "agmsg");
+        Directory.CreateDirectory(scripts);
+        File.WriteAllText(Path.Combine(scripts, "team.sh"), "fixture");
+        File.WriteAllText(Path.Combine(scripts, "send.sh"), "fixture");
+        var runner = new FakeRunner();
+        var context = CreateContext();
+        NotifyEventWriter.Append(
+            ResolveEventPath(),
+            new NotifyDesignEvent
+            {
+                Timestamp = firstNow.AddMinutes(-10),
+                Team = Team,
+                Kind = "escalation",
+                Unit = "G641-acknowledged-escalation",
+                Summary = "approval is durable but nobody was woken",
+                Artifact = "approval",
+            });
+
+        var supervisor = CreateSupervisor(context, scripts, runner, write: true, boundSeconds: 300);
+        var first = supervisor.RunOnce();
+        Assert.Contains(first.Findings, finding =>
+            finding.Kind == "undelivered-escalation" && finding.WakeDelivered);
+
+        now = firstNow.AddSeconds(1);
+        var second = supervisor.RunOnce();
+
+        Assert.True(second.Silent);
+        Assert.DoesNotContain(second.Findings, finding => finding.Kind == "undelivered-escalation");
+        Assert.Contains(second.RecoveryRecords, record =>
+            record.Kind == "undelivered-escalation" && record.WakeDelivered && record.ClearedAt is not null);
+
+        now = firstNow.AddSeconds(2);
+        var third = supervisor.RunOnce();
+        Assert.True(third.Silent);
+        Assert.DoesNotContain(third.Findings, finding => finding.Kind == "undelivered-escalation");
+    }
+
+    [Fact]
     public void HealthyRecordedSeatsRemainSilentAndAbsentSeatsAreConstructedFromTopology_G641()
     {
         var context = CreateContext();

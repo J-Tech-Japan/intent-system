@@ -137,6 +137,11 @@ the declared bound was met. A restart gap beyond the bound is reported as
 `supervisor-not-running` and as `absent_since_last_cycle: true`; a missing
 previous cycle is reported as unknown rather than guessed healthy.
 
+If `--bound` is omitted, no declared bound is inferred or recorded. The
+cycle's persisted `interval_seconds` is used only as the configured interval
+for self-absence detection; `bound_met` remains null and the liveness summary
+states that no detection bound was declared.
+
 Every finding has an append-only recovery record in `stalls.jsonl` with
 `detectable_at`, `surfaced_at`, and `cleared_at`. If a condition is first seen
 after supervision restarted, `detectable_at` is null and
@@ -145,6 +150,9 @@ duration; an unknown start never receives a flattering duration. Undelivered
 `notify escalate` events are treated as findings, and the loop reports its own
 liveness in every bounded `--once` result. Dry-run resolves and previews the
 same classes and bound without waking, recording, or clearing anything.
+After a wake is delivered for an undelivered escalation, its recovery record is
+acknowledged and cleared; the append-only event remains durable, but later
+cycles suppress that acknowledged key and return to healthy silence.
 
 > **Preview through 1.x (G641).** Measured supervision, its bound and durable
 > recovery records, the undelivered-escalation finding, and self-liveness are

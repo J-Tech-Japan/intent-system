@@ -317,6 +317,8 @@ internal sealed record NotifySupervisionCycle
     [JsonPropertyName("bound_seconds")] public int? BoundSeconds { get; init; }
     [JsonPropertyName("actual_interval_seconds")] public long? ActualIntervalSeconds { get; init; }
     [JsonPropertyName("bound_met")] public bool? BoundMet { get; init; }
+    [JsonPropertyName("absence_threshold_seconds")] public int? AbsenceThresholdSeconds { get; init; }
+    [JsonPropertyName("absence_threshold_kind")] public string? AbsenceThresholdKind { get; init; }
     [JsonPropertyName("absent_since_last_cycle")] public bool AbsentSinceLastCycle { get; init; }
     [JsonPropertyName("gap_seconds")] public long? GapSeconds { get; init; }
 }
