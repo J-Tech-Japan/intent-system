@@ -925,6 +925,25 @@ orchestrator の closeout レポートは、packet が宣言した write-back �
 recorded か pending かを列挙します — packet metadata の read-only な伝播であり、
 host の変更は行いません。
 
+### closeout debt としての guide reachability (G645, preview-through-1.x)
+
+keyword-to-guide standard は運用上の規約です。thread に keyword を渡せば、その thread は named guide に
+到達し、surface を理解して action できなければなりません。packet は role-facing な各 surface について
+guide_reachability の route (guide_surface / role / target_surface) を 1 つずつ宣言するか、
+no_role_facing_surface: true を明示します。declaration の欠落は explicit no-surface と同じではなく、
+intent-cli は route を推測せず guide wording も判定しません。
+
+intent-cli automation guide-reachability-record --execution-unit <u> --commit <host-commit-sha>
+[--note <text>] [--dry-run|--write] [--format json|markdown] は named guide route を更新した host commit を
+記録します。artifact は .intent-cli/guide-reachability/<u>/record.json です。record ができるまで、closeout
+済みの declared route は automation stalled-work の guide-reachability-pending として execution unit、
+guide surface、role を示します。explicit no-surface なら debt はありません。これは 1.0 promise の対象外の
+preview surface であり、merge gate ではなく closeout debt です。
+
+recorder は evidence-only です。guide content を書かず、intent tree を変更せず、guide の良し悪しを決めません。
+同一 commit には冪等で、競合または unreadable な証跡は拒否し、packet declaration がないまたは malformed の
+場合は fail closed します。
+
 ### 行き詰まった published issue を retire する (G525)
 
 `intent-cli automation issue-retire --repo <r> --issue <n> --reason <superseded|decomposed|obsolete> [--note <text>] [--domain <name>] [--write]`

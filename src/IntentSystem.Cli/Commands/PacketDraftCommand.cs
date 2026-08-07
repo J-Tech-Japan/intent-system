@@ -297,6 +297,13 @@ internal static class PacketDraftCommand
               expected: ""
               write_back_required: false
               write_back_targets: []
+            # G645: guide reachability is explicit and checked at closeout.
+            # Set this to false and name one route per role-facing surface,
+            # or keep the explicit no-surface answer when this slice adds no
+            # role-facing surface. A blank declaration is not a decision.
+            guide_reachability:
+              no_role_facing_surface: true
+              routes: []
             """;
     }
 
@@ -334,6 +341,10 @@ internal static class PacketDraftCommand
             - Diagram candidate: TODO concept/workflow/topology/state diagram update, or decline.
             - Docs update: TODO user-facing docs to change, or decline.
             - Closeout learning: TODO knowledge to write back after landing + whether `write_back_required`.
+
+            - Guide reachability (G645): for every role-facing surface, name the guide surface, routing role,
+              and target surface; if none is added, explicitly set `no_role_facing_surface: true`. A blank
+              declaration is not a decision. `stalled-work` reports a declared route until the host records it.
 
             `improve` (G456 / G460) is the later safety net; packet-time maintenance is the normal path.
             """;
@@ -730,6 +741,12 @@ internal static class PacketDraftCommand
             - Diagram candidate: TODO / none
             - Docs update: TODO / none
             - Closeout writeback expected: no
+
+            ## Guide Reachability (G645)
+
+            While the author still knows the answer, name the guide surface and role that route to every
+            role-facing surface this slice adds, or explicitly say that no role-facing surface is added. A
+            blank answer is not treated as no-surface. The closeout record is a debt check, not a merge gate.
 
             ## Base Branch Policy
 

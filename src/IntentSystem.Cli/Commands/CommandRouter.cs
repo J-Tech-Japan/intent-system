@@ -79,6 +79,7 @@ internal static class CommandRouter
         "automation issue-publish --issue <n> --write",
         "automation queue-dependency-reconcile [--execution-unit <u>] [--dry-run|--write]",
         "automation knowledge-writeback-record --execution-unit <u> --commit <host-sha> [--target <path>]... [--dry-run|--write]",
+        "automation guide-reachability-record --execution-unit <u> --commit <host-sha> [--dry-run|--write]",
         "automation pr-transition --transition review-start --write",
         "automation pr-transition --transition request-update --write",
         "automation pr-transition --transition approved --write",
@@ -238,6 +239,8 @@ internal static class CommandRouter
                 ["issue-retire"] = AutomationIssueRetireCommand.Execute,
                 // G564: records a performed intent-tree/ADR/diagram/docs write-back.
                 ["knowledge-writeback-record"] = AutomationKnowledgeWriteBackRecordCommand.Execute,
+                // G645: records a performed guide route update.
+                ["guide-reachability-record"] = AutomationGuideReachabilityRecordCommand.Execute,
                 ["label-palette-audit"] = AutomationLabelPaletteAuditCommand.Execute,
                 ["label-palette-sync"] = AutomationLabelPaletteSyncCommand.Execute,
                 ["pr-transition"] = AutomationPrTransitionCommand.Execute,

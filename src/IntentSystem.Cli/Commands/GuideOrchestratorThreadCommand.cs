@@ -2035,6 +2035,9 @@ internal static class GuideOrchestratorThreadCommand
                     + "--execution-unit <unit> --commit <host-sha> --write`. This is read-only propagation of packet "
                     + "metadata: the orchestrator reports the obligation, design performs the write-back, and no thread "
                     + "here mutates host intent content.",
+                GuideReachabilityRule = GuideReachabilityDuty.Standard + " " + GuideReachabilityDuty.CloseoutCheck
+                    + " The closeout report names each declared guide and role, whether it is recorded or pending; "
+                    + "this remains a debt check and never a merge gate.",
                 ReviewIncompleteRule =
                     "A review `completed` reply that omits `design_alignment_checked: true` and the checked-source list "
                     + "is INCOMPLETE — the orchestrator does not route merge/closeout on that reply alone. The only "
@@ -6186,6 +6189,10 @@ internal sealed record OrchestratorReplyContract
     /// </summary>
     [JsonPropertyName("closeout_knowledge_write_back_rule")]
     public required string CloseoutKnowledgeWriteBackRule { get; init; }
+
+    /// <summary>G645: closeout reports the separate guide-reachability debt.</summary>
+    [JsonPropertyName("closeout_guide_reachability_rule")]
+    public required string GuideReachabilityRule { get; init; }
 }
 
 /// <summary>
