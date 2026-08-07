@@ -27,6 +27,11 @@ mode と現在のインストール済みガイドに従います。
 オーケストレーション contract](12-agent-message-orchestration.md) はセッションレイヤーの意味の
 正本となる定義として残ります。
 
+pane を配置する前に、[チームのワークスペース配置（G637、preview）](12-agent-message-orchestration.md)
+を読んでください。実際の workspace と pane ID が分かったら、operator が観測した shape を
+`intent-cli guide workspace-layout` に渡します。同じ label vocabulary と 40% / 60% 均等分割を
+導入時から確認できます。この guide は command を表示するだけで、herdr を駆動しません。
+
 ## これから設定するもの
 
 4 スレッドモデルが **primary** です。design は intent を作成し、orchestration は

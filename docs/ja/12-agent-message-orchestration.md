@@ -367,6 +367,42 @@ agmsg internals と同じくリンクアウトし、herdr 自身のドキュメ�
 立ち会う、ping テスト前の actas + readiness、1 ロール 1 保持者と handover 時の graceful
 drop）が満たされるなら、**任意の** 同等なワークスペースマネージャーで置き換えられます。
 
+## チームのワークスペース配置（G637、preview-through-1.x）
+
+> **1.x を通じた preview。** このワークスペース配置ガイドは v0.12.0 の freeze 後に追加されました。
+> 1.0 compatibility promise の対象外であり、1.x の間に変更または撤回される可能性があります。
+> 正式化は後続 MAJOR release で行います。[compatibility ledger](1.0-compatibility-ledger.md) の
+> preview entry を参照してください。
+
+各 team workspace は、3 席を見渡せる 1 つの形にそろえます。
+`orchestration` は左側で幅 40%、高さ全体を占めます。`implementation` は右上、`review` は右下です。
+右側に残る 60% は上下で均等に分かれ、各 pane は 30% になります。label は記録済み topology の
+role 名である `orchestration`、`implementation`、`review` を使います。3 席目が実際に design の席なら
+その pane の label は `design` とします。slot の規約は seat の identity を変更しません。
+
+この guide は operator が観測した shape と明示的な ID を入力にします。live workspace を一覧・照会
+せず、herdr を実行もしません。
+
+```text
+intent-cli guide workspace-layout --workspace-id <workspace-id> --tab-id <tab-id> \
+  --shape canonical|three-column|mirrored|unknown \
+  --orchestration-pane <orchestration-pane> --implementation-pane <implementation-pane> \
+  --review-pane <review-pane> --temporary-tab-id <temporary-tab-id> --format markdown
+```
+
+canonical shape と canonical label の workspace では、変更不要であることを表示します。別の shape なら、
+一時 tab へ `herdr pane move` してから、本来その下に置く pane を target にして戻す往復、pane rename、
+40% / 60%-均等分割を作る resize の呼び出しをこの順番で表示します。ratio が分かる場合は渡して、
+resize amount を必要最小限の方向差分にします。表示された command を実行する直前に、明示的な ID を
+record から解決してください。この guide は plan であり executor ではありません。
+
+実測した herdr 0.8.0 on macOS では、同じ tab 内の `herdr pane move` は `changed: false` を返す no-op です。
+一時 tab に移してから destination pane を target にして戻す往復も同じ herdr 0.8.0 on macOS で実測し、
+pane は再作成ではなく付け替えられ、稼働中の 17 agent process がすべて残りました。まず scratch tab で
+この往復を検証し、すべての agent が残っていることを確認してから、稼働中 agent を持つ workspace に適用し、
+もう一度存在を確認します。これは測定した事実であり、未測定の herdr version や platform への主張では
+ありません。single-pane workspace は標準化する配置を持たないため、この規約の対象外です。
+
 ## herdr-only の運用手順（preferred — fewer dependencies）
 
 この節はチームが `herdr-only` を記録している場合だけ operative です。agmsg の
