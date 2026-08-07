@@ -12,7 +12,7 @@ internal static class SupervisionGuideText
         "Preview through 1.x (G628/G644): supervision setup is outside the 1.0 compatibility promise.";
 
     public const string DeploymentBasis =
-        "Basis: measured on this host (2026-08-07) — omitting `--once` leaves the command looping; two supervisors on one team wake the same stall twice; and a supervisor placed inside a seat dies with that seat. Guidance: deploy exactly one standing loop per team outside the seats, and leave process start/stop/management to the operator or scheduler; intent-cli neither starts nor manages it.";
+        "Measured on this host (2026-08-07): only the loop behavior was observed here — omitting `--once` leaves the command looping. Deployment guidance (not a host measurement): deploy exactly one standing loop per team outside the seats; two supervisors on one team can wake the same stall twice; and a supervisor inside a seat cannot report its own death and dies with that seat. Leave process start/stop/management to the operator or scheduler; intent-cli neither starts nor manages it.";
 
     public const string ReferencePointer =
         "Read the orchestration reference for supervision semantics instead of copying them here: `docs/en/12-agent-message-orchestration.md` (JA mirror: `docs/ja/12-agent-message-orchestration.md`).";

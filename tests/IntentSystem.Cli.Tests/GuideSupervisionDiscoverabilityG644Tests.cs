@@ -47,6 +47,7 @@ public sealed class GuideSupervisionDiscoverabilityG644Tests : IDisposable
             Assert.Contains("measured on this host", setup, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("12-agent-message-orchestration.md", setup, StringComparison.Ordinal);
             Assert.Contains("Preview through 1.x", setup, StringComparison.Ordinal);
+            AssertMeasuredVsGuidance(setup);
         }
 
         Assert.False(child.TryGetProperty("supervision_setup", out _));
@@ -72,6 +73,7 @@ public sealed class GuideSupervisionDiscoverabilityG644Tests : IDisposable
         Assert.Contains("neither starts nor manages", reviewPrompt, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("12-agent-message-orchestration.md", reviewPrompt, StringComparison.Ordinal);
         Assert.Contains("Preview through 1.x", reviewPrompt, StringComparison.Ordinal);
+        AssertMeasuredVsGuidance(reviewPrompt);
 
         using var implementationWriter = new StringWriter();
         var implementationExitCode = GuideWorkflowTaskImplementationLoopCommand.Execute(
@@ -152,6 +154,25 @@ public sealed class GuideSupervisionDiscoverabilityG644Tests : IDisposable
             Assert.Contains("12-agent-message-orchestration.md", document, StringComparison.Ordinal);
             Assert.Contains("1.x", document, StringComparison.Ordinal);
         }
+    }
+
+    private static void AssertMeasuredVsGuidance(string renderedGuide)
+    {
+        var measuredStart = renderedGuide.IndexOf("Measured on this host", StringComparison.Ordinal);
+        var guidanceStart = renderedGuide.IndexOf("Deployment guidance (not a host measurement)", StringComparison.Ordinal);
+        Assert.True(measuredStart >= 0, "The rendered guide must identify the host-observed evidence.");
+        Assert.True(guidanceStart > measuredStart, "Deployment guidance must follow the measured evidence with a distinct basis.");
+
+        var measured = renderedGuide[measuredStart..guidanceStart];
+        Assert.Contains("omitting `--once` leaves the command looping", measured, StringComparison.Ordinal);
+        Assert.DoesNotContain("two supervisors", measured, StringComparison.Ordinal);
+        Assert.DoesNotContain("outside the seats", measured, StringComparison.Ordinal);
+        Assert.DoesNotContain("dies with that seat", measured, StringComparison.Ordinal);
+
+        var guidance = renderedGuide[guidanceStart..];
+        Assert.Contains("exactly one standing loop per team outside the seats", guidance, StringComparison.Ordinal);
+        Assert.Contains("two supervisors on one team can wake the same stall twice", guidance, StringComparison.Ordinal);
+        Assert.Contains("inside a seat cannot report its own death and dies with that seat", guidance, StringComparison.Ordinal);
     }
 
     private CliContext CreateContext() => new()
