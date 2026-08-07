@@ -52,13 +52,22 @@ intent-cli notify status --task-id <task-id> [--domain <domain> --team <team>] \
 `<routing-root>/.intent-cli/notify/<domain>/<team>/pending.jsonl` へ追記します。
 snapshot は task id、recorded recipient identity、expected artifact、dispatch timestamp を
 持ちます。write に失敗した場合は pane prompt や external reader event を試みません。
-一致する `notify report` は resolution を追記し、unknown または既に settled の task id は
-拒否して supplied id と known open ids の両方を示します。`notify status` は delegate と同じ
+一致する `notify report` は resolution を追記します。open な pending delegation に一致しない
+task id でも report は配信し、human-readable と machine output の両方に supplied id と
+「open な pending delegation に一致しなかった」ことを示す advisory を出します。この場合は
+pending record を作成も解決もしません。既に settled の task id、または team store 間で
+identifier が衝突する lookup は従来どおり拒否し、supplied id と known open ids を示します。
+`notify status` は delegate と同じ
 recorded identity / liveness judgment を読みます。herdr では recorded workspace/pane の
 正確な `agent_running` flag を使い、status string は使いません。agmsg では recorded roster を
 使います。report がなく recipient が running なら `live`、一致する report 後は現在の liveness
 によらず `settled`、recipient が not running かつ report がない場合だけ `lost` です。経過時間
 だけで verdict を変えることはありません。
+
+report は bookkeeping entry ではなく message です。fail-closed の保護は message を運ぶことではなく
+pending state の mutation に置きます。認識されない identifier を理由に配信を拒否すると、recipient が
+依頼したことを知らなかった unsolicited report や escalation への回答という、情報を運ぶ message を
+黙らせてしまいます。
 
 > **1.x を通じた preview (G629)。** pending-delegation record と `notify status` は
 > v0.12.0 freeze 後に追加されました。1.0 compatibility promise の対象外であり、1.x の間に

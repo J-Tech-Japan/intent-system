@@ -54,15 +54,25 @@ intent-cli notify status --task-id <task-id> [--domain <domain> --team <team>] \
 `<routing-root>/.intent-cli/notify/<domain>/<team>/pending.jsonl`. The snapshot
 contains the task id, recorded recipient identity, expected artifact, and
 dispatch timestamp. If that write fails, no pane prompt or external reader
-event is attempted. A matching `notify report` appends the resolution; an
-unknown or already-settled task id is refused and the supplied id plus known
-open ids are named. `notify status` reads the same recorded identity and
+event is attempted. A matching `notify report` appends the resolution. An
+unmatched task id still delivers the report and emits an advisory in both
+human-readable and machine output naming the supplied id and stating that no
+open pending delegation matched; it creates or resolves no pending record. An
+already-settled task id, or a lookup whose identifiers conflict across team
+stores, remains refused and names the supplied id plus the known open ids.
+`notify status` reads the same recorded identity and
 liveness judgment as delegate: herdr uses the exact `agent_running` flag at
 the recorded workspace/pane (never the status string), while agmsg uses its
 recorded roster. It reports `live` for a running recipient with no report,
 `settled` after the matching report regardless of current liveness, and
 `lost` only when the recipient is not running and no report arrived. Elapsed
 time never changes the verdict.
+
+A report is a message rather than a bookkeeping entry: fail-closed protection
+belongs on pending-state mutation, not on carrying the message. Refusing an
+unrecognised identifier would silence unsolicited reports and answers to
+escalations—the messages whose information the recipient did not know to
+request.
 
 > **Preview through 1.x (G629).** Pending-delegation records and `notify
 > status` were added after the v0.12.0 freeze. They are outside the 1.0
