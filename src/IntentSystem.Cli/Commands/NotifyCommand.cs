@@ -167,6 +167,7 @@ internal static class NotifyCommand
                 return 1;
             }
 
+            string? reportAdvisory = null;
             if (string.Equals(operation, OperationReport, StringComparison.Ordinal))
             {
                 var pending = NotifyPendingDelegationStore.Find(
@@ -174,7 +175,11 @@ internal static class NotifyCommand
                     options.Domain,
                     options.Team,
                     options.TaskId!);
-                if (!pending.Resolved || pending.Record is null || pending.Record.ReportArrived)
+                var unmatched = !pending.Resolved
+                    && pending.Record is null
+                    && pending.Error is null;
+                if (!unmatched
+                    && (!pending.Resolved || pending.Record is null || pending.Record.ReportArrived))
                 {
                     var known = FormatKnownTaskIds(pending.KnownTaskIds);
                     Emit(writer, options.Format, FailureResult(
@@ -189,9 +194,16 @@ internal static class NotifyCommand
                         preflight: preflight));
                     return 1;
                 }
+
+                if (unmatched)
+                {
+                    reportAdvisory = BuildUnmatchedReportAdvisory(
+                        options.TaskId!,
+                        pending.KnownTaskIds);
+                }
             }
 
-            return ExecuteDelivery(writer, operation, options, resolution, preflight);
+            return ExecuteDelivery(writer, operation, options, resolution, preflight, reportAdvisory);
         }
 
         SessionLayerModeResolution escalationResolution;
@@ -372,6 +384,12 @@ internal static class NotifyCommand
     private static string FormatKnownTaskIds(IReadOnlyList<string> knownTaskIds) =>
         knownTaskIds.Count == 0 ? "<none>" : string.Join(", ", knownTaskIds);
 
+    private static string BuildUnmatchedReportAdvisory(
+        string taskId,
+        IReadOnlyList<string> knownTaskIds) =>
+        $"No open pending delegation matched supplied report task id '{taskId}'; the report was delivered "
+        + $"without creating or resolving a pending record. Known open task ids: {FormatKnownTaskIds(knownTaskIds)}.";
+
     internal static void EmitSupervision(
         TextWriter writer,
         NotifySupervisorPass pass,
@@ -445,7 +463,8 @@ internal static class NotifyCommand
         string operation,
         NotifyOptions options,
         SessionLayerModeResolution resolution,
-        SessionLayerPreflightResult preflight)
+        SessionLayerPreflightResult preflight,
+        string? reportAdvisory = null)
     {
         var reportCommand = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? BuildReportCommand(options)
@@ -691,7 +710,8 @@ internal static class NotifyCommand
             deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
             taskFile: envelopeDelivery.TaskFile,
             deliveryPointer: envelopeDelivery.ResultPointer,
-            pendingRecordPath: pendingRecordPath));
+            pendingRecordPath: pendingRecordPath,
+            advisory: reportAdvisory));
         return 0;
     }
 
@@ -939,7 +959,8 @@ internal static class NotifyCommand
         string? deliveryMethod = null,
         string? taskFile = null,
         string? deliveryPointer = null,
-        string? pendingRecordPath = null) => new()
+        string? pendingRecordPath = null,
+        string? advisory = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot!,
@@ -963,7 +984,8 @@ internal static class NotifyCommand
             ResendPermitted = resendPermitted,
             InlinePayloadWarning = inlinePayloadWarning,
             RecipientWarning = recipientWarning,
-            Warnings = recipientWarning is null ? null : [recipientWarning.Message],
+            Advisory = advisory,
+            Warnings = BuildWarnings(advisory, recipientWarning),
             DeliveryMethod = deliveryMethod,
             TaskFile = taskFile,
             DeliveryPointer = deliveryPointer,
@@ -993,7 +1015,8 @@ internal static class NotifyCommand
         string? deliveryMethod = null,
         string? taskFile = null,
         string? deliveryPointer = null,
-        string? pendingRecordPath = null) => new()
+        string? pendingRecordPath = null,
+        string? advisory = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot ?? string.Empty,
@@ -1017,7 +1040,8 @@ internal static class NotifyCommand
             ResendPermitted = resendPermitted,
             InlinePayloadWarning = inlinePayloadWarning,
             RecipientWarning = recipientWarning,
-            Warnings = recipientWarning is null ? null : [recipientWarning.Message],
+            Advisory = advisory,
+            Warnings = BuildWarnings(advisory, recipientWarning),
             DeliveryMethod = deliveryMethod,
             TaskFile = taskFile,
             DeliveryPointer = deliveryPointer,
@@ -1027,6 +1051,24 @@ internal static class NotifyCommand
             ReportCommand = reportCommand,
             Summary = summary,
         };
+
+    private static IReadOnlyList<string>? BuildWarnings(
+        string? advisory,
+        NotifyRecipientWarning? recipientWarning)
+    {
+        var warnings = new List<string>();
+        if (recipientWarning is not null)
+        {
+            warnings.Add(recipientWarning.Message);
+        }
+
+        if (!string.IsNullOrWhiteSpace(advisory))
+        {
+            warnings.Add(advisory);
+        }
+
+        return warnings.Count == 0 ? null : warnings;
+    }
 
     private static void Emit(TextWriter writer, string format, NotifyResult result)
     {
@@ -1076,6 +1118,10 @@ internal static class NotifyCommand
         if (result.RecipientWarning is { } recipientWarning)
         {
             writer.WriteLine($"- recipient warning: role={recipientWarning.Role}; liveness={recipientWarning.ObservedLiveness}; {recipientWarning.Message}");
+        }
+        if (result.Advisory is not null)
+        {
+            writer.WriteLine($"- advisory: {result.Advisory}");
         }
         if (result.DeliveryMethod is not null)
         {
@@ -1370,6 +1416,7 @@ internal sealed record NotifyResult
     [JsonPropertyName("resend_permitted")] public bool? ResendPermitted { get; init; }
     [JsonPropertyName("inline_payload_warning")] public NotifyInlinePayloadWarning? InlinePayloadWarning { get; init; }
     [JsonPropertyName("recipient_warning")] public NotifyRecipientWarning? RecipientWarning { get; init; }
+    [JsonPropertyName("advisory")] public string? Advisory { get; init; }
     [JsonPropertyName("warnings")] public IReadOnlyList<string>? Warnings { get; init; }
     [JsonPropertyName("delivery_method")] public string? DeliveryMethod { get; init; }
     [JsonPropertyName("task_file")] public string? TaskFile { get; init; }

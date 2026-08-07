@@ -89,20 +89,58 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
     }
 
     [Fact]
-    public void UnknownReportNamesSuppliedAndKnownTaskIdsAndDoesNotDeliver_G629()
+    public void UnmatchedReportDeliversWithAdvisoryAndLeavesPendingRecordUnchanged_G640()
     {
         var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
         NotifyCommand.ProcessRunnerFactory = () => runner;
-        Assert.Equal(0, workspace.Run(DelegateArgs()).ExitCode);
+        var (_, delegated) = workspace.Run(DelegateArgs());
+        var pendingPath = delegated.GetProperty("pending_record_path").GetString()!;
+        var pendingBefore = File.ReadAllText(pendingPath);
         runner.Calls.Clear();
 
         var (exitCode, result) = workspace.Run(ReportArgs(taskId: "G629-unknown"));
 
+        Assert.Equal(0, exitCode);
+        Assert.True(result.GetProperty("delivered").GetBoolean());
+        var advisory = result.GetProperty("advisory").GetString()!;
+        Assert.Contains("G629-unknown", advisory, StringComparison.Ordinal);
+        Assert.Contains("No open pending delegation matched", advisory, StringComparison.Ordinal);
+        Assert.Contains("G629-demo", advisory, StringComparison.Ordinal);
+        Assert.Contains(result.GetProperty("warnings").EnumerateArray(), warning =>
+            warning.GetString()!.Contains("G629-unknown", StringComparison.Ordinal));
+        var summary = result.GetProperty("summary").GetString()!;
+        Assert.Contains("Delivered notification", summary, StringComparison.Ordinal);
+        Assert.Contains(runner.Calls, call => call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wH:p1"]));
+        Assert.Equal(pendingBefore, File.ReadAllText(pendingPath));
+
+        var (humanExit, humanOutput) = workspace.RunText(ReportArgs(taskId: "G629-human", format: "markdown"));
+        Assert.Equal(0, humanExit);
+        Assert.Contains("- advisory:", humanOutput, StringComparison.Ordinal);
+        Assert.Contains("G629-human", humanOutput, StringComparison.Ordinal);
+        Assert.Contains("No open pending delegation matched", humanOutput, StringComparison.Ordinal);
+        Assert.Equal(pendingBefore, File.ReadAllText(pendingPath));
+    }
+
+    [Fact]
+    public void CorruptPendingStoreRefusesReportWithoutDelivery_G640()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        var pendingPath = NotifyPendingDelegationStore.ResolvePath(
+            workspace.RootPath,
+            Workspace.Domain,
+            Workspace.Team);
+        Directory.CreateDirectory(Path.GetDirectoryName(pendingPath)!);
+        File.WriteAllText(pendingPath, "{ not valid pending json");
+
+        var (exitCode, result) = workspace.Run(ReportArgs(taskId: "G640-corrupt"));
+
         Assert.Equal(1, exitCode);
+        Assert.False(result.GetProperty("delivered").GetBoolean());
         Assert.Equal("unknown-task-id", result.GetProperty("cause").GetString());
         var summary = result.GetProperty("summary").GetString()!;
-        Assert.Contains("G629-unknown", summary, StringComparison.Ordinal);
-        Assert.Contains("G629-demo", summary, StringComparison.Ordinal);
+        Assert.Contains("G640-corrupt", summary, StringComparison.Ordinal);
+        Assert.Contains("could not be read", summary, StringComparison.Ordinal);
         Assert.Empty(runner.Calls);
     }
 
@@ -131,12 +169,12 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
         "--write", "--format", "json",
     ];
 
-    private static string[] ReportArgs(string taskId = "G629-demo") =>
+    private static string[] ReportArgs(string taskId = "G629-demo", string format = "json") =>
     [
         "notify", "report", "--domain", Workspace.Domain, "--team", Workspace.Team,
         "--from", "implementation", "--to", "orchestration", "--task-id", taskId,
         "--status", "completed", "--artifact", "https://example.test/pr/1373",
-        "--summary", "pending state implemented", "--write", "--format", "json",
+        "--summary", "pending state implemented", "--write", "--format", format,
     ];
 
     private static string[] StatusArgs() =>
@@ -198,6 +236,13 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
             using var writer = new StringWriter();
             var exitCode = CommandRouter.Execute(args, Context, writer);
             return (exitCode, JsonDocument.Parse(writer.ToString()).RootElement.Clone());
+        }
+
+        public (int ExitCode, string Output) RunText(string[] args)
+        {
+            using var writer = new StringWriter();
+            var exitCode = CommandRouter.Execute(args, Context, writer);
+            return (exitCode, writer.ToString());
         }
 
         public string HerdrAgents(
