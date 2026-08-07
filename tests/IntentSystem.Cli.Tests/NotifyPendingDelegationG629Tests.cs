@@ -122,6 +122,29 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
     }
 
     [Fact]
+    public void CorruptPendingStoreRefusesReportWithoutDelivery_G640()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        var pendingPath = NotifyPendingDelegationStore.ResolvePath(
+            workspace.RootPath,
+            Workspace.Domain,
+            Workspace.Team);
+        Directory.CreateDirectory(Path.GetDirectoryName(pendingPath)!);
+        File.WriteAllText(pendingPath, "{ not valid pending json");
+
+        var (exitCode, result) = workspace.Run(ReportArgs(taskId: "G640-corrupt"));
+
+        Assert.Equal(1, exitCode);
+        Assert.False(result.GetProperty("delivered").GetBoolean());
+        Assert.Equal("unknown-task-id", result.GetProperty("cause").GetString());
+        var summary = result.GetProperty("summary").GetString()!;
+        Assert.Contains("G640-corrupt", summary, StringComparison.Ordinal);
+        Assert.Contains("could not be read", summary, StringComparison.Ordinal);
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
     public void PendingRecordWriteFailureHappensBeforeAnyPaneDelivery_G629()
     {
         var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
