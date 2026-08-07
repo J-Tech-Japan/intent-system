@@ -290,6 +290,13 @@ internal static class GuideHelpCommand
             Purpose = "G487/G540 paste-ready prompts for the PRIMARY four-thread orchestrator model (design/orchestrator/implementation/review) over its selected session transport, plus the implementation/review threads it delegates to. agmsg is a message/progress/completion signal layer only; intent-cli and GitHub stay authoritative. Distinguishes the primary orchestrator-message model from the simpler timer-loop alternative (no mixed-mode timer races), pins the structured reply contract, the design-orchestrator double-check rule, an orchestrator first-wake, and safety boundaries. Timer-loop mode remains fully supported, not replaced.",
             Example = "intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --format markdown"
         },
+        // G637: preview workspace convention; render-only and host-state-free.
+        new GuideSubcommandEntry
+        {
+            Name = "workspace-layout",
+            Purpose = "G637 preview-through-1.x team workspace convention: consume an operator-observed shape and explicit workspace/tab/pane IDs, then render the 40% orchestration-left / 60%-even implementation-review layout, topology-role labels, and the temporary-tab round trip for non-conforming shapes. Never queries or executes herdr.",
+            Example = "intent-cli guide workspace-layout --workspace-id <workspace-id> --tab-id <tab-id> --shape three-column --format markdown"
+        },
         // G563: G488's renderer is retired to a pointer — `intent-cli skill`
         // ships and installs the one artifact named `intent-cli`.
         new GuideSubcommandEntry

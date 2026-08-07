@@ -26,6 +26,13 @@ first published packet. [Start a project](02-project-start.md) remains
 authoritative for topology, and the [agent-message orchestration contract](12-agent-message-orchestration.md)
 remains authoritative for session-layer semantics.
 
+Before arranging panes, use the [team workspace layout convention (G637,
+preview)](12-agent-message-orchestration.md#team-workspace-layout-convention-g637--preview-through-1x).
+After the real workspace and pane IDs are known, run
+`intent-cli guide workspace-layout` with the operator-observed shape so the same label vocabulary
+and 40% / 60%-even arrangement are visible during onboarding. The guide emits
+commands only; it does not drive herdr.
+
 ## What you are setting up
 
 The four-thread model is the **primary** model: design authors intent,

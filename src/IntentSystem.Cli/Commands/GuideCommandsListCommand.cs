@@ -279,6 +279,15 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "guide workspace-layout",
+            Role = RoleDesign,
+            Classification = ClassificationSupport,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerOperator,
+            Purpose = "G637 preview-through-1.x layout convention: `intent-cli guide workspace-layout` consumes an operator-supplied workspace snapshot and renders explicit herdr pane rename/resize commands plus the temporary-tab round trip for non-conforming shapes. It never queries or executes herdr."
+        },
+        new CommandGroupEntry
+        {
             Name = "guide workflow task implementation-loop",
             Role = RoleChildImplementation,
             Classification = ClassificationSupport,

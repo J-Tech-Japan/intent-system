@@ -400,6 +400,48 @@ provided the same rules hold: one dedicated folder per role as the pane cwd,
 shim-safe typed launch, attended first-run prompts, actas + readiness before the
 ping test, and one holder per role with a graceful drop on handover.
 
+## Team workspace layout convention (G637 — preview-through-1.x)
+
+> **Preview through 1.x.** This workspace-layout guide was added after the
+> v0.12.0 freeze. It is outside the 1.0 compatibility promise, may change or
+> be withdrawn during 1.x, and is formalised only by a later MAJOR release.
+> See the [compatibility ledger](1.0-compatibility-ledger.md) preview entry.
+
+Every team workspace uses one visible three-seat shape: `orchestration` owns
+the left pane at 40% width and full height; `implementation` is the top-right
+pane; and `review` is the bottom-right pane. The two right panes therefore
+split the remaining 60% evenly (30% each). Labels use the recorded topology
+role vocabulary: `orchestration`, `implementation`, and `review`. If the
+third seat is genuinely a design seat, label that pane `design`; the slot
+convention does not change the seat's identity.
+
+The guide consumes an operator-observed shape and explicit IDs. It never lists
+or queries a live workspace and never executes herdr:
+
+```text
+intent-cli guide workspace-layout --workspace-id <workspace-id> --tab-id <tab-id> \
+  --shape canonical|three-column|mirrored|unknown \
+  --orchestration-pane <orchestration-pane> --implementation-pane <implementation-pane> \
+  --review-pane <review-pane> --temporary-tab-id <temporary-tab-id> --format markdown
+```
+
+For a conforming workspace with canonical labels, the command reports that no
+change is needed. For a different shape it prints, in order, a temporary-tab
+round trip (`herdr pane move` to the temporary tab and back targeting the pane
+it should sit under), pane renames, and the resize calls that establish the
+40% / 60%-even split. Supply the observed ratios when known so the resize
+amounts are minimal directional deltas. Resolve every explicit ID immediately
+before running a printed command; the guide is a plan, not an executor.
+
+Same-tab `herdr pane move` is a no-op returning `changed: false` on the measured
+herdr 0.8.0 on macOS baseline. The temporary-tab round trip was also measured
+on herdr 0.8.0 on macOS: the pane was reparented rather than recreated and all
+seventeen running agent processes survived. Verify that round trip on a scratch
+tab first, confirm every agent is still present, then apply it to a workspace
+holding working agents and confirm presence again. These are measured facts,
+not claims about unmeasured herdr versions or platforms. A single-pane
+workspace has no arrangement to standardise and is outside this convention.
+
 ## Herdr-only operating procedure (preferred — fewer dependencies)
 
 This section is operative only when the team has recorded `herdr-only`. It is
