@@ -390,6 +390,13 @@ internal static class AutomationStalledWorkCommand
     public const string KindKnowledgeWritebackPending = "knowledge-writeback-pending";
 
     /// <summary>
+    /// G645: a closed-out unit whose packet declared guide routes but whose
+    /// host has not recorded the route update. This is closeout debt, never a
+    /// merge gate, and the report names the declared guide and role.
+    /// </summary>
+    public const string KindGuideReachabilityPending = "guide-reachability-pending";
+
+    /// <summary>
     /// G564: a closed-out unit's write-back metadata — its packet's G461
     /// declaration, the runs log the closeout is read from, or an existing
     /// write-back record — is present but unreadable. Reported here WITH the
@@ -398,6 +405,19 @@ internal static class AutomationStalledWorkCommand
     /// exactly the false all-clear this kind exists to prevent.
     /// </summary>
     public const string ReasonKnowledgeMetadataUnreadable = "knowledge-metadata-unreadable";
+
+    /// <summary>G645: a packet carries no readable guide-reachability declaration.</summary>
+    public const string ReasonGuideReachabilityDeclarationMissing = "guide-reachability-declaration-missing";
+
+    /// <summary>G645: a declared route or record could not be read safely.</summary>
+    public const string ReasonGuideReachabilityMetadataUnreadable = "guide-reachability-metadata-unreadable";
+
+    /// <summary>
+    /// G645: closeouts before the reachability detector shipped are outside its
+    /// default scan. Operators may opt into older closeouts explicitly.
+    /// </summary>
+    public static readonly DateTimeOffset GuideReachabilityActivationUtc =
+        new(2026, 8, 7, 0, 0, 0, TimeSpan.Zero);
 
     /// <summary>
     /// G564: units closed out BEFORE this detection shipped are out of scope
@@ -426,7 +446,7 @@ internal static class AutomationStalledWorkCommand
     };
 
     private const string UsageLine =
-        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--knowledge-writeback-since <iso-8601>] [--format json|markdown]";
+        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--knowledge-writeback-since <iso-8601>] [--guide-reachability-since <iso-8601>] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -440,7 +460,7 @@ internal static class AutomationStalledWorkCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var domain, out var repo, out var staleMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var repairSilentMinutes, out var knowledgeWriteBackSince, out var format, out var error))
+        if (!TryParseArguments(args, out var domain, out var repo, out var staleMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var repairSilentMinutes, out var knowledgeWriteBackSince, out var guideReachabilitySince, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -450,7 +470,7 @@ internal static class AutomationStalledWorkCommand
         AutomationStalledWorkResult result;
         try
         {
-            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes, repairSilentMinutes, knowledgeWriteBackSince);
+            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes, repairSilentMinutes, knowledgeWriteBackSince, guideReachabilitySince);
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
@@ -494,7 +514,8 @@ internal static class AutomationStalledWorkCommand
         int claimedSilentMinutes = DefaultClaimedSilentMinutes,
         int backlogIdleMinutes = DefaultBacklogIdleMinutes,
         int repairSilentMinutes = DefaultRepairSilentMinutes,
-        DateTimeOffset? knowledgeWriteBackSince = null)
+        DateTimeOffset? knowledgeWriteBackSince = null,
+        DateTimeOffset? guideReachabilitySince = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
@@ -534,6 +555,16 @@ internal static class AutomationStalledWorkCommand
             knowledgeWriteBackSince ?? KnowledgeWriteBackActivationUtc,
             items,
             excluded);
+        CollectGuideReachabilityPending(
+            context,
+            domain,
+            candidateDomains,
+            repo,
+            now,
+            guideReachabilitySince ?? GuideReachabilityActivationUtc,
+            items,
+            excluded,
+            warnings);
 
         var operatorAttention = CollectOperatorAttention(context, domain, now, items);
 
@@ -2555,6 +2586,227 @@ internal static class AutomationStalledWorkCommand
     }
 
     /// <summary>
+    /// G645: closed-out units whose packet declared one or more guide routes
+    /// but whose host has not recorded the route update. This mirrors the
+    /// knowledge-write-back collector deliberately: declaration, closeout,
+    /// and recording are separate facts, and an explicit no-surface answer is
+    /// silent while an absent declaration is reported as distinguishable
+    /// metadata rather than guessed into no debt.
+    /// </summary>
+    private static void CollectGuideReachabilityPending(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
+        string repo,
+        DateTimeOffset now,
+        DateTimeOffset since,
+        List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded,
+        List<string> warnings)
+    {
+        var runLogPath = context.GetRunLogPath();
+        if (!File.Exists(runLogPath))
+        {
+            return;
+        }
+
+        IReadOnlyList<RunEvent> events;
+        try
+        {
+            events = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException or NotSupportedException)
+        {
+            excluded.Add(new StalledWorkExcluded
+            {
+                Kind = KindGuideReachabilityPending,
+                ExecutionUnit = string.Empty,
+                Issue = null,
+                Pr = null,
+                Reason = ReasonGuideReachabilityMetadataUnreadable,
+                Detail =
+                    $"the runs log '{runLogPath}' could not be read: {exception.Message}. Guide reachability "
+                    + "closeouts cannot be enumerated, so the scan fails closed rather than claiming silence.",
+            });
+            return;
+        }
+
+        var closeouts = events
+            .Where(runEvent =>
+                string.Equals(runEvent.Event, CloseoutRecordedEvent, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(runEvent.ExecutionUnit))
+            .GroupBy(runEvent => runEvent.ExecutionUnit, StringComparer.Ordinal)
+            .Select(group => (Unit: group.Key, ClosedAt: group.Min(runEvent => runEvent.Ts)))
+            .OrderBy(entry => entry.Unit, StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var (executionUnit, closedAt) in closeouts)
+        {
+            if (closedAt < since)
+            {
+                continue;
+            }
+
+            if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out _))
+            {
+                // The knowledge-writeback collector owns the canonical-unit
+                // exclusion for this shared closeout event. Do not duplicate
+                // that legacy exclusion merely because the G645 detector is
+                // also scanning the same runs log.
+                continue;
+            }
+
+            string packetYamlPath;
+            try
+            {
+                packetYamlPath = GuideReachabilityRecord.ResolvePacketPath(context.RepoRoot, executionUnit);
+            }
+            catch (InvalidOperationException exception)
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindGuideReachabilityPending,
+                    ExecutionUnit = executionUnit,
+                    Issue = null,
+                    Pr = null,
+                    Reason = ReasonGuideReachabilityMetadataUnreadable,
+                    Detail = $"packet path could not be resolved: {exception.Message}",
+                });
+                continue;
+            }
+
+            var resolution = new ExecutionUnitResolution(
+                executionUnit,
+                Corroborated: File.Exists(packetYamlPath),
+                IsAmbiguous: false,
+                CandidatePacketPaths: Array.Empty<string>());
+            if (!TryConfirmDomain(domain, resolution, ReadPacketDeclaredDomain(context, executionUnit), candidateDomains, repo,
+                    out var reason, out var detail))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindGuideReachabilityPending,
+                    ExecutionUnit = executionUnit,
+                    Issue = null,
+                    Pr = null,
+                    Reason = reason,
+                    Detail = detail,
+                });
+                continue;
+            }
+
+            GuideReachabilityDeclaration declaration;
+            try
+            {
+                declaration = GuideReachabilityDeclaration.Read(File.ReadAllText(packetYamlPath));
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindGuideReachabilityPending,
+                    ExecutionUnit = executionUnit,
+                    Issue = null,
+                    Pr = null,
+                    Reason = ReasonGuideReachabilityMetadataUnreadable,
+                    Detail =
+                        $"'{executionUnit}': packet '{packetYamlPath}' could not be read for guide reachability: "
+                        + $"{exception.Message}. The declaration is not treated as absent.",
+                });
+                continue;
+            }
+
+            if (!declaration.IsDeclared)
+            {
+                // Legacy packets remain quiet in the item/excluded arrays so
+                // adding this detector does not rewrite every pre-G645 JSON
+                // shape. The warning is the explicit distinction: absent is
+                // not the same as the valid no-surface answer.
+                warnings.Add(
+                    $"'{executionUnit}': packet '{packetYamlPath}' has no guide_reachability declaration; "
+                    + "absence is distinct from explicit no_role_facing_surface: true and should be repaired "
+                    + "before a role-facing surface is shipped.");
+                continue;
+            }
+
+            if (declaration.NoRoleFacingSurface)
+            {
+                continue;
+            }
+
+            string recordPath;
+            try
+            {
+                recordPath = GuideReachabilityRecord.ResolveFullPath(context.RepoRoot, executionUnit);
+            }
+            catch (InvalidOperationException exception)
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindGuideReachabilityPending,
+                    ExecutionUnit = executionUnit,
+                    Issue = null,
+                    Pr = null,
+                    Reason = ReasonGuideReachabilityMetadataUnreadable,
+                    Detail = $"guide-reachability record path could not be resolved: {exception.Message}",
+                });
+                continue;
+            }
+
+            if (File.Exists(recordPath))
+            {
+                try
+                {
+                    _ = GuideReachabilityRecord.Deserialize(File.ReadAllText(recordPath), executionUnit);
+                    continue;
+                }
+                catch (Exception exception) when (exception is IOException or InvalidOperationException)
+                {
+                    excluded.Add(new StalledWorkExcluded
+                    {
+                        Kind = KindGuideReachabilityPending,
+                        ExecutionUnit = executionUnit,
+                        Issue = null,
+                        Pr = null,
+                        Reason = ReasonGuideReachabilityMetadataUnreadable,
+                        Detail =
+                            $"'{executionUnit}': guide-reachability record '{recordPath}' could not be read: "
+                            + $"{exception.Message}. An unreadable record is not evidence of clearance.",
+                    });
+                    continue;
+                }
+            }
+
+            items.Add(new StalledWorkItem
+            {
+                Kind = KindGuideReachabilityPending,
+                ExecutionUnit = executionUnit,
+                Issue = null,
+                Pr = null,
+                AgeMinutes = ComputeAgeMinutesFromInstant(ClampToNow(closedAt, now), now),
+                IsInformational = false,
+                DeclaredGuideSurfaces = declaration.Routes.Select(route => route.GuideSurface).Distinct(StringComparer.Ordinal).ToArray(),
+                DeclaredGuideRoles = declaration.Routes.Select(route => route.Role).Distinct(StringComparer.Ordinal).ToArray(),
+                RecommendedAction = BuildGuideReachabilityPendingAction(executionUnit, declaration),
+            });
+        }
+    }
+
+    private static string BuildGuideReachabilityPendingAction(
+        string executionUnit,
+        GuideReachabilityDeclaration declaration)
+    {
+        var routes = string.Join(
+            "; ",
+            declaration.Routes.Select(route => $"{route.GuideSurface} -> {route.Role} -> {route.TargetSurface}"));
+
+        return
+            $"confirm and record the declared guide route(s) for '{executionUnit}' ({routes}) — design updates the "
+            + $"named guide in the host, then: '{GuideReachabilityDuty.RecordCommand(executionUnit)}'. "
+            + "This is closeout debt, not a merge gate; reachability is never inferred and guide wording is never judged here.";
+    }
+
+    /// <summary>
     /// G552: names the exact clarification to answer (design) and the
     /// escalation path (operator). Never an auto-answer: the answer is human
     /// content, and this command only ever emits text.
@@ -3034,6 +3286,7 @@ internal static class AutomationStalledWorkCommand
         out int backlogIdleMinutes,
         out int repairSilentMinutes,
         out DateTimeOffset? knowledgeWriteBackSince,
+        out DateTimeOffset? guideReachabilitySince,
         out string format,
         out string error)
     {
@@ -3044,6 +3297,7 @@ internal static class AutomationStalledWorkCommand
         backlogIdleMinutes = DefaultBacklogIdleMinutes;
         repairSilentMinutes = DefaultRepairSilentMinutes;
         knowledgeWriteBackSince = null;
+        guideReachabilitySince = null;
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -3127,6 +3381,20 @@ internal static class AutomationStalledWorkCommand
                         return false;
                     }
                     knowledgeWriteBackSince = parsedSince;
+                    index++;
+                    break;
+                // G645: deliberate opt-in to scanning closeouts older than
+                // the reachability detector's activation floor.
+                case "--guide-reachability-since":
+                    if (index + 1 >= args.Length
+                        || !DateTimeOffset.TryParse(args[index + 1], System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                            out var parsedGuideReachabilitySince))
+                    {
+                        error = "--guide-reachability-since requires an ISO-8601 instant (e.g. 2026-08-07T00:00:00Z).";
+                        return false;
+                    }
+                    guideReachabilitySince = parsedGuideReachabilitySince;
                     index++;
                     break;
                 case "--format":
@@ -3259,6 +3527,14 @@ internal static class AutomationStalledWorkCommand
                 if (item.DeclaredWriteBackTargets is { Count: > 0 } declaredTargets)
                 {
                     writer.WriteLine($"- declared_write_back_targets: {string.Join(", ", declaredTargets)}");
+                }
+                if (item.DeclaredGuideSurfaces is { Count: > 0 } declaredGuides)
+                {
+                    writer.WriteLine($"- declared_guide_surfaces: {string.Join(", ", declaredGuides)}");
+                }
+                if (item.DeclaredGuideRoles is { Count: > 0 } declaredRoles)
+                {
+                    writer.WriteLine($"- declared_guide_roles: {string.Join(", ", declaredRoles)}");
                 }
                 // G533: informational kinds never recommend a transition —
                 // rendered as `status` (descriptive prose) rather than
@@ -3439,6 +3715,19 @@ internal sealed record StalledWorkItem
     /// </summary>
     [JsonPropertyName("declared_write_back_targets")]
     public IReadOnlyList<string>? DeclaredWriteBackTargets { get; init; }
+
+    /// <summary>
+    /// G645: guide surfaces the packet declared for a role-facing addition.
+    /// Null for every other stall kind, including knowledge write-back.
+    /// </summary>
+    [JsonPropertyName("declared_guide_surfaces")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? DeclaredGuideSurfaces { get; init; }
+
+    /// <summary>G645: routing roles paired with the declared guide surfaces.</summary>
+    [JsonPropertyName("declared_guide_roles")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? DeclaredGuideRoles { get; init; }
 
     /// <summary>G596: actor that can actually discharge the finding.</summary>
     [JsonPropertyName("required_actor")]

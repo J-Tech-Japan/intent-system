@@ -80,6 +80,23 @@ request.
 > formalised only by a later MAJOR release. See the [compatibility
 > ledger](1.0-compatibility-ledger.md) preview rows.
 
+### Guide reachability (G645 — preview-through-1.x)
+
+The keyword-to-guide standard is part of the workflow: handing a thread a
+keyword must be enough for that thread to reach the named guide, understand
+the surface, and act. Each packet declares guide_surface, role, and
+target_surface for every role-facing addition, or explicitly declares
+no_role_facing_surface. A missing declaration is not a no-surface decision;
+the process never infers a route and never judges guide wording.
+
+At closeout, design records the host update with
+intent-cli automation guide-reachability-record --execution-unit <unit>
+--commit <host-sha> --write. Until then, automation stalled-work reports
+guide-reachability-pending with the execution unit, guide, and role. The debt
+does not block merge or closeout, and an explicit no-surface declaration is
+silent. This is a preview surface outside the 1.0 promise; see the
+compatibility ledger.
+
 ### Bounded recipient supervision (G630)
 
 ```bash

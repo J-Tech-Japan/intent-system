@@ -946,6 +946,30 @@ drift apart. The orchestrator's closeout report to the design thread
 enumerates the packet's declared write-backs and whether each is recorded or
 pending — read-only propagation of packet metadata, no host mutation.
 
+### Guide reachability as closeout debt (G645, preview-through-1.x)
+
+The keyword-to-guide standard is operational: handing a thread a keyword must
+be enough for that thread to reach the named guide, understand the surface,
+and act. A packet therefore declares guide_reachability with one route per
+role-facing surface (guide_surface, role, and target_surface), or explicitly
+sets no_role_facing_surface: true. An absent declaration is not the same as
+that explicit no-surface answer, and intent-cli never infers a route or judges
+guide wording.
+
+intent-cli automation guide-reachability-record --execution-unit <u>
+--commit <host-commit-sha> [--note <text>] [--dry-run|--write] [--format
+json|markdown] records the host commit that updated the named guide routes.
+The artifact is .intent-cli/guide-reachability/<u>/record.json; until it
+exists, a closed-out declared route appears as guide-reachability-pending in
+automation stalled-work, naming the execution unit, guide surface, and role.
+An explicit no-surface declaration produces no debt. This is a preview surface
+outside the 1.0 promise, and it is closeout debt rather than a merge gate.
+
+The recorder is evidence-only: it does not write guide content, mutate the
+intent tree, or decide whether the guide is good. It is idempotent for the same
+commit, refuses conflicting or unreadable evidence, and fails closed when a
+packet declaration is absent or malformed.
+
 ### Retiring a stuck published issue (G525)
 
 `intent-cli automation issue-retire --repo <r> --issue <n> --reason <superseded|decomposed|obsolete> [--note <text>] [--domain <name>] [--write]`

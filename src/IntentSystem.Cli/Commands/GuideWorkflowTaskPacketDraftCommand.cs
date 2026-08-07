@@ -101,7 +101,11 @@ internal static class GuideWorkflowTaskPacketDraftCommand
         // G564: the declarations above are only worth reading if they are
         // honest — an undeclared obligation is invisible to closeout, to
         // review, and to `automation stalled-work`.
-        new IntentMaintenancePrompt { Id = "co-evolution-duty", Prompt = IntentTreeCoEvolutionDuty.Duty + " " + IntentTreeCoEvolutionDuty.AuthoringRule + " Whatever you declare here is enforced after the slice lands: a closed-out unit with a declared-but-unrecorded write-back becomes an aging `knowledge-writeback-pending` item, cleared only by `intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --write`." }
+        new IntentMaintenancePrompt { Id = "co-evolution-duty", Prompt = IntentTreeCoEvolutionDuty.Duty + " " + IntentTreeCoEvolutionDuty.AuthoringRule + " Whatever you declare here is enforced after the slice lands: a closed-out unit with a declared-but-unrecorded write-back becomes an aging `knowledge-writeback-pending` item, cleared only by `intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --write`." },
+        // G645: reachability is a separate declaration from knowledge
+        // write-back. It is explicit so an absent answer cannot look like a
+        // considered no-surface decision.
+        new IntentMaintenancePrompt { Id = "guide-reachability", Prompt = GuideReachabilityDuty.Standard + " " + GuideReachabilityDuty.AuthoringRule + " A closed-out unit with declared routes stays visible as `guide-reachability-pending` until `intent-cli automation guide-reachability-record --execution-unit <unit> --commit <host-sha> --write` records the host update; an explicit no-surface declaration produces no debt." }
     };
 
     /// <summary>
@@ -141,7 +145,8 @@ internal static class GuideWorkflowTaskPacketDraftCommand
         "Prefer intent-cli-backed metadata mutation over hand-editing. Ask `intent-cli guide commands list --format json` or `intent-cli automation summary --domain <d> --format json` which command performs the transition, run that command, then validate the result.",
         "Child implementation loops MUST NOT inspect or mutate parent host queue-state, runs logs, packet directories, intent tree, review-runtime state, local rules, or local skills (G300 / G330 / G333). The packet directory is host-owned; child agents see only the rendered GitHub issue body. " + DispatcherSkillCarveOut.BoundaryClause,
         "Never launch AI providers (Claude / Codex / any LLM) from intent-cli. The chat-first model has the human agent driving the conversation; intent-cli emits text the agent acts on.",
-        "Packet-time intent maintenance is the NORMAL path: every packet draft considers intent placement, ADR / diagram / docs candidates, and closeout writeback while the design context is fresh (G461). The `improve` reflection process (G456 / G460) is the later SAFETY NET that catches drift the packet-time check missed — it is not a substitute for thinking about knowledge maintenance when the packet is written. This metadata is OPTIONAL and backward-compatible: legacy packets without it stay valid, and the agent may explicitly decline each prompt."
+        "Packet-time intent maintenance is the NORMAL path: every packet draft considers intent placement, ADR / diagram / docs candidates, and closeout writeback while the design context is fresh (G461). The `improve` reflection process (G456 / G460) is the later SAFETY NET that catches drift the packet-time check missed — it is not a substitute for thinking about knowledge maintenance when the packet is written. This metadata is OPTIONAL and backward-compatible: legacy packets without it stay valid, and the agent may explicitly decline each prompt.",
+        "Guide reachability is a separate explicit packet answer (G645): name guide surface + routing role + target surface for each role-facing addition, or set `no_role_facing_surface: true`. The tool never infers a route or judges guide wording; a declared route is closeout debt until recorded, while an explicit no-surface answer is silent."
     };
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)

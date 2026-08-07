@@ -114,6 +114,18 @@ Stage 5b — knowledge writeback check (G461 / G564; SAME CADENCE as the closeou
 5. Do not block the closeout queue write on this — but do not report the closeout as complete while the declared write-back is unrecorded either; a still-pending item is part of the closeout report (below).
 6. {IntentTreeCoEvolutionDuty.AuthoringRule}
 
+Stage 5c — guide reachability check (G645; SAME CADENCE as the closeout):
+{GuideReachabilityDuty.Standard}
+1. Read the packet's `guide_reachability` declaration. For each role-facing surface, it must name the guide
+   surface, routing role, and target surface. If the slice adds no role-facing surface, the packet must say
+   `no_role_facing_surface: true`; an absent or blank declaration is not the same answer.
+2. If routes were declared, DESIGN confirms the named guide routes in the host and records the evidence with
+   `intent-cli automation guide-reachability-record --execution-unit <execution-unit> --commit <host-commit-sha> --write`.
+3. Until that record exists, `intent-cli automation stalled-work` reports a `guide-reachability-pending` debt
+   naming the execution unit, declared guide surface, and role. An explicit no-surface declaration produces no debt.
+4. This is closeout debt, not a merge gate; intent-cli never infers reachability, judges guide wording, or writes
+   guide content on design's behalf. {GuideReachabilityDuty.AuthoringRule}
+
 Stage 6 — parent commit/push checklist (required last step):
 1. Stage parent durable state: `git add .intent-cli/queue-state.json .intent-cli/runs.jsonl submodules/<child-repo-name>`.
 2. Commit: `git commit -m ""closeout: PR #{targetRepoPlaceholder}#<n> — <execution-unit>""`.

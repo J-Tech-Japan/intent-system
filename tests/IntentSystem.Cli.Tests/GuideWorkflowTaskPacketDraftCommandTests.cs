@@ -101,8 +101,8 @@ public sealed class GuideWorkflowTaskPacketDraftCommandTests
     [Fact]
     public void Execute_EmitsPacketTimeIntentMaintenancePrompts()
     {
-        // G461 AC: new packet draft guidance includes intent placement, ADR
-        // candidate, diagram candidate, docs update, and closeout learning prompts.
+        // G461/G645 AC: packet draft guidance includes the original intent
+        // maintenance prompts plus the explicit guide-reachability decision.
         using var writer = new StringWriter();
         var exitCode = GuideWorkflowTaskPacketDraftCommand.Execute(
             CreateContext(), new[] { "--format", "json" }, writer);
@@ -118,7 +118,7 @@ public sealed class GuideWorkflowTaskPacketDraftCommandTests
         // list, rather than living only in a separate guide an author may not
         // open. The G461 five keep their ids and their order.
         Assert.Equal(
-            new[] { "intent-placement", "adr-candidate", "diagram-candidate", "docs-update", "closeout-learning", "co-evolution-duty" },
+            new[] { "intent-placement", "adr-candidate", "diagram-candidate", "docs-update", "closeout-learning", "co-evolution-duty", "guide-reachability" },
             ids);
         // Each prompt carries actionable text.
         foreach (var p in prompts.EnumerateArray())

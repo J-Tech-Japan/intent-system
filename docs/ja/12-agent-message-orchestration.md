@@ -74,6 +74,19 @@ pending state の mutation に置きます。認識されない identifier を�
 > 変更・撤回できます。後続 MAJOR release でのみ正式化します。[compatibility ledger]
 > (1.0-compatibility-ledger.md) の preview row を参照してください。
 
+### guide reachability (G645 — preview-through-1.x)
+
+keyword-to-guide standard は workflow の一部です。thread に keyword を渡せば、その thread は named guide に
+到達し、surface を理解して action できなければなりません。packet は role-facing な追加ごとに
+guide_surface / role / target_surface を宣言するか、no_role_facing_surface を明示します。declaration の
+欠落を no-surface と解釈せず、process は route を推測せず guide wording も判定しません。
+
+closeout では design が host update を
+intent-cli automation guide-reachability-record --execution-unit <unit> --commit <host-sha> --write
+で記録します。記録されるまで automation stalled-work は execution unit、guide、role を含む
+guide-reachability-pending を出します。この debt は merge/closeout を阻害せず、explicit no-surface は
+silent です。これは 1.0 promise の対象外の preview surface です。compatibility ledger を参照してください。
+
 ### bounded な recipient supervision (G630)
 
 ```bash
