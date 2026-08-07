@@ -2698,27 +2698,27 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 使っています: 現在のバージョンの 2 つ目のコピーは同期し続けるべき対象が 1 つ増えることを
 意味し、しかも誰も見ていない roll でこそ stale になります。
 
-### 次リリース準備(v0.13.1)
+### 次リリース準備(v0.13.2)
 
-**`v0.13.0` は出荷済み**(GitHub Release + NuGet)で、次に準備するラインは
-`0.13.1` です。[v0.13.1 notes stub](release-notes-v0.13.1.md) が必須の
+**`v0.13.1` は出荷済み**(GitHub Release + NuGet)で、次に準備するラインは
+`0.13.2` です。[v0.13.2 notes stub](release-notes-v0.13.2.md) が必須の
 prepare-only placeholder です。直前の出荷範囲は
-[release-notes-v0.13.0.md](release-notes-v0.13.0.md) を参照してください。
+[release-notes-v0.13.1.md](release-notes-v0.13.1.md) を参照してください。
 
-**リリース準備検証(`v0.13.1` release-preparation PR のマージ前に実行):**
+**リリース準備検証(`v0.13.2` release-preparation PR のマージ前に実行):**
 
 ```bash
 # 1. version policy が release-to-be-cut を記録していることを確認。
-cat eng/version.json   # stableVersion 0.13.0 (published), nextVersion 0.13.1 (to release)
+cat eng/version.json   # stableVersion 0.13.1 (published), nextVersion 0.13.2 (to release)
 
 # 2. build して表示バージョン識別(version + git SHA + G-unit)を確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待する形: intent-cli 0.13.1-<sha>-G<unit>   (古いリテラルではない)
+#   期待する形: intent-cli 0.13.2-<sha>-G<unit>   (古いリテラルではない)
 
 # 3. pack して NuGet package version が policy と一致することを確認。
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.13.1.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.13.2.nupkg
 
 # 4. G475、出荷済み release-note check、release/version guard を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
@@ -2731,10 +2731,10 @@ dotnet test IntentSystem.sln -c Release
 
 準備コミットが `main` に入り readiness の証跡が揃ったら、operator が Release 作成を
 明示的に承認しなければなりません。そのうえで初めて maintainer/operator(または承認済みの
-外部リリース自動化)が `v0.13.1` の GitHub Release を作成・公開できます。公開すると
+外部リリース自動化)が `v0.13.2` の GitHub Release を作成・公開できます。公開すると
 `release.yml`(`on: release: published`)が起動し、NuGet package とプラットフォーム別
 バイナリを build/publish します。**その後すぐに `eng/version.json` を roll します** —
-`stableVersion → 0.13.1`、`nextVersion → 0.13.2` —
+`stableVersion → 0.13.2`、`nextVersion → 0.13.3` —
 [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
 **ステップ 4–6** に従い、**同一コミットに DRAFT note スタブ**(ステップ 4)、
 **「次リリース準備」セクションを ja/en 両ミラーで新しいラインへ更新**(ステップ 5)、
