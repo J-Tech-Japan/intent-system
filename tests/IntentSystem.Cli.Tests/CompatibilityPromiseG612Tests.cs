@@ -110,6 +110,23 @@ public sealed class CompatibilityPromiseG612Tests
     }
 
     [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void Ledger_RecordsTheG636PostStartInteractionPreviewSurface(string language)
+    {
+        var ledger = Read(language, "1.0-compatibility-ledger.md");
+
+        var rows = ledger.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.StartsWith("| unattended-launch post-start interaction |", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.Single(rows);
+        Assert.Contains("`preview-through-1.x`", rows[0], StringComparison.Ordinal);
+        Assert.Contains("`default_is_safe`", rows[0], StringComparison.Ordinal);
+        Assert.Contains("G636", rows[0], StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("en", "all machine-emitted `cause` values", "Every `cause` value actually emitted")]
     [InlineData("ja", "machine-consumed JSON payload で実際に emit されるすべての `cause` value", "実際に emit されるすべての `cause` value")]
     public void PromiseAndLedger_CoverEveryMachineEmittedCauseValue_G612(

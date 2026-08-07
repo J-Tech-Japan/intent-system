@@ -184,9 +184,19 @@ than a per-invocation approval that re-prompts on the next wake.
 
 An unattended-launch recipe is agent-neutral: it states the launch invocation,
 the bounded allowed roots derived from that role's actual work, the autonomous
-continuation bound, the startup gates the operator must answer, and the denial
-semantics. A later Cursor or opencode recipe adds an entry with those same
-fields; it does not restate or weaken the central rule below.
+continuation bound, the startup gates the operator must answer, the post-start
+interaction (what the agent presents, the answer that preserves the declared
+envelope, and whether the default answer is safe), and the denial semantics. A
+recipe that stops at the command line is incomplete: an agent can negotiate
+authority after launch even when the invocation is correct. A later Cursor or
+opencode recipe adds an entry with those same fields; it does not restate or
+weaken the central rule below.
+
+> **Preview through 1.x (G636).** The post-start interaction field is a
+> post-v0.12.0-freeze preview surface. It is outside the 1.0 compatibility
+> promise, may change or be withdrawn during 1.x, and is formalised only by a
+> later MAJOR release. See the [compatibility ledger](1.0-compatibility-ledger.md)
+> entry for this preview surface.
 
 > **Central autopilot supervision rule.** In an unattended autopilot seat, an
 > action outside the launch allowlist is silently auto-denied rather than
@@ -225,6 +235,13 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
   host `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` before sending
   the pane one line, `Read task envelope: <path>`. Declare `inline` explicitly
   when desired; an absent declaration preserves existing inline delivery.
+- **Post-start interaction (G636, preview-through-1.x).** At the first task,
+  Copilot 1.0.78 presents `1. Enable all permissions (recommended)` /
+  `2. Continue with limited permissions` / `3. Cancel`, with the cursor on
+  option 1. Answer `Continue with limited permissions` to preserve the bounded
+  `--add-dir` envelope. The default `Enable all permissions` answer is unsafe;
+  the recipe records `default_is_safe: false`, and accepting it on restart is a
+  supervision failure, not a shortcut.
 - **Startup gates.** Folder trust and autopilot-enable are operator provisioning
   gates; launch flags bypass neither. The autopilot-enable dialog appears at the
   **first task** even when launch used `--mode autopilot`. With
@@ -240,7 +257,9 @@ three additional facts: an expected action inside the recorded roots succeeds;
 the role reaches its canonical reporting surface (for review, `intent-cli notify
 report` through its host routing root); and a deliberately out-of-scope action
 is denied. Capture that denial for review. A live pane or a successful allowed
-action alone is **not** READY.
+action alone is **not** READY. If a denial probe unexpectedly succeeds, first
+check whether the post-start interaction was answered with its default; an
+unsafe default can discard the declared boundary.
 
 **4. Role initialization.** Type the actas form matching the pane's CLI —
 `/agmsg actas <role>` for claude, `$agmsg actas <role>` for codex — then confirm

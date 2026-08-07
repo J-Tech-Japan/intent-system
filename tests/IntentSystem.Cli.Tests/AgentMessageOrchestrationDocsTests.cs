@@ -87,14 +87,26 @@ public sealed class AgentMessageOrchestrationDocsTests
             Assert.Contains("--allow-all-paths", doc, StringComparison.Ordinal);
             Assert.Contains("Continue with limited permissions", doc, StringComparison.Ordinal);
             Assert.Contains("Enable all permissions", doc, StringComparison.Ordinal);
+            Assert.Contains("preview-through-1.x", doc, StringComparison.Ordinal);
+            Assert.Contains("post-start interaction", doc, StringComparison.Ordinal);
         }
 
         Assert.Contains("silently auto-denied", en, StringComparison.Ordinal);
         Assert.Contains("静かに自動拒否", ja, StringComparison.Ordinal);
+        Assert.Contains("recipe that stops at the command line is incomplete", en, StringComparison.Ordinal);
+        Assert.Contains("command line で止まるレシピは不完全", ja, StringComparison.Ordinal);
+        Assert.Contains("default `Enable all permissions` answer is unsafe", en, StringComparison.Ordinal);
+        Assert.Contains("`default_is_safe: false`", en, StringComparison.Ordinal);
+        Assert.Contains("default の `Enable all permissions` は unsafe", ja, StringComparison.Ordinal);
+        Assert.Contains("`default_is_safe: false`", ja, StringComparison.Ordinal);
+        Assert.Contains("supervision failure, not a shortcut", en, StringComparison.Ordinal);
+        Assert.Contains("supervision failure です", ja, StringComparison.Ordinal);
         Assert.Contains("G556 liveness and notify/delivery semantics are unchanged", en, StringComparison.Ordinal);
         Assert.Contains("G556 の liveness と notify/delivery semantics は変わりません", ja, StringComparison.Ordinal);
         Assert.Contains("out-of-scope action is denied", en, StringComparison.Ordinal);
         Assert.Contains("out-of-scope にした action が拒否", ja, StringComparison.Ordinal);
+        Assert.Contains("denial probe unexpectedly succeeds", en, StringComparison.Ordinal);
+        Assert.Contains("denial probe が予想に反して", ja, StringComparison.Ordinal);
         Assert.Contains("transcript for denials", en, StringComparison.Ordinal);
         Assert.Contains("transcript で拒否を調べます", ja, StringComparison.Ordinal);
 
