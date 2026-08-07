@@ -72,6 +72,9 @@ internal sealed record NotifyDeliveryResult
 
     public SessionLayerPreflightPhaseResult? ActivePhase { get; init; }
 
+    /// <summary>G638: report delivery may proceed with an advisory seat-liveness warning.</summary>
+    public NotifyRecipientWarning? RecipientWarning { get; init; }
+
     public required string Summary { get; init; }
 }
 
@@ -85,7 +88,8 @@ internal interface INotifyTransport
         string toRole,
         IReadOnlyList<string> rolesToValidate,
         string payload,
-        bool write);
+        bool write,
+        bool allowStoppedRecipient = false);
 }
 
 internal sealed class AgmsgNotifyTransport : INotifyTransport
@@ -107,7 +111,8 @@ internal sealed class AgmsgNotifyTransport : INotifyTransport
         string toRole,
         IReadOnlyList<string> rolesToValidate,
         string payload,
-        bool write)
+        bool write,
+        bool allowStoppedRecipient = false)
     {
         var teamScript = Path.Combine(scriptsDirectory, "team.sh");
         var sendScript = Path.Combine(scriptsDirectory, "send.sh");
@@ -248,7 +253,8 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
         string toRole,
         IReadOnlyList<string> rolesToValidate,
         string payload,
-        bool write)
+        bool write,
+        bool allowStoppedRecipient = false)
     {
         var topologyResolution = NotifyRoleTopologyStore.Resolve(routingRoot, domain, team);
         if (!topologyResolution.Resolved)
@@ -358,6 +364,75 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
 
             if (atRecordedPane.Length > 0)
             {
+                if (allowStoppedRecipient)
+                {
+                    var warning = new NotifyRecipientWarning
+                    {
+                        Role = toRole,
+                        ObservedLiveness = "not-running",
+                        Message = $"Recipient role '{toRole}' is recorded at workspace '{topology.WorkspaceId}' "
+                            + $"pane '{recordedPane}', but the observed seat is not running. The report will still "
+                            + "be delivered to the recorded pane and remain unread until that role wakes.",
+                    };
+                    if (!write)
+                    {
+                        return new NotifyDeliveryResult
+                        {
+                            Resolved = true,
+                            Delivered = false,
+                            RecipientWarning = warning,
+                            ReceiverStateOutcome = "seat-not-running",
+                            WorkingTransition = "not-observed",
+                            SettleOutcome = "unread",
+                            ResendPermitted = false,
+                            ActivePhase = Skipped("Dry-run retained the recorded pane despite the recipient seat being stopped."),
+                            Summary = $"Dry-run: would deliver report to stopped logical role '{toRole}' at recorded pane '{recordedPane}'.",
+                        };
+                    }
+
+                    NotifyProcessResult reportDelivery;
+                    try
+                    {
+                        reportDelivery = runner.Run(executable, ["agent", "prompt", recordedPane, payload]);
+                    }
+                    catch (InvalidOperationException exception)
+                    {
+                        return Failure(
+                            "transport-unavailable",
+                            $"{exception.Message} The stopped-seat report warning remains advisory; retry delivery when the transport is available.",
+                            recipientWarning: warning);
+                    }
+
+                    if (reportDelivery.ExitCode == 0)
+                    {
+                        return new NotifyDeliveryResult
+                        {
+                            Resolved = true,
+                            Delivered = true,
+                            RecipientWarning = warning,
+                            ReceiverStateOutcome = "seat-not-running",
+                            WorkingTransition = "not-observed",
+                            SettleOutcome = "unread",
+                            ResendPermitted = false,
+                            ActivePhase = new SessionLayerPreflightPhaseResult
+                            {
+                                Status = SessionLayerPreflight.ActiveAcknowledged,
+                                Checked = true,
+                                ContactedReceiver = true,
+                                Summary = "Report prompt was submitted to the recorded pane; recipient seat liveness remains stopped.",
+                            },
+                            Summary = $"Delivered report to stopped logical role '{toRole}' at recorded pane '{recordedPane}'. "
+                                + "The report is delivered and will remain unread until that role wakes.",
+                        };
+                    }
+
+                    return Failure(
+                        "transport-failure",
+                        $"Report prompt to stopped logical role '{toRole}' at recorded pane '{recordedPane}' failed: "
+                        + OneLine(reportDelivery.StandardError, reportDelivery.StandardOutput),
+                        recipientWarning: warning);
+                }
+
                 return Failure(
                     "agent-not-running",
                     $"Team '{team}' recorded workspace '{topology.WorkspaceId}' pane '{recordedPane}' for logical "
@@ -674,12 +749,14 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
     private static NotifyDeliveryResult Failure(
         string cause,
         string summary,
-        SessionLayerPreflightPhaseResult? activePhase = null) => new()
+        SessionLayerPreflightPhaseResult? activePhase = null,
+        NotifyRecipientWarning? recipientWarning = null) => new()
         {
             Resolved = false,
             Delivered = false,
             Cause = cause,
             ActivePhase = activePhase ?? Skipped("Active receiver delivery did not start because recorded-route resolution failed."),
+            RecipientWarning = recipientWarning,
             Summary = summary,
         };
 
@@ -696,6 +773,16 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
         var value = values.FirstOrDefault(item => !string.IsNullOrWhiteSpace(item)) ?? "no detail";
         return string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
     }
+}
+
+internal sealed record NotifyRecipientWarning
+{
+    [System.Text.Json.Serialization.JsonPropertyName("role")]
+    public required string Role { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("observed_liveness")]
+    public required string ObservedLiveness { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; init; }
 }
 
 internal sealed record HerdrAgentState(

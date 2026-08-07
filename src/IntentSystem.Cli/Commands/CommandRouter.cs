@@ -68,6 +68,7 @@ internal static class CommandRouter
         "automation doctor",
         "automation durable-state-preflight [--format markdown|json]",
         "automation heartbeat --domain <d> --repo <r> [--stale-minutes <m, default 45>] [--format json|markdown]",
+        "automation ci-wait record|clear|show [--domain <d>] --repo <r> --pr <n> [--head <sha>] [--transition <t>] [--dry-run|--write] [--format json|markdown]",
         "automation host-loop-next-action --repo <r> [--sync-classification <c>] [--publish-recovery-repairs <N>] [--next-slice-issue-cut-ready] [--publish-next-execution-unit <u>]",
         "automation host-loop-wake --repo <r> [--domain <d>] [--write] [--format json|markdown]",
         "automation host-queue-item-recovery --repo <r> [--unit <u>] [--issue <n>] [--pr <m>] [--write]",
@@ -217,6 +218,7 @@ internal static class CommandRouter
             {
                 ["base-branch-check"] = AutomationBaseBranchCheckCommand.Execute,
                 ["check"] = AutomationCheckCommand.Execute,
+                ["ci-wait"] = AutomationCiWaitCommand.Execute,
                 ["clarification-stop"] = AutomationClarificationStopCommand.Execute,
                 ["closeout-drift-check"] = AutomationCloseoutDriftCheckCommand.Execute,
                 ["complete"] = AutomationCompleteCommand.Execute,

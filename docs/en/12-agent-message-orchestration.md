@@ -1399,6 +1399,20 @@ Each CI-aware item includes `pr_head_sha`, a pass/fail/skip/pending breakdown,
 and a stable kind + PR + head-SHA `dedupe_key`. This inventory is strictly
 read-only: it never delegates, relabels, or writes queue-state.
 
+G638 adds a durable, **preview-through-1.x** wait record. When checks finish,
+record the exact observed head and the transition that is owed:
+`intent-cli automation ci-wait record --domain <d> --repo <owner/repo> --pr <n> --head <sha> --transition <t> --write`.
+The record is an obligation for the next message-driven wake, not a polling
+loop; `automation ci-wait show` reads it and the canonical `automation
+pr-transition` clears it after the transition is applied. If GitHub reports a
+different head, `stalled-work` emits actionable `ci-head-moved` evidence and
+never treats the old head's green checks as current.
+
+When `notify report` resolves a recorded pane whose role is not running, it
+emits an advisory `recipient_warning` naming the role and observed liveness,
+then still delivers the report to that pane. The report remains unread until
+the sleeping role wakes; liveness is never a refusal reason for a report.
+
 ## Next-slice publication
 
 Routine next-slice issue publication is an **orchestrator responsibility**, not

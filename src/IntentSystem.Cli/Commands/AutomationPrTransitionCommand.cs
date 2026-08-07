@@ -224,6 +224,21 @@ internal static class AutomationPrTransitionCommand
             return 1;
         }
 
+        var ciWaitCleared = false;
+        string? ciWaitWarning = null;
+        if (applied && string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal))
+        {
+            var clear = CiWaitStore.ClearForTransition(context.RepoRoot, repo!, pr!.Value, transition!, write: true);
+            ciWaitCleared = clear.Applied || clear.AlreadyConverged;
+            if (clear.Error is not null)
+            {
+                // The GitHub label transition is already authoritative. Do
+                // not claim it was rolled back; surface the durable-store
+                // repair instead so the next wake can retry the clear.
+                ciWaitWarning = $"PR transition applied, but durable CI wait could not be cleared: {clear.Error}";
+            }
+        }
+
         var result = new AutomationPrTransitionResult
         {
             Repo = repo!,
@@ -235,6 +250,8 @@ internal static class AutomationPrTransitionCommand
             RemoveLabels = removeLabels,
             CurrentLabels = currentLabels,
             Summary = BuildSummary(transition!, plan.AddLabels, removeLabels),
+            CiWaitCleared = ciWaitCleared,
+            CiWaitWarning = ciWaitWarning,
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -514,6 +531,11 @@ internal static class AutomationPrTransitionCommand
         writer.WriteLine($"repo: {result.Repo}");
         writer.WriteLine($"pr: {result.Pr.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
         writer.WriteLine($"applied: {result.Applied.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"ci_wait_cleared: {result.CiWaitCleared.ToString().ToLowerInvariant()}");
+        if (result.CiWaitWarning is not null)
+        {
+            writer.WriteLine($"ci_wait_warning: {result.CiWaitWarning}");
+        }
 
         // G535 review repair: phase-aware ambiguity reporting — only ever
         // emitted for a failed mutation whose outcome on GitHub is unknown.
@@ -579,6 +601,13 @@ internal sealed record AutomationPrTransitionResult
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    [JsonPropertyName("ci_wait_cleared")]
+    public bool CiWaitCleared { get; init; }
+
+    [JsonPropertyName("ci_wait_warning")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CiWaitWarning { get; init; }
 
     /// <summary>
     /// G535 review repair: true when a mutation attempt failed at a point
