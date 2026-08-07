@@ -10,6 +10,7 @@ internal static class NotifyCommand
     private const string OperationReport = "report";
     private const string OperationEscalate = "escalate";
     internal const string OperationStatus = "status";
+    internal const string OperationSupervise = "supervise";
     private const string CompletionEventKind = "completion";
     private const string BlockedEventKind = "blocked";
     private const string QuestionEventKind = "question";
@@ -40,6 +41,11 @@ internal static class NotifyCommand
     private const string StatusUsage =
         "Usage: intent-cli notify status --task-id <id> [--domain <d> --team <t>] "
         + "[--routing-root <host-root>] [--format markdown|json]";
+
+    private const string SuperviseUsage =
+        "Usage: intent-cli notify supervise --domain <d> --team <t> [--interval <seconds>] "
+        + "[--auto-redispatch] [--once] [--routing-root <host-root>] [--dry-run|--write] "
+        + "[--format markdown|json]";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -76,6 +82,9 @@ internal static class NotifyCommand
 
     public static int ExecuteStatus(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, OperationStatus);
+
+    public static int ExecuteSupervise(CliContext context, string[] args, TextWriter writer) =>
+        Execute(context, args, writer, OperationSupervise);
 
     private static int Execute(CliContext context, string[] args, TextWriter writer, string operation)
     {
@@ -116,6 +125,11 @@ internal static class NotifyCommand
         if (string.Equals(operation, OperationStatus, StringComparison.Ordinal))
         {
             return ExecuteStatus(writer, options, routingRoot);
+        }
+
+        if (string.Equals(operation, OperationSupervise, StringComparison.Ordinal))
+        {
+            return ExecuteSupervise(context, writer, options, routingRoot);
         }
 
         if (!string.Equals(operation, OperationEscalate, StringComparison.Ordinal))
@@ -300,8 +314,105 @@ internal static class NotifyCommand
         return 0;
     }
 
+    private static int ExecuteSupervise(
+        CliContext context,
+        TextWriter writer,
+        NotifyOptions options,
+        string routingRoot)
+    {
+        var runner = ProcessRunnerFactory?.Invoke() ?? new NotifyProcessRunner();
+        var supervisor = new NotifySupervisor(
+            context,
+            routingRoot,
+            options.Domain!,
+            options.Team!,
+            options.AutoRedispatch,
+            options.Write,
+            options.Format,
+            runner,
+            HerdrExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveHerdrExecutable(),
+            AgmsgScriptsDirectoryFactory?.Invoke() ?? NotifyTransportPaths.ResolveAgmsgScriptsDirectory());
+        var interval = options.IntervalSeconds ?? NotifySupervisor.DefaultIntervalSeconds;
+        if (options.Once)
+        {
+            var pass = supervisor.RunOnce();
+            if (!pass.Silent)
+            {
+                EmitSupervision(writer, pass, options.Domain!, options.Team!, interval, options.AutoRedispatch, options.Write, options.Format);
+            }
+
+            return pass.ExitCode;
+        }
+
+        using var cancellation = new CancellationTokenSource();
+        ConsoleCancelEventHandler? cancelHandler = null;
+        if (!Console.IsOutputRedirected)
+        {
+            cancelHandler = (_, eventArgs) =>
+            {
+                eventArgs.Cancel = true;
+                cancellation.Cancel();
+            };
+            Console.CancelKeyPress += cancelHandler;
+        }
+
+        try
+        {
+            return supervisor.RunLoop(interval, once: false, writer, cancellation.Token);
+        }
+        finally
+        {
+            if (cancelHandler is not null)
+            {
+                Console.CancelKeyPress -= cancelHandler;
+            }
+        }
+    }
+
     private static string FormatKnownTaskIds(IReadOnlyList<string> knownTaskIds) =>
         knownTaskIds.Count == 0 ? "<none>" : string.Join(", ", knownTaskIds);
+
+    internal static void EmitSupervision(
+        TextWriter writer,
+        NotifySupervisorPass pass,
+        string domain,
+        string team,
+        int intervalSeconds,
+        bool autoRedispatch,
+        bool write,
+        string format = FormatJson)
+    {
+        if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+        {
+            writer.WriteLine(JsonSerializer.Serialize(new
+            {
+                operation = OperationSupervise,
+                domain,
+                team,
+                interval_seconds = intervalSeconds,
+                auto_redispatch = autoRedispatch,
+                command_mode = write ? "write" : "dry-run",
+                silent = pass.Silent,
+                error = pass.Error,
+                actions = pass.Actions,
+            }, JsonOptions));
+            return;
+        }
+
+        writer.WriteLine($"# notify supervise — {domain}/{team}");
+        writer.WriteLine();
+        writer.WriteLine($"- interval: {intervalSeconds}s");
+        writer.WriteLine($"- command mode: {(write ? "write" : "dry-run")}");
+        writer.WriteLine($"- auto-redispatch: {autoRedispatch.ToString().ToLowerInvariant()}");
+        if (pass.Error is not null)
+        {
+            writer.WriteLine($"- error: {pass.Error}");
+        }
+        foreach (var action in pass.Actions)
+        {
+            writer.WriteLine($"- {action.TaskId}: {action.Outcome} — {action.Summary}");
+        }
+    }
 
     private static void EmitStatus(TextWriter writer, string format, NotifyStatusResult result)
     {
@@ -604,6 +715,9 @@ internal static class NotifyCommand
         string? workspaceId = null;
         string? paneId = null;
         string? reader = null;
+        string? cwd = null;
+        string? kind = null;
+        IReadOnlyList<string>? launchArguments = null;
         var identity = $"role={options.ToRole}";
         var topology = NotifyRoleTopologyStore.Resolve(options.RoutingRoot!, options.Domain!, options.Team!);
         if (topology.Resolved
@@ -614,6 +728,9 @@ internal static class NotifyCommand
             workspaceId = recorded.WorkspaceId ?? teamTopology.WorkspaceId;
             paneId = recorded.PaneId;
             reader = recorded.Reader;
+            cwd = recorded.Cwd;
+            kind = recorded.Kind;
+            launchArguments = recorded.LaunchArguments;
             identity = recorded.Resident switch
             {
                 NotifyRecordedRole.HerdrResident =>
@@ -629,15 +746,24 @@ internal static class NotifyCommand
             Domain = options.Domain!,
             Team = options.Team!,
             TaskId = options.TaskId!,
+            DelegatingRole = options.FromRole,
             RecipientRole = options.ToRole!,
+            ReportToRole = options.ReportToRole,
             RecipientIdentity = identity,
             ExpectedArtifact = string.Join("; ", options.ExpectedArtifacts),
+            ExpectedArtifacts = options.ExpectedArtifacts.ToArray(),
+            Objective = options.Objective,
+            Inputs = options.Inputs.ToArray(),
+            ResultNonce = options.ResultNonce,
             DispatchedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
             TransportMode = resolution.Mode,
             Resident = resident,
             WorkspaceId = workspaceId,
             PaneId = paneId,
             Reader = reader,
+            Cwd = cwd,
+            Kind = kind,
+            LaunchArguments = launchArguments,
         };
     }
 
@@ -975,9 +1101,12 @@ internal static class NotifyCommand
         string? artifact = null;
         string? summary = null;
         string? routingRoot = null;
+        int? intervalSeconds = null;
         var inputs = new List<string>();
         var expectedArtifacts = new List<string>();
         var write = false;
+        var autoRedispatch = false;
+        var once = false;
         var format = FormatMarkdown;
         error = string.Empty;
 
@@ -998,6 +1127,15 @@ internal static class NotifyCommand
                 case "--artifact": if (!ReadValue(args, ref index, argument, out artifact, out error)) return false; break;
                 case "--summary": if (!ReadValue(args, ref index, argument, out summary, out error)) return false; break;
                 case "--routing-root": if (!ReadValue(args, ref index, argument, out routingRoot, out error)) return false; break;
+                case "--interval":
+                    if (!ReadValue(args, ref index, argument, out var intervalValue, out error)
+                        || !int.TryParse(intervalValue, out var parsedInterval))
+                    {
+                        error = "--interval requires a whole-number seconds value.";
+                        return false;
+                    }
+                    intervalSeconds = parsedInterval;
+                    break;
                 case "--input":
                     if (!ReadValue(args, ref index, argument, out var input, out error)) return false;
                     inputs.Add(input!);
@@ -1008,6 +1146,8 @@ internal static class NotifyCommand
                     break;
                 case "--write": write = true; break;
                 case "--dry-run": write = false; break;
+                case "--auto-redispatch": autoRedispatch = true; break;
+                case "--once": once = true; break;
                 case "--format":
                     if (!ReadValue(args, ref index, argument, out format, out error)) return false;
                     if (format is not FormatJson and not FormatMarkdown)
@@ -1038,7 +1178,10 @@ internal static class NotifyCommand
             Artifact = artifact,
             Summary = summary,
             RoutingRoot = routingRoot,
+            IntervalSeconds = intervalSeconds,
             Write = write,
+            AutoRedispatch = autoRedispatch,
+            Once = once,
             Format = format,
         };
 
@@ -1050,6 +1193,8 @@ internal static class NotifyCommand
         error = string.Empty;
         var requiredIdentity = string.Equals(operation, OperationStatus, StringComparison.Ordinal)
             ? new[] { ("--task-id", options.TaskId) }
+            : string.Equals(operation, OperationSupervise, StringComparison.Ordinal)
+                ? new[] { ("--domain", options.Domain), ("--team", options.Team) }
             : new[]
             {
                 ("--domain", options.Domain),
@@ -1084,6 +1229,15 @@ internal static class NotifyCommand
             if (options.Domain is not null ^ options.Team is not null)
             {
                 error = "status requires --domain and --team together when either is supplied.";
+                return false;
+            }
+        }
+        else if (string.Equals(operation, OperationSupervise, StringComparison.Ordinal))
+        {
+            if (options.IntervalSeconds is not null
+                && (options.IntervalSeconds < 1 || options.IntervalSeconds > NotifySupervisor.MaximumIntervalSeconds))
+            {
+                error = $"supervise --interval must be between 1 and {NotifySupervisor.MaximumIntervalSeconds} seconds.";
                 return false;
             }
         }
@@ -1151,6 +1305,7 @@ internal static class NotifyCommand
         OperationDelegate => DelegateUsage,
         OperationReport => ReportUsage,
         OperationStatus => StatusUsage,
+        OperationSupervise => SuperviseUsage,
         _ => EscalateUsage,
     };
 }
@@ -1171,6 +1326,9 @@ internal sealed record NotifyOptions
     public string? Artifact { get; init; }
     public string? Summary { get; init; }
     public string? RoutingRoot { get; init; }
+    public int? IntervalSeconds { get; init; }
+    public bool AutoRedispatch { get; init; }
+    public bool Once { get; init; }
     public bool Write { get; init; }
     public required string Format { get; init; }
 }

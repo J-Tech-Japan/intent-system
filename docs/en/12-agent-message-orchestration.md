@@ -70,6 +70,39 @@ time never changes the verdict.
 > formalised only by a later MAJOR release. See the [compatibility
 > ledger](1.0-compatibility-ledger.md) preview rows.
 
+### Bounded recipient supervision (G630)
+
+```bash
+intent-cli notify supervise --domain <domain> --team <team> \
+  [--interval <seconds>] [--auto-redispatch] [--once] [--dry-run|--write] \
+  [--routing-root <host-root>] --format json
+```
+
+`notify supervise` is a preview wake loop over open pending delegations. A
+`live` recipient and a settled record are intentionally silent. A `lost`
+recipient is handled only in this order: confirm that the recorded pane is
+really gone rather than mid-exit; attribute every foreground process to the
+recorded role cwd and verify it is gone; start the recorded unattended-launch
+recipe; send the registering prompt; then prove readiness with an exact nonce
+on a response line. A nonce found anywhere in the pane, including an unsent
+composer echo, is not readiness.
+
+Only after that gate passes does the supervisor send one loss notification to
+the delegating role. It names the task id, says that the recipient was
+recovered, and says that the in-flight task was lost and must be re-dispatched.
+`--auto-redispatch` is off by default; when enabled it invokes the normal
+`notify delegate` path only after readiness and includes the outcome in that
+notification. Unknown recipes, ambiguous process ownership, an old process
+that remains, or an unproven response line stop that recipient fail-closed and
+never claim readiness. Use `--once` for a bounded diagnostic pass; `--dry-run`
+never kills, starts, prompts, re-dispatches, or appends.
+
+> **Preview through 1.x (G630).** Supervision, recovery, response-line
+> readiness evidence, and optional re-dispatch were added after the v0.12.0
+> freeze. They are outside the 1.0 compatibility promise, may change or be
+> withdrawn during 1.x, and are formalised only by a later MAJOR release. See
+> the [compatibility ledger](1.0-compatibility-ledger.md) preview rows.
+
 `notify delegate` embeds the task id, expected artifacts, fresh marker nonce,
 and complete canonical report command (including the transport-neutral
 `--routing-root` needed from an isolated child checkout) in the delivered task. Running that

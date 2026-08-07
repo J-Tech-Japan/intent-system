@@ -11,7 +11,8 @@ internal sealed record NotifyRecordedRole(
     string? Cwd,
     string? Kind,
     string? DeliveryMethod,
-    string? Frontend)
+    string? Frontend,
+    IReadOnlyList<string>? LaunchArguments = null)
 {
     public const string HerdrResident = "herdr";
     public const string ExternalResident = "external";
@@ -230,7 +231,8 @@ internal static class NotifyRoleTopologyStore
                     ReadString(property.Value, "cwd"),
                     ReadString(property.Value, "kind"),
                     ReadString(property.Value, "delivery_method"),
-                    ReadString(property.Value, "frontend")));
+                    ReadString(property.Value, "frontend"),
+                    ReadStringArray(property.Value, "launch_args")));
             }
 
             if (roles.Count == 0)
@@ -670,6 +672,32 @@ internal static class NotifyRoleTopologyStore
         element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static IReadOnlyList<string>? ReadStringArray(JsonElement element, string property)
+    {
+        if (!element.TryGetProperty(property, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var values = new List<string>();
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(item.GetString()))
+            {
+                return [];
+            }
+
+            values.Add(item.GetString()!);
+        }
+
+        return values;
+    }
 
     private static NotifyTopologyResolution Failure(string cause, string summary) => new()
     {

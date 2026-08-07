@@ -158,7 +158,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationPrimary,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerChatAgent,
-           Purpose = "Transport-neutral role workflow (G578/G588/G629): `intent-cli notify delegate|report|escalate|status`. The CLI resolves the recorded session-layer mode internally, validates roles in the requested team topology, records pending delegations durably before delivery, and exposes a preview status query without supervision or re-dispatch. In herdr-only mode pane residents receive at their recorded team-workspace pane while external residents receive delegate/report events through their recorded reader. Dry-run performs the same route resolution without prompting or appending; delivery, pending records, and event append require `--write`."
+           Purpose = "Transport-neutral role workflow (G578/G588/G629/G630): `intent-cli notify delegate|report|escalate|status|supervise`. The CLI resolves the recorded session-layer mode internally, validates roles in the requested team topology, records pending delegations durably before delivery, and exposes preview status and bounded recovery supervision. In herdr-only mode pane residents receive at their recorded team-workspace pane while external residents receive delegate/report events through their recorded reader. Dry-run performs route and supervision resolution without prompting, replacing, redispatching, or appending; delivery, pending records, and recovery mutations require `--write`."
         },
         new CommandGroupEntry
         {
