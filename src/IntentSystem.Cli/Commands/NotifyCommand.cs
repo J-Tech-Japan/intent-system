@@ -9,6 +9,7 @@ internal static class NotifyCommand
     private const string OperationDelegate = "delegate";
     private const string OperationReport = "report";
     private const string OperationEscalate = "escalate";
+    internal const string OperationStatus = "status";
     private const string CompletionEventKind = "completion";
     private const string BlockedEventKind = "blocked";
     private const string QuestionEventKind = "question";
@@ -35,6 +36,10 @@ internal static class NotifyCommand
         "Usage: intent-cli notify escalate --domain <d> --team <t> --from <role> --task-id <id> "
         + "--artifact <value> --summary <text> [--routing-root <host-root>] "
         + "[--dry-run|--write] [--format markdown|json]";
+
+    private const string StatusUsage =
+        "Usage: intent-cli notify status --task-id <id> [--domain <d> --team <t>] "
+        + "[--routing-root <host-root>] [--format markdown|json]";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -68,6 +73,9 @@ internal static class NotifyCommand
 
     public static int ExecuteEscalate(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, OperationEscalate);
+
+    public static int ExecuteStatus(CliContext context, string[] args, TextWriter writer) =>
+        Execute(context, args, writer, OperationStatus);
 
     private static int Execute(CliContext context, string[] args, TextWriter writer, string operation)
     {
@@ -105,6 +113,11 @@ internal static class NotifyCommand
             return 1;
         }
 
+        if (string.Equals(operation, OperationStatus, StringComparison.Ordinal))
+        {
+            return ExecuteStatus(writer, options, routingRoot);
+        }
+
         if (!string.Equals(operation, OperationEscalate, StringComparison.Ordinal))
         {
             var preflight = SessionLayerPreflight.Analyze(
@@ -140,6 +153,30 @@ internal static class NotifyCommand
                 return 1;
             }
 
+            if (string.Equals(operation, OperationReport, StringComparison.Ordinal))
+            {
+                var pending = NotifyPendingDelegationStore.Find(
+                    routingRoot,
+                    options.Domain,
+                    options.Team,
+                    options.TaskId!);
+                if (!pending.Resolved || pending.Record is null || pending.Record.ReportArrived)
+                {
+                    var known = FormatKnownTaskIds(pending.KnownTaskIds);
+                    Emit(writer, options.Format, FailureResult(
+                        operation,
+                        options,
+                        resolution.Mode,
+                        "unknown-task-id",
+                        $"Report task id '{options.TaskId}' does not match an open pending delegation. "
+                        + $"Known open task ids: {known}."
+                        + (pending.Error is null ? string.Empty : $" {pending.Error}"),
+                        modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
+                        preflight: preflight));
+                    return 1;
+                }
+            }
+
             return ExecuteDelivery(writer, operation, options, resolution, preflight);
         }
 
@@ -166,6 +203,132 @@ internal static class NotifyCommand
         string.Equals(finding.Cause, "marker-not-generated", StringComparison.Ordinal)
         || string.Equals(finding.Cause, SessionLayerMigration.ResidueCause, StringComparison.Ordinal);
 
+    private static int ExecuteStatus(TextWriter writer, NotifyOptions options, string routingRoot)
+    {
+        var lookup = NotifyPendingDelegationStore.Find(
+            routingRoot,
+            options.Domain,
+            options.Team,
+            options.TaskId!);
+        if (!lookup.Resolved || lookup.Record is null)
+        {
+            EmitStatus(writer, options.Format, NotifyStatusResult.Failure(
+                routingRoot,
+                options.Domain,
+                options.Team,
+                options.TaskId!,
+                "unknown-task-id",
+                $"No open or settled pending delegation record was found for supplied task id '{options.TaskId}'. "
+                + $"Known open task ids: {FormatKnownTaskIds(lookup.KnownTaskIds)}"
+                + (lookup.Error is null ? string.Empty : $" {lookup.Error}")));
+            return 1;
+        }
+
+        var record = lookup.Record;
+        var transportMode = record.TransportMode;
+        if (string.IsNullOrWhiteSpace(transportMode))
+        {
+            try
+            {
+                transportMode = SessionLayerModeStore.Resolve(routingRoot, record.Domain, record.Team).Mode;
+            }
+            catch (InvalidOperationException exception)
+            {
+                EmitStatus(writer, options.Format, NotifyStatusResult.Failure(
+                    routingRoot,
+                    record.Domain,
+                    record.Team,
+                    record.TaskId,
+                    "session-layer-mode-unreadable",
+                    exception.Message,
+                    record));
+                return 1;
+            }
+        }
+
+        var runner = ProcessRunnerFactory?.Invoke() ?? new NotifyProcessRunner();
+        var liveness = NotifyPendingLiveness.Probe(
+            routingRoot,
+            record,
+            transportMode!,
+            runner,
+            HerdrExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveHerdrExecutable(),
+            AgmsgScriptsDirectoryFactory?.Invoke() ?? NotifyTransportPaths.ResolveAgmsgScriptsDirectory());
+        if (!liveness.Resolved || liveness.Running is null)
+        {
+            EmitStatus(writer, options.Format, NotifyStatusResult.Failure(
+                routingRoot,
+                record.Domain,
+                record.Team,
+                record.TaskId,
+                liveness.Cause ?? "liveness-unavailable",
+                liveness.Summary,
+                record,
+                liveness.Source,
+                liveness.Running));
+            return 1;
+        }
+
+        var verdict = record.ReportArrived
+            ? "settled"
+            : liveness.Running.Value
+                ? "live"
+                : "lost";
+        EmitStatus(writer, options.Format, new NotifyStatusResult
+        {
+            Operation = NotifyCommand.OperationStatus,
+            RoutingRoot = routingRoot,
+            Domain = record.Domain,
+            Team = record.Team,
+            TaskId = record.TaskId,
+            RecipientRole = record.RecipientRole,
+            RecipientIdentity = record.RecipientIdentity,
+            ExpectedArtifact = record.ExpectedArtifact,
+            DispatchedAt = record.DispatchedAt,
+            RecipientRunning = liveness.Running,
+            LivenessSource = liveness.Source,
+            ReportArrived = record.ReportArrived,
+            ReportStatus = record.ReportStatus,
+            ReportArtifact = record.ReportArtifact,
+            ReportSummary = record.ReportSummary,
+            Verdict = verdict,
+            Cause = null,
+            Summary = liveness.Summary + (record.ReportArrived
+                ? $" Matching report status '{record.ReportStatus}' arrived."
+                : $" No matching report has arrived; verdict is '{verdict}'."),
+        });
+        return 0;
+    }
+
+    private static string FormatKnownTaskIds(IReadOnlyList<string> knownTaskIds) =>
+        knownTaskIds.Count == 0 ? "<none>" : string.Join(", ", knownTaskIds);
+
+    private static void EmitStatus(TextWriter writer, string format, NotifyStatusResult result)
+    {
+        if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+        {
+            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            return;
+        }
+
+        writer.WriteLine($"# notify status — {result.TaskId}");
+        writer.WriteLine();
+        writer.WriteLine($"- domain: {result.Domain ?? "<unknown>"}");
+        writer.WriteLine($"- team: {result.Team ?? "<unknown>"}");
+        writer.WriteLine($"- dispatched at: {result.DispatchedAt?.ToString("O") ?? "<unknown>"}");
+        writer.WriteLine($"- recipient: {result.RecipientRole ?? "<unknown>"} ({result.RecipientIdentity ?? "<unknown>"})");
+        writer.WriteLine($"- recipient running: {result.RecipientRunning?.ToString().ToLowerInvariant() ?? "<unknown>"}");
+        writer.WriteLine($"- liveness source: {result.LivenessSource ?? "<unknown>"}");
+        writer.WriteLine($"- report arrived: {result.ReportArrived?.ToString().ToLowerInvariant() ?? "<unknown>"}");
+        writer.WriteLine($"- verdict: {result.Verdict ?? "<unknown>"}");
+        if (result.Cause is not null)
+        {
+            writer.WriteLine($"- cause: {result.Cause}");
+        }
+        writer.WriteLine();
+        writer.WriteLine(result.Summary);
+    }
+
     private static int ExecuteDelivery(
         TextWriter writer,
         string operation,
@@ -179,6 +342,15 @@ internal static class NotifyCommand
         var payload = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? BuildDelegatePayload(options, reportCommand!)
             : BuildReportPayload(options);
+        NotifyPendingDelegation? reportPendingRecord = null;
+        if (string.Equals(operation, OperationReport, StringComparison.Ordinal))
+        {
+            reportPendingRecord = NotifyPendingDelegationStore.Find(
+                options.RoutingRoot!,
+                options.Domain,
+                options.Team,
+                options.TaskId!).Record;
+        }
         var inlinePayloadWarning = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? ResolveInlinePayloadWarning(options, payload)
             : null;
@@ -199,6 +371,38 @@ internal static class NotifyCommand
                 preflight: preflight,
                 inlinePayloadWarning: inlinePayloadWarning));
             return 1;
+        }
+
+        NotifyPendingDelegation? pendingRecord = null;
+        string? pendingRecordPath = null;
+        if (string.Equals(operation, OperationDelegate, StringComparison.Ordinal))
+        {
+            pendingRecord = BuildPendingDelegation(options, resolution);
+            if (options.Write)
+            {
+                var pendingWrite = NotifyPendingDelegationStore.WriteDispatch(
+                    options.RoutingRoot!,
+                    pendingRecord);
+                if (!pendingWrite.Written)
+                {
+                    Emit(writer, options.Format, FailureResult(
+                        operation,
+                        options,
+                        resolution.Mode,
+                        "pending-record-write-failed",
+                        $"Could not write the durable pending delegation record before notifying role '{options.ToRole}': "
+                        + $"{pendingWrite.Error} No notification was sent; repair team-store access and retry notify.",
+                        payload,
+                        reportCommand,
+                        modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
+                        preflight: preflight,
+                        inlinePayloadWarning: inlinePayloadWarning,
+                        pendingRecordPath: pendingWrite.Path));
+                    return 1;
+                }
+
+                pendingRecordPath = pendingWrite.Path;
+            }
         }
 
         if (envelopeDelivery.FileBacked && options.Write)
@@ -317,6 +521,40 @@ internal static class NotifyCommand
                 summary: "The canonical external-reader event append completed exactly once; pane transition observation does not apply.");
         }
 
+        if (string.Equals(operation, OperationReport, StringComparison.Ordinal)
+            && options.Write
+            && reportPendingRecord is not null)
+        {
+            var reportWrite = NotifyPendingDelegationStore.WriteReport(
+                options.RoutingRoot!,
+                reportPendingRecord,
+                options.Status!,
+                options.Artifact!,
+                NotifyEventWriter.NormalizeSummary(options.Summary!),
+                (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime());
+            if (!reportWrite.Written)
+            {
+                Emit(writer, options.Format, FailureResult(
+                    operation,
+                    options,
+                    resolution.Mode,
+                    "pending-record-resolution-failed",
+                    $"Report delivery succeeded, but resolving task '{options.TaskId}' in the pending store failed: "
+                    + $"{reportWrite.Error} Preserve this report and repair the store before retrying.",
+                    payload,
+                    reportCommand,
+                    modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
+                    preflight: deliveryPreflight,
+                    receiverStateOutcome: delivery.ReceiverStateOutcome,
+                    workingTransition: delivery.WorkingTransition,
+                    settleOutcome: delivery.SettleOutcome,
+                    resendPermitted: delivery.ResendPermitted,
+                    inlinePayloadWarning: inlinePayloadWarning,
+                    pendingRecordPath: reportWrite.Path));
+                return 1;
+            }
+        }
+
         Emit(writer, options.Format, SuccessResult(
             operation,
             options,
@@ -338,7 +576,8 @@ internal static class NotifyCommand
             inlinePayloadWarning: inlinePayloadWarning,
             deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
             taskFile: envelopeDelivery.TaskFile,
-            deliveryPointer: envelopeDelivery.ResultPointer));
+            deliveryPointer: envelopeDelivery.ResultPointer,
+            pendingRecordPath: pendingRecordPath));
         return 0;
     }
 
@@ -356,6 +595,51 @@ internal static class NotifyCommand
             ? options.Inputs.FirstOrDefault() ?? options.ExpectedArtifacts[0]
             : options.Artifact!,
     };
+
+    private static NotifyPendingDelegation BuildPendingDelegation(
+        NotifyOptions options,
+        SessionLayerModeResolution resolution)
+    {
+        string? resident = null;
+        string? workspaceId = null;
+        string? paneId = null;
+        string? reader = null;
+        var identity = $"role={options.ToRole}";
+        var topology = NotifyRoleTopologyStore.Resolve(options.RoutingRoot!, options.Domain!, options.Team!);
+        if (topology.Resolved
+            && topology.Topology is { } teamTopology
+            && teamTopology.Roles.TryGetValue(options.ToRole!, out var recorded))
+        {
+            resident = recorded.Resident;
+            workspaceId = recorded.WorkspaceId ?? teamTopology.WorkspaceId;
+            paneId = recorded.PaneId;
+            reader = recorded.Reader;
+            identity = recorded.Resident switch
+            {
+                NotifyRecordedRole.HerdrResident =>
+                    $"role={options.ToRole};workspace={workspaceId};pane={paneId}",
+                NotifyRecordedRole.ExternalResident =>
+                    $"role={options.ToRole};reader={reader}",
+                _ => $"role={options.ToRole}",
+            };
+        }
+
+        return new NotifyPendingDelegation
+        {
+            Domain = options.Domain!,
+            Team = options.Team!,
+            TaskId = options.TaskId!,
+            RecipientRole = options.ToRole!,
+            RecipientIdentity = identity,
+            ExpectedArtifact = string.Join("; ", options.ExpectedArtifacts),
+            DispatchedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+            TransportMode = resolution.Mode,
+            Resident = resident,
+            WorkspaceId = workspaceId,
+            PaneId = paneId,
+            Reader = reader,
+        };
+    }
 
     private static string ReaderEventKind(string operation, string? status)
     {
@@ -524,7 +808,8 @@ internal static class NotifyCommand
         NotifyInlinePayloadWarning? inlinePayloadWarning = null,
         string? deliveryMethod = null,
         string? taskFile = null,
-        string? deliveryPointer = null) => new()
+        string? deliveryPointer = null,
+        string? pendingRecordPath = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot!,
@@ -550,6 +835,7 @@ internal static class NotifyCommand
             DeliveryMethod = deliveryMethod,
             TaskFile = taskFile,
             DeliveryPointer = deliveryPointer,
+            PendingRecordPath = pendingRecordPath,
             Cause = null,
             Payload = payload,
             ReportCommand = reportCommand,
@@ -573,7 +859,8 @@ internal static class NotifyCommand
         NotifyInlinePayloadWarning? inlinePayloadWarning = null,
         string? deliveryMethod = null,
         string? taskFile = null,
-        string? deliveryPointer = null) => new()
+        string? deliveryPointer = null,
+        string? pendingRecordPath = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot ?? string.Empty,
@@ -599,6 +886,7 @@ internal static class NotifyCommand
             DeliveryMethod = deliveryMethod,
             TaskFile = taskFile,
             DeliveryPointer = deliveryPointer,
+            PendingRecordPath = pendingRecordPath,
             Cause = cause,
             Payload = payload,
             ReportCommand = reportCommand,
@@ -663,6 +951,10 @@ internal static class NotifyCommand
         if (result.EventPath is not null)
         {
             writer.WriteLine($"- event path: `{result.EventPath}`");
+        }
+        if (result.PendingRecordPath is not null)
+        {
+            writer.WriteLine("- pending record: " + result.PendingRecordPath);
         }
         writer.WriteLine();
         writer.WriteLine(result.Summary);
@@ -756,13 +1048,16 @@ internal static class NotifyCommand
     private static bool Validate(string operation, NotifyOptions options, out string error)
     {
         error = string.Empty;
-        foreach (var (name, value) in new[]
-        {
-            ("--domain", options.Domain),
-            ("--team", options.Team),
-            ("--from", options.FromRole),
-            ("--task-id", options.TaskId),
-        })
+        var requiredIdentity = string.Equals(operation, OperationStatus, StringComparison.Ordinal)
+            ? new[] { ("--task-id", options.TaskId) }
+            : new[]
+            {
+                ("--domain", options.Domain),
+                ("--team", options.Team),
+                ("--from", options.FromRole),
+                ("--task-id", options.TaskId),
+            };
+        foreach (var (name, value) in requiredIdentity)
         {
             if (!IsSafeIdentity(value))
             {
@@ -771,12 +1066,28 @@ internal static class NotifyCommand
             }
         }
 
-        if (!NotifyEventWriter.TryValidateTeam(options.Team!, out error))
+        if (options.Team is not null
+            && !NotifyEventWriter.TryValidateTeam(options.Team, out error))
         {
             return false;
         }
 
-        if (string.Equals(operation, OperationDelegate, StringComparison.Ordinal))
+        if (string.Equals(operation, OperationStatus, StringComparison.Ordinal))
+        {
+            if (options.Domain is not null && !IsSafeIdentity(options.Domain)
+                || options.Team is not null && !IsSafeIdentity(options.Team))
+            {
+                error = "status accepts optional safe --domain and --team values.";
+                return false;
+            }
+
+            if (options.Domain is not null ^ options.Team is not null)
+            {
+                error = "status requires --domain and --team together when either is supplied.";
+                return false;
+            }
+        }
+        else if (string.Equals(operation, OperationDelegate, StringComparison.Ordinal))
         {
             if (!IsSafeIdentity(options.ToRole) || !IsSafeIdentity(options.ReportToRole))
             {
@@ -839,6 +1150,7 @@ internal static class NotifyCommand
     {
         OperationDelegate => DelegateUsage,
         OperationReport => ReportUsage,
+        OperationStatus => StatusUsage,
         _ => EscalateUsage,
     };
 }
@@ -889,10 +1201,64 @@ internal sealed record NotifyResult
     [JsonPropertyName("delivery_method")] public string? DeliveryMethod { get; init; }
     [JsonPropertyName("task_file")] public string? TaskFile { get; init; }
     [JsonPropertyName("delivery_pointer")] public string? DeliveryPointer { get; init; }
+    [JsonPropertyName("pending_record_path")] public string? PendingRecordPath { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("payload")] public string? Payload { get; init; }
     [JsonPropertyName("report_command")] public string? ReportCommand { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
+}
+
+internal sealed record NotifyStatusResult
+{
+    [JsonPropertyName("operation")] public required string Operation { get; init; }
+    [JsonPropertyName("routing_root")] public required string RoutingRoot { get; init; }
+    [JsonPropertyName("domain")] public string? Domain { get; init; }
+    [JsonPropertyName("team")] public string? Team { get; init; }
+    [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+    [JsonPropertyName("recipient_role")] public string? RecipientRole { get; init; }
+    [JsonPropertyName("recipient_identity")] public string? RecipientIdentity { get; init; }
+    [JsonPropertyName("expected_artifact")] public string? ExpectedArtifact { get; init; }
+    [JsonPropertyName("dispatched_at")] public DateTimeOffset? DispatchedAt { get; init; }
+    [JsonPropertyName("recipient_running")] public bool? RecipientRunning { get; init; }
+    [JsonPropertyName("liveness_source")] public string? LivenessSource { get; init; }
+    [JsonPropertyName("report_arrived")] public bool? ReportArrived { get; init; }
+    [JsonPropertyName("report_status")] public string? ReportStatus { get; init; }
+    [JsonPropertyName("report_artifact")] public string? ReportArtifact { get; init; }
+    [JsonPropertyName("report_summary")] public string? ReportSummary { get; init; }
+    [JsonPropertyName("verdict")] public string? Verdict { get; init; }
+    [JsonPropertyName("cause")] public string? Cause { get; init; }
+    [JsonPropertyName("summary")] public required string Summary { get; init; }
+
+    public static NotifyStatusResult Failure(
+        string routingRoot,
+        string? domain,
+        string? team,
+        string taskId,
+        string cause,
+        string summary,
+        NotifyPendingDelegation? record = null,
+        string? livenessSource = null,
+        bool? running = null) => new()
+        {
+            Operation = NotifyCommand.OperationStatus,
+            RoutingRoot = routingRoot,
+            Domain = record?.Domain ?? domain,
+            Team = record?.Team ?? team,
+            TaskId = taskId,
+            RecipientRole = record?.RecipientRole,
+            RecipientIdentity = record?.RecipientIdentity,
+            ExpectedArtifact = record?.ExpectedArtifact,
+            DispatchedAt = record?.DispatchedAt,
+            RecipientRunning = running,
+            LivenessSource = livenessSource,
+            ReportArrived = record?.ReportArrived,
+            ReportStatus = record?.ReportStatus,
+            ReportArtifact = record?.ReportArtifact,
+            ReportSummary = record?.ReportSummary,
+            Verdict = null,
+            Cause = cause,
+            Summary = summary,
+        };
 }
 
 internal sealed record NotifyInlinePayloadWarning

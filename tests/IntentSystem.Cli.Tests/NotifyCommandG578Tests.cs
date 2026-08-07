@@ -301,6 +301,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
         workspace.SetMode(mode);
         var runner = SuccessfulRunner();
         NotifyCommand.ProcessRunnerFactory = () => runner;
+        Assert.Equal(0, workspace.Run(DelegateArgs()).ExitCode);
 
         var (exitCode, result) = workspace.Run([
             "notify", "report", "--domain", NotifyWorkspace.Domain, "--team", NotifyWorkspace.Team,
@@ -323,6 +324,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
         workspace.SetMode(SessionLayerMode.HerdrOnly);
         var runner = SuccessfulRunner();
         NotifyCommand.ProcessRunnerFactory = () => runner;
+        Assert.Equal(0, workspace.Run(DelegateArgs()).ExitCode);
         var childRoot = Directory.CreateTempSubdirectory("notify-child-g578-").FullName;
         try
         {
@@ -607,6 +609,25 @@ public sealed class NotifyCommandG578Tests : IDisposable
         {
             implementationDeliveryMethod = deliveryMethod;
             WriteTopology();
+        }
+
+        public void SeedPending(string taskId = "G578-demo", string recipientRole = "implementation")
+        {
+            var result = NotifyPendingDelegationStore.WriteDispatch(RootPath, new NotifyPendingDelegation
+            {
+                Domain = Domain,
+                Team = Team,
+                TaskId = taskId,
+                RecipientRole = recipientRole,
+                RecipientIdentity = "role=" + recipientRole + ";workspace=wH;pane=wH:p2",
+                ExpectedArtifact = "draft PR URL",
+                DispatchedAt = FixedNow,
+                TransportMode = SessionLayerMode.HerdrOnly,
+                Resident = NotifyRecordedRole.HerdrResident,
+                WorkspaceId = "wH",
+                PaneId = "wH:p2",
+            });
+            Assert.True(result.Written, result.Error);
         }
 
         private object ImplementationRole()
