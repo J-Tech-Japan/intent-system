@@ -21,9 +21,19 @@ internal sealed record NotifySupervisorAction
 internal sealed record NotifySupervisorPass
 {
     public required IReadOnlyList<NotifySupervisorAction> Actions { get; init; }
+    public IReadOnlyList<NotifySupervisionFinding> Findings { get; init; } = [];
+    public IReadOnlyList<NotifySupervisionStallRecord> RecoveryRecords { get; init; } = [];
+    public NotifySupervisionBoundStatus? Bound { get; init; }
+    public NotifySupervisionLiveness? Liveness { get; init; }
+    public IReadOnlyList<string> Warnings { get; init; } = [];
     public string? Error { get; init; }
-    public bool Silent => Actions.Count == 0 && Error is null;
-    public int ExitCode => Error is null && Actions.All(action => action.Cause is null) ? 0 : 1;
+    public bool Silent => Actions.Count == 0 && Findings.Count == 0 && Error is null;
+    public int ExitCode => Error is null
+        && Actions.All(action => action.Cause is null)
+        && Findings.All(finding => finding.Cause is null)
+        && Bound?.BoundMet is not false
+        ? 0
+        : 1;
 }
 
 internal sealed record NotifySupervisorDeliveryResult

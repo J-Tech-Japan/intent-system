@@ -113,6 +113,45 @@ never kills, starts, prompts, re-dispatches, or appends.
 > withdrawn during 1.x, and are formalised only by a later MAJOR release. See
 > the [compatibility ledger](1.0-compatibility-ledger.md) preview rows.
 
+### Measured recovery supervision (G641 — preview-through-1.x)
+
+```bash
+intent-cli notify supervise --domain <domain> --team <team> \
+  --repo <owner/repo> --owner-role <logical-role> --bound <seconds> \
+  [--interval <seconds>] [--once] [--dry-run|--write] \
+  [--routing-root <host-root>] --format json
+```
+
+The same bounded invocation consumes the existing recipient-lost, terminal CI
+wait, queue/write-back, and recorded-seat inventories. A healthy team has no
+findings; a detected condition wakes its owning logical role through the
+transport recorded for that team. The supervisor never invents a transport,
+assumes an agent kind, or applies an owed transition. `--owner-role` names the
+role that owns non-recipient findings, while G630 recipient recovery keeps its
+recorded delegating role as owner.
+
+`--bound` records the team's maximum detection interval under
+`.intent-cli/supervision/<domain>/<team>/bound.json`. Each cycle is durable in
+`cycles.jsonl`, including the measured gap from the previous cycle and whether
+the declared bound was met. A restart gap beyond the bound is reported as
+`supervisor-not-running` and as `absent_since_last_cycle: true`; a missing
+previous cycle is reported as unknown rather than guessed healthy.
+
+Every finding has an append-only recovery record in `stalls.jsonl` with
+`detectable_at`, `surfaced_at`, and `cleared_at`. If a condition is first seen
+after supervision restarted, `detectable_at` is null and
+`detectable_at_unknown` is true. Clearing a known record produces a measured
+duration; an unknown start never receives a flattering duration. Undelivered
+`notify escalate` events are treated as findings, and the loop reports its own
+liveness in every bounded `--once` result. Dry-run resolves and previews the
+same classes and bound without waking, recording, or clearing anything.
+
+> **Preview through 1.x (G641).** Measured supervision, its bound and durable
+> recovery records, the undelivered-escalation finding, and self-liveness are
+> post-freeze preview behavior outside the 1.0 compatibility promise. They may
+> change or be withdrawn during 1.x and are formalised only by a later MAJOR
+> release. See the [compatibility ledger](1.0-compatibility-ledger.md).
+
 `notify delegate` embeds the task id, expected artifacts, fresh marker nonce,
 and complete canonical report command (including the transport-neutral
 `--routing-root` needed from an isolated child checkout) in the delivered task. Running that
