@@ -83,7 +83,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationPrimary,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerChatAgent,
-            Purpose = "Design-side action advisor (G465): `intent-cli next --domain <d> --target-repo <r>` (alias of `guide next`) recommends ONE design-side process — grill / stack / improve / inspect / issue-publish / review / recovery / idle — with a paste-ready suggested prompt. Read-only; never auto-executes."
+            Purpose = "Design-side action advisor (G465/G644): `intent-cli next --domain <d> --team <team> --target-repo <r>` (alias of `guide next`) recommends ONE design-side process and recommends `supervision-setup` when the team's recorded supervision cycle is missing. Read-only; never auto-executes or manages a process."
         },
         new CommandGroupEntry
         {

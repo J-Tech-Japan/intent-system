@@ -166,8 +166,8 @@ The simplest design-thread question — "what should I do next?" — answered by
 recommends one, so users do not have to remember every command name.
 
 ```bash
-intent-cli next --domain <domain> --target-repo <owner/repo> --format markdown
-intent-cli guide next --domain <domain> --target-repo <owner/repo> --format markdown
+intent-cli next --domain <domain> --team <team> --target-repo <owner/repo> --format markdown
+intent-cli guide next --domain <domain> --team <team> --target-repo <owner/repo> --format markdown
 ```
 
 Ask it in natural language: `intent-cli に聞いて、次に何をしたらいいか教えてくださ
@@ -183,6 +183,14 @@ The output includes the recommended action, the reason, the evidence checked, a
 paste-ready suggested prompt, and the safety boundary. `next` is **read-only by
 default** and never auto-executes the chosen action — the user decides whether
 to run the suggested prompt.
+
+When `--domain` and `--team` are supplied, `next` also reads the team's recorded
+supervision cycle. No recorded cycle adds the `supervision-setup` recommendation;
+an existing cycle leaves that recommendation silent. The host-init and
+design-side loop guides carry the deployment step and link the
+[orchestration reference](12-agent-message-orchestration.md); this command only
+detects the missing record and never starts or manages the background process.
+Supervision remains a preview through 1.x under the compatibility promise.
 
 ## Stack — packet backlog creation + first issue publish
 
