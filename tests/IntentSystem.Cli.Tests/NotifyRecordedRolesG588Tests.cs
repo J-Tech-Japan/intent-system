@@ -159,6 +159,8 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
                 Agent("orchestration", "wH", "wH:p1"),
                 Agent("implementation", "wH", "wH:p2"),
                 Agent("review", "wForeign", "wForeign:p9")))
+            : arguments.Take(2).SequenceEqual(["pane", "process-info"])
+                ? EmptyProcessInfo()
             : throw new InvalidOperationException("a refused route must never prompt"));
         NotifyCommand.ProcessRunnerFactory = () => runner;
 
@@ -251,6 +253,8 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
                 Agent("orchestration", "wH", "wH:p1"),
                 Agent("implementation", "wH", "wH:p2"),
                 Agent("review", "wForeign", "wForeign:p9")))
+            : arguments.Take(2).SequenceEqual(["pane", "process-info"])
+                ? EmptyProcessInfo()
             : throw new InvalidOperationException("a refused route must never prompt"));
         NotifyCommand.ProcessRunnerFactory = () => runner;
         var args = DelegateArgs("orchestration", "review", "orchestration", write: false);
@@ -322,6 +326,9 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
         Func<string, IReadOnlyList<string>, NotifyProcessResult> handler) => new(handler);
 
     private static NotifyProcessResult Success(string output = "") => new(0, output, "");
+
+    private static NotifyProcessResult EmptyProcessInfo() => Success(
+        "{\"result\":{\"process_info\":{\"foreground_processes\":[]}}}");
 
     private static string Roster(params object[] agents) =>
         JsonSerializer.Serialize(new { result = new { agents } });

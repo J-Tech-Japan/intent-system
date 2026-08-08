@@ -65,8 +65,11 @@ liveness judgment as delegate: herdr uses the exact `agent_running` flag at
 the recorded workspace/pane (never the status string), while agmsg uses its
 recorded roster. It reports `live` for a running recipient with no report,
 `settled` after the matching report regardless of current liveness, and
-`lost` only when the recipient is not running and no report arrived. Elapsed
-time never changes the verdict.
+`lost` only when the recipient is not running, no report arrived, and the
+recorded pane has no corroborating foreground process. When herdr has lost the
+registration but a process remains, status reports the distinct
+`registration-lost-process-present` state and directs an operator to repair the
+registration; it does not infer process loss.
 
 A report is a message rather than a bookkeeping entry: fail-closed protection
 belongs on pending-state mutation, not on carrying the message. Refusing an
@@ -180,6 +183,22 @@ cycles suppress that acknowledged key and return to healthy silence.
 > post-freeze preview behavior outside the 1.0 compatibility promise. They may
 > change or be withdrawn during 1.x and are formalised only by a later MAJOR
 > release. See the [compatibility ledger](1.0-compatibility-ledger.md).
+
+### Registration-lost but process-present (G648 — preview-through-1.x)
+
+Herdr registration is not process liveness. Before `notify status`, delivery,
+or supervision calls a recipient `lost`, the CLI checks the foreground process
+at the exact recorded workspace/pane. No registration plus no process remains
+the genuine `lost` case and keeps the G630 fail-closed recovery gate unchanged.
+No registration plus a process is named
+`registration-lost-process-present`: liveness reports the recipient as likely
+alive, supervision emits at most one finding per recorded workspace/pane per
+cycle outside the G630 recovery path, and delivery returns the same cause with
+`resend_permitted: true`. The guidance is to re-register the agent at the
+recorded pane; no kill, restart, or automatic re-registration is attempted.
+Absence-like prompt text such as `pane-absent` or `agent_not_found` is never
+allowed to override this process corroboration. This is a preview surface
+through 1.x and is outside the 1.0 compatibility promise.
 
 `notify delegate` embeds the task id, expected artifacts, fresh marker nonce,
 and complete canonical report command (including the transport-neutral

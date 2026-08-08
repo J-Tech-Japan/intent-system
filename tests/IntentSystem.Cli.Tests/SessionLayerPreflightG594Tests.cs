@@ -363,7 +363,9 @@ public sealed class SessionLayerPreflightG594Tests : IDisposable
         var roster = JsonSerializer.Serialize(new { result = new { agents } });
         var runner = new FakeRunner((_, arguments) => arguments.SequenceEqual(["agent", "list"])
             ? Success(roster)
-            : throw new InvalidOperationException("failed pane identity must never prompt"));
+            : arguments.Take(2).SequenceEqual(["pane", "process-info"])
+                ? Success("{\"result\":{\"process_info\":{\"foreground_processes\":[]}}}")
+                : throw new InvalidOperationException("failed pane identity must never prompt"));
         NotifyCommand.ProcessRunnerFactory = () => runner;
         NotifyCommand.HerdrExecutableFactory = () => "fake-herdr";
 

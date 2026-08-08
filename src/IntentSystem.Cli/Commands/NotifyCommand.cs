@@ -300,9 +300,11 @@ internal static class NotifyCommand
 
         var verdict = record.ReportArrived
             ? "settled"
-            : liveness.Running.Value
-                ? "live"
-                : "lost";
+            : liveness.State == NotifyPendingLivenessResult.RegistrationLostProcessPresent
+                ? NotifyPendingLivenessResult.RegistrationLostProcessPresent
+                : liveness.Running.Value
+                    ? "live"
+                    : "lost";
         EmitStatus(writer, options.Format, new NotifyStatusResult
         {
             Operation = NotifyCommand.OperationStatus,
@@ -315,6 +317,9 @@ internal static class NotifyCommand
             ExpectedArtifact = record.ExpectedArtifact,
             DispatchedAt = record.DispatchedAt,
             RecipientRunning = liveness.Running,
+            LivenessState = liveness.State,
+            ProcessPresent = liveness.ProcessPresent,
+            ResendPermitted = liveness.ResendPermitted,
             LivenessSource = liveness.Source,
             ReportArrived = record.ReportArrived,
             ReportStatus = record.ReportStatus,
@@ -467,6 +472,9 @@ internal static class NotifyCommand
         writer.WriteLine($"- dispatched at: {result.DispatchedAt?.ToString("O") ?? "<unknown>"}");
         writer.WriteLine($"- recipient: {result.RecipientRole ?? "<unknown>"} ({result.RecipientIdentity ?? "<unknown>"})");
         writer.WriteLine($"- recipient running: {result.RecipientRunning?.ToString().ToLowerInvariant() ?? "<unknown>"}");
+        writer.WriteLine($"- liveness state: {result.LivenessState ?? "<unknown>"}");
+        writer.WriteLine($"- process present: {result.ProcessPresent?.ToString().ToLowerInvariant() ?? "<unknown>"}");
+        writer.WriteLine($"- resend permitted: {result.ResendPermitted?.ToString().ToLowerInvariant() ?? "<unknown>"}");
         writer.WriteLine($"- liveness source: {result.LivenessSource ?? "<unknown>"}");
         writer.WriteLine($"- report arrived: {result.ReportArrived?.ToString().ToLowerInvariant() ?? "<unknown>"}");
         writer.WriteLine($"- verdict: {result.Verdict ?? "<unknown>"}");
@@ -1572,6 +1580,9 @@ internal sealed record NotifyStatusResult
     [JsonPropertyName("expected_artifact")] public string? ExpectedArtifact { get; init; }
     [JsonPropertyName("dispatched_at")] public DateTimeOffset? DispatchedAt { get; init; }
     [JsonPropertyName("recipient_running")] public bool? RecipientRunning { get; init; }
+    [JsonPropertyName("liveness_state")] public string? LivenessState { get; init; }
+    [JsonPropertyName("process_present")] public bool? ProcessPresent { get; init; }
+    [JsonPropertyName("resend_permitted")] public bool? ResendPermitted { get; init; }
     [JsonPropertyName("liveness_source")] public string? LivenessSource { get; init; }
     [JsonPropertyName("report_arrived")] public bool? ReportArrived { get; init; }
     [JsonPropertyName("report_status")] public string? ReportStatus { get; init; }

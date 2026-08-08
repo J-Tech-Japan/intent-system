@@ -14,6 +14,9 @@ internal sealed record NotifySupervisorAction
     [JsonPropertyName("readiness_nonce")] public string? ReadinessNonce { get; init; }
     [JsonPropertyName("auto_redispatch")] public bool AutoRedispatch { get; init; }
     [JsonPropertyName("auto_redispatched")] public bool AutoRedispatched { get; init; }
+    [JsonPropertyName("resend_permitted")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ResendPermitted { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
 }
@@ -154,6 +157,18 @@ internal sealed class NotifySupervisor
                 runner,
                 herdrExecutable,
                 agmsgScriptsDirectory);
+            if (string.Equals(
+                liveness.State,
+                NotifyPendingLivenessResult.RegistrationLostProcessPresent,
+                StringComparison.Ordinal))
+            {
+                // Registration loss with a corroborating foreground process
+                // is not G630 recipient loss. Surface the distinct state but
+                // never kill, restart, register, or redispatch automatically.
+                actions.Add(RegistrationLostProcessPresent(record, liveness.Summary));
+                continue;
+            }
+
             if (!liveness.Resolved || liveness.Running is null)
             {
                 actions.Add(Stopped(record, liveness.Cause ?? "liveness-unavailable", liveness.Summary));
@@ -417,6 +432,22 @@ internal sealed class NotifySupervisor
             + "recorded recipe, prove a response-line nonce, and notify the delegating role before any optional re-dispatch.",
     };
 
+    private static NotifySupervisorAction RegistrationLostProcessPresent(
+        NotifyPendingDelegation record,
+        string summary) => new()
+        {
+            TaskId = record.TaskId,
+            RecipientRole = record.RecipientRole,
+            Verdict = NotifyPendingLivenessResult.RegistrationLostProcessPresent,
+            Outcome = NotifyPendingLivenessResult.RegistrationLostProcessPresent,
+            Recovered = false,
+            AutoRedispatch = false,
+            AutoRedispatched = false,
+            ResendPermitted = true,
+            Cause = null,
+            Summary = summary,
+        };
+
     private NotifySupervisorRedispatchResult DefaultRedispatch(NotifyPendingDelegation record)
     {
         var expectedArtifacts = record.ExpectedArtifacts?.Where(value => !string.IsNullOrWhiteSpace(value)).ToArray();
@@ -445,6 +476,7 @@ internal sealed class NotifySupervisor
             "--task-id", record.TaskId,
             "--objective", record.Objective,
         };
+
         foreach (var input in record.Inputs ?? [])
         {
             args.Add("--input");

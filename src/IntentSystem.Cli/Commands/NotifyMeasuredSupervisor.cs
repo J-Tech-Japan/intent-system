@@ -177,16 +177,26 @@ internal sealed class NotifyMeasuredSupervisor
         foreach (var action in legacy.Actions)
         {
             var record = openByTask.GetValueOrDefault(action.TaskId);
+            var registrationLoss = string.Equals(
+                action.Verdict,
+                NotifyPendingLivenessResult.RegistrationLostProcessPresent,
+                StringComparison.Ordinal);
+            var paneKey = record is { WorkspaceId: not null, PaneId: not null }
+                ? $"registration:{record.WorkspaceId}:{record.PaneId}"
+                : $"registration:{record?.RecipientIdentity ?? action.RecipientRole}";
             observations.Add(new NotifySupervisionObservation
             {
-                Key = $"recipient:{action.TaskId}",
-                Kind = "recipient-lost",
+                Key = registrationLoss ? paneKey : $"recipient:{action.TaskId}",
+                Kind = registrationLoss
+                    ? NotifyPendingLivenessResult.RegistrationLostProcessPresent
+                    : "recipient-lost",
                 OwnerRole = record?.DelegatingRole ?? ownerRole,
-                Source = "notify-pending",
+                Source = registrationLoss ? "notify-pending-liveness" : "notify-pending",
                 Summary = action.Summary,
                 DetectableAt = null,
-                WakeAlreadyAttempted = action.Recovered,
-                WakeAlreadyDelivered = action.Recovered && action.Cause is null,
+                WakeAlreadyAttempted = registrationLoss ? false : action.Recovered,
+                WakeAlreadyDelivered = registrationLoss ? false : action.Recovered && action.Cause is null,
+                ResendPermitted = registrationLoss ? true : null,
                 WakeCause = action.Cause,
             });
         }
@@ -296,6 +306,7 @@ internal sealed class NotifyMeasuredSupervisor
                 OwnerRole = observation.OwnerRole,
                 Source = observation.Source,
                 Summary = observation.Summary,
+                ResendPermitted = observation.ResendPermitted,
                 DetectableAt = previousCycle is null ? null : observation.DetectableAt,
                 DetectableAtUnknown = previousCycle is null || observation.DetectableAt is null,
                 SurfacedAt = now,
@@ -709,13 +720,41 @@ internal sealed class NotifyMeasuredSupervisor
                 && agent.AgentRunning);
             if (!running)
             {
+                var processInfo = NotifyPaneProcessReader.Read(runner, herdrExecutable, recorded.PaneId);
+                if (!processInfo.Resolved)
+                {
+                    // Do not turn an unverified process observation into a
+                    // false seat-absent finding. The next bounded cycle can
+                    // retry corroboration.
+                    continue;
+                }
+
+                var workspaceId = recorded.WorkspaceId ?? topology.Topology.WorkspaceId;
+                var paneKey = $"registration:{workspaceId}:{recorded.PaneId}";
+                if (processInfo.Processes.Count > 0)
+                {
+                    observations.Add(new NotifySupervisionObservation
+                    {
+                        Key = paneKey,
+                        Kind = NotifyPendingLivenessResult.RegistrationLostProcessPresent,
+                        OwnerRole = ownerRole,
+                        Source = "recorded-topology+pane.process-info",
+                        Summary = $"Recorded herdr seat '{role}' has no running registration at workspace '{workspaceId}' pane '{recorded.PaneId}', but {processInfo.Processes.Count} foreground process(es) remain. Re-register the agent at the recorded pane; no kill, restart, or automatic re-registration is safe. Resend is permitted after repair.",
+                        DetectableAt = null,
+                        WakeAlreadyAttempted = false,
+                        WakeAlreadyDelivered = false,
+                        ResendPermitted = true,
+                    });
+                    continue;
+                }
+
                 observations.Add(new NotifySupervisionObservation
                 {
-                    Key = $"seat:{role}:{recorded.PaneId}",
+                    Key = $"seat:{workspaceId}:{recorded.PaneId}",
                     Kind = "seat-absent",
                     OwnerRole = ownerRole,
                     Source = "recorded-topology",
-                    Summary = $"Recorded herdr seat '{role}' is absent from workspace '{topology.Topology.WorkspaceId}' pane '{recorded.PaneId}'.",
+                    Summary = $"Recorded herdr seat '{role}' is absent from workspace '{workspaceId}' pane '{recorded.PaneId}' and no foreground process corroborates it.",
                     DetectableAt = null,
                     WakeAlreadyAttempted = false,
                     WakeAlreadyDelivered = false,
@@ -733,6 +772,7 @@ internal sealed class NotifyMeasuredSupervisor
         OwnerRole = record.OwnerRole,
         Source = record.Source,
         Summary = record.Summary,
+        ResendPermitted = record.ResendPermitted,
         DetectableAt = record.DetectableAt,
         SurfacedAt = record.SurfacedAt,
         WakeAttempted = record.WakeAttempted,
@@ -748,6 +788,7 @@ internal sealed record NotifySupervisionObservation
     public required string OwnerRole { get; init; }
     public required string Source { get; init; }
     public required string Summary { get; init; }
+    public bool? ResendPermitted { get; init; }
     public DateTimeOffset? DetectableAt { get; init; }
     public bool WakeAlreadyAttempted { get; init; }
     public bool WakeAlreadyDelivered { get; init; }
@@ -826,6 +867,10 @@ internal sealed record NotifySupervisionFinding
 
     [System.Text.Json.Serialization.JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("resend_permitted")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ResendPermitted { get; init; }
 
     [System.Text.Json.Serialization.JsonPropertyName("detectable_at")]
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]

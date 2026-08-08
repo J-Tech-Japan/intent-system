@@ -2,8 +2,13 @@ namespace IntentSystem.Cli.Commands;
 
 internal sealed record NotifyPendingLivenessResult
 {
+    public const string RegistrationLostProcessPresent = "registration-lost-process-present";
+
     public required bool Resolved { get; init; }
     public bool? Running { get; init; }
+    public string State { get; init; } = "unavailable";
+    public bool? ProcessPresent { get; init; }
+    public bool? ResendPermitted { get; init; }
     public required string Source { get; init; }
     public required string Summary { get; init; }
     public string? Cause { get; init; }
@@ -29,6 +34,7 @@ internal static class NotifyPendingLiveness
             {
                 Resolved = true,
                 Running = true,
+                State = "live",
                 Source = "external-reader",
                 Summary = "The recipient is an external recorded reader; recorded reader deliverability is the live judgment and no process running flag applies.",
             };
@@ -91,14 +97,53 @@ internal static class NotifyPendingLiveness
                 + "the delegate liveness judgment requires exactly one.");
         }
 
+        if (running.Length == 1)
+        {
+            return new NotifyPendingLivenessResult
+            {
+                Resolved = true,
+                Running = true,
+                State = "live",
+                ProcessPresent = null,
+                Source = "herdr.agent_running",
+                Summary = $"The recorded recipient identity '{record.RecipientIdentity}' has one agent with running=true.",
+            };
+        }
+
+        // A herdr registration is not process liveness.  Before declaring a
+        // recipient lost, corroborate the exact recorded pane's foreground
+        // process state.  An unregistered but present process is a distinct,
+        // non-recovery state: no kill/start/register action is safe here.
+        var processInfo = NotifyPaneProcessReader.Read(runner, executable, record.PaneId);
+        if (!processInfo.Resolved)
+        {
+            return Failure(
+                processInfo.Cause ?? "process-corroboration-unavailable",
+                $"herdr reported no running registration for recorded recipient '{record.RecipientIdentity}', but process corroboration was unavailable: {processInfo.Summary}");
+        }
+
+        if (processInfo.Processes.Count > 0)
+        {
+            return new NotifyPendingLivenessResult
+            {
+                Resolved = true,
+                Running = false,
+                State = NotifyPendingLivenessResult.RegistrationLostProcessPresent,
+                ProcessPresent = true,
+                ResendPermitted = true,
+                Source = "herdr.registration-and-process",
+                Summary = $"The recorded recipient identity '{record.RecipientIdentity}' has no running herdr registration, but {processInfo.Processes.Count} foreground process(es) remain at the recorded pane '{record.PaneId}'. Registration is lost while the recipient is likely alive; re-register the agent at the recorded pane. No recovery action is safe.",
+            };
+        }
+
         return new NotifyPendingLivenessResult
         {
             Resolved = true,
-            Running = running.Length == 1,
-            Source = "herdr.agent_running",
-            Summary = running.Length == 1
-                ? $"The recorded recipient identity '{record.RecipientIdentity}' has one agent with running=true."
-                : $"The recorded recipient identity '{record.RecipientIdentity}' has no agent with running=true (status strings are ignored).",
+            Running = false,
+            State = "lost",
+            ProcessPresent = false,
+            Source = "herdr.agent_running+pane.process-info",
+            Summary = $"The recorded recipient identity '{record.RecipientIdentity}' has no agent with running=true (status strings are ignored), no foreground process at the recorded pane, and is corroborated lost.",
         };
     }
 
@@ -137,6 +182,7 @@ internal static class NotifyPendingLiveness
         {
             Resolved = true,
             Running = registered,
+            State = registered ? "live" : "lost",
             Source = "agmsg.team_roster",
             Summary = registered
                 ? $"The delegate roster still contains recipient role '{record.RecipientRole}'."

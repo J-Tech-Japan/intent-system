@@ -61,8 +61,10 @@ identifier が衝突する lookup は従来どおり拒否し、supplied id と 
 recorded identity / liveness judgment を読みます。herdr では recorded workspace/pane の
 正確な `agent_running` flag を使い、status string は使いません。agmsg では recorded roster を
 使います。report がなく recipient が running なら `live`、一致する report 後は現在の liveness
-によらず `settled`、recipient が not running かつ report がない場合だけ `lost` です。経過時間
-だけで verdict を変えることはありません。
+によらず `settled`、recipient が not running、report がなく、記録された pane に foreground
+process の corroboration がない場合だけ `lost` です。herdr の registration が失われても
+process が残っている場合は `registration-lost-process-present` という別の state を返し、
+process が消えたとは推測しません。経過時間だけで verdict を変えることはありません。
 
 report は bookkeeping entry ではなく message です。fail-closed の保護は message を運ぶことではなく
 pending state の mutation に置きます。認識されない identifier を理由に配信を拒否すると、recipient が
@@ -153,6 +155,19 @@ event 自体は残したまま、その key を後続 cycle の finding から�
 > **1.x を通じた preview (G641)。** measured supervision、bound と永続 recovery record、undelivered-escalation
 > finding、self-liveness は post-freeze の preview であり、1.0 compatibility promise の対象外です。1.x の間に変更・
 > 撤回でき、後続 MAJOR release でのみ正式化します。[compatibility ledger](1.0-compatibility-ledger.md) を参照してください。
+
+### registration は失われたが process は存在する (G648 — preview-through-1.x)
+
+herdr の registration は process liveness ではありません。`notify status`、delivery、supervision が
+recipient を `lost` と判定する前に、CLI は正確な recorded workspace/pane の foreground process を
+確認します。registration も process もない場合だけが genuine な `lost` であり、G630 の fail-closed
+recovery gate は変わりません。registration がなく process が残る場合は
+`registration-lost-process-present` と命名します。liveness は recipient が生きている可能性を示し、
+supervision は G630 recovery の外側で cycle ごとに recorded workspace/pane あたり最大 1 件の finding を
+返し、delivery は同じ cause と `resend_permitted: true` を返します。対応は recorded pane で agent を
+再登録することであり、kill、restart、automatic re-registration は行いません。`pane-absent` や
+`agent_not_found` のような prompt 文言が process corroboration を上書きすることもありません。
+これは 1.x を通じた preview で、1.0 compatibility promise の対象外です。
 
 `notify delegate` は task id、expected artifact、fresh marker nonce、isolated child
 checkout から必要な transport-neutral `--routing-root` を含む完全な canonical report

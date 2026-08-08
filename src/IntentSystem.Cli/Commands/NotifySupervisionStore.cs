@@ -338,6 +338,7 @@ internal sealed record NotifySupervisionStallRecord
     [JsonPropertyName("detectable_at_unknown")] public bool DetectableAtUnknown { get; init; }
     [JsonPropertyName("wake_attempted")] public bool WakeAttempted { get; init; }
     [JsonPropertyName("wake_delivered")] public bool WakeDelivered { get; init; }
+    [JsonPropertyName("resend_permitted")] public bool? ResendPermitted { get; init; }
     [JsonPropertyName("wake_cause")] public string? WakeCause { get; init; }
 }
 

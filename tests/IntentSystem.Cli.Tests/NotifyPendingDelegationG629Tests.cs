@@ -196,6 +196,14 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
                 return new NotifyProcessResult(0, AgentResponse, string.Empty);
             }
 
+            if (arguments.SequenceEqual(["pane", "process-info", "--pane", "wH:p2"]))
+            {
+                return new NotifyProcessResult(
+                    0,
+                    "{\"result\":{\"process_info\":{\"foreground_processes\":[]}}}",
+                    string.Empty);
+            }
+
             return new NotifyProcessResult(0, string.Empty, string.Empty);
         }
     }
