@@ -605,6 +605,12 @@ them are not. The rendered and structured measurement entries carry
 `host: MyIntentHost` and `date: 2026-08-07` for each fact. Cursor and opencode
 have no measured entry and remain placeholders by name only.
 
+> **Reachability discipline (G650).** Source presence is not reachability:
+> record that this G647 guidance is reachable only after rendering the
+> team-scoped guide under the recorded session layer on the build the role
+> actually runs. A missing typed fragment is a fail-closed rendering defect,
+> not a reason to weaken the typing rule.
+
 ### Provision and prove READY
 
 Use this topology literally: **one workspace per team, one tab named after the
