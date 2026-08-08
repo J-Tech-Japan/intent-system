@@ -110,16 +110,17 @@ public sealed class NotifySupervisionG630Tests : IDisposable
 
         var commands = runner.Calls.Select(call => call.Arguments.ToArray()).ToArray();
         Assert.Equal(["agent", "list"], commands[0]);
-        Assert.Equal(["agent", "list"], commands[1]);
-        Assert.Equal(["pane", "process-info", "--pane", PaneId], commands[2]);
-        Assert.Equal(["-TERM", "7001"], commands[3]);
-        Assert.Equal(["pane", "process-info", "--pane", PaneId], commands[4]);
-        Assert.Equal(["agent", "list"], commands[5]);
-        Assert.Equal(["agent", "start", Role, "--kind", "codex", "--pane", PaneId, "--timeout", "10000", "--", "--sandbox"], commands[6]);
-        Assert.Equal(["agent", "list"], commands[7]);
-        Assert.Equal(["agent", "prompt", PaneId], commands[8].Take(3));
-        Assert.Contains("READY g630-ready", commands[8][3], StringComparison.Ordinal);
-        Assert.Equal(["agent", "read", PaneId, "--source", "recent-unwrapped", "--lines", "200"], commands[9]);
+        Assert.Equal(["pane", "process-info", "--pane", PaneId], commands[1]);
+        Assert.Equal(["agent", "list"], commands[2]);
+        Assert.Equal(["pane", "process-info", "--pane", PaneId], commands[3]);
+        Assert.Equal(["-TERM", "7001"], commands[4]);
+        Assert.Equal(["pane", "process-info", "--pane", PaneId], commands[5]);
+        Assert.Equal(["agent", "list"], commands[6]);
+        Assert.Equal(["agent", "start", Role, "--kind", "codex", "--pane", PaneId, "--timeout", "10000", "--", "--sandbox"], commands[7]);
+        Assert.Equal(["agent", "list"], commands[8]);
+        Assert.Equal(["agent", "prompt", PaneId], commands[9].Take(3));
+        Assert.Contains("READY g630-ready", commands[9][3], StringComparison.Ordinal);
+        Assert.Equal(["agent", "read", PaneId, "--source", "recent-unwrapped", "--lines", "200"], commands[10]);
     }
 
     [Fact]
@@ -299,7 +300,7 @@ public sealed class NotifySupervisionG630Tests : IDisposable
         if (Is(arguments, "pane", "process-info"))
         {
             var processInfoCount = occurrence("process-info");
-            return Success(processInfoCount == 1 || oldProcessRemains
+            return Success(processInfoCount >= 2 && (oldProcessRemains || processInfoCount == 2)
                 ? ProcessInfo(new NotifySupervisorProcess(7001, oldCwd, "codex"))
                 : ProcessInfo());
         }

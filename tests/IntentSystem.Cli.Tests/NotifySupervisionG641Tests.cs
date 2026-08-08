@@ -325,6 +325,15 @@ public sealed class NotifySupervisionG641Tests : IDisposable
                 return new NotifyProcessResult(0, AgentsJson, string.Empty);
             }
 
+            if (arguments.SequenceEqual(["pane", "process-info", "--pane", "wG641:p1"])
+                || arguments.SequenceEqual(["pane", "process-info", "--pane", "wG641:p2"]))
+            {
+                return new NotifyProcessResult(
+                    0,
+                    "{\"result\":{\"process_info\":{\"foreground_processes\":[]}}}",
+                    string.Empty);
+            }
+
             if (fileName == "bash" && arguments.Count > 1 && Path.GetFileName(arguments[0]) == "team.sh")
             {
                 return new NotifyProcessResult(0, "orchestration (codex)\n", string.Empty);

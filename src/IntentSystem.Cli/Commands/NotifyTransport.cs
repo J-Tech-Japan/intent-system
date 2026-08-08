@@ -362,6 +362,29 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                     + "routing fallback. Correct the recorded workspace/pane or re-provision the intended recipient.");
             }
 
+            // A stopped/undetected herdr registration is not proof that the
+            // recipient process is gone. Corroborate the exact recorded pane
+            // before choosing any absence outcome or the stopped-seat report
+            // exception.
+            var processInfo = NotifyPaneProcessReader.Read(runner, executable, recordedPane);
+            if (!processInfo.Resolved)
+            {
+                return Failure(
+                    processInfo.Cause ?? "process-corroboration-unavailable",
+                    $"herdr reported no running registration for logical role '{toRole}' at recorded pane '{recordedPane}', but process corroboration was unavailable: {processInfo.Summary}");
+            }
+
+            if (processInfo.Processes.Count > 0)
+            {
+                return RegistrationLostProcessPresent(
+                    team,
+                    toRole,
+                    topology.WorkspaceId,
+                    recordedPane,
+                    processInfo.Processes.Count,
+                    "The registration is lost while the recipient process is likely alive. Re-register the agent at the recorded pane; no kill, restart, or automatic re-registration is safe.");
+            }
+
             if (atRecordedPane.Length > 0)
             {
                 if (allowStoppedRecipient)
@@ -638,6 +661,35 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
         }
 
         var cause = ClassifyPromptFailure(detail);
+        if (cause is "pane-absent" or "agent-not-running")
+        {
+            var processInfo = NotifyPaneProcessReader.Read(runner, executable, recordedPane);
+            if (!processInfo.Resolved)
+            {
+                return Failure(
+                    processInfo.Cause ?? "process-corroboration-unavailable",
+                    $"herdr prompt reported '{cause}' for logical role '{toRole}', but process corroboration was unavailable: {processInfo.Summary}",
+                    activePhase: new SessionLayerPreflightPhaseResult
+                    {
+                        Status = SessionLayerPreflight.ActiveNotObserved,
+                        Checked = true,
+                        ContactedReceiver = true,
+                        Summary = "The prompt failure could not be corroborated by the recorded pane process state.",
+                    });
+            }
+
+            if (processInfo.Processes.Count > 0)
+            {
+                return RegistrationLostProcessPresent(
+                    team,
+                    toRole,
+                    topology.WorkspaceId,
+                    recordedPane,
+                    processInfo.Processes.Count,
+                    $"The prompt failure was an absence-like registration error ('{cause}'), but a foreground process remains. Re-register the agent at the recorded pane; no kill, restart, or automatic re-registration is safe.");
+            }
+        }
+
         return Failure(
             cause,
             $"herdr delivery to logical role '{toRole}' in team '{team}' workspace '{topology.WorkspaceId}' failed: "
@@ -732,7 +784,9 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
 
         if (detail.Contains("agent", StringComparison.OrdinalIgnoreCase)
             && (detail.Contains("not running", StringComparison.OrdinalIgnoreCase)
-                || detail.Contains("undetected", StringComparison.OrdinalIgnoreCase)))
+                || detail.Contains("undetected", StringComparison.OrdinalIgnoreCase)
+                || detail.Contains("not found", StringComparison.OrdinalIgnoreCase)
+                || detail.Contains("agent_not_found", StringComparison.OrdinalIgnoreCase)))
         {
             return "agent-not-running";
         }
@@ -750,15 +804,44 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
         string cause,
         string summary,
         SessionLayerPreflightPhaseResult? activePhase = null,
-        NotifyRecipientWarning? recipientWarning = null) => new()
+        NotifyRecipientWarning? recipientWarning = null,
+        string? receiverStateOutcome = null,
+        string? workingTransition = null,
+        string? settleOutcome = null,
+        bool? resendPermitted = null) => new()
         {
             Resolved = false,
             Delivered = false,
             Cause = cause,
+            ReceiverStateOutcome = receiverStateOutcome,
+            WorkingTransition = workingTransition,
+            SettleOutcome = settleOutcome,
+            ResendPermitted = resendPermitted,
             ActivePhase = activePhase ?? Skipped("Active receiver delivery did not start because recorded-route resolution failed."),
             RecipientWarning = recipientWarning,
             Summary = summary,
         };
+
+    private static NotifyDeliveryResult RegistrationLostProcessPresent(
+        string team,
+        string role,
+        string workspace,
+        string pane,
+        int processCount,
+        string guidance) => Failure(
+            NotifyPendingLivenessResult.RegistrationLostProcessPresent,
+            $"Team '{team}' has no running herdr registration for logical role '{role}' at recorded workspace '{workspace}' pane '{pane}', but {processCount} foreground process(es) remain. {guidance} Resend is permitted after the registration is repaired.",
+            activePhase: new SessionLayerPreflightPhaseResult
+            {
+                Status = SessionLayerPreflight.ActiveNotObserved,
+                Checked = true,
+                ContactedReceiver = false,
+                Summary = "The recorded pane process is present while the herdr registration is absent; delivery was not attempted.",
+            },
+            receiverStateOutcome: NotifyPendingLivenessResult.RegistrationLostProcessPresent,
+            workingTransition: "unobservable",
+            settleOutcome: "not-applicable",
+            resendPermitted: true);
 
     private static SessionLayerPreflightPhaseResult Skipped(string summary) => new()
     {

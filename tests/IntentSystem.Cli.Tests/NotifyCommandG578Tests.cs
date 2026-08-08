@@ -505,6 +505,9 @@ public sealed class NotifyCommandG578Tests : IDisposable
 
     private static NotifyProcessResult Success(string output = "") => new(0, output, "");
 
+    private static NotifyProcessResult EmptyProcessInfo() => Success(
+        "{\"result\":{\"process_info\":{\"foreground_processes\":[]}}}");
+
     private static NotifyProcessResult Failure(string error) => new(1, "", error);
 
     private static string AgmsgRoster(bool withImplementation = true) =>
@@ -560,7 +563,12 @@ public sealed class NotifyCommandG578Tests : IDisposable
         public NotifyProcessResult Run(string fileName, IReadOnlyList<string> arguments)
         {
             Calls.Add((fileName, arguments.ToArray()));
-            return handler(fileName, arguments);
+            var result = handler(fileName, arguments);
+            return arguments.Take(2).SequenceEqual(["pane", "process-info"])
+                && result.ExitCode == 0
+                && string.IsNullOrWhiteSpace(result.StandardOutput)
+                ? EmptyProcessInfo()
+                : result;
         }
     }
 
