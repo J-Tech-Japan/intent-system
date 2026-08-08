@@ -2037,6 +2037,10 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("--sandbox workspace-write --ask-for-approval never --add-dir <role-work-root>", output, StringComparison.Ordinal);
         Assert.Contains("Please restart Codex", output, StringComparison.Ordinal);
         Assert.Contains("Writes outside declared roots were denied while reads outside declared roots were not", output, StringComparison.Ordinal);
+        Assert.Contains(
+            "- **post-start interaction** — unmeasured; No Codex post-start interaction was observed on MyIntentHost on 2026-08-07; do not infer a prompt, answer, or default safety from the measured launch facts. Prompt, answer, and default safety remain unknown.",
+            output,
+            StringComparison.Ordinal);
         Assert.Contains("(version: Codex v0.144.1; platform: macOS)", output, StringComparison.Ordinal);
         Assert.Contains("(measured on host: MyIntentHost; date: 2026-08-07)", output, StringComparison.Ordinal);
         Assert.DoesNotContain("#### Cursor", output, StringComparison.OrdinalIgnoreCase);
@@ -2052,8 +2056,19 @@ public sealed class GuideOrchestratorThreadCommandTests
             .GetProperty("launch_recipes");
         Assert.Contains("which CLI and model each seat", recipes.GetProperty("seat_kind_intake").GetString(), StringComparison.Ordinal);
         Assert.Contains("codex", recipes.GetProperty("recorded_kinds").EnumerateArray().Select(item => item.GetString()));
-        Assert.Contains("--sandbox workspace-write", recipes.GetProperty("codex_recipe").GetProperty("invocation").GetString(), StringComparison.Ordinal);
-        var codexMeasurements = recipes.GetProperty("codex_recipe").GetProperty("measurements").EnumerateArray().ToArray();
+        var codexRecipe = recipes.GetProperty("codex_recipe");
+        Assert.Contains("--sandbox workspace-write", codexRecipe.GetProperty("invocation").GetString(), StringComparison.Ordinal);
+        var codexPostStart = codexRecipe.GetProperty("post_start_interaction");
+        Assert.Equal("unmeasured", codexPostStart.GetProperty("status").GetString());
+        Assert.False(codexPostStart.GetProperty("observed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, codexPostStart.GetProperty("prompt").ValueKind);
+        Assert.Equal(JsonValueKind.Null, codexPostStart.GetProperty("answer").ValueKind);
+        Assert.Equal(JsonValueKind.Null, codexPostStart.GetProperty("default_is_safe").ValueKind);
+        Assert.Contains(
+            "No Codex post-start interaction was observed on MyIntentHost on 2026-08-07",
+            codexPostStart.GetProperty("absence_reason").GetString(),
+            StringComparison.Ordinal);
+        var codexMeasurements = codexRecipe.GetProperty("measurements").EnumerateArray().ToArray();
         Assert.Equal(3, codexMeasurements.Length);
         Assert.All(codexMeasurements, measurement =>
         {
@@ -2187,8 +2202,8 @@ public sealed class GuideOrchestratorThreadCommandTests
             DefaultIsSafe = false,
         };
 
-        Assert.True(safe.DefaultIsSafe);
-        Assert.False(unsafeDefault.DefaultIsSafe);
+        Assert.True(safe.DefaultIsSafe == true);
+        Assert.False(unsafeDefault.DefaultIsSafe == true);
         Assert.NotEqual(safe.DefaultIsSafe, unsafeDefault.DefaultIsSafe);
     }
 

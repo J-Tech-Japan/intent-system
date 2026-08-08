@@ -2229,7 +2229,7 @@ internal static class GuideOrchestratorThreadCommand
                     "Agent-neutral recipes make an unattended launch reviewable rather than broad by default. Every "
                     + "recipe states the invocation, bounded `--add-dir` roots derived from that role's real work, "
                     + "the continuation bound, the startup gates the operator must answer, the post-start interaction "
-                    + "and answer that preserve the declared envelope, whether the default is safe, and the denial "
+                    + "record (or an explicit unmeasured absence) with its envelope-preserving answer and whether the default is safe, and the denial "
                     + "semantics. A recipe that stops at the command line is incomplete because an agent can negotiate "
                     + "authority after launch. The post-start interaction field is a G636 preview-through-1.x surface "
                     + "added after the v0.12.0 freeze and outside the 1.0 compatibility promise. "
@@ -2245,7 +2245,7 @@ internal static class GuideOrchestratorThreadCommand
                     "bounded allowed roots derived from the logical role's actual needs (not a product-wide path)",
                     "the maximum autonomous continuation bound",
                     "startup trust and autopilot/permission gates the operator must answer",
-                    "a declared post-start interaction: what the agent presents, the envelope-preserving answer, and whether the default is safe",
+                    "a structured post-start interaction record: what the agent presents, the envelope-preserving answer, and whether the default is safe, or an explicit unmeasured absence when no interaction was observed",
                     "a named advisory inline-payload warning profile and threshold, never a safe-paste guarantee",
                     "a declared task-envelope delivery_method (inline or file-backed; undeclared remains inline)",
                     "the silent-denial semantics and the READY/review evidence that proves them",
@@ -3547,7 +3547,7 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **task-envelope delivery method** — {unattended.CopilotRecipe.DeliveryMethod}");
         var copilotInteraction = unattended.CopilotRecipe.PostStartInteraction
             ?? throw new InvalidOperationException("The measured Copilot post-start interaction is missing from the registry.");
-        writer.WriteLine($"- **post-start interaction** — {copilotInteraction.Prompt} Answer: {copilotInteraction.Answer} Default safe: {copilotInteraction.DefaultIsSafe.ToString().ToLowerInvariant()}.");
+        writer.WriteLine($"- **post-start interaction** — {copilotInteraction.ToMarkdown()}");
         writer.WriteLine($"- **startup gates** — {unattended.CopilotRecipe.StartupGates}");
         writer.WriteLine($"- **prohibited blanket permissions** — {unattended.CopilotRecipe.ProhibitedBlanket}");
         writer.WriteLine();
@@ -3561,12 +3561,7 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **continuation bound** — {unattended.CodexRecipe.ContinuationBound}");
         writer.WriteLine($"- **inline-payload advisory** — {unattended.CodexRecipe.InlinePayloadWarningProfile}");
         writer.WriteLine($"- **task-envelope delivery method** — {unattended.CodexRecipe.DeliveryMethod}");
-        if (unattended.CodexRecipe.PostStartInteraction is { } codexInteraction)
-        {
-            writer.WriteLine(
-                $"- **post-start interaction** — {codexInteraction.Prompt} Answer: {codexInteraction.Answer} "
-                + $"Default safe: {codexInteraction.DefaultIsSafe.ToString().ToLowerInvariant()}.");
-        }
+        writer.WriteLine($"- **post-start interaction** — {unattended.CodexRecipe.PostStartInteraction.ToMarkdown()}");
         writer.WriteLine($"- **startup gates** — {unattended.CodexRecipe.StartupGates}");
         writer.WriteLine($"- **prohibited blanket permissions** — {unattended.CodexRecipe.ProhibitedBlanket}");
         writer.WriteLine($"- **denial semantics** — {unattended.CodexRecipe.DenialSemantics}");
@@ -5579,19 +5574,45 @@ internal sealed record OrchestratorUnattendedLaunchRecipes
 /// <summary>
 /// G636: an unattended recipe records the interaction an agent may present
 /// after launch, the answer that preserves the declared envelope, and whether
-/// accepting the default is safe. It records guidance only; it never drives a
-/// dialog or sends keystrokes.
+/// accepting the default is safe. When that interaction was not measured, the
+/// same structured field records an explicit absence instead of inventing a
+/// prompt, answer, or safety decision. It records guidance only; it never
+/// drives a dialog or sends keystrokes.
 /// </summary>
 internal sealed record OrchestratorPostStartInteraction
 {
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = "measured";
+
+    [JsonPropertyName("observed")]
+    public bool Observed { get; init; } = true;
+
     [JsonPropertyName("prompt")]
-    public required string Prompt { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? Prompt { get; init; }
 
     [JsonPropertyName("answer")]
-    public required string Answer { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? Answer { get; init; }
 
     [JsonPropertyName("default_is_safe")]
-    public required bool DefaultIsSafe { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public bool? DefaultIsSafe { get; init; }
+
+    [JsonPropertyName("absence_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? AbsenceReason { get; init; }
+
+    public string ToMarkdown()
+    {
+        if (Observed && string.Equals(Status, "measured", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{Prompt} Answer: {Answer} Default safe: {DefaultIsSafe == true}.";
+        }
+
+        return $"{Status}; {AbsenceReason ?? "No post-start interaction was observed."} "
+            + "Prompt, answer, and default safety remain unknown.";
+    }
 }
 
 internal sealed record OrchestratorProvisioningRoleInitialization

@@ -411,6 +411,12 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
 - **Measured envelope asymmetry.** Writes outside declared roots were denied,
   while reads outside declared roots were not denied. Treat that asymmetry as
   an explicit security fact, not as a read-permission guarantee.
+- **Post-start interaction (G636).** No Codex post-start interaction was
+  observed on **MyIntentHost** on **2026-08-07**. The structured
+  `post_start_interaction` record therefore carries `status: unmeasured`,
+  `observed: false`, null prompt/answer/default-safety values, and an explicit
+  absence reason; Markdown renders that absence. Do not infer an observed
+  prompt, answer, or default safety from the measured launch facts.
 - **Registry boundary.** `topology update-kind` surfaces the measured target
   recipe with the requested change. When a target kind has no recorded recipe,
   it says so explicitly and does not invent launch flags. The recorded kind is

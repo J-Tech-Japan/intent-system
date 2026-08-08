@@ -72,6 +72,7 @@ internal static class HerdrOnlyOperatingGuide
         - **continuation bound** — {{codex.ContinuationBound}}
         - **inline-payload advisory** — {{codex.InlinePayloadWarningProfile}}
         - **task-envelope delivery method** — {{codex.DeliveryMethod}}
+        - **post-start interaction** — {{codex.PostStartInteraction.ToMarkdown()}}
         - **startup gates** — {{codex.StartupGates}}
         - **prohibited blanket permissions** — {{codex.ProhibitedBlanket}}
         - **denial semantics** — {{codex.DenialSemantics}}

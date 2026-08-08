@@ -363,6 +363,11 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
   これは wedge ではなく restart condition であり、回避のために envelope を広げてはいけません。
 - **実測した envelope asymmetry。** 宣言した root の外への write は拒否されましたが、外への read は拒否されませんでした。
   これは明示的な security fact として扱い、read permission の保証と解釈してはいけません。
+- **post-start interaction (G636)。** **MyIntentHost** で **2026-08-07** に Codex の
+  post-start interaction は観測されていません。したがって structured な
+  `post_start_interaction` record は `status: unmeasured`、`observed: false`、prompt/answer/default safety
+  を null、そして明示的な absence reason として保持し、Markdown でもその absence を表示します。実測した
+  prompt・answer・default safety を推測してはいけません。
 - **registry boundary。** `topology update-kind` は変更とともに実測済み target recipe を表示します。recipe が未記録の
   target kind では明示的に absent とし、launch flag を推測しません。recorded kind は human の現在の wish であり、
   human が要求した switch は one step、recovery は unattended に kind を変更しません。

@@ -57,7 +57,7 @@ internal sealed record AgentLaunchRecipe
     public required string DeliveryMethod { get; init; }
 
     [JsonPropertyName("post_start_interaction")]
-    public required OrchestratorPostStartInteraction? PostStartInteraction { get; init; }
+    public required OrchestratorPostStartInteraction PostStartInteraction { get; init; }
 
     [JsonPropertyName("startup_gates")]
     public required string StartupGates { get; init; }
@@ -142,6 +142,8 @@ internal static class AgentLaunchRecipeRegistry
                     + "declaration preserves existing inline delivery.",
                 PostStartInteraction = new OrchestratorPostStartInteraction
                 {
+                    Status = "measured",
+                    Observed = true,
                     Prompt =
                         "At the first task, Copilot 1.0.78 presents `1. Enable all permissions (recommended)` / "
                         + "`2. Continue with limited permissions` / `3. Cancel`, with the cursor on option 1.",
@@ -149,6 +151,7 @@ internal static class AgentLaunchRecipeRegistry
                         "Choose `Continue with limited permissions` to preserve the bounded `--add-dir` envelope; "
                         + "the default `Enable all permissions` answer is unsafe.",
                     DefaultIsSafe = false,
+                    AbsenceReason = null,
                 },
                 StartupGates =
                     "Folder trust and autopilot-enable are operator provisioning gates; neither is bypassed by "
@@ -197,7 +200,17 @@ internal static class AgentLaunchRecipeRegistry
                 DeliveryMethod =
                     "Declare `delivery_method: file-backed` for a paste-sensitive herdr seat. `notify` writes the "
                     + "unchanged envelope before sending one line; an absent declaration preserves existing inline delivery.",
-                PostStartInteraction = null,
+                PostStartInteraction = new OrchestratorPostStartInteraction
+                {
+                    Status = "unmeasured",
+                    Observed = false,
+                    Prompt = null,
+                    Answer = null,
+                    DefaultIsSafe = null,
+                    AbsenceReason =
+                        "No Codex post-start interaction was observed on MyIntentHost on 2026-08-07; "
+                        + "do not infer a prompt, answer, or default safety from the measured launch facts.",
+                },
                 StartupGates =
                     "The operator supplies the mapped pane and role roots. --sandbox workspace-write and "
                     + "--ask-for-approval never are part of the measured bounded invocation; do not broaden them by "
