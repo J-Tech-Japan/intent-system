@@ -2688,7 +2688,7 @@ maintainer/operator (or authorized external release automation) create and
 publish the GitHub Release for `v0.15.0`; publishing it triggers `release.yml`
 (`on: release: published`) to build and publish the NuGet package and the
 per-platform binary artifacts. **Then roll `eng/version.json` immediately** —
-`stableVersion → 0.15.0`, `nextVersion → 0.16.0` — carrying, per **steps 4–6** of the
+`stableVersion → 0.15.0`, `nextVersion → 0.15.1` — carrying, per **steps 4–6** of the
 [post-release version roll](#post-release-version-roll-g554--required-immediate):
 the **DRAFT note stubs in the same commit** (step 4), the **"Next release
 readiness" section refreshed to the new line in both language mirrors** (step

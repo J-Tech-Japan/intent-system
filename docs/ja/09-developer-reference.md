@@ -2754,7 +2754,7 @@ dotnet test IntentSystem.sln -c Release
 外部リリース自動化)が `v0.15.0` の GitHub Release を作成・公開できます。公開すると
 `release.yml`(`on: release: published`)が起動し、NuGet package とプラットフォーム別
 バイナリを build/publish します。**その後すぐに `eng/version.json` を roll します** —
-`stableVersion → 0.15.0`、`nextVersion → 0.16.0` —
+`stableVersion → 0.15.0`、`nextVersion → 0.15.1` —
 [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
 **ステップ 4–6** に従い、**同一コミットに DRAFT note スタブ**(ステップ 4)、
 **「次リリース準備」セクションを ja/en 両ミラーで新しいラインへ更新**(ステップ 5)、
