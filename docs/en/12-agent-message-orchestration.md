@@ -244,7 +244,9 @@ The full reference checklist follows the intake:
 1. **Decide / record** — domain and target repo; host / orchestrator /
    implementation / review paths (each role runs from its own folder, clone, or
    worktree); base branch policy; per-role agents; agmsg team name; delivery
-   mode.
+   mode. In herdr-only, ask the human which CLI and model each seat
+   (`design`, `orchestrator`, `implementation`, and `review`) should run, then
+   record each answer as that seat's `kind`; do not silently choose a default.
 2. **Register roles** — register orchestrator, implementation, and review under
    one agmsg team (`join.sh`).
 3. **Set delivery** — give each role a way to receive messages, e.g. a streamed
@@ -325,9 +327,10 @@ continuation bound, the startup gates the operator must answer, the post-start
 interaction (what the agent presents, the answer that preserves the declared
 envelope, and whether the default answer is safe), and the denial semantics. A
 recipe that stops at the command line is incomplete: an agent can negotiate
-authority after launch even when the invocation is correct. A later Cursor or
-opencode recipe adds an entry with those same fields; it does not restate or
-weaken the central rule below.
+authority after launch even when the invocation is correct. The measured
+registry currently contains Copilot and Codex entries; unmeasured kinds such as
+Cursor and opencode remain placeholders by name only and must not acquire
+invented flags.
 
 > **Preview through 1.x (G636).** The post-start interaction field is a
 > post-v0.12.0-freeze preview surface. It is outside the 1.0 compatibility
@@ -388,6 +391,37 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
 - **Prohibited blanket permissions.** `--yolo` and `--allow-all-paths` are
   **prohibited** for unattended seats on developer machines. Use bounded
   `--add-dir` roots instead.
+
+#### Codex — measured recipe (G647)
+
+```text
+herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox workspace-write --ask-for-approval never --add-dir <role-work-root> [--add-dir <host-routing-root>]
+```
+
+- **Role-derived roots.** Use one bounded `--add-dir <role-work-root>` for the
+  role checkout/worktree; add the host routing root only when that role's
+  canonical report surface needs it.
+- **Measured bounded invocation.** This invocation was measured on **Codex
+  v0.144.1 / macOS**; it is not a universal flag recipe for an unmeasured
+  environment.
+- **Measured self-update behavior.** Codex can self-update, print **“Please
+  restart Codex”**, and exit to the pane's shell. Restart the agent in the
+  recorded pane and re-run READY/ping; this is a restart condition, not a
+  wedge, and never a reason to widen the envelope.
+- **Measured envelope asymmetry.** Writes outside declared roots were denied,
+  while reads outside declared roots were not denied. Treat that asymmetry as
+  an explicit security fact, not as a read-permission guarantee.
+- **Post-start interaction (G636).** No Codex post-start interaction was
+  observed on **MyIntentHost** on **2026-08-07**. The structured
+  `post_start_interaction` record therefore carries `status: unmeasured`,
+  `observed: false`, null prompt/answer/default-safety values, and an explicit
+  absence reason; Markdown renders that absence. Do not infer an observed
+  prompt, answer, or default safety from the measured launch facts.
+- **Registry boundary.** `topology update-kind` surfaces the measured target
+  recipe with the requested change. When a target kind has no recorded recipe,
+  it says so explicitly and does not invent launch flags. The recorded kind is
+  the human's current wish, a human-requested switch is one step, and recovery
+  never changes a kind unattended.
 
 **Unattended READY branch.** Run the normal G556 liveness checks and prove all
 three additional facts: an expected action inside the recorded roots succeeds;
@@ -527,6 +561,30 @@ the concrete counterpart to the agmsg provisioning/receiver sections. It is
 the preferred transport because it has fewer dependencies; agmsg + herdr
 remains supported and is not retired. Exactly one transport runs per team;
 mixed agmsg and herdr delivery is a contract violation.
+
+### Human seat-kind intake and measured registry (G647)
+
+Before launching any herdr-only seat, ask the human which CLI and model each
+seat (`design`, `orchestrator`, `implementation`, and `review`) should run, then
+record each answer as that seat's `kind`. Do not silently choose a default. The
+recorded kind is the human's current wish; a requested switch is one step, and
+recovery never changes a kind unattended. `topology update-kind` shows the
+target's measured recipe with the change or names its absence explicitly.
+
+The registry contains only measured kinds. Codex's measured entry is:
+
+```text
+herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox workspace-write --ask-for-approval never --add-dir <role-work-root> [--add-dir <host-routing-root>]
+```
+
+On **MyIntentHost**, measured **2026-08-07**, **Codex v0.144.1 / macOS**, the
+measured facts are: the bounded invocation uses workspace-write, never-ask
+approval, and role-derived roots; self-update can print **“Please restart
+Codex”** and leave the pane at a shell (restart and re-run READY/ping; this is
+not a wedge); and writes outside declared roots are denied while reads outside
+them are not. The rendered and structured measurement entries carry
+`host: MyIntentHost` and `date: 2026-08-07` for each fact. Cursor and opencode
+have no measured entry and remain placeholders by name only.
 
 ### Provision and prove READY
 

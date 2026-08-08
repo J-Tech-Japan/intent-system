@@ -1591,15 +1591,27 @@ internal static class GuideOrchestratorThreadCommand
                     "review receiver cwd + agent type",
                     "design cwd + agent type, and whether design is manual-inbox or monitored",
                     "delivery mode per role (monitored / streamed inbox watch, or manual inbox)",
-                },
-                Defaults = new[]
-                {
-                    "orchestrator = operator-chosen herdr-startable kind",
-                    "implementer = operator-chosen herdr-startable kind",
-                    "reviewer = operator-chosen herdr-startable kind",
-                    "design = manual-inbox or monitored, using an operator-chosen herdr-startable kind",
-                    "runtime / implementation / review receivers = monitor (when supported)",
-                },
+                }.Concat(herdrOnly
+                    ? new[]
+                    {
+                        "for herdr-only, ask which CLI and model each seat should run; record each answer as that seat's kind",
+                    }
+                    : Array.Empty<string>()).ToArray(),
+                Defaults = herdrOnly
+                    ? new[]
+                    {
+                        "herdr-only seat kinds = no silent default; ask the human for each seat's CLI and model and record the answer",
+                        "design = manual-inbox or monitored, after the human chooses its CLI and model",
+                        "runtime / implementation / review receivers = pane readiness, after the human chooses each seat",
+                    }
+                    : new[]
+                    {
+                        "orchestrator = operator-chosen herdr-startable kind",
+                        "implementer = operator-chosen herdr-startable kind",
+                        "reviewer = operator-chosen herdr-startable kind",
+                        "design = manual-inbox or monitored, using an operator-chosen herdr-startable kind",
+                        "runtime / implementation / review receivers = monitor (when supported)",
+                    },
                 DesignDeliveryNote =
                     "Design may be a manual-inbox receiver (reads with `inbox.sh` on demand) or a monitored receiver; "
                     + "either way it receives ONLY human-decision escalations or explicit summaries, never routine "
@@ -2217,18 +2229,23 @@ internal static class GuideOrchestratorThreadCommand
                     "Agent-neutral recipes make an unattended launch reviewable rather than broad by default. Every "
                     + "recipe states the invocation, bounded `--add-dir` roots derived from that role's real work, "
                     + "the continuation bound, the startup gates the operator must answer, the post-start interaction "
-                    + "and answer that preserve the declared envelope, whether the default is safe, and the denial "
+                    + "record (or an explicit unmeasured absence) with its envelope-preserving answer and whether the default is safe, and the denial "
                     + "semantics. A recipe that stops at the command line is incomplete because an agent can negotiate "
                     + "authority after launch. The post-start interaction field is a G636 preview-through-1.x surface "
                     + "added after the v0.12.0 freeze and outside the 1.0 compatibility promise. "
-                    + "Later agent recipes inherit the central rule below; do not duplicate or weaken it per agent.",
+                    + "G647 keeps this registry limited to measured kinds; unmeasured kinds such as Cursor and "
+                    + "opencode have no recipe entry and must not acquire invented flags. Later measured recipes "
+                    + "inherit the central rule below; do not duplicate or weaken it per agent.",
+                RecordedKinds = AgentLaunchRecipeRegistry.RecordedKinds
+                    .OrderBy(kind => kind, StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
                 RequiredRecipeFields = new[]
                 {
                     "the launch invocation and agent kind",
                     "bounded allowed roots derived from the logical role's actual needs (not a product-wide path)",
                     "the maximum autonomous continuation bound",
                     "startup trust and autopilot/permission gates the operator must answer",
-                    "a declared post-start interaction: what the agent presents, the envelope-preserving answer, and whether the default is safe",
+                    "a structured post-start interaction record: what the agent presents, the envelope-preserving answer, and whether the default is safe, or an explicit unmeasured absence when no interaction was observed",
                     "a named advisory inline-payload warning profile and threshold, never a safe-paste guarantee",
                     "a declared task-envelope delivery_method (inline or file-backed; undeclared remains inline)",
                     "the silent-denial semantics and the READY/review evidence that proves them",
@@ -2241,50 +2258,10 @@ internal static class GuideOrchestratorThreadCommand
                     + "evidence MUST inspect outputs and the transcript for denials; liveness is not evidence that a "
                     + "denied step ran. This changes supervision evidence only — G556 liveness and notify/delivery "
                     + "semantics are unchanged.",
-                CopilotRecipe = new OrchestratorCopilotUnattendedRecipe
-                {
-                    Invocation =
-                        "herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model claude-opus-5 "
-                        + "--mode autopilot --allow-all-tools --add-dir <role-work-root> [--add-dir <host-routing-root>] "
-                        + "--max-autopilot-continues 10",
-                    RoleDerivedRoots =
-                        "Use one bounded `--add-dir <role-work-root>` for the role's checkout/worktree. A review "
-                        + "role additionally receives `--add-dir <host-routing-root>` because `intent-cli notify report` "
-                        + "is its canonical reporting surface. Do not add unrelated developer-machine roots.",
-                    ContinuationBound =
-                        "Keep `--max-autopilot-continues 10` explicit; changing the bound is an operator decision "
-                        + "recorded with the recipe, not an agent default.",
-                    InlinePayloadWarningProfile =
-                        "Profile `copilot-autopilot-observed-paste-risk` declares `inline_payload_warning_chars: 4096`. "
-                        + "It is ADVISORY only: a payload above it is likely pasted rather than typed, while a payload "
-                        + "below it is not promised safe because the real limit is terminal- and agent-dependent. "
-                        + "Reference-first dispatch keeps repeated review substance in committed `review-context.md`, but a "
-                        + "minimal canonical `notify delegate` envelope still measures 842 characters over 14 lines and can "
-                        + "itself be pasted: it reduces duplication, not a paste-sensitive wedge. G619 owns the transport-layer remedy.",
-                    DeliveryMethod =
-                        "Declare `delivery_method: file-backed` for a paste-sensitive herdr seat. `notify` writes the "
-                        + "unchanged envelope to durable host `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` before "
-                        + "sending one line, `Read task envelope: <path>`. Declare `inline` to opt in explicitly; an absent "
-                        + "declaration preserves existing inline delivery.",
-                    PostStartInteraction = new OrchestratorPostStartInteraction
-                    {
-                        Prompt =
-                            "At the first task, Copilot 1.0.78 presents `1. Enable all permissions (recommended)` / "
-                            + "`2. Continue with limited permissions` / `3. Cancel`, with the cursor on option 1.",
-                        Answer =
-                            "Choose `Continue with limited permissions` to preserve the bounded `--add-dir` envelope; "
-                            + "the default `Enable all permissions` answer is unsafe.",
-                        DefaultIsSafe = false,
-                    },
-                    StartupGates =
-                        "Folder trust and autopilot-enable are operator provisioning gates; neither is bypassed by "
-                        + "launch flags. The autopilot-enable dialog appears at the FIRST TASK even when `--mode autopilot` "
-                        + "was passed at launch. With `--allow-all-tools` plus bounded roots, choose `Continue with limited "
-                        + "permissions`; NEVER choose `Enable all permissions`, which discards the boundary.",
-                    ProhibitedBlanket =
-                        "For unattended developer-machine seats, `--yolo` and `--allow-all-paths` are PROHIBITED. "
-                        + "They discard the role-derived boundary; bounded `--add-dir` roots are the required alternative.",
-                },
+                CopilotRecipe = AgentLaunchRecipeRegistry.Find("copilot")
+                    ?? throw new InvalidOperationException("The measured Copilot launch recipe is missing from the registry."),
+                CodexRecipe = AgentLaunchRecipeRegistry.Find("codex")
+                    ?? throw new InvalidOperationException("The measured Codex launch recipe is missing from the registry."),
                 ReadyBranch =
                     "For an unattended seat, run the normal G556 liveness checks AND prove all three recipe-specific "
                     + "facts: an expected action inside the recorded roots succeeds, the role can reach its canonical "
@@ -3568,9 +3545,41 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **continuation bound** — {unattended.CopilotRecipe.ContinuationBound}");
         writer.WriteLine($"- **inline-payload advisory** — {unattended.CopilotRecipe.InlinePayloadWarningProfile}");
         writer.WriteLine($"- **task-envelope delivery method** — {unattended.CopilotRecipe.DeliveryMethod}");
-        writer.WriteLine($"- **post-start interaction** — {unattended.CopilotRecipe.PostStartInteraction.Prompt} Answer: {unattended.CopilotRecipe.PostStartInteraction.Answer} Default safe: {unattended.CopilotRecipe.PostStartInteraction.DefaultIsSafe.ToString().ToLowerInvariant()}.");
+        var copilotInteraction = unattended.CopilotRecipe.PostStartInteraction
+            ?? throw new InvalidOperationException("The measured Copilot post-start interaction is missing from the registry.");
+        writer.WriteLine($"- **post-start interaction** — {copilotInteraction.ToMarkdown()}");
         writer.WriteLine($"- **startup gates** — {unattended.CopilotRecipe.StartupGates}");
         writer.WriteLine($"- **prohibited blanket permissions** — {unattended.CopilotRecipe.ProhibitedBlanket}");
+        writer.WriteLine();
+        writer.WriteLine("#### Codex (measured recipe, G647)");
+        writer.WriteLine();
+        writer.WriteLine("```text");
+        writer.WriteLine(unattended.CodexRecipe.Invocation);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine($"- **role-derived roots** — {unattended.CodexRecipe.RoleDerivedRoots}");
+        writer.WriteLine($"- **continuation bound** — {unattended.CodexRecipe.ContinuationBound}");
+        writer.WriteLine($"- **inline-payload advisory** — {unattended.CodexRecipe.InlinePayloadWarningProfile}");
+        writer.WriteLine($"- **task-envelope delivery method** — {unattended.CodexRecipe.DeliveryMethod}");
+        writer.WriteLine($"- **post-start interaction** — {unattended.CodexRecipe.PostStartInteraction.ToMarkdown()}");
+        writer.WriteLine($"- **startup gates** — {unattended.CodexRecipe.StartupGates}");
+        writer.WriteLine($"- **prohibited blanket permissions** — {unattended.CodexRecipe.ProhibitedBlanket}");
+        writer.WriteLine($"- **denial semantics** — {unattended.CodexRecipe.DenialSemantics}");
+        writer.WriteLine($"- **recovery** — {unattended.CodexRecipe.Recovery}");
+        writer.WriteLine("- **measured facts** —");
+        foreach (var measurement in unattended.CodexRecipe.Measurements)
+        {
+            writer.WriteLine(
+                $"  - [{measurement.Status}] {measurement.Fact}: {measurement.Observation} "
+                + $"(version: {measurement.Version}; platform: {measurement.Platform}) "
+                + $"(measured on host: {measurement.Host}; date: {measurement.Date})");
+        }
+        writer.WriteLine();
+        writer.WriteLine(
+            $"> **Registry boundary (G647):** recorded kinds are {string.Join(", ", unattended.RecordedKinds)}. "
+            + "A target kind without a recorded recipe is named as absent at `topology update-kind`; do not "
+            + "invent a bounded invocation. The recorded kind is the human's current wish, a requested switch "
+            + "is one step, and recovery never changes a kind unattended.");
         writer.WriteLine();
         writer.WriteLine($"> **Unattended READY branch:** {unattended.ReadyBranch}");
         writer.WriteLine();
@@ -5546,59 +5555,64 @@ internal sealed record OrchestratorUnattendedLaunchRecipes
     [JsonPropertyName("required_recipe_fields")]
     public required IReadOnlyList<string> RequiredRecipeFields { get; init; }
 
+    [JsonPropertyName("recorded_kinds")]
+    public required IReadOnlyList<string> RecordedKinds { get; init; }
+
     [JsonPropertyName("central_autopilot_supervision_rule")]
     public required string CentralAutopilotSupervisionRule { get; init; }
 
     [JsonPropertyName("copilot_recipe")]
-    public required OrchestratorCopilotUnattendedRecipe CopilotRecipe { get; init; }
+    public required AgentLaunchRecipe CopilotRecipe { get; init; }
+
+    [JsonPropertyName("codex_recipe")]
+    public required AgentLaunchRecipe CodexRecipe { get; init; }
 
     [JsonPropertyName("ready_branch")]
     public required string ReadyBranch { get; init; }
 }
 
-internal sealed record OrchestratorCopilotUnattendedRecipe
-{
-    [JsonPropertyName("invocation")]
-    public required string Invocation { get; init; }
-
-    [JsonPropertyName("role_derived_roots")]
-    public required string RoleDerivedRoots { get; init; }
-
-    [JsonPropertyName("continuation_bound")]
-    public required string ContinuationBound { get; init; }
-
-    [JsonPropertyName("inline_payload_warning_profile")]
-    public required string InlinePayloadWarningProfile { get; init; }
-
-    [JsonPropertyName("delivery_method")]
-    public required string DeliveryMethod { get; init; }
-
-    [JsonPropertyName("post_start_interaction")]
-    public required OrchestratorPostStartInteraction PostStartInteraction { get; init; }
-
-    [JsonPropertyName("startup_gates")]
-    public required string StartupGates { get; init; }
-
-    [JsonPropertyName("prohibited_blanket")]
-    public required string ProhibitedBlanket { get; init; }
-}
-
 /// <summary>
 /// G636: an unattended recipe records the interaction an agent may present
 /// after launch, the answer that preserves the declared envelope, and whether
-/// accepting the default is safe. It records guidance only; it never drives a
-/// dialog or sends keystrokes.
+/// accepting the default is safe. When that interaction was not measured, the
+/// same structured field records an explicit absence instead of inventing a
+/// prompt, answer, or safety decision. It records guidance only; it never
+/// drives a dialog or sends keystrokes.
 /// </summary>
 internal sealed record OrchestratorPostStartInteraction
 {
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = "measured";
+
+    [JsonPropertyName("observed")]
+    public bool Observed { get; init; } = true;
+
     [JsonPropertyName("prompt")]
-    public required string Prompt { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? Prompt { get; init; }
 
     [JsonPropertyName("answer")]
-    public required string Answer { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? Answer { get; init; }
 
     [JsonPropertyName("default_is_safe")]
-    public required bool DefaultIsSafe { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public bool? DefaultIsSafe { get; init; }
+
+    [JsonPropertyName("absence_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? AbsenceReason { get; init; }
+
+    public string ToMarkdown()
+    {
+        if (Observed && string.Equals(Status, "measured", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{Prompt} Answer: {Answer} Default safe: {DefaultIsSafe == true}.";
+        }
+
+        return $"{Status}; {AbsenceReason ?? "No post-start interaction was observed."} "
+            + "Prompt, answer, and default safety remain unknown.";
+    }
 }
 
 internal sealed record OrchestratorProvisioningRoleInitialization
