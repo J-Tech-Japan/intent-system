@@ -1172,21 +1172,175 @@ public sealed class SessionLayerModeG570Tests : IDisposable
     }
 
     /// <summary>
-    /// G650's negative proof: a newly introduced fragment must fail closed until
-    /// a human explicitly declares its type. This test intentionally never
-    /// broadens the production classifier or substitutes a permissive fallback.
+    /// G650's red/green proof at the rendered-matrix boundary. The real guide
+    /// renderer produces each cell first; the test then injects one deliberately
+    /// undeclared line into the team-scoped herdr-only Markdown cell and runs the
+    /// same matrix declaration walk. The red pass must fail closed on that
+    /// rendered line. Removing the injection must make the complete matrix pass
+    /// again, without weakening or bypassing the production typing rule.
     /// </summary>
     [Fact]
-    public void DeliberatelyUndeclaredFragment_FailsClosed_G650()
+    public void RenderMatrix_RejectsInjectedUndeclaredFragment_ThenPassesAfterRestore_G650()
     {
         var error = Assert.Throws<InvalidOperationException>(() =>
-            SessionLayerFragments.TypeOf(
-                BareValues,
-                "## Setup intake",
-                "- deliberately undeclared G650 fragment"));
+            AssertRenderedGuideMatrixHasDeclaredFragments(InjectDeliberatelyUndeclaredFragment));
 
         Assert.Contains("Undeclared session-layer fragment", error.Message, StringComparison.Ordinal);
         Assert.Contains("## Setup intake", error.Message, StringComparison.Ordinal);
+        Assert.Contains(DeliberatelyUndeclaredFragment, error.Message, StringComparison.Ordinal);
+
+        // Restore the actual rendered guide path and prove every matrix cell is
+        // green again, including both Markdown and JSON surfaces.
+        AssertRenderedGuideMatrixHasDeclaredFragments();
+    }
+
+    private const string DeliberatelyUndeclaredFragment = "- deliberately undeclared G650 fragment";
+
+    private static void AssertRenderedGuideMatrixHasDeclaredFragments(
+        Func<string, string>? markdownTransform = null)
+    {
+        foreach (var (mode, team) in new[]
+        {
+            (SessionLayerMode.Agmsg, false),
+            (SessionLayerMode.Agmsg, true),
+            (SessionLayerMode.HerdrOnly, false),
+            (SessionLayerMode.HerdrOnly, true),
+        })
+        {
+            using var guideWorkspace = new ModeWorkspace();
+            var values = MatrixValues(team);
+            var markdown = guideWorkspace.RenderSessionLayerGuide(mode, team, "markdown");
+
+            // Inject only after the real renderer has produced this cell. The
+            // matrix walk below is therefore the guard being red-tested, not a
+            // direct call to TypeOf with a synthetic line.
+            if (markdownTransform is not null
+                && string.Equals(mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal)
+                && team)
+            {
+                markdown = markdownTransform(markdown);
+            }
+
+            if (string.Equals(mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal))
+            {
+                AssertRenderedMarkdownFragmentsAreDeclared(markdown, values);
+            }
+
+            using var json = JsonDocument.Parse(guideWorkspace.RenderSessionLayerGuide(mode, team, "json"));
+            if (string.Equals(mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal))
+            {
+                AssertRenderedJsonValuesAreDeclared(json.RootElement, values);
+            }
+        }
+    }
+
+    private static string InjectDeliberatelyUndeclaredFragment(string rendered)
+    {
+        const string heading = "## Setup intake\n";
+        var injected = rendered.Replace(
+            heading,
+            heading + DeliberatelyUndeclaredFragment + "\n",
+            StringComparison.Ordinal);
+        Assert.NotEqual(rendered, injected);
+        return injected;
+    }
+
+    private static void AssertRenderedMarkdownFragmentsAreDeclared(
+        string rendered,
+        IReadOnlyDictionary<string, string> values)
+    {
+        string? mixedHeading = null;
+        var inFencedBlock = false;
+        foreach (var raw in rendered.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
+            {
+                inFencedBlock = !inFencedBlock;
+            }
+
+            if (!inFencedBlock && line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                mixedHeading = SessionLayerSections.MixedHeadings.Contains(line, StringComparer.Ordinal)
+                    ? line
+                    : null;
+            }
+
+            if (mixedHeading is not null)
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Contains(SessionLayerSections.MechanicPointer, StringComparison.Ordinal)
+                    || trimmed.Contains("descriptive, not an instruction", StringComparison.Ordinal))
+                {
+                    // These are routing labels produced by the renderer after
+                    // it consumes a declared source fragment, not new source
+                    // fragments that the matrix must declare a second time.
+                    continue;
+                }
+
+                // This is the production renderer's fail-closed declaration
+                // boundary, reached through the rendered matrix walk.
+                SessionLayerFragments.ClausesOf(values, mixedHeading, line);
+            }
+        }
+    }
+
+    private static void AssertRenderedJsonValuesAreDeclared(
+        JsonElement root,
+        IReadOnlyDictionary<string, string> values)
+    {
+        foreach (var property in SessionLayerSections.MixedJsonProperties)
+        {
+            if (root.TryGetProperty(property, out var value))
+            {
+                Walk(value, property);
+            }
+        }
+
+        void Walk(JsonElement element, string property)
+        {
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    foreach (var child in element.EnumerateObject())
+                    {
+                        if (!child.Name.StartsWith("session_layer", StringComparison.Ordinal))
+                        {
+                            Walk(child.Value, property);
+                        }
+                    }
+
+                    break;
+                case JsonValueKind.Array:
+                    foreach (var item in element.EnumerateArray())
+                    {
+                        Walk(item, property);
+                    }
+
+                    break;
+                case JsonValueKind.String:
+                    var text = element.GetString()!;
+                    if (text.Contains(SessionLayerSections.MechanicPointer, StringComparison.Ordinal)
+                        || text.Contains("descriptive, not an instruction", StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+
+                    SessionLayerFragments.JsonClausesOf(values, property, text);
+                    break;
+            }
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> MatrixValues(bool team)
+    {
+        var values = new Dictionary<string, string>(BareValues, StringComparer.Ordinal);
+        if (team)
+        {
+            values["<team>"] = "demo-team";
+        }
+
+        return values;
     }
 
     /// <summary>
