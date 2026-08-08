@@ -2258,50 +2258,8 @@ internal static class GuideOrchestratorThreadCommand
                     + "evidence MUST inspect outputs and the transcript for denials; liveness is not evidence that a "
                     + "denied step ran. This changes supervision evidence only — G556 liveness and notify/delivery "
                     + "semantics are unchanged.",
-                CopilotRecipe = new OrchestratorCopilotUnattendedRecipe
-                {
-                    Invocation =
-                        "herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model claude-opus-5 "
-                        + "--mode autopilot --allow-all-tools --add-dir <role-work-root> [--add-dir <host-routing-root>] "
-                        + "--max-autopilot-continues 10",
-                    RoleDerivedRoots =
-                        "Use one bounded `--add-dir <role-work-root>` for the role's checkout/worktree. A review "
-                        + "role additionally receives `--add-dir <host-routing-root>` because `intent-cli notify report` "
-                        + "is its canonical reporting surface. Do not add unrelated developer-machine roots.",
-                    ContinuationBound =
-                        "Keep `--max-autopilot-continues 10` explicit; changing the bound is an operator decision "
-                        + "recorded with the recipe, not an agent default.",
-                    InlinePayloadWarningProfile =
-                        "Profile `copilot-autopilot-observed-paste-risk` declares `inline_payload_warning_chars: 4096`. "
-                        + "It is ADVISORY only: a payload above it is likely pasted rather than typed, while a payload "
-                        + "below it is not promised safe because the real limit is terminal- and agent-dependent. "
-                        + "Reference-first dispatch keeps repeated review substance in committed `review-context.md`, but a "
-                        + "minimal canonical `notify delegate` envelope still measures 842 characters over 14 lines and can "
-                        + "itself be pasted: it reduces duplication, not a paste-sensitive wedge. G619 owns the transport-layer remedy.",
-                    DeliveryMethod =
-                        "Declare `delivery_method: file-backed` for a paste-sensitive herdr seat. `notify` writes the "
-                        + "unchanged envelope to durable host `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` before "
-                        + "sending one line, `Read task envelope: <path>`. Declare `inline` to opt in explicitly; an absent "
-                        + "declaration preserves existing inline delivery.",
-                    PostStartInteraction = new OrchestratorPostStartInteraction
-                    {
-                        Prompt =
-                            "At the first task, Copilot 1.0.78 presents `1. Enable all permissions (recommended)` / "
-                            + "`2. Continue with limited permissions` / `3. Cancel`, with the cursor on option 1.",
-                        Answer =
-                            "Choose `Continue with limited permissions` to preserve the bounded `--add-dir` envelope; "
-                            + "the default `Enable all permissions` answer is unsafe.",
-                        DefaultIsSafe = false,
-                    },
-                    StartupGates =
-                        "Folder trust and autopilot-enable are operator provisioning gates; neither is bypassed by "
-                        + "launch flags. The autopilot-enable dialog appears at the FIRST TASK even when `--mode autopilot` "
-                        + "was passed at launch. With `--allow-all-tools` plus bounded roots, choose `Continue with limited "
-                        + "permissions`; NEVER choose `Enable all permissions`, which discards the boundary.",
-                    ProhibitedBlanket =
-                        "For unattended developer-machine seats, `--yolo` and `--allow-all-paths` are PROHIBITED. "
-                        + "They discard the role-derived boundary; bounded `--add-dir` roots are the required alternative.",
-                },
+                CopilotRecipe = AgentLaunchRecipeRegistry.Find("copilot")
+                    ?? throw new InvalidOperationException("The measured Copilot launch recipe is missing from the registry."),
                 CodexRecipe = AgentLaunchRecipeRegistry.Find("codex")
                     ?? throw new InvalidOperationException("The measured Codex launch recipe is missing from the registry."),
                 ReadyBranch =
@@ -3587,7 +3545,9 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **continuation bound** — {unattended.CopilotRecipe.ContinuationBound}");
         writer.WriteLine($"- **inline-payload advisory** — {unattended.CopilotRecipe.InlinePayloadWarningProfile}");
         writer.WriteLine($"- **task-envelope delivery method** — {unattended.CopilotRecipe.DeliveryMethod}");
-        writer.WriteLine($"- **post-start interaction** — {unattended.CopilotRecipe.PostStartInteraction.Prompt} Answer: {unattended.CopilotRecipe.PostStartInteraction.Answer} Default safe: {unattended.CopilotRecipe.PostStartInteraction.DefaultIsSafe.ToString().ToLowerInvariant()}.");
+        var copilotInteraction = unattended.CopilotRecipe.PostStartInteraction
+            ?? throw new InvalidOperationException("The measured Copilot post-start interaction is missing from the registry.");
+        writer.WriteLine($"- **post-start interaction** — {copilotInteraction.Prompt} Answer: {copilotInteraction.Answer} Default safe: {copilotInteraction.DefaultIsSafe.ToString().ToLowerInvariant()}.");
         writer.WriteLine($"- **startup gates** — {unattended.CopilotRecipe.StartupGates}");
         writer.WriteLine($"- **prohibited blanket permissions** — {unattended.CopilotRecipe.ProhibitedBlanket}");
         writer.WriteLine();
@@ -3599,7 +3559,16 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
         writer.WriteLine($"- **role-derived roots** — {unattended.CodexRecipe.RoleDerivedRoots}");
         writer.WriteLine($"- **continuation bound** — {unattended.CodexRecipe.ContinuationBound}");
+        writer.WriteLine($"- **inline-payload advisory** — {unattended.CodexRecipe.InlinePayloadWarningProfile}");
+        writer.WriteLine($"- **task-envelope delivery method** — {unattended.CodexRecipe.DeliveryMethod}");
+        if (unattended.CodexRecipe.PostStartInteraction is { } codexInteraction)
+        {
+            writer.WriteLine(
+                $"- **post-start interaction** — {codexInteraction.Prompt} Answer: {codexInteraction.Answer} "
+                + $"Default safe: {codexInteraction.DefaultIsSafe.ToString().ToLowerInvariant()}.");
+        }
         writer.WriteLine($"- **startup gates** — {unattended.CodexRecipe.StartupGates}");
+        writer.WriteLine($"- **prohibited blanket permissions** — {unattended.CodexRecipe.ProhibitedBlanket}");
         writer.WriteLine($"- **denial semantics** — {unattended.CodexRecipe.DenialSemantics}");
         writer.WriteLine($"- **recovery** — {unattended.CodexRecipe.Recovery}");
         writer.WriteLine("- **measured facts** —");
@@ -3607,7 +3576,8 @@ internal static class GuideOrchestratorThreadCommand
         {
             writer.WriteLine(
                 $"  - [{measurement.Status}] {measurement.Fact}: {measurement.Observation} "
-                + $"(version: {measurement.Version}; platform: {measurement.Platform})");
+                + $"(version: {measurement.Version}; platform: {measurement.Platform}) "
+                + $"(measured on host: {measurement.Host}; date: {measurement.Date})");
         }
         writer.WriteLine();
         writer.WriteLine(
@@ -5597,40 +5567,13 @@ internal sealed record OrchestratorUnattendedLaunchRecipes
     public required string CentralAutopilotSupervisionRule { get; init; }
 
     [JsonPropertyName("copilot_recipe")]
-    public required OrchestratorCopilotUnattendedRecipe CopilotRecipe { get; init; }
+    public required AgentLaunchRecipe CopilotRecipe { get; init; }
 
     [JsonPropertyName("codex_recipe")]
     public required AgentLaunchRecipe CodexRecipe { get; init; }
 
     [JsonPropertyName("ready_branch")]
     public required string ReadyBranch { get; init; }
-}
-
-internal sealed record OrchestratorCopilotUnattendedRecipe
-{
-    [JsonPropertyName("invocation")]
-    public required string Invocation { get; init; }
-
-    [JsonPropertyName("role_derived_roots")]
-    public required string RoleDerivedRoots { get; init; }
-
-    [JsonPropertyName("continuation_bound")]
-    public required string ContinuationBound { get; init; }
-
-    [JsonPropertyName("inline_payload_warning_profile")]
-    public required string InlinePayloadWarningProfile { get; init; }
-
-    [JsonPropertyName("delivery_method")]
-    public required string DeliveryMethod { get; init; }
-
-    [JsonPropertyName("post_start_interaction")]
-    public required OrchestratorPostStartInteraction PostStartInteraction { get; init; }
-
-    [JsonPropertyName("startup_gates")]
-    public required string StartupGates { get; init; }
-
-    [JsonPropertyName("prohibited_blanket")]
-    public required string ProhibitedBlanket { get; init; }
 }
 
 /// <summary>

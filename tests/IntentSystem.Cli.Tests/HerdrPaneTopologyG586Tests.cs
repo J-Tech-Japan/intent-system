@@ -14,7 +14,7 @@ public sealed class HerdrPaneTopologyG586Tests : IDisposable
     private const string Repo = "J-Tech-Japan/intent-system";
     // G636 extends the shared guide; keep the deterministic baseline aligned
     // with the rendered guidance while preserving the hash guard.
-    private const string G594AgmsgBaselineSha256 = "854389cc84123bedbe389b5fc300763d44548c0f95b4d336ed66e95f2a3ba0b8";
+    private const string G594AgmsgBaselineSha256 = "194ebbf9106a164811c142d9f66f4cca753b8c8139f998968fbb400dcf19dfed";
 
     private readonly string root = Directory.CreateTempSubdirectory("herdr-topology-g586-").FullName;
 

@@ -571,12 +571,14 @@ The registry contains only measured kinds. Codex's measured entry is:
 herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox workspace-write --ask-for-approval never --add-dir <role-work-root> [--add-dir <host-routing-root>]
 ```
 
-On **Codex v0.144.1 / macOS**, the measured facts are: the bounded invocation
-uses workspace-write, never-ask approval, and role-derived roots; self-update
-can print **“Please restart Codex”** and leave the pane at a shell (restart and
-re-run READY/ping; this is not a wedge); and writes outside declared roots are
-denied while reads outside them are not. Cursor and opencode have no measured
-entry and remain placeholders by name only.
+On **MyIntentHost**, measured **2026-08-07**, **Codex v0.144.1 / macOS**, the
+measured facts are: the bounded invocation uses workspace-write, never-ask
+approval, and role-derived roots; self-update can print **“Please restart
+Codex”** and leave the pane at a shell (restart and re-run READY/ping; this is
+not a wedge); and writes outside declared roots are denied while reads outside
+them are not. The rendered and structured measurement entries carry
+`host: MyIntentHost` and `date: 2026-08-07` for each fact. Cursor and opencode
+have no measured entry and remain placeholders by name only.
 
 ### Provision and prove READY
 

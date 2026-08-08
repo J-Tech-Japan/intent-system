@@ -18,6 +18,12 @@ internal sealed record AgentLaunchRecipeMeasurement
     [JsonPropertyName("observation")]
     public required string Observation { get; init; }
 
+    [JsonPropertyName("host")]
+    public required string Host { get; init; }
+
+    [JsonPropertyName("date")]
+    public required string Date { get; init; }
+
     [JsonPropertyName("version")]
     public required string Version { get; init; }
 
@@ -44,8 +50,20 @@ internal sealed record AgentLaunchRecipe
     [JsonPropertyName("continuation_bound")]
     public required string ContinuationBound { get; init; }
 
+    [JsonPropertyName("inline_payload_warning_profile")]
+    public required string InlinePayloadWarningProfile { get; init; }
+
+    [JsonPropertyName("delivery_method")]
+    public required string DeliveryMethod { get; init; }
+
+    [JsonPropertyName("post_start_interaction")]
+    public required OrchestratorPostStartInteraction? PostStartInteraction { get; init; }
+
     [JsonPropertyName("startup_gates")]
     public required string StartupGates { get; init; }
+
+    [JsonPropertyName("prohibited_blanket")]
+    public required string ProhibitedBlanket { get; init; }
 
     [JsonPropertyName("denial_semantics")]
     public required string DenialSemantics { get; init; }
@@ -56,8 +74,6 @@ internal sealed record AgentLaunchRecipe
     [JsonPropertyName("measurements")]
     public required IReadOnlyList<AgentLaunchRecipeMeasurement> Measurements { get; init; }
 
-    [JsonPropertyName("post_start_interaction")]
-    public string? PostStartInteraction { get; init; }
 }
 
 /// <summary>
@@ -91,6 +107,8 @@ internal sealed record AgentLaunchRecipeResolution
 internal static class AgentLaunchRecipeRegistry
 {
     private const string Measured = "measured";
+    private const string MeasuredHost = "MyIntentHost";
+    private const string MeasuredDate = "2026-08-07";
     private const string MeasuredPlatform = "macOS";
 
     private static readonly IReadOnlyDictionary<string, AgentLaunchRecipe> Recipes =
@@ -104,21 +122,48 @@ internal static class AgentLaunchRecipeRegistry
                     + "--mode autopilot --allow-all-tools --add-dir <role-work-root> "
                     + "[--add-dir <host-routing-root>] --max-autopilot-continues 10",
                 RoleDerivedRoots =
-                    "Use one bounded --add-dir <role-work-root> for the role checkout/worktree; review also "
-                    + "receives --add-dir <host-routing-root> for the canonical intent-cli notify report surface.",
-                ContinuationBound = "--max-autopilot-continues 10 is explicit and operator-controlled.",
+                    "Use one bounded `--add-dir <role-work-root>` for the role's checkout/worktree. A review "
+                    + "role additionally receives `--add-dir <host-routing-root>` because `intent-cli notify report` "
+                    + "is its canonical reporting surface. Do not add unrelated developer-machine roots.",
+                ContinuationBound =
+                    "Keep `--max-autopilot-continues 10` explicit; changing the bound is an operator decision "
+                    + "recorded with the recipe, not an agent default.",
+                InlinePayloadWarningProfile =
+                    "Profile `copilot-autopilot-observed-paste-risk` declares `inline_payload_warning_chars: 4096`. "
+                    + "It is ADVISORY only: a payload above it is likely pasted rather than typed, while a payload "
+                    + "below it is not promised safe because the real limit is terminal- and agent-dependent. "
+                    + "Reference-first dispatch keeps repeated review substance in committed `review-context.md`, but a "
+                    + "minimal canonical `notify delegate` envelope still measures 842 characters over 14 lines and can "
+                    + "itself be pasted: it reduces duplication, not a paste-sensitive wedge. G619 owns the transport-layer remedy.",
+                DeliveryMethod =
+                    "Declare `delivery_method: file-backed` for a paste-sensitive herdr seat. `notify` writes the "
+                    + "unchanged envelope to durable host `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` before "
+                    + "sending one line, `Read task envelope: <path>`. Declare `inline` to opt in explicitly; an absent "
+                    + "declaration preserves existing inline delivery.",
+                PostStartInteraction = new OrchestratorPostStartInteraction
+                {
+                    Prompt =
+                        "At the first task, Copilot 1.0.78 presents `1. Enable all permissions (recommended)` / "
+                        + "`2. Continue with limited permissions` / `3. Cancel`, with the cursor on option 1.",
+                    Answer =
+                        "Choose `Continue with limited permissions` to preserve the bounded `--add-dir` envelope; "
+                        + "the default `Enable all permissions` answer is unsafe.",
+                    DefaultIsSafe = false,
+                },
                 StartupGates =
-                    "Folder trust and autopilot-enable remain attended operator gates; choose Continue with limited "
-                    + "permissions at the first task to preserve the declared roots.",
+                    "Folder trust and autopilot-enable are operator provisioning gates; neither is bypassed by "
+                    + "launch flags. The autopilot-enable dialog appears at the FIRST TASK even when `--mode autopilot` "
+                    + "was passed at launch. With `--allow-all-tools` plus bounded roots, choose `Continue with limited "
+                    + "permissions`; NEVER choose `Enable all permissions`, which discards the boundary.",
+                ProhibitedBlanket =
+                    "For unattended developer-machine seats, `--yolo` and `--allow-all-paths` are PROHIBITED. "
+                    + "They discard the role-derived boundary; bounded `--add-dir` roots are the required alternative.",
                 DenialSemantics =
                     "An unattended out-of-scope action is silently auto-denied; READY must capture that denial and "
                     + "must not treat liveness or an allowed action alone as proof.",
                 Recovery =
                     "If the bounded envelope is lost, stop and re-provision with the recorded roots; never widen "
                     + "the recipe through --yolo or --allow-all-paths.",
-                PostStartInteraction =
-                    "Copilot 1.0.78 presents Enable all permissions / Continue with limited permissions / Cancel; "
-                    + "choose Continue with limited permissions (default_is_safe: false).",
                 Measurements =
                 [
                     new AgentLaunchRecipeMeasurement
@@ -126,6 +171,8 @@ internal static class AgentLaunchRecipeRegistry
                         Status = Measured,
                         Fact = "post-start permission interaction",
                         Observation = "The first task presents a permission choice whose default would discard the bounded envelope.",
+                        Host = MeasuredHost,
+                        Date = MeasuredDate,
                         Version = "Copilot 1.0.78",
                         Platform = MeasuredPlatform,
                     },
@@ -144,10 +191,20 @@ internal static class AgentLaunchRecipeRegistry
                 ContinuationBound =
                     "No product-wide continuation bound is inferred; keep any role-specific bound explicit in the "
                     + "operator's measured launch record.",
+                InlinePayloadWarningProfile =
+                    "Codex inline-payload risk was not measured in G647; do not infer a safe threshold. Use the "
+                    + "reference-first/file-backed task-envelope guidance when the operator records it.",
+                DeliveryMethod =
+                    "Declare `delivery_method: file-backed` for a paste-sensitive herdr seat. `notify` writes the "
+                    + "unchanged envelope before sending one line; an absent declaration preserves existing inline delivery.",
+                PostStartInteraction = null,
                 StartupGates =
                     "The operator supplies the mapped pane and role roots. --sandbox workspace-write and "
                     + "--ask-for-approval never are part of the measured bounded invocation; do not broaden them by "
                     + "guessing flags for another environment.",
+                ProhibitedBlanket =
+                    "Do not add unmeasured blanket permissions or broaden the role-derived roots; in particular, "
+                    + "do not replace the bounded invocation with a guessed --yolo or --allow-all-paths equivalent.",
                 DenialSemantics =
                     "Measured envelope asymmetry: writes outside declared roots are denied, while reads outside "
                     + "declared roots are not denied. Treat the read asymmetry as an explicit security fact, not as "
@@ -165,6 +222,8 @@ internal static class AgentLaunchRecipeRegistry
                         Observation =
                             "workspace-write sandbox, never-ask approval, and per-role --add-dir roots were used "
                             + "for the first Codex seat.",
+                        Host = MeasuredHost,
+                        Date = MeasuredDate,
                         Version = "Codex v0.144.1",
                         Platform = MeasuredPlatform,
                     },
@@ -175,6 +234,8 @@ internal static class AgentLaunchRecipeRegistry
                         Observation =
                             "The CLI printed 'Please restart Codex' and exited to a shell; restarting the agent "
                             + "restored the seat.",
+                        Host = MeasuredHost,
+                        Date = MeasuredDate,
                         Version = "Codex v0.144.1",
                         Platform = MeasuredPlatform,
                     },
@@ -184,6 +245,8 @@ internal static class AgentLaunchRecipeRegistry
                         Fact = "envelope asymmetry",
                         Observation =
                             "Writes outside declared roots were denied while reads outside declared roots were not.",
+                        Host = MeasuredHost,
+                        Date = MeasuredDate,
                         Version = "Codex v0.144.1",
                         Platform = MeasuredPlatform,
                     },

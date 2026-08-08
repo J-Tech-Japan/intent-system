@@ -2038,6 +2038,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("Please restart Codex", output, StringComparison.Ordinal);
         Assert.Contains("Writes outside declared roots were denied while reads outside declared roots were not", output, StringComparison.Ordinal);
         Assert.Contains("(version: Codex v0.144.1; platform: macOS)", output, StringComparison.Ordinal);
+        Assert.Contains("(measured on host: MyIntentHost; date: 2026-08-07)", output, StringComparison.Ordinal);
         Assert.DoesNotContain("#### Cursor", output, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("#### opencode", output, StringComparison.OrdinalIgnoreCase);
 
@@ -2052,7 +2053,13 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("which CLI and model each seat", recipes.GetProperty("seat_kind_intake").GetString(), StringComparison.Ordinal);
         Assert.Contains("codex", recipes.GetProperty("recorded_kinds").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("--sandbox workspace-write", recipes.GetProperty("codex_recipe").GetProperty("invocation").GetString(), StringComparison.Ordinal);
-        Assert.Equal(3, recipes.GetProperty("codex_recipe").GetProperty("measurements").GetArrayLength());
+        var codexMeasurements = recipes.GetProperty("codex_recipe").GetProperty("measurements").EnumerateArray().ToArray();
+        Assert.Equal(3, codexMeasurements.Length);
+        Assert.All(codexMeasurements, measurement =>
+        {
+            Assert.Equal("MyIntentHost", measurement.GetProperty("host").GetString());
+            Assert.Equal("2026-08-07", measurement.GetProperty("date").GetString());
+        });
     }
 
     [Fact]
@@ -2130,6 +2137,10 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("Copilot 1.0.78 presents", postStart.GetProperty("prompt").GetString(), StringComparison.Ordinal);
         Assert.Contains("Continue with limited permissions", postStart.GetProperty("answer").GetString(), StringComparison.Ordinal);
         Assert.False(postStart.GetProperty("default_is_safe").GetBoolean());
+        var codexRecipe = unattended.GetProperty("codex_recipe");
+        Assert.Contains("--sandbox workspace-write", codexRecipe.GetProperty("invocation").GetString(), StringComparison.Ordinal);
+        Assert.Equal("MyIntentHost", codexRecipe.GetProperty("measurements").EnumerateArray().First().GetProperty("host").GetString());
+        Assert.Equal("2026-08-07", codexRecipe.GetProperty("measurements").EnumerateArray().First().GetProperty("date").GetString());
         Assert.Contains("out-of-scope action is denied", unattended.GetProperty("ready_branch").GetString(), StringComparison.Ordinal);
         Assert.Contains("denial probe unexpectedly succeeds", unattended.GetProperty("ready_branch").GetString(), StringComparison.Ordinal);
 

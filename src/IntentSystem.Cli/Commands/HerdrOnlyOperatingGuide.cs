@@ -33,7 +33,8 @@ internal static class HerdrOnlyOperatingGuide
             '\n',
             codex.Measurements.Select(measurement =>
                 $"- [{measurement.Status}] {measurement.Fact}: {measurement.Observation} "
-                + $"(version: {measurement.Version}; platform: {measurement.Platform})"));
+                + $"(version: {measurement.Version}; platform: {measurement.Platform}) "
+                + $"(measured on host: {measurement.Host}; date: {measurement.Date})"));
         var recordedKinds = string.Join(", ", AgentLaunchRecipeRegistry.RecordedKinds.OrderBy(kind => kind, StringComparer.OrdinalIgnoreCase));
         return $$"""
         {{SessionLayerSections.ReplacementHeading}}
@@ -68,7 +69,11 @@ internal static class HerdrOnlyOperatingGuide
         ```
 
         - **role-derived roots** — {{codex.RoleDerivedRoots}}
+        - **continuation bound** — {{codex.ContinuationBound}}
+        - **inline-payload advisory** — {{codex.InlinePayloadWarningProfile}}
+        - **task-envelope delivery method** — {{codex.DeliveryMethod}}
         - **startup gates** — {{codex.StartupGates}}
+        - **prohibited blanket permissions** — {{codex.ProhibitedBlanket}}
         - **denial semantics** — {{codex.DenialSemantics}}
         - **recovery** — {{codex.Recovery}}
         - **measured facts** —

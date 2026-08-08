@@ -506,10 +506,12 @@ registry には実測済みの kind だけを置きます。Codex の実測 entr
 herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox workspace-write --ask-for-approval never --add-dir <role-work-root> [--add-dir <host-routing-root>]
 ```
 
-**Codex v0.144.1 / macOS** の実測 fact は、workspace-write・never-ask approval・role-derived root の
-bounded invocation、自己更新が **「Please restart Codex」** を表示して pane を shell に残す挙動
-（再起動と READY/ping を行い、wedge とは扱わない）、宣言 root 外の write は拒否される一方で read は
-拒否されないという asymmetry です。Cursor と opencode は実測 entry がなく、名前だけの placeholder に留めます。
+**MyIntentHost で 2026-08-07 に実測した Codex v0.144.1 / macOS** の fact は、workspace-write・never-ask
+approval・role-derived root の bounded invocation、自己更新が **「Please restart Codex」** を表示して pane を
+shell に残す挙動（再起動と READY/ping を行い、wedge とは扱わない）、宣言 root 外の write は拒否される一方で
+read は拒否されないという asymmetry です。rendered / structured の各 measurement には
+`host: MyIntentHost` と `date: 2026-08-07` を付けます。Cursor と opencode は実測 entry がなく、名前だけの
+placeholder に留めます。
 
 ### Provisioning と READY の証明
 
