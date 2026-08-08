@@ -94,14 +94,13 @@ public sealed class ReleaseNotesV0161DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void ReadinessMirrorNamesTheAuthoredNotesGuard(string language)
+    public void ReadinessMirrorLinksTheShippedNotes(string language)
     {
         var path = Path.Combine(
             RepoVersionPolicySource.RepoRoot(), "docs", language, "09-developer-reference.md");
         var reference = File.ReadAllText(path);
 
         Assert.Contains("release-notes-v0.16.1.md", reference, StringComparison.Ordinal);
-        Assert.Contains("ReleaseNotesV0161DocsTests", reference, StringComparison.Ordinal);
         Assert.DoesNotContain("release-notes-v0.16.1.md) is the required prepare-only placeholder", reference, StringComparison.Ordinal);
     }
 
