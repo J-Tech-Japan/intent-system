@@ -1591,15 +1591,27 @@ internal static class GuideOrchestratorThreadCommand
                     "review receiver cwd + agent type",
                     "design cwd + agent type, and whether design is manual-inbox or monitored",
                     "delivery mode per role (monitored / streamed inbox watch, or manual inbox)",
-                },
-                Defaults = new[]
-                {
-                    "orchestrator = operator-chosen herdr-startable kind",
-                    "implementer = operator-chosen herdr-startable kind",
-                    "reviewer = operator-chosen herdr-startable kind",
-                    "design = manual-inbox or monitored, using an operator-chosen herdr-startable kind",
-                    "runtime / implementation / review receivers = monitor (when supported)",
-                },
+                }.Concat(herdrOnly
+                    ? new[]
+                    {
+                        "for herdr-only, ask which CLI and model each seat should run; record each answer as that seat's kind",
+                    }
+                    : Array.Empty<string>()).ToArray(),
+                Defaults = herdrOnly
+                    ? new[]
+                    {
+                        "herdr-only seat kinds = no silent default; ask the human for each seat's CLI and model and record the answer",
+                        "design = manual-inbox or monitored, after the human chooses its CLI and model",
+                        "runtime / implementation / review receivers = pane readiness, after the human chooses each seat",
+                    }
+                    : new[]
+                    {
+                        "orchestrator = operator-chosen herdr-startable kind",
+                        "implementer = operator-chosen herdr-startable kind",
+                        "reviewer = operator-chosen herdr-startable kind",
+                        "design = manual-inbox or monitored, using an operator-chosen herdr-startable kind",
+                        "runtime / implementation / review receivers = monitor (when supported)",
+                    },
                 DesignDeliveryNote =
                     "Design may be a manual-inbox receiver (reads with `inbox.sh` on demand) or a monitored receiver; "
                     + "either way it receives ONLY human-decision escalations or explicit summaries, never routine "
@@ -2221,7 +2233,12 @@ internal static class GuideOrchestratorThreadCommand
                     + "semantics. A recipe that stops at the command line is incomplete because an agent can negotiate "
                     + "authority after launch. The post-start interaction field is a G636 preview-through-1.x surface "
                     + "added after the v0.12.0 freeze and outside the 1.0 compatibility promise. "
-                    + "Later agent recipes inherit the central rule below; do not duplicate or weaken it per agent.",
+                    + "G647 keeps this registry limited to measured kinds; unmeasured kinds such as Cursor and "
+                    + "opencode have no recipe entry and must not acquire invented flags. Later measured recipes "
+                    + "inherit the central rule below; do not duplicate or weaken it per agent.",
+                RecordedKinds = AgentLaunchRecipeRegistry.RecordedKinds
+                    .OrderBy(kind => kind, StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
                 RequiredRecipeFields = new[]
                 {
                     "the launch invocation and agent kind",
@@ -2285,6 +2302,8 @@ internal static class GuideOrchestratorThreadCommand
                         "For unattended developer-machine seats, `--yolo` and `--allow-all-paths` are PROHIBITED. "
                         + "They discard the role-derived boundary; bounded `--add-dir` roots are the required alternative.",
                 },
+                CodexRecipe = AgentLaunchRecipeRegistry.Find("codex")
+                    ?? throw new InvalidOperationException("The measured Codex launch recipe is missing from the registry."),
                 ReadyBranch =
                     "For an unattended seat, run the normal G556 liveness checks AND prove all three recipe-specific "
                     + "facts: an expected action inside the recorded roots succeeds, the role can reach its canonical "
@@ -3571,6 +3590,31 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **post-start interaction** — {unattended.CopilotRecipe.PostStartInteraction.Prompt} Answer: {unattended.CopilotRecipe.PostStartInteraction.Answer} Default safe: {unattended.CopilotRecipe.PostStartInteraction.DefaultIsSafe.ToString().ToLowerInvariant()}.");
         writer.WriteLine($"- **startup gates** — {unattended.CopilotRecipe.StartupGates}");
         writer.WriteLine($"- **prohibited blanket permissions** — {unattended.CopilotRecipe.ProhibitedBlanket}");
+        writer.WriteLine();
+        writer.WriteLine("#### Codex (measured recipe, G647)");
+        writer.WriteLine();
+        writer.WriteLine("```text");
+        writer.WriteLine(unattended.CodexRecipe.Invocation);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine($"- **role-derived roots** — {unattended.CodexRecipe.RoleDerivedRoots}");
+        writer.WriteLine($"- **continuation bound** — {unattended.CodexRecipe.ContinuationBound}");
+        writer.WriteLine($"- **startup gates** — {unattended.CodexRecipe.StartupGates}");
+        writer.WriteLine($"- **denial semantics** — {unattended.CodexRecipe.DenialSemantics}");
+        writer.WriteLine($"- **recovery** — {unattended.CodexRecipe.Recovery}");
+        writer.WriteLine("- **measured facts** —");
+        foreach (var measurement in unattended.CodexRecipe.Measurements)
+        {
+            writer.WriteLine(
+                $"  - [{measurement.Status}] {measurement.Fact}: {measurement.Observation} "
+                + $"(version: {measurement.Version}; platform: {measurement.Platform})");
+        }
+        writer.WriteLine();
+        writer.WriteLine(
+            $"> **Registry boundary (G647):** recorded kinds are {string.Join(", ", unattended.RecordedKinds)}. "
+            + "A target kind without a recorded recipe is named as absent at `topology update-kind`; do not "
+            + "invent a bounded invocation. The recorded kind is the human's current wish, a requested switch "
+            + "is one step, and recovery never changes a kind unattended.");
         writer.WriteLine();
         writer.WriteLine($"> **Unattended READY branch:** {unattended.ReadyBranch}");
         writer.WriteLine();
@@ -5546,11 +5590,17 @@ internal sealed record OrchestratorUnattendedLaunchRecipes
     [JsonPropertyName("required_recipe_fields")]
     public required IReadOnlyList<string> RequiredRecipeFields { get; init; }
 
+    [JsonPropertyName("recorded_kinds")]
+    public required IReadOnlyList<string> RecordedKinds { get; init; }
+
     [JsonPropertyName("central_autopilot_supervision_rule")]
     public required string CentralAutopilotSupervisionRule { get; init; }
 
     [JsonPropertyName("copilot_recipe")]
     public required OrchestratorCopilotUnattendedRecipe CopilotRecipe { get; init; }
+
+    [JsonPropertyName("codex_recipe")]
+    public required AgentLaunchRecipe CodexRecipe { get; init; }
 
     [JsonPropertyName("ready_branch")]
     public required string ReadyBranch { get; init; }

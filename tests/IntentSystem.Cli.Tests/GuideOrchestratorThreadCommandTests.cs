@@ -2023,6 +2023,39 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_HerdrOnly_SetupAsksForCliAndModelAndRendersMeasuredCodexRecipe_G647()
+    {
+        using var workspace = new RecordedGuideWorkspace("intent-cli", "intent-cli-dev", SessionLayerMode.HerdrOnly);
+        var output = RunMarkdown(workspace.Context,
+            ["--domain", "intent-cli", "--team", "intent-cli-dev", "--target-repo", "owner/repo", "--agent", "codex"]);
+
+        Assert.Contains("ask the human which CLI and model each seat should run", output, StringComparison.Ordinal);
+        Assert.Contains("record each answer as that seat's `kind`", output, StringComparison.Ordinal);
+        Assert.Contains("The recorded kind is the human's current wish", output, StringComparison.Ordinal);
+        Assert.Contains("recovery never changes a kind unattended", output, StringComparison.Ordinal);
+        Assert.Contains("#### Codex (measured recipe, G647)", output, StringComparison.Ordinal);
+        Assert.Contains("--sandbox workspace-write --ask-for-approval never --add-dir <role-work-root>", output, StringComparison.Ordinal);
+        Assert.Contains("Please restart Codex", output, StringComparison.Ordinal);
+        Assert.Contains("Writes outside declared roots were denied while reads outside declared roots were not", output, StringComparison.Ordinal);
+        Assert.Contains("(version: Codex v0.144.1; platform: macOS)", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("#### Cursor", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("#### opencode", output, StringComparison.OrdinalIgnoreCase);
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, GuideOrchestratorThreadCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--team", "intent-cli-dev", "--target-repo", "owner/repo", "--agent", "codex", "--format", "json"],
+            writer));
+        using var document = JsonDocument.Parse(writer.ToString());
+        var recipes = document.RootElement.GetProperty("herdr_only_operations")
+            .GetProperty("launch_recipes");
+        Assert.Contains("which CLI and model each seat", recipes.GetProperty("seat_kind_intake").GetString(), StringComparison.Ordinal);
+        Assert.Contains("codex", recipes.GetProperty("recorded_kinds").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("--sandbox workspace-write", recipes.GetProperty("codex_recipe").GetProperty("invocation").GetString(), StringComparison.Ordinal);
+        Assert.Equal(3, recipes.GetProperty("codex_recipe").GetProperty("measurements").GetArrayLength());
+    }
+
+    [Fact]
     public void Execute_Markdown_Provisioning_NamesHerdrSurfaces_AndLinksOutInternals_G549()
     {
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);

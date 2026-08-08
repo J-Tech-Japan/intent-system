@@ -241,6 +241,39 @@ public sealed class SessionLayerTopologyG604Tests : IDisposable
     }
 
     [Fact]
+    public void UpdateKind_SurfacesRecordedAndAbsentRecipesWithoutChangingRefusalSemantics_G647()
+    {
+        const string team = "intent-cli-dev";
+        Assert.True(Record(team, "review", "w1:p1").Applied);
+        var context = CreateContext(Domain);
+
+        using var recordedOutput = new StringWriter();
+        Assert.Equal(0, SessionLayerTopologyCommand.ExecuteUpdateKind(context,
+            ["--domain", Domain, "--team", team, "--role", "review", "--current-kind", "codex",
+                "--new-kind", "copilot", "--confirm-update-kind", "--dry-run", "--format", "json"],
+            recordedOutput));
+        using (var recorded = JsonDocument.Parse(recordedOutput.ToString()))
+        {
+            var recipe = recorded.RootElement.GetProperty("recipe");
+            Assert.True(recipe.GetProperty("recorded").GetBoolean());
+            Assert.Equal("recorded", recipe.GetProperty("status").GetString());
+            Assert.Contains("--kind copilot", recipe.GetProperty("recipe").GetProperty("invocation").GetString(), StringComparison.Ordinal);
+        }
+
+        using var absentOutput = new StringWriter();
+        Assert.Equal(0, SessionLayerTopologyCommand.ExecuteUpdateKind(context,
+            ["--domain", Domain, "--team", team, "--role", "review", "--current-kind", "codex",
+                "--new-kind", "cursor", "--confirm-update-kind", "--dry-run", "--format", "json"],
+            absentOutput));
+        using var absent = JsonDocument.Parse(absentOutput.ToString());
+        var absentRecipe = absent.RootElement.GetProperty("recipe");
+        Assert.False(absentRecipe.GetProperty("recorded").GetBoolean());
+        Assert.Equal("absent", absentRecipe.GetProperty("status").GetString());
+        Assert.Contains("No launch recipe is recorded", absentRecipe.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("recipe", absentRecipe.EnumerateObject().Select(property => property.Name), StringComparer.Ordinal);
+    }
+
+    [Fact]
     public void UpdateField_DeclaresOnlyAllowedAbsentDeliveryMethodAndPreservesSiblingBytes_G620()
     {
         const string team = "intent-cli-dev";

@@ -853,7 +853,8 @@ internal static class SessionLayerTopologyWriter
         var validation = NotifyRoleTopologyStore.Validate(routingRoot, request.Domain, request.Team);
         if (!validation.Valid)
             return new(request.Team, request.Role, request.CurrentKind, request.NewKind, request.Write ? "write" : "dry-run", false, false, true,
-                $"Topology record is invalid; refusing update-kind. {string.Join(" ", validation.Findings.Select(f => f.Message))}");
+                $"Topology record is invalid; refusing update-kind. {string.Join(" ", validation.Findings.Select(f => f.Message))}",
+                AgentLaunchRecipeRegistry.Describe(request.NewKind));
         try
         {
             var root = JsonNode.Parse(File.ReadAllText(path)) as JsonObject ?? throw new JsonException("the root is not an object");
@@ -861,20 +862,28 @@ internal static class SessionLayerTopologyWriter
                 || !TrySelectRolesForWrite(team!, out var roles, out error)
                 || !roles!.TryGetPropertyValue(request.Role, out var roleNode) || roleNode is not JsonObject role)
                 return new(request.Team, request.Role, request.CurrentKind, request.NewKind, request.Write ? "write" : "dry-run", false, false, true,
-                    $"Role '{request.Role}' is not a valid recorded role. {error}");
+                    $"Role '{request.Role}' is not a valid recorded role. {error}",
+                    AgentLaunchRecipeRegistry.Describe(request.NewKind));
             var current = ReadString(role, "kind");
             if (!string.Equals(current, request.CurrentKind, StringComparison.Ordinal))
                 return new(request.Team, request.Role, request.CurrentKind, request.NewKind, request.Write ? "write" : "dry-run", false, false, true,
-                    $"Role '{request.Role}' records kind '{current ?? "missing"}', not stated current kind '{request.CurrentKind}'. Refusing update-kind.");
+                    $"Role '{request.Role}' records kind '{current ?? "missing"}', not stated current kind '{request.CurrentKind}'. Refusing update-kind.",
+                    AgentLaunchRecipeRegistry.Describe(request.NewKind));
             role["kind"] = request.NewKind;
             if (request.Write) WriteAtomically(path, root.ToJsonString(FileJsonOptions) + Environment.NewLine);
             return new(request.Team, request.Role, request.CurrentKind, request.NewKind, request.Write ? "write" : "dry-run", request.Write, true, false,
-                request.Write ? $"Updated only kind for role '{request.Role}' in team '{request.Team}'." : $"Dry-run: would update only kind for role '{request.Role}'.");
+                request.Write
+                    ? $"Updated only kind for role '{request.Role}' in team '{request.Team}'. "
+                        + AgentLaunchRecipeRegistry.Describe(request.NewKind).Summary
+                    : $"Dry-run: would update only kind for role '{request.Role}'. "
+                        + AgentLaunchRecipeRegistry.Describe(request.NewKind).Summary,
+                AgentLaunchRecipeRegistry.Describe(request.NewKind));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
         {
             return new(request.Team, request.Role, request.CurrentKind, request.NewKind, request.Write ? "write" : "dry-run", false, false, true,
-                $"Topology file '{path}' could not be updated: {exception.Message}");
+                $"Topology file '{path}' could not be updated: {exception.Message}",
+                AgentLaunchRecipeRegistry.Describe(request.NewKind));
         }
     }
 
@@ -1226,7 +1235,17 @@ internal sealed record SessionLayerTopologyRecordResult
 }
 
 internal sealed record SessionLayerTopologyKindUpdateRequest(string Domain, string Team, string Role, string CurrentKind, string NewKind, bool Write);
-internal sealed record SessionLayerTopologyKindUpdateResult(string Team, string Role, string CurrentKind, string NewKind, string Mode, bool Applied, bool Changed, bool Conflict, string Summary);
+internal sealed record SessionLayerTopologyKindUpdateResult(
+    string Team,
+    string Role,
+    string CurrentKind,
+    string NewKind,
+    string Mode,
+    bool Applied,
+    bool Changed,
+    bool Conflict,
+    string Summary,
+    AgentLaunchRecipeResolution? Recipe = null);
 internal sealed record SessionLayerTopologyFieldUpdateRequest(string Domain, string Team, string Role, string Field, string CurrentValue, string NewValue, bool Write);
 internal sealed record SessionLayerTopologyFieldUpdateResult(string Team, string Role, string Field, string CurrentValue, string NewValue, string Mode, bool Applied, bool Changed, bool Conflict, string Summary);
 internal sealed record SessionLayerTopologyLegacyRetireRequest(string Domain, string Team, string Evidence);

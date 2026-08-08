@@ -210,7 +210,9 @@ intake の後に、完全なリファレンスチェックリストが続きま�
 
 1. **決定 / 記録** — domain と target repo、host / orchestrator / implementation /
    review のパス（各ロールは自分のフォルダー・クローン・worktree から実行）、base branch
-   policy、ロールごとの agent、agmsg team 名、delivery mode。
+   policy、ロールごとの agent、agmsg team 名、delivery mode。herdr-only では各 seat
+   （`design`、`orchestrator`、`implementation`、`review`）でどの CLI と model を使うか human に
+   尋ね、各回答をその seat の `kind` として記録します。silent に default を選びません。
 2. **ロール登録** — orchestrator・implementation・review を 1 つの agmsg team に登録
    （`join.sh`）。
 3. **delivery 設定** — 各ロールがメッセージを受け取れるようにする。例: ストリーミングの
@@ -289,8 +291,8 @@ unattended 起動レシピは agent-neutral です。起動 invocation、各 rol
 semantics に加えて、起動後に agent が提示する post-start interaction、宣言した境界を
 維持するための回答、default answer が安全かどうかを記録します。command line が正しくても
 起動後に agent が権限を交渉できるため、command line で止まるレシピは不完全です。
-後から Cursor や opencode のレシピを追加する場合も、同じ field を持つ entry を追加するだけで、
-以下の central rule を再定義・弱化しません。
+この host で実測済みの registry には Copilot と Codex の entry があります。未実測の kind（Cursor や
+opencode など）は名前だけの placeholder のままにし、推測した flag を追加してはいけません。
 
 > **1.x を通じた preview (G636)。** post-start interaction field は v0.12.0 freeze 後に追加された
 > preview surface です。1.0 compatibility promise の対象外であり、1.x の間に変更・撤回される
@@ -344,6 +346,26 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
   `Enable all permissions` は選びません。
 - **禁止する包括権限。** developer machine の unattended seat では `--yolo` と
   `--allow-all-paths` は **禁止** です。代わりに境界付き `--add-dir` root を使います。
+
+#### Codex — 実測済みの recipe (G647)
+
+```text
+herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox workspace-write --ask-for-approval never --add-dir <role-work-root> [--add-dir <host-routing-root>]
+```
+
+- **role-derived root。** role の checkout/worktree には境界付きの
+  `--add-dir <role-work-root>` を 1 つ使い、その role の canonical report surface に必要な場合だけ
+  host routing root を追加します。
+- **実測した bounded invocation。** この invocation は **Codex v0.144.1 / macOS** で実測したものであり、
+  未実測環境に対する universal な flag recipe ではありません。
+- **実測した自己更新 behavior。** Codex は自己更新して **「Please restart Codex」** を表示し、
+  pane の shell へ exit することがあります。記録済み pane で agent を再起動して READY/ping を再実行します。
+  これは wedge ではなく restart condition であり、回避のために envelope を広げてはいけません。
+- **実測した envelope asymmetry。** 宣言した root の外への write は拒否されましたが、外への read は拒否されませんでした。
+  これは明示的な security fact として扱い、read permission の保証と解釈してはいけません。
+- **registry boundary。** `topology update-kind` は変更とともに実測済み target recipe を表示します。recipe が未記録の
+  target kind では明示的に absent とし、launch flag を推測しません。recorded kind は human の現在の wish であり、
+  human が要求した switch は one step、recovery は unattended に kind を変更しません。
 
 **unattended READY branch。** 通常の G556 liveness check に加え、次の 3 点を証明します:
 記録済み root 内の期待される action が成功すること、role が canonical reporting surface
@@ -469,6 +491,25 @@ pane は再作成ではなく付け替えられ、稼働中の 17 agent process 
 provisioning / receiver 節に対する具体的な counterpart です。依存関係が少ないため優先しますが、
 agmsg + herdr はサポート対象で廃止されません。1 チームでは transport を 1 つだけ動かし、
 agmsg と herdr の mixed delivery は contract violation です。
+
+### human の seat-kind intake と実測 registry (G647)
+
+herdr-only の seat を起動する前に、各 seat（`design`、`orchestrator`、`implementation`、`review`）で
+どの CLI と model を使うか human に尋ね、各回答をその seat の `kind` として記録します。silent に
+default を選びません。recorded kind は human の現在の wish であり、要求された switch は one step、
+recovery は unattended に kind を変更しません。`topology update-kind` は変更とともに target の実測
+recipe を表示し、未記録なら absent を明示します。
+
+registry には実測済みの kind だけを置きます。Codex の実測 entry は次のとおりです。
+
+```text
+herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox workspace-write --ask-for-approval never --add-dir <role-work-root> [--add-dir <host-routing-root>]
+```
+
+**Codex v0.144.1 / macOS** の実測 fact は、workspace-write・never-ask approval・role-derived root の
+bounded invocation、自己更新が **「Please restart Codex」** を表示して pane を shell に残す挙動
+（再起動と READY/ping を行い、wedge とは扱わない）、宣言 root 外の write は拒否される一方で read は
+拒否されないという asymmetry です。Cursor と opencode は実測 entry がなく、名前だけの placeholder に留めます。
 
 ### Provisioning と READY の証明
 

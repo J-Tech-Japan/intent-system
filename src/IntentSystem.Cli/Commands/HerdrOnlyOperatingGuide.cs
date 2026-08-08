@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace IntentSystem.Cli.Commands;
@@ -15,6 +16,7 @@ internal static class HerdrOnlyOperatingGuide
     public static readonly IReadOnlyList<string> Headings =
     [
         "## Herdr-only provisioning and READY gate",
+        "## Herdr-only measured launch recipes (G647)",
         "## Herdr-only dispatch and artifact handoff",
         "## Herdr-only wake sources",
         "## Herdr-only bounded waiting and success detection",
@@ -25,6 +27,14 @@ internal static class HerdrOnlyOperatingGuide
     public static string RenderMarkdown(IReadOnlyList<string> replacedHeadings)
     {
         var replaced = string.Join('\n', replacedHeadings.Select(heading => $"- `{heading.TrimStart('#', ' ')}`"));
+        var codex = AgentLaunchRecipeRegistry.Find("codex")
+            ?? throw new InvalidOperationException("The measured Codex launch recipe is missing from the registry.");
+        var codexMeasurements = string.Join(
+            '\n',
+            codex.Measurements.Select(measurement =>
+                $"- [{measurement.Status}] {measurement.Fact}: {measurement.Observation} "
+                + $"(version: {measurement.Version}; platform: {measurement.Platform})"));
+        var recordedKinds = string.Join(", ", AgentLaunchRecipeRegistry.RecordedKinds.OrderBy(kind => kind, StringComparer.OrdinalIgnoreCase));
         return $$"""
         {{SessionLayerSections.ReplacementHeading}}
 
@@ -43,8 +53,26 @@ internal static class HerdrOnlyOperatingGuide
         1. Confirm the installed surface with `herdr workspace --help`, `herdr tab --help`, `herdr pane --help`, and `herdr agent --help`. `herdr --skill` is a discovery pointer for the bundled herdr agent skill only; it never replaces intent-cli guide authority. This guide assumes the latest stable herdr on macOS/Linux; Windows support is beta and is not assumed. Use the installed help/schema when a version-specific option is needed.
         2. Use this topology literally: One workspace per team, one tab named after the team, one pane per role, each pane opened with that role's folder as its cwd. This keeps all roles visible to the operator at once and keeps the G550 supervision pane scan from being hidden behind an inactive tab. Create the workspace with `herdr workspace create --cwd <host-repo> --label <team> · herdr-only --no-focus`. The label is a human-facing, non-authoritative display of the recorded mode: intent-cli never writes herdr state and neither the label nor a pane title is mode evidence; `session-layer-mode.json` remains the source of truth. Measured on herdr 0.8.0, its `workspace_created` result has top-level `workspace`, `tab`, and `root_pane`; seed the mapping from `workspace.workspace_id`, `tab.tab_id`, and `root_pane.pane_id`, verify `root_pane.cwd`, and ensure that returned tab is the one team-named tab (if needed, use its explicit id with `herdr tab rename <tab-id> <team>`). Assign the root pane to one host-repo role, then make pane creation the DEFAULT for every remaining herdr-resident role: resolve a non-empty mapped pane id and run `herdr pane split --pane <pane-id> --direction right|down --cwd <role-cwd> --no-focus`, with design and orchestrator on `<host-repo>`, implementation on `<implementation-repo>`, and review on its isolated review cwd/worktree. Update the mapping from every pane creation result. Same-tab `herdr pane move` is unsupported, so a layout change requires recreating the affected pane and updating this mapping. `herdr tab create --workspace <workspace-id> --cwd <role-cwd> --label <logical-role> --no-focus` is NOT the primary path; use it only when the operator explicitly authorizes a separate role tab for a documented reason such as requiring tab-level lifecycle isolation instead of simultaneous visibility.
         3. Record a durable operator-visible mapping of each herdr-resident logical role (`design`, `orchestrator`, `implementation`, `review`) to its current workspace/tab/pane id and cwd. Workflows address the logical role and NEVER hard-code pane/workspace ids. After the initial workspace creation returns the first ids, every provisioning or mutation command MUST resolve its explicit non-empty pane/workspace target id from this recorded mapping immediately before execution and carry that id on the command. If resolution is missing or empty, fail closed and DO NOT run the command: herdr can otherwise apply a focus-default and mutate the currently focused pane in another team. The existing G555 cross-project attribution rules remain authoritative and unchanged; reference them rather than inventing a second attribution policy. A design frontend outside herdr is recorded as the design reader type, not fabricated as a pane.
+        Before launching any seat, **ask the human which CLI and model each seat should run** (`design`, `orchestrator`, `implementation`, and `review`); record each answer as that seat's `kind` in the topology (`topology record ... --kind <cli-kind>` for a new role or the confirmed `topology update-kind` command for a switch); keep the chosen model beside the operator's setup record rather than guessing a default. The recorded kind is the human's current wish, a human-requested switch is one step, and recovery never changes a kind unattended.
         4. Launch the typed agent in the mapped pane with `herdr agent start <logical-role> --kind <herdr-startable-kind> --pane <pane-id> -- <operator-approved-permission-flags>`. Claude, Codex, Copilot, Cursor, OpenCode and other kinds herdr can start are examples, not a supported-set restriction. Pass launch and permission flags after `--`; do not inject modifier chords into an interactive prompt. A just-started agent may not register a session until its first kickoff prompt; the READY gate's unattended ping covers this expected state. Approvals are NEVER auto-answered: only the G550 MAY-answer classes may be handled, and every other approval is escalated to the operator.
         5. READY consumes the shared machine-readable session-layer preflight exposed by `automation doctor`, this guide's `session_layer.preflight`, and `notify`; those are three consumers of one production predicate, not three agreeing checks. First require its passive structural phase to report `ready`: the named team must have an explicit mode record, and a recorded herdr-only team must have a valid matching topology. Absence is check-not-completed, never `not-required`; `cannot-determine` is never green. The passive phase contacts no receiver and the active phase may remain `skipped` without invalidating that passive verdict. Then apply the G556 verified-liveness active receiver proof: Approvals surface visibly in the pane and are handled at the supervision boundary, explicitly unlike the agmsg Codex bridge's headless auto-decline. After the startup report, wait a settle delay, then re-check `herdr agent list`, inspect the mapped pane/agent, verify the expected cwd/repository and detected agent kind, and send a bounded unattended ping whose fresh ack is observed in that same pane. An undetected agent, a shell prompt where the agent should be, a mismatched cwd, no unattended working transition, or no fresh ack is NOT READY; after re-provisioning, repeat this entire settle-and-re-check sequence, including the record-first preflight, before declaring READY. Never infer or repair the mode from live herdr state; probe only the recorded transport, and treat contradiction evidence as diagnostic-only.
+
+        ## Herdr-only measured launch recipes (G647)
+
+        The per-kind recipe registry contains only measured entries: {{recordedKinds}}. Unmeasured kinds such as Cursor and opencode remain placeholders by name only; do not invent launch flags. `topology update-kind` surfaces a recorded target recipe with the requested change, or an explicit absent notice. The recorded kind is the human's current wish, a human-requested switch is one step, and recovery never changes a kind unattended.
+
+        #### Codex (measured recipe, G647)
+
+        ```text
+        {{codex.Invocation}}
+        ```
+
+        - **role-derived roots** — {{codex.RoleDerivedRoots}}
+        - **startup gates** — {{codex.StartupGates}}
+        - **denial semantics** — {{codex.DenialSemantics}}
+        - **recovery** — {{codex.Recovery}}
+        - **measured facts** —
+        {{codexMeasurements}}
 
         Role identity in herdr-only is this verified logical-role→pane mapping. There is no agmsg identity or separate role-switching step.
 
@@ -159,8 +187,22 @@ internal static class HerdrOnlyOperatingGuide
             ["mapping"] = "Record an operator-visible logical-role-to-current-pane-id-and-cwd mapping; never hard-code pane/workspace ids.",
             ["target_id_rule"] = "After initial workspace creation returns the first ids, every provisioning/mutation command resolves an explicit non-empty pane/workspace target id from the recorded logical-role mapping immediately before execution and carries it on the command; empty or missing resolution fails closed and the command does not run. This prevents herdr focus-default mutation of the currently focused pane in another team and references the unchanged G555 attribution rules.",
             ["typed_launch"] = "herdr agent start <logical-role> --kind <agent-kind> --pane <pane-id> -- <operator-approved-permission-flags>",
+            ["seat_kind_intake"] = "Before launch, ask the human which CLI and model each seat (design, orchestrator, implementation, review) should run; record each answer as that role's kind with topology record --kind or the confirmed topology update-kind command. The recorded kind is the human's current wish, a requested switch is one step, and recovery never changes a kind unattended. Do not guess a default model.",
             ["approval_boundary"] = "Approvals surface visibly in the pane and are handled at the supervision boundary, unlike the agmsg Codex bridge's headless auto-decline; the G550 MAY/escalate boundary governs.",
             ["ready_gate"] = "READY consumes the one shared session-layer preflight: passive structure must be ready for an explicitly recorded named-team mode; absence is check-not-completed, cannot-determine is never green, and the active phase is separately reportable/skippable without invalidating passive structure. Then G556 verified-liveness requires: after the startup report, wait a settle delay, then re-check the expected agent/cwd/repo and send a bounded unattended ping with fresh same-pane acknowledgement; repeat this entire settle-and-re-check sequence after re-provisioning. Never infer/repair mode from herdr reality; probe only the recorded transport and keep contradiction diagnostic-only.",
+        },
+        ["launch_recipes"] = new JsonObject
+        {
+            ["recorded_kinds"] = new JsonArray(
+                AgentLaunchRecipeRegistry.RecordedKinds
+                    .OrderBy(kind => kind, StringComparer.OrdinalIgnoreCase)
+                    .Select(kind => (JsonNode?)JsonValue.Create(kind))
+                    .ToArray()),
+            ["registry_boundary"] = "Only measured kinds have entries. Unmeasured kinds such as Cursor and opencode remain placeholders by name only; update-kind surfaces a recorded recipe or an explicit absent notice, never invented flags. The recorded kind is the human's current wish, a requested switch is one step, and recovery never changes a kind unattended.",
+            ["seat_kind_intake"] = "Before launch, ask the human which CLI and model each seat (design, orchestrator, implementation, review) should run; record each answer as that role's kind with topology record --kind or the confirmed topology update-kind command. Do not guess a default model.",
+            ["codex_recipe"] = JsonSerializer.SerializeToNode(
+                AgentLaunchRecipeRegistry.Find("codex")
+                    ?? throw new InvalidOperationException("The measured Codex launch recipe is missing from the registry.")),
         },
         ["dispatch"] = new JsonObject
         {
