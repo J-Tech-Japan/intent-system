@@ -2720,9 +2720,9 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 ### 次リリース準備(v0.16.1)
 
 **`v0.16.0` は出荷済み**(GitHub Release + NuGet)で、次に準備するラインは
-`0.16.1` です。[v0.16.1 notes stub](release-notes-v0.16.1.md) が必須の
-prepare-only placeholder です。直前の出荷範囲は
-[release-notes-v0.16.0.md](release-notes-v0.16.0.md) を参照してください。
+`0.16.1` です。[v0.16.1 notes](release-notes-v0.16.1.md) に G650 だけを対象とする
+operator review 用の内容が入り、必須の prepare-only artifact になっています。直前の
+出荷範囲は [release-notes-v0.16.0.md](release-notes-v0.16.0.md) を参照し、ここでは重複記載しません。
 
 **リリース準備検証(`v0.16.1` release-preparation PR のマージ前に実行):**
 
@@ -2742,7 +2742,7 @@ ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.16.1.nupkg
 # 4. G475、出荷済み release-note check、release/version guard を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
-  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0150DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0161DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 
 # 5. Release suite を完全実行。
 dotnet test IntentSystem.sln -c Release

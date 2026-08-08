@@ -2652,9 +2652,10 @@ to keep in sync, and it goes stale on exactly the roll nobody is watching.
 ### Next release readiness (v0.16.1)
 
 **`v0.16.0` shipped** (GitHub Release + NuGet), and the next prepared line is
-`0.16.1`. [The v0.16.1 notes stub](release-notes-v0.16.1.md) is the required
-prepare-only placeholder. See [release-notes-v0.16.0.md](release-notes-v0.16.0.md)
-for the preceding shipped scope.
+`0.16.1`. [The v0.16.1 notes](release-notes-v0.16.1.md) now contain the
+operator-review content for exactly G650 and are the required prepare-only
+artifact. See [release-notes-v0.16.0.md](release-notes-v0.16.0.md) for the
+preceding shipped scope; it is linked, not restated.
 
 **Release-readiness verification (run before merging the `v0.16.1`
 release-preparation PR):**
@@ -2675,7 +2676,7 @@ ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.16.1.nupkg
 # 4. Confirm G475, the shipped release-note checks, and the release/version guards.
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
-  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0150DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0161DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 
 # 5. Run the complete Release suite.
 dotnet test IntentSystem.sln -c Release
