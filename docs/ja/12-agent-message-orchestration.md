@@ -533,6 +533,11 @@ read は拒否されないという asymmetry です。rendered / structured の
 `host: MyIntentHost` と `date: 2026-08-07` を付けます。Cursor と opencode は実測 entry がなく、名前だけの
 placeholder に留めます。
 
+> **Reachability discipline (G650)。** source に存在することは reachability ではありません。
+> この G647 guidance が到達可能だと記録するのは、実際に role が動かす build で、記録済みの
+> session layer の team-scoped guide を表示してからにします。typed fragment が欠けた場合は
+> fail-closed の rendering defect であり、typing rule を弱める理由にはなりません。
+
 ### Provisioning と READY の証明
 
 この topology を文字どおり使います: **1 チームにつき 1 workspace、team 名の 1 tab、role

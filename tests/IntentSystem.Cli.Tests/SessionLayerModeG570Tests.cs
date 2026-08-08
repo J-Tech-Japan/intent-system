@@ -810,6 +810,15 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             ["<delivery-mode>"] = "monitor",
         };
 
+    private static readonly IReadOnlyDictionary<string, string> TeamMissingValues =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["<domain>"] = ModeWorkspace.Domain,
+            ["<owner/repo>"] = "<owner/repo>",
+            ["<agent>"] = "<agent>",
+            ["<team>"] = "demo-team",
+        };
+
     /// <summary>Every string value under a rendered JSON node.</summary>
     private static IEnumerable<string> RenderedStrings(JsonElement element)
     {
@@ -917,6 +926,13 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         Assert.Equal(0, herdrWorkspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
         shapes.Add((herdrWorkspace.RenderOrchestratorGuide(), BareValues));
         shapes.Add((herdrWorkspace.RenderSetupReadyMarkdown(), SetupReadyValues));
+
+        // G650: the team-scoped herdr-only intake has a distinct missing-input
+        // shape (eight fields). Keep it in the independent exhaustiveness matrix
+        // so its declaration cannot become decorative or drift from the JSON
+        // surface that the operator actually reads.
+        using var herdrTeamWorkspace = new ModeWorkspace();
+        shapes.Add((herdrTeamWorkspace.RenderTeamScopedMissingMarkdown(), TeamMissingValues));
 
         foreach (var (rendered, values) in shapes)
         {
@@ -1027,6 +1043,10 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         shapes.Add((herdrWorkspace.RenderOrchestratorGuideJson(), BareValues));
         shapes.Add((herdrWorkspace.RenderSetupReadyJson(), SetupReadyValues));
 
+        // Same G650 team-scoped herdr-only shape as the markdown proof above.
+        using var herdrTeamWorkspace = new ModeWorkspace();
+        shapes.Add((herdrTeamWorkspace.RenderTeamScopedMissingJson(), TeamMissingValues));
+
         var undeclared = new List<string>();
         var consumed = new HashSet<(string, string)>();
         IReadOnlyDictionary<string, string> values = BareValues;
@@ -1101,6 +1121,226 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         Assert.True(
             unconsumedRows.Length == 0,
             "declared JSON fragments no longer rendered:\n" + string.Join("\n", unconsumedRows));
+    }
+
+    /// <summary>
+    /// G650: the exact team-scoped herdr-only invocation that previously
+    /// failed closed on an undeclared setup-intake fragment now renders, and
+    /// the guide still reaches the G647 ask-the-human contract. The no-team
+    /// path remains covered by the existing mode matrix above.
+    /// </summary>
+    [Fact]
+    public void TeamScopedHerdrOnlyGuide_RendersDeclaredMissingInputsAndG647Intake_G650()
+    {
+        using var herdrWorkspace = new ModeWorkspace();
+        var markdown = herdrWorkspace.RenderTeamScopedMissingMarkdown();
+
+        Assert.Contains(
+            "- missing-inputs — supply the 8 missing field(s) below to get a setup-ready plan.",
+            markdown,
+            StringComparison.Ordinal);
+        Assert.Contains("ask the human which CLI and model each seat should run", markdown, StringComparison.Ordinal);
+        Assert.Contains("record each answer as that seat's `kind`", markdown, StringComparison.Ordinal);
+
+        var json = herdrWorkspace.RenderTeamScopedMissingJson();
+        var recipes = json.GetProperty("herdr_only_operations").GetProperty("launch_recipes");
+        Assert.Contains("which CLI and model each seat", recipes.GetProperty("seat_kind_intake").GetString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G650's reachability guard is an explicit four-cell matrix: the guide's
+    /// markdown and JSON renderings must stay callable for both transports and
+    /// for both domain-wide and team-scoped resolution. A new mixed-section
+    /// fragment therefore cannot hide behind an invocation shape that the
+    /// existing mode tests never exercise.
+    /// </summary>
+    [Theory]
+    [InlineData(SessionLayerMode.Agmsg, false)]
+    [InlineData(SessionLayerMode.Agmsg, true)]
+    [InlineData(SessionLayerMode.HerdrOnly, false)]
+    [InlineData(SessionLayerMode.HerdrOnly, true)]
+    public void EverySessionLayerGuideMode_RendersWithAndWithoutTeam_G650(string mode, bool team)
+    {
+        using var guideWorkspace = new ModeWorkspace();
+
+        var markdown = guideWorkspace.RenderSessionLayerGuide(mode, team, "markdown");
+        Assert.Contains("## Setup intake", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("Undeclared session-layer fragment", markdown, StringComparison.Ordinal);
+
+        using var json = JsonDocument.Parse(guideWorkspace.RenderSessionLayerGuide(mode, team, "json"));
+        Assert.True(json.RootElement.TryGetProperty("setup_intake", out _));
+    }
+
+    /// <summary>
+    /// G650's red/green proof at the rendered-matrix boundary. The real guide
+    /// renderer produces each cell first; the test then injects one deliberately
+    /// undeclared line into the team-scoped herdr-only Markdown cell and runs the
+    /// same matrix declaration walk. The red pass must fail closed on that
+    /// rendered line. Removing the injection must make the complete matrix pass
+    /// again, without weakening or bypassing the production typing rule.
+    /// </summary>
+    [Fact]
+    public void RenderMatrix_RejectsInjectedUndeclaredFragment_ThenPassesAfterRestore_G650()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            AssertRenderedGuideMatrixHasDeclaredFragments(InjectDeliberatelyUndeclaredFragment));
+
+        Assert.Contains("Undeclared session-layer fragment", error.Message, StringComparison.Ordinal);
+        Assert.Contains("## Setup intake", error.Message, StringComparison.Ordinal);
+        Assert.Contains(DeliberatelyUndeclaredFragment, error.Message, StringComparison.Ordinal);
+
+        // Restore the actual rendered guide path and prove every matrix cell is
+        // green again, including both Markdown and JSON surfaces.
+        AssertRenderedGuideMatrixHasDeclaredFragments();
+    }
+
+    private const string DeliberatelyUndeclaredFragment = "- deliberately undeclared G650 fragment";
+
+    private static void AssertRenderedGuideMatrixHasDeclaredFragments(
+        Func<string, string>? markdownTransform = null)
+    {
+        foreach (var (mode, team) in new[]
+        {
+            (SessionLayerMode.Agmsg, false),
+            (SessionLayerMode.Agmsg, true),
+            (SessionLayerMode.HerdrOnly, false),
+            (SessionLayerMode.HerdrOnly, true),
+        })
+        {
+            using var guideWorkspace = new ModeWorkspace();
+            var values = MatrixValues(team);
+            var markdown = guideWorkspace.RenderSessionLayerGuide(mode, team, "markdown");
+
+            // Inject only after the real renderer has produced this cell. The
+            // matrix walk below is therefore the guard being red-tested, not a
+            // direct call to TypeOf with a synthetic line.
+            if (markdownTransform is not null
+                && string.Equals(mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal)
+                && team)
+            {
+                markdown = markdownTransform(markdown);
+            }
+
+            if (string.Equals(mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal))
+            {
+                AssertRenderedMarkdownFragmentsAreDeclared(markdown, values);
+            }
+
+            using var json = JsonDocument.Parse(guideWorkspace.RenderSessionLayerGuide(mode, team, "json"));
+            if (string.Equals(mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal))
+            {
+                AssertRenderedJsonValuesAreDeclared(json.RootElement, values);
+            }
+        }
+    }
+
+    private static string InjectDeliberatelyUndeclaredFragment(string rendered)
+    {
+        const string heading = "## Setup intake\n";
+        var injected = rendered.Replace(
+            heading,
+            heading + DeliberatelyUndeclaredFragment + "\n",
+            StringComparison.Ordinal);
+        Assert.NotEqual(rendered, injected);
+        return injected;
+    }
+
+    private static void AssertRenderedMarkdownFragmentsAreDeclared(
+        string rendered,
+        IReadOnlyDictionary<string, string> values)
+    {
+        string? mixedHeading = null;
+        var inFencedBlock = false;
+        foreach (var raw in rendered.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
+            {
+                inFencedBlock = !inFencedBlock;
+            }
+
+            if (!inFencedBlock && line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                mixedHeading = SessionLayerSections.MixedHeadings.Contains(line, StringComparer.Ordinal)
+                    ? line
+                    : null;
+            }
+
+            if (mixedHeading is not null)
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Contains(SessionLayerSections.MechanicPointer, StringComparison.Ordinal)
+                    || trimmed.Contains("descriptive, not an instruction", StringComparison.Ordinal))
+                {
+                    // These are routing labels produced by the renderer after
+                    // it consumes a declared source fragment, not new source
+                    // fragments that the matrix must declare a second time.
+                    continue;
+                }
+
+                // This is the production renderer's fail-closed declaration
+                // boundary, reached through the rendered matrix walk.
+                SessionLayerFragments.ClausesOf(values, mixedHeading, line);
+            }
+        }
+    }
+
+    private static void AssertRenderedJsonValuesAreDeclared(
+        JsonElement root,
+        IReadOnlyDictionary<string, string> values)
+    {
+        foreach (var property in SessionLayerSections.MixedJsonProperties)
+        {
+            if (root.TryGetProperty(property, out var value))
+            {
+                Walk(value, property);
+            }
+        }
+
+        void Walk(JsonElement element, string property)
+        {
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    foreach (var child in element.EnumerateObject())
+                    {
+                        if (!child.Name.StartsWith("session_layer", StringComparison.Ordinal))
+                        {
+                            Walk(child.Value, property);
+                        }
+                    }
+
+                    break;
+                case JsonValueKind.Array:
+                    foreach (var item in element.EnumerateArray())
+                    {
+                        Walk(item, property);
+                    }
+
+                    break;
+                case JsonValueKind.String:
+                    var text = element.GetString()!;
+                    if (text.Contains(SessionLayerSections.MechanicPointer, StringComparison.Ordinal)
+                        || text.Contains("descriptive, not an instruction", StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+
+                    SessionLayerFragments.JsonClausesOf(values, property, text);
+                    break;
+            }
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> MatrixValues(bool team)
+    {
+        var values = new Dictionary<string, string>(BareValues, StringComparer.Ordinal);
+        if (team)
+        {
+            values["<team>"] = "demo-team";
+        }
+
+        return values;
     }
 
     /// <summary>
@@ -2025,6 +2265,43 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         public string RenderOrchestratorGuide() =>
             Render(["guide", "orchestrator-thread", "--domain", Domain, "--target-repo", Repo, "--agent", "claude"]);
 
+        /// <summary>
+        /// The G650 regression shape: a team-scoped herdr-only guide with no
+        /// optional setup inputs. The route is valid, so the renderer must
+        /// classify and print its eight missing fields rather than throw on an
+        /// undeclared fragment.
+        /// </summary>
+        public string RenderTeamScopedMissingMarkdown()
+        {
+            RecordHerdrTeam();
+            return Render([
+                "guide", "orchestrator-thread", "--domain", Domain, "--team", "demo-team", "--format", "markdown",
+            ]);
+        }
+
+        public string RenderSessionLayerGuide(string mode, bool team, string format)
+        {
+            Assert.Equal(0, RunSet(mode, write: true).ExitCode);
+            var args = new List<string>
+            {
+                "guide", "orchestrator-thread", "--domain", Domain,
+                "--target-repo", Repo, "--agent", "claude",
+            };
+            if (team)
+            {
+                Assert.Equal(0, RunSet(mode, write: true, team: "demo-team").ExitCode);
+                if (string.Equals(mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal))
+                {
+                    WriteSetupTopology();
+                }
+
+                args.AddRange(["--team", "demo-team"]);
+            }
+
+            args.AddRange(["--format", format]);
+            return Render(args.ToArray());
+        }
+
         /// <summary>A setup-ready invocation: every intake input supplied.</summary>
         private static string[] SetupReadyArgs(string format, string existingLoopPolicy = "none") =>
         [
@@ -2097,6 +2374,22 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         {
             var output = Render(["guide", "orchestrator-thread", "--domain", Domain, "--target-repo", Repo, "--agent", "claude", "--format", "json"]);
             return JsonDocument.Parse(output).RootElement.Clone();
+        }
+
+        public JsonElement RenderTeamScopedMissingJson()
+        {
+            RecordHerdrTeam();
+            var output = Render([
+                "guide", "orchestrator-thread", "--domain", Domain, "--team", "demo-team", "--format", "json",
+            ]);
+            return JsonDocument.Parse(output).RootElement.Clone();
+        }
+
+        private void RecordHerdrTeam()
+        {
+            Assert.Equal(0, RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
+            Assert.Equal(0, RunSet(SessionLayerMode.HerdrOnly, write: true, team: "demo-team").ExitCode);
+            WriteSetupTopology();
         }
 
         public void WriteRawRecord(string content)
