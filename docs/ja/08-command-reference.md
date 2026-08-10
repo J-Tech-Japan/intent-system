@@ -188,6 +188,12 @@ Scheduler、または systemd artifact と operator 用の正確な registration
 command を生成しますが実行しません。継続的な health は team の `cycles.jsonl` record の
 age と declared bound を比較します。process-name grep は、実測で team を混同し、一方の
 supervisor を強制終了しながら別 team の process を残したアンチパターンです。supervision と
+optional `notify supervise --event-mode` は同じ process 内で blocking `herdr agent wait` を保持し、
+implementation / review の settle を数秒単位で wake します。独立した interval cycle は safety floor
+として残り、両 source は recorded seat transition で de-dup します。install artifact は invocation を
+埋め込むため、event mode の adoption には `supervise install --event-mode` で artifact を再生成して
+明示的に re-register する必要があり、既存 artifact は interval-only のままです。この path は macOS の
+herdr 0.8.0 で実測し、他 version / platform は unverified です。
 install emission は compatibility promise 上 1.x までの preview です。
 
 ## Stack — packet backlog 作成 + 最初の issue publish

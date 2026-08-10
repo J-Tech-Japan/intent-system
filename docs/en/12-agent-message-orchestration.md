@@ -315,6 +315,36 @@ supervisor health.
 > promise. Emission is not registration or runtime verification, and this
 > surface makes no release decision.
 
+### Event-driven supervision (G659 — preview-through-1.x)
+
+Add `--event-mode` to the one standing `notify supervise` invocation to opt in.
+The same supervisor process keeps one blocking `herdr agent wait` per recorded
+seat and wakes the owner role within seconds when an implementation or review
+seat changes from `working` to `done`, `blocked`, or `idle`. It records the
+transition, source, `state_change_seq`, observed latency, and wake result in
+`cycles.jsonl`. A wait death or error is recorded as `event-wait` with
+`rearm_attempted: true`, then re-armed. No terminal output is parsed.
+
+Event waits and interval cycles are independent observation sources inside one
+process. The interval loop remains the safety floor when a wait dies. Both
+sources use the same workspace/pane/sequence transition key, so their race
+produces one transition and one wake (`1 transition / 1 wake`). Existing wake targets, stall classes,
+owner-to-design escalation, recovery authority, and exactly-one-supervisor-per-
+team rule are unchanged; event mode does not create a second standing loop.
+Measured evidence is `herdr 0.8.0` on macOS. Other herdr versions and platforms
+are unverified.
+
+G659 supersedes hand-written transition watchers only when an operator adopts
+event mode; intent-cli never finds, kills, or forcibly replaces them. G658
+scheduler artifacts embed their invocation, so an installed interval-only
+artifact stays interval-only. Adoption requires running `notify supervise
+install ... --event-mode` again, inspecting the new artifact, and explicitly
+unregistering/re-registering it with the printed operator commands.
+
+> **Preview through 1.x (G659).** Event waits, transition/wait records, and
+> event/interval de-duplication are post-freeze preview behavior. They make no
+> release decision and may change or be withdrawn during 1.x.
+
 ### Escalation ladder and CI fallback (G657 — preview-through-1.x)
 
 The complete ladder is: seats do their assigned work; orchestration notices

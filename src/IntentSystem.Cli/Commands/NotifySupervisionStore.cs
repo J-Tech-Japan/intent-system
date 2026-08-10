@@ -66,6 +66,9 @@ internal static class NotifySupervisionStore
                     Directory = directory,
                     Bound = bound,
                     LastCycle = cycles.LastOrDefault(),
+                    LastIntervalCycle = cycles.LastOrDefault(cycle =>
+                        string.IsNullOrWhiteSpace(cycle.Trigger)
+                        || string.Equals(cycle.Trigger, "interval", StringComparison.Ordinal)),
                     ActiveStalls = stalls.Where(item => item.ClearedAt is null)
                         .ToDictionary(item => item.Key, StringComparer.Ordinal),
                     StallHistory = stalls,
@@ -313,6 +316,7 @@ internal sealed record NotifySupervisionCycle
     [JsonPropertyName("cycle_id")] public required string CycleId { get; init; }
     [JsonPropertyName("started_at")] public required DateTimeOffset StartedAt { get; init; }
     [JsonPropertyName("completed_at")] public required DateTimeOffset CompletedAt { get; init; }
+    [JsonPropertyName("trigger")] public string Trigger { get; init; } = "interval";
     [JsonPropertyName("interval_seconds")] public required int IntervalSeconds { get; init; }
     [JsonPropertyName("cadence_interval_seconds")] public int? CadenceIntervalSeconds { get; init; }
     [JsonPropertyName("bound_seconds")] public int? BoundSeconds { get; init; }
@@ -325,6 +329,36 @@ internal sealed record NotifySupervisionCycle
     [JsonPropertyName("bound_below_interval")] public bool BoundBelowInterval { get; init; }
     [JsonPropertyName("last_observed_state_change_sequences")] public IReadOnlyDictionary<string, long> LastObservedStateChangeSequences { get; init; } = new Dictionary<string, long>(StringComparer.Ordinal);
     [JsonPropertyName("last_observed_state_change_times")] public IReadOnlyDictionary<string, DateTimeOffset> LastObservedStateChangeTimes { get; init; } = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+    [JsonPropertyName("last_observed_agent_statuses")] public IReadOnlyDictionary<string, string> LastObservedAgentStatuses { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+    [JsonPropertyName("transitions")] public IReadOnlyList<NotifySupervisionTransition> Transitions { get; init; } = [];
+    [JsonPropertyName("wait_events")] public IReadOnlyList<NotifySupervisionWaitEvent> WaitEvents { get; init; } = [];
+}
+
+internal sealed record NotifySupervisionTransition
+{
+    [JsonPropertyName("key")] public required string Key { get; init; }
+    [JsonPropertyName("role")] public required string Role { get; init; }
+    [JsonPropertyName("workspace_id")] public required string WorkspaceId { get; init; }
+    [JsonPropertyName("pane_id")] public required string PaneId { get; init; }
+    [JsonPropertyName("from_status")] public required string FromStatus { get; init; }
+    [JsonPropertyName("to_status")] public required string ToStatus { get; init; }
+    [JsonPropertyName("state_change_seq")] public required long StateChangeSequence { get; init; }
+    [JsonPropertyName("source")] public required string Source { get; init; }
+    [JsonPropertyName("observed_at")] public required DateTimeOffset ObservedAt { get; init; }
+    [JsonPropertyName("latency_seconds")] public long? LatencySeconds { get; init; }
+    [JsonPropertyName("wake_attempted")] public bool WakeAttempted { get; init; }
+    [JsonPropertyName("wake_delivered")] public bool WakeDelivered { get; init; }
+}
+
+internal sealed record NotifySupervisionWaitEvent
+{
+    [JsonPropertyName("role")] public required string Role { get; init; }
+    [JsonPropertyName("workspace_id")] public required string WorkspaceId { get; init; }
+    [JsonPropertyName("pane_id")] public required string PaneId { get; init; }
+    [JsonPropertyName("outcome")] public required string Outcome { get; init; }
+    [JsonPropertyName("detail")] public required string Detail { get; init; }
+    [JsonPropertyName("observed_at")] public required DateTimeOffset ObservedAt { get; init; }
+    [JsonPropertyName("rearm_attempted")] public bool RearmAttempted { get; init; }
 }
 
 internal sealed record NotifySupervisionStallRecord
@@ -354,6 +388,7 @@ internal sealed record NotifySupervisionReadResult
     public required string Directory { get; init; }
     public NotifySupervisionBound? Bound { get; init; }
     public NotifySupervisionCycle? LastCycle { get; init; }
+    public NotifySupervisionCycle? LastIntervalCycle { get; init; }
     public required IReadOnlyDictionary<string, NotifySupervisionStallRecord> ActiveStalls { get; init; }
     public required IReadOnlyList<NotifySupervisionStallRecord> StallHistory { get; init; }
     public string? Error { get; init; }

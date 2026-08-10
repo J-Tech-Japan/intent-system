@@ -15,7 +15,7 @@ internal static class NotifySuperviseInstallCommand
     public const string Usage =
         "Usage: intent-cli notify supervise install --domain <d> --team <t> --repo <owner/repo> "
         + "--owner-role <role> --bound <seconds> --interval <seconds> "
-        + "[--platform macos|windows|linux] [--output <path>] [--routing-root <host-root>] "
+        + "[--event-mode] [--platform macos|windows|linux] [--output <path>] [--routing-root <host-root>] "
         + "[--dry-run|--write] [--format markdown|json]";
 
     private const string FormatJson = "json";
@@ -104,13 +104,14 @@ internal static class NotifySuperviseInstallCommand
             ArtifactPath = artifactPath,
             ArtifactWritten = options.Write,
             VerificationStatus = verificationStatus,
+            EventMode = options.EventMode,
             SuperviseInvocation = invocation,
             RegistrationCommand = registrationCommand,
             UnregistrationCommand = unregistrationCommand,
             CommandMode = options.Write ? "write" : "dry-run",
             ManagesProcess = false,
             Summary = options.Write
-                ? $"Emitted the {options.Platform} supervisor artifact. intent-cli did not register, start, stop, or unregister it."
+                ? $"Emitted the {options.Platform} supervisor artifact with event mode {(options.EventMode ? "enabled" : "disabled")}. intent-cli did not register, start, stop, or unregister it."
                 : $"Previewed the {options.Platform} supervisor artifact path and operator commands without writing or executing anything.",
         };
         Emit(writer, options.Format, result);
@@ -134,19 +135,25 @@ internal static class NotifySuperviseInstallCommand
             label + extension);
     }
 
-    private static IReadOnlyList<string> BuildSuperviseArguments(InstallOptions options, string routingRoot) =>
-    [
-        "notify", "supervise",
-        "--domain", options.Domain,
-        "--team", options.Team,
-        "--repo", options.Repo,
-        "--owner-role", options.OwnerRole,
-        "--bound", options.BoundSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        "--interval", options.IntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        "--routing-root", routingRoot,
-        "--write",
-        "--format", "json",
-    ];
+    private static IReadOnlyList<string> BuildSuperviseArguments(InstallOptions options, string routingRoot)
+    {
+        var arguments = new List<string>
+        {
+            "notify", "supervise",
+            "--domain", options.Domain,
+            "--team", options.Team,
+            "--repo", options.Repo,
+            "--owner-role", options.OwnerRole,
+            "--bound", options.BoundSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "--interval", options.IntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        };
+        if (options.EventMode)
+        {
+            arguments.Add("--event-mode");
+        }
+        arguments.AddRange(["--routing-root", routingRoot, "--write", "--format", "json"]);
+        return arguments;
+    }
 
     private static string BuildArtifact(string platform, string label, IReadOnlyList<string> arguments) => platform switch
     {
@@ -295,6 +302,7 @@ WantedBy=default.target
         int? bound = null;
         int? interval = null;
         var write = false;
+        var eventMode = false;
         var format = FormatMarkdown;
         error = string.Empty;
 
@@ -318,6 +326,7 @@ WantedBy=default.target
                     break;
                 case "--write": write = true; break;
                 case "--dry-run": write = false; break;
+                case "--event-mode": eventMode = true; break;
                 case "--format":
                     if (!ReadValue(args, ref index, argument, out format, out error)) return Fail(out options);
                     if (format is not FormatJson and not FormatMarkdown)
@@ -361,6 +370,7 @@ WantedBy=default.target
             BoundSeconds = bound.Value, IntervalSeconds = interval.Value,
             RoutingRoot = routingRoot, Output = output, Platform = platform,
             Write = write, Format = format!,
+            EventMode = eventMode,
         };
         return true;
     }
@@ -448,6 +458,7 @@ WantedBy=default.target
         writer.WriteLine($"- platform: {result.Platform} (current: {result.CurrentPlatform}; cross-authored: {result.CrossAuthored.ToString().ToLowerInvariant()})");
         writer.WriteLine($"- verification status: {result.VerificationStatus}");
         writer.WriteLine($"- command mode: {result.CommandMode}");
+        writer.WriteLine($"- event mode: {result.EventMode.ToString().ToLowerInvariant()}");
         writer.WriteLine($"- artifact path: `{result.ArtifactPath}` (written: {result.ArtifactWritten.ToString().ToLowerInvariant()})");
         writer.WriteLine($"- supervise invocation: `{result.SuperviseInvocation}`");
         writer.WriteLine($"- registration command (operator action): `{result.RegistrationCommand}`");
@@ -469,6 +480,7 @@ WantedBy=default.target
         public string? RoutingRoot { get; init; }
         public string? Output { get; init; }
         public required bool Write { get; init; }
+        public bool EventMode { get; init; }
         public required string Format { get; init; }
     }
 
@@ -482,6 +494,7 @@ WantedBy=default.target
         [JsonPropertyName("artifact_path")] public required string ArtifactPath { get; init; }
         [JsonPropertyName("artifact_written")] public required bool ArtifactWritten { get; init; }
         [JsonPropertyName("verification_status")] public required string VerificationStatus { get; init; }
+        [JsonPropertyName("event_mode")] public required bool EventMode { get; init; }
         [JsonPropertyName("supervise_invocation")] public required string SuperviseInvocation { get; init; }
         [JsonPropertyName("registration_command")] public required string RegistrationCommand { get; init; }
         [JsonPropertyName("unregistration_command")] public required string UnregistrationCommand { get; init; }
