@@ -16,6 +16,58 @@ prompts from this page by hand. Generate the current prompts with:
 intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --mode single-domain|multi-domain --format markdown
 ```
 
+## Design-thread operating contract (G654 — preview-through-1.x)
+
+Render the agent-kind-neutral contract with `intent-cli guide design-thread`.
+`guide commands list` catalogs it and `guide next` names it for the design
+role. Its wording is the same in `agmsg` and `herdr-only`, with or without a
+named team. Re-read installed guides after a CLI version or session-layer
+configuration change, not on every wake.
+
+A design wake has exactly four valid outcome shapes: advance the canonical
+workflow; confirm new evidence of real progress; discover the next actionable
+design, packet, or issue candidate and hand it to orchestration; or report a
+blocker only a human can resolve. `no-actionable`, `running=true`, liveness,
+unchanged status, and `no change` are not outcomes while the project is
+unfinished. Reports cite evidence of change. A human-action report names the
+minimal concrete operation and why automation cannot perform it.
+
+Keep provenance states distinct: candidate, accepted design, packet, queued
+unit, published unit, and WIP. Do not use an execution-unit number until it
+exists in canonical host state. Before prioritising an external handoff,
+record source kind, reference, timestamp, requesting party, and acceptance
+state. Read-only inspection needs no approval. Unless an operator says
+merge-only, a merge instruction authorises one complete closeout transaction:
+merge, verify the merge commit, close the linked issue, transition the queue,
+append runs, write back host state, and push host state. Ask once for that
+whole transaction, never piecemeal. Publication, contract, priority, and
+release changes still require explicit acceptance.
+
+GitHub `reviewDecision` alone never proves a blocker. Attribute and compare
+intent-cli workflow labels, the exact PR head, GitHub checks, GitHub
+mergeability, and canonical queue state. Delegation verification has three
+layers: canonical workflow status; recorded session-layer agent state and
+G652 activity sub-verdicts; and real artifacts such as files, commits, and
+pull requests. `running=true` alone never proves progress, and terminal
+content is never parsed as workflow evidence.
+
+The team formula is four judgment-bearing threads plus one supervision
+process. Watcher infrastructure is not a fifth role: it holds no conversation,
+makes no judgment, and spends no model tokens. Supervision runs outside the
+design conversation and is consulted at most once per design wake.
+Orchestration owns detection, classification, and authorised recovery for
+every stall class, including review wedges. Design is event-driven and
+receives only the escalation set rendered by the guide. Its residual duty is
+a low-frequency check of the last completed supervision-cycle record against
+the declared supervision-liveness bound, not a conversational heartbeat. The
+detection bound must exceed the wake interval plus scheduling jitter.
+
+A design seat whose agent kind has no inbound app monitor must be a recorded
+resident herdr seat with the routing root as cwd, where persistent AGENTS rules
+apply. A kind with an inbound app monitor may use that external reader. This is
+a deployment rule, not a recommendation; it does not assign stall recovery to
+design or add a model-backed monitoring role.
+
 ## Canonical notify workflow
 
 All role-to-role workflow messages use `intent-cli notify`; agents never choose

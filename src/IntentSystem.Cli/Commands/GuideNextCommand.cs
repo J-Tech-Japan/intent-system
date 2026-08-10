@@ -92,10 +92,11 @@ internal static class GuideNextCommand
 $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). This is READ-ONLY: recommend ONE design-side process, do not mutate packets / issues / labels / queue state, and never launch an AI provider.
 
 1. Check the evidence (below) — current intents, open questions, packet backlog, open PRs / review state, and CLI / queue health — before recommending.
-2. When a domain and team are supplied, inspect the recorded supervision cycle and include `supervision-setup` first when no cycle is recorded.
-3. Match the situation to exactly one action in the decision set (supervision-setup when its check is missing, then grill / stack / improve / inspect / issue-publish / review / recovery / idle).
-4. Return the recommendation output shape: the recommended action, the reason tied to the evidence you actually checked, the evidence checked, a paste-ready suggested prompt for that action, and the safety boundary.
-5. Stop there — the user decides whether to run the suggested prompt. next never auto-executes the chosen action.";
+2. Use `{GuideDesignThreadCommand.CommandName}` as the design-role operating contract. Its four-outcome wake rule governs whether this wake has an outcome at all.
+3. When a domain and team are supplied, inspect the recorded supervision cycle and include `supervision-setup` first when no cycle is recorded.
+4. Match the situation to exactly one action in the decision set (supervision-setup when its check is missing, then grill / stack / improve / inspect / issue-publish / review / recovery / idle).
+5. Return the recommendation output shape: the recommended action, the reason tied to the evidence you actually checked, the evidence checked, a paste-ready suggested prompt for that action, and the safety boundary.
+6. Stop there — the user decides whether to run the suggested prompt. next never auto-executes the chosen action.";
 
         var evidenceToCheck = new[]
         {
@@ -177,6 +178,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             Team = string.IsNullOrWhiteSpace(team) ? null : team,
             TargetRepo = string.IsNullOrWhiteSpace(targetRepo) ? null : targetRepo,
             Supervision = supervision,
+            DesignRoleGuide = GuideDesignThreadCommand.CommandName,
             ShortPrompt = ShortPrompt,
             ReadOnly = true,
             Summary =
@@ -238,6 +240,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             writer.WriteLine($"- team: {result.Team}");
         }
         writer.WriteLine($"- read-only: {(result.ReadOnly ? "yes" : "no")}");
+        writer.WriteLine($"- design-role operating guide: `{result.DesignRoleGuide}`");
         writer.WriteLine();
 
         if (result.Supervision is { Checked: true })
@@ -453,6 +456,9 @@ internal sealed record GuideNextResult
 
     [JsonPropertyName("supervision")]
     public required GuideNextSupervisionStatus Supervision { get; init; }
+
+    [JsonPropertyName("design_role_guide")]
+    public required string DesignRoleGuide { get; init; }
 
     [JsonPropertyName("short_prompt")]
     public required string ShortPrompt { get; init; }

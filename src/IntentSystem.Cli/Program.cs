@@ -207,6 +207,8 @@ internal static class Program
                 || string.Equals(args[1], "artifact-intake", StringComparison.Ordinal)
                 // G487: optional agmsg-backed orchestrator-thread guidance — read-only, no host state required.
                 || string.Equals(args[1], "orchestrator-thread", StringComparison.Ordinal)
+                // G654: agent-kind-neutral design-thread guidance — read-only, no host state required.
+                || string.Equals(args[1], "design-thread", StringComparison.Ordinal)
                 // G637: read-only workspace-layout guidance — no host state required.
                 || string.Equals(args[1], "workspace-layout", StringComparison.Ordinal)
                 // G488: thin agent skill pack bootstrap — read-only, no host state required.
