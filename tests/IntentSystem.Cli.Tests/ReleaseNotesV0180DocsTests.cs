@@ -159,16 +159,11 @@ public sealed class ReleaseNotesV0180DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void VersionReadinessMinorRationaleAndPrepareOnlyBoundariesStayAligned(string language)
+    public void PublishedNotesMinorRationaleAndPrepareOnlyBoundariesStayGuarded(string language)
     {
-        var root = RepoVersionPolicySource.RepoRoot();
         var notes = Read(language);
         var compact = Regex.Replace(notes, @"\s+", " ");
-        var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
-        var policy = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "eng", "version.json"))).RootElement;
 
-        Assert.Equal("0.17.0", policy.GetProperty("stableVersion").GetString());
-        Assert.Equal("0.18.0", policy.GetProperty("nextVersion").GetString());
         Assert.Contains("guide bootstrap", notes, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("bootstrap-resume", notes, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(language == "en" ? "absent at v0.17.0" : "v0.17.0 には存在しません", compact, StringComparison.OrdinalIgnoreCase);
@@ -179,9 +174,39 @@ public sealed class ReleaseNotesV0180DocsTests
         Assert.Contains("package publish", notes, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("post-release roll", notes, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("v0180-preapproved-001", notes, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void PostReleaseReadinessAdvancesToV0181WhileV0180NotesStayLinked(string language)
+    {
+        var root = RepoVersionPolicySource.RepoRoot();
+        var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
+        var policy = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "eng", "version.json"))).RootElement;
+        var stubPath = Path.Combine(root, "docs", language, "release-notes-v0.18.1.md");
+
+        Assert.Equal("0.18.0", policy.GetProperty("stableVersion").GetString());
+        Assert.Equal("0.18.1", policy.GetProperty("nextVersion").GetString());
+        Assert.True(File.Exists(stubPath));
+        Assert.Contains(language == "en" ? "DRAFT / UNRELEASED" : "DRAFT / 未リリース", File.ReadAllText(stubPath), StringComparison.Ordinal);
+        Assert.Contains("release-notes-v0.18.1.md", reference, StringComparison.Ordinal);
         Assert.Contains("release-notes-v0.18.0.md", reference, StringComparison.Ordinal);
-        Assert.Contains("release-notes-v0.17.0.md", reference, StringComparison.Ordinal);
         Assert.DoesNotContain("release-notes-v0.17.1.md", reference, StringComparison.Ordinal);
+        Assert.Contains("ReleaseNotesV0180DocsTests", reference, StringComparison.Ordinal);
+        Assert.Contains("ReleaseNotesV0170DocsTests", reference, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReleaseNotesV0181DocsTests", reference, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("en", "7bb2938af2c10b3f6907b5d7aae4e80707e1381aad766f3bf2b8a392203373ac")]
+    [InlineData("ja", "52256cd05666fb7ff514d2766878c87892afa28baf401450fc90e460267bc08f")]
+    public void PublishedV0180NotesRemainByteForByteFrozen(string language, string expectedSha256)
+    {
+        var bytes = File.ReadAllBytes(Path.Combine(
+            RepoVersionPolicySource.RepoRoot(), "docs", language, "release-notes-v0.18.0.md"));
+
+        Assert.Equal(expectedSha256, Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)));
     }
 
     private static IReadOnlyList<string> CountMismatches(string notes, string language)
