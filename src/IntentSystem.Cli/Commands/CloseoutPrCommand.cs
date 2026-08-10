@@ -238,6 +238,28 @@ internal static class CloseoutPrCommand
         var executionUnit = matchedItem.ExecutionUnit;
         var nowTs = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
 
+        // G661 / RH-030A: shipped work does not erase contradictory packet
+        // history. Report the still-retired sidecar and leave it byte-identical;
+        // only an explicit, evidenced reactivation may change lifecycle.
+        var closeoutFindings = new List<CloseoutPrFinding>();
+        var packetDirectory = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit);
+        var lifecycle = PacketLifecycle.ReadState(packetDirectory);
+        if (lifecycle.State == PacketLifecycleState.ValidRetired)
+        {
+            closeoutFindings.Add(new CloseoutPrFinding
+            {
+                Kind = "shipped-while-retired-contradiction",
+                Path = lifecycle.SidecarPath,
+                Summary =
+                    $"Execution unit '{executionUnit}' is being closed out as shipped while lifecycle.yaml still "
+                    + $"declares '{lifecycle.Metadata?.Lifecycle}'. The lifecycle record was not changed.",
+                RecommendedAction =
+                    $"Inspect the history, then run `intent-cli packet retire --execution-unit {executionUnit} "
+                    + "--reactivate --evidence <why-the-prior-retirement-is-no-longer-valid> --write --format json` "
+                    + "if reactivation is correct. Never silently unretire a shipped unit.",
+            });
+        }
+
         var runsEvents = new List<string>
         {
             BuildRunsEvent(executionUnit, "pr-merged", repo!, pr.Value, nowTs),
@@ -337,7 +359,8 @@ internal static class CloseoutPrCommand
             RecoverableMissingLinkedPr = recoverableMissingLinkedPr,
             InferredIssue = inferredIssue,
             RecoverySource = recoverySource,
-            RecoveryAction = recoveryAction
+            RecoveryAction = recoveryAction,
+            Findings = closeoutFindings,
         };
 
         EmitResult(writer, result, format);
@@ -459,7 +482,8 @@ internal static class CloseoutPrCommand
             ContinuationHint = null,
             NextSteps = Array.Empty<string>(),
             Error = error,
-            StateLayout = stateLayout
+            StateLayout = stateLayout,
+            Findings = Array.Empty<CloseoutPrFinding>(),
         };
     }
 
@@ -501,6 +525,22 @@ internal static class CloseoutPrCommand
             writer.WriteLine($"- {result.Error}");
             return;
         }
+
+        writer.WriteLine("## Findings");
+        if (result.Findings.Count == 0)
+        {
+            writer.WriteLine("- none");
+        }
+        else
+        {
+            foreach (var finding in result.Findings)
+            {
+                writer.WriteLine($"- {finding.Kind}: {finding.Summary}");
+                writer.WriteLine($"  - path: {finding.Path}");
+                writer.WriteLine($"  - recommended_action: {finding.RecommendedAction}");
+            }
+        }
+        writer.WriteLine();
 
         writer.WriteLine("## Queue transition");
         writer.WriteLine($"- before: {result.QueueStateBeforeState}");
@@ -821,4 +861,22 @@ internal sealed record CloseoutPrResult
     /// </summary>
     [JsonPropertyName("recovery_action")]
     public string? RecoveryAction { get; init; }
+
+    [JsonPropertyName("findings")]
+    public required IReadOnlyList<CloseoutPrFinding> Findings { get; init; }
+}
+
+internal sealed record CloseoutPrFinding
+{
+    [JsonPropertyName("kind")]
+    public required string Kind { get; init; }
+
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("recommended_action")]
+    public required string RecommendedAction { get; init; }
 }

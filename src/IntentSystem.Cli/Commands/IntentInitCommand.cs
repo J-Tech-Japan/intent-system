@@ -28,6 +28,18 @@ internal static class IntentInitCommand
     private const string UsageLine =
         "Usage: intent-cli intent init --domain <name> [--target-repo <owner/repo>] [--host-repo <owner/repo>] [--base-branch-policy direct-main|main-ai] [--write] [--format markdown|json]";
 
+    internal static readonly IReadOnlyList<string> AppendOnlyGitAttributesLines =
+    [
+        ".intent-cli/runs.jsonl merge=union",
+        ".intent-cli/**/*.jsonl merge=union",
+    ];
+
+    internal static readonly IReadOnlyList<string> SupervisionTelemetryGitIgnoreLines =
+    [
+        ".intent-cli/supervision/**/cycles.jsonl",
+        ".intent-cli/supervision/**/stalls.jsonl",
+    ];
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -67,6 +79,11 @@ internal static class IntentInitCommand
 
         EnsureNotChildWorktree(hostRepoRoot);
 
+        var configPath = ResolveHostPath(
+            hostRepoRoot,
+            $"{CliRuntimeContracts.IntentCliDirectoryName}/{CliRuntimeContracts.ConfigFileName}");
+        var freshHost = !File.Exists(configPath);
+
         // G301: extend the new-host bootstrap to also write the canonical
         // host policy files (`AGENTS.md`, `CLAUDE.md`) and the host-binding
         // record so wrong-host operation can be detected later. The
@@ -89,6 +106,11 @@ internal static class IntentInitCommand
             $"intents/{request.Domain}/clarifications/open.md",
             $"intents/{request.Domain}/intent-tree/00-map.md"
         };
+        if (freshHost)
+        {
+            planned.Add(".gitattributes");
+            planned.Add(".gitignore");
+        }
 
         var written = new List<string>();
         var existing = new List<string>();
@@ -96,6 +118,27 @@ internal static class IntentInitCommand
         foreach (var relativePath in planned)
         {
             var absolutePath = ResolveHostPath(hostRepoRoot, relativePath);
+            if (freshHost && relativePath is ".gitattributes" or ".gitignore")
+            {
+                var requiredLines = relativePath == ".gitattributes"
+                    ? AppendOnlyGitAttributesLines
+                    : SupervisionTelemetryGitIgnoreLines;
+                if (!request.Write)
+                {
+                    continue;
+                }
+
+                if (AppendMissingLines(absolutePath, requiredLines))
+                {
+                    written.Add(relativePath);
+                }
+                else
+                {
+                    existing.Add(relativePath);
+                }
+                continue;
+            }
+
             if (File.Exists(absolutePath))
             {
                 existing.Add(relativePath);
@@ -124,8 +167,37 @@ internal static class IntentInitCommand
             PlannedPaths = planned,
             WrittenPaths = written,
             ExistingPaths = existing,
-            NextSteps = BuildNextSteps(request, written.Count, existing.Count)
+            NextSteps = BuildNextSteps(request, written.Count, existing.Count, freshHost),
+            FreshHost = freshHost,
+            GitAttributesLines = AppendOnlyGitAttributesLines,
+            GitIgnoreLines = SupervisionTelemetryGitIgnoreLines,
+            ExistingHostGuidance =
+                "Existing hosts are never auto-migrated. Add the exact .gitattributes and .gitignore lines "
+                + "reported by this command deliberately, then commit and push them if adopted.",
         };
+    }
+
+    private static bool AppendMissingLines(string path, IReadOnlyList<string> requiredLines)
+    {
+        var existingText = File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+        var existingLines = existingText.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .ToHashSet(StringComparer.Ordinal);
+        var missing = requiredLines.Where(line => !existingLines.Contains(line)).ToArray();
+        if (missing.Length == 0)
+        {
+            return false;
+        }
+
+        var prefix = existingText.Length == 0 || existingText.EndsWith('\n') ? string.Empty : Environment.NewLine;
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+        File.AppendAllText(path, prefix + string.Join(Environment.NewLine, missing) + Environment.NewLine);
+        return true;
     }
 
     private static void EnsureNotChildWorktree(string hostRepoRoot)
@@ -148,7 +220,8 @@ internal static class IntentInitCommand
     private static IReadOnlyList<string> BuildNextSteps(
         IntentInitRequest request,
         int writtenCount,
-        int existingCount)
+        int existingCount,
+        bool freshHost)
     {
         var domain = request.Domain;
         var verb = request.Write
@@ -168,6 +241,9 @@ internal static class IntentInitCommand
         steps.Add($"Open `intents/{domain}/intent-tree/00-map.md` and capture the initial domain shape.");
         steps.Add($"Use `intent-cli interview record-answer --write` (chat-first) to durably record durable Q/A for '{domain}'.");
         steps.Add($"Use `intent-cli intent next-slice --domain {domain} --dry-run` to plan the first publishable slice.");
+        steps.Add(freshHost
+            ? "Fresh-host git defaults include merge=union for append-only .intent-cli JSONL stores and ignores for supervision cycles/stalls telemetry. Commit and push those repo policy files with the host scaffold."
+            : "Existing host detected: no .gitattributes or .gitignore migration was performed. Apply the exact reported lines manually if desired; intent-cli never auto-migrates them.");
         steps.Add("Run this command from the parent host repository, never inside `.intent-cli/worktrees/**`.");
 
         return steps;

@@ -74,7 +74,10 @@ internal static class PacketLifecycle
             AbsorbedBy = fields.GetValueOrDefault("absorbed_by"),
             SupersededBy = fields.GetValueOrDefault("superseded_by"),
             RetiredReason = fields.GetValueOrDefault("retired_reason"),
-            RetiredAt = fields.GetValueOrDefault("retired_at")
+            RetiredAt = fields.GetValueOrDefault("retired_at"),
+            ReactivatedFrom = fields.GetValueOrDefault("reactivated_from"),
+            ReactivationEvidence = fields.GetValueOrDefault("reactivation_evidence"),
+            ReactivatedAt = fields.GetValueOrDefault("reactivated_at")
         };
     }
 
@@ -184,7 +187,10 @@ internal static class PacketLifecycle
             AbsorbedBy = fields.GetValueOrDefault("absorbed_by"),
             SupersededBy = fields.GetValueOrDefault("superseded_by"),
             RetiredReason = fields.GetValueOrDefault("retired_reason"),
-            RetiredAt = fields.GetValueOrDefault("retired_at")
+            RetiredAt = fields.GetValueOrDefault("retired_at"),
+            ReactivatedFrom = fields.GetValueOrDefault("reactivated_from"),
+            ReactivationEvidence = fields.GetValueOrDefault("reactivation_evidence"),
+            ReactivatedAt = fields.GetValueOrDefault("reactivated_at")
         };
 
         if (trimmedLifecycle == LifecycleReady)
@@ -272,6 +278,9 @@ internal static class PacketLifecycle
         AppendOptional(builder, "superseded_by", metadata.SupersededBy);
         AppendOptional(builder, "retired_reason", metadata.RetiredReason);
         AppendOptional(builder, "retired_at", metadata.RetiredAt);
+        AppendOptional(builder, "reactivated_from", metadata.ReactivatedFrom);
+        AppendOptional(builder, "reactivation_evidence", metadata.ReactivationEvidence);
+        AppendOptional(builder, "reactivated_at", metadata.ReactivatedAt);
         return builder.ToString();
     }
 
@@ -352,6 +361,12 @@ internal sealed record PacketLifecycleMetadata
     public string? RetiredReason { get; init; }
 
     public string? RetiredAt { get; init; }
+
+    public string? ReactivatedFrom { get; init; }
+
+    public string? ReactivationEvidence { get; init; }
+
+    public string? ReactivatedAt { get; init; }
 }
 
 /// <summary>

@@ -19,6 +19,26 @@ internal sealed record GuideReachabilityRoute
 
 internal sealed record GuideReachabilityDeclaration
 {
+    /// <summary>
+    /// G661: canonical accepted YAML fragments. The missing-declaration
+    /// warning and packet scaffold both render these exact spellings so an
+    /// author can paste either form without reverse-engineering the parser.
+    /// </summary>
+    public const string RouteYaml = """
+        guide_reachability:
+          no_role_facing_surface: false
+          routes:
+            - guide_surface: guide workflow task implementation-loop
+              role: implementation
+              target_surface: <role-facing-surface>
+        """;
+
+    public const string NoSurfaceYaml = """
+        guide_reachability:
+          no_role_facing_surface: true
+          routes: []
+        """;
+
     public required bool IsDeclared { get; init; }
 
     public required bool NoRoleFacingSurface { get; init; }

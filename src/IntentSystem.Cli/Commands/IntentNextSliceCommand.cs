@@ -654,16 +654,20 @@ internal static class IntentNextSliceCommand
         var githubBodyPath = Path.Combine(directory, "github-body.md");
         var githubBodyPresent = File.Exists(githubBodyPath);
         var missing = new List<string>();
+        IssueValidateBodyResult? publishGate = null;
 
         if (githubBodyPresent)
         {
             var content = File.ReadAllText(githubBodyPath);
-            foreach (var section in RequiredContractSections)
+            // G661: reuse the publish gate's own judgment. In particular, a
+            // freshly scaffolded `- TODO` Related Links section is present but
+            // not valid, so it remains visibly not-ready instead of being
+            // surfaced as work the publish path will refuse.
+            publishGate = IssueValidateBodyValidator.Validate(githubBodyPath, content);
+            missing.AddRange(publishGate.MissingHeadings);
+            if (publishGate.RelatedLinksInvalid)
             {
-                if (!ContainsSectionHeading(content, section))
-                {
-                    missing.Add(section);
-                }
+                missing.Add("Related Links");
             }
         }
         else
@@ -690,31 +694,15 @@ internal static class IntentNextSliceCommand
             ExecutionUnit = executionUnit,
             PacketDirectory = directory,
             GithubBodyPresent = githubBodyPresent,
-            MissingContractSections = missing,
+            MissingContractSections = missing.Distinct(StringComparer.Ordinal).ToArray(),
+            PublishGateReady = publishGate?.IsValid == true,
+            NotReadyReason = publishGate?.IsValid == false
+                ? publishGate.RelatedLinksReason
+                    ?? $"publish gate rejected missing section(s): {string.Join(", ", publishGate.MissingHeadings)}"
+                : githubBodyPresent ? null : "github-body.md is missing.",
             GapAnalysis = gapAnalysis,
             Provenance = provenance
         };
-    }
-
-    private static bool ContainsSectionHeading(string content, string section)
-    {
-        var lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        foreach (var rawLine in lines)
-        {
-            var line = rawLine.Trim();
-            if (!line.StartsWith("##", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            var heading = line.TrimStart('#').Trim();
-            if (string.Equals(heading, section, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static string ComputeRecommendedOutcome(
@@ -1052,6 +1040,11 @@ internal static class IntentNextSliceCommand
             writer.WriteLine($"- execution unit: {result.Candidate.ExecutionUnit}");
             writer.WriteLine($"- packet directory: {result.Candidate.PacketDirectory}");
             writer.WriteLine($"- github-body.md present: {(result.Candidate.GithubBodyPresent ? "yes" : "no")}");
+            writer.WriteLine($"- publish gate ready: {(result.Candidate.PublishGateReady ? "yes" : "no")}");
+            if (!string.IsNullOrWhiteSpace(result.Candidate.NotReadyReason))
+            {
+                writer.WriteLine($"- not-ready reason: {result.Candidate.NotReadyReason}");
+            }
             if (result.Candidate.MissingContractSections.Count == 0)
             {
                 writer.WriteLine("- missing contract sections: none");
@@ -1264,6 +1257,15 @@ internal sealed record IntentNextSliceCandidate
 
     [JsonPropertyName("missing_contract_sections")]
     public required IReadOnlyList<string> MissingContractSections { get; init; }
+
+    /// <summary>G661: the existing issue publish gate's own verdict.</summary>
+    [JsonPropertyName("publish_gate_ready")]
+    public required bool PublishGateReady { get; init; }
+
+    /// <summary>G661: visible reason a present scaffold is not issue-cut-ready.</summary>
+    [JsonPropertyName("not_ready_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? NotReadyReason { get; init; }
 
     /// <summary>
     /// G354: per-section gap classification and repair guidance.

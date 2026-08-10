@@ -121,11 +121,16 @@ internal static class IssuePublishFlowCommand
         }
 
         var githubBodyPresent = File.Exists(githubBodyPath);
-        IReadOnlyList<string> missing = githubBodyPresent
+        var githubBody = githubBodyPresent ? File.ReadAllText(githubBodyPath) : null;
+        var validation = githubBody is null
+            ? null
+            : IssueValidateBodyValidator.Validate(githubBodyPath, githubBody);
+        IReadOnlyList<string> missing = validation is null
             ? PacketDraftCommand.RequiredContractSections
-                .Where(section => !ContainsSectionHeading(File.ReadAllText(githubBodyPath), section))
-                .ToArray()
-            : PacketDraftCommand.RequiredContractSections;
+            : validation.MissingHeadings
+                .Concat(validation.RelatedLinksInvalid ? ["Related Links"] : Array.Empty<string>())
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
 
         // G290: prefer `packet.yaml` `title:` over the body H1 fallback so a
         // packet with valid metadata never publishes as `<id> (untitled)`.
@@ -150,7 +155,7 @@ internal static class IssuePublishFlowCommand
         // exactly one that next-slice / packet-draft / diagnostics will not
         // report issue-cut-ready. ContractComplete requires the body present AND
         // no missing required sections.
-        var contractComplete = githubBodyPresent && missing.Count == 0;
+        var contractComplete = githubBodyPresent && validation?.IsValid == true;
         if (!NextSliceReadinessEvaluator.IsPublishable(executionUnit!, contractComplete))
         {
             var validationResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
@@ -167,7 +172,7 @@ internal static class IssuePublishFlowCommand
                 publishYamlPatched: false,
                 runsAppended: false,
                 error: githubBodyPresent
-                    ? "Child Issue Contract is incomplete; required sections are missing."
+                    ? "Child Issue Contract is incomplete; the existing publish gate rejected headings or placeholder-only Related Links."
                     : "github-body.md is missing in the packet directory.",
                 titleSource: titleSource);
             EmitResult(writer, validationResult, format);
@@ -1108,27 +1113,6 @@ internal static class IssuePublishFlowCommand
                 writer.WriteLine($"- {step}");
             }
         }
-    }
-
-    private static bool ContainsSectionHeading(string content, string section)
-    {
-        var lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        foreach (var rawLine in lines)
-        {
-            var line = rawLine.Trim();
-            if (!line.StartsWith("##", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            var heading = line.TrimStart('#').Trim();
-            if (string.Equals(heading, section, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /// <summary>

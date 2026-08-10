@@ -117,6 +117,40 @@ public sealed class PacketRetireCommandTests
     }
 
     [Fact]
+    public void Execute_ReactivateRequiresAndRecordsEvidence_G661()
+    {
+        using var workspace = new PacketRetireWorkspace();
+        workspace.CreatePacket("RH-030A");
+        Assert.Equal(0, PacketRetireCommand.Execute(
+            workspace.Context,
+            ["--execution-unit", "RH-030A", "--retired", "--reason", "empty scaffold", "--write", "--format", "json"],
+            TextWriter.Null));
+
+        using var missingEvidence = new StringWriter();
+        Assert.Equal(1, PacketRetireCommand.Execute(
+            workspace.Context,
+            ["--execution-unit", "RH-030A", "--reactivate", "--write"],
+            missingEvidence));
+        Assert.Contains("--evidence", missingEvidence.ToString(), StringComparison.Ordinal);
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, PacketRetireCommand.Execute(
+            workspace.Context,
+            ["--execution-unit", "RH-030A", "--reactivate", "--evidence", "real defect shipped in PR #98", "--write", "--format", "json"],
+            writer));
+        using var result = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("reactivated", result.RootElement.GetProperty("status").GetString());
+        Assert.Equal("ready", result.RootElement.GetProperty("lifecycle").GetString());
+        Assert.Equal("retired", result.RootElement.GetProperty("reactivated_from").GetString());
+        Assert.Equal("real defect shipped in PR #98", result.RootElement.GetProperty("reactivation_evidence").GetString());
+
+        var sidecar = File.ReadAllText(Path.Combine(workspace.PacketDirectory("RH-030A"), "lifecycle.yaml"));
+        Assert.Contains("lifecycle: ready", sidecar, StringComparison.Ordinal);
+        Assert.Contains("reactivation_evidence: \"real defect shipped in PR #98\"", sidecar, StringComparison.Ordinal);
+        Assert.Contains("packet-reactivated", File.ReadAllText(workspace.Context.GetRunLogPath()), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_MissingPacketDirectory_Fails()
     {
         using var workspace = new PacketRetireWorkspace();

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using IntentSystem.Clarify.Models;
@@ -392,6 +394,15 @@ internal static class AutomationStalledWorkCommand
     /// commits) but nothing said "done", so nothing could say "not done".
     /// </summary>
     public const string KindKnowledgeWritebackPending = "knowledge-writeback-pending";
+
+    /// <summary>
+    /// G661: the record exists locally but git still reports its exact path as
+    /// untracked, ignored, staged, or modified. This is distinct from an
+    /// absent record: the write-back was recorded, but another checkout cannot
+    /// observe it until the operator commits and pushes it.
+    /// </summary>
+    public const string KindKnowledgeWritebackRecordedUncommitted =
+        "knowledge-writeback-recorded-uncommitted";
 
     /// <summary>
     /// G645: a closed-out unit whose packet declared guide routes but whose
@@ -2544,8 +2555,29 @@ internal static class AutomationStalledWorkCommand
                     // host_commit that is not a commit — discharge this unit's
                     // obligation.
                     _ = KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(recordPath), executionUnit);
-                    // Recorded: the obligation is discharged. This is the
-                    // clearing path — no item, no exclusion.
+                    var relativeRecordPath = KnowledgeWriteBackRecord.ResolveRelativePath(executionUnit);
+                    if (IsGitPathUncommitted(context.RepoRoot, relativeRecordPath))
+                    {
+                        items.Add(new StalledWorkItem
+                        {
+                            Kind = KindKnowledgeWritebackRecordedUncommitted,
+                            ExecutionUnit = executionUnit,
+                            Issue = null,
+                            Pr = null,
+                            AgeMinutes = ComputeAgeMinutesFromInstant(ClampToNow(closedAt, now), now),
+                            IsInformational = false,
+                            DeclaredWriteBackTargets = declaration.DeclaredTargets,
+                            RecordPath = relativeRecordPath,
+                            RecommendedAction =
+                                $"commit and push `{relativeRecordPath}` in the host repo, then re-run stalled-work. "
+                                + "The record exists only in this checkout until both steps complete; intent-cli never auto-commits.",
+                        });
+                    }
+
+                    // A committed record discharges the obligation. If git
+                    // status cannot be established (legacy/non-git fixture),
+                    // preserve the pre-G661 clearing behavior rather than
+                    // manufacturing a dirty finding without evidence.
                     continue;
                 }
                 catch (Exception exception) when (exception is IOException or InvalidOperationException)
@@ -2577,6 +2609,50 @@ internal static class AutomationStalledWorkCommand
                 DeclaredWriteBackTargets = declaration.DeclaredTargets,
                 RecommendedAction = BuildKnowledgeWritebackPendingAction(executionUnit, declaration),
             });
+        }
+    }
+
+    private static bool IsGitPathUncommitted(string repoRoot, string relativePath)
+    {
+        try
+        {
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo("git")
+                {
+                    WorkingDirectory = repoRoot,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                },
+            };
+            process.StartInfo.ArgumentList.Add("status");
+            process.StartInfo.ArgumentList.Add("--porcelain=v1");
+            process.StartInfo.ArgumentList.Add("--untracked-files=all");
+            process.StartInfo.ArgumentList.Add("--ignored=matching");
+            process.StartInfo.ArgumentList.Add("--");
+            process.StartInfo.ArgumentList.Add(relativePath);
+            if (!process.Start())
+            {
+                return false;
+            }
+
+            var output = process.StandardOutput.ReadToEnd();
+            _ = process.StandardError.ReadToEnd();
+            if (!process.WaitForExit(5000))
+            {
+                process.Kill(entireProcessTree: true);
+                return false;
+            }
+
+            return process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        {
+            return false;
         }
     }
 
@@ -2743,7 +2819,11 @@ internal static class AutomationStalledWorkCommand
                 warnings.Add(
                     $"'{executionUnit}': packet '{packetYamlPath}' has no guide_reachability declaration; "
                     + "absence is distinct from explicit no_role_facing_surface: true and should be repaired "
-                    + "before a role-facing surface is shipped.");
+                    + "before a role-facing surface is shipped. Paste exactly one accepted YAML form:\n\n"
+                    + "Route form:\n"
+                    + GuideReachabilityDeclaration.RouteYaml
+                    + "\n\nExplicit no-surface form:\n"
+                    + GuideReachabilityDeclaration.NoSurfaceYaml);
                 continue;
             }
 
@@ -3546,6 +3626,10 @@ internal static class AutomationStalledWorkCommand
                 {
                     writer.WriteLine($"- declared_write_back_targets: {string.Join(", ", declaredTargets)}");
                 }
+                if (item.RecordPath is { } recordPath)
+                {
+                    writer.WriteLine($"- record_path: {recordPath}");
+                }
                 if (item.DeclaredGuideSurfaces is { Count: > 0 } declaredGuides)
                 {
                     writer.WriteLine($"- declared_guide_surfaces: {string.Join(", ", declaredGuides)}");
@@ -3738,6 +3822,11 @@ internal sealed record StalledWorkItem
     /// </summary>
     [JsonPropertyName("declared_write_back_targets")]
     public IReadOnlyList<string>? DeclaredWriteBackTargets { get; init; }
+
+    /// <summary>G661: exact locally recorded but not-yet-committed path.</summary>
+    [JsonPropertyName("record_path")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RecordPath { get; init; }
 
     /// <summary>
     /// G645: guide surfaces the packet declared for a role-facing addition.

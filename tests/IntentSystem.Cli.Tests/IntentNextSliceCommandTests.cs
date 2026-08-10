@@ -2795,7 +2795,7 @@ public sealed class IntentNextSliceCommandTests
 
             ## Related Links
 
-            - (none)
+            - G354 verification evidence
 
             ## Base Branch Policy
 
@@ -2851,7 +2851,7 @@ public sealed class IntentNextSliceCommandTests
 
             ## Related Links
 
-            - (none)
+            - G354 product-gap evidence
             """);
 
         using var writer = new StringWriter();
@@ -3749,6 +3749,46 @@ public sealed class IntentNextSliceCommandTests
         var root = document.RootElement;
         Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
         Assert.Equal(0, root.GetProperty("candidate").GetProperty("missing_contract_sections").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_TodoScaffoldUsesPublishGateAndIsVisiblyNotReady_G661()
+    {
+        using var workspace = new IntentNextSliceWorkspace();
+        Assert.Equal(0, PacketDraftCommand.Execute(
+            workspace.Context,
+            ["--execution-unit", "G661", "--target-repo", "J-Tech-Japan/intent-system"],
+            TextWriter.Null));
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-08-10T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G661",
+                  "title": "TODO short title",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], writer));
+        using var result = JsonDocument.Parse(writer.ToString());
+        Assert.NotEqual("issue-cut-ready", result.RootElement.GetProperty("recommended_outcome").GetString());
+        var candidate = result.RootElement.GetProperty("candidate");
+        Assert.False(candidate.GetProperty("publish_gate_ready").GetBoolean());
+        Assert.Contains("Related Links", candidate.GetProperty("not_ready_reason").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("Related Links", candidate.GetProperty("missing_contract_sections").EnumerateArray().Select(item => item.GetString()));
     }
 
     private sealed class IntentNextSliceWorkspace : IDisposable

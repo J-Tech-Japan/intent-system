@@ -166,6 +166,49 @@ public sealed class CloseoutPrCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_Rh030AShape_ReportsShippedWhileRetiredWithoutUnretiring_G661()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueState("RH-030A", "review", linkedPr: "98"));
+        var packetDirectory = Path.Combine(workspace.Context.RepoRoot, ".intent-cli", "issues", "RH-030A");
+        Directory.CreateDirectory(packetDirectory);
+        var sidecarPath = Path.Combine(packetDirectory, PacketLifecycle.SidecarFileName);
+        const string retired = "lifecycle: retired\nretired_reason: empty scaffold\n";
+        File.WriteAllText(sidecarPath, retired);
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "98", "--pr-merged", "true", "--write", "--format", "json"],
+            writer));
+
+        using var result = JsonDocument.Parse(writer.ToString());
+        var finding = Assert.Single(result.RootElement.GetProperty("findings").EnumerateArray());
+        Assert.Equal("shipped-while-retired-contradiction", finding.GetProperty("kind").GetString());
+        Assert.Contains("--reactivate --evidence", finding.GetProperty("recommended_action").GetString()!, StringComparison.Ordinal);
+        Assert.Equal(retired, File.ReadAllText(sidecarPath));
+    }
+
+    [Fact]
+    public void Execute_EvidencedReactivationThenCloseout_HasNoContradiction_G661()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueState("RH-030A", "review", linkedPr: "98"));
+        var packetDirectory = Path.Combine(workspace.Context.RepoRoot, ".intent-cli", "issues", "RH-030A");
+        Directory.CreateDirectory(packetDirectory);
+        File.WriteAllText(Path.Combine(packetDirectory, PacketLifecycle.SidecarFileName),
+            "lifecycle: ready\nreactivated_from: retired\nreactivation_evidence: real defect\n");
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "98", "--pr-merged", "true", "--dry-run", "--format", "json"],
+            writer));
+        using var result = JsonDocument.Parse(writer.ToString());
+        Assert.Empty(result.RootElement.GetProperty("findings").EnumerateArray());
+    }
+
+    [Fact]
     public void Execute_GivenDryRun_DoesNotMutateAnyFile()
     {
         using var workspace = new CloseoutPrWorkspace();

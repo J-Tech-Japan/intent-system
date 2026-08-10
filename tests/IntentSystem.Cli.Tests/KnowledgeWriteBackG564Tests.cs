@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
@@ -90,6 +91,29 @@ public sealed class KnowledgeWriteBackG564Tests : IDisposable
         Assert.False(record.Json.GetProperty("already_recorded").GetBoolean());
         Assert.True(File.Exists(workspace.RecordPath("G564")));
 
+        Assert.Equal(0, workspace.RunStalledWork().GetArrayLength());
+    }
+
+    [Fact]
+    public void RecordedButUncommitted_IsDistinctAndNamesThePath_G661()
+    {
+        using var workspace = new WriteBackWorkspace();
+        workspace.InitializeGit();
+        workspace.WriteDeclaringPacket("G661", requiredIntentTree: true, targets: ["intents/node-02.md"]);
+        workspace.WriteCloseout("G661", FixedNow.AddMinutes(-45));
+        workspace.CommitAll("baseline closeout");
+
+        var record = workspace.RunRecord(["--execution-unit", "G661", "--commit", HostCommit, "--write", "--format", "json"]);
+        Assert.True(record.Json.GetProperty("commit_push_required_for_other_checkouts").GetBoolean());
+        Assert.Contains("committed and pushed", record.Json.GetProperty("durability_guidance").GetString()!, StringComparison.Ordinal);
+
+        var item = Assert.Single(workspace.RunStalledWork().EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindKnowledgeWritebackRecordedUncommitted, item.GetProperty("kind").GetString());
+        Assert.Equal(".intent-cli/knowledge-writebacks/G661/record.json", item.GetProperty("record_path").GetString());
+        Assert.Contains("commit and push", item.GetProperty("recommended_action").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("knowledge-writebacks", workspace.GitStatus(), StringComparison.Ordinal);
+
+        workspace.CommitAll("commit writeback record");
         Assert.Equal(0, workspace.RunStalledWork().GetArrayLength());
     }
 
@@ -846,6 +870,45 @@ public sealed class KnowledgeWriteBackG564Tests : IDisposable
             var document = JsonDocument.Parse(writer.ToString());
             _documents.Add(document);
             return new RecordRun(exit, document.RootElement);
+        }
+
+        public void InitializeGit()
+        {
+            RunGit("init", "-q");
+            RunGit("config", "user.email", "tests@example.com");
+            RunGit("config", "user.name", "Intent CLI Tests");
+        }
+
+        public void CommitAll(string message)
+        {
+            RunGit("add", ".");
+            RunGit("commit", "-q", "-m", message);
+        }
+
+        public string GitStatus() => RunGit("status", "--short");
+
+        private string RunGit(params string[] args)
+        {
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo("git")
+                {
+                    WorkingDirectory = RootPath,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                },
+            };
+            foreach (var arg in args)
+            {
+                process.StartInfo.ArgumentList.Add(arg);
+            }
+            process.Start();
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            Assert.True(process.ExitCode == 0, $"git {string.Join(' ', args)} failed: {error}");
+            return output;
         }
 
         public void Dispose()

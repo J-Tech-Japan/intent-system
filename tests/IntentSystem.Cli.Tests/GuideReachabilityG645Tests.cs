@@ -105,7 +105,10 @@ public sealed class GuideReachabilityG645Tests : IDisposable
                 StringComparison.Ordinal));
         Assert.Contains(
             result.GetProperty("warnings").EnumerateArray().Select(warning => warning.GetString()),
-            warning => warning is not null && warning.Contains("no guide_reachability declaration", StringComparison.Ordinal));
+            warning => warning is not null
+                && warning.Contains("no guide_reachability declaration", StringComparison.Ordinal)
+                && warning.Contains(GuideReachabilityDeclaration.RouteYaml, StringComparison.Ordinal)
+                && warning.Contains(GuideReachabilityDeclaration.NoSurfaceYaml, StringComparison.Ordinal));
 
         var recorded = workspace.RunRecord(["--execution-unit", "G645", "--commit", HostCommit, "--format", "json"]);
         Assert.Equal(1, recorded.ExitCode);
@@ -123,11 +126,44 @@ public sealed class GuideReachabilityG645Tests : IDisposable
             writer));
 
         var packet = File.ReadAllText(Path.Combine(workspace.RootPath, ".intent-cli", "issues", "G645", "packet.yaml"));
-        Assert.Contains("guide_reachability:", packet, StringComparison.Ordinal);
-        Assert.Contains("no_role_facing_surface: true", packet, StringComparison.Ordinal);
+        Assert.Contains("# guide_reachability:", packet, StringComparison.Ordinal);
+        Assert.Contains("#   no_role_facing_surface: true", packet, StringComparison.Ordinal);
+        Assert.False(GuideReachabilityDeclaration.Read(packet).IsDeclared);
         var guide = CommandRouterOutput("guide", "workflow", "task", "packet-draft");
         Assert.Contains("guide-reachability", guide, StringComparison.Ordinal);
         Assert.Contains("keyword-to-guide", guide, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void WarningYamlPastedVerbatim_IsAcceptedAndSilencesWarning_G661(bool routeForm)
+    {
+        using var workspace = new ReachabilityWorkspace();
+        var declaration = routeForm
+            ? GuideReachabilityDeclaration.RouteYaml.Replace("<role-facing-surface>", "notify supervise", StringComparison.Ordinal)
+            : GuideReachabilityDeclaration.NoSurfaceYaml;
+        workspace.WritePacket("G661", $"""
+            implementation_issue_packet:
+              source_execution_unit: G661
+              domain: intent-cli
+            {declaration}
+            """);
+        workspace.WriteCloseout("G661", FixedNow.AddMinutes(-180));
+
+        var result = workspace.RunStalledWorkResult();
+        Assert.DoesNotContain(
+            result.GetProperty("warnings").EnumerateArray(),
+            warning => warning.GetString()!.Contains("no guide_reachability declaration", StringComparison.Ordinal));
+        if (routeForm)
+        {
+            Assert.Contains(result.GetProperty("items").EnumerateArray(),
+                item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindGuideReachabilityPending);
+        }
+        else
+        {
+            Assert.Empty(result.GetProperty("items").EnumerateArray());
+        }
     }
 
     [Fact]

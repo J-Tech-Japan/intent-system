@@ -57,6 +57,58 @@ herdr seat にし、persistent AGENTS rule を適用します。inbound app moni
 を利用できます。これは recommendation ではなく deployment rule であり、stall recovery を design に
 移したり、model-backed monitoring role を追加したりしません。
 
+## host state の誠実さと不足のない scaffold (G661 — 1.x を通じた preview)
+
+host 側の 5 つの境界には「surface は evidence より強い完了を主張しない」という同じ規則を
+適用します。`automation knowledge-writeback-record --write` はローカル record を作りますが、
+その path をコミットしてプッシュするまで別 checkout からは観測できないことを常に表示します。
+intent-cli 自身が自動でコミットすることはありません。このため `automation stalled-work` は record の不在
+(`knowledge-writeback-pending`)と、ローカルだけに記録済みの path
+(`knowledge-writeback-recorded-uncommitted`)を区別し、commit と push が必要な正確な path を示します。
+
+reactivation の経路は `packet retire --reactivate --evidence <text> --write` だけです。evidence を
+必須とし、`lifecycle: ready` と変更前の lifecycle、evidence、timestamp を書き、
+`packet-reactivated` を追記します。closeout はこの transition を推測しません。出荷済みの work に
+non-publishable な lifecycle が残っていれば `shipped-while-retired-contradiction` を出し、sidecar は
+変更しません。
+
+issue-cut readiness は既存の publish validator の判定をそのまま使います。placeholder だけの
+Related Links を含む TODO scaffold は validator の理由付きで not ready と表示され、
+`issue-cut-ready` として提示されません。`packet draft` の guide reachability も、作者が次の accepted
+form のどちらかを選ぶまで comment のままです。declaration 欠落 warning は両 fragment をそのまま表示します。
+
+```yaml
+guide_reachability:
+  no_role_facing_surface: false
+  routes:
+    - guide_surface: guide workflow task implementation-loop
+      role: implementation
+      target_surface: <role-facing-surface>
+```
+
+```yaml
+guide_reachability:
+  no_role_facing_surface: true
+  routes: []
+```
+
+新規 host では `intent init --write` が既存内容を保持したまま、次の repository default を追記します。
+
+```gitattributes
+.intent-cli/runs.jsonl merge=union
+.intent-cli/**/*.jsonl merge=union
+```
+
+```gitignore
+.intent-cli/supervision/**/cycles.jsonl
+.intent-cli/supervision/**/stalls.jsonl
+```
+
+前者は append-only JSONL store に union merge を適用し、後者は team ごとの supervision telemetry を
+git の対象外にします。初期化済みの host に対して `intent init` はこの正確な行を guidance として
+表示するだけで、`.gitattributes` と `.gitignore` を変更しません。migration は常に operator が明示的に
+行います。
+
 ## canonical notify workflow
 
 role 間の workflow message はすべて `intent-cli notify` を使い、agent 自身は
