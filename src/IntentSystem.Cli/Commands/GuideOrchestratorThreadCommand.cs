@@ -1674,6 +1674,42 @@ internal static class GuideOrchestratorThreadCommand
                     + "`context-only: <text>`) unless the orchestrator delegated the action — receivers act only on "
                     + "orchestrator delegations, not on design context.",
             },
+            PreDelegationPrerequisites = new OrchestratorPreDelegationPrerequisites
+            {
+                PreviewStatus =
+                    "Preview through 1.x (G655): this post-v0.12.0 guidance surface is outside the 1.0 compatibility "
+                    + "promise and may change or be withdrawn during 1.x.",
+                Summary =
+                    "Prerequisites travel with the delegation, not with the receiver's privileges. Before delegating, "
+                    + "the orchestrator identifies every workspace prerequisite the task needs, prepares it under the "
+                    + "orchestrator's authority, and verifies it. A bounded receiver is never assumed able to create "
+                    + "worktrees, checkout state, or directories outside its recorded write envelope.",
+                RequiredSequence = new[]
+                {
+                    "Identify the task's required worktrees, checkouts, checkout state, and directories before choosing the receiver.",
+                    "Compare every prerequisite write with the selected recipe's recorded write envelope (its role-derived roots); a path the receiver cannot write is orchestrator-owned preparation, not receiver work.",
+                    "Create or repair the prerequisite under orchestrator authority, using the existing managed-worktree and safe-cleanup policy where a worktree is needed.",
+                    "Verify the prepared cwd, checkout/branch state, managed-worktree registration, and required writable directories before sending the delegation.",
+                    "Delegate only after verification, carrying the prepared path and state with the same logical task.",
+                },
+                PermissionFailureRecovery =
+                    "A receiver permission failure is a ROUTING SIGNAL, not a retry target. The orchestrator prepares "
+                    + "the missing prerequisite, verifies it, and resumes the SAME PR and SAME LOGICAL TASK from the "
+                    + "prepared path. Keep the receiver's recorded envelope bounded and preserve G630's rule that "
+                    + "recovery never changes the seat kind unattended.",
+                AntiPattern =
+                    "ANTI-PATTERN: re-delegating the identical failing step that the receiver's recorded write "
+                    + "envelope cannot perform. Do not loop the failure, widen the seat envelope, mint a replacement "
+                    + "PR/task, or switch the seat kind as a workaround.",
+                RuntimeBoundary =
+                    "This is guidance-first orchestration: it adds no command. intent-cli does not create or verify "
+                    + "worktrees and executes no git operation; the human/orchestrator performs the documented "
+                    + "preparation with its existing authority.",
+                Attribution =
+                    "The worktree-metadata permission failure and retry loop were reported with transcript by the "
+                    + "remote-herdr team on 2026-08-08. The Codex write-envelope asymmetry remains a separate fact "
+                    + "measured on MyIntentHost on 2026-08-07; do not reattribute either observation.",
+            },
             WorktreeManagement = new OrchestratorWorktreeManagement
             {
                 Summary =
@@ -2249,6 +2285,7 @@ internal static class GuideOrchestratorThreadCommand
                 {
                     "the launch invocation and agent kind",
                     "bounded allowed roots derived from the logical role's actual needs (not a product-wide path)",
+                    "the recorded write envelope the delegator checks every workspace prerequisite against before delegation (G655)",
                     "the maximum autonomous continuation bound",
                     "startup trust and autopilot/permission gates the operator must answer",
                     "a structured post-start interaction record: what the agent presents, the envelope-preserving answer, and whether the default is safe, or an explicit unmeasured absence when no interaction was observed",
@@ -4542,6 +4579,27 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"> **Context-only:** {guide.DesignTrafficController.ContextOnlyRule}");
         writer.WriteLine();
 
+        writer.WriteLine("## Pre-delegation workspace prerequisites (G655)");
+        writer.WriteLine();
+        writer.WriteLine($"> **{guide.PreDelegationPrerequisites.PreviewStatus}**");
+        writer.WriteLine();
+        writer.WriteLine(guide.PreDelegationPrerequisites.Summary);
+        writer.WriteLine();
+        writer.WriteLine("### Required sequence");
+        writer.WriteLine();
+        for (var i = 0; i < guide.PreDelegationPrerequisites.RequiredSequence.Count; i++)
+        {
+            writer.WriteLine($"{i + 1}. {guide.PreDelegationPrerequisites.RequiredSequence[i]}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"> **Prepare and resume:** {guide.PreDelegationPrerequisites.PermissionFailureRecovery}");
+        writer.WriteLine();
+        writer.WriteLine($"> **{guide.PreDelegationPrerequisites.AntiPattern}**");
+        writer.WriteLine();
+        writer.WriteLine($"- **runtime boundary** — {guide.PreDelegationPrerequisites.RuntimeBoundary}");
+        writer.WriteLine($"- **evidence attribution** — {guide.PreDelegationPrerequisites.Attribution}");
+        writer.WriteLine();
+
         writer.WriteLine("## Managed worktree cleanup");
         writer.WriteLine();
         writer.WriteLine(guide.WorktreeManagement.Summary);
@@ -4845,6 +4903,9 @@ internal sealed record OrchestratorThreadGuide
 
     [JsonPropertyName("design_traffic_controller")]
     public required OrchestratorDesignTrafficController DesignTrafficController { get; init; }
+
+    [JsonPropertyName("pre_delegation_prerequisites")]
+    public required OrchestratorPreDelegationPrerequisites PreDelegationPrerequisites { get; init; }
 
     [JsonPropertyName("worktree_management")]
     public required OrchestratorWorktreeManagement WorktreeManagement { get; init; }
@@ -5781,6 +5842,30 @@ internal sealed record OrchestratorDesignTrafficController
 
     [JsonPropertyName("context_only_rule")]
     public required string ContextOnlyRule { get; init; }
+}
+
+internal sealed record OrchestratorPreDelegationPrerequisites
+{
+    [JsonPropertyName("preview_status")]
+    public required string PreviewStatus { get; init; }
+
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("required_sequence")]
+    public required IReadOnlyList<string> RequiredSequence { get; init; }
+
+    [JsonPropertyName("permission_failure_recovery")]
+    public required string PermissionFailureRecovery { get; init; }
+
+    [JsonPropertyName("anti_pattern")]
+    public required string AntiPattern { get; init; }
+
+    [JsonPropertyName("runtime_boundary")]
+    public required string RuntimeBoundary { get; init; }
+
+    [JsonPropertyName("attribution")]
+    public required string Attribution { get; init; }
 }
 
 internal sealed record OrchestratorDesignHandoff

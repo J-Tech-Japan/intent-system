@@ -987,6 +987,87 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_HerdrOnly_PreDelegationPrerequisites_AreReachableWithAndWithoutTeamInEveryFormat_G655()
+    {
+        using var workspace = new RecordedGuideWorkspace("intent-cli", "intent-cli-dev", SessionLayerMode.HerdrOnly);
+
+        foreach (var format in GuideOrchestratorThreadCommand.SupportedFormats)
+        {
+            foreach (var includeTeam in new[] { false, true })
+            {
+                var args = new List<string>
+                {
+                    "--domain", "intent-cli",
+                    "--target-repo", "J-Tech-Japan/intent-system",
+                    "--agent", "codex",
+                    "--format", format,
+                };
+                if (includeTeam)
+                {
+                    args.AddRange(["--team", "intent-cli-dev"]);
+                }
+
+                using var writer = new StringWriter();
+                Assert.Equal(0, GuideOrchestratorThreadCommand.Execute(workspace.Context, args.ToArray(), writer));
+                var output = writer.ToString();
+
+                if (string.Equals(format, "json", StringComparison.Ordinal))
+                {
+                    using var document = JsonDocument.Parse(output);
+                    var contract = document.RootElement.GetProperty("pre_delegation_prerequisites");
+                    Assert.Contains("Prerequisites travel with the delegation", contract.GetProperty("summary").GetString(), StringComparison.Ordinal);
+                    Assert.Equal(5, contract.GetProperty("required_sequence").GetArrayLength());
+                    Assert.Contains("SAME PR and SAME LOGICAL TASK", contract.GetProperty("permission_failure_recovery").GetString(), StringComparison.Ordinal);
+                    Assert.Contains("re-delegating the identical failing step", contract.GetProperty("anti_pattern").GetString(), StringComparison.Ordinal);
+                    Assert.Contains("executes no git operation", contract.GetProperty("runtime_boundary").GetString(), StringComparison.Ordinal);
+                }
+                else
+                {
+                    Assert.Contains("## Pre-delegation workspace prerequisites (G655)", output, StringComparison.Ordinal);
+                    Assert.Contains("recorded write envelope", output, StringComparison.Ordinal);
+                    Assert.Contains("SAME PR and SAME LOGICAL TASK", output, StringComparison.Ordinal);
+                    Assert.Contains("ANTI-PATTERN: re-delegating the identical failing step", output, StringComparison.Ordinal);
+                    Assert.Contains("Preview through 1.x (G655)", output, StringComparison.Ordinal);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void Execute_Recipes_PointDelegatorToRecordedWriteEnvelopeWithoutWideningOrKindChange_G655()
+    {
+        using var workspace = new RecordedGuideWorkspace("intent-cli", "intent-cli-dev", SessionLayerMode.HerdrOnly);
+        var output = RunMarkdown(workspace.Context,
+            ["--domain", "intent-cli", "--team", "intent-cli-dev", "--target-repo", "owner/repo", "--agent", "codex"]);
+
+        Assert.Contains("compares workspace prerequisites with this recorded write envelope", output, StringComparison.Ordinal);
+        Assert.Contains("prepares anything outside it under orchestrator authority", output, StringComparison.Ordinal);
+        Assert.Contains("recovery never changes a kind unattended", output, StringComparison.Ordinal);
+        Assert.Contains("Do not add unmeasured blanket permissions or broaden the role-derived roots", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Docs_KeepEnglishJapaneseAndPreviewLedgerInParity_G655()
+    {
+        var root = RepoVersionPolicySource.RepoRoot();
+        var english = File.ReadAllText(Path.Combine(root, "docs", "en", "12-agent-message-orchestration.md"));
+        var japanese = File.ReadAllText(Path.Combine(root, "docs", "ja", "12-agent-message-orchestration.md"));
+        var englishLedger = File.ReadAllText(Path.Combine(root, "docs", "en", "1.0-compatibility-ledger.md"));
+        var japaneseLedger = File.ReadAllText(Path.Combine(root, "docs", "ja", "1.0-compatibility-ledger.md"));
+
+        Assert.Contains("## Pre-delegation workspace prerequisites (G655)", english, StringComparison.Ordinal);
+        Assert.Contains("## delegation 前の workspace prerequisite (G655)", japanese, StringComparison.Ordinal);
+        Assert.Contains("same PR and same logical task", english, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("同じ PR と同じ logical task", japanese, StringComparison.Ordinal);
+        Assert.Contains("remote-herdr team on\n2026-08-08", english, StringComparison.Ordinal);
+        Assert.Contains("remote-herdr team が 2026-08-08 に報告", japanese, StringComparison.Ordinal);
+        Assert.Contains("orchestrator pre-delegation prerequisite guidance", englishLedger, StringComparison.Ordinal);
+        Assert.Contains("orchestrator の delegation 前 prerequisite guidance", japaneseLedger, StringComparison.Ordinal);
+        Assert.Contains("preview-through-1.x", englishLedger, StringComparison.Ordinal);
+        Assert.Contains("preview-through-1.x", japaneseLedger, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_Markdown_ReviewDelegation_RequiresManagedWorktreeRoot_ProhibitsRawTmpRm_G520()
     {
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
@@ -2138,7 +2219,12 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("no authorization makes them answerable", authorityBoundary, StringComparison.Ordinal);
 
         var unattended = provisioning.GetProperty("unattended_launch_recipes");
-        Assert.Equal(8, unattended.GetProperty("required_recipe_fields").GetArrayLength());
+        var recipeFields = unattended.GetProperty("required_recipe_fields").EnumerateArray()
+            .Select(field => field.GetString()!)
+            .ToArray();
+        Assert.Equal(9, recipeFields.Length);
+        Assert.Contains(recipeFields, field => field.Contains("write envelope", StringComparison.Ordinal)
+            && field.Contains("workspace prerequisite", StringComparison.Ordinal));
         Assert.Contains("silently auto-denied", unattended.GetProperty("central_autopilot_supervision_rule").GetString(), StringComparison.Ordinal);
         Assert.Contains("--add-dir <role-work-root>", unattended.GetProperty("copilot_recipe").GetProperty("invocation").GetString(), StringComparison.Ordinal);
         Assert.Contains("intent-cli notify report", unattended.GetProperty("copilot_recipe").GetProperty("role_derived_roots").GetString(), StringComparison.Ordinal);

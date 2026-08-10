@@ -337,7 +337,9 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
 - **role-derived root。** 各 role には checkout または worktree 用の境界付き
   `--add-dir <role-work-root>` を 1 つ与えます。reviewer には canonical reporting surface
   である `intent-cli notify report` のため、さらに `--add-dir <host-routing-root>` が必要です。
-  developer-machine の無関係な root は追加しません。
+  developer-machine の無関係な root は追加しません。delegation の前に orchestrator は workspace
+  prerequisite をこの記録済み write envelope と比較し、その外側にあるものを orchestrator の権限
+  で準備します (G655)。
 - **継続上限。** `--max-autopilot-continues 10` を明示したままにします。別の上限は、レシピと
   ともに記録する operator の判断です。
 - **inline-payload の advisory。** `copilot-autopilot-observed-paste-risk` profile は
@@ -376,7 +378,8 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
 
 - **role-derived root。** role の checkout/worktree には境界付きの
   `--add-dir <role-work-root>` を 1 つ使い、その role の canonical report surface に必要な場合だけ
-  host routing root を追加します。
+  host routing root を追加します。delegation の前に orchestrator は workspace prerequisite をこの
+  記録済み write envelope と比較し、その外側にあるものを orchestrator の権限で準備します (G655)。
 - **実測した bounded invocation。** この invocation は **Codex v0.144.1 / macOS** で実測したものであり、
   未実測環境に対する universal な flag recipe ではありません。
 - **実測した自己更新 behavior。** Codex は自己更新して **「Please restart Codex」** を表示し、
@@ -1572,6 +1575,39 @@ state**、それを裏付ける evidence、必要なときだけの options、�
 - `evidence` — 現在の state を establish する intent-cli / GitHub の事実。
 - `options` — **任意** の候補の選択肢。役立つときのみ含める。
 - `decision_needed` — 人間に求める正確な判断またはアクション。
+
+## delegation 前の workspace prerequisite (G655)
+
+> **1.x を通じた preview。** この v0.12.0 freeze 後の guidance surface は 1.0 compatibility
+> promise の対象外であり、1.x の間に変更・撤回される可能性があります。
+
+prerequisite は receiver の privilege ではなく delegation とともに運ばれます。delegation の前に
+orchestrator は task が必要とするすべての workspace prerequisite を識別し、境界付き receiver が
+記録済み write envelope の外で worktree、checkout state、directory を作れるとは想定しません。
+
+1. 必要な worktree、checkout、checkout state、directory を識別する。
+2. prerequisite の各 write を、選択した recipe の記録済み write envelope (role-derived root) と
+   比較する。receiver が書けない path は receiver work ではなく orchestrator 側の準備です。
+3. orchestrator の権限で prerequisite を作成または修復する。worktree が必要なら既存の
+   managed-worktree と safe-cleanup policy に従う。
+4. 準備した cwd、checkout/branch state、managed-worktree registration、必要な writable directory
+   を検証する。
+5. 検証後にのみ、準備済み path と state を同じ logical task とともに委譲する。
+
+> **prepare and resume。** receiver の permission failure は **routing signal であり、retry target
+> ではありません**。orchestrator が不足する prerequisite を準備・検証し、準備済み path から
+> **同じ PR と同じ logical task** を再開します。receiver の envelope は境界付きのままにし、
+> recovery が unattended に seat kind を変更しないという G630 の rule も変更しません。
+
+> **避けるべき手順:** receiver の記録済み write envelope では実行できない同一の failing step を
+> 再委譲すること。failure loop、envelope の拡大、replacement PR/task の作成、workaround としての
+> seat kind switch は行いません。
+
+これは guidance-first orchestration であり、新しい command は追加しません。intent-cli は worktree
+を作成・検証せず、git operation も実行しません。human/orchestrator が既存の権限で準備します。
+worktree metadata failure と retry loop は transcript 付きで **remote-herdr team が 2026-08-08 に報告**
+しました。Codex write-envelope asymmetry は別の事実として **MyIntentHost での 2026-08-07 の実測**
+という attribution を維持します。
 
 ## managed worktree のクリーンアップ
 
