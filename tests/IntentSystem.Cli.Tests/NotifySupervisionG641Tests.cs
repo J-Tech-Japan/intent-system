@@ -223,7 +223,7 @@ public sealed class NotifySupervisionG641Tests : IDisposable
     }
 
     [Fact]
-    public void LiveIdleIsSurfacedOnceWhileAdvancingWorkingActivityStaysHealthy_G652()
+    public void ColdStartWorkingActivityEstablishesBaselineBeforeLiveIdleIsSurfacedOnce_G652()
     {
         var context = CreateContext();
         RecordMode(context, SessionLayerMode.HerdrOnly);
@@ -251,9 +251,7 @@ public sealed class NotifySupervisionG641Tests : IDisposable
 
         var first = supervisor.RunOnce();
 
-        var idle = Assert.Single(first.Findings, finding => finding.Kind == "live-idle-no-report");
-        Assert.Equal("herdr.activity", idle.Source);
-        Assert.False(idle.WakeAttempted);
+        Assert.DoesNotContain(first.Findings, finding => finding.Kind == "live-idle-no-report");
         Assert.Contains("not corrected", Assert.Single(first.Warnings), StringComparison.Ordinal);
         Assert.Equal(120, first.Bound!.BoundSeconds);
         var recordedFirst = NotifySupervisionStore.Read(context.ResolveSupervisionArtifactRootPath(), Domain, Team);
@@ -263,10 +261,17 @@ public sealed class NotifySupervisionG641Tests : IDisposable
         now = firstNow.AddSeconds(1);
         var unchanged = supervisor.RunOnce();
 
-        Assert.DoesNotContain(unchanged.Findings, finding => finding.Kind == "live-idle-no-report");
+        var idle = Assert.Single(unchanged.Findings, finding => finding.Kind == "live-idle-no-report");
+        Assert.Equal("herdr.activity", idle.Source);
+        Assert.False(idle.WakeAttempted);
         Assert.Contains("not corrected", Assert.Single(unchanged.Warnings), StringComparison.Ordinal);
 
         now = firstNow.AddSeconds(2);
+        var unchangedAgain = supervisor.RunOnce();
+
+        Assert.DoesNotContain(unchangedAgain.Findings, finding => finding.Kind == "live-idle-no-report");
+
+        now = firstNow.AddSeconds(3);
         runner.AgentsJson = HerdrAgentsJson(stateChangeSequence: 8);
         var advancing = supervisor.RunOnce();
 
@@ -274,6 +279,30 @@ public sealed class NotifySupervisionG641Tests : IDisposable
         var recordedAdvancing = NotifySupervisionStore.Read(context.ResolveSupervisionArtifactRootPath(), Domain, Team);
         Assert.Equal(8, recordedAdvancing.LastCycle!.LastObservedStateChangeSequences["activity:wG641:wG641:p2"]);
         Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("send-text"));
+    }
+
+    [Fact]
+    public void ContinuousSupervisionEmitsBoundBelowIntervalWarningAtStart_G652()
+    {
+        var context = CreateContext();
+        var supervisor = CreateSupervisor(
+            context,
+            "unused-agmsg",
+            new FakeRunner(),
+            write: true,
+            boundSeconds: 120,
+            intervalSeconds: 600);
+        using var cancellation = new CancellationTokenSource();
+        NotifySupervisor.Delay = _ => cancellation.Cancel();
+        using var writer = new StringWriter();
+
+        var exitCode = supervisor.RunLoop(writer, cancellation.Token, once: false);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.False(document.RootElement.GetProperty("silent").GetBoolean());
+        Assert.Contains("not corrected", document.RootElement.GetProperty("warnings")[0].GetString(), StringComparison.Ordinal);
+        Assert.True(document.RootElement.GetProperty("bound").GetProperty("recorded").GetBoolean());
     }
 
     [Fact]

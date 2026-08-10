@@ -105,6 +105,45 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
     }
 
     [Fact]
+    public void StatusTreatsColdStartStateChangesAsWorkingAndKeepsUnknownDistinctFromLiveIdle_G652()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(
+            implementationRunning: true,
+            implementationStatus: "working",
+            stateChangeSequence: 7,
+            lastStateChangeAt: FixedNow.AddMinutes(1)));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        Assert.Equal(0, workspace.Run(DelegateArgs()).ExitCode);
+
+        var (_, first) = workspace.Run(StatusArgs());
+        Assert.Equal("working", first.GetProperty("activity_verdict").GetString());
+        Assert.Contains("activity_evidence=state-change-after-dispatch", first.GetProperty("activity_inputs").GetString(), StringComparison.Ordinal);
+
+        runner.AgentResponse = workspace.HerdrAgents(
+            implementationRunning: true,
+            implementationStatus: "working",
+            stateChangeSequence: 8,
+            lastStateChangeAt: FixedNow.AddMinutes(2));
+        var (_, second) = workspace.Run(StatusArgs());
+        Assert.Equal("working", second.GetProperty("activity_verdict").GetString());
+
+        runner.AgentResponse = workspace.HerdrAgents(
+            implementationRunning: true,
+            implementationStatus: "working",
+            stateChangeSequence: 9,
+            lastStateChangeAt: FixedNow.AddMinutes(3));
+        var (_, third) = workspace.Run(StatusArgs());
+        Assert.Equal("working", third.GetProperty("activity_verdict").GetString());
+
+        runner.AgentResponse = workspace.HerdrAgents(
+            implementationRunning: true,
+            implementationStatus: "working",
+            stateChangeSequence: 9);
+        var (_, unknown) = workspace.Run(StatusArgs());
+        Assert.Equal("activity-unknown", unknown.GetProperty("activity_verdict").GetString());
+    }
+
+    [Fact]
     public void StatusUsesRunningFlagNotIdleStatusStringAndReportsLost_G629()
     {
         var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));

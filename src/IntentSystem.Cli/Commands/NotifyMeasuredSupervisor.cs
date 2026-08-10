@@ -201,9 +201,22 @@ internal sealed class NotifyMeasuredSupervisor
                 observedTimes[paneKey] = changedAt;
             }
 
-            var advanced = previousCycle?.LastObservedStateChangeSequences.TryGetValue(paneKey, out var priorSequence) == true
-                && sequence > priorSequence;
-            var idle = !string.Equals(activity.AgentStatus, "working", StringComparison.Ordinal) || !advanced;
+            long? priorStateChangeSequence = null;
+            if (previousCycle?.LastObservedStateChangeSequences.TryGetValue(paneKey, out var observedSequence) == true)
+            {
+                priorStateChangeSequence = observedSequence;
+            }
+
+            var hasPriorActivityObservation = priorStateChangeSequence.HasValue;
+            var advanced = priorStateChangeSequence is { } priorSequence && sequence > priorSequence;
+            var stateChangedAfterDispatch = activity.LastStateChangeAt is { } lastStateChangeAt
+                && lastStateChangeAt > pending.DispatchedAt;
+            var working = string.Equals(activity.AgentStatus, "working", StringComparison.Ordinal)
+                && (advanced || (!hasPriorActivityObservation && stateChangedAfterDispatch));
+            // A first observation establishes a durable baseline but is never
+            // proof that no activity occurred. Only a later observation can
+            // classify an unchanged/non-working recipient as live-idle.
+            var idle = hasPriorActivityObservation && !working;
             var beyondThreshold = declaredBoundSeconds.HasValue
                 && now - pending.DispatchedAt > TimeSpan.FromSeconds(declaredBoundSeconds.Value);
             if (!pending.ReportArrived && idle && beyondThreshold)

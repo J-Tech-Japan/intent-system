@@ -312,15 +312,36 @@ internal static class NotifyCommand
             context.ResolveSupervisionArtifactRootPath(),
             record.Domain,
             record.Team);
+        long? priorStateChangeSequence = null;
+        if (supervision.LastCycle?.LastObservedStateChangeSequences.TryGetValue(activityKey, out var observedSequence) == true)
+        {
+            priorStateChangeSequence = observedSequence;
+        }
+
+        var hasPriorActivityObservation = liveness.StateChangeSequence.HasValue && priorStateChangeSequence.HasValue;
         var activityAdvancing = liveness.StateChangeSequence is { } sequence
-            && supervision.LastCycle?.LastObservedStateChangeSequences.TryGetValue(activityKey, out var priorSequence) == true
+            && priorStateChangeSequence is { } priorSequence
             && sequence > priorSequence;
+        var stateChangedAfterDispatch = liveness.LastStateChangeAt is { } lastStateChangeAt
+            && lastStateChangeAt > record.DispatchedAt;
+        var activityEvidence = activityAdvancing
+            ? "observed-sequence-advance"
+            : !hasPriorActivityObservation && stateChangedAfterDispatch
+                ? "state-change-after-dispatch"
+                : hasPriorActivityObservation
+                    ? "observed-sequence-unchanged"
+                    : "baseline-missing";
         var hasHerdrActivity = liveness.StateChangeSequence.HasValue
             || liveness.LastStateChangeAt.HasValue
             || liveness.AgentStatus is not null;
         var activityVerdict = liveness.Running == true && hasHerdrActivity
-            ? string.Equals(liveness.AgentStatus, "working", StringComparison.Ordinal)
-                && activityAdvancing ? "working" : "live-idle"
+            ? !hasPriorActivityObservation
+                ? string.Equals(liveness.AgentStatus, "working", StringComparison.Ordinal) && stateChangedAfterDispatch
+                    ? "working"
+                    : "activity-unknown"
+                : string.Equals(liveness.AgentStatus, "working", StringComparison.Ordinal) && activityAdvancing
+                    ? "working"
+                    : "live-idle"
             : null;
         EmitStatus(writer, options.Format, new NotifyStatusResult
         {
@@ -343,7 +364,7 @@ internal static class NotifyCommand
             LastStateChangeAt = liveness.LastStateChangeAt,
             ActivityVerdict = activityVerdict,
             ActivityInputs = liveness.Running == true
-                ? $"agent_status={liveness.AgentStatus ?? "<unknown>"}; state_change_seq={liveness.StateChangeSequence?.ToString(CultureInfo.InvariantCulture) ?? "<unknown>"}; last_state_change_at={liveness.LastStateChangeAt?.ToString("O") ?? "<unknown>"}; advancing_since_last_observation={activityAdvancing.ToString().ToLowerInvariant()}"
+                ? $"agent_status={liveness.AgentStatus ?? "<unknown>"}; state_change_seq={liveness.StateChangeSequence?.ToString(CultureInfo.InvariantCulture) ?? "<unknown>"}; last_state_change_at={liveness.LastStateChangeAt?.ToString("O") ?? "<unknown>"}; activity_evidence={activityEvidence}; advancing_since_last_observation={activityAdvancing.ToString().ToLowerInvariant()}"
                 : null,
             ReportArrived = record.ReportArrived,
             ReportStatus = record.ReportStatus,
