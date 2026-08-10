@@ -13,6 +13,30 @@ public sealed class AgentMessageOrchestrationDocsTests
     private const string DocRelativePath = "12-agent-message-orchestration.md";
 
     [Fact]
+    public void BothDocs_StateTheResidencyDeliveryContractsSideBySide_G660()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        foreach (var doc in new[] { en, ja })
+        {
+            Assert.Contains("| recorded residency |", doc, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("`recorded-reader-append`", doc, StringComparison.Ordinal);
+            Assert.Contains("`recorded-pane-wake`", doc, StringComparison.Ordinal);
+            Assert.Contains("`delivery_basis`", doc, StringComparison.Ordinal);
+            Assert.Contains("G641/G657", doc, StringComparison.Ordinal);
+            Assert.Contains("G660", doc, StringComparison.Ordinal);
+            Assert.Contains("preview", doc, StringComparison.Ordinal);
+            Assert.Contains("6-field event history", doc, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("durable append to that reader is delivery", en, StringComparison.Ordinal);
+        Assert.Contains("reader への永続追記が delivery", ja, StringComparison.Ordinal);
+        Assert.Contains("failed reader append remains `delivered: false`", en, StringComparison.Ordinal);
+        Assert.Contains("reader append が失敗した場合は", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void EnglishDoc_HasTerminalWorkspaceProvisioningSection_WithAllSixElements_G549()
     {
         var doc = ReadDoc("en");

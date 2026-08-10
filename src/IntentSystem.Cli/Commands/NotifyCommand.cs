@@ -529,6 +529,7 @@ internal static class NotifyCommand
             ProcessPresent = liveness.ProcessPresent,
             ResendPermitted = liveness.ResendPermitted,
             LivenessSource = liveness.Source,
+            DeliveryBasis = liveness.DeliveryBasis,
             AgentStatus = liveness.AgentStatus,
             StateChangeSequence = liveness.StateChangeSequence,
             LastStateChangeAt = liveness.LastStateChangeAt,
@@ -700,6 +701,7 @@ internal static class NotifyCommand
         writer.WriteLine($"- process present: {result.ProcessPresent?.ToString().ToLowerInvariant() ?? "<unknown>"}");
         writer.WriteLine($"- resend permitted: {result.ResendPermitted?.ToString().ToLowerInvariant() ?? "<unknown>"}");
         writer.WriteLine($"- liveness source: {result.LivenessSource ?? "<unknown>"}");
+        writer.WriteLine($"- delivery basis: {result.DeliveryBasis ?? "<unknown>"}");
         writer.WriteLine($"- agent status: {result.AgentStatus ?? "<unknown>"}");
         writer.WriteLine($"- state change sequence: {result.StateChangeSequence?.ToString(CultureInfo.InvariantCulture) ?? "<unknown>"}");
         writer.WriteLine($"- last state change at: {result.LastStateChangeAt?.ToString("O") ?? "<unknown>"}");
@@ -1150,14 +1152,22 @@ internal static class NotifyCommand
         NotifyOptions options,
         SessionLayerModeResolution resolution)
     {
-        if (!NotifyEventWriter.TryResolvePath(options.RoutingRoot!, options.Team!, out var path, out var error))
+        var judgment = NotifyRecipientDeliveryJudgment.Resolve(
+            options.RoutingRoot!,
+            options.Domain!,
+            options.Team!,
+            "design");
+        var path = judgment.UsesRecordedReaderAppend ? judgment.Target : null;
+        if (path is null
+            && !NotifyEventWriter.TryResolvePath(options.RoutingRoot!, options.Team!, out path, out var error))
         {
             Emit(writer, options.Format, FailureResult(
                 OperationEscalate,
                 options,
                 resolution.Mode,
                 "invalid-team",
-                error));
+                error,
+                deliveryBasis: judgment.Basis));
             return 1;
         }
 
@@ -1172,43 +1182,68 @@ internal static class NotifyCommand
                 payload: null,
                 reportCommand: null,
                 $"Dry-run: would append escalation to '{path}'.",
-                eventPath: path));
+                eventPath: path,
+                deliveryBasis: judgment.Basis));
             return 0;
         }
 
+        var escalation = new NotifyDesignEvent
+        {
+            Timestamp = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+            Team = options.Team!,
+            Kind = EscalationEventKind,
+            Unit = options.TaskId!,
+            Summary = NotifyEventWriter.NormalizeSummary(options.Summary!),
+            Artifact = options.Artifact!,
+        };
         try
         {
-            NotifyEventWriter.Append(path, new NotifyDesignEvent
-            {
-                Timestamp = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
-                Team = options.Team!,
-                Kind = EscalationEventKind,
-                Unit = options.TaskId!,
-                Summary = NotifyEventWriter.NormalizeSummary(options.Summary!),
-                Artifact = options.Artifact!,
-            });
+            NotifyEventWriter.Append(path, escalation);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
+            var finding = NotifyEscalationFailureStore.Append(
+                options.RoutingRoot!,
+                new NotifyEscalationAppendFailure
+                {
+                    Timestamp = escalation.Timestamp,
+                    Domain = options.Domain!,
+                    Team = options.Team!,
+                    TaskId = options.TaskId!,
+                    FromRole = options.FromRole!,
+                    Artifact = options.Artifact!,
+                    Summary = escalation.Summary,
+                    ReaderPath = path,
+                    DeliveryBasis = judgment.Basis ?? "residency-unresolved",
+                    Error = exception.Message,
+                });
             Emit(writer, options.Format, FailureResult(
                 OperationEscalate,
                 options,
                 resolution.Mode,
                 "event-append-failed",
-                $"Could not append the design-boundary event: {exception.Message}"));
+                $"Could not append the design-boundary event: {exception.Message} "
+                + (finding.Written
+                    ? $"The genuine undelivered-escalation finding was retained at '{finding.Path}'."
+                    : $"The undelivered-escalation finding also could not be retained at '{finding.Path}': {finding.Error}"),
+                deliveryBasis: judgment.Basis));
             return 1;
         }
 
+        var delivered = judgment.Judge(readerAppendSucceeded: true, paneWakeDelivered: false);
         Emit(writer, options.Format, SuccessResult(
             OperationEscalate,
             options,
             resolution,
-            delivered: false,
+            delivered,
             eventAppended: true,
             payload: null,
             reportCommand: null,
-            $"Appended escalation for task '{options.TaskId}' to the design-boundary event channel.",
-            eventPath: path));
+            delivered
+                ? $"Appended escalation for task '{options.TaskId}' to the recorded design reader; durable append satisfied delivery."
+                : $"Appended escalation for task '{options.TaskId}' to the design-boundary event channel; the pane-resident design role was not woken.",
+            eventPath: path,
+            deliveryBasis: judgment.Basis));
         return 0;
     }
 
@@ -1300,7 +1335,8 @@ internal static class NotifyCommand
         string? deliveryPointer = null,
         string? pendingRecordPath = null,
         string? advisory = null,
-        string? outboxEntryPath = null) => new()
+        string? outboxEntryPath = null,
+        string? deliveryBasis = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot!,
@@ -1331,6 +1367,7 @@ internal static class NotifyCommand
             DeliveryPointer = deliveryPointer,
             PendingRecordPath = pendingRecordPath,
             OutboxEntryPath = outboxEntryPath,
+            DeliveryBasis = deliveryBasis,
             Cause = null,
             Payload = payload,
             ReportCommand = reportCommand,
@@ -1358,7 +1395,8 @@ internal static class NotifyCommand
         string? deliveryPointer = null,
         string? pendingRecordPath = null,
         string? advisory = null,
-        string? outboxEntryPath = null) => new()
+        string? outboxEntryPath = null,
+        string? deliveryBasis = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot ?? string.Empty,
@@ -1389,6 +1427,7 @@ internal static class NotifyCommand
             DeliveryPointer = deliveryPointer,
             PendingRecordPath = pendingRecordPath,
             OutboxEntryPath = outboxEntryPath,
+            DeliveryBasis = deliveryBasis,
             Cause = cause,
             Payload = payload,
             ReportCommand = reportCommand,
@@ -1426,6 +1465,10 @@ internal static class NotifyCommand
         writer.WriteLine($"- mode: {result.Mode} ({result.ModeSource ?? "unresolved"})");
         writer.WriteLine($"- command mode: {result.CommandMode}");
         writer.WriteLine($"- delivered: {result.Delivered.ToString().ToLowerInvariant()}");
+        if (result.DeliveryBasis is not null)
+        {
+            writer.WriteLine($"- delivery basis: {result.DeliveryBasis}");
+        }
         writer.WriteLine($"- event appended: {result.EventAppended.ToString().ToLowerInvariant()}");
         if (result.Cause is not null)
         {
@@ -1904,6 +1947,7 @@ internal sealed record NotifyResult
     [JsonPropertyName("delivery_pointer")] public string? DeliveryPointer { get; init; }
     [JsonPropertyName("pending_record_path")] public string? PendingRecordPath { get; init; }
     [JsonPropertyName("outbox_entry_path")] public string? OutboxEntryPath { get; init; }
+    [JsonPropertyName("delivery_basis")] public string? DeliveryBasis { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("payload")] public string? Payload { get; init; }
     [JsonPropertyName("report_command")] public string? ReportCommand { get; init; }
@@ -1926,6 +1970,7 @@ internal sealed record NotifyStatusResult
     [JsonPropertyName("process_present")] public bool? ProcessPresent { get; init; }
     [JsonPropertyName("resend_permitted")] public bool? ResendPermitted { get; init; }
     [JsonPropertyName("liveness_source")] public string? LivenessSource { get; init; }
+    [JsonPropertyName("delivery_basis")] public string? DeliveryBasis { get; init; }
     [JsonPropertyName("agent_status")] public string? AgentStatus { get; init; }
     [JsonPropertyName("state_change_seq")] public long? StateChangeSequence { get; init; }
     [JsonPropertyName("last_state_change_at")] public DateTimeOffset? LastStateChangeAt { get; init; }

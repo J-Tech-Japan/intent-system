@@ -12,6 +12,7 @@ internal sealed record NotifyPendingLivenessResult
     public string? AgentStatus { get; init; }
     public long? StateChangeSequence { get; init; }
     public DateTimeOffset? LastStateChangeAt { get; init; }
+    public string? DeliveryBasis { get; init; }
     public required string Source { get; init; }
     public required string Summary { get; init; }
     public string? Cause { get; init; }
@@ -31,7 +32,15 @@ internal static class NotifyPendingLiveness
         string herdrExecutable,
         string agmsgScriptsDirectory)
     {
-        if (string.Equals(record.Resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal))
+        var deliveryJudgment = NotifyRecipientDeliveryJudgment.Resolve(record);
+        if (!deliveryJudgment.Resolved)
+        {
+            return Failure(
+                deliveryJudgment.Cause ?? "delivery-judgment-unavailable",
+                deliveryJudgment.Summary);
+        }
+
+        if (deliveryJudgment.UsesRecordedReaderAppend)
         {
             return new NotifyPendingLivenessResult
             {
@@ -39,13 +48,15 @@ internal static class NotifyPendingLiveness
                 Running = true,
                 State = "live",
                 Source = "external-reader",
-                Summary = "The recipient is an external recorded reader; recorded reader deliverability is the live judgment and no process running flag applies.",
+                DeliveryBasis = deliveryJudgment.Basis,
+                Summary = $"The recipient is an external recorded reader; '{deliveryJudgment.Basis}' is the live delivery judgment and no process running flag applies.",
             };
         }
 
-        return string.Equals(mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal)
+        var result = string.Equals(mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal)
             ? ProbeHerdr(record, runner, herdrExecutable)
             : ProbeAgmsg(record, runner, agmsgScriptsDirectory);
+        return result with { DeliveryBasis = deliveryJudgment.Basis };
     }
 
     private static NotifyPendingLivenessResult ProbeHerdr(

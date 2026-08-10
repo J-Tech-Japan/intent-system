@@ -102,6 +102,28 @@ intent-cli notify status --task-id <task-id> [--domain <domain> --team <team>] \
   [--routing-root <host-root>] --format json
 ```
 
+Delivery is judged once from the recipient's recorded residency, and the same
+judgment is consumed by `notify status`, `notify escalate`, and
+`notify supervise`:
+
+| Recorded residency | Delivery contract | Output basis |
+| --- | --- | --- |
+| `external` with a recorded reader | A durable append to that reader is delivery; no pane wake applies. | `recorded-reader-append` |
+| `herdr` with a recorded pane | Delivery requires the recorded pane wake; appending an event alone is not delivery. | `recorded-pane-wake` |
+
+Therefore a successful external-reader escalation reports `delivered: true`
+and supervision does not open `undelivered-escalation`. On the next cycle it
+clears any matching open false-positive record exactly once without rewriting
+the 6-field event history. A failed reader append remains `delivered: false`
+and is retained as a genuine append-failure finding outside the reader it could
+not write, so that finding is not cleared as a migrated false positive. Pane
+delivery and the G641/G657 wake and escalation ladder are unchanged.
+
+> **Preview through 1.x (G660).** The shared residency-resolved judgment,
+> `delivery_basis` output, append-failure finding, and false-positive
+> reconciliation are post-freeze preview behavior outside the 1.0
+> compatibility promise.
+
 `notify delegate --write` first appends a durable pending snapshot at
 `<routing-root>/.intent-cli/notify/<domain>/<team>/pending.jsonl`. The snapshot
 contains the task id, recorded recipient identity, expected artifact, and
@@ -257,8 +279,8 @@ Every finding has an append-only recovery record in `stalls.jsonl` with
 `detectable_at`, `surfaced_at`, and `cleared_at`. If a condition is first seen
 after supervision restarted, `detectable_at` is null and
 `detectable_at_unknown` is true. Clearing a known record produces a measured
-duration; an unknown start never receives a flattering duration. Undelivered
-`notify escalate` events are treated as findings, and the loop reports its own
+duration; an unknown start never receives a flattering duration. Pane-resident
+or failed-append `notify escalate` deliveries are treated as findings, and the loop reports its own
 liveness in every bounded `--once` result. Dry-run resolves and previews the
 same classes and bound without waking, recording, or clearing anything.
 After a wake is delivered for an undelivered escalation, its recovery record is

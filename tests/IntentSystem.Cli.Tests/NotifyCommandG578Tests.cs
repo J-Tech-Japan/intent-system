@@ -397,7 +397,9 @@ public sealed class NotifyCommandG578Tests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.True(result.GetProperty("event_appended").GetBoolean());
-        Assert.False(result.GetProperty("delivered").GetBoolean());
+        Assert.Equal(
+            string.Equals(mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal),
+            result.GetProperty("delivered").GetBoolean());
         var lines = File.ReadAllLines(workspace.EventPath);
         Assert.Single(lines);
         using var document = JsonDocument.Parse(lines[0]);

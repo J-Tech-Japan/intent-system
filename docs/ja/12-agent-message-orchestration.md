@@ -90,6 +90,25 @@ intent-cli notify status --task-id <task-id> [--domain <domain> --team <team>] \
   [--routing-root <host-root>] --format json
 ```
 
+delivery は recipient の recorded residency から 1 度だけ判定し、同じ judgment を
+`notify status`、`notify escalate`、`notify supervise` が利用します。
+
+| recorded residency | delivery contract | output basis |
+| --- | --- | --- |
+| recorded reader を持つ `external` | reader への永続追記が delivery であり、pane wake は適用しません。 | `recorded-reader-append` |
+| recorded pane を持つ `herdr` | recorded pane の wake が delivery に必要であり、event の append だけでは delivery になりません。 | `recorded-pane-wake` |
+
+したがって external-reader への escalation の append が成功すれば `delivered: true` を返し、
+supervision は `undelivered-escalation` を開きません。次の cycle では対応する open false-positive
+record を 1 回だけ解消し、6-field event history は書き換えません。reader append が失敗した場合は
+`delivered: false` のまま、書けなかった reader の外側に genuine append-failure finding を保持するため、
+移行済みの false positive として解消しません。pane delivery と G641/G657 の wake / escalation
+ladder は変わりません。
+
+> **1.x を通じた preview (G660)。** shared residency-resolved judgment、`delivery_basis` output、
+> append-failure finding、false-positive reconciliation は freeze 後の preview behavior であり、
+> 1.0 compatibility promise の対象外です。
+
 `notify delegate --write` は最初に team-scoped な pending snapshot を
 `<routing-root>/.intent-cli/notify/<domain>/<team>/pending.jsonl` へ追記します。
 snapshot は task id、recorded recipient identity、expected artifact、dispatch timestamp を
@@ -195,7 +214,7 @@ scheduler の揺らぎに headroom を持たせます。この場合 `bound_met`
 各 finding は `stalls.jsonl` に append-only recovery record として残り、`detectable_at`、`surfaced_at`、
 `cleared_at` を持ちます。supervision restart 後に初めて見つかった condition は `detectable_at: null` と
 `detectable_at_unknown: true` になり、都合のよい duration を作りません。既知の start を持つ record の clear は
-実測 duration を記録します。未配信の `notify escalate` event も finding として扱い、bounded `--once` result には
+実測 duration を記録します。pane-resident または append-failure の `notify escalate` delivery も finding として扱い、bounded `--once` result には
 loop 自身の liveness を返します。dry-run は同じ class と bound を解決して確認しますが、wake、record、clear はしません。
 undelivered escalation の wake が Delivered になった後は recovery record を acknowledgement として消去し、append-only
 event 自体は残したまま、その key を後続 cycle の finding から除外して healthy silence に戻します。
