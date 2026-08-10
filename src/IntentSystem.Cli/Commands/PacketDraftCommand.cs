@@ -297,13 +297,23 @@ internal static class PacketDraftCommand
               expected: ""
               write_back_required: false
               write_back_targets: []
-            # G645: guide reachability is explicit and checked at closeout.
-            # Set this to false and name one route per role-facing surface,
-            # or keep the explicit no-surface answer when this slice adds no
-            # role-facing surface. A blank declaration is not a decision.
-            guide_reachability:
-              no_role_facing_surface: true
-              routes: []
+            # G645/G661: guide reachability is explicit and checked at closeout.
+            # Uncomment and complete EXACTLY ONE accepted form. Leaving this
+            # commented is visibly undeclared; the scaffold never guesses that
+            # a new slice has no role-facing surface.
+            #
+            # Route form:
+            # guide_reachability:
+            #   no_role_facing_surface: false
+            #   routes:
+            #     - guide_surface: guide workflow task implementation-loop
+            #       role: implementation
+            #       target_surface: <role-facing-surface>
+            #
+            # Explicit no-surface form:
+            # guide_reachability:
+            #   no_role_facing_surface: true
+            #   routes: []
             """;
     }
 

@@ -26,6 +26,21 @@ internal static class IntentInitRenderer
         WriteList(writer, result.ExistingPaths);
 
         writer.WriteLine();
+        writer.WriteLine("## Multi-checkout git defaults (G661)");
+        writer.WriteLine($"- host classification: {(result.FreshHost ? "fresh" : "existing")}");
+        writer.WriteLine("- `.gitattributes` exact lines:");
+        foreach (var line in result.GitAttributesLines)
+        {
+            writer.WriteLine($"  - `{line}`");
+        }
+        writer.WriteLine("- `.gitignore` exact lines:");
+        foreach (var line in result.GitIgnoreLines)
+        {
+            writer.WriteLine($"  - `{line}`");
+        }
+        writer.WriteLine($"- existing-host rule: {result.ExistingHostGuidance}");
+
+        writer.WriteLine();
         writer.WriteLine("## Next steps");
         foreach (var step in result.NextSteps)
         {

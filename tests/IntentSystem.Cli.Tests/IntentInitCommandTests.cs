@@ -391,6 +391,64 @@ public sealed class IntentInitCommandTests
         Assert.Equal(existing, File.ReadAllText(queueStatePath));
     }
 
+    [Fact]
+    public void Execute_FreshHostWritesUnionAttributesAndTelemetryIgnores_G661()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var hostRoot = tempDirectory.CreateDirectory("host");
+        File.WriteAllText(Path.Combine(hostRoot, ".gitattributes"), "*.md text\n");
+        File.WriteAllText(Path.Combine(hostRoot, ".gitignore"), ".DS_Store\n");
+        using var writer = new StringWriter();
+
+        Assert.Equal(0, IntentInitCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "demo", "--write", "--format", "json"],
+            writer));
+
+        var attributes = File.ReadAllText(Path.Combine(hostRoot, ".gitattributes"));
+        var ignores = File.ReadAllText(Path.Combine(hostRoot, ".gitignore"));
+        Assert.Contains("*.md text", attributes, StringComparison.Ordinal);
+        Assert.All(IntentInitCommand.AppendOnlyGitAttributesLines,
+            line => Assert.Contains(line, attributes, StringComparison.Ordinal));
+        Assert.Contains(".DS_Store", ignores, StringComparison.Ordinal);
+        Assert.All(IntentInitCommand.SupervisionTelemetryGitIgnoreLines,
+            line => Assert.Contains(line, ignores, StringComparison.Ordinal));
+
+        using var result = System.Text.Json.JsonDocument.Parse(writer.ToString());
+        Assert.True(result.RootElement.GetProperty("fresh_host").GetBoolean());
+        Assert.Contains("merge=union", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("never auto-migrated", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ExistingHostOnlyReportsExactGuidanceAndDoesNotMigrate_G661()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var hostRoot = tempDirectory.CreateDirectory("host");
+        Directory.CreateDirectory(Path.Combine(hostRoot, ".intent-cli"));
+        File.WriteAllText(Path.Combine(hostRoot, ".intent-cli", "config.toml"), "[project]\ndomain=\"demo\"\n");
+        File.WriteAllText(Path.Combine(hostRoot, ".gitattributes"), "*.md text\n");
+        File.WriteAllText(Path.Combine(hostRoot, ".gitignore"), ".DS_Store\n");
+        var attributesBefore = File.ReadAllText(Path.Combine(hostRoot, ".gitattributes"));
+        var ignoresBefore = File.ReadAllText(Path.Combine(hostRoot, ".gitignore"));
+        using var writer = new StringWriter();
+
+        Assert.Equal(0, IntentInitCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "demo", "--write", "--format", "json"],
+            writer));
+
+        Assert.Equal(attributesBefore, File.ReadAllText(Path.Combine(hostRoot, ".gitattributes")));
+        Assert.Equal(ignoresBefore, File.ReadAllText(Path.Combine(hostRoot, ".gitignore")));
+        using var result = System.Text.Json.JsonDocument.Parse(writer.ToString());
+        Assert.False(result.RootElement.GetProperty("fresh_host").GetBoolean());
+        Assert.Contains("never auto-migrated", result.RootElement.GetProperty("existing_host_guidance").GetString()!, StringComparison.Ordinal);
+        Assert.All(IntentInitCommand.AppendOnlyGitAttributesLines,
+            line => Assert.Contains(line, writer.ToString(), StringComparison.Ordinal));
+        Assert.All(IntentInitCommand.SupervisionTelemetryGitIgnoreLines,
+            line => Assert.Contains(line, writer.ToString(), StringComparison.Ordinal));
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext

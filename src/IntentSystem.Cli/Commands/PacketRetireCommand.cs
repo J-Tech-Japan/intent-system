@@ -28,12 +28,15 @@ internal static class PacketRetireCommand
     private const string StatusRetired = "retired";
     private const string StatusAlreadyRetired = "already-retired";
     private const string StatusPlanned = "planned";
+    private const string StatusReactivated = "reactivated";
+    private const string StatusAlreadyReactivated = "already-reactivated";
 
     private const string RetireActor = "intent-cli";
     private const string RunEventName = "packet-retired";
+    private const string ReactivateRunEventName = "packet-reactivated";
 
     private const string UsageLine =
-        "Usage: intent-cli packet retire --execution-unit <id> (--absorbed-by <unit> | --superseded-by <unit> | --retired) --reason <text> [--write] [--format markdown|json]";
+        "Usage: intent-cli packet retire --execution-unit <id> ((--absorbed-by <unit> | --superseded-by <unit> | --retired) --reason <text> | --reactivate --evidence <text>) [--write] [--format markdown|json]";
 
     private static readonly Regex ExecutionUnitPattern = new(
         @"^[A-Za-z][A-Za-z0-9-]*$",
@@ -68,7 +71,9 @@ internal static class PacketRetireCommand
             out var absorbedBy,
             out var supersededBy,
             out var retired,
+            out var reactivate,
             out var reason,
+            out var evidence,
             out var write,
             out var format,
             out var error))
@@ -93,14 +98,29 @@ internal static class PacketRetireCommand
             return 1;
         }
 
-        var lifecycle = absorbedBy is not null
+        var lifecycle = reactivate
+            ? PacketLifecycle.LifecycleReady
+            : absorbedBy is not null
             ? PacketLifecycle.LifecycleAbsorbed
             : supersededBy is not null
                 ? PacketLifecycle.LifecycleSuperseded
                 : PacketLifecycle.LifecycleRetired;
 
         var existing = PacketLifecycle.TryRead(packetDirectory);
-        var alreadyRetired = existing is not null
+        if (reactivate && existing is null)
+        {
+            writer.WriteLine($"Cannot reactivate '{executionUnit}': no lifecycle metadata exists to prove a prior retirement.");
+            return 1;
+        }
+        if (reactivate && existing is not null
+            && existing.Lifecycle != PacketLifecycle.LifecycleReady
+            && !PacketLifecycle.IsNonPublishable(existing))
+        {
+            writer.WriteLine($"Cannot reactivate '{executionUnit}': lifecycle '{existing.Lifecycle}' is not a recognized retired state.");
+            return 1;
+        }
+
+        var alreadyRetired = !reactivate && existing is not null
             && string.Equals(existing.Lifecycle, lifecycle, StringComparison.Ordinal)
             && string.Equals(existing.AbsorbedBy, absorbedBy, StringComparison.Ordinal)
             && string.Equals(existing.SupersededBy, supersededBy, StringComparison.Ordinal)
@@ -110,8 +130,28 @@ internal static class PacketRetireCommand
         string mode;
         string status;
         string? retiredAt = existing?.RetiredAt;
+        string? reactivatedAt = existing?.ReactivatedAt;
+        string? reactivatedFrom = existing?.ReactivatedFrom;
+        if (reactivate && existing is not null && PacketLifecycle.IsNonPublishable(existing))
+        {
+            reactivatedFrom ??= existing.Lifecycle;
+        }
+        var alreadyReactivated = reactivate
+            && existing is not null
+            && string.Equals(existing.Lifecycle, PacketLifecycle.LifecycleReady, StringComparison.Ordinal)
+            && string.Equals(existing.ReactivationEvidence, evidence, StringComparison.Ordinal);
 
-        if (alreadyRetired)
+        if (alreadyReactivated)
+        {
+            mode = write ? ModeWrite : ModeDryRun;
+            status = StatusAlreadyReactivated;
+        }
+        else if (reactivate && existing?.Lifecycle == PacketLifecycle.LifecycleReady)
+        {
+            writer.WriteLine($"'{executionUnit}' is already active with different reactivation evidence; refusing to replace the recorded transition.");
+            return 1;
+        }
+        else if (alreadyRetired)
         {
             // Idempotent: same retirement already recorded. Do not rewrite the
             // sidecar or append a duplicate run event.
@@ -120,31 +160,54 @@ internal static class PacketRetireCommand
         }
         else if (write)
         {
-            retiredAt = TimestampFactory().ToString("O");
-            var metadata = new PacketLifecycleMetadata
+            var transitionAt = TimestampFactory();
+            PacketLifecycleMetadata metadata;
+            string runEvent;
+            string runReason;
+            if (reactivate)
             {
-                Lifecycle = lifecycle,
-                AbsorbedBy = absorbedBy,
-                SupersededBy = supersededBy,
-                RetiredReason = reason,
-                RetiredAt = retiredAt
-            };
+                reactivatedAt = transitionAt.ToString("O");
+                reactivatedFrom = existing!.Lifecycle;
+                metadata = new PacketLifecycleMetadata
+                {
+                    Lifecycle = PacketLifecycle.LifecycleReady,
+                    ReactivatedFrom = reactivatedFrom,
+                    ReactivationEvidence = evidence,
+                    ReactivatedAt = reactivatedAt,
+                };
+                runEvent = ReactivateRunEventName;
+                runReason = evidence!;
+            }
+            else
+            {
+                retiredAt = transitionAt.ToString("O");
+                metadata = new PacketLifecycleMetadata
+                {
+                    Lifecycle = lifecycle,
+                    AbsorbedBy = absorbedBy,
+                    SupersededBy = supersededBy,
+                    RetiredReason = reason,
+                    RetiredAt = retiredAt
+                };
+                runEvent = RunEventName;
+                runReason = reason!;
+            }
 
             File.WriteAllText(sidecarPath, PacketLifecycle.Render(metadata));
             AppendRunEvent(
                 context,
                 new RunEvent
                 {
-                    Ts = TimestampFactory(),
+                    Ts = transitionAt,
                     ExecutionUnit = executionUnit!,
-                    Event = RunEventName,
+                    Event = runEvent,
                     By = RetireActor,
-                    Reason = reason,
+                    Reason = runReason,
                     PacketRef = sidecarPath
                 });
 
             mode = ModeWrite;
-            status = StatusRetired;
+            status = reactivate ? StatusReactivated : StatusRetired;
         }
         else
         {
@@ -163,7 +226,10 @@ internal static class PacketRetireCommand
             AbsorbedBy = absorbedBy,
             SupersededBy = supersededBy,
             RetiredReason = reason,
-            RetiredAt = retiredAt
+            RetiredAt = retiredAt,
+            ReactivationEvidence = evidence,
+            ReactivatedFrom = reactivatedFrom,
+            ReactivatedAt = reactivatedAt,
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -185,7 +251,9 @@ internal static class PacketRetireCommand
         out string? absorbedBy,
         out string? supersededBy,
         out bool retired,
+        out bool reactivate,
         out string? reason,
+        out string? evidence,
         out bool write,
         out string format,
         out string error)
@@ -194,7 +262,9 @@ internal static class PacketRetireCommand
         absorbedBy = null;
         supersededBy = null;
         retired = false;
+        reactivate = false;
         reason = null;
+        evidence = null;
         write = false;
         format = FormatMarkdown;
         error = string.Empty;
@@ -231,10 +301,21 @@ internal static class PacketRetireCommand
                 case "--retired":
                     retired = true;
                     break;
+                case "--reactivate":
+                    reactivate = true;
+                    break;
                 case "--reason":
                     if (!TryTakeValue(args, ref index, out reason))
                     {
                         error = "--reason requires a value.";
+                        return false;
+                    }
+
+                    break;
+                case "--evidence":
+                    if (!TryTakeValue(args, ref index, out evidence))
+                    {
+                        error = "--evidence requires a value.";
                         return false;
                     }
 
@@ -273,20 +354,27 @@ internal static class PacketRetireCommand
 
         var relationshipCount = (absorbedBy is not null ? 1 : 0)
             + (supersededBy is not null ? 1 : 0)
-            + (retired ? 1 : 0);
+            + (retired ? 1 : 0)
+            + (reactivate ? 1 : 0);
         if (relationshipCount == 0)
         {
-            error = "Exactly one of --absorbed-by, --superseded-by, or --retired is required.";
+            error = "Exactly one of --absorbed-by, --superseded-by, --retired, or --reactivate is required.";
             return false;
         }
 
         if (relationshipCount > 1)
         {
-            error = "--absorbed-by, --superseded-by, and --retired are mutually exclusive.";
+            error = "--absorbed-by, --superseded-by, --retired, and --reactivate are mutually exclusive.";
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(reason))
+        if (reactivate && string.IsNullOrWhiteSpace(evidence))
+        {
+            error = "--reactivate requires --evidence <text>; reactivation must preserve why the prior retirement is no longer valid.";
+            return false;
+        }
+
+        if (!reactivate && string.IsNullOrWhiteSpace(reason))
         {
             error = "--reason is required; retirement must record a deterministic reason.";
             return false;
@@ -340,6 +428,12 @@ internal static class PacketRetireCommand
         {
             writer.WriteLine($"- retired_at: {result.RetiredAt}");
         }
+        if (result.ReactivationEvidence is not null)
+        {
+            writer.WriteLine($"- reactivated_from: {result.ReactivatedFrom}");
+            writer.WriteLine($"- reactivation_evidence: {result.ReactivationEvidence}");
+            writer.WriteLine($"- reactivated_at: {result.ReactivatedAt}");
+        }
 
         writer.WriteLine($"- sidecar: {result.SidecarPath}");
         writer.WriteLine();
@@ -347,13 +441,15 @@ internal static class PacketRetireCommand
         {
             writer.WriteLine("Dry-run: re-run with --write to record the retirement and preserve packet files.");
         }
-        else if (result.Status == StatusAlreadyRetired)
+        else if (result.Status is StatusAlreadyRetired or StatusAlreadyReactivated)
         {
-            writer.WriteLine("Already retired with the same metadata; no changes written (idempotent).");
+            writer.WriteLine("Lifecycle transition already carries the same evidence; no changes written (idempotent).");
         }
         else
         {
-            writer.WriteLine("Packet files preserved; excluded from next-slice issue-cut-ready candidates.");
+            writer.WriteLine(result.Status == StatusReactivated
+                ? "Packet reactivated with durable evidence; packet files and the prior mistake remain visible in git history."
+                : "Packet files preserved; excluded from next-slice issue-cut-ready candidates.");
         }
     }
 
@@ -366,6 +462,7 @@ internal static class PacketRetireCommand
         writer.WriteLine("Marks an absorbed / superseded / retired packet so next-slice excludes it");
         writer.WriteLine("from issue-cut-ready candidates, while preserving the packet files in git history.");
         writer.WriteLine("Writes a lifecycle.yaml sidecar and appends a packet-retired run event. Idempotent.");
+        writer.WriteLine("--reactivate requires --evidence, records packet-reactivated, and never silently clears retirement.");
     }
 
     internal sealed record PacketRetireResult
@@ -399,5 +496,14 @@ internal static class PacketRetireCommand
 
         [JsonPropertyName("retired_at")]
         public string? RetiredAt { get; init; }
+
+        [JsonPropertyName("reactivation_evidence")]
+        public string? ReactivationEvidence { get; init; }
+
+        [JsonPropertyName("reactivated_from")]
+        public string? ReactivatedFrom { get; init; }
+
+        [JsonPropertyName("reactivated_at")]
+        public string? ReactivatedAt { get; init; }
     }
 }

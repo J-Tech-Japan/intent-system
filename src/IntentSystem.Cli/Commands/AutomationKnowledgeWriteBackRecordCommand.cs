@@ -187,6 +187,8 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
             DeclaredFacets = declaration.RequiredFacets,
             DeclarationRequired = declaration.IsRequired,
             Note = record.Note,
+            CommitPushRequiredForOtherCheckouts = true,
+            DurabilityGuidance = BuildDurabilityGuidance(KnowledgeWriteBackRecord.ResolveRelativePath(executionUnit!)),
             Warnings = warnings,
             Error = null,
         };
@@ -211,6 +213,8 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
             DeclaredFacets = Array.Empty<string>(),
             DeclarationRequired = false,
             Note = null,
+            CommitPushRequiredForOtherCheckouts = true,
+            DurabilityGuidance = BuildDurabilityGuidance(KnowledgeWriteBackRecord.ResolveRelativePath(executionUnit)),
             Warnings = Array.Empty<string>(),
             Error = error,
         };
@@ -238,6 +242,8 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
         {
             writer.WriteLine($"- host_commit: `{result.HostCommit}`");
         }
+        writer.WriteLine($"- commit_push_required_for_other_checkouts: {(result.CommitPushRequiredForOtherCheckouts ? "true" : "false")}");
+        writer.WriteLine($"- durability_guidance: {result.DurabilityGuidance}");
         if (result.Targets.Count > 0)
         {
             writer.WriteLine($"- targets: {string.Join(", ", result.Targets)}");
@@ -268,6 +274,10 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
             }
         }
     }
+
+    private static string BuildDurabilityGuidance(string recordPath) =>
+        $"The record at `{recordPath}` exists only in this checkout until it is committed and pushed; "
+        + "other checkouts cannot observe or rely on it before both steps complete. intent-cli never auto-commits.";
 
     private static bool TryParseArguments(
         string[] args,
@@ -448,6 +458,12 @@ internal sealed record KnowledgeWriteBackRecordResult
 
     [JsonPropertyName("note")]
     public required string? Note { get; init; }
+
+    [JsonPropertyName("commit_push_required_for_other_checkouts")]
+    public required bool CommitPushRequiredForOtherCheckouts { get; init; }
+
+    [JsonPropertyName("durability_guidance")]
+    public required string DurabilityGuidance { get; init; }
 
     [JsonPropertyName("warnings")]
     public required IReadOnlyList<string> Warnings { get; init; }

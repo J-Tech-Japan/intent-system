@@ -68,6 +68,61 @@ apply. A kind with an inbound app monitor may use that external reader. This is
 a deployment rule, not a recommendation; it does not assign stall recovery to
 design or add a model-backed monitoring role.
 
+## Host-state honesty and complete scaffolds (G661 — preview-through-1.x)
+
+Five host-side edges share one rule: a surface must not claim more than its
+evidence. `automation knowledge-writeback-record --write` creates the local
+record but always states that other checkouts cannot observe it until the path
+is committed and pushed; intent-cli never commits it. `automation stalled-work`
+therefore distinguishes an absent record (`knowledge-writeback-pending`) from a
+local recorded path (`knowledge-writeback-recorded-uncommitted`) and names the
+exact path that still needs commit and push.
+
+`packet retire --reactivate --evidence <text> --write` is the only reactivation
+edge. It requires evidence, writes `lifecycle: ready` plus the prior lifecycle,
+evidence, and timestamp, and appends `packet-reactivated`. Closeout never infers
+this transition: if shipped work still has a non-publishable lifecycle, closeout
+emits `shipped-while-retired-contradiction` and leaves the sidecar unchanged.
+
+Issue-cut readiness consumes the existing publish validator's verdict. A TODO
+scaffold, including placeholder-only Related Links, is visible as not ready with
+the validator's reason and is never offered as `issue-cut-ready`. `packet draft`
+also leaves guide reachability commented until the author chooses one of these
+accepted forms; a missing-declaration warning prints both fragments verbatim:
+
+```yaml
+guide_reachability:
+  no_role_facing_surface: false
+  routes:
+    - guide_surface: guide workflow task implementation-loop
+      role: implementation
+      target_surface: <role-facing-surface>
+```
+
+```yaml
+guide_reachability:
+  no_role_facing_surface: true
+  routes: []
+```
+
+On a fresh host, `intent init --write` appends these repository defaults while
+preserving existing file content:
+
+```gitattributes
+.intent-cli/runs.jsonl merge=union
+.intent-cli/**/*.jsonl merge=union
+```
+
+```gitignore
+.intent-cli/supervision/**/cycles.jsonl
+.intent-cli/supervision/**/stalls.jsonl
+```
+
+The first pair gives append-only JSONL stores union-merge behaviour; the second
+keeps per-team supervision telemetry out of git. For an already initialised
+host, `intent init` prints these exact lines as guidance and changes neither
+`.gitattributes` nor `.gitignore`; migration is always an explicit operator act.
+
 ## Canonical notify workflow
 
 All role-to-role workflow messages use `intent-cli notify`; agents never choose
