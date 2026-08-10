@@ -353,6 +353,60 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
         Assert.Contains("without creating or resolving a pending record", completed.GetProperty("advisory").GetString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void DelegateRefusesStrandedGenerationAndUsedNonceBeforeWork_G653()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+
+        Assert.Equal(0, workspace.Run(DelegateArgs("G653-stranded", "g653-generation-1")).ExitCode);
+        runner.PromptExitCode = 1;
+        Assert.Equal(1, workspace.Run(ReportArgs("G653-stranded")).ExitCode);
+        runner.PromptExitCode = 0;
+        runner.Calls.Clear();
+
+        var (strandedExit, stranded) = workspace.Run(DelegateArgs("G653-stranded", "g653-generation-2"));
+        Assert.Equal(1, strandedExit);
+        Assert.Equal("undelivered-report-outbox", stranded.GetProperty("cause").GetString());
+        Assert.Contains(
+            $"intent-cli notify collect --domain intent-cli --team intent-cli-dev --task-id G653-stranded --write --routing-root {workspace.RootPath}",
+            stranded.GetProperty("summary").GetString(),
+            StringComparison.Ordinal);
+        Assert.Empty(runner.Calls);
+
+        Assert.Equal(0, workspace.Run(CollectArgs("G653-stranded")).ExitCode);
+
+        Assert.Equal(0, workspace.Run(DelegateArgs("G653-nonce", "g653-nonce-1")).ExitCode);
+        Assert.Equal(0, workspace.Run(ReportArgs("G653-nonce")).ExitCode);
+        runner.Calls.Clear();
+
+        var (reusedNonceExit, reusedNonce) = workspace.Run(DelegateArgs("G653-nonce", "g653-nonce-1"));
+        Assert.Equal(1, reusedNonceExit);
+        Assert.Equal("result-nonce-already-used", reusedNonce.GetProperty("cause").GetString());
+        Assert.Contains("fresh --result-nonce or a new --task-id", reusedNonce.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Empty(runner.Calls);
+
+        Assert.Equal(0, workspace.Run(DelegateArgs("G653-nonce", "g653-nonce-2")).ExitCode);
+        Assert.Equal(0, workspace.Run(ReportArgs("G653-nonce")).ExitCode);
+    }
+
+    [Fact]
+    public void CollectCarriesAnUnmatchedUndeliveredReportWithoutRedispatch_G653()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true)) { PromptExitCode = 1 };
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+
+        Assert.Equal(1, workspace.Run(ReportArgs("G653-unmatched-collect")).ExitCode);
+        runner.PromptExitCode = 0;
+        runner.Calls.Clear();
+
+        var (collectExit, collected) = workspace.Run(CollectArgs("G653-unmatched-collect"));
+
+        Assert.Equal(0, collectExit);
+        Assert.True(collected.GetProperty("delivered").GetBoolean());
+        Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("send-text"));
+    }
+
     private static string[] DelegateArgs(string taskId = "G629-demo", string resultNonce = "g629-nonce") =>
     [
         "notify", "delegate", "--domain", Workspace.Domain, "--team", Workspace.Team,
@@ -376,10 +430,10 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
         "--task-id", "G629-demo", "--format", "json",
     ];
 
-    private static string[] CollectArgs() =>
+    private static string[] CollectArgs(string taskId = "G629-demo") =>
     [
         "notify", "collect", "--domain", Workspace.Domain, "--team", Workspace.Team,
-        "--task-id", "G629-demo", "--write", "--format", "json",
+        "--task-id", taskId, "--write", "--format", "json",
     ];
 
     private sealed class FakeRunner(Func<string> agentResponse) : INotifyProcessRunner

@@ -47,7 +47,7 @@ internal static class NotifyReportOutboxStore
             {
                 var state = string.Equals(existingGeneration.DeliveryState, "undelivered", StringComparison.Ordinal)
                     ? $"An undelivered report outbox entry already exists for task '{persisted.TaskId}' and its current dispatch generation. "
-                      + $"Recover it with '{BuildCollectCommand(persisted)}'; do not re-delegate the task."
+                      + $"Recover it with '{BuildCollectCommand(routingRoot, persisted)}'; do not re-delegate the task."
                     : $"A report outbox entry already exists for task '{persisted.TaskId}' and its current dispatch generation.";
                 return new NotifyReportOutboxWriteResult(false, path, state);
             }
@@ -82,13 +82,21 @@ internal static class NotifyReportOutboxStore
         string? resultNonce) =>
         FindCurrent(routingRoot, domain, team, taskId, resultNonce, matchGeneration: true);
 
+    public static NotifyReportOutboxReadResult FindUndelivered(
+        string routingRoot,
+        string domain,
+        string team,
+        string taskId) =>
+        FindCurrent(routingRoot, domain, team, taskId, resultNonce: null, matchGeneration: false, undeliveredOnly: true);
+
     private static NotifyReportOutboxReadResult FindCurrent(
         string routingRoot,
         string domain,
         string team,
         string taskId,
         string? resultNonce,
-        bool matchGeneration)
+        bool matchGeneration,
+        bool undeliveredOnly = false)
     {
         var path = ResolvePath(routingRoot, domain, team);
         lock (Sync)
@@ -96,7 +104,8 @@ internal static class NotifyReportOutboxStore
             var current = ReadCurrent(path, out var error);
             var entry = current.Values
                 .Where(candidate => string.Equals(candidate.TaskId, taskId, StringComparison.Ordinal)
-                    && (!matchGeneration || string.Equals(candidate.ResultNonce, resultNonce, StringComparison.Ordinal)))
+                    && (!matchGeneration || string.Equals(candidate.ResultNonce, resultNonce, StringComparison.Ordinal))
+                    && (!undeliveredOnly || string.Equals(candidate.DeliveryState, "undelivered", StringComparison.Ordinal)))
                 .OrderByDescending(candidate => candidate.CreatedAt)
                 .FirstOrDefault();
             return new NotifyReportOutboxReadResult(error is null, path, entry, error);
@@ -168,8 +177,8 @@ internal static class NotifyReportOutboxStore
             ? entry.EntryId
             : $"legacy:{entry.TaskId}:{entry.ResultNonce ?? string.Empty}";
 
-    private static string BuildCollectCommand(NotifyReportOutboxEntry entry) =>
-        $"intent-cli notify collect --domain {entry.Domain} --team {entry.Team} --task-id {entry.TaskId} --write";
+    public static string BuildCollectCommand(string routingRoot, NotifyReportOutboxEntry entry) =>
+        $"intent-cli notify collect --domain {entry.Domain} --team {entry.Team} --task-id {entry.TaskId} --write --routing-root {routingRoot}";
 }
 
 internal sealed record NotifyReportOutboxEntry

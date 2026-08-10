@@ -148,6 +148,12 @@ internal static class NotifyCommand
             return ExecuteCollect(writer, options, routingRoot);
         }
 
+        if (string.Equals(operation, OperationDelegate, StringComparison.Ordinal) && options.Write)
+        {
+            var delegateGuard = GuardDelegateOutboxLifecycle(writer, options, routingRoot);
+            if (delegateGuard is not null) return delegateGuard.Value;
+        }
+
         NotifyReportOutboxEntry? persistedReportOutbox = null;
         string? persistedOutboxPath = null;
         string? reportAdvisory = null;
@@ -258,7 +264,20 @@ internal static class NotifyCommand
         var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
         var outbox = pending.Resolved && pending.Record is not null
             ? NotifyReportOutboxStore.Find(routingRoot, options.Domain!, options.Team!, options.TaskId!, pending.Record.ResultNonce)
-            : NotifyReportOutboxStore.Find(routingRoot, options.Domain!, options.Team!, options.TaskId!);
+            : new NotifyReportOutboxReadResult(true, NotifyReportOutboxStore.ResolvePath(routingRoot, options.Domain!, options.Team!), null, null);
+        if (outbox.Entry is null || string.Equals(outbox.Entry.DeliveryState, "delivered", StringComparison.Ordinal))
+        {
+            var undelivered = NotifyReportOutboxStore.FindUndelivered(
+                routingRoot,
+                options.Domain!,
+                options.Team!,
+                options.TaskId!);
+            if (undelivered.Entry is not null || !undelivered.Resolved) outbox = undelivered;
+        }
+        if (outbox.Entry is null && pending.Error is null)
+        {
+            outbox = NotifyReportOutboxStore.Find(routingRoot, options.Domain!, options.Team!, options.TaskId!);
+        }
         if (!outbox.Resolved || outbox.Entry is null)
         {
             Emit(writer, options.Format, FailureResult(OperationCollect, options, SessionLayerMode.Default,
@@ -275,7 +294,7 @@ internal static class NotifyCommand
             return 1;
         }
 
-        if (!pending.Resolved || pending.Record is null || pending.Record.ReportArrived)
+        if (!pending.Resolved && pending.Error is not null)
         {
             Emit(writer, options.Format, FailureResult(OperationCollect, options, SessionLayerMode.Default,
                 "already-delivered", $"Task '{options.TaskId}' has no open matching pending record; collection is refused and never re-dispatches work.",
@@ -305,6 +324,74 @@ internal static class NotifyCommand
         }
 
         return ExecuteDelivery(writer, OperationCollect, collected, resolution, preflight, existingOutbox: outbox.Entry);
+    }
+
+    private static int? GuardDelegateOutboxLifecycle(TextWriter writer, NotifyOptions options, string routingRoot)
+    {
+        var undelivered = NotifyReportOutboxStore.FindUndelivered(
+            routingRoot,
+            options.Domain!,
+            options.Team!,
+            options.TaskId!);
+        if (!undelivered.Resolved)
+        {
+            Emit(writer, options.Format, FailureResult(
+                OperationDelegate,
+                options,
+                SessionLayerMode.Default,
+                "report-outbox-unavailable",
+                undelivered.Error ?? $"Could not read the report outbox for task '{options.TaskId}'. No work was started.",
+                outboxEntryPath: undelivered.Path));
+            return 1;
+        }
+
+        if (undelivered.Entry is not null)
+        {
+            Emit(writer, options.Format, FailureResult(
+                OperationDelegate,
+                options,
+                SessionLayerMode.Default,
+                "undelivered-report-outbox",
+                $"Task '{options.TaskId}' already has an undelivered report outbox entry. Recover it with "
+                + $"'{NotifyReportOutboxStore.BuildCollectCommand(routingRoot, undelivered.Entry)}'; do not re-delegate the task. No work was started.",
+                outboxEntryPath: undelivered.Path));
+            return 1;
+        }
+
+        var existingGeneration = NotifyReportOutboxStore.Find(
+            routingRoot,
+            options.Domain!,
+            options.Team!,
+            options.TaskId!,
+            options.ResultNonce);
+        if (!existingGeneration.Resolved)
+        {
+            Emit(writer, options.Format, FailureResult(
+                OperationDelegate,
+                options,
+                SessionLayerMode.Default,
+                "report-outbox-unavailable",
+                existingGeneration.Error ?? $"Could not read the report outbox for task '{options.TaskId}'. No work was started.",
+                outboxEntryPath: existingGeneration.Path));
+            return 1;
+        }
+
+        var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
+        if (existingGeneration.Entry is not null
+            || pending.Record is not null && string.Equals(pending.Record.ResultNonce, options.ResultNonce, StringComparison.Ordinal))
+        {
+            Emit(writer, options.Format, FailureResult(
+                OperationDelegate,
+                options,
+                SessionLayerMode.Default,
+                "result-nonce-already-used",
+                $"Task '{options.TaskId}' has already used result nonce '{options.ResultNonce}'. Supply a fresh --result-nonce "
+                + "or a new --task-id before delegating; no work was started.",
+                outboxEntryPath: existingGeneration.Path));
+            return 1;
+        }
+
+        return null;
     }
 
     private static int ExecuteStatus(CliContext context, TextWriter writer, NotifyOptions options, string routingRoot)
@@ -639,6 +726,12 @@ internal static class NotifyCommand
             reportPendingRecord = pending.Resolved && pending.Record is { ReportArrived: false }
                 ? pending.Record
                 : null;
+            if (string.Equals(operation, OperationCollect, StringComparison.Ordinal)
+                && existingOutbox is not null
+                && !string.Equals(reportPendingRecord?.ResultNonce, existingOutbox.ResultNonce, StringComparison.Ordinal))
+            {
+                reportPendingRecord = null;
+            }
         }
         NotifyReportOutboxEntry? reportOutbox = existingOutbox;
         string? outboxEntryPath = null;

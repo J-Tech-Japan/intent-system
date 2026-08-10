@@ -753,11 +753,11 @@ internal sealed class NotifyMeasuredSupervisor
 
         return entries.Select(entry => new NotifySupervisionObservation
         {
-            Key = $"report-outbox:{entry.TaskId}",
+            Key = $"report-outbox:{entry.EntryId ?? $"{entry.TaskId}:{entry.ResultNonce ?? "legacy"}"}",
             Kind = "undelivered-report-outbox",
             OwnerRole = entry.FromRole,
             Source = "notify-report-outbox",
-            Summary = $"Report outbox entry for task '{entry.TaskId}' is undelivered at '{NotifyReportOutboxStore.ResolvePath(routingRoot, domain, team)}'. Collect it with `intent-cli notify collect --domain {domain} --team {team} --task-id {entry.TaskId} --routing-root {routingRoot} --write`; do not re-delegate the task.",
+            Summary = $"Report outbox entry for task '{entry.TaskId}' is undelivered at '{NotifyReportOutboxStore.ResolvePath(routingRoot, domain, team)}'. Collect it with `{NotifyReportOutboxStore.BuildCollectCommand(routingRoot, entry)}`; do not re-delegate the task.",
             DetectableAt = entry.CreatedAt,
             WakeSuppressed = true,
         }).ToArray();

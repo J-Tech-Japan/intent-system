@@ -99,6 +99,12 @@ re-delegated task id can carry a new report and unmatched reports continue as
 messages. A second report for an undelivered current generation fails closed
 and names its exact `notify collect` recovery command.
 
+Before opening a new delegation, `notify delegate --write` refuses a task with
+an undelivered report entry and names that same collection command, so the
+supervision finding and a collectable entry are the same set. It also refuses a
+previously used task-id/result-nonce pair before work starts and requires a
+fresh `--result-nonce` or a new task id.
+
 A report is a message rather than a bookkeeping entry: fail-closed protection
 belongs on pending-state mutation, not on carrying the message. Refusing an
 unrecognised identifier would silence unsolicited reports and answers to
