@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -13,6 +14,7 @@ namespace IntentSystem.Cli.Commands;
 internal sealed class NotifyMeasuredSupervisor
 {
     private const int FallbackAbsenceHeadroomSeconds = 60;
+    private const string DesignRole = "design";
 
     private readonly CliContext context;
     private readonly string routingRoot;
@@ -171,7 +173,8 @@ internal sealed class NotifyMeasuredSupervisor
             format,
             runner,
             herdrExecutable,
-            agmsgScriptsDirectory).RunOnce();
+            agmsgScriptsDirectory,
+            notifier: DeliverRecoveryNotification).RunOnce();
         actions.AddRange(legacy.Actions);
         if (legacy.Error is not null)
         {
@@ -226,10 +229,11 @@ internal sealed class NotifyMeasuredSupervisor
                     Key = $"live-idle:{paneKey}",
                     Kind = "live-idle-no-report",
                     OwnerRole = pending.DelegatingRole ?? ownerRole,
+                    SubjectRole = pending.RecipientRole,
                     Source = "herdr.activity",
                     Summary = $"Recipient '{pending.RecipientRole}' is live-idle with no report beyond the declared {declaredBoundSeconds!.Value}s threshold; inspect the recorded terminal pane. No recovery sequence was entered.",
                     DetectableAt = pending.DispatchedAt.AddSeconds(declaredBoundSeconds!.Value),
-                    WakeSuppressed = true,
+                    WakeSuppressed = !IsOwnerSubject(pending.RecipientRole),
                 });
             }
         }
@@ -250,6 +254,7 @@ internal sealed class NotifyMeasuredSupervisor
                     ? NotifyPendingLivenessResult.RegistrationLostProcessPresent
                     : "recipient-lost",
                 OwnerRole = record?.DelegatingRole ?? ownerRole,
+                SubjectRole = action.RecipientRole,
                 Source = registrationLoss ? "notify-pending-liveness" : "notify-pending",
                 Summary = action.Summary,
                 DetectableAt = null,
@@ -275,9 +280,10 @@ internal sealed class NotifyMeasuredSupervisor
                 warnings.AddRange(stalled.Warnings);
                 foreach (var item in stalled.Items)
                 {
-                    // A pending CI check is an active wait, not a stall.  The
-                    // terminal CI classes are retained and woken here.
-                    if (string.Equals(item.Kind, AutomationStalledWorkCommand.KindCiPending, StringComparison.Ordinal))
+                    // Informational lifecycle observations, including an
+                    // actively claimed repair and pending CI, are not wake
+                    // findings. Actionable terminal classes are retained.
+                    if (item.IsInformational)
                     {
                         continue;
                     }
@@ -353,7 +359,13 @@ internal sealed class NotifyMeasuredSupervisor
 
             if (existing is not null && existing.WakeDelivered)
             {
-                records.Add(existing with { Summary = observation.Summary });
+                records.Add(existing with
+                {
+                    Summary = observation.Summary,
+                    SubjectRole = observation.SubjectRole ?? existing.SubjectRole,
+                    WakeTargetRole = ResolveWakeTarget(observation),
+                    WakeClass = ResolveWakeClass(observation),
+                });
                 findings.Add(ToFinding(records[^1]));
                 continue;
             }
@@ -376,6 +388,9 @@ internal sealed class NotifyMeasuredSupervisor
                 Key = observation.Key,
                 Kind = observation.Kind,
                 OwnerRole = observation.OwnerRole,
+                SubjectRole = observation.SubjectRole,
+                WakeTargetRole = ResolveWakeTarget(observation),
+                WakeClass = ResolveWakeClass(observation),
                 Source = observation.Source,
                 Summary = observation.Summary,
                 ResendPermitted = observation.ResendPermitted,
@@ -386,6 +401,9 @@ internal sealed class NotifyMeasuredSupervisor
             record = record with
             {
                 Summary = observation.Summary,
+                SubjectRole = observation.SubjectRole ?? record.SubjectRole,
+                WakeTargetRole = ResolveWakeTarget(observation),
+                WakeClass = ResolveWakeClass(observation),
                 WakeAttempted = wake.Attempted,
                 WakeDelivered = wake.Delivered,
                 WakeCause = wake.Cause,
@@ -581,14 +599,15 @@ internal sealed class NotifyMeasuredSupervisor
             };
         }
 
-        if (string.IsNullOrWhiteSpace(observation.OwnerRole))
+        var wakeTargetRole = ResolveWakeTarget(observation);
+        if (string.IsNullOrWhiteSpace(wakeTargetRole))
         {
             return new NotifySupervisionWakeResult
             {
                 Attempted = false,
                 Delivered = false,
-                Cause = "owner-role-missing",
-                Summary = "The finding has no owning logical role; no transport was invented.",
+                Cause = "wake-target-role-missing",
+                Summary = "The finding has no eligible wake target role; no transport was invented.",
             };
         }
 
@@ -613,10 +632,10 @@ internal sealed class NotifyMeasuredSupervisor
             Domain = domain,
             Team = team,
             TaskId = "supervision-" + observation.Key.Replace(':', '-'),
-            DelegatingRole = observation.OwnerRole,
-            RecipientRole = observation.OwnerRole,
-            ReportToRole = observation.OwnerRole,
-            RecipientIdentity = $"supervision-owner={observation.OwnerRole}",
+            DelegatingRole = wakeTargetRole,
+            RecipientRole = wakeTargetRole,
+            ReportToRole = wakeTargetRole,
+            RecipientIdentity = $"supervision-target={wakeTargetRole}",
             ExpectedArtifact = "supervision finding acknowledgement",
             ExpectedArtifacts = ["supervision finding acknowledgement"],
             Objective = observation.Summary,
@@ -634,6 +653,9 @@ internal sealed class NotifyMeasuredSupervisor
                 source = observation.Source,
                 key = observation.Key,
                 summary = observation.Summary,
+                subject_role = observation.SubjectRole,
+                wake_target_role = wakeTargetRole,
+                wake_class = ResolveWakeClass(observation),
                 must_transition = false,
             }),
             runner,
@@ -647,6 +669,43 @@ internal sealed class NotifyMeasuredSupervisor
             Summary = delivery.Summary,
         };
     }
+
+    private NotifySupervisorDeliveryResult DeliverRecoveryNotification(
+        NotifyPendingDelegation record,
+        string notification)
+    {
+        if (!IsOwnerSubject(record.RecipientRole))
+        {
+            return NotifySupervisorDelivery.Send(
+                routingRoot,
+                record,
+                notification,
+                runner,
+                herdrExecutable,
+                agmsgScriptsDirectory);
+        }
+
+        var payload = JsonNode.Parse(notification)?.AsObject() ?? new JsonObject();
+        payload["subject_role"] = record.RecipientRole;
+        payload["wake_target_role"] = DesignRole;
+        payload["wake_class"] = "escalation";
+        return NotifySupervisorDelivery.Send(
+            routingRoot,
+            record with { DelegatingRole = DesignRole },
+            payload.ToJsonString(),
+            runner,
+            herdrExecutable,
+            agmsgScriptsDirectory);
+    }
+
+    private bool IsOwnerSubject(string? subjectRole) =>
+        string.Equals(subjectRole, ownerRole, StringComparison.Ordinal);
+
+    private string ResolveWakeTarget(NotifySupervisionObservation observation) =>
+        IsOwnerSubject(observation.SubjectRole) ? DesignRole : observation.OwnerRole;
+
+    private string? ResolveWakeClass(NotifySupervisionObservation observation) =>
+        IsOwnerSubject(observation.SubjectRole) ? "escalation" : null;
 
     private IReadOnlyList<NotifySupervisionObservation> ReadUndeliveredEscalations(
         DateTimeOffset now,
@@ -814,6 +873,13 @@ internal sealed class NotifyMeasuredSupervisor
         var observations = new List<NotifySupervisionObservation>();
         foreach (var (role, recorded) in topology.Topology.Roles)
         {
+            // Design is the operator-facing rung above supervision, not a
+            // seat that this loop watches or attempts to recover.
+            if (string.Equals(role, DesignRole, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             if (!string.Equals(recorded.Resident, NotifyRecordedRole.HerdrResident, StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(recorded.PaneId))
             {
@@ -844,6 +910,7 @@ internal sealed class NotifyMeasuredSupervisor
                         Key = paneKey,
                         Kind = NotifyPendingLivenessResult.RegistrationLostProcessPresent,
                         OwnerRole = ownerRole,
+                        SubjectRole = role,
                         Source = "recorded-topology+pane.process-info",
                         Summary = $"Recorded herdr seat '{role}' has no running registration at workspace '{workspaceId}' pane '{recorded.PaneId}', but {processInfo.Processes.Count} foreground process(es) remain. Re-register the agent at the recorded pane; no kill, restart, or automatic re-registration is safe. Resend is permitted after repair.",
                         DetectableAt = null,
@@ -859,6 +926,7 @@ internal sealed class NotifyMeasuredSupervisor
                     Key = $"seat:{workspaceId}:{recorded.PaneId}",
                     Kind = "seat-absent",
                     OwnerRole = ownerRole,
+                    SubjectRole = role,
                     Source = "recorded-topology",
                     Summary = $"Recorded herdr seat '{role}' is absent from workspace '{workspaceId}' pane '{recorded.PaneId}' and no foreground process corroborates it.",
                     DetectableAt = null,
@@ -876,6 +944,9 @@ internal sealed class NotifyMeasuredSupervisor
         Key = record.Key,
         Kind = record.Kind,
         OwnerRole = record.OwnerRole,
+        SubjectRole = record.SubjectRole,
+        WakeTargetRole = record.WakeTargetRole,
+        WakeClass = record.WakeClass,
         Source = record.Source,
         Summary = record.Summary,
         ResendPermitted = record.ResendPermitted,
@@ -892,6 +963,7 @@ internal sealed record NotifySupervisionObservation
     public required string Key { get; init; }
     public required string Kind { get; init; }
     public required string OwnerRole { get; init; }
+    public string? SubjectRole { get; init; }
     public required string Source { get; init; }
     public required string Summary { get; init; }
     public bool? ResendPermitted { get; init; }
@@ -968,6 +1040,18 @@ internal sealed record NotifySupervisionFinding
 
     [System.Text.Json.Serialization.JsonPropertyName("owner_role")]
     public required string OwnerRole { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("subject_role")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? SubjectRole { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("wake_target_role")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? WakeTargetRole { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("wake_class")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? WakeClass { get; init; }
 
     [System.Text.Json.Serialization.JsonPropertyName("source")]
     public required string Source { get; init; }

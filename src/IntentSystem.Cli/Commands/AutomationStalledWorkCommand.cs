@@ -34,10 +34,14 @@ namespace IntentSystem.Cli.Commands;
 /// <item><c>ci-all-green-not-transitioned</c> — the same PR lifecycle point,
 ///   with every reported check terminal and no failed conclusion. Carries
 ///   the exact head SHA, normalized outcome breakdown, and a stable dedupe
-///   key; recommends the existing review-start transition but never runs it.</item>
+///   key; recommends the existing review-start transition but never runs it.
+///   G657 permits the declared <c>intent-pr-created</c> label as a fallback
+///   when no exact-head wait exists.</item>
 /// <item><c>ci-failed-not-transitioned</c> — every reported check is terminal
-///   and at least one failed. Carries the same stable evidence but routes the
-///   next action to repair/escalation by ownership rather than review.</item>
+///   and at least one failed under a durable wait for the current exact head,
+///   with no claimed repair or newer head. Carries the same stable evidence
+///   but routes the next action to repair/escalation by ownership rather than
+///   review.</item>
 /// <item><c>merged-not-closed-out</c> — a MERGED PR's linked queue item is
 ///   not <see cref="QueueItemState.Completed"/>.</item>
 /// <item><c>approved-not-merged</c> — an OPEN PR carries
@@ -941,9 +945,12 @@ internal static class AutomationStalledWorkCommand
             StalledWorkCiProjection? ci = null;
             var ciWait = ciWaits.FirstOrDefault(wait => wait.Pr == pr.Number
                 && string.Equals(wait.Repo, repo, StringComparison.OrdinalIgnoreCase));
-            var observedHead = ciWait?.ObservedHead;
-            var owedTransition = ciWait?.OwedTransition;
-            var ciWaitState = ciWait is null ? null : "pending";
+            var exactHeadCiWait = ciWait is not null
+                && string.Equals(ciWait.ObservedHead, pr.HeadRefOid, StringComparison.OrdinalIgnoreCase);
+            var observedHead = exactHeadCiWait ? ciWait!.ObservedHead : null;
+            var owedTransition = exactHeadCiWait ? ciWait!.OwedTransition : null;
+            var ciWaitState = exactHeadCiWait ? "pending" : null;
+            string? ciClassificationSource = null;
             var currentHead = pr.HeadRefOid;
             if (prLabels.Contains(WorkerNextActionConstants.Labels.IntentPrRequestUpdate)
                 || prLabels.Contains(WorkerNextActionConstants.Labels.IntentPrUpdateInProgress))
@@ -964,20 +971,17 @@ internal static class AutomationStalledWorkCommand
             }
             else
             {
-                if (ciWait is not null
-                    && !string.Equals(ciWait.ObservedHead, pr.HeadRefOid, StringComparison.OrdinalIgnoreCase))
+                ci = ProjectCiState(pr);
+                if (ciWait is not null && !exactHeadCiWait
+                    && ci is not { Outcome: StalledWorkCiOutcomes.AllGreen })
                 {
-                    kind = KindCiHeadMoved;
-                    isInformational = false;
-                    ciWaitState = "stale-head";
-                    recommendedAction =
-                        $"intent-cli automation ci-wait record --domain {domain} --repo {repo} --pr {pr.Number} "
-                        + $"--head {pr.HeadRefOid} --transition {ciWait.OwedTransition} --write; observed wait head "
-                        + $"{ciWait.ObservedHead} moved to current head {pr.HeadRefOid}; do not infer green from the old head.";
+                    // A new head is evidence that repair is advancing. The
+                    // old exact-head result cannot classify the new head and
+                    // supervision remains silent until that head is observed.
+                    continue;
                 }
                 else
                 {
-                    ci = ProjectCiState(pr);
                     if (ci is { Outcome: StalledWorkCiOutcomes.Pending })
                     {
                         kind = KindCiPending;
@@ -993,17 +997,28 @@ internal static class AutomationStalledWorkCommand
                         var transition = owedTransition ?? "review-start";
                         recommendedAction =
                             $"intent-cli automation pr-transition --repo {repo} --pr {pr.Number} --transition {transition} --write";
-                        ciWaitState = ciWait is null ? null : "terminal";
+                        ciWaitState = exactHeadCiWait ? "terminal" : null;
+                        ciClassificationSource = exactHeadCiWait
+                            ? "ci-wait-record"
+                            : "declared-label-fallback";
                     }
                     else if (ci is { Outcome: StalledWorkCiOutcomes.Failed })
                     {
+                        if (!exactHeadCiWait)
+                        {
+                            // Settled-red is actionable only when a durable
+                            // exact-head wait proves this is an owed workflow
+                            // transition rather than an unclaimed observation.
+                            continue;
+                        }
                         kind = KindCiFailedNotTransitioned;
                         isInformational = false;
                         recommendedAction =
                             $"inspect failed checks for PR #{pr.Number} at head {pr.HeadRefOid}; route branch-owned "
                             + "failures to implementation repair and product/design or canonical failures to escalation; "
                             + "do not start review.";
-                        ciWaitState = ciWait is null ? null : "terminal";
+                        ciWaitState = "terminal";
+                        ciClassificationSource = "ci-wait-record";
                     }
                     else
                     {
@@ -1043,7 +1058,9 @@ internal static class AutomationStalledWorkCommand
             // modification of ANY kind (which may postdate the specific
             // label change) unless a dedicated label-event fetch is added.
             var isRepairLifecycle = kind is KindRepairPending or KindRereviewPending;
-            var ageSource = isRepairLifecycle ? pr.UpdatedAt : ciWait?.RecordedAt.ToString("O") ?? pr.CreatedAt;
+            var ageSource = isRepairLifecycle
+                ? pr.UpdatedAt
+                : exactHeadCiWait ? ciWait!.RecordedAt.ToString("O") : pr.CreatedAt;
             var ageMinutes = ComputeAgeMinutes(ageSource, now);
 
             // G546: promote a repair-lifecycle PR that has been observably
@@ -1073,13 +1090,14 @@ internal static class AutomationStalledWorkCommand
                 CiBreakdown = ci?.Breakdown,
                 DedupeKey = ci is null && kind != KindCiHeadMoved
                     ? null
-                    : ciWait is null
+                    : !exactHeadCiWait
                         ? $"{kind}:pr-{pr.Number}:{pr.HeadRefOid}"
                         : $"{kind}:pr-{pr.Number}:{pr.HeadRefOid}:observed-{observedHead}",
                 OwedTransition = owedTransition,
                 ObservedHeadSha = observedHead,
                 CurrentHeadSha = kind == KindCiHeadMoved ? currentHead : null,
                 CiWaitState = ciWaitState,
+                CiClassificationSource = ciClassificationSource,
             });
         }
     }
@@ -3706,6 +3724,11 @@ internal sealed record StalledWorkItem
     [JsonPropertyName("ci_wait_state")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? CiWaitState { get; init; }
+
+    /// <summary>G657: durable record path or declared-label green fallback.</summary>
+    [JsonPropertyName("ci_classification_source")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CiClassificationSource { get; init; }
 
     /// <summary>
     /// G564: for <see cref="AutomationStalledWorkCommand.KindKnowledgeWritebackPending"/>,

@@ -332,6 +332,9 @@ internal sealed record NotifySupervisionStallRecord
     [JsonPropertyName("key")] public required string Key { get; init; }
     [JsonPropertyName("kind")] public required string Kind { get; init; }
     [JsonPropertyName("owner_role")] public required string OwnerRole { get; init; }
+    [JsonPropertyName("subject_role")] public string? SubjectRole { get; init; }
+    [JsonPropertyName("wake_target_role")] public string? WakeTargetRole { get; init; }
+    [JsonPropertyName("wake_class")] public string? WakeClass { get; init; }
     [JsonPropertyName("source")] public required string Source { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
     [JsonPropertyName("detectable_at")] public DateTimeOffset? DetectableAt { get; init; }
