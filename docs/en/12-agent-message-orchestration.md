@@ -84,6 +84,28 @@ recovery for that finding. A declared bound below the configured interval is a
 structural false-alarm warning, emitted at supervise start and on each cycle,
 not a value the CLI silently corrects.
 
+**Report outbox (G653 — preview-through-1.x).** `notify report --write`
+persists the sender-side outbox entry before it attempts transport. The entry
+keeps the task id, result nonce, status, artifact, summary, and delivery
+timestamps, so a delivery failure is retained as `undelivered` rather than
+discarding completed work. Supervision only surfaces that entry and its
+`notify collect` remedy; it never sends it automatically. The recipient-side
+terminal `ORCH_RESULT` remains a record for the human, but intent-cli never
+parses a terminal. When a visible result has no arrived report, collect the
+persisted outbox entry — do not re-delegate or redo the task. Collection sends
+only the original report once for its task id and refuses an already-delivered
+entry. Entries are scoped to the dispatch generation (the result nonce), so a
+re-delegated task id can carry a new report and unmatched reports continue as
+messages. A second report for an undelivered current generation fails closed
+and names its exact `notify collect` recovery command.
+
+Before opening a new delegation, `notify delegate --write` refuses a task with
+an undelivered report entry and names that same collection command, so the
+supervision finding and a collectable entry are the same set. It also refuses a
+previously settled task-id/result-nonce pair before work starts and requires a
+fresh `--result-nonce` or a new task id; an open generation with no outbox can
+be resent idempotently.
+
 A report is a message rather than a bookkeeping entry: fail-closed protection
 belongs on pending-state mutation, not on carrying the message. Refusing an
 unrecognised identifier would silence unsolicited reports and answers to

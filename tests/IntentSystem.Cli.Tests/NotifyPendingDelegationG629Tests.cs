@@ -24,6 +24,7 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
         NotifyCommand.HerdrExecutableFactory = null;
         NotifyCommand.UtcNowFactory = null;
         NotifyPendingDelegationStore.WriteOverride = null;
+        NotifyReportOutboxStore.WriteOverride = null;
         workspace.Dispose();
     }
 
@@ -255,20 +256,194 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
         Assert.Empty(runner.Calls);
     }
 
-    private static string[] DelegateArgs() =>
+    [Fact]
+    public void ReportOutboxFailsClosedBeforeTransportAndSurvivesFailedDelivery_G653()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        Assert.Equal(0, workspace.Run(DelegateArgs()).ExitCode);
+        runner.Calls.Clear();
+        NotifyReportOutboxStore.WriteOverride = (path, _) =>
+            new NotifyReportOutboxWriteResult(false, path, "fixture denies outbox write");
+
+        var (unwritableExit, unwritable) = workspace.Run(ReportArgs());
+
+        Assert.Equal(1, unwritableExit);
+        Assert.Equal("report-outbox-write-failed", unwritable.GetProperty("cause").GetString());
+        Assert.Empty(runner.Calls);
+
+        NotifyReportOutboxStore.WriteOverride = null;
+        runner.PromptExitCode = 1;
+        var (failedExit, failed) = workspace.Run(ReportArgs());
+
+        Assert.Equal(1, failedExit);
+        Assert.False(failed.GetProperty("delivered").GetBoolean());
+        var outboxPath = failed.GetProperty("outbox_entry_path").GetString()!;
+        Assert.True(File.Exists(outboxPath));
+        Assert.Contains(outboxPath, failed.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+        var outbox = NotifyReportOutboxStore.Find(workspace.RootPath, Workspace.Domain, Workspace.Team, "G629-demo");
+        Assert.True(outbox.Resolved);
+        Assert.Equal("undelivered", outbox.Entry!.DeliveryState);
+    }
+
+    [Fact]
+    public void CollectResendsOnlyPersistedReportAndRefusesSecondCollection_G653()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true)) { PromptExitCode = 1 };
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        Assert.Equal(0, workspace.Run(DelegateArgs()).ExitCode);
+        Assert.Equal(1, workspace.Run(ReportArgs()).ExitCode);
+        runner.PromptExitCode = 0;
+        runner.Calls.Clear();
+
+        var (repeatedExit, repeated) = workspace.Run(ReportArgs());
+        Assert.Equal(1, repeatedExit);
+        Assert.Equal("report-outbox-write-failed", repeated.GetProperty("cause").GetString());
+        Assert.Contains(
+            "intent-cli notify collect --domain intent-cli --team intent-cli-dev --task-id G629-demo --write",
+            repeated.GetProperty("summary").GetString(),
+            StringComparison.Ordinal);
+        Assert.Empty(runner.Calls);
+
+        var (collectExit, collected) = workspace.Run(CollectArgs());
+
+        Assert.Equal(0, collectExit);
+        Assert.True(collected.GetProperty("delivered").GetBoolean());
+        var (_, status) = workspace.Run(StatusArgs());
+        Assert.True(status.GetProperty("report_arrived").GetBoolean());
+        Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("send-text"));
+
+        runner.Calls.Clear();
+        var (secondExit, second) = workspace.Run(CollectArgs());
+        Assert.Equal(1, secondExit);
+        Assert.Equal("already-collected", second.GetProperty("cause").GetString());
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public void ReusedTaskIdCreatesNewDispatchGenerationAndUnmatchedReportsRemainMessages_G653()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+
+        Assert.Equal(0, workspace.Run(DelegateArgs("G653-reused", "g653-generation-1")).ExitCode);
+        Assert.Equal(0, workspace.Run(ReportArgs("G653-reused")).ExitCode);
+        Assert.Equal(0, workspace.Run(DelegateArgs("G653-reused", "g653-generation-2")).ExitCode);
+        Assert.Equal(0, workspace.Run(ReportArgs("G653-reused")).ExitCode);
+
+        var firstGeneration = NotifyReportOutboxStore.Find(
+            workspace.RootPath, Workspace.Domain, Workspace.Team, "G653-reused", "g653-generation-1");
+        var secondGeneration = NotifyReportOutboxStore.Find(
+            workspace.RootPath, Workspace.Domain, Workspace.Team, "G653-reused", "g653-generation-2");
+        Assert.Equal("delivered", firstGeneration.Entry!.DeliveryState);
+        Assert.Equal("delivered", secondGeneration.Entry!.DeliveryState);
+
+        var (_, unmatchedFirst) = workspace.Run(ReportArgs("G653-unmatched"));
+        var (_, unmatchedSecond) = workspace.Run(ReportArgs("G653-unmatched"));
+        Assert.True(unmatchedFirst.GetProperty("delivered").GetBoolean());
+        Assert.True(unmatchedSecond.GetProperty("delivered").GetBoolean());
+        Assert.Contains("without creating or resolving a pending record", unmatchedFirst.GetProperty("advisory").GetString(), StringComparison.Ordinal);
+        Assert.Contains("without creating or resolving a pending record", unmatchedSecond.GetProperty("advisory").GetString(), StringComparison.Ordinal);
+
+        Assert.Equal(0, workspace.Run(DelegateArgs("G653-question", "g653-question-generation")).ExitCode);
+        var (_, question) = workspace.Run(ReportArgs("G653-question", status: "question"));
+        var (_, completed) = workspace.Run(ReportArgs("G653-question", status: "completed"));
+        Assert.True(question.GetProperty("delivered").GetBoolean());
+        Assert.True(completed.GetProperty("delivered").GetBoolean());
+        Assert.Contains("without creating or resolving a pending record", completed.GetProperty("advisory").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DelegateRefusesStrandedGenerationAndUsedNonceBeforeWork_G653()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+
+        Assert.Equal(0, workspace.Run(DelegateArgs("G653-stranded", "g653-generation-1")).ExitCode);
+        runner.PromptExitCode = 1;
+        Assert.Equal(1, workspace.Run(ReportArgs("G653-stranded")).ExitCode);
+        runner.PromptExitCode = 0;
+        runner.Calls.Clear();
+
+        var (strandedExit, stranded) = workspace.Run(DelegateArgs("G653-stranded", "g653-generation-2"));
+        Assert.Equal(1, strandedExit);
+        Assert.Equal("undelivered-report-outbox", stranded.GetProperty("cause").GetString());
+        Assert.Contains(
+            $"intent-cli notify collect --domain intent-cli --team intent-cli-dev --task-id G653-stranded --write --routing-root {workspace.RootPath}",
+            stranded.GetProperty("summary").GetString(),
+            StringComparison.Ordinal);
+        Assert.Empty(runner.Calls);
+
+        Assert.Equal(0, workspace.Run(CollectArgs("G653-stranded")).ExitCode);
+
+        Assert.Equal(0, workspace.Run(DelegateArgs("G653-nonce", "g653-nonce-1")).ExitCode);
+        Assert.Equal(0, workspace.Run(ReportArgs("G653-nonce")).ExitCode);
+        runner.Calls.Clear();
+
+        var (reusedNonceExit, reusedNonce) = workspace.Run(DelegateArgs("G653-nonce", "g653-nonce-1"));
+        Assert.Equal(1, reusedNonceExit);
+        Assert.Equal("result-nonce-already-used", reusedNonce.GetProperty("cause").GetString());
+        Assert.Contains("fresh --result-nonce or a new --task-id", reusedNonce.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Empty(runner.Calls);
+
+        Assert.Equal(0, workspace.Run(DelegateArgs("G653-nonce", "g653-nonce-2")).ExitCode);
+        Assert.Equal(0, workspace.Run(ReportArgs("G653-nonce")).ExitCode);
+    }
+
+    [Fact]
+    public void DelegateAllowsOpenGenerationResendButRefusesSettledNonceReuse_G653()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+
+        Assert.Equal(0, workspace.Run(DelegateArgs("G653-open-resend", "g653-open-nonce")).ExitCode);
+        runner.Calls.Clear();
+
+        var (resendExit, resend) = workspace.Run(DelegateArgs("G653-open-resend", "g653-open-nonce"));
+        Assert.Equal(0, resendExit);
+        Assert.True(resend.GetProperty("delivered").GetBoolean());
+        Assert.Contains(runner.Calls, call => call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wH:p2"]));
+
+        Assert.Equal(0, workspace.Run(ReportArgs("G653-open-resend")).ExitCode);
+        runner.Calls.Clear();
+
+        var (settledExit, settled) = workspace.Run(DelegateArgs("G653-open-resend", "g653-open-nonce"));
+        Assert.Equal(1, settledExit);
+        Assert.Equal("result-nonce-already-used", settled.GetProperty("cause").GetString());
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public void CollectCarriesAnUnmatchedUndeliveredReportWithoutRedispatch_G653()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true)) { PromptExitCode = 1 };
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+
+        Assert.Equal(1, workspace.Run(ReportArgs("G653-unmatched-collect")).ExitCode);
+        runner.PromptExitCode = 0;
+        runner.Calls.Clear();
+
+        var (collectExit, collected) = workspace.Run(CollectArgs("G653-unmatched-collect"));
+
+        Assert.Equal(0, collectExit);
+        Assert.True(collected.GetProperty("delivered").GetBoolean());
+        Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("send-text"));
+    }
+
+    private static string[] DelegateArgs(string taskId = "G629-demo", string resultNonce = "g629-nonce") =>
     [
         "notify", "delegate", "--domain", Workspace.Domain, "--team", Workspace.Team,
         "--from", "orchestration", "--to", "implementation", "--report-to", "orchestration",
-        "--task-id", "G629-demo", "--objective", "Inspect pending delegation state",
-        "--input", "issue #1373", "--expected-artifact", "draft PR URL", "--result-nonce", "g629-nonce",
+        "--task-id", taskId, "--objective", "Inspect pending delegation state",
+        "--input", "issue #1373", "--expected-artifact", "draft PR URL", "--result-nonce", resultNonce,
         "--write", "--format", "json",
     ];
 
-    private static string[] ReportArgs(string taskId = "G629-demo", string format = "json") =>
+    private static string[] ReportArgs(string taskId = "G629-demo", string format = "json", string status = "completed") =>
     [
         "notify", "report", "--domain", Workspace.Domain, "--team", Workspace.Team,
         "--from", "implementation", "--to", "orchestration", "--task-id", taskId,
-        "--status", "completed", "--artifact", "https://example.test/pr/1373",
+        "--status", status, "--artifact", "https://example.test/pr/1373",
         "--summary", "pending state implemented", "--write", "--format", format,
     ];
 
@@ -278,10 +453,17 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
         "--task-id", "G629-demo", "--format", "json",
     ];
 
+    private static string[] CollectArgs(string taskId = "G629-demo") =>
+    [
+        "notify", "collect", "--domain", Workspace.Domain, "--team", Workspace.Team,
+        "--task-id", taskId, "--write", "--format", "json",
+    ];
+
     private sealed class FakeRunner(Func<string> agentResponse) : INotifyProcessRunner
     {
         public List<(string FileName, IReadOnlyList<string> Arguments)> Calls { get; } = [];
         public string AgentResponse { get; set; } = agentResponse();
+        public int PromptExitCode { get; set; }
 
         public NotifyProcessResult Run(string fileName, IReadOnlyList<string> arguments)
         {
@@ -297,6 +479,11 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
                     0,
                     "{\"result\":{\"process_info\":{\"foreground_processes\":[]}}}",
                     string.Empty);
+            }
+
+            if (arguments.Take(3).SequenceEqual(["agent", "prompt", "wH:p1"]))
+            {
+                return new NotifyProcessResult(PromptExitCode, string.Empty, PromptExitCode == 0 ? string.Empty : "fixture prompt failure");
             }
 
             return new NotifyProcessResult(0, string.Empty, string.Empty);

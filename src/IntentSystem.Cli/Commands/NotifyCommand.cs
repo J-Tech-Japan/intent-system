@@ -9,6 +9,7 @@ internal static class NotifyCommand
 {
     private const string OperationDelegate = "delegate";
     private const string OperationReport = "report";
+    private const string OperationCollect = "collect";
     private const string OperationEscalate = "escalate";
     internal const string OperationStatus = "status";
     internal const string OperationSupervise = "supervise";
@@ -32,6 +33,10 @@ internal static class NotifyCommand
     private const string ReportUsage =
         "Usage: intent-cli notify report --domain <d> --team <t> --from <role> --to <role> --task-id <id> "
         + "--status completed|blocked|question --artifact <value> --summary <text> "
+        + "[--routing-root <host-root>] [--dry-run|--write] [--format markdown|json]";
+
+    private const string CollectUsage =
+        "Usage: intent-cli notify collect --domain <d> --team <t> --task-id <id> "
         + "[--routing-root <host-root>] [--dry-run|--write] [--format markdown|json]";
 
     private const string EscalateUsage =
@@ -79,6 +84,9 @@ internal static class NotifyCommand
 
     public static int ExecuteReport(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, OperationReport);
+
+    public static int ExecuteCollect(CliContext context, string[] args, TextWriter writer) =>
+        Execute(context, args, writer, OperationCollect);
 
     public static int ExecuteEscalate(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, OperationEscalate);
@@ -135,6 +143,58 @@ internal static class NotifyCommand
             return ExecuteSupervise(context, writer, options, routingRoot);
         }
 
+        if (string.Equals(operation, OperationCollect, StringComparison.Ordinal))
+        {
+            return ExecuteCollect(writer, options, routingRoot);
+        }
+
+        if (string.Equals(operation, OperationDelegate, StringComparison.Ordinal) && options.Write)
+        {
+            var delegateGuard = GuardDelegateOutboxLifecycle(writer, options, routingRoot);
+            if (delegateGuard is not null) return delegateGuard.Value;
+        }
+
+        NotifyReportOutboxEntry? persistedReportOutbox = null;
+        string? persistedOutboxPath = null;
+        string? reportAdvisory = null;
+        if (string.Equals(operation, OperationReport, StringComparison.Ordinal))
+        {
+            var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
+            var openPending = pending.Resolved && pending.Record is { ReportArrived: false };
+            var unmatched = !openPending && pending.Error is null;
+            if (!openPending && !unmatched)
+            {
+                Emit(writer, options.Format, FailureResult(operation, options, SessionLayerMode.Default, "unknown-task-id",
+                    $"Report task id '{options.TaskId}' does not match an open pending delegation. Known open task ids: {FormatKnownTaskIds(pending.KnownTaskIds)}."
+                    + (pending.Error is null ? string.Empty : $" {pending.Error}")));
+                return 1;
+            }
+
+            if (unmatched) reportAdvisory = BuildUnmatchedReportAdvisory(options.TaskId!, pending.KnownTaskIds);
+            persistedOutboxPath = NotifyReportOutboxStore.ResolvePath(routingRoot, options.Domain!, options.Team!);
+            if (options.Write)
+            {
+                persistedReportOutbox = new NotifyReportOutboxEntry
+                {
+                    Domain = options.Domain!, Team = options.Team!, TaskId = options.TaskId!,
+                    ResultNonce = openPending ? pending.Record!.ResultNonce : null,
+                    FromRole = options.FromRole!, ToRole = options.ToRole!, Status = options.Status!, Artifact = options.Artifact!,
+                    Summary = NotifyEventWriter.NormalizeSummary(options.Summary!),
+                    CreatedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(), DeliveryState = "prepared",
+                };
+                var write = NotifyReportOutboxStore.WriteNew(routingRoot, persistedReportOutbox);
+                persistedOutboxPath = write.Path;
+                if (!write.Written)
+                {
+                    Emit(writer, options.Format, FailureResult(operation, options, SessionLayerMode.Default, "report-outbox-write-failed",
+                        $"Could not persist report task '{options.TaskId}' before transport: {write.Error} No transport was attempted.",
+                        outboxEntryPath: persistedOutboxPath));
+                    return 1;
+                }
+                persistedReportOutbox = write.Entry ?? persistedReportOutbox;
+            }
+        }
+
         if (!string.Equals(operation, OperationEscalate, StringComparison.Ordinal))
         {
             var preflight = SessionLayerPreflight.Analyze(
@@ -158,6 +218,8 @@ internal static class NotifyCommand
                     !IsAdvisoryPreflightFinding(finding))
                     ?? scope.Findings.FirstOrDefault();
                 var cause = primaryFinding?.Cause ?? "session-layer-not-ready";
+                if (persistedReportOutbox is not null && options.Write)
+                    NotifyReportOutboxStore.MarkUndelivered(routingRoot, persistedReportOutbox, cause);
                 Emit(writer, options.Format, FailureResult(
                     operation,
                     options,
@@ -166,47 +228,12 @@ internal static class NotifyCommand
                     (primaryFinding is null ? string.Empty : primaryFinding.Message + " ")
                     + scope.Summary + " " + preflight.Summary,
                     modeSource: scope.ModeSource,
-                    preflight: preflight));
+                    preflight: preflight,
+                    outboxEntryPath: persistedOutboxPath));
                 return 1;
             }
 
-            string? reportAdvisory = null;
-            if (string.Equals(operation, OperationReport, StringComparison.Ordinal))
-            {
-                var pending = NotifyPendingDelegationStore.Find(
-                    routingRoot,
-                    options.Domain,
-                    options.Team,
-                    options.TaskId!);
-                var unmatched = !pending.Resolved
-                    && pending.Record is null
-                    && pending.Error is null;
-                if (!unmatched
-                    && (!pending.Resolved || pending.Record is null || pending.Record.ReportArrived))
-                {
-                    var known = FormatKnownTaskIds(pending.KnownTaskIds);
-                    Emit(writer, options.Format, FailureResult(
-                        operation,
-                        options,
-                        resolution.Mode,
-                        "unknown-task-id",
-                        $"Report task id '{options.TaskId}' does not match an open pending delegation. "
-                        + $"Known open task ids: {known}."
-                        + (pending.Error is null ? string.Empty : $" {pending.Error}"),
-                        modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
-                        preflight: preflight));
-                    return 1;
-                }
-
-                if (unmatched)
-                {
-                    reportAdvisory = BuildUnmatchedReportAdvisory(
-                        options.TaskId!,
-                        pending.KnownTaskIds);
-                }
-            }
-
-            return ExecuteDelivery(writer, operation, options, resolution, preflight, reportAdvisory);
+            return ExecuteDelivery(writer, operation, options, resolution, preflight, reportAdvisory, persistedReportOutbox);
         }
 
         SessionLayerModeResolution escalationResolution;
@@ -231,6 +258,146 @@ internal static class NotifyCommand
     private static bool IsAdvisoryPreflightFinding(SessionLayerPreflightFinding finding) =>
         string.Equals(finding.Cause, "marker-not-generated", StringComparison.Ordinal)
         || string.Equals(finding.Cause, SessionLayerMigration.ResidueCause, StringComparison.Ordinal);
+
+    private static int ExecuteCollect(TextWriter writer, NotifyOptions options, string routingRoot)
+    {
+        var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
+        var outbox = pending.Resolved && pending.Record is not null
+            ? NotifyReportOutboxStore.Find(routingRoot, options.Domain!, options.Team!, options.TaskId!, pending.Record.ResultNonce)
+            : new NotifyReportOutboxReadResult(true, NotifyReportOutboxStore.ResolvePath(routingRoot, options.Domain!, options.Team!), null, null);
+        if (outbox.Entry is null || string.Equals(outbox.Entry.DeliveryState, "delivered", StringComparison.Ordinal))
+        {
+            var undelivered = NotifyReportOutboxStore.FindUndelivered(
+                routingRoot,
+                options.Domain!,
+                options.Team!,
+                options.TaskId!);
+            if (undelivered.Entry is not null || !undelivered.Resolved) outbox = undelivered;
+        }
+        if (outbox.Entry is null && pending.Error is null)
+        {
+            outbox = NotifyReportOutboxStore.Find(routingRoot, options.Domain!, options.Team!, options.TaskId!);
+        }
+        if (!outbox.Resolved || outbox.Entry is null)
+        {
+            Emit(writer, options.Format, FailureResult(OperationCollect, options, SessionLayerMode.Default,
+                "outbox-entry-unavailable", outbox.Error ?? $"No persisted outbox entry exists for task '{options.TaskId}'.",
+                outboxEntryPath: outbox.Path));
+            return 1;
+        }
+
+        if (string.Equals(outbox.Entry.DeliveryState, "delivered", StringComparison.Ordinal))
+        {
+            Emit(writer, options.Format, FailureResult(OperationCollect, options, SessionLayerMode.Default,
+                "already-collected", $"Outbox entry for task '{options.TaskId}' is already delivered; collection is refused.",
+                outboxEntryPath: outbox.Path));
+            return 1;
+        }
+
+        if (!pending.Resolved && pending.Error is not null)
+        {
+            Emit(writer, options.Format, FailureResult(OperationCollect, options, SessionLayerMode.Default,
+                "already-delivered", $"Task '{options.TaskId}' has no open matching pending record; collection is refused and never re-dispatches work.",
+                outboxEntryPath: outbox.Path));
+            return 1;
+        }
+
+        var collected = options with
+        {
+            FromRole = outbox.Entry.FromRole,
+            ToRole = outbox.Entry.ToRole,
+            Status = outbox.Entry.Status,
+            Artifact = outbox.Entry.Artifact,
+            Summary = outbox.Entry.Summary,
+            ResultNonce = outbox.Entry.ResultNonce,
+        };
+        var preflight = SessionLayerPreflight.Analyze(routingRoot, collected.Domain!, collected.Team!, collected.ToRole!);
+        var scope = preflight.Scopes.Single();
+        var resolution = scope.Resolution ?? new SessionLayerModeResolution { Mode = scope.Mode ?? SessionLayerMode.Default, Source = SessionLayerModeSource.Default };
+        if (preflight.Ready is not true)
+        {
+            var finding = scope.Findings.FirstOrDefault(finding => !IsAdvisoryPreflightFinding(finding)) ?? scope.Findings.FirstOrDefault();
+            Emit(writer, collected.Format, FailureResult(OperationCollect, collected, resolution.Mode,
+                finding?.Cause ?? "session-layer-not-ready", (finding?.Message ?? string.Empty) + " " + scope.Summary,
+                modeSource: scope.ModeSource, preflight: preflight, outboxEntryPath: outbox.Path));
+            return 1;
+        }
+
+        return ExecuteDelivery(writer, OperationCollect, collected, resolution, preflight, existingOutbox: outbox.Entry);
+    }
+
+    private static int? GuardDelegateOutboxLifecycle(TextWriter writer, NotifyOptions options, string routingRoot)
+    {
+        var undelivered = NotifyReportOutboxStore.FindUndelivered(
+            routingRoot,
+            options.Domain!,
+            options.Team!,
+            options.TaskId!);
+        if (!undelivered.Resolved)
+        {
+            Emit(writer, options.Format, FailureResult(
+                OperationDelegate,
+                options,
+                SessionLayerMode.Default,
+                "report-outbox-unavailable",
+                undelivered.Error ?? $"Could not read the report outbox for task '{options.TaskId}'. No work was started.",
+                outboxEntryPath: undelivered.Path));
+            return 1;
+        }
+
+        if (undelivered.Entry is not null)
+        {
+            Emit(writer, options.Format, FailureResult(
+                OperationDelegate,
+                options,
+                SessionLayerMode.Default,
+                "undelivered-report-outbox",
+                $"Task '{options.TaskId}' already has an undelivered report outbox entry. Recover it with "
+                + $"'{NotifyReportOutboxStore.BuildCollectCommand(routingRoot, undelivered.Entry)}'; do not re-delegate the task. No work was started.",
+                outboxEntryPath: undelivered.Path));
+            return 1;
+        }
+
+        var existingGeneration = NotifyReportOutboxStore.Find(
+            routingRoot,
+            options.Domain!,
+            options.Team!,
+            options.TaskId!,
+            options.ResultNonce);
+        if (!existingGeneration.Resolved)
+        {
+            Emit(writer, options.Format, FailureResult(
+                OperationDelegate,
+                options,
+                SessionLayerMode.Default,
+                "report-outbox-unavailable",
+                existingGeneration.Error ?? $"Could not read the report outbox for task '{options.TaskId}'. No work was started.",
+                outboxEntryPath: existingGeneration.Path));
+            return 1;
+        }
+
+        var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
+        var sameOpenGeneration = pending.Resolved
+            && pending.Record is { ReportArrived: false }
+            && string.Equals(pending.Record.ResultNonce, options.ResultNonce, StringComparison.Ordinal);
+        if (existingGeneration.Entry is not null
+            || (pending.Record is not null
+                && !sameOpenGeneration
+                && string.Equals(pending.Record.ResultNonce, options.ResultNonce, StringComparison.Ordinal)))
+        {
+            Emit(writer, options.Format, FailureResult(
+                OperationDelegate,
+                options,
+                SessionLayerMode.Default,
+                "result-nonce-already-used",
+                $"Task '{options.TaskId}' has already used result nonce '{options.ResultNonce}'. Supply a fresh --result-nonce "
+                + "or a new --task-id before delegating; no work was started.",
+                outboxEntryPath: existingGeneration.Path));
+            return 1;
+        }
+
+        return null;
+    }
 
     private static int ExecuteStatus(CliContext context, TextWriter writer, NotifyOptions options, string routingRoot)
     {
@@ -542,8 +709,11 @@ internal static class NotifyCommand
         NotifyOptions options,
         SessionLayerModeResolution resolution,
         SessionLayerPreflightResult preflight,
-        string? reportAdvisory = null)
+        string? reportAdvisory = null,
+        NotifyReportOutboxEntry? existingOutbox = null)
     {
+        var isReport = string.Equals(operation, OperationReport, StringComparison.Ordinal)
+            || string.Equals(operation, OperationCollect, StringComparison.Ordinal);
         var reportCommand = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? BuildReportCommand(options)
             : null;
@@ -551,14 +721,58 @@ internal static class NotifyCommand
             ? BuildDelegatePayload(options, reportCommand!)
             : BuildReportPayload(options);
         NotifyPendingDelegation? reportPendingRecord = null;
-        if (string.Equals(operation, OperationReport, StringComparison.Ordinal))
+        if (isReport)
         {
-            reportPendingRecord = NotifyPendingDelegationStore.Find(
+            var pending = NotifyPendingDelegationStore.Find(
                 options.RoutingRoot!,
                 options.Domain,
                 options.Team,
-                options.TaskId!).Record;
+                options.TaskId!);
+            reportPendingRecord = pending.Resolved && pending.Record is { ReportArrived: false }
+                ? pending.Record
+                : null;
+            if (string.Equals(operation, OperationCollect, StringComparison.Ordinal)
+                && existingOutbox is not null
+                && !string.Equals(reportPendingRecord?.ResultNonce, existingOutbox.ResultNonce, StringComparison.Ordinal))
+            {
+                reportPendingRecord = null;
+            }
         }
+        NotifyReportOutboxEntry? reportOutbox = existingOutbox;
+        string? outboxEntryPath = null;
+        if (isReport)
+        {
+            outboxEntryPath = NotifyReportOutboxStore.ResolvePath(options.RoutingRoot!, options.Domain!, options.Team!);
+            if (options.Write && reportOutbox is null)
+            {
+                reportOutbox = new NotifyReportOutboxEntry
+                {
+                    Domain = options.Domain!,
+                    Team = options.Team!,
+                    TaskId = options.TaskId!,
+                    ResultNonce = reportPendingRecord?.ResultNonce,
+                    FromRole = options.FromRole!,
+                    ToRole = options.ToRole!,
+                    Status = options.Status!,
+                    Artifact = options.Artifact!,
+                    Summary = NotifyEventWriter.NormalizeSummary(options.Summary!),
+                    CreatedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+                    DeliveryState = "prepared",
+                };
+                var outboxWrite = NotifyReportOutboxStore.WriteNew(options.RoutingRoot!, reportOutbox);
+                outboxEntryPath = outboxWrite.Path;
+                if (!outboxWrite.Written)
+                {
+                    Emit(writer, options.Format, FailureResult(operation, options, resolution.Mode,
+                        "report-outbox-write-failed", $"Could not persist report task '{options.TaskId}' before transport: {outboxWrite.Error} No transport was attempted.",
+                        modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default", preflight: preflight,
+                        outboxEntryPath: outboxEntryPath));
+                    return 1;
+                }
+                reportOutbox = outboxWrite.Entry ?? reportOutbox;
+            }
+        }
+
         var inlinePayloadWarning = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? ResolveInlinePayloadWarning(options, payload)
             : null;
@@ -567,6 +781,10 @@ internal static class NotifyCommand
             : NotifyTaskEnvelopeDelivery.Inline(payload);
         if (!envelopeDelivery.Resolved)
         {
+            if (reportOutbox is not null && options.Write)
+            {
+                NotifyReportOutboxStore.MarkUndelivered(options.RoutingRoot!, reportOutbox, envelopeDelivery.Cause!);
+            }
             Emit(writer, options.Format, FailureResult(
                 operation,
                 options,
@@ -577,7 +795,8 @@ internal static class NotifyCommand
                 reportCommand,
                 modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
                 preflight: preflight,
-                inlinePayloadWarning: inlinePayloadWarning));
+                inlinePayloadWarning: inlinePayloadWarning,
+                outboxEntryPath: outboxEntryPath));
             return 1;
         }
 
@@ -671,12 +890,16 @@ internal static class NotifyCommand
 
         if (!delivery.Resolved)
         {
+            if (reportOutbox is not null && options.Write)
+            {
+                NotifyReportOutboxStore.MarkUndelivered(options.RoutingRoot!, reportOutbox, delivery.Cause ?? "transport-failure");
+            }
             Emit(writer, options.Format, FailureResult(
                 operation,
                 options,
                 resolution.Mode,
                 delivery.Cause!,
-                delivery.Summary,
+                delivery.Summary + (outboxEntryPath is null ? string.Empty : $" Report is retained at '{outboxEntryPath}'."),
                 payload,
                 reportCommand,
                 modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
@@ -689,7 +912,8 @@ internal static class NotifyCommand
                 recipientWarning: delivery.RecipientWarning,
                 deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
                 taskFile: envelopeDelivery.TaskFile,
-                deliveryPointer: envelopeDelivery.ResultPointer));
+                deliveryPointer: envelopeDelivery.ResultPointer,
+                outboxEntryPath: outboxEntryPath));
             return 1;
         }
 
@@ -703,6 +927,10 @@ internal static class NotifyCommand
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
+                if (reportOutbox is not null)
+                {
+                    NotifyReportOutboxStore.MarkUndelivered(options.RoutingRoot!, reportOutbox, "event-append-failed");
+                }
                 Emit(writer, options.Format, FailureResult(
                     operation,
                     options,
@@ -717,7 +945,8 @@ internal static class NotifyCommand
                     inlinePayloadWarning: inlinePayloadWarning,
                     deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
                     taskFile: envelopeDelivery.TaskFile,
-                    deliveryPointer: envelopeDelivery.ResultPointer));
+                    deliveryPointer: envelopeDelivery.ResultPointer,
+                    outboxEntryPath: outboxEntryPath));
                 return 1;
             }
         }
@@ -731,7 +960,7 @@ internal static class NotifyCommand
                 summary: "The canonical external-reader event append completed exactly once; pane transition observation does not apply.");
         }
 
-        if (string.Equals(operation, OperationReport, StringComparison.Ordinal)
+        if (isReport
             && options.Write
             && reportPendingRecord is not null)
         {
@@ -744,6 +973,10 @@ internal static class NotifyCommand
                 (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime());
             if (!reportWrite.Written)
             {
+                if (reportOutbox is not null)
+                {
+                    NotifyReportOutboxStore.MarkUndelivered(options.RoutingRoot!, reportOutbox, "pending-record-resolution-failed");
+                }
                 Emit(writer, options.Format, FailureResult(
                     operation,
                     options,
@@ -760,7 +993,22 @@ internal static class NotifyCommand
                     settleOutcome: delivery.SettleOutcome,
                     resendPermitted: delivery.ResendPermitted,
                     inlinePayloadWarning: inlinePayloadWarning,
-                    pendingRecordPath: reportWrite.Path));
+                    pendingRecordPath: reportWrite.Path,
+                    outboxEntryPath: outboxEntryPath));
+                return 1;
+            }
+        }
+
+        if (reportOutbox is not null && options.Write)
+        {
+            var deliveredWrite = NotifyReportOutboxStore.MarkDelivered(options.RoutingRoot!, reportOutbox);
+            outboxEntryPath = deliveredWrite.Path;
+            if (!deliveredWrite.Written)
+            {
+                Emit(writer, options.Format, FailureResult(operation, options, resolution.Mode,
+                    "report-outbox-delivery-mark-failed", $"Report transport completed but its outbox entry could not be marked delivered: {deliveredWrite.Error}",
+                    modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default", preflight: deliveryPreflight,
+                    outboxEntryPath: outboxEntryPath));
                 return 1;
             }
         }
@@ -789,7 +1037,8 @@ internal static class NotifyCommand
             taskFile: envelopeDelivery.TaskFile,
             deliveryPointer: envelopeDelivery.ResultPointer,
             pendingRecordPath: pendingRecordPath,
-            advisory: reportAdvisory));
+            advisory: reportAdvisory,
+            outboxEntryPath: outboxEntryPath));
         return 0;
     }
 
@@ -1038,7 +1287,8 @@ internal static class NotifyCommand
         string? taskFile = null,
         string? deliveryPointer = null,
         string? pendingRecordPath = null,
-        string? advisory = null) => new()
+        string? advisory = null,
+        string? outboxEntryPath = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot!,
@@ -1068,6 +1318,7 @@ internal static class NotifyCommand
             TaskFile = taskFile,
             DeliveryPointer = deliveryPointer,
             PendingRecordPath = pendingRecordPath,
+            OutboxEntryPath = outboxEntryPath,
             Cause = null,
             Payload = payload,
             ReportCommand = reportCommand,
@@ -1094,7 +1345,8 @@ internal static class NotifyCommand
         string? taskFile = null,
         string? deliveryPointer = null,
         string? pendingRecordPath = null,
-        string? advisory = null) => new()
+        string? advisory = null,
+        string? outboxEntryPath = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot ?? string.Empty,
@@ -1124,6 +1376,7 @@ internal static class NotifyCommand
             TaskFile = taskFile,
             DeliveryPointer = deliveryPointer,
             PendingRecordPath = pendingRecordPath,
+            OutboxEntryPath = outboxEntryPath,
             Cause = cause,
             Payload = payload,
             ReportCommand = reportCommand,
@@ -1218,6 +1471,10 @@ internal static class NotifyCommand
         if (result.PendingRecordPath is not null)
         {
             writer.WriteLine("- pending record: " + result.PendingRecordPath);
+        }
+        if (result.OutboxEntryPath is not null)
+        {
+            writer.WriteLine("- report outbox: " + result.OutboxEntryPath);
         }
         writer.WriteLine();
         writer.WriteLine(result.Summary);
@@ -1394,6 +1651,8 @@ internal static class NotifyCommand
         error = string.Empty;
         var requiredIdentity = string.Equals(operation, OperationStatus, StringComparison.Ordinal)
             ? new[] { ("--task-id", options.TaskId) }
+            : string.Equals(operation, OperationCollect, StringComparison.Ordinal)
+                ? new[] { ("--domain", options.Domain), ("--team", options.Team), ("--task-id", options.TaskId) }
             : string.Equals(operation, OperationSupervise, StringComparison.Ordinal)
                 ? new[] { ("--domain", options.Domain), ("--team", options.Team) }
             : new[]
@@ -1497,6 +1756,15 @@ internal static class NotifyCommand
                 return false;
             }
         }
+        else if (string.Equals(operation, OperationCollect, StringComparison.Ordinal))
+        {
+            if (options.FromRole is not null || options.ToRole is not null || options.Status is not null
+                || options.Artifact is not null || options.Summary is not null)
+            {
+                error = "collect reads the persisted outbox entry; it accepts only domain, team, task-id, routing-root, write/dry-run, and format.";
+                return false;
+            }
+        }
         else if (string.IsNullOrWhiteSpace(options.Artifact) || string.IsNullOrWhiteSpace(options.Summary))
         {
             error = "escalate requires --artifact and --summary.";
@@ -1546,6 +1814,7 @@ internal static class NotifyCommand
     {
         OperationDelegate => DelegateUsage,
         OperationReport => ReportUsage,
+        OperationCollect => CollectUsage,
         OperationStatus => StatusUsage,
         OperationSupervise => SuperviseUsage,
         _ => EscalateUsage,
@@ -1612,6 +1881,7 @@ internal sealed record NotifyResult
     [JsonPropertyName("task_file")] public string? TaskFile { get; init; }
     [JsonPropertyName("delivery_pointer")] public string? DeliveryPointer { get; init; }
     [JsonPropertyName("pending_record_path")] public string? PendingRecordPath { get; init; }
+    [JsonPropertyName("outbox_entry_path")] public string? OutboxEntryPath { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("payload")] public string? Payload { get; init; }
     [JsonPropertyName("report_command")] public string? ReportCommand { get; init; }

@@ -306,6 +306,74 @@ public sealed class NotifySupervisionG641Tests : IDisposable
     }
 
     [Fact]
+    public void UndeliveredReportOutboxIsSurfacedOnceWithoutAutoSendOrRedispatch_G653()
+    {
+        var context = CreateContext();
+        RecordMode(context, SessionLayerMode.HerdrOnly);
+        WriteTopology();
+        Assert.True(NotifyPendingDelegationStore.WriteDispatch(root, new NotifyPendingDelegation
+        {
+            Domain = Domain,
+            Team = Team,
+            TaskId = "G653-undelivered",
+            DelegatingRole = "orchestration",
+            RecipientRole = "implementation",
+            ReportToRole = "orchestration",
+            RecipientIdentity = "implementation",
+            ExpectedArtifact = "draft-pr",
+            ResultNonce = "g653-undelivered-generation",
+            DispatchedAt = firstNow,
+            TransportMode = SessionLayerMode.HerdrOnly,
+            Resident = NotifyRecordedRole.HerdrResident,
+            WorkspaceId = "wG641",
+            PaneId = "wG641:p2",
+        }).Written);
+        Assert.True(NotifyReportOutboxStore.WriteNew(root, new NotifyReportOutboxEntry
+        {
+            Domain = Domain,
+            Team = Team,
+            TaskId = "G653-undelivered",
+            ResultNonce = "g653-undelivered-generation",
+            FromRole = "implementation",
+            ToRole = "orchestration",
+            Status = "completed",
+            Artifact = "draft-pr",
+            Summary = "completed but transport failed",
+            CreatedAt = firstNow,
+            DeliveryState = "undelivered",
+            DeliveryError = "fixture",
+        }).Written);
+        var runner = new FakeRunner { AgentsJson = HerdrAgentsJson(stateChangeSequence: 1) };
+        var supervisor = CreateSupervisor(context, "unused-agmsg", runner, write: true, boundSeconds: null);
+
+        var first = supervisor.RunOnce();
+
+        var finding = Assert.Single(first.Findings, item => item.Kind == "undelivered-report-outbox");
+        Assert.Contains(
+            $"intent-cli notify collect --domain {Domain} --team {Team} --task-id G653-undelivered --write --routing-root {root}",
+            finding.Summary,
+            StringComparison.Ordinal);
+        Assert.False(finding.WakeAttempted);
+        Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("send-text") || call.Arguments.Contains("prompt"));
+
+        now = firstNow.AddSeconds(1);
+        var second = supervisor.RunOnce();
+        Assert.DoesNotContain(second.Findings, item => item.Kind == "undelivered-report-outbox");
+
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        NotifyCommand.HerdrExecutableFactory = () => "fake-herdr";
+        runner.Calls.Clear();
+        using var writer = new StringWriter();
+        Assert.Equal(0, CommandRouter.Execute(
+            ["notify", "collect", "--domain", Domain, "--team", Team, "--task-id", "G653-undelivered", "--write", "--format", "json"],
+            context,
+            writer));
+        Assert.True(NotifyPendingDelegationStore.Find(root, Domain, Team, "G653-undelivered").Record!.ReportArrived);
+        Assert.Contains(runner.Calls, call => call.Arguments.Contains("prompt"));
+        Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("send-text"));
+    }
+
+    [Fact]
     public void EnglishAndJapaneseGuidanceNameTheMeasuredPreviewContract_G641()
     {
         var rootPath = RepoVersionPolicySource.RepoRoot();
