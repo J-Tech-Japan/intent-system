@@ -202,11 +202,17 @@ default** and never auto-executes the chosen action — the user decides whether
 to run the suggested prompt.
 
 When `--domain` and `--team` are supplied, `next` also reads the team's recorded
-supervision cycle. No recorded cycle adds the `supervision-setup` recommendation;
+topology and supervision cycle. Recorded topology with no completed cycle/front-door
+handoff adds `bootstrap-resume` and links the render-only
+`intent-cli guide bootstrap`; no topology and a completed cycle are silent. No
+recorded cycle independently adds the `supervision-setup` recommendation;
 an existing cycle leaves that recommendation silent. The host-init and
 design-side loop guides carry the deployment step and link the
 [orchestration reference](12-agent-message-orchestration.md); this command only
 detects the missing record and never starts or manages the background process.
+The bootstrap trigger phrases are `Start this work in a herdr-only team.` and
+`herdr-only で起動して。`; its output asks the human for CLI/model and app-kind
+choices and executes nothing.
 
 With `--domain`, `next` reads the independently declared realignment window and
 the latest append-only improve-run record. Only when no run falls within that

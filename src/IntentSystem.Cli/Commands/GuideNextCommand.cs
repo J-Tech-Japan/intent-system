@@ -41,6 +41,7 @@ internal static class GuideNextCommand
     public const string ActionIdle = "idle";
     public const string ActionSupervisionSetup = "supervision-setup";
     public const string ActionRealignment = "realignment";
+    public const string ActionBootstrapResume = "bootstrap-resume";
 
     internal static Func<DateTimeOffset> UtcNowFactory { get; set; } = () => DateTimeOffset.UtcNow;
 
@@ -91,17 +92,19 @@ internal static class GuideNextCommand
         var repoArg = string.IsNullOrWhiteSpace(targetRepo) ? "<owner/repo>" : targetRepo!;
         var supervision = ReadSupervisionStatus(context, domain, team);
         var realignment = ReadRealignmentStatus(context, domain);
+        var bootstrap = ReadBootstrapStatus(context, domain, team);
 
         var prompt =
 $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). This is READ-ONLY: recommend ONE design-side process, do not mutate packets / issues / labels / queue state, and never launch an AI provider.
 
 1. Check the evidence (below) — current intents, open questions, packet backlog, open PRs / review state, and CLI / queue health — before recommending.
 2. Use `{GuideDesignThreadCommand.CommandName}` as the design-role operating contract. Its four-outcome wake rule governs whether this wake has an outcome at all.
-3. When a domain and team are supplied, inspect the recorded supervision cycle and include `supervision-setup` first when no cycle is recorded.
-4. When a domain is supplied, inspect the independently declared realignment window and latest durable improve-run record. If no run falls within that window, include `realignment`; judge timestamp recency only, never review quality. With no window declaration, do not invent a cadence.
-5. Match the situation to exactly one action in the decision set (supervision-setup when its check is missing, then realignment when its declared window is lapsed, then grill / stack / improve / inspect / issue-publish / review / recovery / idle).
-6. Return the recommendation output shape: the recommended action, the reason tied to the evidence you actually checked, the evidence checked, a paste-ready suggested prompt for that action, and the safety boundary.
-7. Stop there — the user decides whether to run the suggested prompt. next never auto-executes the chosen action.";
+3. When a domain and team are supplied, inspect recorded topology plus the supervision cycle. A recorded topology without a completed cycle/handoff includes `bootstrap-resume` first; absent topology is silent because bootstrap has not started; a completed cycle clears the recommendation.
+4. Inspect the recorded supervision cycle independently and include `supervision-setup` when no cycle is recorded.
+5. When a domain is supplied, inspect the independently declared realignment window and latest durable improve-run record. If no run falls within that window, include `realignment`; judge timestamp recency only, never review quality. With no window declaration, do not invent a cadence.
+6. Match the situation to exactly one action in the decision set (bootstrap-resume for a half-done bootstrap, supervision-setup when its check is missing, then realignment when its declared window is lapsed, then grill / stack / improve / inspect / issue-publish / review / recovery / idle).
+7. Return the recommendation output shape: the recommended action, the reason tied to the evidence you actually checked, the evidence checked, a paste-ready suggested prompt for that action, and the safety boundary.
+8. Stop there — the user decides whether to run the suggested prompt. next never auto-executes the chosen action.";
 
         var evidenceToCheck = new[]
         {
@@ -112,6 +115,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             "CLI / queue health — `intent-cli automation doctor`: a stale CLI or dirty queue pushes toward recovery before anything else.",
             "Drift / short-term-loop signals — repeated corrective packets on the same surface push toward improve.",
             $"Recorded supervision cycle — when `--domain {domainArg} --team {teamArg}` is supplied, read the team's append-only supervision state; no recorded cycle is a setup gap, while an existing cycle keeps the setup recommendation silent.",
+            $"Bootstrap completion — when `--domain {domainArg} --team {teamArg}` is supplied, read the recorded topology and supervision cycle. Topology with no completed cycle/handoff is half-done and routes to `{GuideBootstrapCommand.CommandName}`; absent topology and a completed cycle are silent.",
             $"Improve-run recency — when `--domain {domainArg}` is supplied, read `.intent-cli/improve/{domainArg}/window.json` and `runs.jsonl`; compare only the latest run timestamp with the independently declared realignment window. A missing/aged run recommends realignment; a fresh record is immediately silent. Never infer quality from age.",
         };
 
@@ -177,9 +181,19 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             });
         }
 
+        if (bootstrap.ResumeRecommended)
+        {
+            decisionSet.Insert(0, new GuideNextAction
+            {
+                Action = ActionBootstrapResume,
+                WhenToChoose = $"Team `{team}` has recorded topology but no completed supervision cycle and application-front-door handoff. Resume from named state `{bootstrap.StateName}`; preserve recorded facts and emit only missing steps.",
+                SuggestedPrompt = $"`{GuideBootstrapCommand.CommandName} --domain {domainArg} --team {teamArg} --target-repo {repoArg} --routing-root {context?.RepoRoot ?? "<routing-root>"} --format markdown`",
+            });
+        }
+
         if (realignment.RecommendationIncluded)
         {
-            decisionSet.Insert(supervision.SetupRecommended ? 1 : 0, new GuideNextAction
+            decisionSet.Insert((bootstrap.ResumeRecommended ? 1 : 0) + (supervision.SetupRecommended ? 1 : 0), new GuideNextAction
             {
                 Action = ActionRealignment,
                 WhenToChoose = $"No recorded improve run is within the latest declared {realignment.WindowDays}-day realignment window. This is timestamp recency only; it is not a judgment that the previous review was poor or incomplete.",
@@ -195,12 +209,13 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             TargetRepo = string.IsNullOrWhiteSpace(targetRepo) ? null : targetRepo,
             Supervision = supervision,
             Realignment = realignment,
+            Bootstrap = bootstrap,
             DesignRoleGuide = GuideDesignThreadCommand.CommandName,
             ShortPrompt = ShortPrompt,
             ReadOnly = true,
             Summary =
                 "next is the design-side action advisor: ask it what to do next and it lays out the catalog of design-side "
-                + "processes (supervision-setup when no recorded cycle, realignment when a declared improve window lapses, grill, stack, improve, inspect, issue-publish, review, recovery, idle), the evidence to check first, "
+                + "processes (bootstrap-resume for recorded-topology half-done state, supervision-setup when no recorded cycle, realignment when a declared improve window lapses, grill, stack, improve, inspect, issue-publish, review, recovery, idle), the evidence to check first, "
                 + "and the recommendation output shape. It recommends ONE process tied to the evidence; it is read-only by default "
                 + "and never auto-executes the chosen action — the user decides whether to run the suggested prompt.",
             NotThis = new[]
@@ -210,6 +225,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 "next does NOT replace the host / review / worker loops — it advises the design thread, it does not drive operational automation.",
                 "intent-cli does NOT launch Claude/Codex/Copilot or any AI provider; the AI agent owns the semantic decision and conversation.",
                 "next does NOT start or manage the supervision process; it only detects a missing recorded cycle and recommends setup.",
+                "next does NOT create or join a team; bootstrap discovery only reads recorded topology and supervision state and recommends the render-only bootstrap guide.",
                 "next does NOT schedule, cron, or auto-run improve and does not create a stalled-work debt class; it only compares the latest recorded run timestamp with the independently declared window.",
                 "next does NOT grade realignment quality. The review remains human/agent semantic work; recency is the only machine judgment.",
             },
@@ -223,7 +239,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             DecisionSet = decisionSet,
             RecommendationOutputShape = new[]
             {
-                new GuideNextOutputField { Field = "recommended_action", Meaning = "Exactly one action id from the decision set (supervision-setup when no cycle is recorded, realignment when a declared window lapses, or grill / stack / improve / inspect / issue-publish / review / recovery / idle)." },
+                new GuideNextOutputField { Field = "recommended_action", Meaning = "Exactly one action id from the decision set (bootstrap-resume for a half-done bootstrap, supervision-setup when no cycle is recorded, realignment when a declared window lapses, or grill / stack / improve / inspect / issue-publish / review / recovery / idle)." },
                 new GuideNextOutputField { Field = "reason", Meaning = "Why this action, tied to the specific evidence checked (cite the intent / packet / PR / health signal that drove it)." },
                 new GuideNextOutputField { Field = "evidence_checked", Meaning = "The evidence actually inspected this run, so the recommendation is auditable." },
                 new GuideNextOutputField { Field = "suggested_prompt", Meaning = "The paste-ready prompt / command for the recommended action that the user can run as-is." },
@@ -235,6 +251,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 "No auto-execute: the recommended action runs only when the user chooses to run the suggested prompt.",
                 "Never hand-edit workflow labels, queue-state, or publish metadata from next — those stay in the operational intent-cli surfaces.",
                 "Supervision discovery is read-only: it reads the recorded cycle and never starts, stops, or manages a background process.",
+                "Bootstrap discovery is read-only: it reads topology and cycle records, never invokes herdr, a scheduler, an OS command, an application integration, or an AI provider.",
                 "Realignment discovery is read-only and recency-only: it reads the durable improve record, never grades review quality, and never schedules or auto-runs improve.",
             },
             Prompt = prompt,
@@ -275,6 +292,29 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             if (result.Supervision.Error is not null)
             {
                 writer.WriteLine($"- read error: {result.Supervision.Error}");
+            }
+            writer.WriteLine();
+        }
+        if (result.Bootstrap is { Checked: true })
+        {
+            writer.WriteLine("## Bootstrap completion check (G664 — preview-through-1.x)");
+            writer.WriteLine();
+            if (result.Bootstrap.Error is not null)
+            {
+                writer.WriteLine("- bootstrap state: unreadable; repair the recorded topology/state before deciding (fail closed)");
+                writer.WriteLine($"- read error: {result.Bootstrap.Error}");
+            }
+            else if (!result.Bootstrap.TopologyRecorded)
+            {
+                writer.WriteLine("- topology recorded: no; bootstrap-resume recommendation: silent (bootstrap has not started)");
+            }
+            else if (result.Bootstrap.ResumeRecommended)
+            {
+                writer.WriteLine($"- topology recorded: yes; named state: `{result.Bootstrap.StateName}`; completed cycle/handoff: no; recommendation: **bootstrap-resume**");
+            }
+            else
+            {
+                writer.WriteLine("- topology recorded: yes; completed cycle/handoff: yes; bootstrap-resume recommendation: silent");
             }
             writer.WriteLine();
         }
@@ -480,6 +520,50 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
         }
     }
 
+    private static GuideNextBootstrapStatus ReadBootstrapStatus(
+        CliContext? context,
+        string? domain,
+        string? team)
+    {
+        if (context is null || string.IsNullOrWhiteSpace(domain) || string.IsNullOrWhiteSpace(team))
+        {
+            return new GuideNextBootstrapStatus
+            {
+                Checked = false,
+                Domain = string.IsNullOrWhiteSpace(domain) ? null : domain,
+                Team = string.IsNullOrWhiteSpace(team) ? null : team,
+            };
+        }
+
+        try
+        {
+            var state = GuideBootstrapCommand.InspectState(context, context.RepoRoot, domain, team);
+            return new GuideNextBootstrapStatus
+            {
+                Checked = true,
+                Domain = domain.Trim(),
+                Team = team.Trim(),
+                TopologyRecorded = state.TopologyRecorded,
+                CycleRecorded = state.SupervisionCycleRecorded,
+                Complete = state.Complete,
+                ResumeRecommended = state.TopologyRecorded && !state.SupervisionCycleRecorded,
+                StateName = state.Name,
+                TopologyPath = state.TopologyPath,
+                Error = state.ReadError,
+            };
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return new GuideNextBootstrapStatus
+            {
+                Checked = true,
+                Domain = domain.Trim(),
+                Team = team.Trim(),
+                Error = $"Bootstrap state could not be read: {exception.Message}",
+            };
+        }
+    }
+
     private static GuideNextRealignmentStatus ReadRealignmentStatus(CliContext? context, string? domain)
     {
         if (context is null || string.IsNullOrWhiteSpace(domain))
@@ -591,6 +675,9 @@ internal sealed record GuideNextResult
     [JsonPropertyName("realignment")]
     public required GuideNextRealignmentStatus Realignment { get; init; }
 
+    [JsonPropertyName("bootstrap")]
+    public required GuideNextBootstrapStatus Bootstrap { get; init; }
+
     [JsonPropertyName("design_role_guide")]
     public required string DesignRoleGuide { get; init; }
 
@@ -686,6 +773,20 @@ internal sealed record GuideNextSupervisionStatus
 
     [JsonPropertyName("error")]
     public string? Error { get; init; }
+}
+
+internal sealed record GuideNextBootstrapStatus
+{
+    [JsonPropertyName("checked")] public required bool Checked { get; init; }
+    [JsonPropertyName("domain")] public string? Domain { get; init; }
+    [JsonPropertyName("team")] public string? Team { get; init; }
+    [JsonPropertyName("topology_recorded")] public bool TopologyRecorded { get; init; }
+    [JsonPropertyName("cycle_recorded")] public bool CycleRecorded { get; init; }
+    [JsonPropertyName("complete")] public bool Complete { get; init; }
+    [JsonPropertyName("resume_recommended")] public bool ResumeRecommended { get; init; }
+    [JsonPropertyName("state_name")] public string? StateName { get; init; }
+    [JsonPropertyName("topology_path")] public string? TopologyPath { get; init; }
+    [JsonPropertyName("error")] public string? Error { get; init; }
 }
 
 internal sealed record GuideNextAction

@@ -16,6 +16,40 @@ prompts from this page by hand. Generate the current prompts with:
 intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --mode single-domain|multi-domain --format markdown
 ```
 
+## Application-front-door bootstrap (G664 — preview-through-1.x)
+
+From a desktop-app conversation, say **`Start this work in a herdr-only team.`**
+or **`herdr-only で起動して。`** and render the current pass with:
+
+```text
+intent-cli guide bootstrap --domain <domain> --team <team> --target-repo <owner/repo> --routing-root <host-root> --format markdown
+```
+
+The six steps stay in order. First ask the human which CLI and model each of
+the design, orchestration, implementation, and review seats should run; there
+are no defaults. Then emit the herdr workspace/pane/typed-seat commands from
+the installed recipe and G637 layout guide, record operator-supplied topology,
+emit `notify supervise install`, ask the application kind and whether it has
+an inbound app monitor before applying G654's design placement rule, and
+delegate the first task to orchestration. The final output explicitly names
+the new design thread and says the application conversation remains the
+operator's front door, not a loop seat.
+
+Recorded topology selects `join-and-delegate`: do not recreate its workspace
+or seats. Partial state is named—for example
+`topology-recorded-seats-missing` or
+`topology-recorded-supervision-and-handoff-missing`—and only missing commands
+are emitted. `guide next --domain <domain> --team <team>` recommends
+`bootstrap-resume` for recorded topology without a completed supervision
+cycle/application-front-door handoff and clears that recommendation after the
+cycle completes. No topology is silent because bootstrap has not started.
+
+This surface executes nothing: intent-cli never invokes herdr, starts a
+provider, registers or unregisters an OS scheduler artifact, or adds
+application-side integration. It composes the existing recipes, deployment
+rule, four-judgment-thread-plus-one-supervision-process formula, and
+preview-through-1.x boundaries without changing them.
+
 ## Design-thread operating contract (G654 — preview-through-1.x)
 
 Render the agent-kind-neutral contract with `intent-cli guide design-thread`.

@@ -346,6 +346,8 @@ internal static class CommandRouter
                 ["orchestrator-thread"] = GuideOrchestratorThreadCommand.Execute,
                 // G654: agent-kind-neutral design-thread operating contract.
                 ["design-thread"] = GuideDesignThreadCommand.Execute,
+                // G664: app-conversation front-door bootstrap composition.
+                ["bootstrap"] = GuideBootstrapCommand.Execute,
                 // G637: read-only canonical team workspace layout plan.
                 ["workspace-layout"] = GuideWorkspaceLayoutCommand.Execute,
                 // G488: thin, portable agent skill pack bootstrap (ADR-013 / spec-27).
