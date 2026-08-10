@@ -808,72 +808,86 @@ internal sealed class NotifyMeasuredSupervisor
         DateTimeOffset now,
         bool priorCycleExists)
     {
-        if (!NotifyEventWriter.TryResolvePath(routingRoot, team, out var path, out _)
-            || !File.Exists(path))
-        {
-            return [];
-        }
-
         var observations = new List<NotifySupervisionObservation>();
-        try
+        var judgment = NotifyRecipientDeliveryJudgment.Resolve(
+            routingRoot,
+            domain,
+            team,
+            DesignRole);
+        var path = judgment.UsesRecordedReaderAppend ? judgment.Target : null;
+        if (path is null)
         {
-            foreach (var line in File.ReadLines(path))
-            {
-                if (string.IsNullOrWhiteSpace(line))
-                {
-                    continue;
-                }
-
-                using var document = JsonDocument.Parse(line);
-                var root = document.RootElement;
-                if (!root.TryGetProperty("kind", out var kind)
-                    || !string.Equals(kind.GetString(), "escalation", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var unit = root.TryGetProperty("unit", out var unitElement)
-                    ? unitElement.GetString() ?? "unknown"
-                    : "unknown";
-                var artifact = root.TryGetProperty("artifact", out var artifactElement)
-                    ? artifactElement.GetString() ?? unit
-                    : unit;
-                var summary = root.TryGetProperty("summary", out var summaryElement)
-                    ? summaryElement.GetString() ?? string.Empty
-                    : string.Empty;
-                // Notify's own recovery/finding wake is already delivered by
-                // the transport adapter.  It uses the same six-field event
-                // schema as an operator escalation, so exclude those marked
-                // payloads rather than creating a self-sustaining wake loop.
-                if (artifact.StartsWith("supervision-", StringComparison.Ordinal)
-                    || summary.Contains("supervise-finding", StringComparison.Ordinal)
-                    || summary.Contains("supervise-recovery", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-                var timestamp = root.TryGetProperty("timestamp", out var timestampElement)
-                    && timestampElement.TryGetDateTimeOffset(out var recordedAt)
-                    ? recordedAt.ToUniversalTime()
-                    : (DateTimeOffset?)null;
-                var key = $"escalation:{unit}:{timestamp?.UtcTicks.ToString(CultureInfo.InvariantCulture) ?? artifact}";
-                observations.Add(new NotifySupervisionObservation
-                {
-                    Key = key,
-                    Kind = "undelivered-escalation",
-                    OwnerRole = ownerRole,
-                    Source = "notify-escalate",
-                    Summary = $"Escalation '{unit}' is durable in events.jsonl with delivered:false; the owning role was not woken.",
-                    DetectableAt = priorCycleExists ? timestamp : null,
-                    WakeAlreadyAttempted = false,
-                    WakeAlreadyDelivered = false,
-                });
-            }
+            NotifyEventWriter.TryResolvePath(routingRoot, team, out path, out _);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+
+        if (path is not null && File.Exists(path))
         {
-            return
-            [
-                new NotifySupervisionObservation
+            try
+            {
+                foreach (var line in File.ReadLines(path))
+                {
+                    if (string.IsNullOrWhiteSpace(line))
+                    {
+                        continue;
+                    }
+
+                    using var document = JsonDocument.Parse(line);
+                    var root = document.RootElement;
+                    if (!root.TryGetProperty("kind", out var kind)
+                        || !string.Equals(kind.GetString(), "escalation", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var unit = root.TryGetProperty("unit", out var unitElement)
+                        ? unitElement.GetString() ?? "unknown"
+                        : "unknown";
+                    var artifact = root.TryGetProperty("artifact", out var artifactElement)
+                        ? artifactElement.GetString() ?? unit
+                        : unit;
+                    var summary = root.TryGetProperty("summary", out var summaryElement)
+                        ? summaryElement.GetString() ?? string.Empty
+                        : string.Empty;
+                    // Notify's own recovery/finding wake is already delivered by
+                    // the transport adapter.  It uses the same six-field event
+                    // schema as an operator escalation, so exclude those marked
+                    // payloads rather than creating a self-sustaining wake loop.
+                    if (artifact.StartsWith("supervision-", StringComparison.Ordinal)
+                        || summary.Contains("supervise-finding", StringComparison.Ordinal)
+                        || summary.Contains("supervise-recovery", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    // The event's existence proves its append.  The shared
+                    // residency contract decides whether that append is
+                    // delivery or whether a pane wake is still required.
+                    if (judgment.Judge(readerAppendSucceeded: true, paneWakeDelivered: false))
+                    {
+                        continue;
+                    }
+
+                    var timestamp = root.TryGetProperty("timestamp", out var timestampElement)
+                        && timestampElement.TryGetDateTimeOffset(out var recordedAt)
+                        ? recordedAt.ToUniversalTime()
+                        : (DateTimeOffset?)null;
+                    var key = $"escalation:{unit}:{timestamp?.UtcTicks.ToString(CultureInfo.InvariantCulture) ?? artifact}";
+                    observations.Add(new NotifySupervisionObservation
+                    {
+                        Key = key,
+                        Kind = "undelivered-escalation",
+                        OwnerRole = ownerRole,
+                        Source = "notify-escalate",
+                        Summary = $"Escalation '{unit}' is durable in events.jsonl but delivery basis '{judgment.Basis ?? "unresolved"}' was not satisfied; the pane-resident role was not woken.",
+                        DetectableAt = priorCycleExists ? timestamp : null,
+                        WakeAlreadyAttempted = false,
+                        WakeAlreadyDelivered = false,
+                    });
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+            {
+                observations.Add(new NotifySupervisionObservation
                 {
                     Key = "escalation-store:unreadable",
                     Kind = "undelivered-escalation",
@@ -881,9 +895,35 @@ internal sealed class NotifyMeasuredSupervisor
                     Source = "notify-escalate",
                     Summary = $"The escalation event channel could not be read: {exception.Message}",
                     DetectableAt = null,
-                },
-            ];
+                });
+            }
         }
+
+        var appendFailures = NotifyEscalationFailureStore.Read(routingRoot, domain, team, out var failureError);
+        if (failureError is not null)
+        {
+            observations.Add(new NotifySupervisionObservation
+            {
+                Key = "escalation-append-failure-store:unreadable",
+                Kind = "undelivered-escalation",
+                OwnerRole = ownerRole,
+                Source = "notify-escalate-append-failed",
+                Summary = failureError,
+                DetectableAt = null,
+                WakeSuppressed = true,
+            });
+        }
+
+        observations.AddRange(appendFailures.Select(failure => new NotifySupervisionObservation
+        {
+            Key = $"escalation-append-failed:{failure.TaskId}:{failure.Timestamp.UtcTicks.ToString(CultureInfo.InvariantCulture)}",
+            Kind = "undelivered-escalation",
+            OwnerRole = ownerRole,
+            Source = "notify-escalate-append-failed",
+            Summary = $"Escalation '{failure.TaskId}' was not appended to recorded reader '{failure.ReaderPath}'; delivery basis '{failure.DeliveryBasis}' remains unsatisfied: {failure.Error}",
+            DetectableAt = priorCycleExists ? failure.Timestamp : null,
+            WakeSuppressed = true,
+        }));
 
         return observations;
     }
