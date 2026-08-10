@@ -271,6 +271,50 @@ cycles suppress that acknowledged key and return to healthy silence.
 > change or be withdrawn during 1.x and are formalised only by a later MAJOR
 > release. See the [compatibility ledger](1.0-compatibility-ledger.md).
 
+### Persistent supervisor setup (G658 — preview-through-1.x)
+
+Set up the standing loop through the emit-only installer rather than an ad-hoc
+background shell:
+
+```bash
+intent-cli notify supervise install --domain <domain> --team <team> \
+  --repo <owner/repo> --owner-role <logical-role> --bound <seconds> \
+  --interval <seconds> [--platform macos|windows|linux] \
+  [--output <path>] [--routing-root <host-root>] --write --format json
+```
+
+Without `--platform`, the command emits the current platform's scheduler
+definition: a launchd plist on macOS, a `schtasks`-compatible Task Scheduler
+XML file on Windows, or a systemd user unit on Linux. `--platform` is an
+explicit cross-authoring override. Every artifact is named and labelled
+`intent-cli.supervise.<domain>.<team>` and embeds the complete `notify
+supervise` invocation, including domain, team, repo, owner role, bound, and
+interval. Output names the written path and prints exact registration and
+unregistration commands. Those commands are operator actions: intent-cli
+does not execute them and never registers, unregisters, starts, stops, or
+kills the supervisor. Windows and Linux artifacts emitted from the measured
+macOS path are explicitly `emitted-but-unverified`.
+
+Install exactly one artifact per team outside the agent seats. The loop,
+per-cycle measurement, detection bound, one-wake-per-finding behavior, and
+escalation ownership are the existing G630/G641/G657 semantics; installation
+does not grant the CLI a new lifecycle or recovery authority.
+
+The canonical per-team liveness check is the age of that team's
+`.intent-cli/supervision/<domain>/<team>/cycles.jsonl` record compared with
+its declared bound. Process-name grep is an anti-pattern because it cannot
+prove team identity. On 2026-08-08, a measured process-name grep conflated
+teams, killed the design team's own supervisor, and retained another team's
+process. The absence remained unnoticed for about 47 hours until the durable
+record showed `absent_since_last_cycle=true`, `gap_seconds=169796`, and a
+failed bound. Use record identity and age, never a shared process name, for
+supervisor health.
+
+> **Preview through 1.x (G658).** Scheduler artifact emission and its output
+> schema are post-freeze preview behavior outside the 1.0 compatibility
+> promise. Emission is not registration or runtime verification, and this
+> surface makes no release decision.
+
 ### Escalation ladder and CI fallback (G657 — preview-through-1.x)
 
 The complete ladder is: seats do their assigned work; orchestration notices

@@ -53,7 +53,8 @@ internal static class NotifyCommand
         + "[--repo <owner/repo>] [--owner-role <role>] [--bound <seconds>] "
         + "[--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] "
         + "[--repair-silent-minutes <m>] [--auto-redispatch] [--once] [--routing-root <host-root>] [--dry-run|--write] "
-        + "[--format markdown|json]";
+        + "[--format markdown|json]\n"
+        + NotifySuperviseInstallCommand.Usage;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -95,7 +96,9 @@ internal static class NotifyCommand
         Execute(context, args, writer, OperationStatus);
 
     public static int ExecuteSupervise(CliContext context, string[] args, TextWriter writer) =>
-        Execute(context, args, writer, OperationSupervise);
+        args.Length > 0 && string.Equals(args[0], NotifySuperviseInstallCommand.Operation, StringComparison.Ordinal)
+            ? NotifySuperviseInstallCommand.Execute(context, args[1..], writer)
+            : Execute(context, args, writer, OperationSupervise);
 
     private static int Execute(CliContext context, string[] args, TextWriter writer, string operation)
     {

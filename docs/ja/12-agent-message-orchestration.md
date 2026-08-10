@@ -204,6 +204,41 @@ event 自体は残したまま、その key を後続 cycle の finding から�
 > finding、self-liveness は post-freeze の preview であり、1.0 compatibility promise の対象外です。1.x の間に変更・
 > 撤回でき、後続 MAJOR release でのみ正式化します。[compatibility ledger](1.0-compatibility-ledger.md) を参照してください。
 
+### supervisor の永続 setup (G658 — preview-through-1.x)
+
+standing loop の setup は ad-hoc な background shell ではなく出力専用の installer を使います。
+
+```bash
+intent-cli notify supervise install --domain <domain> --team <team> \
+  --repo <owner/repo> --owner-role <logical-role> --bound <seconds> \
+  --interval <seconds> [--platform macos|windows|linux] \
+  [--output <path>] [--routing-root <host-root>] --write --format json
+```
+
+`--platform` を省略すると current platform の scheduler definition、すなわち macOS の launchd plist、
+Windows の `schtasks` compatible Task Scheduler XML、または Linux の systemd user unit を生成します。
+`--platform` は明示的な cross-authoring override です。すべての artifact は
+`intent-cli.supervise.<domain>.<team>` という team 固有の名前と label を持ち、domain、team、repo、
+owner role、bound、interval を含む完全な `notify supervise` invocation を埋め込みます。output は write 先と
+registration / unregistration の正確な command を表示します。これらは operator action であり、intent-cli は
+実行しません。supervisor の register、unregister、start、stop、強制終了は一切行いません。macOS から生成した
+Windows / Linux artifact は `emitted-but-unverified` と明示します。
+
+agent seat の外に team ごと 1 つだけ artifact を配置します。loop、cycle measurement、detection bound、
+finding ごとの 1 wake、escalation ownership は既存の G630/G641/G657 semantics のままです。この配置によって
+CLI の lifecycle 権限や recovery 権限は増えません。
+
+team ごとの canonical liveness check は、その team の
+`.intent-cli/supervision/<domain>/<team>/cycles.jsonl` record の age を declared bound と比較することです。
+process-name grep は team identity を証明できないアンチパターンです。2026-08-08 の実測では process-name grep が
+team を混同し、design team 自身の supervisor を強制終了し、別 team の process を残しました。この absence は約 47 時間
+検知されず、永続 record が `absent_since_last_cycle=true`、`gap_seconds=169796`、bound failure を示して初めて
+判明しました。supervisor health は共有 process name ではなく record identity と age で判定します。
+
+> **1.x を通じた preview (G658)。** scheduler artifact emission と output schema は post-freeze preview で、
+> 1.0 compatibility promise の対象外です。生成は registration や runtime verification ではなく、この surface は
+> release decision を行いません。
+
 ### escalation ladder と CI fallback (G657 — preview-through-1.x)
 
 完全な ladder は次のとおりです。各 seat は割り当てられた作業を行い、orchestration は通常の stall を検知して
