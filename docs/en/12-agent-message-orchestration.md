@@ -271,6 +271,38 @@ cycles suppress that acknowledged key and return to healthy silence.
 > change or be withdrawn during 1.x and are formalised only by a later MAJOR
 > release. See the [compatibility ledger](1.0-compatibility-ledger.md).
 
+### Escalation ladder and CI fallback (G657 — preview-through-1.x)
+
+The complete ladder is: seats do their assigned work; orchestration notices
+ordinary stalls and applies only its existing authorised recovery; measured
+supervision watches every working seat in its remit, including orchestration.
+Design is the operator's rung and is not watched by supervision. A finding
+whose `subject_role` is the configured owner role is the one narrow fallback:
+supervision sends one `wake_class: escalation` wake to `design` through
+design's recorded pane or event-reader transport. Every other subject wakes
+the ordinary `owner_role`. A cycle never broadcasts to both rungs.
+The durable finding records `subject_role`, `wake_target_role`, and
+`wake_class` as provenance.
+
+Design rules on the escalation but gains no recovery authority. It remains the
+last resort for supervision-liveness concerns; supervision does not start
+watching or recovering design. Health evidence, the G630 recovery sequence,
+delivery, settlement, and lifecycle-transition ownership are unchanged.
+
+Terminal CI is similarly action-shaped. A failed exact-head `ci-wait` is
+actionable only while that head is still current and no repair is claimed.
+Repair/update labels or a new head are evidence of normal repair, so
+supervision stays silent. Green checks may also use declared state as a
+fallback: an issue labelled `intent-pr-created`, with an open non-draft PR
+whose checks are all green and which lacks review-routing labels, produces
+`ci-all-green-not-transitioned` even without a `ci-wait` record. Its
+`ci_classification_source` is `declared-label-fallback`; a durable wait remains
+the richer `ci-wait-record` path.
+
+> **Preview through 1.x (G657).** Subject-based owner escalation and the
+> settled-CI classification fallback are post-freeze preview behavior outside
+> the 1.0 compatibility promise. They make no release decision.
+
 ### Registration-lost but process-present (G648 — preview-through-1.x)
 
 Herdr registration is not process liveness. Before `notify status`, delivery,
@@ -1657,9 +1689,10 @@ record the exact observed head and the transition that is owed:
 `intent-cli automation ci-wait record --domain <d> --repo <owner/repo> --pr <n> --head <sha> --transition <t> --write`.
 The record is an obligation for the next message-driven wake, not a polling
 loop; `automation ci-wait show` reads it and the canonical `automation
-pr-transition` clears it after the transition is applied. If GitHub reports a
-different head, `stalled-work` emits actionable `ci-head-moved` evidence and
-never treats the old head's green checks as current.
+pr-transition` clears it after the transition is applied. G638 originally
+named a different current head as actionable `ci-head-moved`; G657 narrows
+that case to silence because a new head is advancing-repair evidence. The old
+head's green or red checks are never treated as current.
 
 When `notify report` resolves a recorded pane whose role is not running, it
 emits an advisory `recipient_warning` naming the role and observed liveness,

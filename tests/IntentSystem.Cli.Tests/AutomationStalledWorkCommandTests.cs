@@ -211,13 +211,15 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         AssertCiBreakdown(greenItem, passed: 1, failed: 0, skipped: 1, pending: 0, total: 2);
         Assert.Equal($"ci-all-green-not-transitioned:pr-1282:{headSha}",
             greenItem.GetProperty("dedupe_key").GetString());
+        Assert.Equal("declared-label-fallback",
+            greenItem.GetProperty("ci_classification_source").GetString());
         Assert.Contains("--transition review-start", greenItem.GetProperty("recommended_action").GetString(),
             StringComparison.Ordinal);
         Assert.NotEqual(pendingItem.GetProperty("kind").GetString(), greenItem.GetProperty("kind").GetString());
     }
 
     [Fact]
-    public void Execute_CiTerminalFailure_IsActionableAndCarriesOutcomeBreakdown()
+    public void Execute_CiTerminalFailure_IsActionableAndCarriesOutcomeBreakdown_G657()
     {
         using var workspace = new StalledWorkWorkspace();
         workspace.WritePacketDomain("G589", "intent-cli");
@@ -237,6 +239,15 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
                 CheckRun("COMPLETED", "SKIPPED"),
                 StatusContext("FAILURE"),
             ]);
+        Assert.True(CiWaitStore.Record(workspace.RootPath, new CiWaitRecord
+        {
+            Domain = "intent-cli",
+            Repo = "J-Tech-Japan/intent-system",
+            Pr = 1282,
+            ObservedHead = headSha,
+            OwedTransition = "review-start",
+            RecordedAt = FixedNow.AddMinutes(-5),
+        }, write: true).Applied);
 
         var result = RunJson(workspace, issue, failedPr);
         var item = Assert.Single(result.RootElement.GetProperty("items").EnumerateArray());
@@ -245,12 +256,68 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         Assert.False(item.GetProperty("is_informational").GetBoolean());
         Assert.Equal("failed", item.GetProperty("ci_outcome").GetString());
         AssertCiBreakdown(item, passed: 1, failed: 1, skipped: 1, pending: 0, total: 3);
-        Assert.Equal($"ci-failed-not-transitioned:pr-1282:{headSha}",
+        Assert.Equal($"ci-failed-not-transitioned:pr-1282:{headSha}:observed-{headSha}",
             item.GetProperty("dedupe_key").GetString());
+        Assert.Equal("ci-wait-record", item.GetProperty("ci_classification_source").GetString());
         var action = item.GetProperty("recommended_action").GetString();
         Assert.Contains("repair", action, StringComparison.Ordinal);
         Assert.Contains("escalation", action, StringComparison.Ordinal);
         Assert.DoesNotContain("review-start", action, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_CiTerminalFailureWithoutExactHeadWaitIsNotActionable_G657()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G657", "intent-cli");
+        var issue = BuildIssue(1419, "G657: Escalation ladder",
+            FixedNow.AddDays(-2), "intent-pr-created");
+        var failedPr = BuildPr(1420, issue.Title, FixedNow.AddMinutes(-90), "OPEN", issue.Number,
+            headRefOid: "657red123def4567890abc123def4567890abc12",
+            statusCheckRollup: [CheckRun("COMPLETED", "FAILURE")]);
+
+        var result = RunJson(workspace, issue, failedPr);
+
+        Assert.False(result.RootElement.GetProperty("stalled").GetBoolean());
+        Assert.Empty(result.RootElement.GetProperty("items").EnumerateArray());
+    }
+
+    [Fact]
+    public void Execute_CiTerminalFailureDuringClaimedRepairHasNoActionableFinding_G657()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G657", "intent-cli");
+        var issue = BuildIssue(1419, "G657: Escalation ladder",
+            FixedNow.AddDays(-2), "intent-pr-created");
+        const string headSha = "657repairdef4567890abc123def4567890abc12";
+        Assert.True(CiWaitStore.Record(workspace.RootPath, new CiWaitRecord
+        {
+            Domain = "intent-cli",
+            Repo = "J-Tech-Japan/intent-system",
+            Pr = 1420,
+            ObservedHead = headSha,
+            OwedTransition = "review-start",
+            RecordedAt = FixedNow.AddMinutes(-5),
+        }, write: true).Applied);
+        var failedPr = BuildPr(1420, issue.Title, FixedNow.AddHours(-2), "OPEN", issue.Number,
+            extraLabels: ["intent-pr-update-in-progress"],
+            updatedAt: FixedNow.AddMinutes(-5),
+            headRefOid: headSha,
+            statusCheckRollup: [CheckRun("COMPLETED", "FAILURE")]);
+
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue], prs: [failedPr]);
+        using var writer = new StringWriter();
+        Assert.Equal(0, AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--stale-minutes", "0",
+                "--repair-silent-minutes", "180", "--format", "json"],
+            writer));
+        using var result = JsonDocument.Parse(writer.ToString());
+
+        Assert.DoesNotContain(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+            item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindCiFailedNotTransitioned);
+        Assert.All(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+            Assert.True(item.GetProperty("is_informational").GetBoolean()));
     }
 
     [Fact]
@@ -318,7 +385,7 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_DurableWait_MovedHeadIsActionableUntilTheWaitIsRepointed()
+    public void Execute_DurableWait_MovedHeadIsSilentUntilTheWaitIsRepointed_G657()
     {
         using var workspace = new StalledWorkWorkspace();
         workspace.WritePacketDomain("G589", "intent-cli");
@@ -341,15 +408,19 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
             statusCheckRollup: [CheckRun("IN_PROGRESS")]);
 
         var stale = RunJson(workspace, issue, movedPr);
-        Assert.True(stale.RootElement.GetProperty("stalled").GetBoolean());
-        var staleItem = Assert.Single(stale.RootElement.GetProperty("items").EnumerateArray());
-        Assert.Equal(AutomationStalledWorkCommand.KindCiHeadMoved, staleItem.GetProperty("kind").GetString());
-        Assert.Equal("stale-head", staleItem.GetProperty("ci_wait_state").GetString());
-        Assert.Equal(oldHead, staleItem.GetProperty("observed_head_sha").GetString());
-        Assert.Equal(newHead, staleItem.GetProperty("current_head_sha").GetString());
-        Assert.False(staleItem.TryGetProperty("ci_outcome", out _));
-        Assert.Contains("--head " + newHead, staleItem.GetProperty("recommended_action").GetString(),
-            StringComparison.Ordinal);
+        Assert.False(stale.RootElement.GetProperty("stalled").GetBoolean());
+        Assert.Empty(stale.RootElement.GetProperty("items").EnumerateArray());
+
+        var greenMoved = RunJson(workspace, issue, movedPr with
+        {
+            StatusCheckRollup = [CheckRun("COMPLETED", "SUCCESS")],
+        });
+        var greenFallback = Assert.Single(greenMoved.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindCiAllGreenNotTransitioned,
+            greenFallback.GetProperty("kind").GetString());
+        Assert.Equal("declared-label-fallback",
+            greenFallback.GetProperty("ci_classification_source").GetString());
+        Assert.False(greenFallback.TryGetProperty("observed_head_sha", out _));
 
         var repointed = wait with { ObservedHead = newHead, RecordedAt = FixedNow };
         Assert.True(CiWaitStore.Record(workspace.RootPath, repointed, write: true).Applied);

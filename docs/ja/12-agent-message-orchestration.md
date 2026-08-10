@@ -204,6 +204,29 @@ event 自体は残したまま、その key を後続 cycle の finding から�
 > finding、self-liveness は post-freeze の preview であり、1.0 compatibility promise の対象外です。1.x の間に変更・
 > 撤回でき、後続 MAJOR release でのみ正式化します。[compatibility ledger](1.0-compatibility-ledger.md) を参照してください。
 
+### escalation ladder と CI fallback (G657 — preview-through-1.x)
+
+完全な ladder は次のとおりです。各 seat は割り当てられた作業を行い、orchestration は通常の stall を検知して
+既存の権限内だけで recovery を行います。measured supervision は担当範囲の working seat を orchestration も含めて
+監視します。design は operator の rung であり、supervision の監視対象ではありません。finding の `subject_role` が configured owner role の場合だけ narrow fallback を使い、design の
+recorded pane または event-reader transport に `wake_class: escalation` の wake を 1 件だけ送ります。それ以外の
+subject は通常どおり `owner_role` を起こします。同じ cycle で両方の rung へ一斉送信しません。
+永続 finding は provenance として `subject_role`、`wake_target_role`、`wake_class` を記録します。
+
+design は escalation を裁定しますが、recovery の権限は受け取りません。supervision liveness に対する最後の
+resort であり、supervision が design を監視または recover することもありません。health evidence、G630 recovery
+sequence、delivery、settlement、lifecycle transition の ownership は変更しません。
+
+terminal CI も action の形で分類します。exact-head の `ci-wait` が failed で、その head が current のまま、repair
+の担当表明がない場合だけ actionable です。repair/update label または new head は通常の repair が進行している
+証拠なので、supervision は silent のままです。green check には declared state の fallback もあります。
+`intent-pr-created` label の issue に紐づく open non-draft PR が all green で review-routing label を持たない場合、
+`ci-wait` record がなくても `ci-all-green-not-transitioned` を返します。このとき
+`ci_classification_source` は `declared-label-fallback` で、永続 wait はより豊かな `ci-wait-record` path です。
+
+> **preview-through-1.x (G657)。** subject-based owner escalation と settled-CI classification fallback は
+> v0.12.0 freeze 後の preview behavior で、1.0 compatibility promise の対象外です。release decision は行いません。
+
 ### registration は失われたが process は存在する (G648 — preview-through-1.x)
 
 herdr の registration は process liveness ではありません。`notify status`、delivery、supervision が
@@ -1450,9 +1473,9 @@ G638 は永続的な **preview-through-1.x** wait record を追加します。ch
 exact head と owed transition を記録します:
 `intent-cli automation ci-wait record --domain <d> --repo <owner/repo> --pr <n> --head <sha> --transition <t> --write`。
 これは polling loop ではなく、次の message-driven wake が扱う obligation です。`automation ci-wait show`
-で読み取り、canonical な `automation pr-transition` が transition の適用後に消去します。GitHub が別の
-head を報告した場合、`stalled-work` は actionable な `ci-head-moved` evidence を出し、古い head の green
-を現在の成功とはみなしません。
+で読み取り、canonical な `automation pr-transition` が transition の適用後に消去します。G638 は別の
+current head を actionable な `ci-head-moved` と命名しましたが、G657 は new head を advancing-repair evidence
+として silent に限定します。old head の green または red check を current の結果とはみなしません。
 
 `notify report` が running でない role の recorded pane を解決した場合、role と observed liveness を示す
 advisory `recipient_warning` を出力したうえで、その pane に report を届けます。report は sleeping role が

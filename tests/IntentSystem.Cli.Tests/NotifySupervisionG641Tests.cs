@@ -374,6 +374,77 @@ public sealed class NotifySupervisionG641Tests : IDisposable
     }
 
     [Fact]
+    public void OwnerSeatLossWakesOnlyDesignThroughRecordedTopologyAsEscalation_G657()
+    {
+        var context = CreateContext();
+        RecordMode(context, SessionLayerMode.HerdrOnly);
+        WriteTopology(includeDesign: true);
+        var runner = new FakeRunner
+        {
+            AgentsJson = RunningAgentsJson("design", "implementation"),
+        };
+        var supervisor = CreateSupervisor(context, "unused-agmsg", runner, write: true, boundSeconds: null);
+
+        var pass = supervisor.RunOnce();
+
+        var finding = Assert.Single(pass.Findings, item => item.Kind == "seat-absent");
+        Assert.Equal("orchestration", finding.SubjectRole);
+        Assert.Equal("design", finding.WakeTargetRole);
+        Assert.Equal("escalation", finding.WakeClass);
+        Assert.True(finding.WakeDelivered);
+        var prompt = Assert.Single(runner.Calls, call =>
+            call.Arguments.Take(2).SequenceEqual(["agent", "prompt"]));
+        Assert.Equal("wG641:p0", prompt.Arguments[2]);
+        Assert.Contains("\"wake_class\":\"escalation\"", prompt.Arguments[3], StringComparison.Ordinal);
+        Assert.DoesNotContain(runner.Calls, call =>
+            call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wG641:p1"]));
+    }
+
+    [Fact]
+    public void ImplementationSeatLossStillWakesOnlyOrchestration_G657()
+    {
+        var context = CreateContext();
+        RecordMode(context, SessionLayerMode.HerdrOnly);
+        WriteTopology(includeDesign: true);
+        var runner = new FakeRunner
+        {
+            AgentsJson = RunningAgentsJson("design", "orchestration"),
+        };
+        var supervisor = CreateSupervisor(context, "unused-agmsg", runner, write: true, boundSeconds: null);
+
+        var pass = supervisor.RunOnce();
+
+        var finding = Assert.Single(pass.Findings, item => item.Kind == "seat-absent");
+        Assert.Equal("implementation", finding.SubjectRole);
+        Assert.Equal("orchestration", finding.WakeTargetRole);
+        Assert.Null(finding.WakeClass);
+        var prompt = Assert.Single(runner.Calls, call =>
+            call.Arguments.Take(2).SequenceEqual(["agent", "prompt"]));
+        Assert.Equal("wG641:p1", prompt.Arguments[2]);
+        Assert.DoesNotContain(runner.Calls, call =>
+            call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wG641:p0"]));
+    }
+
+    [Fact]
+    public void MissingDesignSeatIsTheOperatorRungAndIsNotWatched_G657()
+    {
+        var context = CreateContext();
+        RecordMode(context, SessionLayerMode.HerdrOnly);
+        WriteTopology(includeDesign: true);
+        var runner = new FakeRunner
+        {
+            AgentsJson = RunningAgentsJson("orchestration", "implementation"),
+        };
+        var supervisor = CreateSupervisor(context, "unused-agmsg", runner, write: true, boundSeconds: null);
+
+        var pass = supervisor.RunOnce();
+
+        Assert.DoesNotContain(pass.Findings, item => item.SubjectRole == "design");
+        Assert.DoesNotContain(runner.Calls, call =>
+            call.Arguments.Take(2).SequenceEqual(["agent", "prompt"]));
+    }
+
+    [Fact]
     public void EnglishAndJapaneseGuidanceNameTheMeasuredPreviewContract_G641()
     {
         var rootPath = RepoVersionPolicySource.RepoRoot();
@@ -386,6 +457,7 @@ public sealed class NotifySupervisionG641Tests : IDisposable
         {
             Assert.Contains("G641", document, StringComparison.Ordinal);
             Assert.Contains("G652", document, StringComparison.Ordinal);
+            Assert.Contains("G657", document, StringComparison.Ordinal);
             Assert.Contains("--bound", document, StringComparison.Ordinal);
             Assert.Contains("undelivered-escalation", document, StringComparison.Ordinal);
             Assert.Contains("detectable_at", document, StringComparison.Ordinal);
@@ -393,10 +465,16 @@ public sealed class NotifySupervisionG641Tests : IDisposable
             Assert.Contains("state_change_seq", document, StringComparison.Ordinal);
             Assert.Contains("live-idle", document, StringComparison.Ordinal);
             Assert.Contains("preview-through-1.x", document, StringComparison.Ordinal);
+            Assert.Contains("subject_role", document, StringComparison.Ordinal);
+            Assert.Contains("wake_target_role", document, StringComparison.Ordinal);
+            Assert.Contains("wake_class", document, StringComparison.Ordinal);
+            Assert.Contains("declared-label-fallback", document, StringComparison.Ordinal);
         }
 
         Assert.Contains("measured supervision records", englishLedger, StringComparison.Ordinal);
         Assert.Contains("measured supervision records", japaneseLedger, StringComparison.Ordinal);
+        Assert.Contains("supervision escalation ladder", englishLedger, StringComparison.Ordinal);
+        Assert.Contains("supervision escalation ladder", japaneseLedger, StringComparison.Ordinal);
     }
 
     private NotifyMeasuredSupervisor CreateSupervisor(
@@ -472,22 +550,49 @@ public sealed class NotifySupervisionG641Tests : IDisposable
             writer));
     }
 
-    private void WriteTopology()
+    private void WriteTopology(bool includeDesign = false)
     {
         var path = NotifyRoleTopologyStore.ResolvePath(root, Domain, Team);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var roles = new Dictionary<string, object>
+        {
+            ["orchestration"] = new { resident = "herdr", workspace_id = "wG641", pane_id = "wG641:p1" },
+            ["implementation"] = new { resident = "herdr", workspace_id = "wG641", pane_id = "wG641:p2" },
+        };
+        if (includeDesign)
+        {
+            roles["design"] = new { resident = "herdr", workspace_id = "wG641", pane_id = "wG641:p0" };
+        }
         File.WriteAllText(path, JsonSerializer.Serialize(new
         {
             domain = Domain,
             team = Team,
             workspace_id = "wG641",
-            roles = new Dictionary<string, object>
-            {
-                ["orchestration"] = new { resident = "herdr", workspace_id = "wG641", pane_id = "wG641:p1" },
-                ["implementation"] = new { resident = "herdr", workspace_id = "wG641", pane_id = "wG641:p2" },
-            },
+            roles,
         }));
     }
+
+    private static string RunningAgentsJson(params string[] roles) => JsonSerializer.Serialize(new
+    {
+        result = new
+        {
+            agents = roles.Select(role => new
+            {
+                name = role,
+                workspace_id = "wG641",
+                pane_id = role switch
+                {
+                    "design" => "wG641:p0",
+                    "orchestration" => "wG641:p1",
+                    _ => "wG641:p2",
+                },
+                agent = "fixture",
+                agent_session = new { id = role },
+                agent_status = "working",
+                interactive_ready = true,
+            }),
+        },
+    });
 
     private sealed class FakeRunner : INotifyProcessRunner
     {
@@ -503,7 +608,8 @@ public sealed class NotifySupervisionG641Tests : IDisposable
             }
 
             if (arguments.SequenceEqual(["pane", "process-info", "--pane", "wG641:p1"])
-                || arguments.SequenceEqual(["pane", "process-info", "--pane", "wG641:p2"]))
+                || arguments.SequenceEqual(["pane", "process-info", "--pane", "wG641:p2"])
+                || arguments.SequenceEqual(["pane", "process-info", "--pane", "wG641:p0"]))
             {
                 return new NotifyProcessResult(
                     0,
