@@ -288,6 +288,15 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "guide design-thread",
+            Role = RoleDesign,
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "G654 preview-through-1.x agent-kind-neutral design-thread operating contract: four outcome wakes, provenance, transaction-scoped approval, merge-authority comparison, three-layer verification, orchestration-owned recovery, supervision-liveness checking, and outcome-shaped reporting."
+        },
+        new CommandGroupEntry
+        {
             Name = "guide workflow task implementation-loop",
             Role = RoleChildImplementation,
             Classification = ClassificationSupport,

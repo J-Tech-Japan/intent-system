@@ -15,6 +15,48 @@ review）と、特に 1 つのホストリポジトリが **複数の intent ド
 intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --mode single-domain|multi-domain --format markdown
 ```
 
+## design thread の運用 contract（G654 — preview-through-1.x）
+
+agent kind に依存しない contract は `intent-cli guide design-thread` で表示します。
+`guide commands list` が catalog に載せ、`guide next` が design role 向けにこの guide を示します。
+内容は `agmsg` / `herdr-only` と team 指定の有無で変わりません。guide を再読するのは
+CLI version または session-layer configuration が変わったときで、wake ごとではありません。
+
+design wake の有効な outcome は 4 種類だけです。canonical workflow を進める、新しい実進捗の
+evidence を確認する、次の actionable な design / packet / issue candidate を見つけて provenance
+付きで orchestration に渡す、人間だけが解決できる blocker を報告する、のいずれかです。
+unfinished project では `no-actionable`、`running=true`、liveness、unchanged status、`no change`
+は outcome ではありません。report は変化の evidence を示します。人間の action が必要なら、
+最小の具体的 operation と自動化できない理由を示します。
+
+provenance state は candidate、accepted design、packet、queued unit、published unit、WIP を区別します。
+canonical host state に存在する前に execution-unit number を使いません。external handoff を優先する前に、
+source kind、reference、timestamp、requesting party、acceptance state を記録します。read-only inspection
+に approval は不要です。operator が merge-only と明示しない限り、merge instruction は merge、merge
+commit 検証、linked issue close、queue transition、runs append、host state write-back、host state push からなる
+完全な closeout transaction を 1 回で許可します。piecemeal な approval は求めません。publication、contract、
+priority、release の変更には引き続き明示的 acceptance が必要です。
+
+GitHub `reviewDecision` だけでは blocker を証明できません。intent-cli workflow label、exact PR head、
+GitHub check、GitHub mergeability、canonical queue state を source ごとに帰属させて比較します。
+delegation verification は canonical workflow status、recorded session-layer agent state と G652 activity
+sub-verdict、file / commit / pull request という実 artifact の 3 layer です。`running=true` だけでは
+progress を証明できず、terminal content を workflow evidence として `parse` しません。
+
+team formula は judgment を担う 4 thread と 1 supervision process です。watcher infrastructure は
+第 5 role ではなく、conversation、judgment、model token を持ちません。supervision は design
+conversation の外で動き、design wake あたり最大 1 回だけ参照します。すべての stall class（review
+wedge を含む）の detection、classification、authorized recovery は orchestration が所有します。
+design は event-driven で、guide が示す escalation set だけを受け取ります。残る duty は、最後に完了した
+supervision-cycle record の age を declared supervision-liveness bound と低頻度で比較することであり、
+conversation の heartbeat ではありません。detection bound は wake interval と scheduling jitter の和より
+大きくします。
+
+inbound app monitor を持たない agent kind の design seat は routing root を cwd とする recorded resident
+herdr seat にし、persistent AGENTS rule を適用します。inbound app monitor を持つ kind は external reader
+を利用できます。これは recommendation ではなく deployment rule であり、stall recovery を design に
+移したり、model-backed monitoring role を追加したりしません。
+
 ## canonical notify workflow
 
 role 間の workflow message はすべて `intent-cli notify` を使い、agent 自身は

@@ -344,6 +344,8 @@ internal static class CommandRouter
                 ["artifact-intake"] = GuideArtifactIntakeCommand.Execute,
                 // G487: optional agmsg-backed orchestrator-thread guide surface.
                 ["orchestrator-thread"] = GuideOrchestratorThreadCommand.Execute,
+                // G654: agent-kind-neutral design-thread operating contract.
+                ["design-thread"] = GuideDesignThreadCommand.Execute,
                 // G637: read-only canonical team workspace layout plan.
                 ["workspace-layout"] = GuideWorkspaceLayoutCommand.Execute,
                 // G488: thin, portable agent skill pack bootstrap (ADR-013 / spec-27).
