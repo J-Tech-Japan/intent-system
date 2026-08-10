@@ -306,6 +306,39 @@ public sealed class NotifySupervisionG641Tests : IDisposable
     }
 
     [Fact]
+    public void UndeliveredReportOutboxIsSurfacedOnceWithoutAutoSendOrRedispatch_G653()
+    {
+        var context = CreateContext();
+        Assert.True(NotifyReportOutboxStore.WriteNew(root, new NotifyReportOutboxEntry
+        {
+            Domain = Domain,
+            Team = Team,
+            TaskId = "G653-undelivered",
+            FromRole = "implementation",
+            ToRole = "orchestration",
+            Status = "completed",
+            Artifact = "draft-pr",
+            Summary = "completed but transport failed",
+            CreatedAt = firstNow,
+            DeliveryState = "undelivered",
+            DeliveryError = "fixture",
+        }).Written);
+        var runner = new FakeRunner();
+        var supervisor = CreateSupervisor(context, "unused-agmsg", runner, write: true, boundSeconds: null);
+
+        var first = supervisor.RunOnce();
+
+        var finding = Assert.Single(first.Findings, item => item.Kind == "undelivered-report-outbox");
+        Assert.Contains("notify collect", finding.Summary, StringComparison.Ordinal);
+        Assert.False(finding.WakeAttempted);
+        Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("send-text") || call.Arguments.Contains("process-info"));
+
+        now = firstNow.AddSeconds(1);
+        var second = supervisor.RunOnce();
+        Assert.DoesNotContain(second.Findings, item => item.Kind == "undelivered-report-outbox");
+    }
+
+    [Fact]
     public void EnglishAndJapaneseGuidanceNameTheMeasuredPreviewContract_G641()
     {
         var rootPath = RepoVersionPolicySource.RepoRoot();

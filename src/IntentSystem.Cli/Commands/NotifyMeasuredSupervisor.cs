@@ -313,6 +313,7 @@ internal sealed class NotifyMeasuredSupervisor
             .ToHashSet(StringComparer.Ordinal);
         observations.AddRange(ReadUndeliveredEscalations(now, previousCycle is not null)
             .Where(observation => !acknowledgedEscalations.Contains(observation.Key)));
+        observations.AddRange(ReadUndeliveredReportOutbox());
         observations.AddRange(ReadAbsentSeats(now));
 
         if (absentSinceLastCycle)
@@ -729,6 +730,37 @@ internal sealed class NotifyMeasuredSupervisor
         }
 
         return observations;
+    }
+
+    private IReadOnlyList<NotifySupervisionObservation> ReadUndeliveredReportOutbox()
+    {
+        var entries = NotifyReportOutboxStore.ReadUndelivered(routingRoot, domain, team, out var error);
+        if (error is not null)
+        {
+            return
+            [
+                new NotifySupervisionObservation
+                {
+                    Key = "report-outbox:unreadable",
+                    Kind = "undelivered-report-outbox",
+                    OwnerRole = ownerRole,
+                    Source = "notify-report-outbox",
+                    Summary = $"The report outbox could not be read: {error}",
+                    WakeSuppressed = true,
+                },
+            ];
+        }
+
+        return entries.Select(entry => new NotifySupervisionObservation
+        {
+            Key = $"report-outbox:{entry.TaskId}",
+            Kind = "undelivered-report-outbox",
+            OwnerRole = entry.FromRole,
+            Source = "notify-report-outbox",
+            Summary = $"Report outbox entry for task '{entry.TaskId}' is undelivered at '{NotifyReportOutboxStore.ResolvePath(routingRoot, domain, team)}'. Collect it with `intent-cli notify collect --domain {domain} --team {team} --task-id {entry.TaskId} --routing-root {routingRoot} --write`; do not re-delegate the task.",
+            DetectableAt = entry.CreatedAt,
+            WakeSuppressed = true,
+        }).ToArray();
     }
 
     private IReadOnlyList<NotifySupervisionObservation> ReadAbsentSeats(DateTimeOffset now)

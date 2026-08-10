@@ -84,6 +84,18 @@ recovery for that finding. A declared bound below the configured interval is a
 structural false-alarm warning, emitted at supervise start and on each cycle,
 not a value the CLI silently corrects.
 
+**Report outbox (G653 — preview-through-1.x).** `notify report --write`
+persists the sender-side outbox entry before it attempts transport. The entry
+keeps the task id, result nonce, status, artifact, summary, and delivery
+timestamps, so a delivery failure is retained as `undelivered` rather than
+discarding completed work. Supervision only surfaces that entry and its
+`notify collect` remedy; it never sends it automatically. The recipient-side
+terminal `ORCH_RESULT` remains a record for the human, but intent-cli never
+parses a terminal. When a visible result has no arrived report, collect the
+persisted outbox entry — do not re-delegate or redo the task. Collection sends
+only the original report once for its task id and refuses an already-delivered
+entry.
+
 A report is a message rather than a bookkeeping entry: fail-closed protection
 belongs on pending-state mutation, not on carrying the message. Refusing an
 unrecognised identifier would silence unsolicited reports and answers to

@@ -24,6 +24,7 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
         NotifyCommand.HerdrExecutableFactory = null;
         NotifyCommand.UtcNowFactory = null;
         NotifyPendingDelegationStore.WriteOverride = null;
+        NotifyReportOutboxStore.WriteOverride = null;
         workspace.Dispose();
     }
 
@@ -255,6 +256,61 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
         Assert.Empty(runner.Calls);
     }
 
+    [Fact]
+    public void ReportOutboxFailsClosedBeforeTransportAndSurvivesFailedDelivery_G653()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        Assert.Equal(0, workspace.Run(DelegateArgs()).ExitCode);
+        runner.Calls.Clear();
+        NotifyReportOutboxStore.WriteOverride = (path, _) =>
+            new NotifyReportOutboxWriteResult(false, path, "fixture denies outbox write");
+
+        var (unwritableExit, unwritable) = workspace.Run(ReportArgs());
+
+        Assert.Equal(1, unwritableExit);
+        Assert.Equal("report-outbox-write-failed", unwritable.GetProperty("cause").GetString());
+        Assert.Empty(runner.Calls);
+
+        NotifyReportOutboxStore.WriteOverride = null;
+        runner.PromptExitCode = 1;
+        var (failedExit, failed) = workspace.Run(ReportArgs());
+
+        Assert.Equal(1, failedExit);
+        Assert.False(failed.GetProperty("delivered").GetBoolean());
+        var outboxPath = failed.GetProperty("outbox_entry_path").GetString()!;
+        Assert.True(File.Exists(outboxPath));
+        Assert.Contains(outboxPath, failed.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+        var outbox = NotifyReportOutboxStore.Find(workspace.RootPath, Workspace.Domain, Workspace.Team, "G629-demo");
+        Assert.True(outbox.Resolved);
+        Assert.Equal("undelivered", outbox.Entry!.DeliveryState);
+    }
+
+    [Fact]
+    public void CollectResendsOnlyPersistedReportAndRefusesSecondCollection_G653()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true)) { PromptExitCode = 1 };
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        Assert.Equal(0, workspace.Run(DelegateArgs()).ExitCode);
+        Assert.Equal(1, workspace.Run(ReportArgs()).ExitCode);
+        runner.PromptExitCode = 0;
+        runner.Calls.Clear();
+
+        var (collectExit, collected) = workspace.Run(CollectArgs());
+
+        Assert.Equal(0, collectExit);
+        Assert.True(collected.GetProperty("delivered").GetBoolean());
+        var (_, status) = workspace.Run(StatusArgs());
+        Assert.True(status.GetProperty("report_arrived").GetBoolean());
+        Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("send-text"));
+
+        runner.Calls.Clear();
+        var (secondExit, second) = workspace.Run(CollectArgs());
+        Assert.Equal(1, secondExit);
+        Assert.Equal("already-collected", second.GetProperty("cause").GetString());
+        Assert.Empty(runner.Calls);
+    }
+
     private static string[] DelegateArgs() =>
     [
         "notify", "delegate", "--domain", Workspace.Domain, "--team", Workspace.Team,
@@ -278,10 +334,17 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
         "--task-id", "G629-demo", "--format", "json",
     ];
 
+    private static string[] CollectArgs() =>
+    [
+        "notify", "collect", "--domain", Workspace.Domain, "--team", Workspace.Team,
+        "--task-id", "G629-demo", "--write", "--format", "json",
+    ];
+
     private sealed class FakeRunner(Func<string> agentResponse) : INotifyProcessRunner
     {
         public List<(string FileName, IReadOnlyList<string> Arguments)> Calls { get; } = [];
         public string AgentResponse { get; set; } = agentResponse();
+        public int PromptExitCode { get; set; }
 
         public NotifyProcessResult Run(string fileName, IReadOnlyList<string> arguments)
         {
@@ -297,6 +360,11 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
                     0,
                     "{\"result\":{\"process_info\":{\"foreground_processes\":[]}}}",
                     string.Empty);
+            }
+
+            if (arguments.Take(3).SequenceEqual(["agent", "prompt", "wH:p1"]))
+            {
+                return new NotifyProcessResult(PromptExitCode, string.Empty, PromptExitCode == 0 ? string.Empty : "fixture prompt failure");
             }
 
             return new NotifyProcessResult(0, string.Empty, string.Empty);

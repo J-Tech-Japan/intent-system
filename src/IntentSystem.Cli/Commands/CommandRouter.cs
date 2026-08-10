@@ -133,6 +133,7 @@ internal static class CommandRouter
             {
                 ["delegate"] = NotifyCommand.ExecuteDelegate,
                 ["report"] = NotifyCommand.ExecuteReport,
+                ["collect"] = NotifyCommand.ExecuteCollect,
                 ["escalate"] = NotifyCommand.ExecuteEscalate,
                 ["status"] = NotifyCommand.ExecuteStatus,
                 ["supervise"] = NotifyCommand.ExecuteSupervise
