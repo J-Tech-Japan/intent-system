@@ -410,7 +410,10 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model clau
 - **Role-derived roots.** Give every role one bounded `--add-dir <role-work-root>`
   for its checkout or worktree. A reviewer also needs `--add-dir
   <host-routing-root>` because `intent-cli notify report` is its canonical
-  reporting surface. Do not add unrelated developer-machine roots.
+  reporting surface. Do not add unrelated developer-machine roots. Before
+  delegation, the orchestrator compares workspace prerequisites with this
+  recorded write envelope and prepares anything outside it under orchestrator
+  authority (G655).
 - **Continuation bound.** Keep `--max-autopilot-continues 10` explicit. Any
   different bound is an operator decision recorded with the recipe.
 - **Inline-payload advisory.** Profile `copilot-autopilot-observed-paste-risk`
@@ -454,7 +457,9 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
 
 - **Role-derived roots.** Use one bounded `--add-dir <role-work-root>` for the
   role checkout/worktree; add the host routing root only when that role's
-  canonical report surface needs it.
+  canonical report surface needs it. Before delegation, the orchestrator
+  compares workspace prerequisites with this recorded write envelope and
+  prepares anything outside it under orchestrator authority (G655).
 - **Measured bounded invocation.** This invocation was measured on **Codex
   v0.144.1 / macOS**; it is not a universal flag recipe for an unmeasured
   environment.
@@ -1786,6 +1791,44 @@ re-deriving the state:
 - `evidence` — the intent-cli / GitHub facts that establish the current state.
 - `options` — **optional** candidate choices, included only when they help.
 - `decision_needed` — the exact decision or action requested from the human.
+
+## Pre-delegation workspace prerequisites (G655)
+
+> **Preview through 1.x.** This post-v0.12.0 guidance surface is outside the
+> 1.0 compatibility promise and may change or be withdrawn during 1.x.
+
+Prerequisites travel with the delegation, not with the receiver's privileges.
+Before delegating, the orchestrator identifies every workspace prerequisite the
+task needs and never assumes a bounded receiver can create worktrees, checkout
+state, or directories outside its recorded write envelope.
+
+1. Identify the required worktrees, checkouts, checkout state, and directories.
+2. Compare every prerequisite write with the selected recipe's recorded write
+   envelope (its role-derived roots). A path the receiver cannot write is
+   orchestrator-owned preparation, not receiver work.
+3. Create or repair the prerequisite under orchestrator authority, following
+   the existing managed-worktree and safe-cleanup policy where applicable.
+4. Verify the prepared cwd, checkout/branch state, managed-worktree
+   registration, and required writable directories.
+5. Delegate only after verification, carrying the prepared path and state with
+   the same logical task.
+
+> **Prepare and resume.** A receiver permission failure is a **routing signal,
+> not a retry target**. The orchestrator prepares and verifies the missing
+> prerequisite, then resumes the **same PR and same logical task** from the
+> prepared path. The receiver's envelope stays bounded, and G630's rule that
+> recovery never changes the seat kind unattended remains unchanged.
+
+> **Anti-pattern:** re-delegating the identical failing step that the receiver's
+> recorded write envelope cannot perform. Do not loop the failure, widen the
+> envelope, mint a replacement PR/task, or switch the seat kind as a workaround.
+
+This is guidance-first orchestration and adds no command. intent-cli does not
+create or verify worktrees and executes no git operation; the human/orchestrator
+performs preparation with its existing authority. The worktree-metadata failure
+and retry loop were reported with transcript by the **remote-herdr team on
+2026-08-08**. The Codex write-envelope asymmetry remains separately attributed
+to the **MyIntentHost measurement on 2026-08-07**.
 
 ## Managed worktree cleanup
 

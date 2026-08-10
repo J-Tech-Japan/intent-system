@@ -137,6 +137,7 @@ internal static class SessionLayerSections
         new("## CI wait state", "ci_wait_state", Applicability.ModeIndependent),
         new("## Draft PR reviewability", "draft_pr_reviewability", Applicability.ModeIndependent),
         new("## Dependency planning", "dependency_planning", Applicability.ModeIndependent),
+        new("## Pre-delegation workspace prerequisites (G655)", "pre_delegation_prerequisites", Applicability.ModeIndependent),
         new("## Detailed guide commands", "detailed_guide_commands", Applicability.ModeIndependent),
     ];
 

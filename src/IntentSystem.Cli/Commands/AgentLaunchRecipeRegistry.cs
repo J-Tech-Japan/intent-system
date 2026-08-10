@@ -124,7 +124,9 @@ internal static class AgentLaunchRecipeRegistry
                 RoleDerivedRoots =
                     "Use one bounded `--add-dir <role-work-root>` for the role's checkout/worktree. A review "
                     + "role additionally receives `--add-dir <host-routing-root>` because `intent-cli notify report` "
-                    + "is its canonical reporting surface. Do not add unrelated developer-machine roots.",
+                    + "is its canonical reporting surface. Do not add unrelated developer-machine roots. Before "
+                    + "delegation, the orchestrator compares workspace prerequisites with this recorded write "
+                    + "envelope and prepares anything outside it under orchestrator authority (G655).",
                 ContinuationBound =
                     "Keep `--max-autopilot-continues 10` explicit; changing the bound is an operator decision "
                     + "recorded with the recipe, not an agent default.",
@@ -190,7 +192,9 @@ internal static class AgentLaunchRecipeRegistry
                     + "[--add-dir <host-routing-root>]",
                 RoleDerivedRoots =
                     "Use one bounded --add-dir <role-work-root> for the role checkout/worktree; add the host "
-                    + "routing root only for a role whose canonical report surface needs it.",
+                    + "routing root only for a role whose canonical report surface needs it. Before delegation, the "
+                    + "orchestrator compares workspace prerequisites with this recorded write envelope and prepares "
+                    + "anything outside it under orchestrator authority (G655).",
                 ContinuationBound =
                     "No product-wide continuation bound is inferred; keep any role-specific bound explicit in the "
                     + "operator's measured launch record.",
