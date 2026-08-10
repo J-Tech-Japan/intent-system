@@ -35,6 +35,12 @@ internal static class GuideOrchestratorThreadCommand
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
 
+    /// <summary>
+    /// Every output format this guide accepts. Rendering guards consume this
+    /// list so adding a format also adds it to their coverage matrix.
+    /// </summary>
+    internal static readonly IReadOnlyList<string> SupportedFormats = [FormatMarkdown, FormatJson];
+
     private const string ModeSingleDomain = "single-domain";
     private const string ModeMultiDomain = "multi-domain";
 
@@ -3334,8 +3340,7 @@ internal static class GuideOrchestratorThreadCommand
             }
         }
 
-        if (!string.Equals(format, FormatMarkdown, StringComparison.Ordinal)
-            && !string.Equals(format, FormatJson, StringComparison.Ordinal))
+        if (!SupportedFormats.Contains(format, StringComparer.Ordinal))
         {
             values = parsed;
             error = $"Unknown --format '{format}'. Supported: markdown, json.";

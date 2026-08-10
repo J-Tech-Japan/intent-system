@@ -921,6 +921,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         Assert.Equal(0, agmsgWorkspace.RunSet(SessionLayerMode.Agmsg, write: true).ExitCode);
         shapes.Add((agmsgWorkspace.RenderOrchestratorGuide(), BareValues));
         shapes.Add((agmsgWorkspace.RenderSetupReadyMarkdown(), SetupReadyValues));
+        shapes.Add((agmsgWorkspace.RenderSessionLayerGuide(SessionLayerMode.Agmsg, team: true, "markdown"), MatrixValues(team: true)));
 
         using var herdrWorkspace = new ModeWorkspace();
         Assert.Equal(0, herdrWorkspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
@@ -933,6 +934,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         // surface that the operator actually reads.
         using var herdrTeamWorkspace = new ModeWorkspace();
         shapes.Add((herdrTeamWorkspace.RenderTeamScopedMissingMarkdown(), TeamMissingValues));
+        shapes.Add((herdrTeamWorkspace.RenderTeamScopedThreeMissingMarkdown(), MatrixValues(team: true)));
 
         foreach (var (rendered, values) in shapes)
         {
@@ -1005,9 +1007,13 @@ public sealed class SessionLayerModeG570Tests : IDisposable
 
         // And no declaration is decorative: every row names a fragment that is
         // actually rendered, so the table cannot drift ahead of the document.
+        var dynamicMissingHeadlines = Enumerable.Range(1, 11)
+            .Select(count => $"- missing-inputs — supply the {count} missing field(s) below to get a setup-ready plan.")
+            .ToHashSet(StringComparer.Ordinal);
         var unconsumedRows = SessionLayerFragments.Declarations
-            .Where(d => !shapes.Any(shape =>
-                consumed.Contains((d.Section, SessionLayerFragments.Expand(shape.Values, d.Text)))))
+            .Where(d => !dynamicMissingHeadlines.Contains(d.Text)
+                && !shapes.Any(shape =>
+                    consumed.Contains((d.Section, SessionLayerFragments.Expand(shape.Values, d.Text)))))
             .Select(d => $"[{d.Section}] {d.Text}")
             .ToArray();
         Assert.True(
@@ -1037,6 +1043,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         Assert.Equal(0, agmsgWorkspace.RunSet(SessionLayerMode.Agmsg, write: true).ExitCode);
         shapes.Add((agmsgWorkspace.RenderOrchestratorGuideJson(), BareValues));
         shapes.Add((agmsgWorkspace.RenderSetupReadyJson(), SetupReadyValues));
+        shapes.Add((JsonDocument.Parse(agmsgWorkspace.RenderSessionLayerGuide(SessionLayerMode.Agmsg, team: true, "json")).RootElement.Clone(), MatrixValues(team: true)));
 
         using var herdrWorkspace = new ModeWorkspace();
         Assert.Equal(0, herdrWorkspace.RunSet(SessionLayerMode.HerdrOnly, write: true).ExitCode);
@@ -1046,6 +1053,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         // Same G650 team-scoped herdr-only shape as the markdown proof above.
         using var herdrTeamWorkspace = new ModeWorkspace();
         shapes.Add((herdrTeamWorkspace.RenderTeamScopedMissingJson(), TeamMissingValues));
+        shapes.Add((herdrTeamWorkspace.RenderTeamScopedThreeMissingJson(), MatrixValues(team: true)));
 
         var undeclared = new List<string>();
         var consumed = new HashSet<(string, string)>();
@@ -1113,9 +1121,13 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             undeclared.Count == 0,
             "rendered JSON values with no declared type:\n" + string.Join("\n", undeclared));
 
+        var dynamicMissingHeadlines = Enumerable.Range(1, 11)
+            .Select(count => $"missing-inputs — supply the {count} missing field(s) below to get a setup-ready plan.")
+            .ToHashSet(StringComparer.Ordinal);
         var unconsumedRows = SessionLayerFragments.JsonDeclarations
-            .Where(d => !shapes.Any(shape =>
-                consumed.Contains((d.Section, SessionLayerFragments.Expand(shape.Values, d.Text)))))
+            .Where(d => !dynamicMissingHeadlines.Contains(d.Text)
+                && !shapes.Any(shape =>
+                    consumed.Contains((d.Section, SessionLayerFragments.Expand(shape.Values, d.Text)))))
             .Select(d => $"[{d.Section}] {d.Text}")
             .ToArray();
         Assert.True(
@@ -1148,11 +1160,65 @@ public sealed class SessionLayerModeG570Tests : IDisposable
     }
 
     /// <summary>
-    /// G650's reachability guard is an explicit four-cell matrix: the guide's
-    /// markdown and JSON renderings must stay callable for both transports and
-    /// for both domain-wide and team-scoped resolution. A new mixed-section
-    /// fragment therefore cannot hide behind an invocation shape that the
-    /// existing mode tests never exercise.
+    /// G656: a team-scoped JSON invocation can legitimately have exactly three
+    /// missing folders. Its headline must be declared before JSON serialization
+    /// reaches the session-layer fragment boundary.
+    /// </summary>
+    [Fact]
+    public void TeamScopedHerdrOnlyJsonGuide_RendersDeclaredThreeMissingInputs_G656()
+    {
+        using var herdrWorkspace = new ModeWorkspace();
+        var json = herdrWorkspace.RenderTeamScopedThreeMissingJson();
+
+        var intake = json.GetProperty("setup_intake");
+        Assert.Equal("missing-inputs", intake.GetProperty("status").GetString());
+        Assert.Equal(
+            "missing-inputs — supply the 3 missing field(s) below to get a setup-ready plan.",
+            intake.GetProperty("headline").GetString());
+    }
+
+    /// <summary>
+    /// G656 repair: the setup-intake headline is generated from eleven required
+    /// inputs. Render every reachable missing-count cell through every supported
+    /// format so an undeclared count fails at the production boundary.
+    /// </summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    [InlineData(8)]
+    [InlineData(9)]
+    [InlineData(10)]
+    [InlineData(11)]
+    public void EveryReachableSetupIntakeMissingCount_RendersInEverySupportedFormat_G656(int missingCount)
+    {
+        using var guideWorkspace = new ModeWorkspace();
+        var expectedHeadline = $"missing-inputs — supply the {missingCount} missing field(s) below to get a setup-ready plan.";
+
+        foreach (var format in GuideOrchestratorThreadCommand.SupportedFormats)
+        {
+            var rendered = guideWorkspace.RenderGuideWithExactlyMissingInputs(missingCount, format);
+            if (string.Equals(format, "markdown", StringComparison.Ordinal))
+            {
+                Assert.Contains($"- {expectedHeadline}", rendered, StringComparison.Ordinal);
+            }
+            else
+            {
+                using var json = JsonDocument.Parse(rendered);
+                Assert.Equal(expectedHeadline, json.RootElement.GetProperty("setup_intake").GetProperty("headline").GetString());
+            }
+        }
+    }
+
+    /// <summary>
+    /// G656's reachability guard covers every supported output format for both
+    /// transports and for both domain-wide and team-scoped resolution. A new
+    /// mixed-section fragment therefore cannot hide behind an invocation shape
+    /// or format that the existing mode tests never exercise.
     /// </summary>
     [Theory]
     [InlineData(SessionLayerMode.Agmsg, false)]
@@ -1163,16 +1229,24 @@ public sealed class SessionLayerModeG570Tests : IDisposable
     {
         using var guideWorkspace = new ModeWorkspace();
 
-        var markdown = guideWorkspace.RenderSessionLayerGuide(mode, team, "markdown");
-        Assert.Contains("## Setup intake", markdown, StringComparison.Ordinal);
-        Assert.DoesNotContain("Undeclared session-layer fragment", markdown, StringComparison.Ordinal);
-
-        using var json = JsonDocument.Parse(guideWorkspace.RenderSessionLayerGuide(mode, team, "json"));
-        Assert.True(json.RootElement.TryGetProperty("setup_intake", out _));
+        foreach (var format in GuideOrchestratorThreadCommand.SupportedFormats)
+        {
+            var rendered = guideWorkspace.RenderSessionLayerGuide(mode, team, format);
+            if (string.Equals(format, "markdown", StringComparison.Ordinal))
+            {
+                Assert.Contains("## Setup intake", rendered, StringComparison.Ordinal);
+                Assert.DoesNotContain("Undeclared session-layer fragment", rendered, StringComparison.Ordinal);
+            }
+            else
+            {
+                using var json = JsonDocument.Parse(rendered);
+                Assert.True(json.RootElement.TryGetProperty("setup_intake", out _));
+            }
+        }
     }
 
     /// <summary>
-    /// G650's red/green proof at the rendered-matrix boundary. The real guide
+    /// G650's Markdown red/green proof at the rendered-matrix boundary. The real guide
     /// renderer produces each cell first; the test then injects one deliberately
     /// undeclared line into the team-scoped herdr-only Markdown cell and runs the
     /// same matrix declaration walk. The red pass must fail closed on that
@@ -1194,10 +1268,29 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         AssertRenderedGuideMatrixHasDeclaredFragments();
     }
 
+    /// <summary>
+    /// G656: the same rendered-matrix guard must fail closed for a JSON value,
+    /// not merely for a Markdown line.
+    /// </summary>
+    [Fact]
+    public void RenderMatrix_RejectsInjectedUndeclaredJsonFragment_ThenPassesAfterRestore_G656()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            AssertRenderedGuideMatrixHasDeclaredFragments(jsonTransform: InjectDeliberatelyUndeclaredJsonFragment));
+
+        Assert.Contains("Undeclared session-layer JSON fragment", error.Message, StringComparison.Ordinal);
+        Assert.Contains("setup_intake", error.Message, StringComparison.Ordinal);
+        Assert.Contains(DeliberatelyUndeclaredJsonFragment, error.Message, StringComparison.Ordinal);
+
+        AssertRenderedGuideMatrixHasDeclaredFragments();
+    }
+
     private const string DeliberatelyUndeclaredFragment = "- deliberately undeclared G650 fragment";
+    private const string DeliberatelyUndeclaredJsonFragment = "deliberately undeclared G656 JSON fragment";
 
     private static void AssertRenderedGuideMatrixHasDeclaredFragments(
-        Func<string, string>? markdownTransform = null)
+        Func<string, string>? markdownTransform = null,
+        Func<string, string, string>? jsonTransform = null)
     {
         foreach (var (mode, team) in new[]
         {
@@ -1221,16 +1314,10 @@ public sealed class SessionLayerModeG570Tests : IDisposable
                 markdown = markdownTransform(markdown);
             }
 
-            if (string.Equals(mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal))
-            {
-                AssertRenderedMarkdownFragmentsAreDeclared(markdown, values);
-            }
+            AssertRenderedMarkdownFragmentsAreDeclared(markdown, values);
 
             using var json = JsonDocument.Parse(guideWorkspace.RenderSessionLayerGuide(mode, team, "json"));
-            if (string.Equals(mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal))
-            {
-                AssertRenderedJsonValuesAreDeclared(json.RootElement, values);
-            }
+            AssertRenderedJsonValuesAreDeclared(json.RootElement, values, jsonTransform);
         }
     }
 
@@ -1244,6 +1331,12 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         Assert.NotEqual(rendered, injected);
         return injected;
     }
+
+    private static string InjectDeliberatelyUndeclaredJsonFragment(string property, string rendered) =>
+        string.Equals(property, "setup_intake", StringComparison.Ordinal)
+            && string.Equals(rendered, "missing-inputs", StringComparison.Ordinal)
+                ? DeliberatelyUndeclaredJsonFragment
+                : rendered;
 
     private static void AssertRenderedMarkdownFragmentsAreDeclared(
         string rendered,
@@ -1287,7 +1380,8 @@ public sealed class SessionLayerModeG570Tests : IDisposable
 
     private static void AssertRenderedJsonValuesAreDeclared(
         JsonElement root,
-        IReadOnlyDictionary<string, string> values)
+        IReadOnlyDictionary<string, string> values,
+        Func<string, string, string>? transform = null)
     {
         foreach (var property in SessionLayerSections.MixedJsonProperties)
         {
@@ -1326,7 +1420,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
                         return;
                     }
 
-                    SessionLayerFragments.JsonClausesOf(values, property, text);
+                    SessionLayerFragments.JsonClausesOf(values, property, transform?.Invoke(property, text) ?? text);
                     break;
             }
         }
@@ -2302,6 +2396,39 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             return Render(args.ToArray());
         }
 
+        public string RenderGuideWithExactlyMissingInputs(int missingCount, string format)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(missingCount, 1);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(missingCount, 11);
+
+            var suppliedCount = 11 - missingCount;
+            var suppliedInputs = SuppliedInputs;
+            var args = new List<string> { "guide", "orchestrator-thread" };
+            foreach (var input in suppliedInputs.Take(suppliedCount))
+            {
+                args.Add(input.Argument);
+                args.Add(input.Value);
+            }
+
+            args.AddRange(["--format", format]);
+            return Render(args.ToArray());
+        }
+
+        private static readonly (string Argument, string Value)[] SuppliedInputs =
+        [
+            ("--domain", Domain),
+            ("--target-repo", Repo),
+            ("--orchestrator-path", "/w/orchestrator"),
+            ("--implementation-path", "/w/implementation"),
+            ("--review-path", "/w/review"),
+            ("--orchestrator-agent", "claude"),
+            ("--implementer-agent", "claude"),
+            ("--reviewer-agent", "claude"),
+            ("--team", "demo-team"),
+            ("--delivery-mode", "monitor"),
+            ("--existing-loop-policy", "none"),
+        ];
+
         /// <summary>A setup-ready invocation: every intake input supplied.</summary>
         private static string[] SetupReadyArgs(string format, string existingLoopPolicy = "none") =>
         [
@@ -2384,6 +2511,25 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             ]);
             return JsonDocument.Parse(output).RootElement.Clone();
         }
+
+        public JsonElement RenderTeamScopedThreeMissingJson()
+        {
+            RecordHerdrTeam();
+            var output = Render(TeamScopedThreeMissingArgs("json"));
+            return JsonDocument.Parse(output).RootElement.Clone();
+        }
+
+        public string RenderTeamScopedThreeMissingMarkdown()
+        {
+            RecordHerdrTeam();
+            return Render(TeamScopedThreeMissingArgs("markdown"));
+        }
+
+        private static string[] TeamScopedThreeMissingArgs(string format) =>
+        [
+            "guide", "orchestrator-thread", "--domain", Domain, "--team", "demo-team",
+            "--target-repo", Repo, "--agent", "claude", "--existing-loop-policy", "none", "--format", format,
+        ];
 
         private void RecordHerdrTeam()
         {
