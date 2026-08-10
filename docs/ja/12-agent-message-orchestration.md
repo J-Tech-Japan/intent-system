@@ -70,7 +70,7 @@ process が消えたとは推測しません。経過時間だけで verdict を
 
 **report outbox (G653 — 1.x を通じた preview)。** `notify report --write` は transport を試す前に sender-side outbox entry を保存します。entry は task id、result nonce、status、artifact、summary、delivery timestamp を保持し、delivery failure は完了した作業を失わず `undelivered` として残ります。supervision は entry と `notify collect` の remedy を表示するだけで自動送信しません。recipient-side terminal の `ORCH_RESULT` は人間向けの record のままで、intent-cli は terminal を `parse` しません。visible result に arrived report がないときは、recipient を `re-delegate` したり task を `redo` したりせず persisted outbox entry を `collect` します。collection は同じ task id の original report だけを一度送信し、already-delivered entry は拒否します。entry は dispatch generation（result nonce）単位なので、再委譲された task id も新しい report を運べ、unmatched report も message として継続します。undelivered の current generation に対する二回目の report は fail-closed で拒否し、正確な `notify collect` recovery command を示します。
 
-新しい委譲を開始する前に、`notify delegate --write` は undelivered report entry がある task を拒否し、supervision finding と同じ `notify collect` command を示します。これにより finding の対象と collect できる entry は一致します。また、すでに使われた task id/result nonce の組も作業開始前に拒否し、fresh `--result-nonce` または新しい task id を要求します。
+新しい委譲を開始する前に、`notify delegate --write` は undelivered report entry がある task を拒否し、supervision finding と同じ `notify collect` command を示します。これにより finding の対象と collect できる entry は一致します。また、report が settled になった task id/result nonce の組も作業開始前に拒否し、fresh `--result-nonce` または新しい task id を要求します。outbox がない open generation は idempotent に再送できます。
 
 report は bookkeeping entry ではなく message です。fail-closed の保護は message を運ぶことではなく
 pending state の mutation に置きます。認識されない identifier を理由に配信を拒否すると、recipient が

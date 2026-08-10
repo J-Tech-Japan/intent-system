@@ -377,8 +377,13 @@ internal static class NotifyCommand
         }
 
         var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
+        var sameOpenGeneration = pending.Resolved
+            && pending.Record is { ReportArrived: false }
+            && string.Equals(pending.Record.ResultNonce, options.ResultNonce, StringComparison.Ordinal);
         if (existingGeneration.Entry is not null
-            || pending.Record is not null && string.Equals(pending.Record.ResultNonce, options.ResultNonce, StringComparison.Ordinal))
+            || (pending.Record is not null
+                && !sameOpenGeneration
+                && string.Equals(pending.Record.ResultNonce, options.ResultNonce, StringComparison.Ordinal)))
         {
             Emit(writer, options.Format, FailureResult(
                 OperationDelegate,

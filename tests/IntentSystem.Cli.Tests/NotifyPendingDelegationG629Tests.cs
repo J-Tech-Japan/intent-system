@@ -391,6 +391,29 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
     }
 
     [Fact]
+    public void DelegateAllowsOpenGenerationResendButRefusesSettledNonceReuse_G653()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+
+        Assert.Equal(0, workspace.Run(DelegateArgs("G653-open-resend", "g653-open-nonce")).ExitCode);
+        runner.Calls.Clear();
+
+        var (resendExit, resend) = workspace.Run(DelegateArgs("G653-open-resend", "g653-open-nonce"));
+        Assert.Equal(0, resendExit);
+        Assert.True(resend.GetProperty("delivered").GetBoolean());
+        Assert.Contains(runner.Calls, call => call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wH:p2"]));
+
+        Assert.Equal(0, workspace.Run(ReportArgs("G653-open-resend")).ExitCode);
+        runner.Calls.Clear();
+
+        var (settledExit, settled) = workspace.Run(DelegateArgs("G653-open-resend", "g653-open-nonce"));
+        Assert.Equal(1, settledExit);
+        Assert.Equal("result-nonce-already-used", settled.GetProperty("cause").GetString());
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
     public void CollectCarriesAnUnmatchedUndeliveredReportWithoutRedispatch_G653()
     {
         var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true)) { PromptExitCode = 1 };

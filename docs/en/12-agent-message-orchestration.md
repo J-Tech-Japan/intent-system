@@ -102,8 +102,9 @@ and names its exact `notify collect` recovery command.
 Before opening a new delegation, `notify delegate --write` refuses a task with
 an undelivered report entry and names that same collection command, so the
 supervision finding and a collectable entry are the same set. It also refuses a
-previously used task-id/result-nonce pair before work starts and requires a
-fresh `--result-nonce` or a new task id.
+previously settled task-id/result-nonce pair before work starts and requires a
+fresh `--result-nonce` or a new task id; an open generation with no outbox can
+be resent idempotently.
 
 A report is a message rather than a bookkeeping entry: fail-closed protection
 belongs on pending-state mutation, not on carrying the message. Refusing an
