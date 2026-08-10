@@ -54,9 +54,9 @@ internal static class GuideCommandsListCommand
             Name = "improve",
             Role = RoleDesign,
             Classification = ClassificationPrimary,
-            Mutability = MutabilityReadOnly,
+            Mutability = MutabilityMixed,
             RecommendedCaller = CallerChatAgent,
-            Purpose = "Design-thread improve / realignment process (G456/G457): `intent-cli improve --domain <d>` (alias of `guide improve`) returns the periodic MVV / ADR / intent-tree / packet-history / clarification-history reflection review. A design-thread reflection process — NOT bug-to-intent-repair, host-loop recovery, state-doctor, dirty-state repair, or any operational diagnostic."
+            Purpose = "Design-thread improve / realignment process (G456/G457/G662): `intent-cli improve --domain <d>` returns the review guide; preview `improve window --write` declares recency independently like a supervision bound, and after human/agent review `improve record --write` appends run evidence without grading quality. Not a scheduler, auto-run, stalled-work class, or operational diagnostic."
         },
         new CommandGroupEntry
         {
@@ -83,7 +83,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationPrimary,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerChatAgent,
-            Purpose = "Design-side action advisor (G465/G644): `intent-cli next --domain <d> --team <team> --target-repo <r>` (alias of `guide next`) recommends ONE design-side process and recommends `supervision-setup` when the team's recorded supervision cycle is missing. Read-only; never auto-executes or manages a process."
+            Purpose = "Design-side action advisor (G465/G644/G662): `intent-cli next --domain <d> --team <team> --target-repo <r>` recommends ONE process, `supervision-setup` when the team's cycle is missing, and realignment when no improve run falls within the independently declared recency window. Read-only; no quality grading, scheduler, auto-run, or stalled-work class."
         },
         new CommandGroupEntry
         {

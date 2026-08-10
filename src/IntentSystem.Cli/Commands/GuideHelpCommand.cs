@@ -140,7 +140,7 @@ internal static class GuideHelpCommand
         new GuideSubcommandEntry
         {
             Name = "improve",
-            Purpose = "Design-thread improve / realignment process (G456): periodically review MVV, ADR/design notes, intent tree, packet history, and clarification history for drift, short-term loops, and intent-strengthening opportunities. Run it by asking: `intent-cli で improve プロセスを実行してください。`. A reflection process, not a scheduler / provider launcher / loop-recovery diagnostic.",
+            Purpose = "Design-thread improve / realignment process (G456/G662): review MVV, ADR/design notes, intent tree, packet history, and clarification history; preview `improve window --write` declares the independent bound and `improve record --write` appends durable run evidence after human/agent review without grading quality. Not a scheduler / provider launcher / loop-recovery diagnostic.",
             Example = "intent-cli guide improve --domain <domain> --format markdown"
         },
         new GuideSubcommandEntry
@@ -158,7 +158,7 @@ internal static class GuideHelpCommand
         new GuideSubcommandEntry
         {
             Name = "next",
-            Purpose = "Design-side action advisor (G465/G644): answers 'what should I do next?' by recommending one design-side process and, when --domain plus --team are supplied, recommends supervision setup when no cycle is recorded. Read-only by default; never auto-executes or manages a process.",
+            Purpose = "Design-side action advisor (G465/G644/G662): recommends one design-side process, checks supervision setup with --domain plus --team, and recommends realignment when no durable improve run falls within the independently declared recency window. Read-only and recency-only; never grades quality, schedules, or auto-executes.",
             Example = "intent-cli guide next --domain <domain> --team <team> --target-repo <owner/repo> --format markdown"
         },
         new GuideSubcommandEntry

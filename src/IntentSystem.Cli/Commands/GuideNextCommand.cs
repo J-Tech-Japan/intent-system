@@ -40,6 +40,9 @@ internal static class GuideNextCommand
     public const string ActionRecovery = "recovery";
     public const string ActionIdle = "idle";
     public const string ActionSupervisionSetup = "supervision-setup";
+    public const string ActionRealignment = "realignment";
+
+    internal static Func<DateTimeOffset> UtcNowFactory { get; set; } = () => DateTimeOffset.UtcNow;
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -87,6 +90,7 @@ internal static class GuideNextCommand
         var teamArg = string.IsNullOrWhiteSpace(team) ? "<team>" : team!;
         var repoArg = string.IsNullOrWhiteSpace(targetRepo) ? "<owner/repo>" : targetRepo!;
         var supervision = ReadSupervisionStatus(context, domain, team);
+        var realignment = ReadRealignmentStatus(context, domain);
 
         var prompt =
 $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). This is READ-ONLY: recommend ONE design-side process, do not mutate packets / issues / labels / queue state, and never launch an AI provider.
@@ -94,9 +98,10 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
 1. Check the evidence (below) — current intents, open questions, packet backlog, open PRs / review state, and CLI / queue health — before recommending.
 2. Use `{GuideDesignThreadCommand.CommandName}` as the design-role operating contract. Its four-outcome wake rule governs whether this wake has an outcome at all.
 3. When a domain and team are supplied, inspect the recorded supervision cycle and include `supervision-setup` first when no cycle is recorded.
-4. Match the situation to exactly one action in the decision set (supervision-setup when its check is missing, then grill / stack / improve / inspect / issue-publish / review / recovery / idle).
-5. Return the recommendation output shape: the recommended action, the reason tied to the evidence you actually checked, the evidence checked, a paste-ready suggested prompt for that action, and the safety boundary.
-6. Stop there — the user decides whether to run the suggested prompt. next never auto-executes the chosen action.";
+4. When a domain is supplied, inspect the independently declared realignment window and latest durable improve-run record. If no run falls within that window, include `realignment`; judge timestamp recency only, never review quality. With no window declaration, do not invent a cadence.
+5. Match the situation to exactly one action in the decision set (supervision-setup when its check is missing, then realignment when its declared window is lapsed, then grill / stack / improve / inspect / issue-publish / review / recovery / idle).
+6. Return the recommendation output shape: the recommended action, the reason tied to the evidence you actually checked, the evidence checked, a paste-ready suggested prompt for that action, and the safety boundary.
+7. Stop there — the user decides whether to run the suggested prompt. next never auto-executes the chosen action.";
 
         var evidenceToCheck = new[]
         {
@@ -107,6 +112,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             "CLI / queue health — `intent-cli automation doctor`: a stale CLI or dirty queue pushes toward recovery before anything else.",
             "Drift / short-term-loop signals — repeated corrective packets on the same surface push toward improve.",
             $"Recorded supervision cycle — when `--domain {domainArg} --team {teamArg}` is supplied, read the team's append-only supervision state; no recorded cycle is a setup gap, while an existing cycle keeps the setup recommendation silent.",
+            $"Improve-run recency — when `--domain {domainArg}` is supplied, read `.intent-cli/improve/{domainArg}/window.json` and `runs.jsonl`; compare only the latest run timestamp with the independently declared realignment window. A missing/aged run recommends realignment; a fresh record is immediately silent. Never infer quality from age.",
         };
 
         var decisionSet = new List<GuideNextAction>
@@ -171,6 +177,16 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             });
         }
 
+        if (realignment.RecommendationIncluded)
+        {
+            decisionSet.Insert(supervision.SetupRecommended ? 1 : 0, new GuideNextAction
+            {
+                Action = ActionRealignment,
+                WhenToChoose = $"No recorded improve run is within the latest declared {realignment.WindowDays}-day realignment window. This is timestamp recency only; it is not a judgment that the previous review was poor or incomplete.",
+                SuggestedPrompt = $"`intent-cli improve --domain {domainArg} --format markdown`; after the human/agent review, record it with `intent-cli improve record --domain {domainArg} --mode implementation-aware --artifact <touched-path> [--artifact <touched-path> ...] --write --format json`.",
+            });
+        }
+
         return new GuideNextResult
         {
             Process = "design-action-next-advisor",
@@ -178,12 +194,13 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             Team = string.IsNullOrWhiteSpace(team) ? null : team,
             TargetRepo = string.IsNullOrWhiteSpace(targetRepo) ? null : targetRepo,
             Supervision = supervision,
+            Realignment = realignment,
             DesignRoleGuide = GuideDesignThreadCommand.CommandName,
             ShortPrompt = ShortPrompt,
             ReadOnly = true,
             Summary =
                 "next is the design-side action advisor: ask it what to do next and it lays out the catalog of design-side "
-                + "processes (supervision-setup when no recorded cycle, grill, stack, improve, inspect, issue-publish, review, recovery, idle), the evidence to check first, "
+                + "processes (supervision-setup when no recorded cycle, realignment when a declared improve window lapses, grill, stack, improve, inspect, issue-publish, review, recovery, idle), the evidence to check first, "
                 + "and the recommendation output shape. It recommends ONE process tied to the evidence; it is read-only by default "
                 + "and never auto-executes the chosen action — the user decides whether to run the suggested prompt.",
             NotThis = new[]
@@ -193,6 +210,8 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 "next does NOT replace the host / review / worker loops — it advises the design thread, it does not drive operational automation.",
                 "intent-cli does NOT launch Claude/Codex/Copilot or any AI provider; the AI agent owns the semantic decision and conversation.",
                 "next does NOT start or manage the supervision process; it only detects a missing recorded cycle and recommends setup.",
+                "next does NOT schedule, cron, or auto-run improve and does not create a stalled-work debt class; it only compares the latest recorded run timestamp with the independently declared window.",
+                "next does NOT grade realignment quality. The review remains human/agent semantic work; recency is the only machine judgment.",
             },
             DoNotSubstitute = new[]
             {
@@ -204,7 +223,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             DecisionSet = decisionSet,
             RecommendationOutputShape = new[]
             {
-                new GuideNextOutputField { Field = "recommended_action", Meaning = "Exactly one action id from the decision set (supervision-setup when no cycle is recorded, or grill / stack / improve / inspect / issue-publish / review / recovery / idle)." },
+                new GuideNextOutputField { Field = "recommended_action", Meaning = "Exactly one action id from the decision set (supervision-setup when no cycle is recorded, realignment when a declared window lapses, or grill / stack / improve / inspect / issue-publish / review / recovery / idle)." },
                 new GuideNextOutputField { Field = "reason", Meaning = "Why this action, tied to the specific evidence checked (cite the intent / packet / PR / health signal that drove it)." },
                 new GuideNextOutputField { Field = "evidence_checked", Meaning = "The evidence actually inspected this run, so the recommendation is auditable." },
                 new GuideNextOutputField { Field = "suggested_prompt", Meaning = "The paste-ready prompt / command for the recommended action that the user can run as-is." },
@@ -216,6 +235,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 "No auto-execute: the recommended action runs only when the user chooses to run the suggested prompt.",
                 "Never hand-edit workflow labels, queue-state, or publish metadata from next — those stay in the operational intent-cli surfaces.",
                 "Supervision discovery is read-only: it reads the recorded cycle and never starts, stops, or manages a background process.",
+                "Realignment discovery is read-only and recency-only: it reads the durable improve record, never grades review quality, and never schedules or auto-runs improve.",
             },
             Prompt = prompt,
         };
@@ -256,6 +276,34 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             {
                 writer.WriteLine($"- read error: {result.Supervision.Error}");
             }
+            writer.WriteLine();
+        }
+        if (result.Realignment is { Checked: true })
+        {
+            writer.WriteLine("## Realignment recency check (G662 — preview-through-1.x)");
+            writer.WriteLine();
+            if (result.Realignment.Error is not null)
+            {
+                writer.WriteLine("- improve-run record: unreadable; repair the record read before deciding (fail closed)");
+                writer.WriteLine($"- read error: {result.Realignment.Error}");
+            }
+            else if (!result.Realignment.Declared)
+            {
+                writer.WriteLine("- declared realignment window: none; recommendation: silent (do not invent a cadence)");
+            }
+            else if (!result.Realignment.RunRecorded && result.Realignment.RecommendationIncluded)
+            {
+                writer.WriteLine($"- latest run: none; declared window: {result.Realignment.WindowDays} days; recommendation: **realignment**");
+            }
+            else if (result.Realignment.RecommendationIncluded)
+            {
+                writer.WriteLine($"- latest run: {result.Realignment.LastRecordedAt:O}; declared window: {result.Realignment.WindowDays} days; age: {result.Realignment.AgeDays:F2} days; recommendation: **realignment**");
+            }
+            else
+            {
+                writer.WriteLine($"- latest run: {result.Realignment.LastRecordedAt:O}; declared window: {result.Realignment.WindowDays} days; age: {result.Realignment.AgeDays:F2} days; recommendation: silent (fresh record)");
+            }
+            writer.WriteLine("- judgment basis: timestamp recency only; intent-cli never grades the human/agent review's quality");
             writer.WriteLine();
         }
         writer.WriteLine(result.Summary);
@@ -384,7 +432,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
     {
         writer.WriteLine("next (alias: guide next)");
         writer.WriteLine(UsageLine);
-        writer.WriteLine("Read-only: design-side action advisor. Lays out the design-side process catalog, and when --domain plus --team are supplied checks whether a supervision cycle is recorded and recommends setup when it is missing. Never auto-executes, starts, or manages a process; never launches an AI provider.");
+        writer.WriteLine("Read-only: design-side action advisor. Lays out the design-side process catalog, checks supervision setup with --domain plus --team, and compares the latest improve run with the domain's independently declared recency window. A missing/aged run yields a paste-ready realignment recommendation; a fresh record is immediately silent. Recency only: no quality grading, scheduler, cron, auto-run, or stalled-work debt class.");
         writer.WriteLine("Ask it: " + ShortPrompt);
     }
 
@@ -432,6 +480,89 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
         }
     }
 
+    private static GuideNextRealignmentStatus ReadRealignmentStatus(CliContext? context, string? domain)
+    {
+        if (context is null || string.IsNullOrWhiteSpace(domain))
+        {
+            return new GuideNextRealignmentStatus
+            {
+                Checked = false,
+                Domain = string.IsNullOrWhiteSpace(domain) ? null : domain,
+            };
+        }
+
+        var artifactRoot = context.ResolveArtifactRootPath();
+        var window = ImproveRealignmentWindowStore.Read(artifactRoot, domain.Trim());
+        if (!window.Resolved)
+        {
+            return new GuideNextRealignmentStatus
+            {
+                Checked = true,
+                Domain = domain.Trim(),
+                WindowPath = window.Path,
+                Error = window.Error,
+            };
+        }
+
+        if (window.Record is null)
+        {
+            return new GuideNextRealignmentStatus
+            {
+                Checked = true,
+                Domain = domain.Trim(),
+                WindowPath = window.Path,
+            };
+        }
+
+        var read = ImproveRunStore.ReadLatest(artifactRoot, domain.Trim());
+        if (!read.Resolved)
+        {
+            return new GuideNextRealignmentStatus
+            {
+                Checked = true,
+                Domain = domain.Trim(),
+                Declared = true,
+                WindowDays = window.Record.WindowDays,
+                WindowPath = window.Path,
+                RecordPath = read.Path,
+                Error = read.Error,
+            };
+        }
+
+        if (read.Latest is null)
+        {
+            return new GuideNextRealignmentStatus
+            {
+                Checked = true,
+                Domain = domain.Trim(),
+                Declared = true,
+                WindowDays = window.Record.WindowDays,
+                Lapsed = true,
+                RecommendationIncluded = true,
+                WindowPath = window.Path,
+                RecordPath = read.Path,
+            };
+        }
+
+        var age = UtcNowFactory().ToUniversalTime() - read.Latest.RecordedAt.ToUniversalTime();
+        var ageDays = Math.Max(0d, age.TotalDays);
+        var lapsed = ageDays > window.Record.WindowDays;
+        return new GuideNextRealignmentStatus
+        {
+            Checked = true,
+            Domain = domain.Trim(),
+            Declared = true,
+            RunRecorded = true,
+            LastRecordedAt = read.Latest.RecordedAt,
+            WindowDays = window.Record.WindowDays,
+            AgeDays = ageDays,
+            Lapsed = lapsed,
+            RecommendationIncluded = lapsed,
+            RecordPath = read.Path,
+            WindowPath = window.Path,
+        };
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -456,6 +587,9 @@ internal sealed record GuideNextResult
 
     [JsonPropertyName("supervision")]
     public required GuideNextSupervisionStatus Supervision { get; init; }
+
+    [JsonPropertyName("realignment")]
+    public required GuideNextRealignmentStatus Realignment { get; init; }
 
     [JsonPropertyName("design_role_guide")]
     public required string DesignRoleGuide { get; init; }
@@ -489,6 +623,45 @@ internal sealed record GuideNextResult
 
     [JsonPropertyName("prompt")]
     public required string Prompt { get; init; }
+}
+
+internal sealed record GuideNextRealignmentStatus
+{
+    [JsonPropertyName("checked")]
+    public required bool Checked { get; init; }
+
+    [JsonPropertyName("domain")]
+    public string? Domain { get; init; }
+
+    [JsonPropertyName("declared")]
+    public bool Declared { get; init; }
+
+    [JsonPropertyName("run_recorded")]
+    public bool RunRecorded { get; init; }
+
+    [JsonPropertyName("last_recorded_at")]
+    public DateTimeOffset? LastRecordedAt { get; init; }
+
+    [JsonPropertyName("window_days")]
+    public int? WindowDays { get; init; }
+
+    [JsonPropertyName("age_days")]
+    public double? AgeDays { get; init; }
+
+    [JsonPropertyName("lapsed")]
+    public bool Lapsed { get; init; }
+
+    [JsonPropertyName("recommendation_included")]
+    public bool RecommendationIncluded { get; init; }
+
+    [JsonPropertyName("record_path")]
+    public string? RecordPath { get; init; }
+
+    [JsonPropertyName("window_path")]
+    public string? WindowPath { get; init; }
+
+    [JsonPropertyName("error")]
+    public string? Error { get; init; }
 }
 
 internal sealed record GuideNextSupervisionStatus

@@ -45,6 +45,9 @@ After publishing, the issue appears in the target repository with `intent-target
 # Scaffold the packet (packet.yaml / implementation.md / review-context.md / github-body.md)
 intent-cli packet draft --execution-unit <id> --target-repo <owner>/<repo> --format markdown
 
+# Required before publish: retain the actual lexical facet-check result
+intent-cli intent facet-check --domain <domain> --packet <id> --format json
+
 # Enforce the Standalone Child Issue Contract, then publish
 intent-cli issue validate-body ...
 intent-cli issue publish-flow <id> --repo <owner>/<repo> --write --format json
@@ -53,6 +56,13 @@ intent-cli automation issue-publish --execution-unit <id> --write --format json
 # Equivalent alternate when the issue number is already known:
 intent-cli automation issue-publish --issue <n> --write --format json
 ```
+
+The facet check is required before publish, but its output must be described
+honestly. `no_facet_data: true` means the lexical check **did not run** because
+there were no facet-annotated intent nodes; it never means the packet passed.
+The current intent-cli domain is the measured example—it has no facet nodes—so
+human/agent semantic alignment review remains necessary. Do not author facet
+nodes merely to manufacture a green result in this slice.
 
 ## Alternative: timer-loop setup
 

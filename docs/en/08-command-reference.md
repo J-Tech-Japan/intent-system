@@ -84,6 +84,23 @@ quick intent-only reflection:
 intent-cli improve --domain <domain> --light --format markdown
 ```
 
+Declare the team's realignment window independently, like a supervision bound,
+then append an explicit durable run record after the human/agent performs the
+review (G662, `preview-through-1.x`). The run record contains the domain, mode,
+timestamp, and artifacts actually touched:
+
+```bash
+intent-cli improve window --domain <domain> --days <days> --write --format json
+intent-cli improve record --domain <domain> --mode implementation-aware \
+  --artifact <touched-path> \
+  [--artifact <touched-path> ...] --write --format json
+```
+
+The semantic review remains human/agent work. intent-cli records that it ran
+and uses its timestamp for recency only; it never scores or grades the review.
+This record does not create a scheduler, cron job, auto-run, or stalled-work
+debt class.
+
 After operator approval the agent may create the proposed corrective packets and
 publish **at most one** first GitHub issue unless asked for more.
 
@@ -190,6 +207,16 @@ an existing cycle leaves that recommendation silent. The host-init and
 design-side loop guides carry the deployment step and link the
 [orchestration reference](12-agent-message-orchestration.md); this command only
 detects the missing record and never starts or manages the background process.
+
+With `--domain`, `next` reads the independently declared realignment window and
+the latest append-only improve-run record. Only when no run falls within that
+window does it add a paste-ready `realignment` action (run improve, then record
+the completed run).
+A fresh record makes that recommendation silent immediately. With no window
+declaration, `next` invents no cadence. This is timestamp recency only—not a
+quality judgment—and it adds no scheduler, cron, auto-run, or stalled-work debt
+class.
+
 That setup step routes through `intent-cli notify supervise install`, which
 emits a launchd, Task Scheduler, or systemd artifact and exact operator
 registration/unregistration commands without executing them. For ongoing

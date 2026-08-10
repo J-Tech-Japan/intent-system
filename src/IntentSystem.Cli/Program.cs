@@ -227,7 +227,11 @@ internal static class Program
     /// </summary>
     private static bool IsImproveCommand(string[] args)
     {
-        return args.Length >= 1 && string.Equals(args[0], "improve", StringComparison.Ordinal);
+        return args.Length >= 1
+            && string.Equals(args[0], "improve", StringComparison.Ordinal)
+            && (args.Length < 2
+                || (!string.Equals(args[1], "record", StringComparison.Ordinal)
+                    && !string.Equals(args[1], "window", StringComparison.Ordinal)));
     }
 
     /// <summary>
