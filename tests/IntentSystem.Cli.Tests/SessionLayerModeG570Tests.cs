@@ -1007,9 +1007,13 @@ public sealed class SessionLayerModeG570Tests : IDisposable
 
         // And no declaration is decorative: every row names a fragment that is
         // actually rendered, so the table cannot drift ahead of the document.
+        var dynamicMissingHeadlines = Enumerable.Range(1, 11)
+            .Select(count => $"- missing-inputs — supply the {count} missing field(s) below to get a setup-ready plan.")
+            .ToHashSet(StringComparer.Ordinal);
         var unconsumedRows = SessionLayerFragments.Declarations
-            .Where(d => !shapes.Any(shape =>
-                consumed.Contains((d.Section, SessionLayerFragments.Expand(shape.Values, d.Text)))))
+            .Where(d => !dynamicMissingHeadlines.Contains(d.Text)
+                && !shapes.Any(shape =>
+                    consumed.Contains((d.Section, SessionLayerFragments.Expand(shape.Values, d.Text)))))
             .Select(d => $"[{d.Section}] {d.Text}")
             .ToArray();
         Assert.True(
@@ -1117,9 +1121,13 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             undeclared.Count == 0,
             "rendered JSON values with no declared type:\n" + string.Join("\n", undeclared));
 
+        var dynamicMissingHeadlines = Enumerable.Range(1, 11)
+            .Select(count => $"missing-inputs — supply the {count} missing field(s) below to get a setup-ready plan.")
+            .ToHashSet(StringComparer.Ordinal);
         var unconsumedRows = SessionLayerFragments.JsonDeclarations
-            .Where(d => !shapes.Any(shape =>
-                consumed.Contains((d.Section, SessionLayerFragments.Expand(shape.Values, d.Text)))))
+            .Where(d => !dynamicMissingHeadlines.Contains(d.Text)
+                && !shapes.Any(shape =>
+                    consumed.Contains((d.Section, SessionLayerFragments.Expand(shape.Values, d.Text)))))
             .Select(d => $"[{d.Section}] {d.Text}")
             .ToArray();
         Assert.True(
@@ -1167,6 +1175,43 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         Assert.Equal(
             "missing-inputs — supply the 3 missing field(s) below to get a setup-ready plan.",
             intake.GetProperty("headline").GetString());
+    }
+
+    /// <summary>
+    /// G656 repair: the setup-intake headline is generated from eleven required
+    /// inputs. Render every reachable missing-count cell through every supported
+    /// format so an undeclared count fails at the production boundary.
+    /// </summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    [InlineData(8)]
+    [InlineData(9)]
+    [InlineData(10)]
+    [InlineData(11)]
+    public void EveryReachableSetupIntakeMissingCount_RendersInEverySupportedFormat_G656(int missingCount)
+    {
+        using var guideWorkspace = new ModeWorkspace();
+        var expectedHeadline = $"missing-inputs — supply the {missingCount} missing field(s) below to get a setup-ready plan.";
+
+        foreach (var format in GuideOrchestratorThreadCommand.SupportedFormats)
+        {
+            var rendered = guideWorkspace.RenderGuideWithExactlyMissingInputs(missingCount, format);
+            if (string.Equals(format, "markdown", StringComparison.Ordinal))
+            {
+                Assert.Contains($"- {expectedHeadline}", rendered, StringComparison.Ordinal);
+            }
+            else
+            {
+                using var json = JsonDocument.Parse(rendered);
+                Assert.Equal(expectedHeadline, json.RootElement.GetProperty("setup_intake").GetProperty("headline").GetString());
+            }
+        }
     }
 
     /// <summary>
@@ -2350,6 +2395,39 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             args.AddRange(["--format", format]);
             return Render(args.ToArray());
         }
+
+        public string RenderGuideWithExactlyMissingInputs(int missingCount, string format)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(missingCount, 1);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(missingCount, 11);
+
+            var suppliedCount = 11 - missingCount;
+            var suppliedInputs = SuppliedInputs;
+            var args = new List<string> { "guide", "orchestrator-thread" };
+            foreach (var input in suppliedInputs.Take(suppliedCount))
+            {
+                args.Add(input.Argument);
+                args.Add(input.Value);
+            }
+
+            args.AddRange(["--format", format]);
+            return Render(args.ToArray());
+        }
+
+        private static readonly (string Argument, string Value)[] SuppliedInputs =
+        [
+            ("--domain", Domain),
+            ("--target-repo", Repo),
+            ("--orchestrator-path", "/w/orchestrator"),
+            ("--implementation-path", "/w/implementation"),
+            ("--review-path", "/w/review"),
+            ("--orchestrator-agent", "claude"),
+            ("--implementer-agent", "claude"),
+            ("--reviewer-agent", "claude"),
+            ("--team", "demo-team"),
+            ("--delivery-mode", "monitor"),
+            ("--existing-loop-policy", "none"),
+        ];
 
         /// <summary>A setup-ready invocation: every intake input supplied.</summary>
         private static string[] SetupReadyArgs(string format, string existingLoopPolicy = "none") =>
