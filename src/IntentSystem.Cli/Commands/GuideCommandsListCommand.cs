@@ -297,6 +297,15 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "guide bootstrap",
+            Role = RoleDesign,
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "G664 preview-through-1.x application-front-door bootstrap: asks the human for each seat's CLI/model and the app kind, composes herdr-only workspace/topology/supervision/design-placement/first-delegation commands, detects join and partial states, and ends with the explicit front-door handoff. Render-only; executes nothing."
+        },
+        new CommandGroupEntry
+        {
             Name = "guide workflow task implementation-loop",
             Role = RoleChildImplementation,
             Classification = ClassificationSupport,

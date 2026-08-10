@@ -194,12 +194,17 @@ reason・確認した evidence・paste 可能な suggested prompt・safety bound
 ます。`next` はデフォルトで **read-only** で、選択したアクションを自動実行しません。
 実行するかはユーザーが判断します。
 
-`--domain` と `--team` を指定すると、`next` は team に記録された supervision cycle
-も読み取ります。cycle が未記録なら `supervision-setup` を推奨し、cycle があれば
+`--domain` と `--team` を指定すると、`next` は team に記録された topology と supervision cycle
+も読み取ります。recorded topology があり completed cycle / front-door handoff がなければ
+`bootstrap-resume` と render-only の `intent-cli guide bootstrap` を示し、topology がない場合と
+cycle 完了後は silent です。cycle が未記録なら独立して `supervision-setup` を推奨し、cycle があれば
 その推奨を静かにします。host-init と design-side loop の guide が deployment の手順を
 示し、[オーケストレーションのリファレンス](12-agent-message-orchestration.md)へ
 リンクします。この command は未記録を検出するだけで、background process を start・
 manage しません。
+bootstrap trigger phrase は `Start this work in a herdr-only team.` と
+`herdr-only で起動して。` です。出力は CLI / model と app-kind の選択を人間へ質問し、
+executes nothing です。
 
 `--domain` を指定すると、`next` は独立して宣言された realignment window と最新の
 append-only improve-run record を読みます。その window 内に run がない場合だけ、

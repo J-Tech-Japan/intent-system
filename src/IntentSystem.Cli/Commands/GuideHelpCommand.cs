@@ -297,6 +297,13 @@ internal static class GuideHelpCommand
             Purpose = "G654 preview-through-1.x agent-kind-neutral design-thread operating contract: four valid wake outcomes, provenance and approval semantics, merge-authority comparison, three-layer delegation verification, orchestration-owned recovery, record-based supervision-liveness checking, and outcome-shaped reporting.",
             Example = "intent-cli guide design-thread --domain <name> --team <team> --routing-root <host-root> --format markdown"
         },
+        // G664: application conversation to herdr-only team genesis.
+        new GuideSubcommandEntry
+        {
+            Name = "bootstrap",
+            Purpose = "G664 preview-through-1.x app-front-door bootstrap: one guided pass asks the human for CLI/model and app kind, emits but never executes team/topology/supervision/delegation commands, resumes named partial state, and makes the application conversation's handoff explicit.",
+            Example = "intent-cli guide bootstrap --domain <name> --team <team> --target-repo <owner/repo> --routing-root <host-root> --format markdown"
+        },
         // G637: preview workspace convention; render-only and host-state-free.
         new GuideSubcommandEntry
         {

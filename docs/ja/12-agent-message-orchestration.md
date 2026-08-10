@@ -15,6 +15,38 @@ review）と、特に 1 つのホストリポジトリが **複数の intent ド
 intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --mode single-domain|multi-domain --format markdown
 ```
 
+## application front door からの bootstrap（G664 — preview-through-1.x）
+
+desktop app conversation から **`Start this work in a herdr-only team.`** または
+**`herdr-only で起動して。`** と依頼し、現在の guided pass を次で表示します。
+
+```text
+intent-cli guide bootstrap --domain <domain> --team <team> --target-repo <owner/repo> --routing-root <host-root> --format markdown
+```
+
+6 step の順序は固定です。最初に design / orchestration / implementation /
+review の各 seat が使う CLI と model を人間へ質問し、default は置きません。次に
+installed recipe と G637 layout guide に従う herdr workspace / pane / typed-seat
+command を出力し、operator-supplied topology を記録し、`notify supervise
+install` を出力します。その後 application kind と inbound app monitor の有無を
+人間へ質問してから G654 の design placement rule を適用し、最初の task を
+orchestration へ委譲します。最後の出力は、どの thread が新しい design seat
+なのか、application conversation は loop seat ではなく operator's front door のまま
+であることを明示します。
+
+recorded topology があれば `join-and-delegate` となり、workspace や seat を再作成
+しません。partial state は `topology-recorded-seats-missing`、
+`topology-recorded-supervision-and-handoff-missing` などの名前で示し、missing command
+だけを出力します。`guide next --domain <domain> --team <team>` は recorded topology
+があり completed supervision cycle / application-front-door handoff がない場合に
+`bootstrap-resume` を推奨し、cycle 完了後は直ちに silent になります。topology が
+なければ bootstrap は未開始なので silent です。
+
+この surface executes nothing です。intent-cli は herdr を呼び出さず、provider を
+起動せず、OS scheduler artifact を登録 / 解除せず、application-side
+integration を追加しません。既存 recipe、deployment rule、4 judgment thread + 1
+supervision process formula、preview-through-1.x boundary を変更せず構成します。
+
 ## design thread の運用 contract（G654 — preview-through-1.x）
 
 agent kind に依存しない contract は `intent-cli guide design-thread` で表示します。
