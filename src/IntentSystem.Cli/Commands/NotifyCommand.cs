@@ -127,7 +127,7 @@ internal static class NotifyCommand
 
         if (string.Equals(operation, OperationStatus, StringComparison.Ordinal))
         {
-            return ExecuteStatus(writer, options, routingRoot);
+            return ExecuteStatus(context, writer, options, routingRoot);
         }
 
         if (string.Equals(operation, OperationSupervise, StringComparison.Ordinal))
@@ -232,7 +232,7 @@ internal static class NotifyCommand
         string.Equals(finding.Cause, "marker-not-generated", StringComparison.Ordinal)
         || string.Equals(finding.Cause, SessionLayerMigration.ResidueCause, StringComparison.Ordinal);
 
-    private static int ExecuteStatus(TextWriter writer, NotifyOptions options, string routingRoot)
+    private static int ExecuteStatus(CliContext context, TextWriter writer, NotifyOptions options, string routingRoot)
     {
         var lookup = NotifyPendingDelegationStore.Find(
             routingRoot,
@@ -305,6 +305,44 @@ internal static class NotifyCommand
                 : liveness.Running.Value
                     ? "live"
                     : "lost";
+        var activityKey = record.WorkspaceId is not null && record.PaneId is not null
+            ? $"activity:{record.WorkspaceId}:{record.PaneId}"
+            : $"activity:{record.RecipientIdentity}";
+        var supervision = NotifySupervisionStore.Read(
+            context.ResolveSupervisionArtifactRootPath(),
+            record.Domain,
+            record.Team);
+        long? priorStateChangeSequence = null;
+        if (supervision.LastCycle?.LastObservedStateChangeSequences.TryGetValue(activityKey, out var observedSequence) == true)
+        {
+            priorStateChangeSequence = observedSequence;
+        }
+
+        var hasPriorActivityObservation = liveness.StateChangeSequence.HasValue && priorStateChangeSequence.HasValue;
+        var activityAdvancing = liveness.StateChangeSequence is { } sequence
+            && priorStateChangeSequence is { } priorSequence
+            && sequence > priorSequence;
+        var stateChangedAfterDispatch = liveness.LastStateChangeAt is { } lastStateChangeAt
+            && lastStateChangeAt > record.DispatchedAt;
+        var activityEvidence = activityAdvancing
+            ? "observed-sequence-advance"
+            : !hasPriorActivityObservation && stateChangedAfterDispatch
+                ? "state-change-after-dispatch"
+                : hasPriorActivityObservation
+                    ? "observed-sequence-unchanged"
+                    : "baseline-missing";
+        var hasHerdrActivity = liveness.StateChangeSequence.HasValue
+            || liveness.LastStateChangeAt.HasValue
+            || liveness.AgentStatus is not null;
+        var activityVerdict = liveness.Running == true && hasHerdrActivity
+            ? !hasPriorActivityObservation
+                ? string.Equals(liveness.AgentStatus, "working", StringComparison.Ordinal) && stateChangedAfterDispatch
+                    ? "working"
+                    : "activity-unknown"
+                : string.Equals(liveness.AgentStatus, "working", StringComparison.Ordinal) && activityAdvancing
+                    ? "working"
+                    : "live-idle"
+            : null;
         EmitStatus(writer, options.Format, new NotifyStatusResult
         {
             Operation = NotifyCommand.OperationStatus,
@@ -321,6 +359,13 @@ internal static class NotifyCommand
             ProcessPresent = liveness.ProcessPresent,
             ResendPermitted = liveness.ResendPermitted,
             LivenessSource = liveness.Source,
+            AgentStatus = liveness.AgentStatus,
+            StateChangeSequence = liveness.StateChangeSequence,
+            LastStateChangeAt = liveness.LastStateChangeAt,
+            ActivityVerdict = activityVerdict,
+            ActivityInputs = liveness.Running == true
+                ? $"agent_status={liveness.AgentStatus ?? "<unknown>"}; state_change_seq={liveness.StateChangeSequence?.ToString(CultureInfo.InvariantCulture) ?? "<unknown>"}; last_state_change_at={liveness.LastStateChangeAt?.ToString("O") ?? "<unknown>"}; activity_evidence={activityEvidence}; advancing_since_last_observation={activityAdvancing.ToString().ToLowerInvariant()}"
+                : null,
             ReportArrived = record.ReportArrived,
             ReportStatus = record.ReportStatus,
             ReportArtifact = record.ReportArtifact,
@@ -476,6 +521,11 @@ internal static class NotifyCommand
         writer.WriteLine($"- process present: {result.ProcessPresent?.ToString().ToLowerInvariant() ?? "<unknown>"}");
         writer.WriteLine($"- resend permitted: {result.ResendPermitted?.ToString().ToLowerInvariant() ?? "<unknown>"}");
         writer.WriteLine($"- liveness source: {result.LivenessSource ?? "<unknown>"}");
+        writer.WriteLine($"- agent status: {result.AgentStatus ?? "<unknown>"}");
+        writer.WriteLine($"- state change sequence: {result.StateChangeSequence?.ToString(CultureInfo.InvariantCulture) ?? "<unknown>"}");
+        writer.WriteLine($"- last state change at: {result.LastStateChangeAt?.ToString("O") ?? "<unknown>"}");
+        writer.WriteLine($"- activity verdict: {result.ActivityVerdict ?? "<unknown>"}");
+        writer.WriteLine($"- activity inputs: {result.ActivityInputs ?? "<unknown>"}");
         writer.WriteLine($"- report arrived: {result.ReportArrived?.ToString().ToLowerInvariant() ?? "<unknown>"}");
         writer.WriteLine($"- verdict: {result.Verdict ?? "<unknown>"}");
         if (result.Cause is not null)
@@ -1584,6 +1634,11 @@ internal sealed record NotifyStatusResult
     [JsonPropertyName("process_present")] public bool? ProcessPresent { get; init; }
     [JsonPropertyName("resend_permitted")] public bool? ResendPermitted { get; init; }
     [JsonPropertyName("liveness_source")] public string? LivenessSource { get; init; }
+    [JsonPropertyName("agent_status")] public string? AgentStatus { get; init; }
+    [JsonPropertyName("state_change_seq")] public long? StateChangeSequence { get; init; }
+    [JsonPropertyName("last_state_change_at")] public DateTimeOffset? LastStateChangeAt { get; init; }
+    [JsonPropertyName("activity_verdict")] public string? ActivityVerdict { get; init; }
+    [JsonPropertyName("activity_inputs")] public string? ActivityInputs { get; init; }
     [JsonPropertyName("report_arrived")] public bool? ReportArrived { get; init; }
     [JsonPropertyName("report_status")] public string? ReportStatus { get; init; }
     [JsonPropertyName("report_artifact")] public string? ReportArtifact { get; init; }

@@ -723,6 +723,8 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 var agentWorkspaceId = ReadString(agent, "workspace_id") ?? WorkspaceFromPane(paneId);
                 var agentKind = ReadString(agent, "agent");
                 var status = ReadString(agent, "agent_status");
+                var stateChangeSequence = ReadInt64(agent, "state_change_seq");
+                var lastStateChangeAt = ReadDateTimeOffset(agent, "last_state_change_at");
                 var cwd = ReadString(agent, "cwd") ?? ReadString(agent, "foreground_cwd");
                 var explicitlyNotReady = agent.TryGetProperty("interactive_ready", out var ready)
                     && ready.ValueKind == JsonValueKind.False;
@@ -733,7 +735,7 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                     && !explicitlyNotReady
                     && !string.Equals(status, "unknown", StringComparison.Ordinal);
 
-                parsed.Add(new HerdrAgentState(name, agentWorkspaceId, paneId, running, status, cwd));
+                parsed.Add(new HerdrAgentState(name, agentWorkspaceId, paneId, running, status, cwd, stateChangeSequence, lastStateChangeAt));
             }
 
             return parsed;
@@ -750,6 +752,16 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
         element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static long? ReadInt64(JsonElement element, string property) =>
+        element.TryGetProperty(property, out var value)
+        && value.ValueKind == JsonValueKind.Number
+        && value.TryGetInt64(out var parsed) ? parsed : null;
+
+    private static DateTimeOffset? ReadDateTimeOffset(JsonElement element, string property) =>
+        element.TryGetProperty(property, out var value)
+        && value.ValueKind == JsonValueKind.String
+        && DateTimeOffset.TryParse(value.GetString(), out var parsed) ? parsed : null;
 
     private static string? WorkspaceFromPane(string? paneId)
     {
@@ -874,7 +886,9 @@ internal sealed record HerdrAgentState(
     string? PaneId,
     bool AgentRunning,
     string? AgentStatus,
-    string? Cwd = null);
+    string? Cwd = null,
+    long? StateChangeSequence = null,
+    DateTimeOffset? LastStateChangeAt = null);
 
 internal static class NotifyTransportPaths
 {

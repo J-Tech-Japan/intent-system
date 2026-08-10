@@ -223,6 +223,89 @@ public sealed class NotifySupervisionG641Tests : IDisposable
     }
 
     [Fact]
+    public void ColdStartWorkingActivityEstablishesBaselineBeforeLiveIdleIsSurfacedOnce_G652()
+    {
+        var context = CreateContext();
+        RecordMode(context, SessionLayerMode.HerdrOnly);
+        WriteTopology();
+        Assert.True(NotifyPendingDelegationStore.WriteDispatch(root, new NotifyPendingDelegation
+        {
+            Domain = Domain,
+            Team = Team,
+            TaskId = "G652-live-activity",
+            DelegatingRole = "orchestration",
+            RecipientRole = "implementation",
+            RecipientIdentity = "implementation",
+            ExpectedArtifact = "draft-pr",
+            DispatchedAt = firstNow.AddSeconds(-121),
+            TransportMode = SessionLayerMode.HerdrOnly,
+            Resident = NotifyRecordedRole.HerdrResident,
+            WorkspaceId = "wG641",
+            PaneId = "wG641:p2",
+        }).Written);
+        var runner = new FakeRunner
+        {
+            AgentsJson = HerdrAgentsJson(stateChangeSequence: 7),
+        };
+        var supervisor = CreateSupervisor(context, "unused-agmsg", runner, write: true, boundSeconds: 120, intervalSeconds: 600);
+
+        var first = supervisor.RunOnce();
+
+        Assert.DoesNotContain(first.Findings, finding => finding.Kind == "live-idle-no-report");
+        Assert.Contains("not corrected", Assert.Single(first.Warnings), StringComparison.Ordinal);
+        Assert.Equal(120, first.Bound!.BoundSeconds);
+        var recordedFirst = NotifySupervisionStore.Read(context.ResolveSupervisionArtifactRootPath(), Domain, Team);
+        Assert.True(recordedFirst.LastCycle!.BoundBelowInterval);
+        Assert.Equal(7, recordedFirst.LastCycle.LastObservedStateChangeSequences["activity:wG641:wG641:p2"]);
+
+        now = firstNow.AddSeconds(1);
+        var unchanged = supervisor.RunOnce();
+
+        var idle = Assert.Single(unchanged.Findings, finding => finding.Kind == "live-idle-no-report");
+        Assert.Equal("herdr.activity", idle.Source);
+        Assert.False(idle.WakeAttempted);
+        Assert.Contains("not corrected", Assert.Single(unchanged.Warnings), StringComparison.Ordinal);
+
+        now = firstNow.AddSeconds(2);
+        var unchangedAgain = supervisor.RunOnce();
+
+        Assert.DoesNotContain(unchangedAgain.Findings, finding => finding.Kind == "live-idle-no-report");
+
+        now = firstNow.AddSeconds(3);
+        runner.AgentsJson = HerdrAgentsJson(stateChangeSequence: 8);
+        var advancing = supervisor.RunOnce();
+
+        Assert.DoesNotContain(advancing.Findings, finding => finding.Kind == "live-idle-no-report");
+        var recordedAdvancing = NotifySupervisionStore.Read(context.ResolveSupervisionArtifactRootPath(), Domain, Team);
+        Assert.Equal(8, recordedAdvancing.LastCycle!.LastObservedStateChangeSequences["activity:wG641:wG641:p2"]);
+        Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("send-text"));
+    }
+
+    [Fact]
+    public void ContinuousSupervisionEmitsBoundBelowIntervalWarningAtStart_G652()
+    {
+        var context = CreateContext();
+        var supervisor = CreateSupervisor(
+            context,
+            "unused-agmsg",
+            new FakeRunner(),
+            write: true,
+            boundSeconds: 120,
+            intervalSeconds: 600);
+        using var cancellation = new CancellationTokenSource();
+        NotifySupervisor.Delay = _ => cancellation.Cancel();
+        using var writer = new StringWriter();
+
+        var exitCode = supervisor.RunLoop(writer, cancellation.Token, once: false);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.False(document.RootElement.GetProperty("silent").GetBoolean());
+        Assert.Contains("not corrected", document.RootElement.GetProperty("warnings")[0].GetString(), StringComparison.Ordinal);
+        Assert.True(document.RootElement.GetProperty("bound").GetProperty("recorded").GetBoolean());
+    }
+
+    [Fact]
     public void EnglishAndJapaneseGuidanceNameTheMeasuredPreviewContract_G641()
     {
         var rootPath = RepoVersionPolicySource.RepoRoot();
@@ -234,10 +317,13 @@ public sealed class NotifySupervisionG641Tests : IDisposable
         foreach (var document in new[] { english, japanese })
         {
             Assert.Contains("G641", document, StringComparison.Ordinal);
+            Assert.Contains("G652", document, StringComparison.Ordinal);
             Assert.Contains("--bound", document, StringComparison.Ordinal);
             Assert.Contains("undelivered-escalation", document, StringComparison.Ordinal);
             Assert.Contains("detectable_at", document, StringComparison.Ordinal);
             Assert.Contains("absent_since_last_cycle", document, StringComparison.Ordinal);
+            Assert.Contains("state_change_seq", document, StringComparison.Ordinal);
+            Assert.Contains("live-idle", document, StringComparison.Ordinal);
             Assert.Contains("preview-through-1.x", document, StringComparison.Ordinal);
         }
 
@@ -250,14 +336,15 @@ public sealed class NotifySupervisionG641Tests : IDisposable
         string scripts,
         FakeRunner runner,
         bool write,
-        int? boundSeconds) => new(
+        int? boundSeconds,
+        int intervalSeconds = 300) => new(
         context,
         root,
         Domain,
         Team,
         repo: null,
         ownerRole: "orchestration",
-        intervalSeconds: 300,
+        intervalSeconds: intervalSeconds,
         declaredBoundSeconds: boundSeconds,
         staleMinutes: 45,
         claimedSilentMinutes: 720,
@@ -269,6 +356,28 @@ public sealed class NotifySupervisionG641Tests : IDisposable
         runner,
         herdrExecutable: "fake-herdr",
         agmsgScriptsDirectory: scripts);
+
+    private static string HerdrAgentsJson(long stateChangeSequence) => JsonSerializer.Serialize(new
+    {
+        result = new
+        {
+            agents = new[]
+            {
+                new
+                {
+                    name = "orchestration", workspace_id = "wG641", pane_id = "wG641:p1", agent = "fixture",
+                    agent_session = new { id = "orchestration" }, agent_status = "working", interactive_ready = true,
+                    state_change_seq = 1L, last_state_change_at = (string?)null,
+                },
+                new
+                {
+                    name = "implementation", workspace_id = "wG641", pane_id = "wG641:p2", agent = "fixture",
+                    agent_session = new { id = "implementation" }, agent_status = "working", interactive_ready = true,
+                    state_change_seq = stateChangeSequence, last_state_change_at = (string?)"2026-08-07T12:00:00.0000000+00:00",
+                },
+            },
+        },
+    });
 
     private CliContext CreateContext() => new()
     {
@@ -315,7 +424,7 @@ public sealed class NotifySupervisionG641Tests : IDisposable
     private sealed class FakeRunner : INotifyProcessRunner
     {
         public List<(string FileName, IReadOnlyList<string> Arguments)> Calls { get; } = [];
-        public string AgentsJson { get; init; } = "{\"result\":{\"agents\":[]}}";
+        public string AgentsJson { get; set; } = "{\"result\":{\"agents\":[]}}";
 
         public NotifyProcessResult Run(string fileName, IReadOnlyList<string> arguments)
         {

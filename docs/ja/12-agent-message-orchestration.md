@@ -66,6 +66,8 @@ process の corroboration がない場合だけ `lost` です。herdr の regist
 process が残っている場合は `registration-lost-process-present` という別の state を返し、
 process が消えたとは推測しません。経過時間だけで verdict を変えることはありません。
 
+**活動証拠 (G652 — 1.x を通じた preview)。** 実行中 process は作業の証拠ではありません。herdr では status が `agent_status`、`state_change_seq`、最後の状態変更時刻も示します。`working` には working agent と進行する活動が必要です。sequence baseline がまだない場合、status は `live-idle` を断定せず `activity-unknown` を返します。dispatch 後の状態変更時刻は cold-start の `working` の十分な証拠です。supervision は最初の baseline を live-idle finding なしで記録し、その後に変化しない live-idle recipient に report がなければ一度だけ表示して terminal の確認を remedy として示します。この finding のために terminal content を読んだり recovery に入ったりしません。declared bound が configured interval より小さい場合は、supervise start と各 cycle で structural false alarm warning を出し、CLI が黙って補正する値ではありません。
+
 report は bookkeeping entry ではなく message です。fail-closed の保護は message を運ぶことではなく
 pending state の mutation に置きます。認識されない identifier を理由に配信を拒否すると、recipient が
 依頼したことを知らなかった unsolicited report や escalation への回答という、情報を運ぶ message を
