@@ -118,7 +118,7 @@ public sealed class GuideWorkflowTaskPacketDraftCommandTests
         // list, rather than living only in a separate guide an author may not
         // open. The G461 five keep their ids and their order.
         Assert.Equal(
-            new[] { "intent-placement", "adr-candidate", "diagram-candidate", "docs-update", "closeout-learning", "co-evolution-duty", "guide-reachability" },
+            new[] { "facet-check-before-publish", "intent-placement", "adr-candidate", "diagram-candidate", "docs-update", "closeout-learning", "co-evolution-duty", "guide-reachability" },
             ids);
         // Each prompt carries actionable text.
         foreach (var p in prompts.EnumerateArray())

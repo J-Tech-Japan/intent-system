@@ -443,6 +443,14 @@ internal static class CommandRouter
         // as `guide improve`.
         if (string.Equals(args[0], "improve", StringComparison.Ordinal))
         {
+            if (args.Length >= 2 && string.Equals(args[1], "record", StringComparison.Ordinal))
+            {
+                return ImproveRunRecordCommand.Execute(context, args[2..], writer);
+            }
+            if (args.Length >= 2 && string.Equals(args[1], "window", StringComparison.Ordinal))
+            {
+                return ImproveWindowCommand.Execute(context, args[2..], writer);
+            }
             return GuideImproveCommand.Execute(context, args[1..], writer);
         }
 
@@ -725,10 +733,10 @@ internal static class CommandRouter
         "implementation-loop — `intent-cli guide workflow task implementation-loop --target-repo <r> --agent claude --frequency 5m --format markdown` (paste-ready child implementation-loop prompt with current label/claim/complete rules, G338).",
         "review-next-slice-loop — `intent-cli guide workflow task review-next-slice-loop --domain <d> --target-repo <r> --agent claude --frequency 20m --format markdown` (paste-ready host review / next-slice-loop prompt with current host-sync preflight + packet/issue lifecycle rules, G338).",
         "bug-to-intent-repair — `intent-cli guide workflow task bug-to-intent-repair --format json` (report → triage → plan → intent-repair → implementation-repair chain; classifies implementation-mismatch / intent-gap / packet-gap / rule-gap / metadata-workflow-gap; recommends packet creation when the bug is in intent-cli rules/guidance, G339).",
-        "improve (design-thread reflection) — `intent-cli improve --domain <d> --format markdown` (alias of `intent-cli guide improve`): periodic MVV / ADR / intent-tree / packet-history / clarification-history realignment review, G456/G457. NOT bug-to-intent-repair, host-loop recovery, state-doctor, or dirty-state repair.",
+        "improve (design-thread reflection) — `intent-cli improve --domain <d> --format markdown` returns the realignment guide. Preview `improve window ... --write` declares the independent recency bound; `improve record ... --write` appends evidence after human/agent review and never grades quality, G456/G457/G662. NOT a scheduler, auto-run, stalled-work class, or operational recovery.",
         "grill (persistent interview mode) — `intent-cli grill --domain <d> --format markdown` (alias of `intent-cli guide grill`): once the user asks to grill a topic, stay in grill mode — generate an open-question backlog from current intents/packets/ADRs/docs, ask one question at a time, and continue after each answer until a stop condition holds, G463. Built on the interview artifacts; NOT clarification (blocker resolution) and NOT improve (retrospective realignment).",
         "stack (packet backlog creation) — `intent-cli stack --domain <d> --target-repo <r> --format markdown` (alias of `intent-cli guide stack`): forward planning — create an ordered packet backlog from the current intents (often ~10), commit/push durable state, and publish AT MOST the first GitHub issue by default, G464. Distinct from improve (retrospective realignment), grill (open-question interview), clarification (blocker resolution), and runtime queue transitions.",
-        "next (design-side action advisor) — `intent-cli next --domain <d> --team <team> --target-repo <r> --format markdown` (alias of `intent-cli guide next`): answers \"what should I do next?\" by recommending ONE design-side process and recommends `supervision-setup` when no cycle is recorded, G465/G644. Read-only by default; never auto-executes or manages a process.",
+        "next (design-side action advisor) — `intent-cli next --domain <d> --team <team> --target-repo <r> --format markdown` (alias of `intent-cli guide next`): recommends ONE design-side process, `supervision-setup` when no cycle is recorded, and realignment when no durable improve run falls within the independently declared window, G465/G644/G662. Read-only and recency-only; never grades quality, auto-executes, or manages a process.",
         "inspect (evidence-backed observation) — `intent-cli inspect --domain <d> --target-repo <r> --format markdown` (alias of `intent-cli guide inspect`): observe the real app / CLI / UI / log / test behavior, separate observed evidence from inference, compare against expected intent, and turn gaps into packet candidates, G466. First pass read-only; routes to stack / grill / improve / recovery / no-action. Distinct from grill, stack, and improve."
     };
 

@@ -140,11 +140,23 @@ internal static class GuideImproveCommand
         reportTemplate.Add("## Proposed next steps (propose first — apply only after operator agreement)");
         reportTemplate.Add("- <intent-strengthening edit / clarification to open / corrective packet to draft / ADR update>, each via a supported intent-cli or repo path");
 
+        var recordCommand =
+            $"intent-cli improve record --domain {domainToken} --mode {mode} "
+            + "--artifact <touched-path> [--artifact <touched-path> ...] --write --format json";
+        var windowCommand =
+            $"intent-cli improve window --domain {domainToken} --days <days> --write --format json";
+        reportTemplate.Add("## Durable run record (G662 — preview-through-1.x)");
+        reportTemplate.Add($"- after the human/agent review is complete, append its recency evidence with: `{recordCommand}`");
+
         return new GuideImproveResult
         {
             Process = "design-thread-improve",
             Mode = mode,
             Domain = string.IsNullOrWhiteSpace(domain) ? null : domain,
+            RecordPreviewStatus = "preview-through-1.x",
+            RecordCommand = recordCommand,
+            WindowCommand = windowCommand,
+            RecordSemantics = "The realignment review is human/agent work. intent-cli records domain, mode, timestamp, and touched artifacts; it never grades review quality. The team declares recency independently, like a supervision bound, and neither command schedules work.",
             ShortPrompt = ShortPrompt,
             Summary = light
                 ? "Design-thread improve (LIGHT / intent-only): a quick reflection over MVV, ADR/design notes, intent tree, "
@@ -217,6 +229,14 @@ internal static class GuideImproveCommand
         writer.WriteLine($"_mode: {result.Mode}_ (default is implementation-aware; pass `--light` for a quick intent-only reflection)");
         writer.WriteLine();
         writer.WriteLine(result.Summary);
+        writer.WriteLine();
+
+        writer.WriteLine("## Durable run record (G662 — preview-through-1.x)");
+        writer.WriteLine();
+        writer.WriteLine($"- command: `{result.RecordCommand}`");
+        writer.WriteLine($"- declare the team's recency window independently: `{result.WindowCommand}`");
+        writer.WriteLine($"- semantics: {result.RecordSemantics}");
+        writer.WriteLine("- record only after the human/agent has performed the realignment review; list the artifacts actually touched.");
         writer.WriteLine();
 
         writer.WriteLine("## What this is NOT");
@@ -330,7 +350,7 @@ internal static class GuideImproveCommand
     {
         writer.WriteLine("guide improve");
         writer.WriteLine(UsageLine);
-        writer.WriteLine("Read-only design-thread improve / realignment process. DEFAULT is implementation-aware: when evidence is available, inspect related issues/PRs/diffs/tests/reviews/product evidence and propose a corrective backlog. Pass `--light` for a quick intent-only reflection (MVV / ADR / intent-tree / packet / clarification). Run it by asking: " + ShortPrompt);
+        writer.WriteLine("Read-only design-thread improve / realignment process. DEFAULT is implementation-aware: when evidence is available, inspect related issues/PRs/diffs/tests/reviews/product evidence and propose a corrective backlog. Pass `--light` for a quick intent-only reflection (MVV / ADR / intent-tree / packet / clarification). After the human/agent review, use the preview `intent-cli improve record` surface to append recency evidence; intent-cli never grades review quality. Run it by asking: " + ShortPrompt);
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -352,6 +372,18 @@ internal sealed record GuideImproveResult
 
     [JsonPropertyName("domain")]
     public string? Domain { get; init; }
+
+    [JsonPropertyName("record_preview_status")]
+    public required string RecordPreviewStatus { get; init; }
+
+    [JsonPropertyName("record_command")]
+    public required string RecordCommand { get; init; }
+
+    [JsonPropertyName("window_command")]
+    public required string WindowCommand { get; init; }
+
+    [JsonPropertyName("record_semantics")]
+    public required string RecordSemantics { get; init; }
 
     [JsonPropertyName("short_prompt")]
     public required string ShortPrompt { get; init; }

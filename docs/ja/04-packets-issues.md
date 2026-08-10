@@ -45,6 +45,9 @@ AI agent が行うこと:
 # packet を scaffold（packet.yaml / implementation.md / review-context.md / github-body.md）
 intent-cli packet draft --execution-unit <id> --target-repo <owner>/<repo> --format markdown
 
+# publish 前に必須: lexical facet-check の実際の結果を保存
+intent-cli intent facet-check --domain <domain> --packet <id> --format json
+
 # Standalone Child Issue Contract を検証してから公開
 intent-cli issue validate-body ...
 intent-cli issue publish-flow <id> --repo <owner>/<repo> --write --format json
@@ -53,6 +56,13 @@ intent-cli automation issue-publish --execution-unit <id> --write --format json
 # issue 番号が既知の場合の同等な代替:
 intent-cli automation issue-publish --issue <n> --write --format json
 ```
+
+facet check は publish 前に必須ですが、結果は正直に記述します。
+`no_facet_data: true` は facet annotation を持つ intent node が無いため lexical check が
+**実行されなかった**ことを意味し、packet が pass した意味には決してなりません。
+現在の intent-cli domain は facet node が無い実測例なので、human / agent による semantic
+alignment review が引き続き必要です。この slice で green result を作るためだけに facet node
+を author してはいけません。
 
 ## 代替: timer-loop のセットアップ
 

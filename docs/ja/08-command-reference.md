@@ -83,6 +83,22 @@ intent-tree の整理だけでは不十分です。素早い intent-only リフ�
 intent-cli improve --domain <domain> --light --format markdown
 ```
 
+team の realignment window を supervision bound と同様に独立して宣言し、その後 human /
+agent がレビューを実施した時に明示的な durable run record を append します（G662、
+`preview-through-1.x`）。run record は domain、mode、timestamp、実際に touch した artifact
+を保持します:
+
+```bash
+intent-cli improve window --domain <domain> --days <days> --write --format json
+intent-cli improve record --domain <domain> --mode implementation-aware \
+  --artifact <touched-path> \
+  [--artifact <touched-path> ...] --write --format json
+```
+
+semantic review は human / agent の作業です。intent-cli は実施された事実を記録し、
+timestamp を recency にだけ使います。review の quality を score / grade しません。この
+record は scheduler、cron、auto-run、stalled-work debt class を追加しません。
+
 operator 承認後、agent は提案した corrective packet を作成し、最初の GitHub issue を
 **最大1件**だけ publish できます（明示的に依頼された場合を除く）。
 
@@ -183,7 +199,17 @@ reason・確認した evidence・paste 可能な suggested prompt・safety bound
 その推奨を静かにします。host-init と design-side loop の guide が deployment の手順を
 示し、[オーケストレーションのリファレンス](12-agent-message-orchestration.md)へ
 リンクします。この command は未記録を検出するだけで、background process を start・
-manage しません。setup は `intent-cli notify supervise install` を通し、launchd、Task
+manage しません。
+
+`--domain` を指定すると、`next` は独立して宣言された realignment window と最新の
+append-only improve-run record を読みます。その window 内に run がない場合だけ、
+improve の実行と完了後の record を含む paste-ready な `realignment` action を追加します。
+fresh record の直後は
+推奨が silent になり、window 宣言がなければ cadence を推測しません。これは timestamp
+recency だけの判定で quality judgment ではなく、scheduler、cron、auto-run、
+stalled-work debt class を追加しません。
+
+setup は `intent-cli notify supervise install` を通し、launchd、Task
 Scheduler、または systemd artifact と operator 用の正確な registration / unregistration
 command を生成しますが実行しません。継続的な health は team の `cycles.jsonl` record の
 age と declared bound を比較します。process-name grep は、実測で team を混同し、一方の
