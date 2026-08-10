@@ -52,7 +52,7 @@ internal static class NotifyCommand
         "Usage: intent-cli notify supervise --domain <d> --team <t> [--interval <seconds>] "
         + "[--repo <owner/repo>] [--owner-role <role>] [--bound <seconds>] "
         + "[--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] "
-        + "[--repair-silent-minutes <m>] [--auto-redispatch] [--once] [--routing-root <host-root>] [--dry-run|--write] "
+        + "[--repair-silent-minutes <m>] [--auto-redispatch] [--event-mode] [--once] [--routing-root <host-root>] [--dry-run|--write] "
         + "[--format markdown|json]\n"
         + NotifySuperviseInstallCommand.Usage;
 
@@ -574,7 +574,8 @@ internal static class NotifyCommand
             options.Format,
             runner,
             HerdrExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveHerdrExecutable(),
-            AgmsgScriptsDirectoryFactory?.Invoke() ?? NotifyTransportPaths.ResolveAgmsgScriptsDirectory());
+            AgmsgScriptsDirectoryFactory?.Invoke() ?? NotifyTransportPaths.ResolveAgmsgScriptsDirectory(),
+            options.EventMode);
         using var cancellation = new CancellationTokenSource();
         ConsoleCancelEventHandler? cancelHandler = null;
         if (!Console.IsOutputRedirected)
@@ -617,7 +618,8 @@ internal static class NotifyCommand
         int intervalSeconds,
         bool autoRedispatch,
         bool write,
-        string format = FormatJson)
+        string format = FormatJson,
+        bool eventMode = false)
     {
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -627,6 +629,8 @@ internal static class NotifyCommand
                 domain,
                 team,
                 interval_seconds = intervalSeconds,
+                event_mode = eventMode,
+                event_mode_evidence = eventMode ? "herdr-0.8.0-macos-measured; other-versions-and-platforms-unverified" : null,
                 auto_redispatch = autoRedispatch,
                 command_mode = write ? "write" : "dry-run",
                 silent = pass.Silent,
@@ -644,6 +648,11 @@ internal static class NotifyCommand
         writer.WriteLine($"# notify supervise — {domain}/{team}");
         writer.WriteLine();
         writer.WriteLine($"- interval: {intervalSeconds}s");
+        writer.WriteLine($"- event mode: {eventMode.ToString().ToLowerInvariant()}");
+        if (eventMode)
+        {
+            writer.WriteLine("- event mode evidence: herdr 0.8.0/macOS measured; other versions and platforms unverified");
+        }
         writer.WriteLine($"- command mode: {(write ? "write" : "dry-run")}");
         writer.WriteLine($"- auto-redispatch: {autoRedispatch.ToString().ToLowerInvariant()}");
         if (pass.Bound is { } bound)
@@ -1511,6 +1520,7 @@ internal static class NotifyCommand
         var write = false;
         var autoRedispatch = false;
         var once = false;
+        var eventMode = false;
         var format = FormatMarkdown;
         error = string.Empty;
 
@@ -1602,6 +1612,7 @@ internal static class NotifyCommand
                 case "--dry-run": write = false; break;
                 case "--auto-redispatch": autoRedispatch = true; break;
                 case "--once": once = true; break;
+                case "--event-mode": eventMode = true; break;
                 case "--format":
                     if (!ReadValue(args, ref index, argument, out format, out error)) return false;
                     if (format is not FormatJson and not FormatMarkdown)
@@ -1643,6 +1654,7 @@ internal static class NotifyCommand
             Write = write,
             AutoRedispatch = autoRedispatch,
             Once = once,
+            EventMode = eventMode,
             Format = format,
         };
 
@@ -1729,6 +1741,12 @@ internal static class NotifyCommand
                 || options.RepairSilentMinutes is < 0)
             {
                 error = "supervise minute thresholds cannot be negative.";
+                return false;
+            }
+
+            if (options.EventMode && options.Once)
+            {
+                error = "supervise --event-mode is continuous and cannot be combined with --once.";
                 return false;
             }
         }
@@ -1850,6 +1868,7 @@ internal sealed record NotifyOptions
     public int? RepairSilentMinutes { get; init; }
     public bool AutoRedispatch { get; init; }
     public bool Once { get; init; }
+    public bool EventMode { get; init; }
     public bool Write { get; init; }
     public required string Format { get; init; }
 }

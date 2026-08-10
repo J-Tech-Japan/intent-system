@@ -34,6 +34,9 @@ internal sealed class NotifyMeasuredSupervisor
     private readonly INotifyProcessRunner runner;
     private readonly string herdrExecutable;
     private readonly string agmsgScriptsDirectory;
+    private readonly bool eventMode;
+    private readonly object supervisionSync = new();
+    private readonly object writerSync = new();
 
     public NotifyMeasuredSupervisor(
         CliContext context,
@@ -53,7 +56,8 @@ internal sealed class NotifyMeasuredSupervisor
         string format,
         INotifyProcessRunner runner,
         string herdrExecutable,
-        string agmsgScriptsDirectory)
+        string agmsgScriptsDirectory,
+        bool eventMode = false)
     {
         this.context = context;
         this.routingRoot = routingRoot;
@@ -73,9 +77,20 @@ internal sealed class NotifyMeasuredSupervisor
         this.runner = runner;
         this.herdrExecutable = herdrExecutable;
         this.agmsgScriptsDirectory = agmsgScriptsDirectory;
+        this.eventMode = eventMode;
     }
 
-    public NotifySupervisorPass RunOnce()
+    public NotifySupervisorPass RunOnce() => RunOnce("interval");
+
+    internal NotifySupervisorPass RunOnce(string trigger)
+    {
+        lock (supervisionSync)
+        {
+            return RunOnceCore(trigger);
+        }
+    }
+
+    private NotifySupervisorPass RunOnceCore(string trigger)
     {
         var now = (NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var state = NotifySupervisionStore.Read(
@@ -93,10 +108,13 @@ internal sealed class NotifyMeasuredSupervisor
 
         var bound = ResolveBound(state, now);
         var previousCycle = state.LastCycle;
-        long? gapSeconds = previousCycle is null
+        var previousIntervalCycle = state.LastIntervalCycle;
+        long? gapSeconds = previousIntervalCycle is null
             ? null
-            : Math.Max(0, (long)(now - previousCycle.CompletedAt).TotalSeconds);
-        var actualIntervalSeconds = gapSeconds;
+            : Math.Max(0, (long)(now - previousIntervalCycle.CompletedAt).TotalSeconds);
+        var actualIntervalSeconds = string.Equals(trigger, "interval", StringComparison.Ordinal)
+            ? gapSeconds
+            : null;
         bool? boundMet = bound.BoundSeconds is { } explicitBoundSeconds && actualIntervalSeconds is { } actual
             ? actual <= explicitBoundSeconds
             : null;
@@ -111,25 +129,26 @@ internal sealed class NotifyMeasuredSupervisor
         // cadence: normal cycle work and scheduler jitter must not look like
         // downtime. The explicit bound result remains null when no bound was
         // recorded, so output never claims an unmeasured promise.
-        var cadenceIntervalSeconds = previousCycle?.IntervalSeconds is > 0
-            ? previousCycle.IntervalSeconds
+        var cadenceIntervalSeconds = previousIntervalCycle?.IntervalSeconds is > 0
+            ? previousIntervalCycle.IntervalSeconds
             : intervalSeconds;
         var absenceThresholdSeconds = bound.BoundSeconds
             ?? FallbackAbsenceThresholdSeconds(cadenceIntervalSeconds);
         var absenceThresholdKind = bound.BoundSeconds is null
             ? "configured-interval"
             : "declared-bound";
-        var absentSinceLastCycle = gapSeconds is { } gap
+        var absentSinceLastCycle = string.Equals(trigger, "interval", StringComparison.Ordinal)
+            && gapSeconds is { } gap
             && gap > absenceThresholdSeconds;
         var liveness = new NotifySupervisionLiveness
         {
             Running = true,
             AbsentSinceLastCycle = absentSinceLastCycle,
-            LastCycleAt = previousCycle?.CompletedAt,
+            LastCycleAt = previousIntervalCycle?.CompletedAt,
             GapSeconds = gapSeconds,
             AbsenceThresholdSeconds = absenceThresholdSeconds,
             AbsenceThresholdKind = absenceThresholdKind,
-            Summary = previousCycle is null
+            Summary = previousIntervalCycle is null
                 ? "Supervision is running; no previous completed cycle exists, so an absence gap is not yet measurable."
                 : absentSinceLastCycle
                     ? bound.BoundSeconds is { } declaredSeconds
@@ -184,6 +203,7 @@ internal sealed class NotifyMeasuredSupervisor
         var openByTask = openBefore.ToDictionary(item => item.TaskId, StringComparer.Ordinal);
         var observedSequences = new Dictionary<string, long>(StringComparer.Ordinal);
         var observedTimes = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var observedStatuses = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var pending in openBefore)
         {
             var transportMode = string.IsNullOrWhiteSpace(pending.TransportMode)
@@ -237,6 +257,14 @@ internal sealed class NotifyMeasuredSupervisor
                 });
             }
         }
+
+        observations.AddRange(ReadRecordedSeatTransitions(
+            now,
+            trigger,
+            previousCycle,
+            observedSequences,
+            observedTimes,
+            observedStatuses));
         foreach (var action in legacy.Actions)
         {
             var record = openByTask.GetValueOrDefault(action.TaskId);
@@ -473,6 +501,7 @@ internal sealed class NotifyMeasuredSupervisor
             CycleId = Guid.NewGuid().ToString("N"),
             StartedAt = now,
             CompletedAt = completedAt,
+            Trigger = trigger,
             IntervalSeconds = intervalSeconds,
             CadenceIntervalSeconds = cadenceIntervalSeconds,
             BoundSeconds = bound.BoundSeconds,
@@ -485,6 +514,31 @@ internal sealed class NotifyMeasuredSupervisor
             BoundBelowInterval = boundBelowInterval,
             LastObservedStateChangeSequences = observedSequences,
             LastObservedStateChangeTimes = observedTimes,
+            LastObservedAgentStatuses = observedStatuses,
+            Transitions = observations
+                .Where(observation => string.Equals(observation.Kind, "seat-state-transition", StringComparison.Ordinal))
+                .Select(observation =>
+                {
+                    var finding = findings.FirstOrDefault(item => string.Equals(item.Key, observation.Key, StringComparison.Ordinal));
+                    return new NotifySupervisionTransition
+                    {
+                        Key = observation.Key,
+                        Role = observation.SubjectRole!,
+                        WorkspaceId = observation.WorkspaceId!,
+                        PaneId = observation.PaneId!,
+                        FromStatus = observation.FromStatus!,
+                        ToStatus = observation.ToStatus!,
+                        StateChangeSequence = observation.StateChangeSequence!.Value,
+                        Source = observation.Source,
+                        ObservedAt = now,
+                        LatencySeconds = observation.StateChangedAt is { } changedAt
+                            ? Math.Max(0, (long)(now - changedAt).TotalSeconds)
+                            : null,
+                        WakeAttempted = finding?.WakeAttempted ?? false,
+                        WakeDelivered = finding?.WakeDelivered ?? false,
+                    };
+                })
+                .ToArray(),
         };
         var cycleWrite = NotifySupervisionStore.RecordCycle(
             NotifySupervisionStore.ResolveCyclePath(
@@ -518,32 +572,75 @@ internal sealed class NotifyMeasuredSupervisor
 
     public int RunLoop(TextWriter writer, CancellationToken cancellationToken, bool once)
     {
-        do
+        var first = RunOnce();
+        EmitPass(writer, first, force: once || eventMode);
+        if (once || cancellationToken.IsCancellationRequested)
         {
-            var pass = RunOnce();
-            if (!pass.Silent || once)
-            {
-                NotifyCommand.EmitSupervision(
-                    writer,
-                    pass,
-                    domain,
-                    team,
-                    intervalSeconds,
-                    autoRedispatch,
-                    write,
-                    format);
-            }
-
-            if (once || cancellationToken.IsCancellationRequested)
-            {
-                return pass.ExitCode;
-            }
-
-            NotifySupervisor.Delay(TimeSpan.FromSeconds(intervalSeconds));
+            return first.ExitCode;
         }
-        while (!cancellationToken.IsCancellationRequested);
 
-        return 0;
+        using var eventCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task? eventMonitor = null;
+        if (eventMode)
+        {
+            eventMonitor = new NotifySupervisionEventMonitor(
+                routingRoot,
+                domain,
+                team,
+                runner,
+                herdrExecutable,
+                role =>
+                {
+                    var pass = RunOnce("event");
+                    EmitPass(writer, pass, force: true);
+                    return Task.CompletedTask;
+                },
+                waitEvent => RecordWaitEvent(writer, waitEvent)).RunAsync(eventCancellation.Token);
+        }
+
+        var exitCode = first.ExitCode;
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                NotifySupervisor.Delay(TimeSpan.FromSeconds(intervalSeconds));
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                var pass = RunOnce();
+                exitCode = pass.ExitCode;
+                EmitPass(writer, pass, force: false);
+            }
+        }
+        finally
+        {
+            eventCancellation.Cancel();
+            if (eventMonitor is not null)
+            {
+                try
+                {
+                    eventMonitor.GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException) when (eventCancellation.IsCancellationRequested)
+                {
+                }
+            }
+        }
+        return exitCode;
+    }
+
+    private void EmitPass(TextWriter writer, NotifySupervisorPass pass, bool force)
+    {
+        if (pass.Silent && !force)
+        {
+            return;
+        }
+        lock (writerSync)
+        {
+            NotifyCommand.EmitSupervision(
+                writer, pass, domain, team, intervalSeconds, autoRedispatch, write, format, eventMode);
+        }
     }
 
     private (int? BoundSeconds, NotifySupervisionBoundStatus Status) ResolveBound(
@@ -822,6 +919,161 @@ internal sealed class NotifyMeasuredSupervisor
         }).ToArray();
     }
 
+    private IReadOnlyList<NotifySupervisionObservation> ReadRecordedSeatTransitions(
+        DateTimeOffset now,
+        string trigger,
+        NotifySupervisionCycle? previousCycle,
+        IDictionary<string, long> observedSequences,
+        IDictionary<string, DateTimeOffset> observedTimes,
+        IDictionary<string, string> observedStatuses)
+    {
+        SessionLayerModeResolution mode;
+        try
+        {
+            mode = SessionLayerModeStore.Resolve(routingRoot, domain, team);
+        }
+        catch (InvalidOperationException)
+        {
+            return [];
+        }
+        if (!string.Equals(mode.Mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal))
+        {
+            return [];
+        }
+
+        var topology = NotifyRoleTopologyStore.Resolve(routingRoot, domain, team);
+        if (!topology.Resolved || topology.Topology is null)
+        {
+            return [];
+        }
+
+        NotifyProcessResult roster;
+        try
+        {
+            roster = runner.Run(herdrExecutable, ["agent", "list"]);
+        }
+        catch (InvalidOperationException)
+        {
+            return [];
+        }
+        if (roster.ExitCode != 0)
+        {
+            return [];
+        }
+
+        IReadOnlyList<HerdrAgentState> agents;
+        try
+        {
+            agents = HerdrNotifyTransport.ParseAgents(roster.StandardOutput);
+        }
+        catch (InvalidOperationException)
+        {
+            return [];
+        }
+
+        var observations = new List<NotifySupervisionObservation>();
+        foreach (var (role, recorded) in topology.Topology.Roles)
+        {
+            if (!string.Equals(recorded.Resident, NotifyRecordedRole.HerdrResident, StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(recorded.PaneId))
+            {
+                continue;
+            }
+            var workspaceId = recorded.WorkspaceId ?? topology.Topology.WorkspaceId;
+            var agent = agents.SingleOrDefault(candidate =>
+                string.Equals(candidate.WorkspaceId, workspaceId, StringComparison.Ordinal)
+                && string.Equals(candidate.PaneId, recorded.PaneId, StringComparison.Ordinal));
+            if (agent?.AgentStatus is null || agent.StateChangeSequence is not { } sequence)
+            {
+                continue;
+            }
+
+            var seatKey = $"seat-state:{workspaceId}:{recorded.PaneId}";
+            observedSequences[seatKey] = sequence;
+            observedStatuses[seatKey] = agent.AgentStatus;
+            if (agent.LastStateChangeAt is { } changedAt)
+            {
+                observedTimes[seatKey] = changedAt;
+            }
+
+            var priorStatus = previousCycle?.LastObservedAgentStatuses.GetValueOrDefault(seatKey);
+            var priorSequence = previousCycle?.LastObservedStateChangeSequences.GetValueOrDefault(seatKey);
+            var settled = agent.AgentStatus is "done" or "blocked" or "idle";
+            if (role is not ("implementation" or "review")
+                || !string.Equals(priorStatus, "working", StringComparison.Ordinal)
+                || !settled
+                || priorSequence is null
+                || sequence <= priorSequence.Value)
+            {
+                continue;
+            }
+
+            observations.Add(new NotifySupervisionObservation
+            {
+                Key = $"seat-transition:{workspaceId}:{recorded.PaneId}:{sequence}",
+                Kind = "seat-state-transition",
+                OwnerRole = ownerRole,
+                SubjectRole = role,
+                Source = string.Equals(trigger, "event", StringComparison.Ordinal)
+                    ? "herdr.agent-wait.event"
+                    : "herdr.agent-list.interval",
+                Summary = $"Recorded seat '{role}' transitioned working→{agent.AgentStatus} at workspace '{workspaceId}' pane '{recorded.PaneId}' (state_change_seq={sequence}). Wake the owner role for composite verification; this state signal alone does not assert success.",
+                DetectableAt = agent.LastStateChangeAt,
+                WorkspaceId = workspaceId,
+                PaneId = recorded.PaneId,
+                FromStatus = "working",
+                ToStatus = agent.AgentStatus,
+                StateChangeSequence = sequence,
+                StateChangedAt = agent.LastStateChangeAt,
+            });
+        }
+        return observations;
+    }
+
+    internal void RecordWaitEvent(TextWriter writer, NotifySupervisionWaitEvent waitEvent)
+    {
+        lock (supervisionSync)
+        {
+            var state = NotifySupervisionStore.Read(
+                context.ResolveSupervisionArtifactRootPath(), domain, team);
+            var previous = state.LastCycle;
+            var cycle = new NotifySupervisionCycle
+            {
+                CycleId = Guid.NewGuid().ToString("N"),
+                StartedAt = waitEvent.ObservedAt,
+                CompletedAt = waitEvent.ObservedAt,
+                Trigger = "event-wait",
+                IntervalSeconds = intervalSeconds,
+                CadenceIntervalSeconds = state.LastIntervalCycle?.CadenceIntervalSeconds ?? intervalSeconds,
+                BoundSeconds = declaredBoundSeconds ?? state.Bound?.BoundSeconds,
+                AbsenceThresholdSeconds = state.LastIntervalCycle?.AbsenceThresholdSeconds,
+                AbsenceThresholdKind = state.LastIntervalCycle?.AbsenceThresholdKind,
+                LastObservedStateChangeSequences = previous?.LastObservedStateChangeSequences
+                    ?? new Dictionary<string, long>(StringComparer.Ordinal),
+                LastObservedStateChangeTimes = previous?.LastObservedStateChangeTimes
+                    ?? new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal),
+                LastObservedAgentStatuses = previous?.LastObservedAgentStatuses
+                    ?? new Dictionary<string, string>(StringComparer.Ordinal),
+                WaitEvents = [waitEvent],
+            };
+            NotifySupervisionStore.RecordCycle(
+                NotifySupervisionStore.ResolveCyclePath(
+                    context.ResolveSupervisionArtifactRootPath(), domain, team),
+                cycle,
+                write);
+        }
+
+        EmitPass(writer, new NotifySupervisorPass
+        {
+            Actions = [],
+            Warnings =
+            [
+                $"event-wait-rearmed: role '{waitEvent.Role}' workspace '{waitEvent.WorkspaceId}' pane "
+                + $"'{waitEvent.PaneId}' wait died or errored and was re-armed: {waitEvent.Detail}",
+            ],
+        }, force: true);
+    }
+
     private IReadOnlyList<NotifySupervisionObservation> ReadAbsentSeats(DateTimeOffset now)
     {
         SessionLayerModeResolution mode;
@@ -972,6 +1224,12 @@ internal sealed record NotifySupervisionObservation
     public bool WakeAlreadyDelivered { get; init; }
     public string? WakeCause { get; init; }
     public bool WakeSuppressed { get; init; }
+    public string? WorkspaceId { get; init; }
+    public string? PaneId { get; init; }
+    public string? FromStatus { get; init; }
+    public string? ToStatus { get; init; }
+    public long? StateChangeSequence { get; init; }
+    public DateTimeOffset? StateChangedAt { get; init; }
 }
 
 internal sealed record NotifySupervisionWakeResult

@@ -239,6 +239,31 @@ team を混同し、design team 自身の supervisor を強制終了し、別 te
 > 1.0 compatibility promise の対象外です。生成は registration や runtime verification ではなく、この surface は
 > release decision を行いません。
 
+### event-driven supervision (G659 — preview-through-1.x)
+
+1 つの standing `notify supervise` invocation に `--event-mode` を追加して有効化します。
+同じ supervisor process が recorded seat ごとに blocking `herdr agent wait` を 1 つ保持し、
+implementation または review seat が `working` から `done`、`blocked`、`idle` へ変わると
+数秒以内に owner role を起こします。transition、source、`state_change_seq`、observed latency、
+wake result は `cycles.jsonl` に記録します。wait の death / error は `event-wait` と
+`rearm_attempted: true` を記録してから再設定します。terminal output は解析しません。
+
+event wait と interval cycle は 1 process 内の独立した observation source です。wait が死んでも
+interval loop は safety floor として残ります。両 source は同じ workspace / pane / sequence の
+transition key を使うため、同時に観測しても 1 transition / 1 wake です。既存の wake target、stall class、
+owner から design への escalation、recovery の権限、team ごと exactly one supervisor の rule は
+変わらず、event mode は第 2 の standing loop を作りません。実測 evidence は macOS 上の
+`herdr 0.8.0` です。他の herdr version と platform は unverified です。
+
+G659 が hand-written transition watcher に取って代わるのは operator が event mode を採用
+した場合だけです。intent-cli は watcher の探索、強制終了、強制置換を行いません。G658 scheduler artifact は
+invocation を埋め込むため、既存の interval-only artifact は interval-only のままです。adoption には
+`notify supervise install ... --event-mode` を再実行し、新しい artifact を確認して、表示された
+operator command で明示的に登録解除 / 再登録する必要があります。
+
+> **1.x を通じた preview (G659)。** event wait、transition / wait record、event / interval de-dup は
+> post-freeze preview です。release decision は行わず、1.x の間に変更・撤回できます。
+
 ### escalation ladder と CI fallback (G657 — preview-through-1.x)
 
 完全な ladder は次のとおりです。各 seat は割り当てられた作業を行い、orchestration は通常の stall を検知して

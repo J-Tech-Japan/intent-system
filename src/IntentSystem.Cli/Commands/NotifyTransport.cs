@@ -9,27 +9,19 @@ internal sealed record NotifyProcessResult(int ExitCode, string StandardOutput, 
 internal interface INotifyProcessRunner
 {
     NotifyProcessResult Run(string fileName, IReadOnlyList<string> arguments);
+
+    Task<NotifyProcessResult> RunAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken) =>
+        Task.Run(() => Run(fileName, arguments), cancellationToken);
 }
 
 internal sealed class NotifyProcessRunner : INotifyProcessRunner
 {
     public NotifyProcessResult Run(string fileName, IReadOnlyList<string> arguments)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = fileName,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = ProcessOutputEncoding.Utf8NoBom,
-            StandardErrorEncoding = ProcessOutputEncoding.Utf8NoBom,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
+        var startInfo = CreateStartInfo(fileName, arguments);
 
         try
         {
@@ -49,6 +41,63 @@ internal sealed class NotifyProcessRunner : INotifyProcessRunner
                 $"Notification transport '{fileName}' could not start: {exception.Message}",
                 exception);
         }
+    }
+
+    public async Task<NotifyProcessResult> RunAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = CreateStartInfo(fileName, arguments);
+        try
+        {
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException($"Failed to start notification transport '{fileName}'.");
+            var standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var standardError = process.StandardError.ReadToEndAsync(cancellationToken);
+            try
+            {
+                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                throw;
+            }
+
+            return new NotifyProcessResult(
+                process.ExitCode,
+                await standardOutput.ConfigureAwait(false),
+                await standardError.ConfigureAwait(false));
+        }
+        catch (Exception exception) when (exception is Win32Exception or IOException)
+        {
+            throw new InvalidOperationException(
+                $"Notification transport '{fileName}' could not start: {exception.Message}",
+                exception);
+        }
+    }
+
+    private static ProcessStartInfo CreateStartInfo(string fileName, IReadOnlyList<string> arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = ProcessOutputEncoding.Utf8NoBom,
+            StandardErrorEncoding = ProcessOutputEncoding.Utf8NoBom,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+        return startInfo;
     }
 }
 

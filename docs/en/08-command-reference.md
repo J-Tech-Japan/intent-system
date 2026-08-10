@@ -196,6 +196,14 @@ registration/unregistration commands without executing them. For ongoing
 health, compare the age of the team's `cycles.jsonl` record with its declared
 bound. Process-name grep is an anti-pattern because a measured cross-team
 collision killed one team's supervisor while retaining another team's process.
+Optional `notify supervise --event-mode` keeps blocking `herdr agent wait`
+subscriptions inside that same process for seconds-scale implementation/review
+settlement wakes. The independent interval cycle remains the safety floor and
+both sources de-duplicate by recorded seat transition. Because install
+artifacts embed the invocation, adopting event mode requires re-emitting and
+explicitly re-registering the artifact with `supervise install --event-mode`;
+an existing artifact remains interval-only. This path is measured with herdr
+0.8.0 on macOS; other versions/platforms are unverified.
 Supervision and install emission remain previews through 1.x under the
 compatibility promise.
 
