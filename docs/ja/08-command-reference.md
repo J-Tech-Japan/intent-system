@@ -183,7 +183,12 @@ reason・確認した evidence・paste 可能な suggested prompt・safety bound
 その推奨を静かにします。host-init と design-side loop の guide が deployment の手順を
 示し、[オーケストレーションのリファレンス](12-agent-message-orchestration.md)へ
 リンクします。この command は未記録を検出するだけで、background process を start・
-manage しません。supervision は compatibility promise 上 1.x までの preview です。
+manage しません。setup は `intent-cli notify supervise install` を通し、launchd、Task
+Scheduler、または systemd artifact と operator 用の正確な registration / unregistration
+command を生成しますが実行しません。継続的な health は team の `cycles.jsonl` record の
+age と declared bound を比較します。process-name grep は、実測で team を混同し、一方の
+supervisor を強制終了しながら別 team の process を残したアンチパターンです。supervision と
+install emission は compatibility promise 上 1.x までの preview です。
 
 ## Stack — packet backlog 作成 + 最初の issue publish
 

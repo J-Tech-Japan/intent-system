@@ -190,7 +190,14 @@ an existing cycle leaves that recommendation silent. The host-init and
 design-side loop guides carry the deployment step and link the
 [orchestration reference](12-agent-message-orchestration.md); this command only
 detects the missing record and never starts or manages the background process.
-Supervision remains a preview through 1.x under the compatibility promise.
+That setup step routes through `intent-cli notify supervise install`, which
+emits a launchd, Task Scheduler, or systemd artifact and exact operator
+registration/unregistration commands without executing them. For ongoing
+health, compare the age of the team's `cycles.jsonl` record with its declared
+bound. Process-name grep is an anti-pattern because a measured cross-team
+collision killed one team's supervisor while retaining another team's process.
+Supervision and install emission remain previews through 1.x under the
+compatibility promise.
 
 ## Stack — packet backlog creation + first issue publish
 
