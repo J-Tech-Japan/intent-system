@@ -94,14 +94,14 @@ public sealed class ReleaseNotesV0161DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void ReadinessMirrorLinksTheShippedNotes(string language)
+    public void PublishedNotesLinkTheirPrecedingScope(string language)
     {
         var path = Path.Combine(
-            RepoVersionPolicySource.RepoRoot(), "docs", language, "09-developer-reference.md");
-        var reference = File.ReadAllText(path);
+            RepoVersionPolicySource.RepoRoot(), "docs", language, "release-notes-v0.16.1.md");
+        var notes = File.ReadAllText(path);
 
-        Assert.Contains("release-notes-v0.16.1.md", reference, StringComparison.Ordinal);
-        Assert.DoesNotContain("release-notes-v0.16.1.md) is the required prepare-only placeholder", reference, StringComparison.Ordinal);
+        Assert.Contains("release-notes-v0.16.0.md", notes, StringComparison.Ordinal);
+        Assert.DoesNotContain("DRAFT /", notes, StringComparison.Ordinal);
     }
 
     private static IReadOnlyList<string> CountMismatches(string notes, string language)

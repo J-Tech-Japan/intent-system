@@ -155,17 +155,16 @@ public sealed class ReleaseNotesV0170DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void PreparationReplacesTheDraftAndRefreshesReadiness(string language)
+    public void ReadinessAdvancesWhilePublishedNotesRemainGuarded(string language)
     {
         var root = RepoVersionPolicySource.RepoRoot();
         var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
 
-        Assert.False(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.16.2.md")));
+        Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.17.1.md")));
+        Assert.Contains("release-notes-v0.17.1.md", reference, StringComparison.Ordinal);
         Assert.Contains("release-notes-v0.17.0.md", reference, StringComparison.Ordinal);
-        Assert.Contains("release-notes-v0.16.1.md", reference, StringComparison.Ordinal);
-        Assert.Contains("release-notes-v0.16.0.md", reference, StringComparison.Ordinal);
         Assert.Contains("ReleaseNotesV0170DocsTests", reference, StringComparison.Ordinal);
-        Assert.DoesNotContain("ReleaseNotesV0162DocsTests", reference, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReleaseNotesV0171DocsTests", reference, StringComparison.Ordinal);
     }
 
     [Theory]
