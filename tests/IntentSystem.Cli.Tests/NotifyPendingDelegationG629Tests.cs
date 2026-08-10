@@ -49,6 +49,62 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
     }
 
     [Fact]
+    public void StatusNamesHerdrActivityEvidenceAndDistinguishesWorkingFromLiveIdle_G652()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(
+            implementationRunning: true,
+            implementationStatus: "working",
+            stateChangeSequence: 7,
+            lastStateChangeAt: FixedNow.AddMinutes(1)));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        Assert.Equal(0, workspace.Run(DelegateArgs()).ExitCode);
+
+        var supervisionRoot = workspace.Context.ResolveSupervisionArtifactRootPath();
+        Assert.True(NotifySupervisionStore.RecordCycle(
+            NotifySupervisionStore.ResolveCyclePath(supervisionRoot, Workspace.Domain, Workspace.Team),
+            new NotifySupervisionCycle
+            {
+                CycleId = "G652-baseline",
+                StartedAt = FixedNow,
+                CompletedAt = FixedNow,
+                IntervalSeconds = 300,
+                LastObservedStateChangeSequences = new Dictionary<string, long>
+                {
+                    ["activity:wH:wH:p2"] = 6,
+                },
+                LastObservedStateChangeTimes = new Dictionary<string, DateTimeOffset>
+                {
+                    ["activity:wH:wH:p2"] = FixedNow,
+                },
+            },
+            write: true).Applied);
+
+        var (_, working) = workspace.Run(StatusArgs());
+        Assert.Equal("working", working.GetProperty("activity_verdict").GetString());
+        Assert.Equal("working", working.GetProperty("agent_status").GetString());
+        Assert.Equal(7, working.GetProperty("state_change_seq").GetInt64());
+
+        Assert.True(NotifySupervisionStore.RecordCycle(
+            NotifySupervisionStore.ResolveCyclePath(supervisionRoot, Workspace.Domain, Workspace.Team),
+            new NotifySupervisionCycle
+            {
+                CycleId = "G652-current-observation",
+                StartedAt = FixedNow.AddMinutes(1),
+                CompletedAt = FixedNow.AddMinutes(1),
+                IntervalSeconds = 300,
+                LastObservedStateChangeSequences = new Dictionary<string, long>
+                {
+                    ["activity:wH:wH:p2"] = 7,
+                },
+            },
+            write: true).Applied);
+        runner.AgentResponse = workspace.HerdrAgents(implementationRunning: true, implementationStatus: "working", stateChangeSequence: 7);
+        var (_, idle) = workspace.Run(StatusArgs());
+        Assert.Equal("live-idle", idle.GetProperty("activity_verdict").GetString());
+        Assert.Contains("advancing_since_last_observation=false", idle.GetProperty("activity_inputs").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void StatusUsesRunningFlagNotIdleStatusStringAndReportsLost_G629()
     {
         var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
@@ -256,7 +312,9 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
         public string HerdrAgents(
             bool implementationRunning,
             string implementationStatus = "idle",
-            bool includeImplementationSession = true)
+            bool includeImplementationSession = true,
+            long? stateChangeSequence = null,
+            DateTimeOffset? lastStateChangeAt = null)
         {
             object HerdrAgent(string name, string paneId, bool running, string status) => new
             {
@@ -269,6 +327,8 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
                     : null,
                 agent_status = status,
                 interactive_ready = running,
+                state_change_seq = name == "implementation" ? stateChangeSequence : null,
+                last_state_change_at = name == "implementation" ? lastStateChangeAt?.ToString("O") : null,
             };
 
             return JsonSerializer.Serialize(new

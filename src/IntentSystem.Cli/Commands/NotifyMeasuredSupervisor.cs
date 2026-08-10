@@ -142,6 +142,11 @@ internal sealed class NotifyMeasuredSupervisor
         var observations = new List<NotifySupervisionObservation>();
         var actions = new List<NotifySupervisorAction>();
         var warnings = new List<string>();
+        var boundBelowInterval = declaredBoundSeconds.HasValue && declaredBoundSeconds.Value < intervalSeconds;
+        if (boundBelowInterval)
+        {
+            warnings.Add($"declared bound {declaredBoundSeconds!.Value}s is smaller than configured interval {intervalSeconds}s; normal cadence will structurally exceed the bound and the value was not corrected.");
+        }
 
         var openBefore = NotifyPendingDelegationStore.ReadOpen(routingRoot, domain, team, out var pendingError);
         if (pendingError is not null)
@@ -174,6 +179,47 @@ internal sealed class NotifyMeasuredSupervisor
         }
 
         var openByTask = openBefore.ToDictionary(item => item.TaskId, StringComparer.Ordinal);
+        var observedSequences = new Dictionary<string, long>(StringComparer.Ordinal);
+        var observedTimes = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        foreach (var pending in openBefore)
+        {
+            var transportMode = string.IsNullOrWhiteSpace(pending.TransportMode)
+                ? SessionLayerMode.Agmsg
+                : pending.TransportMode!;
+            var activity = NotifyPendingLiveness.Probe(routingRoot, pending, transportMode, runner, herdrExecutable, agmsgScriptsDirectory);
+            if (!activity.Resolved || activity.Running != true || activity.StateChangeSequence is not { } sequence)
+            {
+                continue;
+            }
+
+            var paneKey = pending.WorkspaceId is not null && pending.PaneId is not null
+                ? $"activity:{pending.WorkspaceId}:{pending.PaneId}"
+                : $"activity:{pending.RecipientIdentity}";
+            observedSequences[paneKey] = sequence;
+            if (activity.LastStateChangeAt is { } changedAt)
+            {
+                observedTimes[paneKey] = changedAt;
+            }
+
+            var advanced = previousCycle?.LastObservedStateChangeSequences.TryGetValue(paneKey, out var priorSequence) == true
+                && sequence > priorSequence;
+            var idle = !string.Equals(activity.AgentStatus, "working", StringComparison.Ordinal) || !advanced;
+            var beyondThreshold = declaredBoundSeconds.HasValue
+                && now - pending.DispatchedAt > TimeSpan.FromSeconds(declaredBoundSeconds.Value);
+            if (!pending.ReportArrived && idle && beyondThreshold)
+            {
+                observations.Add(new NotifySupervisionObservation
+                {
+                    Key = $"live-idle:{paneKey}",
+                    Kind = "live-idle-no-report",
+                    OwnerRole = pending.DelegatingRole ?? ownerRole,
+                    Source = "herdr.activity",
+                    Summary = $"Recipient '{pending.RecipientRole}' is live-idle with no report beyond the declared {declaredBoundSeconds!.Value}s threshold; inspect the recorded terminal pane. No recovery sequence was entered.",
+                    DetectableAt = pending.DispatchedAt.AddSeconds(declaredBoundSeconds!.Value),
+                    WakeSuppressed = true,
+                });
+            }
+        }
         foreach (var action in legacy.Actions)
         {
             var record = openByTask.GetValueOrDefault(action.TaskId);
@@ -281,6 +327,16 @@ internal sealed class NotifyMeasuredSupervisor
             .Select(group => group.First()))
         {
             var existing = state.ActiveStalls.GetValueOrDefault(observation.Key);
+            if (existing is not null && observation.WakeSuppressed)
+            {
+                // Activity-backed live-idle is an informational, once-only
+                // finding. Keep its durable record active, but do not emit a
+                // duplicate result on unchanged cycles and never wake or enter
+                // the G630 recovery path for it.
+                records.Add(existing with { Summary = observation.Summary });
+                continue;
+            }
+
             if (existing is not null && existing.WakeDelivered)
             {
                 records.Add(existing with { Summary = observation.Summary });
@@ -288,7 +344,9 @@ internal sealed class NotifyMeasuredSupervisor
                 continue;
             }
 
-            var wake = observation.WakeAlreadyAttempted && existing is null
+            var wake = observation.WakeSuppressed
+                ? new NotifySupervisionWakeResult { Attempted = false, Delivered = false, Summary = "Finding is informational; inspect the terminal and do not enter recovery." }
+                : observation.WakeAlreadyAttempted && existing is null
                 ? new NotifySupervisionWakeResult
                 {
                     Attempted = true,
@@ -392,6 +450,9 @@ internal sealed class NotifyMeasuredSupervisor
             AbsenceThresholdKind = absenceThresholdKind,
             AbsentSinceLastCycle = absentSinceLastCycle,
             GapSeconds = gapSeconds,
+            BoundBelowInterval = boundBelowInterval,
+            LastObservedStateChangeSequences = observedSequences,
+            LastObservedStateChangeTimes = observedTimes,
         };
         var cycleWrite = NotifySupervisionStore.RecordCycle(
             NotifySupervisionStore.ResolveCyclePath(
@@ -793,6 +854,7 @@ internal sealed record NotifySupervisionObservation
     public bool WakeAlreadyAttempted { get; init; }
     public bool WakeAlreadyDelivered { get; init; }
     public string? WakeCause { get; init; }
+    public bool WakeSuppressed { get; init; }
 }
 
 internal sealed record NotifySupervisionWakeResult

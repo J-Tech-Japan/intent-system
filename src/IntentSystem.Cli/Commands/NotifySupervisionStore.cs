@@ -322,6 +322,9 @@ internal sealed record NotifySupervisionCycle
     [JsonPropertyName("absence_threshold_kind")] public string? AbsenceThresholdKind { get; init; }
     [JsonPropertyName("absent_since_last_cycle")] public bool AbsentSinceLastCycle { get; init; }
     [JsonPropertyName("gap_seconds")] public long? GapSeconds { get; init; }
+    [JsonPropertyName("bound_below_interval")] public bool BoundBelowInterval { get; init; }
+    [JsonPropertyName("last_observed_state_change_sequences")] public IReadOnlyDictionary<string, long> LastObservedStateChangeSequences { get; init; } = new Dictionary<string, long>(StringComparer.Ordinal);
+    [JsonPropertyName("last_observed_state_change_times")] public IReadOnlyDictionary<string, DateTimeOffset> LastObservedStateChangeTimes { get; init; } = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
 }
 
 internal sealed record NotifySupervisionStallRecord

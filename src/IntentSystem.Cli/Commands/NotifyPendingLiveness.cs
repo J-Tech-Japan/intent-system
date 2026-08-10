@@ -9,6 +9,9 @@ internal sealed record NotifyPendingLivenessResult
     public string State { get; init; } = "unavailable";
     public bool? ProcessPresent { get; init; }
     public bool? ResendPermitted { get; init; }
+    public string? AgentStatus { get; init; }
+    public long? StateChangeSequence { get; init; }
+    public DateTimeOffset? LastStateChangeAt { get; init; }
     public required string Source { get; init; }
     public required string Summary { get; init; }
     public string? Cause { get; init; }
@@ -99,6 +102,7 @@ internal static class NotifyPendingLiveness
 
         if (running.Length == 1)
         {
+            var agent = running[0];
             return new NotifyPendingLivenessResult
             {
                 Resolved = true,
@@ -106,6 +110,9 @@ internal static class NotifyPendingLiveness
                 State = "live",
                 ProcessPresent = null,
                 Source = "herdr.agent_running",
+                AgentStatus = agent.AgentStatus,
+                StateChangeSequence = agent.StateChangeSequence,
+                LastStateChangeAt = agent.LastStateChangeAt,
                 Summary = $"The recorded recipient identity '{record.RecipientIdentity}' has one agent with running=true.",
             };
         }

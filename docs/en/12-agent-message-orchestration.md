@@ -71,6 +71,16 @@ registration but a process remains, status reports the distinct
 `registration-lost-process-present` state and directs an operator to repair the
 registration; it does not infer process loss.
 
+**Activity evidence (G652 — preview-through-1.x).** A running process is not
+evidence of work. For herdr, status also names `agent_status`,
+`state_change_seq`, and the last state-change time: `working` requires a
+working agent with advancing activity; otherwise a present process is
+`live-idle`. Supervision records those observations, surfaces an unchanged
+live-idle recipient with no report once and names terminal inspection as the
+remedy; it never reads terminal content or enters recovery for that finding.
+A declared bound below the configured interval is a structural false-alarm
+warning, not a value the CLI silently corrects.
+
 A report is a message rather than a bookkeeping entry: fail-closed protection
 belongs on pending-state mutation, not on carrying the message. Refusing an
 unrecognised identifier would silence unsolicited reports and answers to
