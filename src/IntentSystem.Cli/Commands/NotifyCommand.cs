@@ -154,8 +154,9 @@ internal static class NotifyCommand
         if (string.Equals(operation, OperationReport, StringComparison.Ordinal))
         {
             var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
-            var unmatched = !pending.Resolved && pending.Record is null && pending.Error is null;
-            if (!unmatched && (!pending.Resolved || pending.Record is null || pending.Record.ReportArrived))
+            var openPending = pending.Resolved && pending.Record is { ReportArrived: false };
+            var unmatched = !openPending && pending.Error is null;
+            if (!openPending && !unmatched)
             {
                 Emit(writer, options.Format, FailureResult(operation, options, SessionLayerMode.Default, "unknown-task-id",
                     $"Report task id '{options.TaskId}' does not match an open pending delegation. Known open task ids: {FormatKnownTaskIds(pending.KnownTaskIds)}."
@@ -169,7 +170,8 @@ internal static class NotifyCommand
             {
                 persistedReportOutbox = new NotifyReportOutboxEntry
                 {
-                    Domain = options.Domain!, Team = options.Team!, TaskId = options.TaskId!, ResultNonce = pending.Record?.ResultNonce,
+                    Domain = options.Domain!, Team = options.Team!, TaskId = options.TaskId!,
+                    ResultNonce = openPending ? pending.Record!.ResultNonce : null,
                     FromRole = options.FromRole!, ToRole = options.ToRole!, Status = options.Status!, Artifact = options.Artifact!,
                     Summary = NotifyEventWriter.NormalizeSummary(options.Summary!),
                     CreatedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(), DeliveryState = "prepared",
@@ -183,6 +185,7 @@ internal static class NotifyCommand
                         outboxEntryPath: persistedOutboxPath));
                     return 1;
                 }
+                persistedReportOutbox = write.Entry ?? persistedReportOutbox;
             }
         }
 
@@ -252,7 +255,10 @@ internal static class NotifyCommand
 
     private static int ExecuteCollect(TextWriter writer, NotifyOptions options, string routingRoot)
     {
-        var outbox = NotifyReportOutboxStore.Find(routingRoot, options.Domain!, options.Team!, options.TaskId!);
+        var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
+        var outbox = pending.Resolved && pending.Record is not null
+            ? NotifyReportOutboxStore.Find(routingRoot, options.Domain!, options.Team!, options.TaskId!, pending.Record.ResultNonce)
+            : NotifyReportOutboxStore.Find(routingRoot, options.Domain!, options.Team!, options.TaskId!);
         if (!outbox.Resolved || outbox.Entry is null)
         {
             Emit(writer, options.Format, FailureResult(OperationCollect, options, SessionLayerMode.Default,
@@ -269,7 +275,6 @@ internal static class NotifyCommand
             return 1;
         }
 
-        var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
         if (!pending.Resolved || pending.Record is null || pending.Record.ReportArrived)
         {
             Emit(writer, options.Format, FailureResult(OperationCollect, options, SessionLayerMode.Default,
@@ -626,11 +631,14 @@ internal static class NotifyCommand
         NotifyPendingDelegation? reportPendingRecord = null;
         if (isReport)
         {
-            reportPendingRecord = NotifyPendingDelegationStore.Find(
+            var pending = NotifyPendingDelegationStore.Find(
                 options.RoutingRoot!,
                 options.Domain,
                 options.Team,
-                options.TaskId!).Record;
+                options.TaskId!);
+            reportPendingRecord = pending.Resolved && pending.Record is { ReportArrived: false }
+                ? pending.Record
+                : null;
         }
         NotifyReportOutboxEntry? reportOutbox = existingOutbox;
         string? outboxEntryPath = null;
@@ -663,6 +671,7 @@ internal static class NotifyCommand
                         outboxEntryPath: outboxEntryPath));
                     return 1;
                 }
+                reportOutbox = outboxWrite.Entry ?? reportOutbox;
             }
         }
 

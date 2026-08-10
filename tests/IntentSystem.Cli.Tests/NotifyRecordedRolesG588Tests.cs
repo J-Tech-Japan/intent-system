@@ -118,14 +118,12 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
         var reportStatuses = NotifyCommand.SupportedReportStatuses.ToArray();
         foreach (var status in reportStatuses)
         {
-            var taskId = $"G588-schema-{status}";
-            workspace.SeedPending(taskId);
+            workspace.SeedPending();
             Assert.Equal(0, workspace.Run(ReportArgs(
                 from: "implementation",
                 to: "design",
                 write: true,
-                status: status,
-                taskId: taskId)).ExitCode);
+                status: status)).ExitCode);
         }
 
         Assert.Equal(0, workspace.Run(EscalateArgs()).ExitCode);
@@ -355,15 +353,10 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
         "--result-nonce", "g588-nonce", write ? "--write" : "--dry-run", "--format", "json",
     ];
 
-    private static string[] ReportArgs(
-        string from,
-        string to,
-        bool write,
-        string status = "completed",
-        string taskId = "G588-demo") =>
+    private static string[] ReportArgs(string from, string to, bool write, string status = "completed") =>
     [
         "notify", "report", "--domain", Workspace.Domain, "--team", Workspace.Team,
-        "--from", from, "--to", to, "--task-id", taskId, "--status", status,
+        "--from", from, "--to", to, "--task-id", "G588-demo", "--status", status,
         "--artifact", "https://example.test/pr/1280", "--summary", "external routing completed",
         write ? "--write" : "--dry-run", "--format", "json",
     ];

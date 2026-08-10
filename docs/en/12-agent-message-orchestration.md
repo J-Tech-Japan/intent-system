@@ -94,7 +94,10 @@ terminal `ORCH_RESULT` remains a record for the human, but intent-cli never
 parses a terminal. When a visible result has no arrived report, collect the
 persisted outbox entry — do not re-delegate or redo the task. Collection sends
 only the original report once for its task id and refuses an already-delivered
-entry.
+entry. Entries are scoped to the dispatch generation (the result nonce), so a
+re-delegated task id can carry a new report and unmatched reports continue as
+messages. A second report for an undelivered current generation fails closed
+and names its exact `notify collect` recovery command.
 
 A report is a message rather than a bookkeeping entry: fail-closed protection
 belongs on pending-state mutation, not on carrying the message. Refusing an

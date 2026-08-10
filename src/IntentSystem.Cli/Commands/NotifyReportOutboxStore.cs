@@ -28,6 +28,9 @@ internal static class NotifyReportOutboxStore
     public static NotifyReportOutboxWriteResult WriteNew(string routingRoot, NotifyReportOutboxEntry entry)
     {
         var path = ResolvePath(routingRoot, entry.Domain, entry.Team);
+        var persisted = string.IsNullOrWhiteSpace(entry.EntryId)
+            ? entry with { EntryId = Guid.NewGuid().ToString("N") }
+            : entry;
         lock (Sync)
         {
             var current = ReadCurrent(path, out var error);
@@ -36,12 +39,21 @@ internal static class NotifyReportOutboxStore
                 return new NotifyReportOutboxWriteResult(false, path, error);
             }
 
-            if (current.ContainsKey(entry.TaskId))
+            var existingGeneration = current.Values.FirstOrDefault(candidate =>
+                string.Equals(candidate.TaskId, persisted.TaskId, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(persisted.ResultNonce)
+                && string.Equals(candidate.ResultNonce, persisted.ResultNonce, StringComparison.Ordinal));
+            if (existingGeneration is not null)
             {
-                return new NotifyReportOutboxWriteResult(false, path, $"An outbox entry already exists for task '{entry.TaskId}'.");
+                var state = string.Equals(existingGeneration.DeliveryState, "undelivered", StringComparison.Ordinal)
+                    ? $"An undelivered report outbox entry already exists for task '{persisted.TaskId}' and its current dispatch generation. "
+                      + $"Recover it with '{BuildCollectCommand(persisted)}'; do not re-delegate the task."
+                    : $"A report outbox entry already exists for task '{persisted.TaskId}' and its current dispatch generation.";
+                return new NotifyReportOutboxWriteResult(false, path, state);
             }
 
-            return Append(path, new NotifyReportOutboxEvent { Kind = "record", Entry = entry });
+            var write = Append(path, new NotifyReportOutboxEvent { Kind = "record", Entry = persisted });
+            return write with { Entry = write.Written ? persisted : null };
         }
     }
 
@@ -59,13 +71,35 @@ internal static class NotifyReportOutboxStore
             Entry = entry with { DeliveryState = "delivered", DeliveryError = null, LastAttemptAt = NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow, DeliveredAt = NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow },
         });
 
-    public static NotifyReportOutboxReadResult Find(string routingRoot, string domain, string team, string taskId)
+    public static NotifyReportOutboxReadResult Find(string routingRoot, string domain, string team, string taskId) =>
+        FindCurrent(routingRoot, domain, team, taskId, resultNonce: null, matchGeneration: false);
+
+    public static NotifyReportOutboxReadResult Find(
+        string routingRoot,
+        string domain,
+        string team,
+        string taskId,
+        string? resultNonce) =>
+        FindCurrent(routingRoot, domain, team, taskId, resultNonce, matchGeneration: true);
+
+    private static NotifyReportOutboxReadResult FindCurrent(
+        string routingRoot,
+        string domain,
+        string team,
+        string taskId,
+        string? resultNonce,
+        bool matchGeneration)
     {
         var path = ResolvePath(routingRoot, domain, team);
         lock (Sync)
         {
             var current = ReadCurrent(path, out var error);
-            return new NotifyReportOutboxReadResult(error is null, path, current.GetValueOrDefault(taskId), error);
+            var entry = current.Values
+                .Where(candidate => string.Equals(candidate.TaskId, taskId, StringComparison.Ordinal)
+                    && (!matchGeneration || string.Equals(candidate.ResultNonce, resultNonce, StringComparison.Ordinal)))
+                .OrderByDescending(candidate => candidate.CreatedAt)
+                .FirstOrDefault();
+            return new NotifyReportOutboxReadResult(error is null, path, entry, error);
         }
     }
 
@@ -93,7 +127,7 @@ internal static class NotifyReportOutboxStore
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 var item = JsonSerializer.Deserialize<NotifyReportOutboxEvent>(line, JsonOptions)
                     ?? throw new InvalidDataException("A report outbox event was empty.");
-                if (item.Entry is not null) current[item.Entry.TaskId] = item.Entry;
+                if (item.Entry is not null) current[EntryKey(item.Entry)] = item.Entry;
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
@@ -128,6 +162,14 @@ internal static class NotifyReportOutboxStore
             throw new ArgumentException($"Outbox path segment '{value}' is unsafe.");
         return value;
     }
+
+    private static string EntryKey(NotifyReportOutboxEntry entry) =>
+        !string.IsNullOrWhiteSpace(entry.EntryId)
+            ? entry.EntryId
+            : $"legacy:{entry.TaskId}:{entry.ResultNonce ?? string.Empty}";
+
+    private static string BuildCollectCommand(NotifyReportOutboxEntry entry) =>
+        $"intent-cli notify collect --domain {entry.Domain} --team {entry.Team} --task-id {entry.TaskId} --write";
 }
 
 internal sealed record NotifyReportOutboxEntry
@@ -135,6 +177,7 @@ internal sealed record NotifyReportOutboxEntry
     [JsonPropertyName("domain")] public required string Domain { get; init; }
     [JsonPropertyName("team")] public required string Team { get; init; }
     [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+    [JsonPropertyName("entry_id")] public string? EntryId { get; init; }
     [JsonPropertyName("result_nonce")] public string? ResultNonce { get; init; }
     [JsonPropertyName("from_role")] public required string FromRole { get; init; }
     [JsonPropertyName("to_role")] public required string ToRole { get; init; }
@@ -154,5 +197,9 @@ internal sealed record NotifyReportOutboxEvent
     [JsonPropertyName("entry")] public NotifyReportOutboxEntry? Entry { get; init; }
 }
 
-internal sealed record NotifyReportOutboxWriteResult(bool Written, string Path, string? Error);
+internal sealed record NotifyReportOutboxWriteResult(
+    bool Written,
+    string Path,
+    string? Error,
+    NotifyReportOutboxEntry? Entry = null);
 internal sealed record NotifyReportOutboxReadResult(bool Resolved, string Path, NotifyReportOutboxEntry? Entry, string? Error);

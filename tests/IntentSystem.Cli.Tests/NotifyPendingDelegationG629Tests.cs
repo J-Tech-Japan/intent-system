@@ -296,6 +296,15 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
         runner.PromptExitCode = 0;
         runner.Calls.Clear();
 
+        var (repeatedExit, repeated) = workspace.Run(ReportArgs());
+        Assert.Equal(1, repeatedExit);
+        Assert.Equal("report-outbox-write-failed", repeated.GetProperty("cause").GetString());
+        Assert.Contains(
+            "intent-cli notify collect --domain intent-cli --team intent-cli-dev --task-id G629-demo --write",
+            repeated.GetProperty("summary").GetString(),
+            StringComparison.Ordinal);
+        Assert.Empty(runner.Calls);
+
         var (collectExit, collected) = workspace.Run(CollectArgs());
 
         Assert.Equal(0, collectExit);
@@ -311,20 +320,53 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
         Assert.Empty(runner.Calls);
     }
 
-    private static string[] DelegateArgs() =>
+    [Fact]
+    public void ReusedTaskIdCreatesNewDispatchGenerationAndUnmatchedReportsRemainMessages_G653()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+
+        Assert.Equal(0, workspace.Run(DelegateArgs("G653-reused", "g653-generation-1")).ExitCode);
+        Assert.Equal(0, workspace.Run(ReportArgs("G653-reused")).ExitCode);
+        Assert.Equal(0, workspace.Run(DelegateArgs("G653-reused", "g653-generation-2")).ExitCode);
+        Assert.Equal(0, workspace.Run(ReportArgs("G653-reused")).ExitCode);
+
+        var firstGeneration = NotifyReportOutboxStore.Find(
+            workspace.RootPath, Workspace.Domain, Workspace.Team, "G653-reused", "g653-generation-1");
+        var secondGeneration = NotifyReportOutboxStore.Find(
+            workspace.RootPath, Workspace.Domain, Workspace.Team, "G653-reused", "g653-generation-2");
+        Assert.Equal("delivered", firstGeneration.Entry!.DeliveryState);
+        Assert.Equal("delivered", secondGeneration.Entry!.DeliveryState);
+
+        var (_, unmatchedFirst) = workspace.Run(ReportArgs("G653-unmatched"));
+        var (_, unmatchedSecond) = workspace.Run(ReportArgs("G653-unmatched"));
+        Assert.True(unmatchedFirst.GetProperty("delivered").GetBoolean());
+        Assert.True(unmatchedSecond.GetProperty("delivered").GetBoolean());
+        Assert.Contains("without creating or resolving a pending record", unmatchedFirst.GetProperty("advisory").GetString(), StringComparison.Ordinal);
+        Assert.Contains("without creating or resolving a pending record", unmatchedSecond.GetProperty("advisory").GetString(), StringComparison.Ordinal);
+
+        Assert.Equal(0, workspace.Run(DelegateArgs("G653-question", "g653-question-generation")).ExitCode);
+        var (_, question) = workspace.Run(ReportArgs("G653-question", status: "question"));
+        var (_, completed) = workspace.Run(ReportArgs("G653-question", status: "completed"));
+        Assert.True(question.GetProperty("delivered").GetBoolean());
+        Assert.True(completed.GetProperty("delivered").GetBoolean());
+        Assert.Contains("without creating or resolving a pending record", completed.GetProperty("advisory").GetString(), StringComparison.Ordinal);
+    }
+
+    private static string[] DelegateArgs(string taskId = "G629-demo", string resultNonce = "g629-nonce") =>
     [
         "notify", "delegate", "--domain", Workspace.Domain, "--team", Workspace.Team,
         "--from", "orchestration", "--to", "implementation", "--report-to", "orchestration",
-        "--task-id", "G629-demo", "--objective", "Inspect pending delegation state",
-        "--input", "issue #1373", "--expected-artifact", "draft PR URL", "--result-nonce", "g629-nonce",
+        "--task-id", taskId, "--objective", "Inspect pending delegation state",
+        "--input", "issue #1373", "--expected-artifact", "draft PR URL", "--result-nonce", resultNonce,
         "--write", "--format", "json",
     ];
 
-    private static string[] ReportArgs(string taskId = "G629-demo", string format = "json") =>
+    private static string[] ReportArgs(string taskId = "G629-demo", string format = "json", string status = "completed") =>
     [
         "notify", "report", "--domain", Workspace.Domain, "--team", Workspace.Team,
         "--from", "implementation", "--to", "orchestration", "--task-id", taskId,
-        "--status", "completed", "--artifact", "https://example.test/pr/1373",
+        "--status", status, "--artifact", "https://example.test/pr/1373",
         "--summary", "pending state implemented", "--write", "--format", format,
     ];
 
