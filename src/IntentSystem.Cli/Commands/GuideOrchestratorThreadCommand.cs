@@ -2248,22 +2248,15 @@ internal static class GuideOrchestratorThreadCommand
                     + "does not silently pick a broader mode. Type the launch into the pane's shell the same way, so "
                     + "the session inherits the folder as cwd.",
                 AttendedFirstRunRule =
-                    "ATTEND the first run of every pane. First-run trust screens (codex hooks-trust) and permission "
-                    + "prompts block the session until answered, and an unattended pane looks \"launched\" while it is "
-                    + "actually waiting. Where the design thread is authorized to answer (see the authority boundary "
-                    + "below), answer so the result is a DURABLE allowlist/trust record — a per-invocation approval "
-                    + "re-prompts on the next wake and stalls the role again.",
+                    "ELIMINATE routine first-run prompts with the recorded kind recipe. If a residual prompt remains, "
+                    + "orchestration alone adjudicates it under the team's durable pre-approval policy; without that "
+                    + "policy the only action is escalation. Design observes the escalation and never relays keys.",
                 AuthorityBoundary =
-                    "attending a pane is not authority to decide for the operator. The design "
-                    + "thread may act ONLY on pane contents it has actually READ (never on a blind keystroke into a "
-                    + "dialog it has not rendered). After that verified read, authorization extends ONLY to the four "
-                    + "MAY-answer classes the supervision section grants — " + SupervisionMayAnswerClasses.InlineList
-                    + " — and to nothing else. "
-                    + "CREDENTIAL, SECURITY, and PERMISSION prompts are NEVER answerable by the design thread: they "
-                    + "ALWAYS remain unanswered and are ALWAYS ESCALATED to the operator, with or without prior "
-                    + "authorization — no authorization makes them answerable. Unsticking a pane is not deciding for "
-                    + "the operator: if answering the dialog would grant access, widen a permission mode, or accept a "
-                    + "security warning, it is the operator's call, not the design thread's.",
+                    "attending a pane is not authority to decide for the operator. Residual adjudication belongs only "
+                    + "to orchestration, and only for the exact agent-kind and prompt-class pairs in a durable per-team "
+                    + "policy. Unmatched prompts and an absent policy are escalate-only. Design never answers a dialog "
+                    + "or relays keystrokes; credential, security, permission, destructive, and product choices remain "
+                    + "in the existing escalation set.",
             },
             UnattendedLaunchRecipes = new OrchestratorUnattendedLaunchRecipes
             {
@@ -2313,6 +2306,22 @@ internal static class GuideOrchestratorThreadCommand
                     + "successful allowed action alone is NOT READY. If a denial probe unexpectedly succeeds, first check "
                     + "whether the post-start interaction was answered with its default; accepting an unsafe default is a "
                     + "supervision failure, not a shortcut.",
+                ApprovalModel = new OrchestratorApprovalModel
+                {
+                    PreviewStatus = "preview-through-1.x (G666)",
+                    Layers = new[]
+                    {
+                        "recipe — eliminate routine launch prompts with the recorded kind recipe",
+                        "policy — orchestration alone adjudicates residual prompts under durable per-team agent-kind/prompt-class rules",
+                        "escalation — design receives only the agreed escalation-class event and never relays keystrokes",
+                    },
+                    PolicyRecordCommand = Fill("intent-cli notify supervise --domain <domain> --team <team> --repo <owner/repo> --owner-role orchestration --pre-approve <agent-kind>:<prompt-class> --pre-escalate <agent-kind>:<prompt-class> --write"),
+                    NoPolicyRule = "No recorded policy means escalate-only; accept nothing by default.",
+                    Incident = "Measured 2026-08-11 in workspace wK: Claude app safety blocked design from relaying an approval keystroke, and advice to use nonexistent `/approvals` could not recover the seat. Correct the launch recipe or route orchestration policy; do not add a relay.",
+                    RecipeDrift = "Each supervision cycle structurally compares a running seat's observed argv with its kind's recorded recipe, ignoring argument order and whitespace. A mismatch emits once per seat per cycle and names both shapes; a conforming seat is silent.",
+                    WatcherBoundary = "The watcher detects and records only. It never restarts or corrects a seat, answers a dialog, or sends keys.",
+                    Formula = "four judgment-bearing threads plus one supervision process; no fifth approval seat",
+                },
             },
             RoleInitialization = new OrchestratorProvisioningRoleInitialization
             {
@@ -2515,7 +2524,7 @@ internal static class GuideOrchestratorThreadCommand
                 Fill("Create one workspace for team `<team>` with a tab named after the team; keep the design thread outside it."),
                 "Split one pane per role, each opened with that role's folder as cwd.",
                 "Launch each pane's agent by TYPING into its interactive shell — codex through the shim, claude with the operator's chosen permission mode; never spawn the executable directly.",
-                "Attend the first run of each pane: answer ONLY the read-pane trust/allowlist dialogs the operator explicitly authorized (durably, not per-invocation). ALWAYS leave every credential, security, and permission prompt unanswered and escalate it to the operator — no authorization makes those answerable by the design thread.",
+                "Eliminate routine first-run prompts with the recorded recipe. Route any residual prompt to orchestration under the durable per-team policy; without a matching rule escalate it. Design never relays keys.",
                 "Type the actas form into each pane (`/agmsg actas <role>` for claude, `$agmsg actas <role>` for codex), then confirm readiness LAYER BY LAYER: delivery configuration (`delivery.sh status`), then the agent-specific live-attachment marker (claude: `Monitor(agmsg inbox stream)` / footer `1 monitor`; codex: `Codex bridge: <team>/<role> alive (pid N)`).",
                 "Ping-test every role and require an ack before the first real delegation — the ack is the ONLY end-to-end proof; configuration and live markers are preconditions, not readiness.",
                 "Continue with `Setup (starting orchestrator mode)` — the delivery mode, role prompts, read-only first wake, and the rest of the setup checklist.",
@@ -2537,11 +2546,10 @@ internal static class GuideOrchestratorThreadCommand
         return new OrchestratorDesignWorkspaceSupervision
         {
             Summary = Fill(
-                "Under authority the OPERATOR granted it, the design thread drives the team's SESSION LAYER through "
+                "G666 preview-through-1.x applies the three-layer approval model. Under authority the OPERATOR granted it, the design thread drives the team's SESSION LAYER through "
                 + "the workspace manager: it provisions the team (see `Terminal-workspace provisioning`), keeps the "
-                + "sessions alive and correctly held, and supervises for stalls. It answers a blocking dialog only "
-                + "inside an explicit boundary and only after READING that dialog from the pane; everything outside "
-                + "the boundary escalates to the operator. This adds a session-layer role — it moves NO workflow "
+                + "sessions alive and correctly held, and supervises for stalls. It records blocking waits and routes "
+                + "them to orchestration; it never answers a dialog or relays keystrokes. This adds a session-layer role — it moves NO workflow "
                 + "authority."),
             GrantedAuthority = new OrchestratorSupervisionAuthority
             {
@@ -2559,7 +2567,7 @@ internal static class GuideOrchestratorThreadCommand
                     "PROVISIONING — build the team's workspace, folders, panes, launches, and role initialization per `Terminal-workspace provisioning` (G549); supervision references that section rather than repeating it.",
                     "SESSION LIFECYCLE — investigate an unresponsive session and, when it must be replaced, do so through the graceful drop that honors one-holder exclusivity.",
                     "STALL SUPERVISION — run the three supervision layers below so a stall is noticed by a layer that is actually running, not by luck.",
-                    "BLOCKING DIALOGS — answer only what the MAY list allows, only after the verified read; escalate everything else.",
+                    "BLOCKING DIALOGS — detect and record the wait, then route it to orchestration; design never answers or relays keys.",
                 },
                 WorkflowStateOwnershipUnchanged =
                     "workflow state ownership does not move. Labels, queue-state, publication, delegation, CI/review gating, and closeout remain with intent-cli, GitHub, and the "
@@ -2578,7 +2586,7 @@ internal static class GuideOrchestratorThreadCommand
                     "READ the pane first — an \"unresponsive\" session is most often blocked on a dialog, a trust screen, or a prompt waiting for input, not dead. Diagnose from what the pane actually shows.",
                     "Distinguish the layers: a live session that is merely not attached to delivery is a delivery problem (re-check the readiness layers), not a reason to replace the session.",
                     "Confirm the role is still held by that session before concluding anything — a role silently dropped elsewhere looks identical to a dead session from the outside.",
-                    "Prefer the least invasive repair that restores liveness: answer an in-boundary dialog, re-arm delivery, or restart the session — replacement is the last step, not the first.",
+                    "Prefer the least invasive authorized repair that restores liveness: route a residual dialog to orchestration, re-arm delivery, or restart the session — replacement is the last step, not the first.",
                 },
                 ExclusivityRule =
                     "replacing a session never means two sessions holding the same role for even a moment. The successor claims only after the incumbent's hold is released; a refused "
@@ -2620,9 +2628,9 @@ internal static class GuideOrchestratorThreadCommand
                         + "entire lifetime, and an agent that died seconds after reporting stays dead until someone "
                         + "looks, so this layer is the fast one.",
                     Note =
-                        "Scanning is READING, and what the scan finds routes by STATE, not by one rule for "
-                        + "everything. A blocking dialog goes to the dialog rules below — answer only what the MAY "
-                        + "list covers after the verified read, and escalate the rest. An `agent-absent` shell "
+                        "Scanning uses structured process state, and what the scan finds routes by STATE, not by one rule for "
+                        + "everything. A blocking dialog is recorded and routed to orchestration under the durable "
+                        + "per-team policy; design never answers it. An `agent-absent` shell "
                         + "prompt is NOT a dialog and must never be routed through dialog handling: it goes to the "
                         + "shim-safe relaunch recovery (recreating the app-server when that is what died), followed "
                         + "by the COMPLETE verified-liveness re-check — report, settle delay, all three checks. See "
@@ -2650,8 +2658,8 @@ internal static class GuideOrchestratorThreadCommand
                     State = "blocking dialog",
                     WhatTheScanSees = "an approval, selection, or trust prompt waiting for input.",
                     Recovery =
-                        "handle it under the dialog rules — answer only what the MAY list covers after the verified "
-                        + "read, escalate the rest.",
+                        "record it and route it to orchestration under the durable per-team policy; design never "
+                        + "answers or relays keys, and absent policy is escalate-only.",
                 },
                 new OrchestratorPaneStuckState
                 {
@@ -2678,43 +2686,38 @@ internal static class GuideOrchestratorThreadCommand
                 + "follow-up. Field cost of forgetting: a claim-now lost inside a session-restart window left a "
                 + "published issue stalled for 5.5 HOURS because no supervision layer happened to be running.",
             VerifiedReadRule =
-                "the design thread may answer a dialog ONLY after it has actually read "
-                + "that dialog's content from the pane and can state what it is approving. A blind keystroke into a "
-                + "dialog it has not rendered is prohibited, no matter how routine the prompt looks or how confident "
-                + "it is about which key clears it. If the content cannot be read or cannot be verified, the dialog "
-                + "is an escalation, not an answer.",
+                "the design thread never answers a dialog. Structured supervision may record enough evidence to name "
+                + "the observed and recorded launch shapes, then orchestration alone adjudicates a residual prompt "
+                + "under a matching durable policy rule. If no rule matches, escalation is the only action.",
             MayAnswer = new[]
             {
                 new OrchestratorSupervisionMayAnswer
                 {
                     Dialog = SupervisionMayAnswerClasses.RequestedConfirmations,
                     Verification =
-                        "the read pane's prompt must match an action THIS design thread just initiated — same target, "
-                        + "same operation. A confirmation it cannot trace to its own request is not its to answer.",
+                        "orchestration may adjudicate only when this exact prompt class and agent kind are recorded in "
+                        + "the durable per-team policy; design never answers it.",
                 },
                 new OrchestratorSupervisionMayAnswer
                 {
                     Dialog = SupervisionMayAnswerClasses.VerifiedReadOnlyCommandApprovals,
                     Verification =
-                        "the exact command shown in the pane must be read and verified to be READ-ONLY. Anything that "
-                        + "writes, deletes, installs, publishes, or mutates state fails this check and escalates — "
-                        + "\"probably read-only\" is not verified.",
+                        "orchestration may adjudicate only when the durable policy names this exact class and agent "
+                        + "kind. Anything unmatched escalates; design never answers it.",
                 },
                 new OrchestratorSupervisionMayAnswer
                 {
                     Dialog = SupervisionMayAnswerClasses.OwnHookTrustScreens,
                     Verification =
-                        "the trust screen must name a hook THIS design thread installed as part of this provisioning "
-                        + "(its own hook-trust case). A trust screen for anything it did not install is not its to "
-                        + "accept.",
+                        "the recorded recipe should eliminate this routine screen. If it remains, orchestration may "
+                        + "adjudicate only under an exact durable policy match; design never accepts it.",
                 },
                 new OrchestratorSupervisionMayAnswer
                 {
                     Dialog = SupervisionMayAnswerClasses.PreauthorizedModeChanges,
                     Verification =
-                        "the operator must have PREAUTHORIZED this specific mode change, and the read pane must show "
-                        + "that same change. Preauthorization is specific and prior — it is never inferred from a "
-                        + "general grant to supervise sessions.",
+                        "the operator must have recorded this exact agent-kind and prompt-class pair before the wait. "
+                        + "Orchestration owns adjudication; design never relays the resulting key.",
                 },
             },
             MustEscalate = new[]
@@ -2753,7 +2756,10 @@ internal static class GuideOrchestratorThreadCommand
             BoundarySentence =
                 "UNSTICKING A SESSION IS NOT DECIDING FOR IT. The design thread's job is to keep the session layer "
                 + "alive so the role can do its own work — not to make the role's choices, and not to make the "
-                + "operator's.",
+                + "operator's. It never answers residual approval dialogs or relays keystrokes. This preserves four "
+                + "judgment-bearing threads plus one supervision process. Measured 2026-08-11 in workspace wK, "
+                + "Claude app safety blocked the relay and nonexistent `/approvals` advice failed; recipe-first "
+                + "launch plus orchestration-owned policy is the durable remedy.",
             ProvisioningReference =
                 "Provisioning is NOT repeated here — see `Terminal-workspace provisioning` for role folders, "
                 + "workspace topology, shim-safe launch, actas/readiness, and the exclusivity/handover rules this "
@@ -3626,6 +3632,21 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"> **Unattended READY branch:** {unattended.ReadyBranch}");
         writer.WriteLine();
 
+        writer.WriteLine("#### Three-layer residual approval model (G666)");
+        writer.WriteLine();
+        writer.WriteLine($"- status: **{unattended.ApprovalModel.PreviewStatus}**");
+        foreach (var layer in unattended.ApprovalModel.Layers)
+        {
+            writer.WriteLine($"- {layer}");
+        }
+        writer.WriteLine($"- **record policy:** `{unattended.ApprovalModel.PolicyRecordCommand}`");
+        writer.WriteLine($"- **absent policy:** {unattended.ApprovalModel.NoPolicyRule}");
+        writer.WriteLine($"- **measured incident:** {unattended.ApprovalModel.Incident}");
+        writer.WriteLine($"- **recipe drift:** {unattended.ApprovalModel.RecipeDrift}");
+        writer.WriteLine($"- **watcher boundary:** {unattended.ApprovalModel.WatcherBoundary}");
+        writer.WriteLine($"- **team formula:** {unattended.ApprovalModel.Formula}");
+        writer.WriteLine();
+
         writer.WriteLine("### 4. Role initialization (actas and readiness)");
         writer.WriteLine();
         writer.WriteLine(provisioning.RoleInitialization.Summary);
@@ -3764,9 +3785,9 @@ internal static class GuideOrchestratorThreadCommand
 
         writer.WriteLine("### Blocking dialogs — the boundary");
         writer.WriteLine();
-        writer.WriteLine($"> **Verified read before answer:** {supervision.VerifiedReadRule}");
+        writer.WriteLine($"> **Detection and adjudication boundary:** {supervision.VerifiedReadRule}");
         writer.WriteLine();
-        writer.WriteLine("#### MAY answer (only after the verified read)");
+        writer.WriteLine("#### Orchestration may adjudicate only with an exact recorded policy rule");
         writer.WriteLine();
         foreach (var entry in supervision.MayAnswer)
         {
@@ -5635,6 +5656,36 @@ internal sealed record OrchestratorUnattendedLaunchRecipes
 
     [JsonPropertyName("ready_branch")]
     public required string ReadyBranch { get; init; }
+
+    [JsonPropertyName("approval_model")]
+    public required OrchestratorApprovalModel ApprovalModel { get; init; }
+}
+
+internal sealed record OrchestratorApprovalModel
+{
+    [JsonPropertyName("preview_status")]
+    public required string PreviewStatus { get; init; }
+
+    [JsonPropertyName("layers")]
+    public required IReadOnlyList<string> Layers { get; init; }
+
+    [JsonPropertyName("policy_record_command")]
+    public required string PolicyRecordCommand { get; init; }
+
+    [JsonPropertyName("no_policy_rule")]
+    public required string NoPolicyRule { get; init; }
+
+    [JsonPropertyName("incident")]
+    public required string Incident { get; init; }
+
+    [JsonPropertyName("recipe_drift")]
+    public required string RecipeDrift { get; init; }
+
+    [JsonPropertyName("watcher_boundary")]
+    public required string WatcherBoundary { get; init; }
+
+    [JsonPropertyName("formula")]
+    public required string Formula { get; init; }
 }
 
 /// <summary>

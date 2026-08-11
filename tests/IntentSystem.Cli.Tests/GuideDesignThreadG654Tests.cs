@@ -77,7 +77,7 @@ public sealed class GuideDesignThreadG654Tests
         Assert.Contains("four judgment-bearing threads plus one supervision process", output, StringComparison.Ordinal);
         Assert.Contains("at most once per design wake", output, StringComparison.Ordinal);
         Assert.DoesNotContain("codex", output, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("claude", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Claude app safety", output, StringComparison.Ordinal);
         Assert.DoesNotContain("copilot", output, StringComparison.OrdinalIgnoreCase);
     }
 

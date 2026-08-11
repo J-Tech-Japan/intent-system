@@ -53,6 +53,7 @@ internal static class NotifyCommand
         + "[--repo <owner/repo>] [--owner-role <role>] [--bound <seconds>] "
         + "[--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] "
         + "[--repair-silent-minutes <m>] [--auto-redispatch] [--event-mode] [--once] [--routing-root <host-root>] [--dry-run|--write] "
+        + "[--pre-approve <agent-kind>:<prompt-class>]... [--pre-escalate <agent-kind>:<prompt-class>]... "
         + "[--format markdown|json]\n"
         + NotifySuperviseInstallCommand.Usage;
 
@@ -576,7 +577,9 @@ internal static class NotifyCommand
             runner,
             HerdrExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveHerdrExecutable(),
             AgmsgScriptsDirectoryFactory?.Invoke() ?? NotifyTransportPaths.ResolveAgmsgScriptsDirectory(),
-            options.EventMode);
+            options.EventMode,
+            options.PreApprovalAcceptRules,
+            options.PreApprovalEscalateRules);
         using var cancellation = new CancellationTokenSource();
         ConsoleCancelEventHandler? cancelHandler = null;
         if (!Console.IsOutputRedirected)
@@ -638,6 +641,7 @@ internal static class NotifyCommand
                 error = pass.Error,
                 warnings = pass.Warnings,
                 bound = pass.Bound,
+                pre_approval_policy = pass.PreApprovalPolicy,
                 liveness = pass.Liveness,
                 actions = pass.Actions,
                 findings = pass.Findings,
@@ -659,6 +663,11 @@ internal static class NotifyCommand
         if (pass.Bound is { } bound)
         {
             writer.WriteLine($"- detection bound: {bound.BoundSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unrecorded>"}s ({bound.Status}); actual interval: {bound.ActualIntervalSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unknown>"}s; met: {bound.BoundMet?.ToString().ToLowerInvariant() ?? "<unknown>"}");
+        }
+        if (pass.PreApprovalPolicy is { } policy)
+        {
+            writer.WriteLine($"- pre-approval policy: {policy.Status}; default={policy.DefaultDecision}; recorded={policy.Recorded.ToString().ToLowerInvariant()}; path={policy.Path}");
+            writer.WriteLine($"  - {policy.Summary}");
         }
         if (pass.Liveness is { } liveness)
         {
@@ -1560,6 +1569,8 @@ internal static class NotifyCommand
         int? repairSilentMinutes = null;
         var inputs = new List<string>();
         var expectedArtifacts = new List<string>();
+        var preApprovalAcceptRules = new List<NotifyPreApprovalRule>();
+        var preApprovalEscalateRules = new List<NotifyPreApprovalRule>();
         var write = false;
         var autoRedispatch = false;
         var once = false;
@@ -1643,6 +1654,24 @@ internal static class NotifyCommand
                     }
                     repairSilentMinutes = parsedRepair;
                     break;
+                case "--pre-approve":
+                    if (!ReadValue(args, ref index, argument, out var acceptRuleValue, out error)
+                        || !NotifyPreApprovalPolicyStore.TryParseRule(acceptRuleValue!, out var acceptRule))
+                    {
+                        error = "--pre-approve requires <agent-kind>:<prompt-class> using safe identifiers.";
+                        return false;
+                    }
+                    preApprovalAcceptRules.Add(acceptRule!);
+                    break;
+                case "--pre-escalate":
+                    if (!ReadValue(args, ref index, argument, out var escalateRuleValue, out error)
+                        || !NotifyPreApprovalPolicyStore.TryParseRule(escalateRuleValue!, out var escalateRule))
+                    {
+                        error = "--pre-escalate requires <agent-kind>:<prompt-class> using safe identifiers.";
+                        return false;
+                    }
+                    preApprovalEscalateRules.Add(escalateRule!);
+                    break;
                 case "--input":
                     if (!ReadValue(args, ref index, argument, out var input, out error)) return false;
                     inputs.Add(input!);
@@ -1694,6 +1723,8 @@ internal static class NotifyCommand
             ClaimedSilentMinutes = claimedSilentMinutes,
             BacklogIdleMinutes = backlogIdleMinutes,
             RepairSilentMinutes = repairSilentMinutes,
+            PreApprovalAcceptRules = preApprovalAcceptRules,
+            PreApprovalEscalateRules = preApprovalEscalateRules,
             Write = write,
             AutoRedispatch = autoRedispatch,
             Once = once,
@@ -1790,6 +1821,12 @@ internal static class NotifyCommand
             if (options.EventMode && options.Once)
             {
                 error = "supervise --event-mode is continuous and cannot be combined with --once.";
+                return false;
+            }
+
+            if ((options.PreApprovalAcceptRules.Count == 0) != (options.PreApprovalEscalateRules.Count == 0))
+            {
+                error = "A recorded pre-approval policy requires at least one --pre-approve and one --pre-escalate rule; without both, omit them and remain escalate-only.";
                 return false;
             }
         }
@@ -1909,6 +1946,8 @@ internal sealed record NotifyOptions
     public int? ClaimedSilentMinutes { get; init; }
     public int? BacklogIdleMinutes { get; init; }
     public int? RepairSilentMinutes { get; init; }
+    public required IReadOnlyList<NotifyPreApprovalRule> PreApprovalAcceptRules { get; init; }
+    public required IReadOnlyList<NotifyPreApprovalRule> PreApprovalEscalateRules { get; init; }
     public bool AutoRedispatch { get; init; }
     public bool Once { get; init; }
     public bool EventMode { get; init; }

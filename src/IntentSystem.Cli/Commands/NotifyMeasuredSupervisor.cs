@@ -35,6 +35,8 @@ internal sealed class NotifyMeasuredSupervisor
     private readonly string herdrExecutable;
     private readonly string agmsgScriptsDirectory;
     private readonly bool eventMode;
+    private readonly IReadOnlyList<NotifyPreApprovalRule> preApprovalAccept;
+    private readonly IReadOnlyList<NotifyPreApprovalRule> preApprovalEscalate;
     private readonly object supervisionSync = new();
     private readonly object writerSync = new();
 
@@ -57,7 +59,9 @@ internal sealed class NotifyMeasuredSupervisor
         INotifyProcessRunner runner,
         string herdrExecutable,
         string agmsgScriptsDirectory,
-        bool eventMode = false)
+        bool eventMode = false,
+        IReadOnlyList<NotifyPreApprovalRule>? preApprovalAccept = null,
+        IReadOnlyList<NotifyPreApprovalRule>? preApprovalEscalate = null)
     {
         this.context = context;
         this.routingRoot = routingRoot;
@@ -78,6 +82,8 @@ internal sealed class NotifyMeasuredSupervisor
         this.herdrExecutable = herdrExecutable;
         this.agmsgScriptsDirectory = agmsgScriptsDirectory;
         this.eventMode = eventMode;
+        this.preApprovalAccept = preApprovalAccept ?? [];
+        this.preApprovalEscalate = preApprovalEscalate ?? [];
     }
 
     public NotifySupervisorPass RunOnce() => RunOnce("interval");
@@ -107,6 +113,17 @@ internal sealed class NotifyMeasuredSupervisor
         }
 
         var bound = ResolveBound(state, now);
+        var preApprovalPolicy = ResolvePreApprovalPolicy(now, out var policyError);
+        if (policyError is not null)
+        {
+            return new NotifySupervisorPass
+            {
+                Actions = [],
+                Bound = bound.Status,
+                PreApprovalPolicy = preApprovalPolicy,
+                Error = policyError,
+            };
+        }
         var previousCycle = state.LastCycle;
         var previousIntervalCycle = state.LastIntervalCycle;
         long? gapSeconds = previousIntervalCycle is null
@@ -348,6 +365,7 @@ internal sealed class NotifyMeasuredSupervisor
         observations.AddRange(ReadUndeliveredEscalations(now, previousCycle is not null)
             .Where(observation => !acknowledgedEscalations.Contains(observation.Key)));
         observations.AddRange(ReadUndeliveredReportOutbox());
+        observations.AddRange(ReadRecipeDriftObservations());
         observations.AddRange(ReadAbsentSeats(now));
 
         if (absentSinceLastCycle)
@@ -565,6 +583,7 @@ internal sealed class NotifyMeasuredSupervisor
             Findings = findings,
             RecoveryRecords = recoveryRecords,
             Bound = bound.Status,
+            PreApprovalPolicy = preApprovalPolicy,
             Liveness = liveness,
             Warnings = warnings,
         };
@@ -678,6 +697,77 @@ internal sealed class NotifyMeasuredSupervisor
                 team),
         });
     }
+
+    private NotifyPreApprovalPolicyStatus ResolvePreApprovalPolicy(
+        DateTimeOffset now,
+        out string? error)
+    {
+        error = null;
+        var artifactRoot = context.ResolveSupervisionArtifactRootPath();
+        var read = NotifyPreApprovalPolicyStore.Read(artifactRoot, domain, team);
+        if (!read.Resolved)
+        {
+            error = $"pre-approval-policy-unreadable: {read.Error}";
+            return MissingPolicyStatus(read.Path, "unreadable");
+        }
+
+        var declarationSupplied = preApprovalAccept.Count > 0 || preApprovalEscalate.Count > 0;
+        if (declarationSupplied)
+        {
+            var policy = new NotifyPreApprovalPolicy
+            {
+                Domain = domain,
+                Team = team,
+                RecordedAt = now,
+                Accept = preApprovalAccept,
+                Escalate = preApprovalEscalate,
+            };
+            var recorded = NotifyPreApprovalPolicyStore.Record(artifactRoot, policy, write);
+            if (recorded.Error is not null)
+            {
+                error = $"pre-approval-policy-write-failed: {recorded.Error}";
+            }
+            return new NotifyPreApprovalPolicyStatus
+            {
+                Recorded = recorded.Applied,
+                Status = recorded.Applied ? "recorded" : "preview-unrecorded",
+                DefaultDecision = "escalate",
+                Path = recorded.Path,
+                Accept = policy.Accept,
+                Escalate = policy.Escalate,
+                Summary = recorded.Applied
+                    ? "Recorded the per-team pre-approval policy for orchestration adjudication. Unmatched prompt shapes escalate."
+                    : "Dry-run: the per-team pre-approval policy was not recorded. Until a write succeeds, adjudication remains escalate-only.",
+            };
+        }
+
+        if (read.Policy is { } existing)
+        {
+            return new NotifyPreApprovalPolicyStatus
+            {
+                Recorded = true,
+                Status = "recorded",
+                DefaultDecision = "escalate",
+                Path = read.Path,
+                Accept = existing.Accept,
+                Escalate = existing.Escalate,
+                Summary = "A durable per-team pre-approval policy is recorded for orchestration; every unmatched prompt shape escalates.",
+            };
+        }
+
+        return MissingPolicyStatus(read.Path, "escalate-only");
+    }
+
+    private static NotifyPreApprovalPolicyStatus MissingPolicyStatus(string path, string status) => new()
+    {
+        Recorded = false,
+        Status = status,
+        DefaultDecision = "escalate",
+        Path = path,
+        Accept = [],
+        Escalate = [],
+        Summary = "No per-team pre-approval policy is recorded; orchestration must escalate every residual prompt and accept none.",
+    };
 
     private static int FallbackAbsenceThresholdSeconds(int cadenceSeconds) =>
         Math.Max(cadenceSeconds * 2, cadenceSeconds + FallbackAbsenceHeadroomSeconds);
@@ -1112,6 +1202,96 @@ internal sealed class NotifyMeasuredSupervisor
                 + $"'{waitEvent.PaneId}' wait died or errored and was re-armed: {waitEvent.Detail}",
             ],
         }, force: true);
+    }
+
+    private IReadOnlyList<NotifySupervisionObservation> ReadRecipeDriftObservations()
+    {
+        var topology = NotifyRoleTopologyStore.Resolve(routingRoot, domain, team);
+        if (!topology.Resolved || topology.Topology is null)
+        {
+            return [];
+        }
+
+        var recordedSeats = topology.Topology.Roles
+            .Where(entry => string.Equals(entry.Value.Resident, NotifyRecordedRole.HerdrResident, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(entry.Value.PaneId)
+                && !string.IsNullOrWhiteSpace(entry.Value.Kind)
+                && AgentLaunchRecipeRegistry.Find(entry.Value.Kind) is not null)
+            .ToArray();
+        if (recordedSeats.Length == 0)
+        {
+            return [];
+        }
+
+        NotifyProcessResult roster;
+        try
+        {
+            roster = runner.Run(herdrExecutable, ["agent", "list"]);
+        }
+        catch (InvalidOperationException)
+        {
+            return [];
+        }
+        if (roster.ExitCode != 0)
+        {
+            return [];
+        }
+
+        IReadOnlyList<HerdrAgentState> agents;
+        try
+        {
+            agents = HerdrNotifyTransport.ParseAgents(roster.StandardOutput);
+        }
+        catch (InvalidOperationException)
+        {
+            return [];
+        }
+
+        var observations = new List<NotifySupervisionObservation>();
+        foreach (var (role, recorded) in recordedSeats)
+        {
+            var recipe = AgentLaunchRecipeRegistry.Find(recorded.Kind!)!;
+
+            var workspaceId = recorded.WorkspaceId ?? topology.Topology.WorkspaceId;
+            var running = agents.Any(agent =>
+                string.Equals(agent.WorkspaceId, workspaceId, StringComparison.Ordinal)
+                && string.Equals(agent.PaneId, recorded.PaneId, StringComparison.Ordinal)
+                && agent.AgentRunning);
+            if (!running)
+            {
+                continue;
+            }
+
+            var processInfo = NotifyPaneProcessReader.Read(runner, herdrExecutable, recorded.PaneId!);
+            if (!processInfo.Resolved)
+            {
+                continue;
+            }
+
+            var comparison = AgentLaunchShapeComparer.Compare(recorded.Kind!, recipe, processInfo.Processes);
+            if (!comparison.Resolved || comparison.Conforming)
+            {
+                continue;
+            }
+
+            observations.Add(new NotifySupervisionObservation
+            {
+                Key = $"recipe-drift:{workspaceId}:{recorded.PaneId}",
+                Kind = "recipe-drift",
+                OwnerRole = ownerRole,
+                SubjectRole = role,
+                Source = "recorded-topology+agent-launch-recipe+pane.process-info",
+                Summary = $"Running seat '{role}' at workspace '{workspaceId}' pane '{recorded.PaneId}' has recipe drift: "
+                    + $"observed launch shape `{comparison.ObservedShape}`; recorded '{recorded.Kind}' recipe "
+                    + $"`{comparison.RecordedShape}`. This finding restarts or corrects nothing, answers no dialog, "
+                    + "and sends no keys.",
+                DetectableAt = null,
+                WakeAlreadyAttempted = false,
+                WakeAlreadyDelivered = false,
+            });
+        }
+
+        return observations;
     }
 
     private IReadOnlyList<NotifySupervisionObservation> ReadAbsentSeats(DateTimeOffset now)

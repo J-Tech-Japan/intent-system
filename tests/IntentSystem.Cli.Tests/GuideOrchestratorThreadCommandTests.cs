@@ -1977,7 +1977,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("exec's the canonical `codex` executable directly BYPASSES the shim", output, StringComparison.Ordinal);
         // Operator-chosen permission mode for claude; attended first-run screens.
         Assert.Contains("permission mode the OPERATOR chose", output, StringComparison.Ordinal);
-        Assert.Contains("DURABLE allowlist/trust record", output, StringComparison.Ordinal);
+        Assert.Contains("ELIMINATE routine first-run prompts", output, StringComparison.Ordinal);
+        Assert.Contains("orchestration alone adjudicates", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2029,27 +2030,13 @@ public sealed class GuideOrchestratorThreadCommandTests
     {
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
 
-        // G549 repair: attending a pane is not authority to decide for the
-        // operator — read-first, explicit-authorization-only, escalate the rest.
+        // G666: attending a pane does not move residual adjudication to design.
         Assert.Contains("> **Authority boundary:**", output, StringComparison.Ordinal);
-        Assert.Contains("ONLY on pane contents it has actually READ", output, StringComparison.Ordinal);
-        Assert.Contains("Unsticking a pane is not deciding for the operator", output, StringComparison.Ordinal);
-
-        // G563: authorization reaches the four MAY-answer classes the
-        // supervision section grants and nothing else. The earlier
-        // "read-pane TRUST/ALLOWLIST cases ONLY" framing was narrower than
-        // that list and silently forbade two of the granted classes.
-        Assert.Contains("the four MAY-answer classes the supervision section grants", output, StringComparison.Ordinal);
+        Assert.Contains("Residual adjudication belongs only to orchestration", output, StringComparison.Ordinal);
+        Assert.Contains("Unmatched prompts and an absent policy are escalate-only", output, StringComparison.Ordinal);
+        Assert.Contains("Design never answers a dialog or relays keystrokes", output, StringComparison.Ordinal);
         Assert.DoesNotContain("ONLY to read-pane TRUST/ALLOWLIST", output, StringComparison.Ordinal);
-
-        // Credential/security/permission prompts are absolutely never
-        // answerable by design, with or without prior authorization.
-        Assert.Contains("CREDENTIAL, SECURITY, and PERMISSION prompts are NEVER answerable", output, StringComparison.Ordinal);
-        Assert.Contains("ALWAYS remain unanswered and are ALWAYS ESCALATED to the operator", output, StringComparison.Ordinal);
-        Assert.Contains("with or without prior authorization", output, StringComparison.Ordinal);
-        Assert.Contains("no authorization makes them answerable", output, StringComparison.Ordinal);
-        // The old conditional framing ("outside that authorization") is gone.
-        Assert.DoesNotContain("outside that explicit authorization", output, StringComparison.Ordinal);
+        Assert.Contains("existing escalation set", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2205,18 +2192,14 @@ public sealed class GuideOrchestratorThreadCommandTests
         var launchRules = provisioning.GetProperty("launch_rules");
         Assert.Contains("shim", launchRules.GetProperty("codex_shim_rule").GetString(), StringComparison.Ordinal);
 
-        // G549 repair: the authority boundary is a first-class field, not prose
-        // folded into the attended-first-run rule.
+        // G666: the authority boundary is a first-class orchestration-owned policy.
         var authorityBoundary = launchRules.GetProperty("authority_boundary").GetString()!;
-        Assert.Contains("READ", authorityBoundary, StringComparison.Ordinal);
-        // G563: the JSON boundary field enumerates the same four MAY-answer
-        // classes the supervision section grants, not a narrower subset.
-        Assert.Contains("the four MAY-answer classes the supervision section grants", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("orchestration", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("durable per-team", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("Unmatched prompts", authorityBoundary, StringComparison.Ordinal);
         Assert.DoesNotContain("read-pane TRUST/ALLOWLIST", authorityBoundary, StringComparison.Ordinal);
-        // Round-2 repair: the escalation rule is absolute in JSON too.
-        Assert.Contains("NEVER answerable", authorityBoundary, StringComparison.Ordinal);
-        Assert.Contains("ALWAYS ESCALATED to the operator", authorityBoundary, StringComparison.Ordinal);
-        Assert.Contains("no authorization makes them answerable", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("Design never answers", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("existing escalation set", authorityBoundary, StringComparison.Ordinal);
 
         var unattended = provisioning.GetProperty("unattended_launch_recipes");
         var recipeFields = unattended.GetProperty("required_recipe_fields").EnumerateArray()
@@ -2363,13 +2346,13 @@ public sealed class GuideOrchestratorThreadCommandTests
     {
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
 
-        // AC: the verified-read rule gates every answer.
-        Assert.Contains("> **Verified read before answer:**", output, StringComparison.Ordinal);
-        Assert.Contains("ONLY after it has actually read that dialog's content from the pane", output, StringComparison.Ordinal);
-        Assert.Contains("blind keystroke into a dialog it has not rendered is prohibited", output, StringComparison.Ordinal);
+        // G666: detection routes to orchestration; design never relays keys.
+        Assert.Contains("> **Detection and adjudication boundary:**", output, StringComparison.Ordinal);
+        Assert.Contains("the design thread never answers a dialog", output, StringComparison.Ordinal);
+        Assert.Contains("orchestration alone adjudicates", output, StringComparison.Ordinal);
 
-        // AC: the MAY list is exactly four items, each with its verification.
-        Assert.Contains("#### MAY answer (only after the verified read)", output, StringComparison.Ordinal);
+        // The same four classes remain explicit, now as policy classes owned by orchestration.
+        Assert.Contains("#### Orchestration may adjudicate only with an exact recorded policy rule", output, StringComparison.Ordinal);
         Assert.Contains("**confirmations of work the design thread itself requested** — verify:", output, StringComparison.Ordinal);
         Assert.Contains("**command approvals verified read-only** — verify:", output, StringComparison.Ordinal);
         Assert.Contains("**trust screens for hooks the design thread itself installed** — verify:", output, StringComparison.Ordinal);
@@ -2452,7 +2435,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains(layers, l => l.Layer == "periodic state watchdog" && l.Cadence.Contains("tens-of-minutes", StringComparison.Ordinal));
 
         Assert.Contains("5.5 HOURS", supervision.GetProperty("rearm_rule").GetString(), StringComparison.Ordinal);
-        Assert.Contains("actually read", supervision.GetProperty("verified_read_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("never answers a dialog", supervision.GetProperty("verified_read_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("orchestration alone adjudicates", supervision.GetProperty("verified_read_rule").GetString(), StringComparison.Ordinal);
 
         // Both dialog lists are closed four-item sets; every MAY entry carries
         // its verification condition.

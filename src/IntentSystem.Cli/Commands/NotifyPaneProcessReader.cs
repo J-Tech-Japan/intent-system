@@ -8,7 +8,13 @@ namespace IntentSystem.Cli.Commands;
 /// reader shared makes status, delivery, and supervision use the same
 /// fail-closed process observation.
 /// </summary>
-internal sealed record NotifyPaneProcess(long Pid, string? Cwd, string? Name);
+internal sealed record NotifyPaneProcess(
+    long Pid,
+    string? Cwd,
+    string? Name,
+    string? Argv0 = null,
+    IReadOnlyList<string>? Argv = null,
+    string? CommandLine = null);
 
 internal sealed record NotifyPaneProcessInfoResult
 {
@@ -74,7 +80,22 @@ internal static class NotifyPaneProcessReader
                     && nameElement.ValueKind == JsonValueKind.String
                     ? nameElement.GetString()
                     : null;
-                processes.Add(new NotifyPaneProcess(pid, cwd, name));
+                var argv0 = process.TryGetProperty("argv0", out var argv0Element)
+                    && argv0Element.ValueKind == JsonValueKind.String
+                    ? argv0Element.GetString()
+                    : null;
+                var argv = process.TryGetProperty("argv", out var argvElement)
+                    && argvElement.ValueKind == JsonValueKind.Array
+                    ? argvElement.EnumerateArray()
+                        .Where(item => item.ValueKind == JsonValueKind.String)
+                        .Select(item => item.GetString()!)
+                        .ToArray()
+                    : null;
+                var commandLine = process.TryGetProperty("cmdline", out var commandLineElement)
+                    && commandLineElement.ValueKind == JsonValueKind.String
+                    ? commandLineElement.GetString()
+                    : null;
+                processes.Add(new NotifyPaneProcess(pid, cwd, name, argv0, argv, commandLine));
             }
 
             return new NotifyPaneProcessInfoResult
