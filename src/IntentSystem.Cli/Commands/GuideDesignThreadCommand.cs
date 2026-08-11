@@ -106,6 +106,20 @@ internal static class GuideDesignThreadCommand
                 MergeTransaction = MergeTransaction,
                 ExplicitAcceptanceStillRequired = new[] { "publication", "contract change", "priority change", "release" },
             },
+            ResidualApproval = new DesignThreadResidualApproval
+            {
+                PreviewStatus = "preview-through-1.x (G666)",
+                Layers = new[]
+                {
+                    "Eliminate routine launch prompts with the kind's recorded unattended-launch recipe.",
+                    "Orchestration alone adjudicates any residual prompt, and only when a durable per-team pre-approval policy names that agent kind and prompt class.",
+                    "Design receives only the resulting escalation-class event; it never relays keystrokes or answers the prompt.",
+                },
+                NoPolicyRule = "No recorded per-team policy means escalate-only: accept nothing by default.",
+                Incident = "On 2026-08-11 in workspace wK, a Claude app safety boundary correctly blocked a request for design to relay an approval keystroke; advice to use a nonexistent `/approvals` surface also failed. The durable correction is recipe-first launch plus orchestration-owned policy, not another relay path.",
+                WatcherBoundary = "Supervision may detect and record a recipe mismatch or residual wait, but never restarts or corrects a seat, answers a dialog, or sends keys.",
+                Formula = "four judgment-bearing threads plus one supervision process; approval handling creates no fifth seat.",
+            },
             MergeAuthority = new DesignThreadMergeAuthority
             {
                 Rule = "GitHub reviewDecision alone never proves a blocker. Compare the sources and attribute every fact to its owning system.",
@@ -141,6 +155,7 @@ internal static class GuideDesignThreadCommand
             {
                 "No behavior change outside guide rendering and reachability surfaces.",
                 "No terminal parsing, provider launch, hidden fifth role, or design-owned stall recovery.",
+                "No design-thread approval-keystroke relay and no watcher restart, correction, dialog answer, or key send.",
                 "No canonical identity inferred from prose, transport state, or an unaccepted candidate.",
                 "No publication, contract, priority, release, destructive, permission, security, or credential decision is silently broadened.",
             },
@@ -174,6 +189,14 @@ internal static class GuideDesignThreadCommand
         writer.WriteLine($"- {result.Approval.MergeRule}");
         writer.WriteLine($"- closeout transaction: {string.Join(" -> ", result.Approval.MergeTransaction)}");
         writer.WriteLine($"- explicit acceptance remains required for: {string.Join(", ", result.Approval.ExplicitAcceptanceStillRequired)}.");
+        writer.WriteLine();
+        writer.WriteLine("## 3a. Residual approval boundary (G666)");
+        writer.WriteLine($"- status: **{result.ResidualApproval.PreviewStatus}**");
+        foreach (var layer in result.ResidualApproval.Layers) writer.WriteLine($"- {layer}");
+        writer.WriteLine($"- **absent policy:** {result.ResidualApproval.NoPolicyRule}");
+        writer.WriteLine($"- **measured incident:** {result.ResidualApproval.Incident}");
+        writer.WriteLine($"- **watcher boundary:** {result.ResidualApproval.WatcherBoundary}");
+        writer.WriteLine($"- **team formula:** {result.ResidualApproval.Formula}");
         writer.WriteLine();
         writer.WriteLine("## 4. Merge-authority comparison");
         writer.WriteLine($"- {result.MergeAuthority.Rule}");
@@ -263,6 +286,7 @@ internal sealed record DesignThreadGuideResult
     public required DesignThreadWakeRule WakeRule { get; init; }
     public required DesignThreadProvenance Provenance { get; init; }
     public required DesignThreadApproval Approval { get; init; }
+    public required DesignThreadResidualApproval ResidualApproval { get; init; }
     public required DesignThreadMergeAuthority MergeAuthority { get; init; }
     public required DesignThreadDelegationVerification DelegationVerification { get; init; }
     public required DesignThreadTeamAndDutySplit TeamAndDutySplit { get; init; }
@@ -275,6 +299,7 @@ internal sealed record DesignThreadReachability { public required string Command
 internal sealed record DesignThreadWakeRule { public required IReadOnlyList<string> ValidOutcomes { get; init; } public required IReadOnlyList<string> NotOutcomes { get; init; } }
 internal sealed record DesignThreadProvenance { public required IReadOnlyList<string> Vocabulary { get; init; } public required string ExecutionUnitRule { get; init; } public required IReadOnlyList<string> ExternalOriginFields { get; init; } }
 internal sealed record DesignThreadApproval { public required string ReadOnlyRule { get; init; } public required string MergeRule { get; init; } public required IReadOnlyList<string> MergeTransaction { get; init; } public required IReadOnlyList<string> ExplicitAcceptanceStillRequired { get; init; } }
+internal sealed record DesignThreadResidualApproval { public required string PreviewStatus { get; init; } public required IReadOnlyList<string> Layers { get; init; } public required string NoPolicyRule { get; init; } public required string Incident { get; init; } public required string WatcherBoundary { get; init; } public required string Formula { get; init; } }
 internal sealed record DesignThreadMergeAuthority { public required string Rule { get; init; } public required IReadOnlyList<string> Facts { get; init; } }
 internal sealed record DesignThreadDelegationVerification { public required IReadOnlyList<string> Layers { get; init; } public required string Rule { get; init; } }
 internal sealed record DesignThreadTeamAndDutySplit { public required string Formula { get; init; } public required string MonitoringRule { get; init; } public required string OrchestrationOwnership { get; init; } public required string DesignMode { get; init; } public required IReadOnlyList<string> DesignEscalations { get; init; } }

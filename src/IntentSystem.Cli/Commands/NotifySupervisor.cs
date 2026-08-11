@@ -27,6 +27,7 @@ internal sealed record NotifySupervisorPass
     public IReadOnlyList<NotifySupervisionFinding> Findings { get; init; } = [];
     public IReadOnlyList<NotifySupervisionStallRecord> RecoveryRecords { get; init; } = [];
     public NotifySupervisionBoundStatus? Bound { get; init; }
+    public NotifyPreApprovalPolicyStatus? PreApprovalPolicy { get; init; }
     public NotifySupervisionLiveness? Liveness { get; init; }
     public IReadOnlyList<string> Warnings { get; init; } = [];
     public string? Error { get; init; }

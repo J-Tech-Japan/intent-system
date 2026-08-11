@@ -249,13 +249,12 @@ public sealed class GuideCoherenceG563Tests
     }
 
     [Fact]
-    public void ProvisioningAuthorityBoundary_EnumeratesTheSameFourMayAnswerClasses_G563()
+    public void ProvisioningAuthorityBoundary_PreservesClassesUnderOrchestrationOwnedPolicy_G563_G666()
     {
         var output = Render(["guide", "orchestrator-thread", "--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
 
-        // Verbatim agreement is the point: the boundary sentence and the MAY
-        // list are composed from the same constants, so a future edit to one
-        // cannot narrow the other by accident.
+        // The four historical classes remain visible, but G666 moves every
+        // residual adjudication to orchestration's durable exact-match policy.
         foreach (var mayAnswerClass in new[]
                  {
                      SupervisionMayAnswerClasses.RequestedConfirmations,
@@ -264,20 +263,12 @@ public sealed class GuideCoherenceG563Tests
                      SupervisionMayAnswerClasses.PreauthorizedModeChanges,
                  })
         {
-            // Once in the supervision MAY list, once in the boundary sentence.
-            Assert.True(
-                CountOccurrences(output, mayAnswerClass) >= 2,
-                $"MAY-answer class \"{mayAnswerClass}\" appears fewer than twice in the rendered guide: the supervision "
-                + "list and the provisioning Authority-boundary sentence must both name it, or the boundary is "
-                + "narrower than the grant.");
+            Assert.Contains(mayAnswerClass, output, StringComparison.Ordinal);
         }
-
-        Assert.Contains(SupervisionMayAnswerClasses.InlineList, output, StringComparison.Ordinal);
-
-        // Widening is NOT what this fix does: credential / security /
-        // permission prompts stay unanswerable with or without authorization.
-        Assert.Contains("CREDENTIAL, SECURITY, and PERMISSION prompts are NEVER answerable", output, StringComparison.Ordinal);
-        Assert.Contains("no authorization makes them answerable", output, StringComparison.Ordinal);
+        Assert.Contains("Orchestration may adjudicate only with an exact recorded policy rule", output, StringComparison.Ordinal);
+        Assert.Contains("No recorded policy means escalate-only", output, StringComparison.Ordinal);
+        Assert.Contains("Design never answers", output, StringComparison.Ordinal);
+        Assert.Contains("credential, security, permission, destructive, and product choices remain in the existing escalation set", output, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -298,6 +298,36 @@ does not block merge or closeout, and an explicit no-surface declaration is
 silent. This is a preview surface outside the 1.0 promise; see the
 compatibility ledger.
 
+### Three-layer residual approval and recipe drift (G666 — preview-through-1.x)
+
+The unattended approval model has exactly three layers. First, eliminate
+routine launch prompts with the agent kind's recorded recipe. Second,
+orchestration alone may adjudicate a residual prompt when a durable per-team
+policy names the exact agent-kind and prompt-class pair. Third, design receives
+only the resulting escalation-class event and never answers the prompt or
+relays keystrokes. No policy or no matching rule means escalate-only; it never
+means accept by default.
+
+Record the policy on the standing supervisor with repeatable
+`--pre-approve <agent-kind>:<prompt-class>` and
+`--pre-escalate <agent-kind>:<prompt-class>` flags plus `--write`. The two lists
+must be declared together. This records adjudication policy; intent-cli does
+not answer a dialog or send keys.
+
+Each supervision cycle also compares the structured argv of every running
+recorded seat with its kind's recorded recipe. Argument order and whitespace
+are equivalent. A mismatch emits one `recipe-drift` finding per seat per cycle
+and names both the observed and recorded shapes; a conforming seat is silent.
+The watcher never restarts or corrects a seat, answers a dialog, or sends keys.
+
+This preserves **four judgment-bearing threads plus one supervision process**;
+there is no fifth approval seat. On 2026-08-11 in workspace wK, Claude app
+safety correctly blocked a design-thread keystroke relay, while advice to use a
+nonexistent `/approvals` surface could not recover the seat. The durable remedy
+is recipe-first launch plus orchestration-owned policy. Render the same
+contract through both `intent-cli guide orchestrator-thread` and
+`intent-cli guide design-thread`, in Markdown or JSON, with or without a team.
+
 ### Bounded recipient supervision (G630)
 
 ```bash
