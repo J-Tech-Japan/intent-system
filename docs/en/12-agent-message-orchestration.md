@@ -1160,7 +1160,8 @@ Record the team
 `workspace_id`; under `roles`, give each pane-backed role `resident: herdr` plus
 its explicit `workspace_id` and `pane_id`, and give a role outside herdr
 `resident: external` plus its routing-root-relative `reader` (normally
-`.intent-cli/events/<team>.jsonl`). All recorded roles may be senders and
+`.intent-cli/events/<domain>/<team>.jsonl`; legacy
+`.intent-cli/events/<team>.jsonl` records remain valid). All recorded roles may be senders and
 delegate report targets. On receipt, herdr residents require a running agent at
 the recorded pane in that exact team workspace; external residents receive the
 canonical delegate/report event through the recorded reader. A missing/unsafe
@@ -1464,12 +1465,28 @@ neither state nor marker alone means success.
 
 ### Normative `events.jsonl` design boundary
 
-Resolve the host root at runtime and use
-`<host-repo>/.intent-cli/events/<team>.jsonl`. `<team>` is the agmsg/herdr team
-name verbatim in one flat filename (`intent-cli-dev.jsonl`, for example); no
-team subdirectories and no hard-coded absolute paths. Before constructing the
-path, fail closed on an empty name, a leading dot, `/` or `\`, or any `..`
-sequence. Never sanitize an invalid name.
+Resolve the host root at runtime and write
+`<host-repo>/.intent-cli/events/<domain>/<team>.jsonl` (G681,
+`preview-through-1.x`). Domain and team are verbatim validated path segments;
+two domains that share a team name therefore write distinct files. Readers
+check the scoped file first and fall back to legacy
+`<host-repo>/.intent-cli/events/<team>.jsonl` only when the scoped file is
+absent. New writes never use the legacy file. Before constructing the path,
+fail closed on an empty name, a leading dot, `/` or `\`, or any `..` sequence.
+Never sanitize an invalid name.
+
+Migration is operator-owned and optional; intent-cli never moves a host file.
+From the host repository root, replace the placeholders and run exactly:
+
+```sh
+mkdir -p .intent-cli/events/<domain> && mv .intent-cli/events/<team>.jsonl .intent-cli/events/<domain>/<team>.jsonl
+```
+
+An existing external-reader topology may retain its legacy reader value: the
+same scoped-first read fallback and scoped write placement apply without a
+topology edit. Keep the existing durable watermark and its unchanged file
+identity/replacement checks after an operator move; never reset or replay it
+automatically.
 
 The canonical `intent-cli notify` surface is the only writer; callers never
 append by hand. The orchestrator normally writes delegate/escalate events, and

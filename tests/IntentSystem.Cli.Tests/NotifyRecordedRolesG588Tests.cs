@@ -403,7 +403,7 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
         }
 
         public string RootPath { get; }
-        public string EventPath => Path.Combine(RootPath, ".intent-cli", "events", $"{Team}.jsonl");
+        public string EventPath => Path.Combine(RootPath, ".intent-cli", "events", Domain, $"{Team}.jsonl");
 
         public void WriteTopology(string? externalReader)
         {

@@ -1335,7 +1335,8 @@ internal static class NotifyCommand
             "design");
         var path = judgment.UsesRecordedReaderAppend ? judgment.Target : null;
         if (path is null
-            && !NotifyEventWriter.TryResolvePath(options.RoutingRoot!, options.Team!, out path, out var error))
+            && !NotifyEventWriter.TryResolveWritePath(
+                options.RoutingRoot!, options.Domain!, options.Team!, out path, out var error))
         {
             Emit(writer, options.Format, FailureResult(
                 OperationEscalate,
@@ -2414,6 +2415,8 @@ internal sealed record NotifyInlinePayloadWarning
 
 internal static class NotifyEventWriter
 {
+    public const string EventsDirectoryRelativePath = ".intent-cli/events";
+
     public static bool TryValidateTeam(string team, out string error)
     {
         if (string.IsNullOrWhiteSpace(team)
@@ -2430,17 +2433,105 @@ internal static class NotifyEventWriter
         return true;
     }
 
-    public static bool TryResolvePath(string repoRoot, string team, out string path, out string error)
+    public static string RelativePathFor(string domain, string team) =>
+        $"{EventsDirectoryRelativePath}/{domain}/{team}.jsonl";
+
+    public static string LegacyRelativePathFor(string team) =>
+        $"{EventsDirectoryRelativePath}/{team}.jsonl";
+
+    public static bool TryResolveWritePath(
+        string repoRoot,
+        string domain,
+        string team,
+        out string path,
+        out string error)
     {
-        if (!TryValidateTeam(team, out error))
+        if (!TryValidateSegment(domain, "Domain", out error)
+            || !TryValidateTeam(team, out error))
         {
             path = string.Empty;
             return false;
         }
 
-        path = Path.GetFullPath(Path.Combine(repoRoot, ".intent-cli", "events", $"{team}.jsonl"));
+        path = ResolveRelative(repoRoot, RelativePathFor(domain, team));
         return true;
     }
+
+    public static bool TryResolveRecordedWritePath(
+        string repoRoot,
+        string domain,
+        string team,
+        string recordedReaderPath,
+        out string path,
+        out string error)
+    {
+        if (!TryResolveWritePath(repoRoot, domain, team, out var scopedPath, out error))
+        {
+            path = string.Empty;
+            return false;
+        }
+
+        var legacyPath = ResolveRelative(repoRoot, LegacyRelativePathFor(team));
+        path = IsSamePath(recordedReaderPath, scopedPath) || IsSamePath(recordedReaderPath, legacyPath)
+            ? scopedPath
+            : recordedReaderPath;
+        error = string.Empty;
+        return true;
+    }
+
+    public static bool TryResolveReadPath(
+        string repoRoot,
+        string domain,
+        string team,
+        string? recordedReaderPath,
+        out string path,
+        out string error)
+    {
+        if (!TryResolveWritePath(repoRoot, domain, team, out var scopedPath, out error))
+        {
+            path = string.Empty;
+            return false;
+        }
+
+        var legacyPath = ResolveRelative(repoRoot, LegacyRelativePathFor(team));
+        if (recordedReaderPath is not null
+            && !IsSamePath(recordedReaderPath, scopedPath)
+            && !IsSamePath(recordedReaderPath, legacyPath))
+        {
+            path = recordedReaderPath;
+            error = string.Empty;
+            return true;
+        }
+
+        path = File.Exists(scopedPath) ? scopedPath : legacyPath;
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryValidateSegment(string value, string label, out string error)
+    {
+        if (string.IsNullOrWhiteSpace(value)
+            || value.StartsWith(".", StringComparison.Ordinal)
+            || value.Contains('/')
+            || value.Contains('\\')
+            || value.Contains("..", StringComparison.Ordinal))
+        {
+            error = $"{label} name must be non-empty and must not start with '.', contain path separators, or contain '..'.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static string ResolveRelative(string repoRoot, string relativePath) =>
+        Path.GetFullPath(Path.Combine(repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+
+    private static bool IsSamePath(string left, string right) =>
+        string.Equals(
+            Path.GetFullPath(left),
+            Path.GetFullPath(right),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     public static void Append(string path, NotifyDesignEvent designEvent)
     {

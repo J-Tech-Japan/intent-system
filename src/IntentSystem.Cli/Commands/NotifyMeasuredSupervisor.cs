@@ -1034,11 +1034,14 @@ internal sealed class NotifyMeasuredSupervisor
             domain,
             team,
             DesignRole);
-        var path = judgment.UsesRecordedReaderAppend ? judgment.Target : null;
-        if (path is null)
-        {
-            NotifyEventWriter.TryResolvePath(routingRoot, team, out path, out _);
-        }
+        var recordedReaderPath = judgment.UsesRecordedReaderAppend ? judgment.Target : null;
+        NotifyEventWriter.TryResolveReadPath(
+            routingRoot,
+            domain,
+            team,
+            recordedReaderPath,
+            out var path,
+            out _);
 
         if (path is not null && File.Exists(path))
         {

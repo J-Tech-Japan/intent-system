@@ -606,7 +606,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
 
         public string RootPath { get; }
         public string AgmsgScriptsPath { get; }
-        public string EventPath => Path.Combine(RootPath, ".intent-cli", "events", $"{Team}.jsonl");
+        public string EventPath => Path.Combine(RootPath, ".intent-cli", "events", Domain, $"{Team}.jsonl");
         public CliContext Context { get; }
         private string? implementationDeliveryMethod;
 

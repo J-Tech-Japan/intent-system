@@ -150,7 +150,8 @@ internal static class HerdrOnlyOperatingGuide
 
         This is a normative, mode-independent design-boundary channel documented here because herdr-only has no separate message bridge. It is NEVER an inter-agent bus and never replaces `intent-cli notify delegate` / `report`, GitHub, or intent-cli workflow state.
 
-        - **Location:** resolve the host repository root at runtime, then use `<host-repo>/.intent-cli/events/<team>.jsonl`. The team name is the agmsg/herdr team name verbatim in one flat filename (example: `intent-cli-dev.jsonl`); there are no team subdirectories and readers never hard-code an absolute path.
+        - **Location (G681 — preview-through-1.x):** resolve the host repository root at runtime, then write `<host-repo>/.intent-cli/events/<domain>/<team>.jsonl`. Domain and team are verbatim path segments; readers never hard-code an absolute path. A reader checks the scoped file first and falls back to legacy `<host-repo>/.intent-cli/events/<team>.jsonl` only when the scoped file is absent. New writes never use the legacy file, so two domains sharing one team name remain distinct.
+        - **Operator-owned legacy move:** migration is optional and never performed by intent-cli. From the host repository root, replace the placeholders and run exactly `mkdir -p .intent-cli/events/<domain> && mv .intent-cli/events/<team>.jsonl .intent-cli/events/<domain>/<team>.jsonl`. Existing external-reader topology records may keep the legacy path; resolution applies the same scoped-first read fallback and scoped write placement, so no topology edit is required. Preserve the existing durable watermark and apply its unchanged file-identity/replacement checks after an operator move; never reset or replay automatically.
         - **Fail closed before path construction:** reject an empty team name, a leading dot, `/` or `\`, and any `..` sequence. Do not sanitize or silently rewrite an invalid name.
         - **Append contract:** the canonical `intent-cli notify` surface is the only writer; callers never append by hand. The orchestrator normally writes delegate/escalate events, while a receiver's canonical report may append when its recorded recipient is external. Open with append semantics (`O_APPEND`), append exactly one complete JSON object per line, include no embedded newline, and normalize `summary` to one line.
         - **Schema:** `{"timestamp":"<RFC3339>","team":"<team>","kind":"completion|blocked|question|escalation","unit":"<execution-unit-or-task-id>","summary":"<one-line-summary>","artifact":"<repo-relative-path-or-URL>"}`. These six fields are required; `artifact` identifies the inspectable handoff or the decision input.
@@ -258,8 +259,10 @@ internal static class HerdrOnlyOperatingGuide
         ["events_jsonl"] = new JsonObject
         {
             ["scope"] = "Mode-independent design boundary only; never an inter-agent bus.",
-            ["path"] = "<host-repo>/.intent-cli/events/<team>.jsonl",
-            ["team_encoding"] = "Team name verbatim as one flat filename; no subdirectories.",
+            ["path"] = "<host-repo>/.intent-cli/events/<domain>/<team>.jsonl",
+            ["legacy_read_fallback"] = "Read <host-repo>/.intent-cli/events/<team>.jsonl only when the scoped file is absent; writes are always scoped.",
+            ["path_encoding"] = "Domain and team are validated verbatim path segments; two domains sharing one team write distinct files.",
+            ["operator_owned_move"] = "From the host repository root, replace placeholders and run exactly: mkdir -p .intent-cli/events/<domain> && mv .intent-cli/events/<team>.jsonl .intent-cli/events/<domain>/<team>.jsonl. intent-cli never runs this move and topology edits are not required.",
             ["validation"] = "Reject empty, leading-dot, path separators, and any '..' sequence before path construction.",
             ["append"] = "The canonical intent-cli notify surface is the only O_APPEND writer; callers never append by hand. Orchestration normally writes delegate/escalate, and canonical report may append for an external recipient. One object per line, no embedded newline, summary normalized to one line.",
             ["schema"] = "timestamp, team, kind, unit, summary, artifact",
