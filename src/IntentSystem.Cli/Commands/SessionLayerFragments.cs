@@ -686,7 +686,9 @@ internal static class SessionLayerFragments
             Operative("Never hide a failure that needs a human.")),
         Fragment(
             S4,
-            Operative("- End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain __DOMAIN__ --repo __OWNER__/__REPO__ --format json`, and process every actionable item it reports before sleeping — never leave one for an unscheduled next wake; escalate explicitly if it is genuinely blocked on an operator decision."),
+            Operative("- End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain __DOMAIN__ --repo __OWNER__/__REPO__ --format json`, and process every actionable item it reports before sleeping — never leave one for an unscheduled next wake; `awaiting-operator-merge` is informational patient state and is never urged or age-escalated."),
+            Scaffold(" "),
+            Operative("Escalate explicitly only when another item is genuinely blocked on an operator decision."),
             Scaffold(" "),
             Operative("This includes a `backlog-ready-idle` item (G544, empty WIP + a ready packet + no activity past the idle threshold) — publish and delegate it in THIS wake, the same as any other issue-cut-ready candidate; only announce a following wake will handle it when that wake is actually scheduled.")),
         Fragment(
@@ -950,7 +952,9 @@ internal static class SessionLayerFragments
             S11,
             Descriptive("1."),
             Scaffold(" "),
-            Operative("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain __DOMAIN__ --repo __OWNER__/__REPO__ --format json`, and process every actionable item before sleeping — never leave one for an unscheduled next wake; escalate explicitly if it is genuinely blocked on an operator decision.")),
+            Operative("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain __DOMAIN__ --repo __OWNER__/__REPO__ --format json`, and process every actionable item before sleeping — never leave one for an unscheduled next wake; `awaiting-operator-merge` is deliberately informational patient state, not actionable review debt, and receives no urge or age escalation."),
+            Scaffold(" "),
+            Operative("Escalate explicitly only when a different item is genuinely blocked on an operator decision.")),
         Fragment(S12, Descriptive("- agmsg is a message/progress/completion signal layer only; intent-cli and GitHub are authoritative for all workflow state.")),
         Fragment(S12, Operative("- No raw label mutation (`gh ... --add-label`/`--remove-label`); every label transition goes through intent-cli worker/automation.")),
         Fragment(S12, Operative("- No hand-editing queue-state, runs.jsonl, packets, or any host metadata (`.intent-cli/**`, `intents/**`).")),
@@ -1634,7 +1638,9 @@ internal static class SessionLayerFragments
             Operative("Never hide a failure that needs a human.")),
         Fragment(
             "scheduling",
-            Operative("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain __DOMAIN__ --repo __OWNER__/__REPO__ --format json`, and process every actionable item it reports before sleeping — never leave one for an unscheduled next wake; escalate explicitly if it is genuinely blocked on an operator decision."),
+            Operative("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain __DOMAIN__ --repo __OWNER__/__REPO__ --format json`, and process every actionable item it reports before sleeping — never leave one for an unscheduled next wake; `awaiting-operator-merge` is informational patient state and is never urged or age-escalated."),
+            Scaffold(" "),
+            Operative("Escalate explicitly only when another item is genuinely blocked on an operator decision."),
             Scaffold(" "),
             Operative("This includes a `backlog-ready-idle` item (G544, empty WIP + a ready packet + no activity past the idle threshold) — publish and delegate it in THIS wake, the same as any other issue-cut-ready candidate; only announce a following wake will handle it when that wake is actually scheduled.")),
         Fragment(
@@ -1782,7 +1788,11 @@ internal static class SessionLayerFragments
         Fragment("orchestrator_first_wake", Operative("The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER, not at-most-one-message overall (G524): a publish this wake must be delegated to implementation in this SAME wake — never defer that delegation to an unscheduled next wake — alongside any repair requests (one per stalled receiver) or one operator escalation.")),
         Fragment("orchestrator_first_wake", Operative("Send workflow notifications only through `intent-cli notify`; it resolves the recorded transport and validates the recipient before delivery, failing closed on an unknown role (G524/G578).")),
         Fragment("orchestrator_first_wake", Operative("Do not launch implement/review recurring timers for this domain/repo while orchestrating.")),
-        Fragment("orchestrator_first_wake", Operative("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain __DOMAIN__ --repo __OWNER__/__REPO__ --format json`, and process every actionable item before sleeping — never leave one for an unscheduled next wake; escalate explicitly if it is genuinely blocked on an operator decision.")),
+        Fragment(
+            "orchestrator_first_wake",
+            Operative("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain __DOMAIN__ --repo __OWNER__/__REPO__ --format json`, and process every actionable item before sleeping — never leave one for an unscheduled next wake; `awaiting-operator-merge` is deliberately informational patient state, not actionable review debt, and receives no urge or age escalation."),
+            Scaffold(" "),
+            Operative("Escalate explicitly only when a different item is genuinely blocked on an operator decision.")),
         Fragment("safety_boundaries", Descriptive("agmsg is a message/progress/completion signal layer only; intent-cli and GitHub are authoritative for all workflow state.")),
         Fragment("safety_boundaries", Operative("No raw label mutation (`gh ... --add-label`/`--remove-label`); every label transition goes through intent-cli worker/automation.")),
         Fragment("safety_boundaries", Operative("No hand-editing queue-state, runs.jsonl, packets, or any host metadata (`.intent-cli/**`, `intents/**`).")),

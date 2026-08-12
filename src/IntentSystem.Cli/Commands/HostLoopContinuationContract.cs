@@ -130,6 +130,7 @@ internal static class HostLoopContinuationContract
     // transition result `transition` / wake `wake_action`).
     public const string StopReviewStart = "review-start";
     public const string StopApproved = "approved";
+    public const string StopAwaitingOperatorMerge = "awaiting-operator-merge";
     public const string StopRequestUpdate = "request-update";
 
     // Recoverable host-owned blocker categories (aligned with the host-side
@@ -150,15 +151,18 @@ internal static class HostLoopContinuationContract
         ApprovalIsTerminal = false,
         Summary =
             "Workflow labels are state markers, not completion boundaries. `intent-pr-approved` is an "
-            + "INTERMEDIATE state: unless a concrete gate (draft, failing CI, merge conflict, base-policy "
-            + "mismatch, missing linkage) blocks merge, the same wake must continue through merge, "
-            + "merged-state verification, and `intent-cli closeout pr`. A wake that stops at a label state "
+            + "INTERMEDIATE state: a direct lane continues through merge, merged-state verification, and "
+            + "`intent-cli closeout pr`; an `operator-merge` lane stops at the visible patient "
+            + "`awaiting-operator-merge` state and only resumes closeout after a human merge is detected. "
+            + "Concrete gates include draft, failing CI, merge conflict, base-policy mismatch, and missing linkage. "
+            + "A wake that stops at a label state "
             + "without either completing the continuation or naming a concrete blocking gate is incomplete.",
         ContinuationAfterApproval = new[]
         {
             "After `automation pr-transition --transition approved --write`, do NOT stop at the `intent-pr-approved` label.",
-            "Merge via the host's existing merge step (the approval transition does not merge).",
-            "Verify the merge landed: `IS_MERGED=$(gh pr view <n> --repo <r> --json merged --jq .merged)`.",
+            "Read the immutable routing snapshot landing_mode before any landing action. On `operator-merge`, never invoke a merge path: enter `awaiting-operator-merge`, notify design once, and wait without urging or age escalation.",
+            "For a direct lane only, merge via the host's existing merge step (the approval transition does not merge).",
+            "For a direct lane, verify the merge landed: `IS_MERGED=$(gh pr view <n> --repo <r> --json merged --jq .merged)`.",
             "Only when `IS_MERGED == true`, run `intent-cli closeout pr --pr <n> --repo <r> --pr-merged $IS_MERGED --write --format json` (G297 — closeout refuses `--pr-merged false`, so a blocked merge can never record closeout).",
             "Stage 2 (next-slice publish) is gated on `closeout pr --write` succeeding for THIS wake; never publish a new child issue after a merge that did not actually land.",
             "If merge is blocked by a concrete gate, classify the blocker (see `blocker_contracts`) and stop with that gate named — do NOT silently leave the PR approved-but-unmerged."
@@ -185,10 +189,22 @@ internal static class HostLoopContinuationContract
                 StopState = StopApproved,
                 Terminal = false,
                 Meaning =
-                    "`intent-pr-approved` is INTERMEDIATE. The merge and closeout are still owed in this wake unless a "
-                    + "concrete gate blocks merge.",
+                    "`intent-pr-approved` is INTERMEDIATE. Inspect the immutable landing mode: direct still owes merge "
+                    + "and closeout in this wake, while operator-merge enters the patient waiting state.",
                 NextCommand =
-                    "Continue the SAME wake: merge, verify `merged == true`, then "
+                    "Direct: continue the SAME wake by merging, verifying `merged == true`, then running "
+                    + "`intent-cli closeout pr --pr <n> --repo <r> --pr-merged true --write --format json`. "
+                    + "Operator-merge: enter `awaiting-operator-merge`; do not merge or close out yet."
+            },
+            new HostLoopStopClassification
+            {
+                StopState = StopAwaitingOperatorMerge,
+                Terminal = true,
+                Meaning =
+                    "Approved + green is waiting on the lane's human landing authority. This is visible patient state, "
+                    + "not review debt or a stall; elapsed time never creates an automation action.",
+                NextCommand =
+                    "None until a human merge is detected. Then resume automatically at "
                     + "`intent-cli closeout pr --pr <n> --repo <r> --pr-merged true --write --format json`."
             },
             new HostLoopStopClassification
@@ -283,7 +299,7 @@ internal static class HostLoopContinuationContract
             "If the previous wake stopped after a partial step (review-start, approved, or a blocker) without completing the continuation, treat this wake as a RAIL-RECOVERY wake — do not re-discover unrelated work first.",
             "Re-read the current contract from installed `intent-cli` guidance (do NOT rely on stale conversation memory): `intent-cli automation summary` and the host-loop guidance prompt.",
             "Re-derive the PR's true state from labels + GitHub (`gh pr view <n> --json merged,isDraft,mergeable,reviewDecision`), then match it to a `stop_classifications` entry and run that entry's `next_command`.",
-            "For a PR already at `intent-pr-approved` but not merged, the next command is merge + `closeout pr` (see `continuation_after_approval`), NOT a re-review.",
+            "For a PR already at `intent-pr-approved`, inspect landing_mode before acting: direct continues to merge + `closeout pr`; operator-merge waits patiently and resumes with closeout only after a human merge is detected. Neither path re-reviews solely because approval already exists.",
             "For a recoverable blocker, apply the `repair_command` and retry ONCE (see `retry_once_policy`) before declaring the PR blocked.",
             "Only after the in-flight PR reaches a terminal state (merged + closeout, or a named unrecoverable blocker) may the wake consider cutting the next slice."
         }

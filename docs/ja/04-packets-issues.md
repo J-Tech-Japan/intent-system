@@ -95,7 +95,7 @@ landing_mode = "direct"
 [project.branch_lanes."intent-cli".hotfix]
 start_branch = "main"
 pr_base_branch = "main"
-landing_mode = "direct"
+landing_mode = "operator-merge"
 
 [project.branch_lanes."sekiban-as-a-service"]
 default_lane = "release"
@@ -120,6 +120,19 @@ review guidance、worker の base-branch check は materialize 済み snapshot �
 draft の byte 単位互換性を維持します。以前の単一形 `[project.branch_lanes]` も互換性のため
 読み込めますが、設定された project domain だけに scope されます。
 名前付き lane は preview-through-1.x であり、branch の作成・管理は行いません。
+
+### 人が landing する権限 (G678 — preview-through-1.x)
+
+`landing_mode = "operator-merge"` は review と approval を従来どおり実行し、不可逆な
+landing step の実行者だけを変更します。lane の PR が approved かつ exact-head checks green
+になると、automation は PR、lane、approval evidence を持つ `awaiting-operator-merge` を
+表示します。これは review debt や stall ではなく patient state です。entry 時に design へ
+1 回だけ通知し、supervision は待機を urge、remind、age-escalate しません。
+
+その PR を merge するのは人だけです。intent-cli のどの path も operator-merge lane を
+merge しません。GitHub で人の merge を検知すると、patient state を即時の closeout-only
+continuation に置き換え、通常の closeout flow を自動的に再開します。`direct`、
+`integration-batch`、registry 未設定 lane の既存 behavior と output は変わりません。
 
 ## lane decision record と publish gate (G669 — preview-through-1.x)
 

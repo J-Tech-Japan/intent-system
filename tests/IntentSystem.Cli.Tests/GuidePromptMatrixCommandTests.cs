@@ -3018,12 +3018,13 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("review_role", prompt, StringComparison.Ordinal);
         Assert.Contains("The host loop is NOT review-free", prompt, StringComparison.Ordinal);
 
-        // An already-approved PR is always mergeable by the orchestrator even
-        // when a different agent performed the review.
+        // Review identity does not change lane landing authority: direct is
+        // orchestrator-mergeable, operator-merge remains human-owned.
         Assert.Contains(
-            "already-approved PR is always mergeable by the orchestrator",
+            "merges an approved `direct` lane even when a DIFFERENT agent reviewed it",
             prompt,
             StringComparison.Ordinal);
+        Assert.Contains("NEVER merges an `operator-merge` lane", prompt, StringComparison.Ordinal);
 
         // Role mismatch is a wait / STOP classification, never Asking UI.
         Assert.Contains("STOP: review-role-mismatch", prompt, StringComparison.Ordinal);
@@ -3077,7 +3078,7 @@ public sealed class GuidePromptMatrixCommandTests
             writer);
 
         var prompt = JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("prompt").GetString()!;
-        Assert.Contains("Role-aware review (G480)", prompt, StringComparison.Ordinal);
+        Assert.Contains("Role-aware review (G480/G678)", prompt, StringComparison.Ordinal);
     }
 
     [Fact]

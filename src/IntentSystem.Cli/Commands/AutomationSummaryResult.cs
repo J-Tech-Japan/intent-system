@@ -142,7 +142,7 @@ internal static class AutomationSummaryConstants
     [
         "Select open intent-target PRs with no PR state label or with intent-pr-rereview-ready, then set intent-pr-reviewing while processing through closeout",
         "Request updates via intent-pr-request-update with concrete repair notes",
-        "Approve and merge via intent-pr-approved when all checks pass",
+        "Approve via intent-pr-approved when all checks pass; direct lanes merge+closeout, while operator-merge lanes wait for a human merge and then resume closeout only",
         "Cut next-slice issues only when WIP cap allows",
         "Apply intent-target only after parent source-of-truth state is durable"
     ];

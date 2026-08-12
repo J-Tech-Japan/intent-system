@@ -40,6 +40,7 @@ internal sealed class NotifyMeasuredSupervisor
     private readonly IReadOnlyList<NotifyPreApprovalRule> preApprovalEscalate;
     private readonly NotifySupervisionWriterIdentity writerIdentity;
     private readonly Func<NotifySupervisionWriterIdentity, bool> writerIsLive;
+    private readonly Func<AutomationStalledWorkResult>? stalledWorkAnalyzer;
     private readonly object supervisionSync = new();
     private readonly object writerSync = new();
 
@@ -67,7 +68,8 @@ internal sealed class NotifyMeasuredSupervisor
         IReadOnlyList<NotifyPreApprovalRule>? preApprovalEscalate = null,
         string? bashExecutable = null,
         NotifySupervisionWriterIdentity? writerIdentity = null,
-        Func<NotifySupervisionWriterIdentity, bool>? writerIsLive = null)
+        Func<NotifySupervisionWriterIdentity, bool>? writerIsLive = null,
+        Func<AutomationStalledWorkResult>? stalledWorkAnalyzer = null)
     {
         this.context = context;
         this.routingRoot = routingRoot;
@@ -93,6 +95,7 @@ internal sealed class NotifyMeasuredSupervisor
         this.preApprovalEscalate = preApprovalEscalate ?? [];
         this.writerIdentity = writerIdentity ?? NotifySupervisionWriterIdentity.Current();
         this.writerIsLive = writerIsLive ?? (other => other.IsLiveOn(this.writerIdentity));
+        this.stalledWorkAnalyzer = stalledWorkAnalyzer;
     }
 
     public NotifySupervisorPass RunOnce() => RunOnce("interval");
@@ -366,21 +369,26 @@ internal sealed class NotifyMeasuredSupervisor
         {
             try
             {
-                var stalled = AutomationStalledWorkCommand.Analyze(
-                    context,
-                    domain,
-                    repo,
-                    staleMinutes,
-                    claimedSilentMinutes,
-                    backlogIdleMinutes,
-                    repairSilentMinutes);
+                var stalled = stalledWorkAnalyzer?.Invoke()
+                    ?? AutomationStalledWorkCommand.Analyze(
+                        context,
+                        domain,
+                        repo,
+                        staleMinutes,
+                        claimedSilentMinutes,
+                        backlogIdleMinutes,
+                        repairSilentMinutes);
                 warnings.AddRange(stalled.Warnings);
                 foreach (var item in stalled.Items)
                 {
                     // Informational lifecycle observations, including an
                     // actively claimed repair and pending CI, are not wake
                     // findings. Actionable terminal classes are retained.
-                    if (item.IsInformational)
+                    if (item.IsInformational
+                        && !string.Equals(
+                            item.Kind,
+                            AutomationStalledWorkCommand.KindAwaitingOperatorMerge,
+                            StringComparison.Ordinal))
                     {
                         continue;
                     }
@@ -390,9 +398,16 @@ internal sealed class NotifyMeasuredSupervisor
                         ?? "none";
                     observations.Add(new NotifySupervisionObservation
                     {
-                        Key = $"stalled:{item.Kind}:{item.ExecutionUnit}:{reference}",
+                        Key = item.DedupeKey is { Length: > 0 }
+                            ? $"stalled:{item.DedupeKey}"
+                            : $"stalled:{item.Kind}:{item.ExecutionUnit}:{reference}",
                         Kind = item.Kind,
-                        OwnerRole = ownerRole,
+                        OwnerRole = string.Equals(
+                            item.Kind,
+                            AutomationStalledWorkCommand.KindAwaitingOperatorMerge,
+                            StringComparison.Ordinal)
+                            ? DesignRole
+                            : ownerRole,
                         Source = "automation-stalled-work",
                         Summary = item.RecommendedAction,
                         DetectableAt = previousCycle is null
@@ -479,6 +494,17 @@ internal sealed class NotifyMeasuredSupervisor
                     WakeTargetRole = ResolveWakeTarget(observation),
                     WakeClass = ResolveWakeClass(observation),
                 });
+                if (string.Equals(
+                    observation.Kind,
+                    AutomationStalledWorkCommand.KindAwaitingOperatorMerge,
+                    StringComparison.Ordinal))
+                {
+                    // G678: entering the patient state notifies design once.
+                    // An unchanged supervision cycle keeps the durable state
+                    // active but emits no repeat finding and sends no repeat
+                    // wake. Human wait duration is never escalation evidence.
+                    continue;
+                }
                 findings.Add(ToFinding(records[^1]));
                 continue;
             }

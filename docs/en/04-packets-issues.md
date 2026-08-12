@@ -97,7 +97,7 @@ landing_mode = "direct"
 [project.branch_lanes."intent-cli".hotfix]
 start_branch = "main"
 pr_base_branch = "main"
-landing_mode = "direct"
+landing_mode = "operator-merge"
 
 [project.branch_lanes."sekiban-as-a-service"]
 default_lane = "release"
@@ -125,6 +125,21 @@ domain. Hosts without a matching registry retain the legacy `direct-main` /
 The previous singleton `[project.branch_lanes]` spelling remains readable for
 compatibility, but is scoped only to the configured project domain. Named lanes
 are preview-through-1.x and do not manage or create branches.
+
+### Human landing authority (G678 — preview-through-1.x)
+
+`landing_mode = "operator-merge"` keeps review and approval unchanged, but
+changes who performs the irreversible landing step. Once the lane's PR is
+approved and its exact-head checks are green, automation exposes
+`awaiting-operator-merge` with the PR, lane, and approval evidence. This is a
+patient state, not review debt or a stall: design is notified once on entry,
+and supervision never urges, reminds, or age-escalates the wait.
+
+Only a human merges that PR. No intent-cli path may merge an operator-merge
+lane. When GitHub reports the human merge, supervision replaces the patient
+state with an immediate closeout-only continuation and the ordinary closeout
+flow resumes. `direct`, `integration-batch`, and lanes with no registry retain
+their existing behavior and output.
 
 ## Lane decision records and the publish gate (G669 — preview-through-1.x)
 
