@@ -628,7 +628,7 @@ public sealed class NotifySupervisionG641Tests : IDisposable
 
     private string ResolveEventPath()
     {
-        NotifyEventWriter.TryResolvePath(root, Team, out var path, out var error);
+        NotifyEventWriter.TryResolveWritePath(root, Domain, Team, out var path, out var error);
         Assert.True(string.IsNullOrEmpty(error), error);
         return path;
     }

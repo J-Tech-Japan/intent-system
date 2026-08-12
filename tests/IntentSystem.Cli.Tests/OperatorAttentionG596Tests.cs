@@ -210,7 +210,8 @@ public sealed class OperatorAttentionG596Tests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.True(result.GetProperty("event_appended").GetBoolean());
-        Assert.True(File.Exists(Path.Combine(workspace.RootPath, ".intent-cli", "events", "intent-cli-dev.jsonl")));
+        Assert.True(File.Exists(Path.Combine(
+            workspace.RootPath, ".intent-cli", "events", "intent-cli", "intent-cli-dev.jsonl")));
         Assert.Equal(before, File.Exists(workspace.StorePath) ? File.ReadAllText(workspace.StorePath) : null);
         Assert.False(File.Exists(workspace.StorePath));
     }

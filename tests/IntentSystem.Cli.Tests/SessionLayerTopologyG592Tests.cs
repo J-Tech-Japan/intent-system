@@ -182,7 +182,8 @@ public sealed class SessionLayerTopologyG592Tests
             "--reader", $".intent-cli/events/{TopologyWorkspace.Team}.jsonl",
             "--write", "--format", "json").ExitCode);
 
-        var topology = NotifyRoleTopologyStore.Resolve(workspace.RootPath, TopologyWorkspace.Team).Topology!;
+        var topology = NotifyRoleTopologyStore.Resolve(
+            workspace.RootPath, "intent-cli", TopologyWorkspace.Team).Topology!;
         var paneTarget = NotifyRoleTopologyStore.ResolveDeliveryTarget(
             workspace.RootPath,
             topology,
@@ -320,7 +321,7 @@ public sealed class SessionLayerTopologyG592Tests
         public string RootPath { get; }
         public CliContext Context { get; }
         public string TopologyPath => NotifyRoleTopologyStore.ResolvePath(RootPath, Context.Config.Project.Domain, Team);
-        public string EventPath => Path.Combine(RootPath, ".intent-cli", "events", $"{Team}.jsonl");
+        public string EventPath => Path.Combine(RootPath, ".intent-cli", "events", "intent-cli", $"{Team}.jsonl");
 
         public void WriteRawTopology(string content)
         {

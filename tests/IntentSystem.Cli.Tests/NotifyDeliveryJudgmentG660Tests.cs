@@ -287,7 +287,7 @@ public sealed class NotifyDeliveryJudgmentG660Tests : IDisposable
 
     private string ResolveEventPath()
     {
-        Assert.True(NotifyEventWriter.TryResolvePath(root, Team, out var path, out var error), error);
+        Assert.True(NotifyEventWriter.TryResolveWritePath(root, Domain, Team, out var path, out var error), error);
         return path;
     }
 

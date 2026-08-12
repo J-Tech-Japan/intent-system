@@ -37,7 +37,10 @@ public sealed class HerdrOnlyOperatingGuideG571Tests : IDisposable
         var json = JsonDocument.Parse(Render(herdrOnly: true, format: "json")).RootElement;
         var events = json.GetProperty(HerdrOnlyOperatingGuide.JsonProperty).GetProperty("events_jsonl");
 
-        Assert.Contains("<host-repo>/.intent-cli/events/<team>.jsonl", output, StringComparison.Ordinal);
+        Assert.Contains("<host-repo>/.intent-cli/events/<domain>/<team>.jsonl", output, StringComparison.Ordinal);
+        Assert.Contains("falls back to legacy `<host-repo>/.intent-cli/events/<team>.jsonl` only when the scoped file is absent", output, StringComparison.Ordinal);
+        Assert.Contains("mkdir -p .intent-cli/events/<domain> && mv .intent-cli/events/<team>.jsonl .intent-cli/events/<domain>/<team>.jsonl", output, StringComparison.Ordinal);
+        Assert.Contains("no topology edit is required", output, StringComparison.Ordinal);
         Assert.Contains("O_APPEND", output, StringComparison.Ordinal);
         Assert.Contains("no embedded newline", output, StringComparison.Ordinal);
         Assert.Contains("leading dot", output, StringComparison.Ordinal);
@@ -51,7 +54,9 @@ public sealed class HerdrOnlyOperatingGuideG571Tests : IDisposable
         Assert.Contains("watermark", output, StringComparison.Ordinal);
         Assert.Contains("NEVER an inter-agent bus", output, StringComparison.Ordinal);
 
-        Assert.Equal("<host-repo>/.intent-cli/events/<team>.jsonl", events.GetProperty("path").GetString());
+        Assert.Equal("<host-repo>/.intent-cli/events/<domain>/<team>.jsonl", events.GetProperty("path").GetString());
+        Assert.Contains("only when the scoped file is absent", events.GetProperty("legacy_read_fallback").GetString());
+        Assert.Contains("intent-cli never runs this move", events.GetProperty("operator_owned_move").GetString());
         Assert.Equal("timestamp, team, kind, unit, summary, artifact", events.GetProperty("schema").GetString());
         Assert.Equal(4, events.GetProperty("kinds").GetArrayLength());
         Assert.True(events.GetProperty("readers").TryGetProperty("claude_app", out _));
@@ -135,6 +140,7 @@ public sealed class HerdrOnlyOperatingGuideG571Tests : IDisposable
 
         foreach (var token in new[]
                  {
+                     "<host-repo>/.intent-cli/events/<domain>/<team>.jsonl",
                      "<host-repo>/.intent-cli/events/<team>.jsonl",
                      "O_APPEND",
                      "timestamp",

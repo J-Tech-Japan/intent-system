@@ -998,7 +998,8 @@ rules が変わらず authoritative であり、別の attribution policy を再
 移す方法は値の copy ではなく destination machine での re-record です。team の
 `workspace_id` を記録し、`roles` 配下で pane-backed role には `resident: herdr` と明示的な
 `workspace_id` / `pane_id`、herdr 外の role には `resident: external` と routing-root-relative
-な `reader`（通常は `.intent-cli/events/<team>.jsonl`）を記録します。すべての recorded role は
+な `reader`（通常は `.intent-cli/events/<domain>/<team>.jsonl`。legacy の
+`.intent-cli/events/<team>.jsonl` record も有効）を記録します。すべての recorded role は
 sender と delegate report target になれます。受信時は herdr resident に、その正確な team
 workspace の recorded pane で running agent が必要です。external resident は recorded reader
 を通して canonical delegate/report event を受け取ります。missing/unsafe reader、stale pane、
@@ -1262,11 +1263,25 @@ canonical facts が final gate であり、state 単独も marker 単独も succ
 
 ### Normative な `events.jsonl` design boundary
 
-host root を実行時に解決し、`<host-repo>/.intent-cli/events/<team>.jsonl` を使います。
-`<team>` は agmsg/herdr team name を verbatim にした flat filename（例:
-`intent-cli-dev.jsonl`）で、team subdirectory と absolute path の hard-code は禁止です。
-path 構築前に、空文字、先頭 dot、`/` または `\`、任意の `..` sequence を fail closed で
-拒否します。不正名を無害化してはいけません。
+host root を実行時に解決し、`<host-repo>/.intent-cli/events/<domain>/<team>.jsonl`
+へ追記します（G681、`preview-through-1.x`）。domain と team は検証済みの verbatim な
+path segment なので、同じ team name を使う 2 domain も別 file へ書きます。reader は scoped
+file を先に調べ、それが absent の場合に限り legacy
+`<host-repo>/.intent-cli/events/<team>.jsonl` を代わりに参照します。新しい追記は legacy file を
+使いません。path 構築前に、空文字、先頭 dot、`/` または `\`、任意の `..` sequence を
+fail closed で拒否します。不正名を無害化してはいけません。
+
+migration は operator 所有かつ optional で、intent-cli は host file を移動しません。host
+repository root で placeholder を置換し、次を正確に実行します。
+
+```sh
+mkdir -p .intent-cli/events/<domain> && mv .intent-cli/events/<team>.jsonl .intent-cli/events/<domain>/<team>.jsonl
+```
+
+既存 external-reader topology は legacy reader value のままでよく、同じ scoped-first の
+代替参照と scoped 配置が topology edit なしで適用されます。operator move 後も既存の永続
+watermark と不変の file identity/replacement check を維持し、自動リセット／再読込
+してはいけません。
 
 canonical `intent-cli notify` surface だけが writer で、caller は手動追記しません。
 通常は orchestrator が delegate/escalate event を書き、recorded recipient が external の場合は

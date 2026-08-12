@@ -20,6 +20,8 @@ internal sealed record NotifyRecordedRole(
 
 internal sealed record NotifyTeamTopology(
     string SourcePath,
+    string? Domain,
+    string Team,
     string WorkspaceId,
     IReadOnlyDictionary<string, NotifyRecordedRole> Roles);
 
@@ -271,7 +273,7 @@ internal static class NotifyRoleTopologyStore
             return new NotifyTopologyResolution
             {
                 Resolved = true,
-                Topology = new NotifyTeamTopology(path, workspaceId, roles),
+                Topology = new NotifyTeamTopology(path, expectedDomain, team, workspaceId, roles),
                 Summary = $"Resolved recorded role topology for team '{team}' from '{path}'.",
             };
         }
@@ -306,6 +308,22 @@ internal static class NotifyRoleTopologyStore
         if (string.Equals(record.Resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal))
         {
             if (!TryResolveReaderPath(routingRoot, record.Reader, out var readerPath, out var readerError))
+            {
+                return DeliveryFailure(
+                    role,
+                    "reader-unavailable",
+                    $"External logical role '{role}' has no deliverable recorded reader in "
+                    + $"'{topology.SourcePath}': {readerError}");
+            }
+
+            if (topology.Domain is not null
+                && !NotifyEventWriter.TryResolveRecordedWritePath(
+                    routingRoot,
+                    topology.Domain,
+                    topology.Team,
+                    readerPath,
+                    out readerPath,
+                    out readerError))
             {
                 return DeliveryFailure(
                     role,
