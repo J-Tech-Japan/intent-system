@@ -21,6 +21,22 @@ public sealed class PlaceholderReadinessG670DocumentationTests
                 Path.Combine(root, "docs", language, "1.0-compatibility-ledger.md"));
             Assert.Contains("G670", ledger, StringComparison.Ordinal);
             Assert.Contains("preview-through-1.x", ledger, StringComparison.Ordinal);
+
+            var ledgerRows = ledger.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var command in new[] { "automation stalled-work", "intent next-slice" })
+            {
+                var commandRow = Assert.Single(
+                    ledgerRows,
+                    row => row.StartsWith($"| `{command}` |", StringComparison.Ordinal));
+                Assert.Contains("stable-at-1.0", commandRow, StringComparison.Ordinal);
+                Assert.DoesNotContain("G670", commandRow, StringComparison.Ordinal);
+            }
+
+            var g670Row = Assert.Single(
+                ledgerRows,
+                row => row.StartsWith("| shared publish-gate readiness exclusion", StringComparison.Ordinal));
+            Assert.Contains("G670", g670Row, StringComparison.Ordinal);
+            Assert.Contains("preview-through-1.x", g670Row, StringComparison.Ordinal);
         }
     }
 }
