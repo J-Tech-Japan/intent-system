@@ -158,6 +158,95 @@ public sealed class NotifySupervisionG675Tests : IDisposable
         Assert.False(File.Exists(artifact));
     }
 
+    [Theory]
+    [InlineData("macos", false, "<string>intent-cli</string>", "/bin/bash")]
+    [InlineData("macos", true, "<string>intent-cli</string>", "/opt/herdr/bin/herdr")]
+    [InlineData("windows", false, "<Command>intent-cli</Command>", "/bin/bash")]
+    [InlineData("windows", true, "<Command>intent-cli</Command>", "/opt/herdr/bin/herdr")]
+    [InlineData("linux", false, "ExecStart=\"intent-cli\"", "/bin/bash")]
+    [InlineData("linux", true, "ExecStart=\"intent-cli\"", "/opt/herdr/bin/herdr")]
+    public void InstallEmission_WhenIntentCliIsNotPathVisible_UsesBareFallbackForEveryPlatformAndEventMode(
+        string platform,
+        bool eventMode,
+        string entrypointMarker,
+        string transportPath)
+    {
+        NotifyTransportPaths.ExecutableResolverOverride = executable => executable switch
+        {
+            "bash" => "/bin/bash",
+            "herdr" => "/opt/herdr/bin/herdr",
+            _ => null,
+        };
+
+        using var writer = new StringWriter();
+        var outputPath = Path.Combine(root, $"{platform}-{eventMode}.artifact");
+        var arguments = new List<string>
+        {
+            "install", "--domain", Domain, "--team", Team,
+            "--repo", "J-Tech-Japan/intent-system", "--owner-role", "orchestration",
+            "--bound", "300", "--interval", "120", "--platform", platform,
+            "--routing-root", root, "--output", outputPath, "--write", "--format", "json",
+        };
+        if (eventMode) arguments.Add("--event-mode");
+
+        var exitCode = NotifyCommand.ExecuteSupervise(CreateContext(), arguments.ToArray(), writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var result = document.RootElement;
+        Assert.True(result.GetProperty("artifact_written").GetBoolean());
+        Assert.Equal(eventMode, result.GetProperty("event_mode").GetBoolean());
+        Assert.Contains("intent-cli", result.GetProperty("unresolved_binaries").EnumerateArray().Select(item => item.GetString()));
+        var intentCli = result.GetProperty("runtime_binaries").EnumerateArray()
+            .Single(binary => binary.GetProperty("name").GetString() == "intent-cli");
+        Assert.False(intentCli.GetProperty("resolved").GetBoolean());
+        if (intentCli.TryGetProperty("path", out var path))
+        {
+            Assert.Equal(JsonValueKind.Null, path.ValueKind);
+        }
+        Assert.StartsWith("intent-cli ", result.GetProperty("supervise_invocation").GetString(), StringComparison.Ordinal);
+        Assert.Contains("intent-cli", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
+
+        var artifact = File.ReadAllText(outputPath);
+        Assert.Contains(entrypointMarker, artifact, StringComparison.Ordinal);
+        Assert.Contains(transportPath, artifact, StringComparison.Ordinal);
+        Assert.DoesNotContain("supervise-install-failed", artifact, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false, "bash")]
+    [InlineData(true, "herdr")]
+    public void InstallDryRunMarkdown_WhenIntentCliIsNotPathVisible_RecordsFallbackWithoutWriting(bool eventMode, string transportName)
+    {
+        NotifyTransportPaths.ExecutableResolverOverride = executable => executable switch
+        {
+            "bash" => "/bin/bash",
+            "herdr" => "/opt/herdr/bin/herdr",
+            _ => null,
+        };
+
+        using var writer = new StringWriter();
+        var arguments = new List<string>
+        {
+            "install", "--domain", Domain, "--team", Team,
+            "--repo", "J-Tech-Japan/intent-system", "--owner-role", "orchestration",
+            "--bound", "300", "--interval", "120", "--platform", "linux",
+            "--routing-root", root, "--dry-run", "--format", "markdown",
+        };
+        if (eventMode) arguments.Add("--event-mode");
+
+        var exitCode = NotifyCommand.ExecuteSupervise(CreateContext(), arguments.ToArray(), writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("- command mode: dry-run", output, StringComparison.Ordinal);
+        Assert.Contains("(written: false)", output, StringComparison.Ordinal);
+        Assert.Contains("- unresolved binaries: intent-cli", output, StringComparison.Ordinal);
+        Assert.Contains("- supervise invocation: `intent-cli ", output, StringComparison.Ordinal);
+        Assert.Contains($"{transportName}=", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("supervise-install-failed", output, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void OrchestratorGuide_RendersConcreteEventWakeSourceAndG675Verification()
     {

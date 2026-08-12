@@ -66,19 +66,14 @@ internal static class NotifySuperviseInstallCommand
 
         var label = $"intent-cli.supervise.{options.Domain}.{options.Team}";
         var runtime = ResolveRuntime(options, routingRoot);
-        if (runtime.IntentCli.Path is null)
-        {
-            EmitUnresolvedFailure(
-                writer,
-                options.Format,
-                runtime,
-                "intent-cli must resolve to an absolute executable at emission; no scheduler artifact was written.");
-            return 1;
-        }
-
+        // Scheduler emission remains usable when the invoking process is a
+        // dotnet/dnx tool host and intent-cli is not itself PATH-visible. The
+        // unresolved runtime record names the gap while the long-standing
+        // bare command remains the operator-resolved artifact entrypoint.
+        var intentCliExecutable = runtime.IntentCli.Path ?? runtime.IntentCli.Name;
         var superviseArguments = BuildSuperviseArguments(options, routingRoot, runtime);
-        var invocation = FormatShellInvocation(runtime.IntentCli.Path, superviseArguments);
-        var artifact = BuildArtifact(options.Platform, label, runtime.IntentCli.Path, superviseArguments, runtime.RecordedPath);
+        var invocation = FormatShellInvocation(intentCliExecutable, superviseArguments);
+        var artifact = BuildArtifact(options.Platform, label, intentCliExecutable, superviseArguments, runtime.RecordedPath);
         var (registrationCommand, unregistrationCommand) = BuildOperatorCommands(options.Platform, label, artifactPath);
         var crossAuthored = !string.Equals(options.Platform, CurrentPlatform(), StringComparison.Ordinal);
         var unresolvedBinaries = runtime.Binaries
@@ -538,33 +533,6 @@ WantedBy=default.target
             return;
         }
         writer.WriteLine($"supervise-install-failed: {error}");
-    }
-
-    private static void EmitUnresolvedFailure(
-        TextWriter writer,
-        string format,
-        NotifySuperviseRuntimeResolution runtime,
-        string summary)
-    {
-        var unresolved = runtime.Binaries.Where(binary => !binary.Resolved).ToArray();
-        if (string.Equals(format, FormatJson, StringComparison.Ordinal))
-        {
-            writer.WriteLine(JsonSerializer.Serialize(new
-            {
-                operation = "supervise-install",
-                success = false,
-                error = summary,
-                recorded_path = runtime.RecordedPath,
-                runtime_binaries = runtime.Binaries,
-                unresolved_binaries = unresolved.Select(binary => binary.Name).ToArray(),
-                manages_process = false,
-            }, JsonOptions));
-            return;
-        }
-
-        writer.WriteLine($"supervise-install-failed: {summary}");
-        writer.WriteLine($"- recorded PATH: `{runtime.RecordedPath}`");
-        writer.WriteLine($"- unresolved binaries: {string.Join(", ", unresolved.Select(binary => binary.Name))}");
     }
 
     private static void Emit(TextWriter writer, string format, InstallResult result)
