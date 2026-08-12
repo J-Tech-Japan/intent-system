@@ -83,7 +83,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationPrimary,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerChatAgent,
-            Purpose = "Design-side action advisor (G465/G644/G662): `intent-cli next --domain <d> --team <team> --target-repo <r>` recommends ONE process, `supervision-setup` when the team's cycle is missing, and realignment when no improve run falls within the independently declared recency window. Read-only; no quality grading, scheduler, auto-run, or stalled-work class."
+            Purpose = "Design-side action advisor (G465/G644/G662/G672): `intent-cli next --domain <d> --team <team> --target-repo <r> [--role <role>]` recommends ONE process, `supervision-setup` when the team's cycle is missing, and realignment when no improve run falls within the independently declared recency window. When a role has an installed contract, `--role` puts its pointer first; roles without a contract receive no invented pointer. Read-only; no quality grading, scheduler, auto-run, or stalled-work class."
         },
         new CommandGroupEntry
         {

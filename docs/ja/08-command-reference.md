@@ -214,13 +214,32 @@ fresh record の直後は
 recency だけの判定で quality judgment ではなく、scheduler、cron、auto-run、
 stalled-work debt class を追加しません。
 
+G672 は invoking role の pointer を optional に追加します（preview-through-1.x）。
+
+```bash
+intent-cli guide next --role design --format markdown
+intent-cli guide next --role orchestration --format markdown
+intent-cli guide onboarding --role implementation --format markdown
+```
+
+contract を持つ role では、この pointer が `guide next` と onboarding の最初の
+read-before-acting instruction になります。design は `intent-cli guide design-thread`、
+orchestration は `intent-cli guide orchestrator-thread`、implementation は
+`intent-cli guide worker issue-to-pr`、review は `intent-cli guide review` を読みます。
+contract がない role には invented pointer を出しません。既存の procedure と
+first-call ordering は変更せず、wake ごとの reread も要求しません。CLI version または
+session-layer configuration が変わったときに再読します。同じ output には、issue #1441
+sections D/B-1 の operator-filed feedback に帰属する measured remote-herdr incident（48 units、session-scoped
+nohup process が unnoticed のまま二度 died）も記録します。
+
 setup は `intent-cli notify supervise install` を通し、launchd、Task
 Scheduler、または systemd artifact と operator 用の正確な registration / unregistration
 command を生成しますが実行しません。継続的な health は team の `cycles.jsonl` record の
 age と declared bound を比較します。process-name grep は、実測で team を混同し、一方の
 supervisor を強制終了しながら別 team の process を残したアンチパターンです。supervision と
-optional `notify supervise --event-mode` は同じ process 内で blocking `herdr agent wait` を保持し、
-implementation / review の settle を数秒単位で wake します。独立した interval cycle は safety floor
+optional `notify supervise --event-mode` は同じ process 内で seat ごとの blocking `herdr agent wait` を保持し、
+implementation / review の settle を数秒単位で wake します。これは normative SECOND wake source である
+herdr `pane.agent_status_changed` の concrete implementation です。独立した interval cycle は safety floor
 として残り、両 source は recorded seat transition で de-dup します。install artifact は invocation を
 埋め込むため、event mode の adoption には `supervise install --event-mode` で artifact を再生成して
 明示的に re-register する必要があり、既存 artifact は interval-only のままです。この path は macOS の

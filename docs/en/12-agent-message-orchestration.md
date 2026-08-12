@@ -58,6 +58,26 @@ role. Its wording is the same in `agmsg` and `herdr-only`, with or without a
 named team. Re-read installed guides after a CLI version or session-layer
 configuration change, not on every wake.
 
+### Role-contract precedence (G672 — preview-through-1.x)
+
+When `guide next` or `guide onboarding` is invoked with `--role`, the role's
+installed operating contract is the first read-before-acting instruction when
+that role has one: `design` → `intent-cli guide design-thread`,
+`orchestration` → `intent-cli guide orchestrator-thread`, `implementation` →
+`intent-cli guide worker issue-to-pr`, and `review` → `intent-cli guide review`.
+Roles without an installed contract receive no invented pointer. This only
+adds the new pointer's ordering; it does not remove or reorder the existing
+procedure, change the contract text, or force a reread on every wake. The
+pointer is reread after a CLI-version or session-layer configuration change.
+
+**Measured incident record (attributed field evidence).** Operator-filed
+feedback in issue #1441 sections D/B-1 for remote-herdr (48 units) recorded
+that, over days, a design seat had not read its own contract; a parallel detector violated
+the rule; supervision used an undeclared bound, the default interval, no event
+mode, and a session-scoped nohup process that died twice unnoticed; seven
+findings were mis-filed. This records the incident without settling the
+substantive B-1 question.
+
 A design wake has exactly four valid outcome shapes: advance the canonical
 workflow; confirm new evidence of real progress; discover the next actionable
 design, packet, or issue candidate and hand it to orchestration; or report a
@@ -493,6 +513,8 @@ sources use the same workspace/pane/sequence transition key, so their race
 produces one transition and one wake (`1 transition / 1 wake`). Existing wake targets, stall classes,
 owner-to-design escalation, recovery authority, and exactly-one-supervisor-per-
 team rule are unchanged; event mode does not create a second standing loop.
+The concrete wake-source flag is `--event-mode`, and the corresponding herdr
+observation is `pane.agent_status_changed` (the normative SECOND wake source).
 Measured evidence is `herdr 0.8.0` on macOS. Other herdr versions and platforms
 are unverified.
 

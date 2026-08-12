@@ -223,16 +223,38 @@ declaration, `next` invents no cadence. This is timestamp recency only—not a
 quality judgment—and it adds no scheduler, cron, auto-run, or stalled-work debt
 class.
 
+G672 adds an optional invoking-role pointer (preview-through-1.x):
+
+```bash
+intent-cli guide next --role design --format markdown
+intent-cli guide next --role orchestration --format markdown
+intent-cli guide onboarding --role implementation --format markdown
+```
+
+When the role has an installed operating contract, this pointer is the first
+read-before-acting instruction in `guide next` and onboarding: design reads
+`intent-cli guide design-thread`, orchestration reads
+`intent-cli guide orchestrator-thread`, implementation reads
+`intent-cli guide worker issue-to-pr`, and review reads `intent-cli guide
+review`. A role without a contract receives no invented pointer. The existing
+procedure and first-call ordering remain unchanged, and this does not force a
+reread on every wake; reread after a CLI-version or session-layer configuration
+change. The same output records the measured remote-herdr incident attributed
+to operator-filed feedback in issue #1441 sections D/B-1 (remote-herdr, 48
+units), including the session-scoped nohup process that died twice unnoticed.
+
 That setup step routes through `intent-cli notify supervise install`, which
 emits a launchd, Task Scheduler, or systemd artifact and exact operator
 registration/unregistration commands without executing them. For ongoing
 health, compare the age of the team's `cycles.jsonl` record with its declared
 bound. Process-name grep is an anti-pattern because a measured cross-team
 collision killed one team's supervisor while retaining another team's process.
-Optional `notify supervise --event-mode` keeps blocking `herdr agent wait`
-subscriptions inside that same process for seconds-scale implementation/review
-settlement wakes. The independent interval cycle remains the safety floor and
-both sources de-duplicate by recorded seat transition. Because install
+Optional `notify supervise --event-mode` keeps blocking per-seat `herdr agent
+wait` subscriptions inside that same process for seconds-scale
+implementation/review settlement wakes. It is the concrete implementation of
+the normative SECOND wake source, herdr `pane.agent_status_changed`; the
+independent interval cycle remains the safety floor and both sources
+de-duplicate by recorded seat transition. Because install
 artifacts embed the invocation, adopting event mode requires re-emitting and
 explicitly re-registering the artifact with `supervise install --event-mode`;
 an existing artifact remains interval-only. This path is measured with herdr

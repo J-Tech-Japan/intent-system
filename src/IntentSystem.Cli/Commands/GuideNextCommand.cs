@@ -25,7 +25,7 @@ internal static class GuideNextCommand
     private const string FormatMarkdown = "markdown";
 
     private const string UsageLine =
-        "Usage: intent-cli next [--domain <name>] [--team <name>] [--target-repo <owner/repo>] [--format markdown|json]  (alias: intent-cli guide next)";
+        "Usage: intent-cli next [--domain <name>] [--team <name>] [--target-repo <owner/repo>] [--role <role>] [--format markdown|json]  (alias: intent-cli guide next)";
 
     /// <summary>The shortest natural-language ask that triggers the advisor.</summary>
     public const string ShortPrompt = "intent-cli に聞いて、次に何をしたらいいか教えてください。";
@@ -57,14 +57,14 @@ internal static class GuideNextCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var domain, out var team, out var targetRepo, out var format, out var error))
+        if (!TryParseArguments(args, out var domain, out var team, out var targetRepo, out var role, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
             return 1;
         }
 
-        var result = BuildResult(context, domain, team, targetRepo);
+        var result = BuildResult(context, domain, team, targetRepo, role ?? "design");
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
             writer.Write(JsonSerializer.Serialize(result, JsonOptions));
@@ -79,13 +79,14 @@ internal static class GuideNextCommand
     }
 
     internal static GuideNextResult BuildResult(string? domain, string? targetRepo)
-        => BuildResult(context: null, domain: domain, team: null, targetRepo: targetRepo);
+        => BuildResult(context: null, domain: domain, team: null, targetRepo: targetRepo, invokingRole: "design");
 
     internal static GuideNextResult BuildResult(
         CliContext? context,
         string? domain,
         string? team,
-        string? targetRepo)
+        string? targetRepo,
+        string? invokingRole = "design")
     {
         var domainArg = string.IsNullOrWhiteSpace(domain) ? "<domain>" : domain!;
         var teamArg = string.IsNullOrWhiteSpace(team) ? "<team>" : team!;
@@ -93,6 +94,8 @@ internal static class GuideNextCommand
         var supervision = ReadSupervisionStatus(context, domain, team);
         var realignment = ReadRealignmentStatus(context, domain);
         var bootstrap = ReadBootstrapStatus(context, domain, team);
+        var normalizedRole = GuideRoleContractGuidance.Normalize(invokingRole);
+        var roleContractFirst = GuideRoleContractGuidance.Resolve(invokingRole);
 
         var prompt =
 $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). This is READ-ONLY: recommend ONE design-side process, do not mutate packets / issues / labels / queue state, and never launch an AI provider.
@@ -210,6 +213,8 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             Supervision = supervision,
             Realignment = realignment,
             Bootstrap = bootstrap,
+            InvokingRole = normalizedRole,
+            RoleContractFirst = roleContractFirst,
             DesignRoleGuide = GuideDesignThreadCommand.CommandName,
             ShortPrompt = ShortPrompt,
             ReadOnly = true,
@@ -218,6 +223,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 + "processes (bootstrap-resume for recorded-topology half-done state, supervision-setup when no recorded cycle, realignment when a declared improve window lapses, grill, stack, improve, inspect, issue-publish, review, recovery, idle), the evidence to check first, "
                 + "and the recommendation output shape. It recommends ONE process tied to the evidence; it is read-only by default "
                 + "and never auto-executes the chosen action — the user decides whether to run the suggested prompt.",
+            MeasuredIncident = GuideRoleContractGuidance.MeasuredIncident,
             NotThis = new[]
             {
                 "next does NOT auto-execute the selected action — it recommends; the user runs the suggested prompt.",
@@ -263,6 +269,19 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
         writer.WriteLine("# Guide next — design-side action advisor");
         writer.WriteLine();
         writer.WriteLine($"_Ask it:_ **{result.ShortPrompt}**");
+        writer.WriteLine();
+        if (result.RoleContractFirst is { } roleContract)
+        {
+            writer.WriteLine("## Read your role contract first (G672 — preview-through-1.x)");
+            writer.WriteLine();
+            writer.WriteLine($"- role: `{roleContract.Role}`");
+            writer.WriteLine($"- operating guide: `{roleContract.Guide}`");
+            writer.WriteLine($"- {roleContract.Instruction}");
+            writer.WriteLine();
+        }
+        writer.WriteLine("## Measured incident record (G672 — preview-through-1.x)");
+        writer.WriteLine();
+        writer.WriteLine(result.MeasuredIncident);
         writer.WriteLine();
         if (!string.IsNullOrWhiteSpace(result.Domain))
         {
@@ -399,11 +418,12 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
         }
     }
 
-    private static bool TryParseArguments(string[] args, out string? domain, out string? team, out string? targetRepo, out string format, out string error)
+    private static bool TryParseArguments(string[] args, out string? domain, out string? team, out string? targetRepo, out string? role, out string format, out string error)
     {
         domain = null;
         team = null;
         targetRepo = null;
+        role = null;
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -442,6 +462,16 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                     index++;
                     break;
 
+                case "--role":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--role requires a value.";
+                        return false;
+                    }
+                    role = args[index + 1].Trim();
+                    index++;
+                    break;
+
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -472,7 +502,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
     {
         writer.WriteLine("next (alias: guide next)");
         writer.WriteLine(UsageLine);
-        writer.WriteLine("Read-only: design-side action advisor. Lays out the design-side process catalog, checks supervision setup with --domain plus --team, and compares the latest improve run with the domain's independently declared recency window. A missing/aged run yields a paste-ready realignment recommendation; a fresh record is immediately silent. Recency only: no quality grading, scheduler, cron, auto-run, or stalled-work debt class.");
+        writer.WriteLine("Read-only: design-side action advisor. With --role, the invoking role's installed operating guide is the first read-before-acting instruction when that role has a contract; roles without a contract receive no invented pointer. Lays out the design-side process catalog, checks supervision setup with --domain plus --team, and compares the latest improve run with the domain's independently declared recency window. A missing/aged run yields a paste-ready realignment recommendation; a fresh record is immediately silent. Recency only: no quality grading, scheduler, cron, auto-run, or stalled-work debt class.");
         writer.WriteLine("Ask it: " + ShortPrompt);
     }
 
@@ -660,6 +690,12 @@ internal sealed record GuideNextResult
     [JsonPropertyName("process")]
     public required string Process { get; init; }
 
+    [JsonPropertyName("invoking_role")]
+    public string? InvokingRole { get; init; }
+
+    [JsonPropertyName("role_contract_first")]
+    public GuideRoleContractPointer? RoleContractFirst { get; init; }
+
     [JsonPropertyName("domain")]
     public string? Domain { get; init; }
 
@@ -689,6 +725,9 @@ internal sealed record GuideNextResult
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    [JsonPropertyName("measured_incident")]
+    public required string MeasuredIncident { get; init; }
 
     [JsonPropertyName("not_this")]
     public required IReadOnlyList<string> NotThis { get; init; }

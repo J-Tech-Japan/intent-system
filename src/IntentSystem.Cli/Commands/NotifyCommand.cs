@@ -64,6 +64,7 @@ internal static class NotifyCommand
         + "[--repair-silent-minutes <m>] [--auto-redispatch] [--event-mode] [--once] [--routing-root <host-root>] [--dry-run|--write] "
         + "[--pre-approve <agent-kind>:<prompt-class>]... [--pre-escalate <agent-kind>:<prompt-class>]... "
         + "[--format markdown|json]\n"
+        + "Event mode: --event-mode keeps the blocking per-seat herdr wait inside this supervisor process and re-arms it after failure. It is the implementation of the normative SECOND wake source from herdr pane.agent_status_changed, alongside the independent interval safety floor; it does not change outcome or label behavior.\n"
         + NotifySuperviseInstallCommand.Usage;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
