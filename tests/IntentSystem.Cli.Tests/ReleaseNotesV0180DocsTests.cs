@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using IntentSystem.Cli.Infrastructure;
 
@@ -179,23 +178,23 @@ public sealed class ReleaseNotesV0180DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void PostReleaseReadinessAdvancesToV0181WhileV0180NotesStayLinked(string language)
+    public void PostReleaseReadinessAdvancesToV0190WhileV0180NotesStayLinked(string language)
     {
         var root = RepoVersionPolicySource.RepoRoot();
         var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
-        var policy = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "eng", "version.json"))).RootElement;
-        var stubPath = Path.Combine(root, "docs", language, "release-notes-v0.18.1.md");
+        var policy = RepoVersionPolicySource.Read();
+        var notesPath = Path.Combine(root, "docs", language, $"release-notes-v{policy.NextVersion}.md");
 
-        Assert.Equal("0.18.0", policy.GetProperty("stableVersion").GetString());
-        Assert.Equal("0.18.1", policy.GetProperty("nextVersion").GetString());
-        Assert.True(File.Exists(stubPath));
-        Assert.Contains(language == "en" ? "DRAFT / UNRELEASED" : "DRAFT / 未リリース", File.ReadAllText(stubPath), StringComparison.Ordinal);
-        Assert.Contains("release-notes-v0.18.1.md", reference, StringComparison.Ordinal);
+        Assert.Equal("0.18.0", policy.StableVersion);
+        Assert.Equal("0.19.0", policy.NextVersion);
+        Assert.True(File.Exists(notesPath));
+        Assert.DoesNotContain(language == "en" ? "DRAFT / UNRELEASED" : "DRAFT / 未リリース", File.ReadAllText(notesPath), StringComparison.Ordinal);
+        Assert.Contains("release-notes-v0.19.0.md", reference, StringComparison.Ordinal);
         Assert.Contains("release-notes-v0.18.0.md", reference, StringComparison.Ordinal);
         Assert.DoesNotContain("release-notes-v0.17.1.md", reference, StringComparison.Ordinal);
         Assert.Contains("ReleaseNotesV0180DocsTests", reference, StringComparison.Ordinal);
+        Assert.Contains("ReleaseNotesV0190DocsTests", reference, StringComparison.Ordinal);
         Assert.Contains("ReleaseNotesV0170DocsTests", reference, StringComparison.Ordinal);
-        Assert.DoesNotContain("ReleaseNotesV0181DocsTests", reference, StringComparison.Ordinal);
     }
 
     [Theory]

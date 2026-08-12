@@ -2787,32 +2787,32 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 使っています: 現在のバージョンの 2 つ目のコピーは同期し続けるべき対象が 1 つ増えることを
 意味し、しかも誰も見ていない roll でこそ stale になります。
 
-### 次リリース準備(v0.18.1)
+### 次リリース準備(v0.19.0)
 
 **`v0.18.0` は出荷済み**(GitHub Release + NuGet)で、次に準備するラインは
-`0.18.1` です。[v0.18.1 notes stub](release-notes-v0.18.1.md) が必須の
-prepare-only placeholder です。直前の出荷範囲は
+`0.19.0` です。[v0.19.0 notes](release-notes-v0.19.0.md) は G666–G676 を
+正確に扱う実内容付き prepare-only release candidate です。直前の出荷範囲は
 [release-notes-v0.18.0.md](release-notes-v0.18.0.md) を参照し、ここでは重複記載しません。
 
-**リリース準備検証(`v0.18.1` release-preparation PR のマージ前に実行):**
+**リリース準備検証(`v0.19.0` release-preparation PR のマージ前に実行):**
 
 ```bash
 # 1. version policy が release-to-be-cut を記録していることを確認。
-cat eng/version.json   # stableVersion 0.18.0 (published), nextVersion 0.18.1 (to release)
+cat eng/version.json   # stableVersion 0.18.0 (published), nextVersion 0.19.0 (to release)
 
 # 2. build して表示バージョン識別(version + git SHA + G-unit)を確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待する形: intent-cli 0.18.1-<sha>-G<unit>   (古いリテラルではない)
+#   期待する形: intent-cli 0.19.0-<sha>-G<unit>   (古いリテラルではない)
 
 # 3. pack して NuGet package version が policy と一致することを確認。
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.18.1.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.19.0.nupkg
 
 # 4. G475、出荷済み release-note check、release/version guard を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
-  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 
 # 5. Release suite を完全実行。
 dotnet test IntentSystem.sln -c Release
@@ -2820,10 +2820,10 @@ dotnet test IntentSystem.sln -c Release
 
 準備コミットが `main` に入り readiness の証跡が揃ったら、operator が Release 作成を
 明示的に承認しなければなりません。そのうえで初めて maintainer/operator(または承認済みの
-外部リリース自動化)が `v0.18.1` の GitHub Release を作成・公開できます。公開すると
+外部リリース自動化)が `v0.19.0` の GitHub Release を作成・公開できます。公開すると
 `release.yml`(`on: release: published`)が起動し、NuGet package とプラットフォーム別
 バイナリを build/publish します。**その後すぐに `eng/version.json` を roll します** —
-`stableVersion → 0.18.1`、`nextVersion → 0.18.2` —
+`stableVersion → 0.19.0`、`nextVersion → 0.19.1` —
 [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
 **ステップ 4–6** に従い、**同一コミットに DRAFT note スタブ**(ステップ 4)、
 **「次リリース準備」セクションを ja/en 両ミラーで新しいラインへ更新**(ステップ 5)、
