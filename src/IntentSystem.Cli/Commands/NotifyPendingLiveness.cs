@@ -30,7 +30,8 @@ internal static class NotifyPendingLiveness
         string mode,
         INotifyProcessRunner runner,
         string herdrExecutable,
-        string agmsgScriptsDirectory)
+        string agmsgScriptsDirectory,
+        string? bashExecutable = null)
     {
         var deliveryJudgment = NotifyRecipientDeliveryJudgment.Resolve(record);
         if (!deliveryJudgment.Resolved)
@@ -55,7 +56,7 @@ internal static class NotifyPendingLiveness
 
         var result = string.Equals(mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal)
             ? ProbeHerdr(record, runner, herdrExecutable)
-            : ProbeAgmsg(record, runner, agmsgScriptsDirectory);
+            : ProbeAgmsg(record, runner, agmsgScriptsDirectory, bashExecutable ?? "bash");
         return result with { DeliveryBasis = deliveryJudgment.Basis };
     }
 
@@ -168,7 +169,8 @@ internal static class NotifyPendingLiveness
     private static NotifyPendingLivenessResult ProbeAgmsg(
         NotifyPendingDelegation record,
         INotifyProcessRunner runner,
-        string scriptsDirectory)
+        string scriptsDirectory,
+        string bashExecutable)
     {
         var teamScript = Path.Combine(scriptsDirectory, "team.sh");
         if (!File.Exists(teamScript))
@@ -181,7 +183,7 @@ internal static class NotifyPendingLiveness
         NotifyProcessResult response;
         try
         {
-            response = runner.Run("bash", [teamScript, record.Team]);
+            response = runner.Run(bashExecutable, [teamScript, record.Team]);
         }
         catch (InvalidOperationException exception)
         {

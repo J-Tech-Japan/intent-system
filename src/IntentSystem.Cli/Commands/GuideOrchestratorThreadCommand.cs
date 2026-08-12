@@ -1645,7 +1645,7 @@ internal static class GuideOrchestratorThreadCommand
                 },
             },
             TerminalWorkspaceProvisioning = BuildTerminalWorkspaceProvisioning(repo, values["<team>"]),
-            DesignWorkspaceSupervision = BuildDesignWorkspaceSupervision(domain, repo),
+            DesignWorkspaceSupervision = BuildDesignWorkspaceSupervision(domain, repo, herdrOnly),
             DesignDecisionHolds = BuildDesignDecisionHolds(domain, repo),
             CrossProjectIsolation = BuildCrossProjectIsolation(),
             DesignTrafficController = new OrchestratorDesignTrafficController
@@ -2543,7 +2543,10 @@ internal static class GuideOrchestratorThreadCommand
     // keeps it moving. Every rule here is session-layer only — the workflow
     // transitions stay with the orchestrator and the canonical commands, and
     // the dialog lists are deliberately closed sets rather than judgment calls.
-    private static OrchestratorDesignWorkspaceSupervision BuildDesignWorkspaceSupervision(string domain, string targetRepo)
+    private static OrchestratorDesignWorkspaceSupervision BuildDesignWorkspaceSupervision(
+        string domain,
+        string targetRepo,
+        bool herdrOnly)
     {
         string Fill(string template) => template
             .Replace("<domain>", domain, StringComparison.Ordinal)
@@ -2657,6 +2660,12 @@ internal static class GuideOrchestratorThreadCommand
                         + "watchdog safety-rules reference below). One canonical nudge per wake, never a batch.",
                 },
             },
+            WakeSources = herdrOnly
+                ? "Measured `intent-cli notify supervise` keeps the interval cycle as the safety floor. The optional "
+                    + "SECOND wake source is enabled only by the concrete `--event-mode` flag: it holds blocking "
+                    + "herdr waits for `pane.agent_status_changed` and re-arms after wait death/error. It does not add "
+                    + "a second supervisor or change finding, recovery, or wake-target semantics."
+                : null,
             PaneScanStuckStates = new[]
             {
                 new OrchestratorPaneStuckState
@@ -3779,6 +3788,13 @@ internal static class GuideOrchestratorThreadCommand
             writer.WriteLine($"  - note — {layer.Note}");
         }
         writer.WriteLine();
+        if (!string.IsNullOrWhiteSpace(supervision.WakeSources))
+        {
+            writer.WriteLine("#### notify supervise wake sources");
+            writer.WriteLine();
+            writer.WriteLine($"- {supervision.WakeSources}");
+            writer.WriteLine();
+        }
         writer.WriteLine("#### What the pane scan is looking for");
         writer.WriteLine();
         foreach (var stuck in supervision.PaneScanStuckStates)
@@ -5312,6 +5328,9 @@ internal sealed record OrchestratorDesignWorkspaceSupervision
 
     [JsonPropertyName("supervision_layers")]
     public required IReadOnlyList<OrchestratorSupervisionLayer> SupervisionLayers { get; init; }
+
+    [JsonPropertyName("wake_sources")]
+    public string? WakeSources { get; init; }
 
     /// <summary>G556: what the blocking-UI pane scan is looking FOR — including a pane showing a shell prompt where an agent should be.</summary>
     [JsonPropertyName("pane_scan_stuck_states")]

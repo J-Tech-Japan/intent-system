@@ -99,6 +99,7 @@ internal sealed class NotifySupervisor
     private readonly INotifyProcessRunner runner;
     private readonly string herdrExecutable;
     private readonly string agmsgScriptsDirectory;
+    private readonly string bashExecutable;
     private readonly Func<NotifyPendingDelegation, NotifySupervisorRedispatchResult>? redispatch;
     private readonly Func<NotifyPendingDelegation, string, NotifySupervisorDeliveryResult>? notifier;
 
@@ -114,7 +115,8 @@ internal sealed class NotifySupervisor
         string herdrExecutable,
         string agmsgScriptsDirectory,
         Func<NotifyPendingDelegation, NotifySupervisorRedispatchResult>? redispatch = null,
-        Func<NotifyPendingDelegation, string, NotifySupervisorDeliveryResult>? notifier = null)
+        Func<NotifyPendingDelegation, string, NotifySupervisorDeliveryResult>? notifier = null,
+        string? bashExecutable = null)
     {
         this.context = context;
         this.routingRoot = routingRoot;
@@ -126,6 +128,7 @@ internal sealed class NotifySupervisor
         this.runner = runner;
         this.herdrExecutable = herdrExecutable;
         this.agmsgScriptsDirectory = agmsgScriptsDirectory;
+        this.bashExecutable = bashExecutable ?? "bash";
         this.redispatch = redispatch;
         this.notifier = notifier;
     }
@@ -157,7 +160,8 @@ internal sealed class NotifySupervisor
                 transportMode,
                 runner,
                 herdrExecutable,
-                agmsgScriptsDirectory);
+                agmsgScriptsDirectory,
+                bashExecutable);
             if (string.Equals(
                 liveness.State,
                 NotifyPendingLivenessResult.RegistrationLostProcessPresent,
@@ -374,7 +378,8 @@ internal sealed class NotifySupervisor
                 notification,
                 runner,
                 herdrExecutable,
-                agmsgScriptsDirectory))
+                agmsgScriptsDirectory,
+                bashExecutable))
             : new NotifySupervisorDeliveryResult
             {
                 Resolved = true,
@@ -496,6 +501,16 @@ internal sealed class NotifySupervisor
         args.Add("--write");
         args.Add("--format");
         args.Add("json");
+        if (Path.IsPathRooted(herdrExecutable))
+        {
+            args.Add("--herdr-executable");
+            args.Add(herdrExecutable);
+        }
+        if (Path.IsPathRooted(bashExecutable))
+        {
+            args.Add("--bash-executable");
+            args.Add(bashExecutable);
+        }
 
         var previousFactory = NotifyCommand.ProcessRunnerFactory;
         NotifyCommand.ProcessRunnerFactory = () => runner;
@@ -900,7 +915,8 @@ internal static class NotifySupervisorDelivery
         string payload,
         INotifyProcessRunner runner,
         string herdrExecutable,
-        string agmsgScriptsDirectory)
+        string agmsgScriptsDirectory,
+        string? bashExecutable = null)
     {
         if (string.IsNullOrWhiteSpace(record.DelegatingRole))
         {
@@ -932,7 +948,7 @@ internal static class NotifySupervisorDelivery
 
         var transport = string.Equals(resolution.Mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal)
             ? (INotifyTransport)new HerdrNotifyTransport(runner, herdrExecutable)
-            : new AgmsgNotifyTransport(runner, agmsgScriptsDirectory);
+            : new AgmsgNotifyTransport(runner, agmsgScriptsDirectory, bashExecutable);
         var delivery = transport.Deliver(
             routingRoot,
             record.Domain,

@@ -380,6 +380,7 @@ internal sealed record NotifySupervisionStallRecord
     [JsonPropertyName("wake_delivered")] public bool WakeDelivered { get; init; }
     [JsonPropertyName("resend_permitted")] public bool? ResendPermitted { get; init; }
     [JsonPropertyName("wake_cause")] public string? WakeCause { get; init; }
+    [JsonPropertyName("cause")] public string? Cause { get; init; }
 }
 
 internal sealed record NotifySupervisionReadResult

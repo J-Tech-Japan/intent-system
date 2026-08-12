@@ -62,6 +62,7 @@ internal static class NotifyCommand
         + "[--repo <owner/repo>] [--owner-role <role>] [--bound <seconds>] "
         + "[--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] "
         + "[--repair-silent-minutes <m>] [--auto-redispatch] [--event-mode] [--once] [--routing-root <host-root>] [--dry-run|--write] "
+        + "[--herdr-executable <absolute-path>] [--bash-executable <absolute-path>] "
         + "[--pre-approve <agent-kind>:<prompt-class>]... [--pre-escalate <agent-kind>:<prompt-class>]... "
         + "[--format markdown|json]\n"
         + "Event mode: --event-mode keeps the blocking per-seat herdr wait inside this supervisor process and re-arms it after failure. It is the implementation of the normative SECOND wake source from herdr pane.agent_status_changed, alongside the independent interval safety floor; it does not change outcome or label behavior.\n"
@@ -88,6 +89,8 @@ internal static class NotifyCommand
     internal static Func<string>? AgmsgScriptsDirectoryFactory { get; set; }
 
     internal static Func<string>? HerdrExecutableFactory { get; set; }
+
+    internal static Func<string>? BashExecutableFactory { get; set; }
 
     internal static Func<DateTimeOffset>? UtcNowFactory { get; set; }
 
@@ -593,8 +596,9 @@ internal static class NotifyCommand
             record,
             transportMode!,
             runner,
-            HerdrExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveHerdrExecutable(),
-            AgmsgScriptsDirectoryFactory?.Invoke() ?? NotifyTransportPaths.ResolveAgmsgScriptsDirectory());
+            options.HerdrExecutable ?? HerdrExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveHerdrExecutable(),
+            AgmsgScriptsDirectoryFactory?.Invoke() ?? NotifyTransportPaths.ResolveAgmsgScriptsDirectory(),
+            options.BashExecutable ?? BashExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveBashExecutable());
         if (!liveness.Resolved || liveness.Running is null)
         {
             EmitStatus(writer, options.Format, NotifyStatusResult.Failure(
@@ -717,11 +721,12 @@ internal static class NotifyCommand
             options.Write,
             options.Format,
             runner,
-            HerdrExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveHerdrExecutable(),
+            options.HerdrExecutable ?? HerdrExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveHerdrExecutable(),
             AgmsgScriptsDirectoryFactory?.Invoke() ?? NotifyTransportPaths.ResolveAgmsgScriptsDirectory(),
             options.EventMode,
             options.PreApprovalAcceptRules,
-            options.PreApprovalEscalateRules);
+            options.PreApprovalEscalateRules,
+            options.BashExecutable ?? BashExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveBashExecutable());
         using var cancellation = new CancellationTokenSource();
         ConsoleCancelEventHandler? cancelHandler = null;
         if (!Console.IsOutputRedirected)
@@ -1047,10 +1052,11 @@ internal static class NotifyCommand
         var transport = string.Equals(resolution.Mode, SessionLayerMode.HerdrOnly, StringComparison.Ordinal)
             ? (INotifyTransport)new HerdrNotifyTransport(
                 runner,
-                HerdrExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveHerdrExecutable())
+                options.HerdrExecutable ?? HerdrExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveHerdrExecutable())
             : new AgmsgNotifyTransport(
                 runner,
-                AgmsgScriptsDirectoryFactory?.Invoke() ?? NotifyTransportPaths.ResolveAgmsgScriptsDirectory());
+                AgmsgScriptsDirectoryFactory?.Invoke() ?? NotifyTransportPaths.ResolveAgmsgScriptsDirectory(),
+                options.BashExecutable ?? BashExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveBashExecutable());
         var roles = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? new[] { options.FromRole!, options.ToRole!, options.ReportToRole! }
             : new[] { options.FromRole!, options.ToRole! };
@@ -1770,6 +1776,8 @@ internal static class NotifyCommand
         string? routingRoot = null;
         string? repo = null;
         string? ownerRole = null;
+        string? herdrExecutable = null;
+        string? bashExecutable = null;
         int? intervalSeconds = null;
         int? detectionBoundSeconds = null;
         int? staleMinutes = null;
@@ -1811,6 +1819,8 @@ internal static class NotifyCommand
                 case "--routing-root": if (!ReadValue(args, ref index, argument, out routingRoot, out error)) return false; break;
                 case "--repo": if (!ReadValue(args, ref index, argument, out repo, out error)) return false; break;
                 case "--owner-role": if (!ReadValue(args, ref index, argument, out ownerRole, out error)) return false; break;
+                case "--herdr-executable": if (!ReadValue(args, ref index, argument, out herdrExecutable, out error)) return false; break;
+                case "--bash-executable": if (!ReadValue(args, ref index, argument, out bashExecutable, out error)) return false; break;
                 case "--interval":
                     if (!ReadValue(args, ref index, argument, out var intervalValue, out error)
                         || !int.TryParse(intervalValue, out var parsedInterval))
@@ -1936,6 +1946,8 @@ internal static class NotifyCommand
             RoutingRoot = routingRoot,
             Repo = repo,
             OwnerRole = ownerRole,
+            HerdrExecutable = herdrExecutable,
+            BashExecutable = bashExecutable,
             IntervalSeconds = intervalSeconds,
             DetectionBoundSeconds = detectionBoundSeconds,
             StaleMinutes = staleMinutes,
@@ -2021,6 +2033,13 @@ internal static class NotifyCommand
             if (options.OwnerRole is not null && !IsSafeIdentity(options.OwnerRole))
             {
                 error = "supervise --owner-role must be a safe logical-role name.";
+                return false;
+            }
+
+            if (options.HerdrExecutable is not null && !Path.IsPathRooted(options.HerdrExecutable)
+                || options.BashExecutable is not null && !Path.IsPathRooted(options.BashExecutable))
+            {
+                error = "supervise executable overrides must be absolute paths.";
                 return false;
             }
 
@@ -2197,6 +2216,8 @@ internal sealed record NotifyOptions
     public string? RoutingRoot { get; init; }
     public string? Repo { get; init; }
     public string? OwnerRole { get; init; }
+    public string? HerdrExecutable { get; init; }
+    public string? BashExecutable { get; init; }
     public int? IntervalSeconds { get; init; }
     public int? DetectionBoundSeconds { get; init; }
     public int? StaleMinutes { get; init; }
