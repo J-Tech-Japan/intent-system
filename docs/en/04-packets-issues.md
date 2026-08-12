@@ -43,19 +43,35 @@ After publishing, the issue appears in the target repository with `intent-target
 
 ```bash
 # Scaffold the packet (packet.yaml / implementation.md / review-context.md / github-body.md)
-intent-cli packet draft --execution-unit <id> --target-repo <owner>/<repo> --format markdown
+intent-cli packet draft --execution-unit <id> --target-repo <owner>/<repo> --team <team> --format markdown
 
 # Required before publish: retain the actual lexical facet-check result
 intent-cli intent facet-check --domain <domain> --packet <id> --format json
 
+# Project the verified packet into the queue using the same claim judgment
+intent-cli automation queue-seed-from-packet --execution-unit <id> --target-repo <owner>/<repo> --team <team> --format json
+
 # Enforce the Standalone Child Issue Contract, then publish
 intent-cli issue validate-body ...
-intent-cli issue publish-flow <id> --repo <owner>/<repo> --write --format json
+intent-cli issue publish-flow <id> --repo <owner>/<repo> --team <team> --write --format json
 # Apply intent-target by either the recorded unit or its issue number
 intent-cli automation issue-publish --execution-unit <id> --write --format json
 # Equivalent alternate when the issue number is already known:
 intent-cli automation issue-publish --issue <n> --write --format json
 ```
+
+On a claims-enabled host, acquire `execution-unit:<id>` by successful plain
+push before the first scaffold, then pass the invoking team to draft, queue
+seed, publish, next-slice, and worker selection. They all consult the same
+read-only claim judgment. An unheld scope or another team's record is refused
+with scope, holder, and holder team named. If `.intent-cli/claims/` does not
+exist, these surfaces keep the legacy single-team output byte-for-byte.
+
+Number allocation is claim-then-draft: compute N, claim
+`execution-unit:<N>`, then scaffold only after winning. A loser fast-forwards,
+recomputes the next number, and retries that new scope exactly once. A second
+loss stops. GitHub labels remain visibility and defence in depth, not the
+ownership fact.
 
 The facet check is required before publish, but its output must be described
 honestly. `no_facet_data: true` means the lexical check **did not run** because

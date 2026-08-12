@@ -70,6 +70,7 @@ clones without a server:
 ```bash
 intent-cli claim acquire --scope execution-unit:<EU> --actor <actor> --team <team> --write --format json
 intent-cli claim acquire --scope release-prep:<owner/repo>:<version> --actor <actor> --team <team> --write --format json
+intent-cli claim verify --scope <scope> --team <team> --format json
 ```
 
 Acquisition is exactly `git pull --ff-only` → create the immutable record under
@@ -92,6 +93,21 @@ Fresh hosts put these exact lines in `.gitattributes`, in this order:
 Existing hosts are not migrated automatically. Add the final, more-specific
 line after broad union rules only through an explicit reviewed commit.
 
+### Preview: claim-aware start surfaces (G680)
+
+Packet draft, queue seed/publish-flow, worker next-action, and release-prep use
+the same `claim verify` judgment. A configured store requires the invoking
+team to hold the matching scope; unheld and other-team refusals name scope,
+holder, and holder team. Next-slice uses that same judgment in recommendation
+mode: unheld and own-team units remain candidates, while claimed-elsewhere
+units are excluded with holder evidence, so it never urges what start will
+refuse.
+
+Numbering is claim-then-draft. Claim `execution-unit:<N>` before scaffolding;
+after losing N, fast-forward, recompute, and retry the next number exactly once.
+The GitHub lifecycle label remains visible defence in depth but is not the
+acquisition fact. Review/closeout gates and `worker complete` are unchanged.
+
 ## Command reference (for agents, maintainers, and troubleshooting)
 
 > **Note:** The commands below are run by the AI agent internally. The authoritative
@@ -100,7 +116,7 @@ line after broad union rules only through an explicit reviewed commit.
 
 ```bash
 # Select exactly one target (no manual label-walking)
-intent-cli worker next-action --repo <owner>/<repo> --github-only --format json
+intent-cli worker next-action --repo <owner>/<repo> --team <team> --github-only --format json
 
 # issue-to-pr: claim, implement smallest change, open ready-for-review PR
 intent-cli worker claim --kind issue --number <n> --repo <owner>/<repo> --github-only --write --format json

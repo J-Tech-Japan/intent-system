@@ -43,19 +43,34 @@ AI agent が行うこと:
 
 ```bash
 # packet を scaffold（packet.yaml / implementation.md / review-context.md / github-body.md）
-intent-cli packet draft --execution-unit <id> --target-repo <owner>/<repo> --format markdown
+intent-cli packet draft --execution-unit <id> --target-repo <owner>/<repo> --team <team> --format markdown
 
 # publish 前に必須: lexical facet-check の実際の結果を保存
 intent-cli intent facet-check --domain <domain> --packet <id> --format json
 
+# 同じ claim judgment で検証済み packet を queue に投影
+intent-cli automation queue-seed-from-packet --execution-unit <id> --target-repo <owner>/<repo> --team <team> --format json
+
 # Standalone Child Issue Contract を検証してから公開
 intent-cli issue validate-body ...
-intent-cli issue publish-flow <id> --repo <owner>/<repo> --write --format json
+intent-cli issue publish-flow <id> --repo <owner>/<repo> --team <team> --write --format json
 # 記録済み unit または issue 番号で intent-target を付与
 intent-cli automation issue-publish --execution-unit <id> --write --format json
 # issue 番号が既知の場合の同等な代替:
 intent-cli automation issue-publish --issue <n> --write --format json
 ```
+
+claims-enabled host では最初の scaffold より前に plain push 成功で
+`execution-unit:<id>` を acquire し、draft、queue seed、publish、next-slice、worker
+selection に invoking team を渡します。すべて同じ read-only claim judgment を参照します。
+unheld scope または別 team の record は scope、holder、holder team を名指して拒否します。
+`.intent-cli/claims/` が存在しない場合、これらの surface は legacy single-team 出力を
+byte 単位で維持します。
+
+番号割り当ては claim-then-draft です。N を計算し `execution-unit:<N>` を claim し、
+勝者だけが scaffold します。敗者は fast-forward 後に次番号を再計算し、その新しい scope を
+exactly once retry します。2 回目も失敗したら停止します。GitHub label は visibility と
+defence in depth のままで、ownership fact ではありません。
 
 facet check は publish 前に必須ですが、結果は正直に記述します。
 `no_facet_data: true` は facet annotation を持つ intent node が無いため lexical check が

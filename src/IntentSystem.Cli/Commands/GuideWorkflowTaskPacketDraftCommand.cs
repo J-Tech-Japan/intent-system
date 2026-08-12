@@ -120,8 +120,8 @@ internal static class GuideWorkflowTaskPacketDraftCommand
     /// </summary>
     internal static readonly IReadOnlyList<string> Commands = new[]
     {
-        "intent-cli packet draft --execution-unit <execution-unit-id> [--domain <name>] [--target-repo <owner/repo>] --dry-run --format markdown",
-        "intent-cli packet draft --execution-unit <execution-unit-id> [--domain <name>] [--target-repo <owner/repo>] --format json"
+        "intent-cli packet draft --execution-unit <execution-unit-id> [--domain <name>] [--target-repo <owner/repo>] [--team <team>] --dry-run --format markdown",
+        "intent-cli packet draft --execution-unit <execution-unit-id> [--domain <name>] [--target-repo <owner/repo>] [--team <team>] --format json"
     };
 
     /// <summary>
@@ -133,6 +133,7 @@ internal static class GuideWorkflowTaskPacketDraftCommand
     internal static readonly IReadOnlyList<string> StopConditions = new[]
     {
         "Before publish, run `intent-cli intent facet-check --domain <domain> --packet <execution-unit> --format json` and retain its output. If `no_facet_data: true`, state that the lexical check did not run — never report it as passed — and perform the semantic facet/alignment review manually. The current intent-cli domain is the measured example: it has no facet nodes. This slice does not invent them.",
+        "On a claims-enabled host, `packet draft` runs the shared claim verification first. Stop when `execution-unit:<id>` is unheld or held by another team; the refusal names the scope, holder, and holder team. A host with no claims store follows the legacy path byte-for-byte.",
         "`packet draft --dry-run` flags missing files: stop, repair the design host packet directory before publishing. Hand-editing the four files is allowed during design; routine automation mutates them through `packet draft --write` only.",
         "**Dry-run the publish validation BEFORE declaring the packet issue-ready (G482)**: never call a packet ready for GitHub issue creation until a publish-validation dry-run reports zero missing contract sections. Run `intent-cli issue validate-body --from-file <github-body.md> --format json` (offline body check), `intent-cli packet draft --execution-unit <id> --dry-run --format json` (re-scaffold + contract check), and — for the host loop — `intent-cli intent next-slice --dry-run --format json`; all three share one required-section source of truth, so a clean result on one is a clean result on all. A freshly scaffolded packet already carries every required section (Goal, Current Observed State, Why This Slice Exists Now, Accepted Baseline You May Assume, Target Repo / Path / Part, In Scope, Out Of Scope, Standalone Child Issue Contract, Acceptance Criteria, Verification, Related Links, Base Branch Policy); fill the placeholders, do not delete sections.",
         "`issue validate-body --from-file <github-body.md> --format json` reports `errors[]` (missing contract sections): stop, repair the body, validate again, only then move to `issue publish-flow`.",
@@ -147,6 +148,7 @@ internal static class GuideWorkflowTaskPacketDraftCommand
     internal static readonly IReadOnlyList<string> Invariants = new[]
     {
         "A packet is the standalone unit of intent: the GitHub issue body alone must let an external agent reproduce the implementation, the review, and the closeout decision. If `github-body.md` requires reading the host packet directory to be understood, the slice is not yet ready to publish.",
+        "G680 claim-then-draft numbering (preview-through-1.x): compute N, acquire `execution-unit:<N>` by successful plain push, then scaffold. A losing claimant fast-forwards, recomputes the next number, and retries exactly once; a second loss stops. GitHub labels are visibility only and never replace this acquisition fact.",
         "Packet ownership is design-side; runtime-created packets carry an explicit `runtime-created` flag in `packet.yaml`. The review-runtime workspace MUST NOT silently edit the four files; it goes through `packet draft --write` with the runtime ownership label (G326).",
         "Prefer intent-cli-backed metadata mutation over hand-editing. Ask `intent-cli guide commands list --format json` or `intent-cli automation summary --domain <d> --format json` which command performs the transition, run that command, then validate the result.",
         "Child implementation loops MUST NOT inspect or mutate parent host queue-state, runs logs, packet directories, intent tree, review-runtime state, local rules, or local skills (G300 / G330 / G333). The packet directory is host-owned; child agents see only the rendered GitHub issue body. " + DispatcherSkillCarveOut.BoundaryClause,

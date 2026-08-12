@@ -45,7 +45,7 @@ internal static class IssuePublishFlowCommand
         RegexOptions.Compiled);
 
     private const string UsageLine =
-        "Usage: intent-cli issue publish-flow <execution-unit> --repo <owner/repo> [--domain <name>] [--write] [--format json|markdown]";
+        "Usage: intent-cli issue publish-flow <execution-unit> --repo <owner/repo> [--domain <name>] [--team <team>] [--write] [--format json|markdown]";
 
     private static readonly Regex ExecutionUnitPattern = new(
         @"^[A-Za-z][A-Za-z0-9-]*$",
@@ -78,7 +78,7 @@ internal static class IssuePublishFlowCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var executionUnit, out var repo, out var domainOverride, out var write, out var format, out var error))
+        if (!TryParseArguments(args, out var executionUnit, out var repo, out var domainOverride, out var team, out var write, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -89,6 +89,14 @@ internal static class IssuePublishFlowCommand
         {
             writer.WriteLine($"Invalid execution-unit id '{executionUnit}'. Expected an alphanumeric token like 'G245'.");
             writer.WriteLine(UsageLine);
+            return 1;
+        }
+
+        var claimVerification = ClaimOwnershipVerifier.Verify(
+            context.RepoRoot, $"execution-unit:{executionUnit}", team);
+        if (!claimVerification.Passed)
+        {
+            ClaimVerificationCommand.Write(writer, format, claimVerification);
             return 1;
         }
 
@@ -1283,6 +1291,7 @@ internal static class IssuePublishFlowCommand
         out string? executionUnit,
         out string? repo,
         out string? domainOverride,
+        out string? team,
         out bool write,
         out string format,
         out string error)
@@ -1290,6 +1299,7 @@ internal static class IssuePublishFlowCommand
         executionUnit = null;
         repo = null;
         domainOverride = null;
+        team = null;
         write = false;
         format = FormatMarkdown;
         error = string.Empty;
@@ -1318,6 +1328,17 @@ internal static class IssuePublishFlowCommand
                     }
 
                     domainOverride = args[index + 1];
+                    index++;
+                    break;
+
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a value.";
+                        return false;
+                    }
+
+                    team = args[index + 1];
                     index++;
                     break;
 

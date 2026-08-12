@@ -87,7 +87,7 @@ Read the issue body with `gh issue view <n> --repo <OWNER>/<REPO>`. The body mus
 If any required section is missing or if the real contract lives only in linked parent files, decline before creating any branch or code change. Report the missing sections and stop. Set outcome to `declined-contract-incomplete`.
 
 Implementation steps:
-1. Claim the issue: `intent-cli worker claim --kind issue --number <n> --repo <OWNER>/<REPO> --write --format json`.
+1. On a claims-enabled host, select with `intent-cli worker next-action --repo <OWNER>/<REPO> --team <team> --format json`; it uses the shared `execution-unit:<EU>` verification and refuses unheld/other-team work with the holder named. With no claims store, selection is byte-identical to the legacy path. Then claim the issue lifecycle label: `intent-cli worker claim --kind issue --number <n> --repo <OWNER>/<REPO> --write --format json`.
 2. Fetch origin/main: `git fetch origin main`. Create a new branch `claude/<slug>` from `origin/main`. Never reuse an existing unrelated branch.
 3. Read only the source files needed to implement the issue correctly. Match the repository's existing style and patterns.
 4. Implement only the requested change. Do not widen scope. Do not add unrequested refactors.

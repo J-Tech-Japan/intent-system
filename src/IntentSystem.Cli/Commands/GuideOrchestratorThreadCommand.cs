@@ -888,12 +888,13 @@ internal static class GuideOrchestratorThreadCommand
             ClaimRouting = new OrchestratorClaimRouting
             {
                 Summary =
-                    "G679 preview-through-1.x orchestration route: verify the Git-backed scope claim before coordinating named execution-unit or release-prep work. This is guide-level verification only; G680 owns command-level consumer enforcement.",
+                    "G679/G680 preview-through-1.x orchestration route: run the shared Git-backed claim verification before coordinating named execution-unit or release-prep work. G680 owns command-level consumer enforcement while leaving the G679 claim transaction primitive unchanged. Packet draft, queue seed/publish, worker next-action, next-slice, and this release-prep route all consult the same judgment.",
                 Verification = new[]
                 {
                     "Require the design/claimant result to report `status=acquired`, `push_succeeded=true`, `scope`, `claim_path`, `holder`, and the pushed `commit`; a local claim file or local commit is never sufficient.",
                     "Fast-forward from origin and re-read the active record at the returned `claim_path`; require its scope, actor, and team to match the intended execution-unit or release-prep owner before publish/delegation coordination.",
                     "Use `execution-unit:<EU>` for one execution unit and `release-prep:<owner/repo>:<version>` for release preparation. Unknown scope kinds are invalid; do not substitute issue labels or queue state as ownership.",
+                    "Run `intent-cli claim verify --scope <scope> --team <team> --format json` and continue only on `passed=true`; a configured store with no active scope is `unheld`, and another team's record names `holder` plus `holder_team`.",
                 },
                 RejectDisambiguation = new[]
                 {

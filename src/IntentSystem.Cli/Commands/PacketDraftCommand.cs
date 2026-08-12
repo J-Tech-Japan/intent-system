@@ -61,7 +61,7 @@ internal static class PacketDraftCommand
     private const string FacetContextEndMarker = "<!-- END GENERATED FACET CONTEXT (G530) -->";
 
     private const string UsageLine =
-        "Usage: intent-cli packet draft --execution-unit <id> [--domain <name>] [--target-repo <owner/repo>] [--lane <id>] [--dry-run] [--format markdown|json]";
+        "Usage: intent-cli packet draft --execution-unit <id> [--domain <name>] [--target-repo <owner/repo>] [--team <team>] [--lane <id>] [--dry-run] [--format markdown|json]";
 
     private static readonly Regex ExecutionUnitPattern = new(
         @"^[A-Za-z][A-Za-z0-9-]*$",
@@ -84,7 +84,7 @@ internal static class PacketDraftCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var executionUnit, out var domainOverride, out var targetRepo, out var laneOverride, out var dryRun, out var format, out var error))
+        if (!TryParseArguments(args, out var executionUnit, out var domainOverride, out var targetRepo, out var team, out var laneOverride, out var dryRun, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -95,6 +95,14 @@ internal static class PacketDraftCommand
         {
             writer.WriteLine($"Invalid execution-unit id '{executionUnit}'. Expected an alphanumeric token like 'G244'.");
             writer.WriteLine(UsageLine);
+            return 1;
+        }
+
+        var claimVerification = ClaimOwnershipVerifier.Verify(
+            context.RepoRoot, $"execution-unit:{executionUnit}", team);
+        if (!claimVerification.Passed)
+        {
+            ClaimVerificationCommand.Write(writer, format, claimVerification);
             return 1;
         }
 
@@ -881,6 +889,7 @@ internal static class PacketDraftCommand
         out string? executionUnit,
         out string? domainOverride,
         out string? targetRepo,
+        out string? team,
         out string? laneOverride,
         out bool dryRun,
         out string format,
@@ -889,6 +898,7 @@ internal static class PacketDraftCommand
         executionUnit = null;
         domainOverride = null;
         targetRepo = null;
+        team = null;
         laneOverride = null;
         dryRun = false;
         format = FormatMarkdown;
@@ -929,6 +939,17 @@ internal static class PacketDraftCommand
                     }
 
                     targetRepo = args[index + 1];
+                    index++;
+                    break;
+
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a value.";
+                        return false;
+                    }
+
+                    team = args[index + 1];
                     index++;
                     break;
 

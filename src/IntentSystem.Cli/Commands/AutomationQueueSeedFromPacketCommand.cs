@@ -60,10 +60,18 @@ internal static class AutomationQueueSeedFromPacketCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (!TryParseArguments(args, out var executionUnit, out var domain, out var targetRepo,
+        if (!TryParseArguments(args, out var executionUnit, out var domain, out var targetRepo, out var team,
                 out var write, out var format, out var error))
         {
             writer.WriteLine(error);
+            return 1;
+        }
+
+        var claimVerification = ClaimOwnershipVerifier.Verify(
+            context.RepoRoot, $"execution-unit:{executionUnit}", team);
+        if (!claimVerification.Passed)
+        {
+            ClaimVerificationCommand.Write(writer, format, claimVerification);
             return 1;
         }
 
@@ -675,6 +683,7 @@ internal static class AutomationQueueSeedFromPacketCommand
         out string executionUnit,
         out string? domain,
         out string? targetRepo,
+        out string? team,
         out bool write,
         out string format,
         out string error)
@@ -682,6 +691,7 @@ internal static class AutomationQueueSeedFromPacketCommand
         executionUnit = string.Empty;
         domain = null;
         targetRepo = null;
+        team = null;
         write = false;
         format = FormatMarkdown;
         error = string.Empty;
@@ -713,6 +723,14 @@ internal static class AutomationQueueSeedFromPacketCommand
                         return false;
                     }
                     targetRepo = args[++index].Trim();
+                    break;
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a value.";
+                        return false;
+                    }
+                    team = args[++index].Trim();
                     break;
                 case "--write":
                     write = true;

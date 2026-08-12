@@ -2731,7 +2731,15 @@ for the preceding shipped scope; it is linked, not restated.
 **Release-readiness verification (run before merging the `v0.19.1`
 release-preparation PR):**
 
+On a claims-enabled host, acquire and verify the release scope before editing
+release artifacts. The same shared verification gates all G680 start surfaces;
+no claims store preserves legacy single-team behavior.
+
 ```bash
+# 0. Acquire and verify release-prep ownership (preview-through-1.x).
+intent-cli claim acquire --scope release-prep:<owner/repo>:0.19.1 --actor <actor> --team <team> --write --format json
+intent-cli claim verify --scope release-prep:<owner/repo>:0.19.1 --team <team> --format json
+
 # 1. Confirm the version policy records the release-to-be-cut.
 cat eng/version.json   # stableVersion 0.19.0 (published), nextVersion 0.19.1 (to release)
 

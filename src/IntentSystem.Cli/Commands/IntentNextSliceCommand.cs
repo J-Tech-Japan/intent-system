@@ -63,9 +63,10 @@ internal static class IntentNextSliceCommand
     // "publishable") and the operator/agent is told to repair or reconcile
     // the sidecar instead of publishing the packet as-is.
     internal const string WarningLifecycleMetadataDiagnostic = "lifecycle-metadata-diagnostic";
+    internal const string WarningClaimedElsewhere = "claimed-elsewhere";
 
     private const string UsageLine =
-        "Usage: intent-cli intent next-slice --dry-run [--domain <name>] [--target-repo <owner/repo>] [--runtime-creation-allowed] [--format json|markdown]";
+        "Usage: intent-cli intent next-slice --dry-run [--domain <name>] [--target-repo <owner/repo>] [--team <team>] [--runtime-creation-allowed] [--format json|markdown]";
 
     // G433: use the same required section list as publish-flow so readiness
     // and publish validation are always consistent.
@@ -84,7 +85,7 @@ internal static class IntentNextSliceCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var dryRun, out var domainOverride, out var targetRepo, out var runtimeCreationAllowed, out var format, out var error))
+        if (!TryParseArguments(args, out var dryRun, out var domainOverride, out var targetRepo, out var team, out var runtimeCreationAllowed, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -98,7 +99,7 @@ internal static class IntentNextSliceCommand
             return 1;
         }
 
-        var result = Analyze(context, domainOverride, targetRepo, runtimeCreationAllowed);
+        var result = Analyze(context, domainOverride, targetRepo, runtimeCreationAllowed, team);
 
         if (string.Equals(format, FormatMarkdown, StringComparison.Ordinal))
         {
@@ -115,7 +116,7 @@ internal static class IntentNextSliceCommand
 
     internal static IntentNextSliceResult Analyze(CliContext context, string? domainOverride, string? targetRepo)
     {
-        return Analyze(context, domainOverride, targetRepo, runtimeCreationAllowed: false);
+        return Analyze(context, domainOverride, targetRepo, runtimeCreationAllowed: false, team: null);
     }
 
     /// <summary>
@@ -131,7 +132,15 @@ internal static class IntentNextSliceCommand
         CliContext context,
         string? domainOverride,
         string? targetRepo,
-        bool runtimeCreationAllowed)
+        bool runtimeCreationAllowed) =>
+        Analyze(context, domainOverride, targetRepo, runtimeCreationAllowed, team: null);
+
+    internal static IntentNextSliceResult Analyze(
+        CliContext context,
+        string? domainOverride,
+        string? targetRepo,
+        bool runtimeCreationAllowed,
+        string? team)
     {
         var domain = string.IsNullOrWhiteSpace(domainOverride)
             ? context.Config.Project.Domain
@@ -362,6 +371,7 @@ internal static class IntentNextSliceCommand
         // the existing notes channel to make every exclusion visible in the
         // next-slice preview.
         var publishReadinessExclusions = new Dictionary<string, string>(StringComparer.Ordinal);
+        var claimExclusions = new Dictionary<string, ClaimOwnershipVerification>(StringComparer.Ordinal);
         // Keep the first rejected packet as a diagnostic candidate only when
         // no publishable packet survives. Its gap analysis remains useful to
         // the design thread, but it can never produce issue-cut-ready.
@@ -429,6 +439,14 @@ internal static class IntentNextSliceCommand
                 if (PacketLifecycle.HasLegacyHumanMarker(directory))
                 {
                     legacyRetirementMarkerUnits.Add(executionUnit);
+                    continue;
+                }
+
+                var claimVerification = ClaimOwnershipVerifier.Verify(
+                    context.RepoRoot, $"execution-unit:{executionUnit}", team, allowUnheld: true);
+                if (!claimVerification.Passed)
+                {
+                    claimExclusions.TryAdd(executionUnit, claimVerification);
                     continue;
                 }
 
@@ -510,6 +528,14 @@ internal static class IntentNextSliceCommand
                         continue;
                     }
 
+                    var claimVerification = ClaimOwnershipVerifier.Verify(
+                        context.RepoRoot, $"execution-unit:{executionUnit}", team, allowUnheld: true);
+                    if (!claimVerification.Passed)
+                    {
+                        claimExclusions.TryAdd(executionUnit, claimVerification);
+                        continue;
+                    }
+
                     var builtCandidate = BuildCandidate(executionUnit, directory);
                     if (!builtCandidate.PublishGateReady)
                     {
@@ -582,6 +608,17 @@ internal static class IntentNextSliceCommand
                 + $"by the shared publish gate: {exclusion.Value}");
         }
 
+        if (claimExclusions.Count > 0)
+        {
+            warnings.Add(WarningClaimedElsewhere);
+            foreach (var exclusion in claimExclusions)
+            {
+                notes.Add(
+                    $"packet '{exclusion.Key}' was excluded from next-slice candidacy by the shared claim verification: "
+                    + exclusion.Value.Detail);
+            }
+        }
+
         return new IntentNextSliceResult
         {
             Domain = domain,
@@ -601,6 +638,16 @@ internal static class IntentNextSliceCommand
             StateLayout = stateLayout,
             Warnings = warnings,
             Notes = notes,
+            ClaimExclusions = claimExclusions.Count == 0
+                ? null
+                : claimExclusions.Select(exclusion => new IntentNextSliceClaimExclusion
+                {
+                    ExecutionUnit = exclusion.Key,
+                    Scope = exclusion.Value.Scope,
+                    Holder = exclusion.Value.Holder,
+                    HolderTeam = exclusion.Value.HolderTeam,
+                    Cause = exclusion.Value.Status,
+                }).ToArray(),
             ReadinessExclusions = publishReadinessExclusions
                 .Select(exclusion => new IntentNextSliceReadinessExclusion
                 {
@@ -1122,6 +1169,7 @@ internal static class IntentNextSliceCommand
         out bool dryRun,
         out string? domainOverride,
         out string? targetRepo,
+        out string? team,
         out bool runtimeCreationAllowed,
         out string format,
         out string error)
@@ -1129,6 +1177,7 @@ internal static class IntentNextSliceCommand
         dryRun = false;
         domainOverride = null;
         targetRepo = null;
+        team = null;
         runtimeCreationAllowed = false;
         format = FormatJson;
         error = string.Empty;
@@ -1165,6 +1214,17 @@ internal static class IntentNextSliceCommand
                     }
 
                     targetRepo = args[index + 1];
+                    index++;
+                    break;
+
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a value.";
+                        return false;
+                    }
+
+                    team = args[index + 1];
                     index++;
                     break;
 
@@ -1279,6 +1339,10 @@ internal sealed record IntentNextSliceResult
     [JsonPropertyName("notes")]
     public required IReadOnlyList<string> Notes { get; init; }
 
+    [JsonPropertyName("claim_exclusions")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<IntentNextSliceClaimExclusion>? ClaimExclusions { get; init; }
+
     /// <summary>
     /// G670: structured internal handoff for stalled-work. The property is
     /// intentionally excluded from command JSON; the public preview uses the
@@ -1288,6 +1352,24 @@ internal sealed record IntentNextSliceResult
     [JsonIgnore]
     internal IReadOnlyList<IntentNextSliceReadinessExclusion> ReadinessExclusions { get; init; }
         = Array.Empty<IntentNextSliceReadinessExclusion>();
+}
+
+internal sealed record IntentNextSliceClaimExclusion
+{
+    [JsonPropertyName("execution_unit")]
+    public required string ExecutionUnit { get; init; }
+
+    [JsonPropertyName("scope")]
+    public required string Scope { get; init; }
+
+    [JsonPropertyName("holder")]
+    public string? Holder { get; init; }
+
+    [JsonPropertyName("holder_team")]
+    public string? HolderTeam { get; init; }
+
+    [JsonPropertyName("cause")]
+    public required string Cause { get; init; }
 }
 
 /// <summary>G670: a packet excluded by the shared publish-gate judgment.</summary>

@@ -2796,7 +2796,15 @@ prepare-only placeholder です。直前の出荷範囲は
 
 **リリース準備検証(`v0.19.1` release-preparation PR のマージ前に実行):**
 
+claims-enabled host では release artifact を編集する前に release scope を acquire / verify します。
+同じ shared verification が G680 の全 start surface を gate し、claims store が無ければ legacy
+single-team behavior を維持します。
+
 ```bash
+# 0. release-prep ownership を acquire / verify (preview-through-1.x)。
+intent-cli claim acquire --scope release-prep:<owner/repo>:0.19.1 --actor <actor> --team <team> --write --format json
+intent-cli claim verify --scope release-prep:<owner/repo>:0.19.1 --team <team> --format json
+
 # 1. version policy が release-to-be-cut を記録していることを確認。
 cat eng/version.json   # stableVersion 0.19.0 (published), nextVersion 0.19.1 (to release)
 

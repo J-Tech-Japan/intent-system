@@ -102,7 +102,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
 
 1. Check the evidence (below) — current intents, open questions, packet backlog, open PRs / review state, and CLI / queue health — before recommending.
 2. Use `{GuideDesignThreadCommand.CommandName}` as the design-role operating contract. Its four-outcome wake rule governs whether this wake has an outcome at all.
-3. Before starting a named execution unit, acquire `execution-unit:<EU>` with `intent-cli claim acquire`; before authoring release preparation, acquire `release-prep:{repoArg}:<version>`. Start only when the command returns `status=acquired` and `push_succeeded=true`; a local file or commit is not ownership.
+3. Before starting a named execution unit, acquire `execution-unit:<EU>` with `intent-cli claim acquire`; before authoring release preparation, acquire `release-prep:{repoArg}:<version>`. Then run the shared `intent-cli claim verify --scope <scope> --team {teamArg}` judgment used by every start surface. Start only when acquisition reports `status=acquired` and `push_succeeded=true` and verification reports `passed=true`; a local file or commit is not ownership.
 4. When a domain and team are supplied, inspect recorded topology plus the supervision cycle. A recorded topology without a completed cycle/handoff includes `bootstrap-resume` first; absent topology is silent because bootstrap has not started; a completed cycle clears the recommendation.
 5. Inspect the recorded supervision cycle independently and include `supervision-setup` when no cycle is recorded.
 6. When a domain is supplied, inspect the independently declared realignment window and latest durable improve-run record. If no run falls within that window, include `realignment`; judge timestamp recency only, never review quality. With no window declaration, do not invent a cadence.
@@ -115,6 +115,8 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             "Claim before start (G679, preview-through-1.x): the design thread starts a named execution unit or release preparation only after the remote accepted the claim's plain push; a local file or commit is never ownership.",
             $"Execution unit: `intent-cli claim acquire --scope execution-unit:<EU> --actor <actor> --team {teamArg} --write --format json`.",
             $"Release preparation: `intent-cli claim acquire --scope release-prep:{repoArg}:<version> --actor <actor> --team {teamArg} --write --format json`.",
+            $"Shared start check: `intent-cli claim verify --scope <scope> --team {teamArg} --format json`; packet draft, queue seed/publish, worker next-action, and release-prep guidance consult this same judgment.",
+            "Numbering is claim-then-draft: compute N, acquire `execution-unit:<N>`, and only the push winner scaffolds. A `held` loser fast-forwards, recomputes the next number, and retries that new scope exactly once; a second loss stops instead of allocating again.",
             "Proceed only on `status=acquired` with `push_succeeded=true`. On `held`, stop and name `holder` plus `holder_team`; on `retry-exhausted`, stop and surface the unrelated-advance failure. Never force-push, infer ownership from age, or take over automatically.",
         };
 

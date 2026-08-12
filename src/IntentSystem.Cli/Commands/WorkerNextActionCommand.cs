@@ -69,7 +69,7 @@ internal static class WorkerNextActionCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (!TryParseArguments(args, out var repo, out var workdir, out var githubOnly, out var format, out var error))
+        if (!TryParseArguments(args, out var repo, out var workdir, out var team, out var githubOnly, out var format, out var error))
         {
             writer.WriteLine(error);
             return 1;
@@ -154,6 +154,7 @@ internal static class WorkerNextActionCommand
             ? Directory.GetCurrentDirectory()
             : workdir!;
         result = ConsultPreflightForPrCommentFix(result, repo!, resolvedWorkdir, prs);
+        result = ConsultExecutionUnitClaim(result, context.RepoRoot, team, issues);
 
         // G281: --workdir is child worktree CONTEXT only — selection runs against
         // GitHub state for --repo, never against the workdir's local filesystem.
@@ -317,6 +318,63 @@ internal static class WorkerNextActionCommand
     }
 
     /// <summary>
+    /// G680: an issue-to-PR action starts execution-unit work, so the selected
+    /// issue must pass the same Git-backed ownership judgment as packet draft
+    /// and publish. Hosts without a claims store return the analyzer result
+    /// byte-for-byte unchanged. Existing label exclusions remain in the
+    /// analyzer as defence in depth.
+    /// </summary>
+    private static WorkerNextActionResult ConsultExecutionUnitClaim(
+        WorkerNextActionResult result,
+        string repoRoot,
+        string? team,
+        IReadOnlyList<GitHubAutomationIssueCandidate> issues)
+    {
+        if (!string.Equals(result.Action, WorkerNextActionConstants.Actions.IssueToPr, StringComparison.Ordinal)
+            || result.Number is not { } issueNumber
+            || !Directory.Exists(Path.Combine(repoRoot, ClaimCommand.ClaimsDirectory.Replace('/', Path.DirectorySeparatorChar))))
+        {
+            return result;
+        }
+
+        var issue = issues.FirstOrDefault(candidate => candidate.Number == issueNumber);
+        var executionUnit = issue is null ? null : LeadingExecutionUnitPattern.Match(issue.Title).Value;
+        if (string.IsNullOrWhiteSpace(executionUnit))
+        {
+            return result with
+            {
+                Action = WorkerNextActionConstants.Actions.Wait,
+                Reason = $"claim verification refused issue #{issueNumber}: could not resolve a leading execution-unit token from the issue title on a claims-enabled host.",
+                SourceClassification = WorkerNextActionConstants.SourceClassifications.ClaimScopeUnresolved,
+                MustCreatePr = null,
+                AllowedTerminalOutcomes = null,
+                ForbiddenTerminalOutcomes = null,
+            };
+        }
+
+        var verification = ClaimOwnershipVerifier.Verify(
+            repoRoot, $"execution-unit:{executionUnit}", team);
+        if (verification.Passed)
+        {
+            return result;
+        }
+
+        return result with
+        {
+            Action = WorkerNextActionConstants.Actions.Wait,
+            Reason = verification.Detail,
+            SourceClassification = WorkerNextActionConstants.SourceClassifications.ClaimRefused,
+            MustCreatePr = null,
+            AllowedTerminalOutcomes = null,
+            ForbiddenTerminalOutcomes = null,
+        };
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex LeadingExecutionUnitPattern = new(
+        @"^(?:[A-Z][A-Z0-9]*-G?[0-9]+|G[0-9]+)(?![A-Za-z0-9])",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
     /// G392: project a <see cref="GitHubAutomationPrCandidate"/> (already
     /// fetched by the label selector with body / labels / closing-ref / state /
     /// draft fields) into the <see cref="GitHubPrLookupResult"/> shape the
@@ -417,12 +475,14 @@ internal static class WorkerNextActionCommand
         string[] args,
         out string? repo,
         out string? workdir,
+        out string? team,
         out bool githubOnly,
         out string format,
         out string error)
     {
         repo = null;
         workdir = null;
+        team = null;
         githubOnly = false;
         format = FormatText;
         error = string.Empty;
@@ -449,6 +509,16 @@ internal static class WorkerNextActionCommand
                         return false;
                     }
                     workdir = args[index + 1];
+                    index++;
+                    break;
+
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a value.";
+                        return false;
+                    }
+                    team = args[index + 1];
                     index++;
                     break;
 
@@ -480,7 +550,7 @@ internal static class WorkerNextActionCommand
                     break;
 
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: --repo <owner/repo> [--workdir <path>] [--github-only] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: --repo <owner/repo> [--workdir <path>] [--team <team>] [--github-only] [--format text|json].";
                     return false;
             }
         }
