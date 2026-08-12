@@ -79,6 +79,37 @@ internal sealed record WorkerNextActionResult
 
     [JsonPropertyName("githubOnly")]
     public bool? GithubOnlyCamel => GithubOnly;
+
+    /// <summary>G673: upstream GitHub availability state.</summary>
+    [JsonPropertyName("github_api_status")]
+    public string GithubApiStatus { get; init; } = GitHubApiQuotaConstants.Healthy;
+
+    [JsonPropertyName("degraded")]
+    public bool Degraded { get; init; }
+
+    [JsonPropertyName("cause")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Cause { get; init; }
+
+    [JsonPropertyName("degraded_state")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GitHubApiDegradedState? DegradedState { get; init; }
+
+    [JsonPropertyName("resource")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Resource => DegradedState?.Resource;
+
+    [JsonPropertyName("remaining")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Remaining => DegradedState?.Remaining;
+
+    [JsonPropertyName("reset")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Reset => DegradedState?.Reset;
+
+    [JsonPropertyName("reset_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResetAt => DegradedState?.ResetAt;
 }
 
 /// <summary>
@@ -91,6 +122,12 @@ internal static class WorkerNextActionConstants
     {
         public const string PrCommentFix = "pr-comment-fix";
         public const string IssueToPr = "issue-to-pr";
+
+        /// <summary>
+        /// G673: GitHub consultation was unavailable. This is distinct from
+        /// <c>none</c>, which means a successful empty/negative selection.
+        /// </summary>
+        public const string Unavailable = "unavailable";
 
         /// <summary>
         /// G325: emitted when an existing PR update lease is still active

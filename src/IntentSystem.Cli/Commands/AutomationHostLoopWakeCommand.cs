@@ -479,6 +479,10 @@ internal static class AutomationHostLoopWakeCommand
             StopReason = stopReason,
             Evidence = evidence,
             Summary = BuildSummary(wakeAction, inner),
+            GithubApiStatus = inner.GithubApiStatus,
+            Degraded = inner.Degraded,
+            Cause = inner.Cause,
+            DegradedState = inner.DegradedState,
         };
     }
 
@@ -550,6 +554,18 @@ internal static class AutomationHostLoopWakeCommand
                 CandidateExecutionUnit = ReadString(root, "candidate_execution_unit"),
                 Summary = ReadString(root, "summary") ?? string.Empty,
                 Evidence = evidence,
+                GithubApiStatus = ReadString(root, "github_api_status")
+                    ?? (root.TryGetProperty("degraded", out var statusDegraded)
+                        && statusDegraded.ValueKind == JsonValueKind.True
+                        ? GitHubApiQuotaConstants.Degraded
+                        : GitHubApiQuotaConstants.Healthy),
+                Degraded = root.TryGetProperty("degraded", out var degraded)
+                    && degraded.ValueKind == JsonValueKind.True,
+                Cause = ReadString(root, "cause"),
+                DegradedState = root.TryGetProperty("degraded_state", out var degradedState)
+                    && degradedState.ValueKind == JsonValueKind.Object
+                    ? JsonSerializer.Deserialize<GitHubApiDegradedState>(degradedState.GetRawText())
+                    : null,
             };
             return true;
         }
@@ -688,5 +704,9 @@ internal static class AutomationHostLoopWakeCommand
         public string? CandidateExecutionUnit { get; init; }
         public required string Summary { get; init; }
         public required IReadOnlyList<string> Evidence { get; init; }
+        public string GithubApiStatus { get; init; } = GitHubApiQuotaConstants.Healthy;
+        public bool Degraded { get; init; }
+        public string? Cause { get; init; }
+        public GitHubApiDegradedState? DegradedState { get; init; }
     }
 }

@@ -91,6 +91,7 @@ internal static class AutomationHeartbeatCommand
             // cannot suppress an overdue CI wait merely because stalled-work
             // intentionally treats a pending check as non-stale.
             Stale = stalledWork.Stalled
+                || stalledWork.DetectionAvailable is false
                 || string.Equals(decision.Verdict, "actionable-stall", StringComparison.Ordinal),
             Items = stalledWork.Items,
             Warnings = stalledWork.Warnings,
@@ -114,6 +115,13 @@ internal static class AutomationHeartbeatCommand
             WaitEndSignal = decision.WaitEndSignal,
             WaitBoundMinutes = decision.WaitBoundMinutes,
             SuggestedAction = decision.SuggestedAction,
+            Partial = stalledWork.Partial,
+            DetectionAvailable = stalledWork.DetectionAvailable,
+            DetectionStatus = stalledWork.DetectionStatus,
+            GithubApiStatus = stalledWork.GithubApiStatus,
+            Degraded = stalledWork.Degraded,
+            Cause = stalledWork.Cause,
+            DegradedState = stalledWork.DegradedState,
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -158,6 +166,15 @@ internal static class AutomationHeartbeatCommand
 
         var builder = new StringBuilder();
         builder.Append("WAKE (heartbeat): ");
+        if (stalledWork.DetectionAvailable is false)
+        {
+            builder
+                .Append("DETECTION UNAVAILABLE (partial local findings; ")
+                .Append(stalledWork.Cause ?? GitHubApiQuotaConstants.DetectionUnavailableCause)
+                .Append(", reset=")
+                .Append(stalledWork.ResetAt ?? stalledWork.Reset?.ToString() ?? "unknown")
+                .Append("). ");
+        }
         if (attentionItems.Length > 0)
         {
             var ownerRoute = string.Join(" AND ", attentionOwners).ToUpperInvariant();
@@ -269,6 +286,32 @@ internal static class AutomationHeartbeatCommand
         int staleMinutes,
         AutomationStalledWorkResult stalledWork)
     {
+        // G673: a quota-degraded scan is never allowed to fall through to the
+        // healthy/no-pending path. The named blind spot is itself the
+        // heartbeat verdict; callers decide whether to wait for reset.
+        if (stalledWork.DetectionAvailable is false)
+        {
+            var source = stalledWork.Degraded ? "github.api.rate_limit" : "github.api";
+            var suggestedAction = stalledWork.Degraded
+                ? "Record the named GitHub quota blind spot and let orchestration decide whether to wait deliberately; no automatic retry or scheduling is performed."
+                : "Record the named non-quota GitHub read failure, retain the partial local findings, and let orchestration decide the next action; no automatic retry or scheduling is performed.";
+            return new HeartbeatDecision(
+                Verdict: "detection-unavailable",
+                Reason: $"stalled-work could not complete GitHub-backed detection ({stalledWork.Cause ?? GitHubApiQuotaConstants.DetectionUnavailableCause}); "
+                    + $"resource={stalledWork.Resource ?? "unknown"}; reset_at={stalledWork.ResetAt ?? stalledWork.Reset?.ToString() ?? "unknown"}.",
+                LastProgressBasis: "named upstream GitHub detection availability observation",
+                LastProgressSource: source,
+                LastProgressAgeMinutes: 0,
+                DedupeKey: $"heartbeat:detection-unavailable:{domain}:{repo}:{stalledWork.Resource ?? "unknown"}:{stalledWork.ResetAt ?? stalledWork.Reset?.ToString() ?? "unknown"}",
+                ActionOwner: "monitor",
+                TargetRole: null,
+                CanonicalNotifyCommand: null,
+                WaitCondition: null,
+                WaitEndSignal: null,
+                WaitBoundMinutes: null,
+                SuggestedAction: suggestedAction);
+        }
+
         var operatorStateUnknown = stalledWork.Items.FirstOrDefault(item =>
             string.Equals(item.Kind, AutomationStalledWorkCommand.KindOperatorAttentionCannotDetermine, StringComparison.Ordinal));
         if (operatorStateUnknown is not null)
@@ -801,6 +844,55 @@ internal sealed record AutomationHeartbeatResult
 
     [JsonPropertyName("suggested_action")]
     public required string SuggestedAction { get; init; }
+
+    /// <summary>G673: upstream availability projection inherited from stalled-work.</summary>
+    [JsonPropertyName("partial")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Partial { get; init; }
+
+    [JsonPropertyName("detection_available")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? DetectionAvailable { get; init; }
+
+    [JsonPropertyName("detection_unavailable")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool DetectionUnavailable => DetectionAvailable is false;
+
+    [JsonPropertyName("detection_status")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DetectionStatus { get; init; }
+
+    [JsonPropertyName("github_api_status")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GithubApiStatus { get; init; }
+
+    [JsonPropertyName("degraded")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Degraded { get; init; }
+
+    [JsonPropertyName("cause")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Cause { get; init; }
+
+    [JsonPropertyName("degraded_state")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GitHubApiDegradedState? DegradedState { get; init; }
+
+    [JsonPropertyName("resource")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Resource => DegradedState?.Resource;
+
+    [JsonPropertyName("remaining")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Remaining => DegradedState?.Remaining;
+
+    [JsonPropertyName("reset")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Reset => DegradedState?.Reset;
+
+    [JsonPropertyName("reset_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResetAt => DegradedState?.ResetAt;
 }
 
 internal sealed record HeartbeatDecision(

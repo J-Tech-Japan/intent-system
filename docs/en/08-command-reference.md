@@ -223,6 +223,25 @@ declaration, `next` invents no cadence. This is timestamp recency only—not a
 quality judgment—and it adds no scheduler, cron, auto-run, or stalled-work debt
 class.
 
+### GitHub API quota visibility (G673 — preview-through-1.x)
+
+GitHub-consulting commands distinguish a successful empty result from an
+unavailable read. On quota exhaustion they emit the machine-readable
+`cause: github-api-quota-exhausted`, `resource`, `remaining`, and `reset_at`
+(also under `degraded_state`). `worker next-action` uses `action: unavailable`;
+`host-loop-next-action` and host review/reconcile surfaces report
+`detection-unavailable`. These states are recognized from the structured
+`gh api rate_limit` response, not quota words in stderr.
+
+`automation stalled-work` retains findings computable from local state, marks
+them `partial: true`, and returns `detection_available: false`; an empty
+`items` list under that state is not healthy. `automation heartbeat` carries
+the same state and verdict. `automation doctor` reports every observed
+resource's `remaining` and `reset`/`reset_at` and returns a non-`ok` verdict
+when quota makes GitHub-consulting surfaces inoperable. Callers decide whether
+to wait for reset; no command retries, sleeps, schedules a reset, budgets
+requests, changes transport, caches, or batches in G673.
+
 G672 adds an optional invoking-role pointer (preview-through-1.x):
 
 ```bash

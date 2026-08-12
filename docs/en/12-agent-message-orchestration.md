@@ -78,6 +78,23 @@ mode, and a session-scoped nohup process that died twice unnoticed; seven
 findings were mis-filed. This records the incident without settling the
 substantive B-1 question.
 
+### GitHub quota as a named last-net blind spot (G673 — preview-through-1.x)
+
+The periodic `automation stalled-work` check remains the last net and its
+wake/supervision class is unchanged. A GitHub API quota failure is not a
+healthy empty result: affected surfaces emit
+`cause: github-api-quota-exhausted`, the exhausted `resource`, and its
+`reset`/`reset_at`. `automation heartbeat` and `stalled-work` expose
+`detection_available: false`; `stalled-work` keeps local-only findings with
+`partial: true`. Record the reset and let orchestration decide whether to
+wait deliberately. There is no automatic retry, sleep, reset scheduling,
+request budgeting, transport migration, or cache in this slice.
+
+This is a measured incident record with separate attribution: issue #1442 is
+the remote-herdr measurement (`graphql.remaining == 0`, 5,046 requests/hour),
+while this host's same-day GraphQL refusal during the G667 publish cycle with
+REST core at 4999/5000 is host corroboration, not a re-attribution of #1442.
+
 A design wake has exactly four valid outcome shapes: advance the canonical
 workflow; confirm new evidence of real progress; discover the next actionable
 design, packet, or issue candidate and hand it to orchestration; or report a

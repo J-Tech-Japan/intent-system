@@ -179,6 +179,12 @@ internal static class AutomationReconcileCommand
                     repo!,
                     [WorkerNextActionConstants.Labels.IntentTarget]);
             }
+            catch (GitHubApiRequestException exception)
+            {
+                var unavailable = BuildGitHubUnavailableResult(lane, repo!, mode, exception);
+                Emit(writer, unavailable, format);
+                return exception.IsQuotaDegraded ? 0 : 1;
+            }
             catch (Exception exception) when (
                 exception is InvalidOperationException
                 or IOException)
@@ -244,6 +250,50 @@ internal static class AutomationReconcileCommand
         Emit(writer, result, format);
         return 0;
     }
+
+    private static AutomationReconcileResult BuildGitHubUnavailableResult(
+        string lane,
+        string repo,
+        string mode,
+        GitHubApiRequestException exception) =>
+        new()
+        {
+            Lane = lane,
+            Repo = repo,
+            Mode = mode,
+            HostOnly = true,
+            SafeRepairs = Array.Empty<AutomationReconcileRepair>(),
+            UnsafeStops =
+            [
+                new AutomationReconcileUnsafeStop
+                {
+                    Kind = exception.IsQuotaDegraded
+                        ? GitHubApiQuotaConstants.DetectionUnavailableCause
+                        : "github-api-error",
+                    TargetKind = null,
+                    TargetNumber = null,
+                    TargetUrl = null,
+                    Reason = exception.Message,
+                    MissingEvidence = new[]
+                    {
+                        $"cause={exception.Cause}; operation={exception.Operation}",
+                    },
+                },
+            ],
+            Warnings = new[]
+            {
+                "No reconcile mutation was attempted because GitHub state was unavailable.",
+            },
+            Summary = exception.IsQuotaDegraded
+                ? "reconcile detection is unavailable because a named GitHub API quota is exhausted; no repair is inferred."
+                : $"reconcile GitHub read failed with non-quota cause '{exception.Cause}'.",
+            Degraded = exception.IsQuotaDegraded,
+            GithubApiStatus = exception.IsQuotaDegraded
+                ? GitHubApiQuotaConstants.Degraded
+                : GitHubApiQuotaConstants.Error,
+            Cause = exception.Cause,
+            DegradedState = exception.DegradedState,
+        };
 
     private static IReadOnlyList<AutomationReconcileRepair> ApplyHighConfidenceRepairs(
         CliContext context,

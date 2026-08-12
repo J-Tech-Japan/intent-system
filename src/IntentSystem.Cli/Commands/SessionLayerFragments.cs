@@ -686,6 +686,13 @@ internal static class SessionLayerFragments
             Operative("This includes a `backlog-ready-idle` item (G544, empty WIP + a ready packet + no activity past the idle threshold) — publish and delegate it in THIS wake, the same as any other issue-cut-ready candidate; only announce a following wake will handle it when that wake is actually scheduled.")),
         Fragment(
             S4,
+            Operative("- G673 last-net honesty: if stalled-work or heartbeat returns `detection_available=false` / `cause=github-api-quota-exhausted`, do not treat an empty item list as healthy."),
+            Scaffold(" "),
+            Operative("Record the exhausted resource and `reset_at`, retain and review `partial=true` local findings, and let orchestration decide whether to wait deliberately; no automatic retry, sleep, reset scheduling, or request budgeting is performed."),
+            Scaffold(" "),
+            Operative("Issue #1442 is the separately attributed remote-herdr measurement; this host's same-day G667 observation is corroboration.")),
+        Fragment(
+            S4,
             Operative("- **repair** — REPAIR routine off-rail states yourself by messaging the appropriate thread back onto the official intent-cli workflow — e.g. a receiver that stalled, skipped `worker complete`, applied a label by hand, or has not replied."),
             Scaffold(" "),
             Operative("Routine recovery is a repair message, not an escalation."),
@@ -1620,6 +1627,13 @@ internal static class SessionLayerFragments
             Operative("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain __DOMAIN__ --repo __OWNER__/__REPO__ --format json`, and process every actionable item it reports before sleeping — never leave one for an unscheduled next wake; escalate explicitly if it is genuinely blocked on an operator decision."),
             Scaffold(" "),
             Operative("This includes a `backlog-ready-idle` item (G544, empty WIP + a ready packet + no activity past the idle threshold) — publish and delegate it in THIS wake, the same as any other issue-cut-ready candidate; only announce a following wake will handle it when that wake is actually scheduled.")),
+        Fragment(
+            "scheduling",
+            Operative("G673 last-net honesty: if stalled-work or heartbeat returns `detection_available=false` / `cause=github-api-quota-exhausted`, do not treat an empty item list as healthy."),
+            Scaffold(" "),
+            Operative("Record the exhausted resource and `reset_at`, retain and review `partial=true` local findings, and let orchestration decide whether to wait deliberately; no automatic retry, sleep, reset scheduling, or request budgeting is performed."),
+            Scaffold(" "),
+            Operative("Issue #1442 is the separately attributed remote-herdr measurement; this host's same-day G667 observation is corroboration.")),
         Fragment(
             "scheduling",
             Operative("ESCALATE to the operator ONLY for: product/design judgment, credentials or security, a destructive local action, or an unresolved canonical ambiguity (intent-cli/GitHub facts genuinely conflict or are missing)."),

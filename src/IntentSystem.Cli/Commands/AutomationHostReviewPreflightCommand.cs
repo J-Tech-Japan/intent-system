@@ -110,6 +110,20 @@ internal static class AutomationHostReviewPreflightCommand
                     WorkerNextActionConstants.Labels.IntentPrCreated
                 ]);
         }
+        catch (GitHubApiRequestException exception)
+        {
+            var unavailable = BuildGitHubUnavailableResult(repo!, exception);
+            if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+            {
+                writer.WriteLine(JsonSerializer.Serialize(unavailable, JsonOptions));
+            }
+            else
+            {
+                WriteText(writer, unavailable);
+            }
+
+            return exception.IsQuotaDegraded ? 0 : 1;
+        }
         catch (Exception exception) when (
             exception is InvalidOperationException
             or IOException)
@@ -263,6 +277,38 @@ internal static class AutomationHostReviewPreflightCommand
             exemptions,
             resolvedWarnings);
     }
+
+    private static AutomationHostReviewPreflightResult BuildGitHubUnavailableResult(
+        string repo,
+        GitHubApiRequestException exception) =>
+        new()
+        {
+            Action = exception.IsQuotaDegraded
+                ? GitHubApiQuotaConstants.DetectionUnavailableCause
+                : "github-api-error",
+            Repo = repo,
+            TargetPr = null,
+            TargetPrUrl = null,
+            InFlightPrs = Array.Empty<int>(),
+            InFlightIssues = Array.Empty<int>(),
+            WipExemptBlockedUnits = Array.Empty<HostReviewWipExemption>(),
+            CandidateExecutionUnit = null,
+            Reason = exception.IsQuotaDegraded
+                ? "Host review detection is unavailable because GitHub API quota is exhausted; no WIP or review conclusion is inferred."
+                : $"Host review candidate read failed with non-quota cause '{exception.Cause}'.",
+            Warnings = new[]
+            {
+                $"cause={exception.Cause}; operation={exception.Operation}; message={exception.Message}",
+            },
+            InstalledCliPath = null,
+            MissingCommandSurfaces = Array.Empty<InstalledCliSurfaceCheck>(),
+            Degraded = exception.IsQuotaDegraded,
+            GithubApiStatus = exception.IsQuotaDegraded
+                ? GitHubApiQuotaConstants.Degraded
+                : GitHubApiQuotaConstants.Error,
+            Cause = exception.Cause,
+            DegradedState = exception.DegradedState,
+        };
 
     private static AutomationHostReviewPreflightResult BuildResult(
         string repo,
@@ -841,4 +887,35 @@ internal sealed record AutomationHostReviewPreflightResult
 
     [JsonPropertyName("missingCommandSurfaces")]
     public IReadOnlyList<InstalledCliSurfaceCheck> MissingCommandSurfacesCamel => MissingCommandSurfaces;
+
+    /// <summary>G673: structured upstream GitHub availability.</summary>
+    [JsonPropertyName("github_api_status")]
+    public string GithubApiStatus { get; init; } = GitHubApiQuotaConstants.Healthy;
+
+    [JsonPropertyName("degraded")]
+    public bool Degraded { get; init; }
+
+    [JsonPropertyName("cause")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Cause { get; init; }
+
+    [JsonPropertyName("degraded_state")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GitHubApiDegradedState? DegradedState { get; init; }
+
+    [JsonPropertyName("resource")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Resource => DegradedState?.Resource;
+
+    [JsonPropertyName("remaining")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Remaining => DegradedState?.Remaining;
+
+    [JsonPropertyName("reset")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Reset => DegradedState?.Reset;
+
+    [JsonPropertyName("reset_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResetAt => DegradedState?.ResetAt;
 }

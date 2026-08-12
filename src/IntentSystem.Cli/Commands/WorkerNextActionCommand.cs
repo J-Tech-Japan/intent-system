@@ -100,6 +100,23 @@ internal static class WorkerNextActionCommand
                 repo!,
                 new[] { WorkerNextActionConstants.Labels.IntentTarget });
         }
+        catch (GitHubApiRequestException exception)
+        {
+            var unavailable = BuildUnavailableResult(repo!, githubOnly, exception);
+            if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+            {
+                writer.WriteLine(JsonSerializer.Serialize(unavailable, JsonOptions));
+            }
+            else
+            {
+                WriteText(writer, unavailable);
+            }
+
+            // A quota blind spot is a named degraded observation, not a
+            // successful empty selection and not an unclassified crash. The
+            // caller decides whether/how to wait; the command does not.
+            return exception.IsQuotaDegraded ? 0 : 1;
+        }
         catch (Exception exception) when (
             exception is InvalidOperationException
             or IOException)
@@ -172,6 +189,35 @@ internal static class WorkerNextActionCommand
 
         return 0;
     }
+
+    private static WorkerNextActionResult BuildUnavailableResult(
+        string repo,
+        bool githubOnly,
+        GitHubApiRequestException exception) =>
+        new()
+        {
+            Action = WorkerNextActionConstants.Actions.Unavailable,
+            Repo = repo,
+            Number = null,
+            Url = null,
+            Reason = exception.Message,
+            RecommendedWorkflow = null,
+            Warnings = new[]
+            {
+                "GitHub consultation was unavailable; do not interpret this as an empty actionable set.",
+            },
+            MustCreatePr = null,
+            AllowedTerminalOutcomes = null,
+            ForbiddenTerminalOutcomes = null,
+            SourceClassification = exception.Cause,
+            GithubOnly = githubOnly,
+            GithubApiStatus = exception.IsQuotaDegraded
+                ? GitHubApiQuotaConstants.Degraded
+                : GitHubApiQuotaConstants.Error,
+            Degraded = exception.IsQuotaDegraded,
+            Cause = exception.Cause,
+            DegradedState = exception.DegradedState,
+        };
 
     /// <summary>
     /// G392: shared-actionability consult. When the label/closing-ref selector
@@ -336,6 +382,18 @@ internal static class WorkerNextActionCommand
         if (!string.IsNullOrEmpty(result.SourceClassification))
         {
             writer.WriteLine($"- source_classification: {result.SourceClassification}");
+        }
+        writer.WriteLine($"- github_api_status: {result.GithubApiStatus}");
+        writer.WriteLine($"- degraded: {result.Degraded.ToString().ToLowerInvariant()}");
+        if (!string.IsNullOrEmpty(result.Cause))
+        {
+            writer.WriteLine($"- cause: {result.Cause}");
+        }
+        if (result.DegradedState is { } degraded)
+        {
+            writer.WriteLine($"- resource: {degraded.Resource}");
+            writer.WriteLine($"- remaining: {degraded.Remaining?.ToString() ?? "unknown"}");
+            writer.WriteLine($"- reset_at: {degraded.ResetAt ?? degraded.Reset?.ToString() ?? "unknown"}");
         }
         writer.WriteLine();
 

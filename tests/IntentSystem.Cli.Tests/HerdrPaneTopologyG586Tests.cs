@@ -12,9 +12,9 @@ public sealed class HerdrPaneTopologyG586Tests : IDisposable
     private const string Domain = "intent-cli";
     private const string Team = "intent-cli-dev";
     private const string Repo = "J-Tech-Japan/intent-system";
-    // G655 extends the shared guide; keep the deterministic baseline aligned
+    // G655/G673 extend the shared guide; keep the deterministic baseline aligned
     // with the rendered guidance while preserving the hash guard.
-    private const string G594AgmsgBaselineSha256 = "38aeb9de98aa4c5f6a1236cb327db014a96f1c981465d575e0228f738b499fbe";
+    private const string G594AgmsgBaselineSha256 = "69395aa872be05617c6612b565d8051385d78daca883dad5884217ad3a300fe5";
 
     private readonly string root = Directory.CreateTempSubdirectory("herdr-topology-g586-").FullName;
 

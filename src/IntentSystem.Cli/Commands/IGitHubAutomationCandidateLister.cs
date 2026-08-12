@@ -193,6 +193,12 @@ internal sealed record GitHubAutomationLabel
 internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCandidateLister
 {
     /// <summary>
+    /// G673 test seam for the structured <c>gh api rate_limit</c> observation
+    /// made after a failed GitHub read. Production leaves this null.
+    /// </summary>
+    internal static Func<IGitHubApiQuotaProbe>? QuotaProbeFactory { get; set; }
+
+    /// <summary>
     /// G206: comma-separated <c>gh pr list --json</c> field list. Exposed
     /// internally so adapter-shape regression tests can lock the supported
     /// subset.
@@ -392,21 +398,24 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
             or InvalidOperationException
             or IOException)
         {
-            throw new InvalidOperationException(
-                $"could not invoke `gh` to {description}: {exception.Message}",
-                exception);
+            throw new GitHubApiRequestException(
+                "github-transport-error",
+                description,
+                $"[github-transport-error] could not invoke `gh` to {description}: {exception.Message}",
+                innerException: exception);
         }
 
         if (exitCode != 0)
         {
-            // G385: classify the failure (auth vs generic) and surface a
-            // sanitized preview instead of the raw, possibly secret-bearing
-            // gh output.
-            var classification = GitHubCliJsonBoundary.ClassifyProcessFailure(stderr, stdout);
-            var errorBody = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
-            throw new InvalidOperationException(
-                $"[{classification}] `gh` failed to {description} with exit {exitCode}: "
-                + GitHubCliJsonBoundary.SanitizePreview(errorBody));
+            // G673: only the API's structured rate-limit response can name a
+            // quota failure. No stderr/free-text quota matching is used.
+            var quotaProbe = QuotaProbeFactory?.Invoke() ?? new GhCliGitHubApiQuotaProbe();
+            throw GitHubApiFailureFactory.FromGhFailure(
+                description,
+                stderr,
+                stdout,
+                exitCode,
+                quotaProbe);
         }
 
         return stdout;
@@ -427,8 +436,9 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
         var extraction = GitHubCliJsonBoundary.ExtractJsonArray(stdout, callDescription);
         if (!extraction.Succeeded)
         {
-            throw new InvalidOperationException(
-                $"[{extraction.Classification}] {extraction.DiagnosticMessage}");
+            throw GitHubApiFailureFactory.JsonInvalid(
+                callDescription,
+                extraction.DiagnosticMessage ?? "gh stdout was not valid JSON");
         }
 
         try
@@ -441,11 +451,13 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
             // The array shape was already validated, so a typed-deserialize
             // failure here is a schema mismatch, not contamination — still
             // surface a sanitized, classified diagnostic.
-            throw new InvalidOperationException(
+            throw new GitHubApiRequestException(
+                GitHubCliJsonBoundary.Classifications.GithubJsonInvalid,
+                callDescription,
                 $"[{GitHubCliJsonBoundary.Classifications.GithubJsonInvalid}] could not map {callDescription} "
                 + $"JSON to the expected shape: {exception.Message}; sanitized preview: "
                 + $"\"{GitHubCliJsonBoundary.SanitizePreview(extraction.Json)}\"",
-                exception);
+                innerException: exception);
         }
     }
 }

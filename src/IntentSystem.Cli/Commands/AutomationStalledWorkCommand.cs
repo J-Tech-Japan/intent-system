@@ -551,16 +551,43 @@ internal static class AutomationStalledWorkCommand
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
 
-        var lister = CandidateListerFactory?.Invoke() ?? new GhCliGitHubAutomationCandidateLister();
-        var openIssues = lister.ListIssues(repo, Array.Empty<string>());
-        var openPrs = lister.ListPullRequests(repo, Array.Empty<string>());
-        var mergedPrs = lister.ListMergedPullRequests(repo, Array.Empty<string>());
-
         var now = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        var warnings = new List<string>();
+        GitHubApiRequestException? githubApiFailure = null;
+        GitHubApiDegradedState? githubApiDegradedState = null;
+        var lister = CandidateListerFactory?.Invoke() ?? new GhCliGitHubAutomationCandidateLister();
+
+        // G673: quota exhaustion disables only the GitHub-derived lanes. Keep
+        // scanning local stores below so findings computable without GitHub
+        // remain visible and are marked partial on the result. Once the named
+        // state is observed, later GitHub reads are skipped; there is no retry
+        // loop and no reset scheduling.
+        IReadOnlyList<T> ReadGitHub<T>(Func<IReadOnlyList<T>> query)
+        {
+            if (githubApiFailure is not null)
+            {
+                return Array.Empty<T>();
+            }
+
+            try
+            {
+                return query();
+            }
+            catch (GitHubApiRequestException exception)
+            {
+                githubApiFailure = exception;
+                githubApiDegradedState = exception.DegradedState;
+                return Array.Empty<T>();
+            }
+        }
+
+        var openIssues = ReadGitHub(() => lister.ListIssues(repo, Array.Empty<string>()));
+        var openPrs = ReadGitHub(() => lister.ListPullRequests(repo, Array.Empty<string>()));
+        var mergedPrs = ReadGitHub(() => lister.ListMergedPullRequests(repo, Array.Empty<string>()));
+
         var candidateDomains = DomainCandidateScanner.Scan(context);
         var items = new List<StalledWorkItem>();
         var excluded = new List<StalledWorkExcluded>();
-        var warnings = new List<string>();
 
         var openPendingDelegations = NotifyPendingDelegationStore.ReadOpen(
             context.RepoRoot,
@@ -576,8 +603,12 @@ internal static class AutomationStalledWorkCommand
         CollectPublishedNotDelegated(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
         var branchLaneQueueState = TryLoadQueueStateForBranchLaneRouting(context, domain, repo, warnings);
         var closedPrs = branchLaneQueueState?.Items.Any(item => item.RoutingSnapshot is not null) == true
-            ? lister.ListClosedPullRequests(repo, Array.Empty<string>())
+            ? ReadGitHub(() => lister.ListClosedPullRequests(repo, Array.Empty<string>()))
             : Array.Empty<GitHubAutomationPrCandidate>();
+        if (githubApiFailure is not null)
+        {
+            warnings.Add(GitHubApiFailureMessage(githubApiFailure));
+        }
         CollectBranchLaneDecisionPending(
             context,
             domain,
@@ -651,6 +682,13 @@ internal static class AutomationStalledWorkCommand
             .OrderByDescending(item => item.AgeMinutes)
             .ToArray();
 
+        var resultItems = githubApiFailure is null
+            ? filtered
+            : filtered
+                .Select(item => item with { Partial = true })
+                .ToArray();
+        var detectionAvailable = githubApiFailure is null;
+
         return new AutomationStalledWorkResult
         {
             Domain = domain,
@@ -663,10 +701,22 @@ internal static class AutomationStalledWorkCommand
             // the exact head becomes terminal, and that terminal item is the
             // dedupe-ready actionable signal. Other historical informational
             // kinds retain their established stalled semantics.
-            Stalled = filtered.Any(item => item.Kind != KindCiPending),
-            Items = filtered,
+            Stalled = githubApiFailure is not null
+                || filtered.Any(item => item.Kind != KindCiPending),
+            Items = resultItems,
             Excluded = excluded,
             Warnings = warnings,
+            Partial = githubApiFailure is not null,
+            DetectionAvailable = detectionAvailable ? null : false,
+            DetectionStatus = detectionAvailable ? null : "unavailable",
+            GithubApiStatus = githubApiFailure is null
+                ? null
+                : githubApiFailure.IsQuotaDegraded
+                    ? GitHubApiQuotaConstants.Degraded
+                    : GitHubApiQuotaConstants.Error,
+            Degraded = githubApiFailure?.IsQuotaDegraded == true,
+            Cause = githubApiFailure?.Cause,
+            DegradedState = githubApiDegradedState,
             // A host that has never used the new lifecycle retains the exact
             // pre-G596 stalled-work shape. Its independent query still says
             // check-not-completed; once a store exists (or is corrupt), this
@@ -678,6 +728,20 @@ internal static class AutomationStalledWorkCommand
                 ? null
                 : operatorAttention.Error,
         };
+    }
+
+    private static string GitHubApiFailureMessage(GitHubApiRequestException exception)
+    {
+        if (exception.DegradedState is { } state)
+        {
+            return
+                $"cause={state.Cause}; resource={state.Resource}; remaining={state.Remaining?.ToString() ?? "unknown"}; "
+                + $"reset_at={state.ResetAt ?? state.Reset?.ToString() ?? "unknown"}; detection is unavailable; "
+                + "local-only findings are partial. No automatic retry or wait is scheduled.";
+        }
+
+        return $"cause={exception.Cause}; operation={exception.Operation}; detection is unavailable; "
+            + "local-only findings are partial. No automatic retry or wait is scheduled.";
     }
 
     private static void CollectPendingDelegations(
@@ -4276,6 +4340,58 @@ internal sealed record AutomationStalledWorkResult
     [JsonPropertyName("operator_attention_error")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public required string? OperatorAttentionError { get; init; }
+
+    /// <summary>
+    /// G673: true when local findings were retained while one or more
+    /// GitHub-derived detectors were unavailable.
+    /// </summary>
+    [JsonPropertyName("partial")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Partial { get; init; }
+
+    [JsonPropertyName("detection_available")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? DetectionAvailable { get; init; }
+
+    [JsonPropertyName("detection_unavailable")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool DetectionUnavailable => DetectionAvailable is false;
+
+    [JsonPropertyName("detection_status")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DetectionStatus { get; init; }
+
+    [JsonPropertyName("github_api_status")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GithubApiStatus { get; init; }
+
+    [JsonPropertyName("degraded")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Degraded { get; init; }
+
+    [JsonPropertyName("cause")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Cause { get; init; }
+
+    [JsonPropertyName("degraded_state")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GitHubApiDegradedState? DegradedState { get; init; }
+
+    [JsonPropertyName("resource")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Resource => DegradedState?.Resource;
+
+    [JsonPropertyName("remaining")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Remaining => DegradedState?.Remaining;
+
+    [JsonPropertyName("reset")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Reset => DegradedState?.Reset;
+
+    [JsonPropertyName("reset_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResetAt => DegradedState?.ResetAt;
 }
 
 internal sealed record StalledWorkItem
@@ -4310,6 +4426,12 @@ internal sealed record StalledWorkItem
 
     [JsonPropertyName("recommended_action")]
     public required string RecommendedAction { get; init; }
+
+    /// <summary>G673: this finding remains computable but is partial because a
+    /// GitHub-derived detector was unavailable during the scan.</summary>
+    [JsonPropertyName("partial")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Partial { get; init; }
 
     /// <summary>G589: exact PR head SHA for CI-aware kinds.</summary>
     [JsonPropertyName("pr_head_sha")]

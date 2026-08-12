@@ -19,6 +19,13 @@ internal static class AutomationDoctorCommand
         DefaultIgnoreCondition = JsonIgnoreCondition.Never,
     };
 
+    /// <summary>
+    /// G673 test seam. Production uses one read-only <c>gh api rate_limit</c>
+    /// observation when the context is a real repository; tests can inject a
+    /// structured fixture without making a network call.
+    /// </summary>
+    public static Func<IGitHubApiQuotaProbe>? QuotaProbeFactory { get; set; }
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -46,6 +53,7 @@ internal static class AutomationDoctorCommand
 
     private static AutomationDoctorResult BuildResult(CliContext context, string? domain, string? team)
     {
+        var quota = ReadQuota(context);
         var surfaceReport = AutomationInstalledCliSurfaceProbe.Check(context);
         var requiredCommands = surfaceReport.Checks
             .Select(check => new AutomationDoctorRequiredCommand
@@ -66,8 +74,14 @@ internal static class AutomationDoctorCommand
         var topologyHealth = SessionLayerTopologyHealth.FromPreflight(preflight);
         var preflightInvalid = preflight.Verdict is SessionLayerPreflight.ConfigurationIncomplete
             or SessionLayerPreflight.CannotDetermine;
+        var quotaDegraded = quota?.IsQuotaDegraded == true;
+        var quotaUnavailable = string.Equals(quota?.Status, GitHubApiQuotaConstants.Error, StringComparison.Ordinal);
         var status = !surfaceReport.Available
             ? "stale-host-cli"
+            : quotaDegraded
+                ? "github-api-quota-degraded"
+            : quotaUnavailable
+                ? "github-api-error"
             : preflightInvalid
                 ? "session-layer-not-ready"
                 : "ok";
@@ -85,14 +99,48 @@ internal static class AutomationDoctorCommand
             AutomationCommandCapabilities = AutomationSummaryConstants.AutomationCommandCapabilities,
             SessionLayerPreflight = preflight,
             TopologyHealth = topologyHealth,
+            GithubApiQuota = quota,
+            GithubApiStatus = quotaDegraded
+                ? GitHubApiQuotaConstants.Degraded
+                : quotaUnavailable
+                    ? GitHubApiQuotaConstants.Error
+                    : GitHubApiQuotaConstants.Healthy,
+            Degraded = quotaDegraded,
+            Cause = quota?.DegradedState?.Cause ?? quota?.Cause,
+            DegradedState = quota?.DegradedState,
             Summary = !surfaceReport.Available
                 ? $"Host automation command preflight failed: installed CLI at {surfaceReport.InstalledCliPath} (binary_source={surfaceReport.BinarySource}) is missing or stale for {string.Join(", ", missing.Select(command => command.Usage))}. Abort before label transitions; refresh the installed CLI instead of falling back to raw gh label mutation. {topologyHealth.Summary}"
+                : quotaDegraded
+                    ? $"GitHub API quota is degraded: {FormatQuotaSummary(quota!)} Six GitHub-consulting surfaces are inoperable until the named resource resets; no automatic retry or wait is scheduled. {topologyHealth.Summary}"
+                : quotaUnavailable
+                    ? $"GitHub API quota observation failed with cause '{quota!.Cause}'. GitHub-consulting surfaces are not reported healthy without a structured availability observation. {topologyHealth.Summary}"
                 : preflightInvalid
                     ? $"Host automation command surfaces are available, but the shared session-layer preflight "
                       + $"returned '{preflight.Verdict}'. {preflight.Summary}"
                     : $"Host automation command preflight passed: required installed automation command surfaces are available (binary_source={surfaceReport.BinarySource}, host_data_root={surfaceReport.HostDataRoot}). {topologyHealth.Summary}",
         };
     }
+
+    private static GitHubApiQuotaReport? ReadQuota(CliContext context)
+    {
+        // Doctor is also used in small non-repository workspaces for installed
+        // command-surface checks. Keep those checks hermetic; a real repo (or
+        // an injected probe) gets the production quota observation.
+        if (QuotaProbeFactory is null
+            && !Directory.Exists(Path.Combine(context.RepoRoot, ".git"))
+            && !File.Exists(Path.Combine(context.RepoRoot, ".git")))
+        {
+            return null;
+        }
+
+        return (QuotaProbeFactory?.Invoke() ?? new GhCliGitHubApiQuotaProbe()).Read();
+    }
+
+    private static string FormatQuotaSummary(GitHubApiQuotaReport quota) =>
+        string.Join(
+            "; ",
+            quota.Resources.Select(resource =>
+                $"{resource.Resource}: remaining={resource.Remaining?.ToString() ?? "unknown"}, reset_at={resource.ResetAt ?? resource.Reset?.ToString() ?? "unknown"}"));
 
     private static string BuildUsage(string command, string? transition) =>
         command switch
@@ -196,6 +244,15 @@ internal static class AutomationDoctorCommand
         writer.WriteLine($"installed_cli_path: {result.InstalledCliPath}");
         writer.WriteLine($"binary_source: {result.BinarySource}");
         writer.WriteLine($"host_data_root: {result.HostDataRoot}");
+        writer.WriteLine($"github_api_status: {result.GithubApiStatus}");
+        if (result.GithubApiQuota is { } quota)
+        {
+            writer.WriteLine("## GitHub API quota");
+            foreach (var resource in quota.Resources)
+            {
+                writer.WriteLine($"- resource: {resource.Resource}; remaining: {resource.Remaining?.ToString() ?? "unknown"}; reset: {resource.Reset?.ToString() ?? "unknown"}; reset_at: {resource.ResetAt ?? "unknown"}");
+            }
+        }
         writer.WriteLine(result.Summary);
         writer.WriteLine();
         writer.WriteLine("## Shared session-layer preflight");
@@ -318,6 +375,49 @@ internal sealed record AutomationDoctorResult
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    /// <summary>G673: per-resource GitHub API remaining/reset observation.</summary>
+    [JsonPropertyName("github_api_quota")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GitHubApiQuotaReport? GithubApiQuota { get; init; }
+
+    [JsonPropertyName("githubApiQuota")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GitHubApiQuotaReport? GithubApiQuotaCamel => GithubApiQuota;
+
+    [JsonPropertyName("quota")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GitHubApiQuotaReport? Quota => GithubApiQuota;
+
+    [JsonPropertyName("github_api_status")]
+    public string GithubApiStatus { get; init; } = GitHubApiQuotaConstants.Healthy;
+
+    [JsonPropertyName("degraded")]
+    public bool Degraded { get; init; }
+
+    [JsonPropertyName("cause")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Cause { get; init; }
+
+    [JsonPropertyName("degraded_state")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GitHubApiDegradedState? DegradedState { get; init; }
+
+    [JsonPropertyName("resource")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Resource => DegradedState?.Resource;
+
+    [JsonPropertyName("remaining")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Remaining => DegradedState?.Remaining;
+
+    [JsonPropertyName("reset")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Reset => DegradedState?.Reset;
+
+    [JsonPropertyName("reset_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResetAt => DegradedState?.ResetAt;
 }
 
 internal sealed record AutomationDoctorRequiredCommand

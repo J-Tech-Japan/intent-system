@@ -214,6 +214,22 @@ fresh record の直後は
 recency だけの判定で quality judgment ではなく、scheduler、cron、auto-run、
 stalled-work debt class を追加しません。
 
+### GitHub API quota の可視化（G673 — preview-through-1.x）
+
+GitHub を参照する command は、成功した empty result と read unavailable を区別します。
+quota exhaustion では machine-readable な `cause: github-api-quota-exhausted`、`resource`、
+`remaining`、`reset_at`（`degraded_state` 内にも同じ値）を emit します。`worker next-action` は
+`action: unavailable`、`host-loop-next-action` と host review / reconcile surface は
+`detection-unavailable` を返します。これは stderr の quota 文言ではなく、structured な
+`gh api rate_limit` response から認識します。
+
+`automation stalled-work` は local state だけで計算できる finding を保持し、`partial: true` と
+`detection_available: false` を返します。その状態で `items` が空でも healthy とは扱いません。
+`automation heartbeat` も同じ state と verdict を運びます。`automation doctor` は観測した全 resource の
+`remaining` と `reset` / `reset_at` を報告し、quota により GitHub-consulting surface が使えない間は
+`ok` 以外の verdict を返します。reset を待つかどうかは caller が判断します。G673 は retry、sleep、
+reset scheduling、request budgeting、transport change、cache、batching を追加しません。
+
 G672 は invoking role の pointer を optional に追加します（preview-through-1.x）。
 
 ```bash
