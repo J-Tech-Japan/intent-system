@@ -240,6 +240,36 @@ an existing artifact remains interval-only. This path is measured with herdr
 Supervision and install emission remain previews through 1.x under the
 compatibility promise.
 
+## Notify — explicit pending-delegation disposition (G671 — preview-through-1.x)
+
+Use the notify lifecycle commands for role-to-role messages. When an open
+delegation's outcome was superseded or applied elsewhere without a matching
+report, record that fact explicitly:
+
+```bash
+intent-cli notify dispose --domain <domain> --team <team> \
+  --task-id <task-id> --kind superseded|applied-elsewhere \
+  --actor <actor> --reason <reason> \
+  [--superseding-task-id <task-id>] \
+  [--applied-outcome-evidence <evidence>] --write --format json
+```
+
+`superseded` requires a superseding task id; `applied-elsewhere` requires
+outcome evidence. The record stores the kind, actor, timestamp, reason, and
+applicable evidence. `notify status` exposes `settlement_basis: disposition`
+and keeps it distinct from report settlement. Disposed records leave the open
+population used by `notify supervise` and `stalled-work`. Disposition is never
+automatic or time-based, and the command refuses unknown or already-settled
+task ids. A late `notify report` is still delivered, with the disagreement
+named and the disposition preserved. This post-freeze surface is previewed
+through 1.x under the compatibility promise.
+
+`automation stalled-work` also reports an informational `pending-delegation-open`
+item for an open notify record once it crosses the configured stale threshold,
+and exposes the unfiltered `open_pending_delegations` count. Report-settled and
+disposition-settled records are excluded; the scan remains read-only and never
+chooses or writes a disposition.
+
 ## Stack — packet backlog creation + first issue publish
 
 A named **forward planning** process (G464). `stack` reads the current intents,

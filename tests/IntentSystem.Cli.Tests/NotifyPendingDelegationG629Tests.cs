@@ -185,6 +185,120 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
     }
 
     [Fact]
+    public void DisposeOpenDelegationSettlesItAndKeepsDispositionVisible_G671()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        Assert.Equal(0, workspace.Run(DelegateArgs()).ExitCode);
+        runner.Calls.Clear();
+
+        var (disposeExit, disposed) = workspace.Run(DisposeArgs(
+            "superseded",
+            "orchestration",
+            "replaced by a later review round",
+            supersedingTaskId: "G671-replacement"));
+
+        Assert.Equal(0, disposeExit);
+        Assert.True(disposed.GetProperty("written").GetBoolean());
+        Assert.Equal("disposition", disposed.GetProperty("settlement_basis").GetString());
+        var disposition = disposed.GetProperty("disposition");
+        Assert.Equal("superseded", disposition.GetProperty("kind").GetString());
+        Assert.Equal("orchestration", disposition.GetProperty("actor").GetString());
+        Assert.Equal(FixedNow, disposition.GetProperty("timestamp").GetDateTimeOffset());
+        Assert.Equal("G671-replacement", disposition.GetProperty("superseding_task_id").GetString());
+        Assert.Contains("disposition", File.ReadAllText(disposed.GetProperty("pending_record_path").GetString()!), StringComparison.Ordinal);
+        Assert.Empty(NotifyPendingDelegationStore.ReadOpen(workspace.RootPath, Workspace.Domain, Workspace.Team, out var readError));
+        Assert.Null(readError);
+
+        var (statusExit, status) = workspace.Run(StatusArgs());
+        Assert.Equal(0, statusExit);
+        Assert.Equal("settled", status.GetProperty("verdict").GetString());
+        Assert.Equal("disposition", status.GetProperty("settlement_basis").GetString());
+        Assert.False(status.GetProperty("report_arrived").GetBoolean());
+        Assert.Equal("superseded", status.GetProperty("disposition").GetProperty("kind").GetString());
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public void AppliedElsewhereDispositionRequiresEvidenceAndSettlesWithoutTransport_G671()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        Assert.Equal(0, workspace.Run(DelegateArgs()).ExitCode);
+        runner.Calls.Clear();
+
+        var (disposeExit, disposed) = workspace.Run(DisposeArgs(
+            "applied-elsewhere",
+            "orchestration",
+            "outcome was applied by the host review lane",
+            appliedOutcomeEvidence: "PR #1451 merged and label transitioned"));
+
+        Assert.Equal(0, disposeExit);
+        Assert.Equal("applied-elsewhere", disposed.GetProperty("disposition").GetProperty("kind").GetString());
+        Assert.Equal("PR #1451 merged and label transitioned", disposed.GetProperty("disposition").GetProperty("applied_outcome_evidence").GetString());
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public void DisposeRefusesSettledAndUnknownTaskIdsNamingBothStates_G671()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        Assert.Equal(0, workspace.Run(DelegateArgs()).ExitCode);
+        Assert.Equal(0, workspace.Run(ReportArgs()).ExitCode);
+
+        var (settledExit, settled) = workspace.Run(DisposeArgs(
+            "superseded",
+            "orchestration",
+            "too late",
+            supersedingTaskId: "G671-replacement"));
+        Assert.Equal(1, settledExit);
+        Assert.Equal("already-settled", settled.GetProperty("cause").GetString());
+        Assert.Contains("G629-demo", settled.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("report-settled", settled.GetProperty("summary").GetString(), StringComparison.Ordinal);
+
+        var (unknownExit, unknown) = workspace.Run(DisposeArgs(
+            "applied-elsewhere",
+            "orchestration",
+            "no such task",
+            appliedOutcomeEvidence: "none",
+            taskId: "G671-unknown"));
+        Assert.Equal(1, unknownExit);
+        Assert.Equal("unknown-task-id", unknown.GetProperty("cause").GetString());
+        Assert.Contains("G671-unknown", unknown.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("unknown", unknown.GetProperty("summary").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void LateReportForDisposedTaskIsDeliveredWithNamedDisagreementAndDoesNotReopenIt_G671()
+    {
+        var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        Assert.Equal(0, workspace.Run(DelegateArgs()).ExitCode);
+        Assert.Equal(0, workspace.Run(DisposeArgs(
+            "superseded",
+            "orchestration",
+            "replaced before the worker could report",
+            supersedingTaskId: "G671-replacement")).ExitCode);
+        runner.Calls.Clear();
+
+        var (reportExit, report) = workspace.Run(ReportArgs());
+        Assert.Equal(0, reportExit);
+        Assert.True(report.GetProperty("delivered").GetBoolean());
+        Assert.Contains("disagreement", report.GetProperty("advisory").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("late report", report.GetProperty("advisory").GetString(), StringComparison.OrdinalIgnoreCase);
+
+        var (statusExit, status) = workspace.Run(StatusArgs());
+        Assert.Equal(0, statusExit);
+        Assert.Equal("settled", status.GetProperty("verdict").GetString());
+        Assert.Equal("disposition", status.GetProperty("settlement_basis").GetString());
+        Assert.True(status.GetProperty("report_arrived").GetBoolean());
+        Assert.Contains("late report", status.GetProperty("late_report_disagreement").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(NotifyPendingDelegationStore.ReadOpen(workspace.RootPath, Workspace.Domain, Workspace.Team, out var readError));
+        Assert.Null(readError);
+    }
+
+    [Fact]
     public void UnmatchedReportDeliversWithAdvisoryAndLeavesPendingRecordUnchanged_G640()
     {
         var runner = new FakeRunner(() => workspace.HerdrAgents(implementationRunning: true));
@@ -446,6 +560,40 @@ public sealed class NotifyPendingDelegationG629Tests : IDisposable
         "--status", status, "--artifact", "https://example.test/pr/1373",
         "--summary", "pending state implemented", "--write", "--format", format,
     ];
+
+    private static string[] DisposeArgs(
+        string kind,
+        string actor,
+        string reason,
+        string? supersedingTaskId = null,
+        string? appliedOutcomeEvidence = null,
+        string taskId = "G629-demo") =>
+    BuildDisposeArgs(kind, actor, reason, supersedingTaskId, appliedOutcomeEvidence, taskId);
+
+    private static string[] BuildDisposeArgs(
+        string kind,
+        string actor,
+        string reason,
+        string? supersedingTaskId,
+        string? appliedOutcomeEvidence,
+        string taskId)
+    {
+        var args = new List<string>
+        {
+            "notify", "dispose", "--domain", Workspace.Domain, "--team", Workspace.Team,
+            "--task-id", taskId, "--kind", kind, "--actor", actor, "--reason", reason,
+        };
+        if (supersedingTaskId is not null)
+        {
+            args.AddRange(["--superseding-task-id", supersedingTaskId]);
+        }
+        if (appliedOutcomeEvidence is not null)
+        {
+            args.AddRange(["--applied-outcome-evidence", appliedOutcomeEvidence]);
+        }
+        args.AddRange(["--write", "--format", "json"]);
+        return [.. args];
+    }
 
     private static string[] StatusArgs() =>
     [

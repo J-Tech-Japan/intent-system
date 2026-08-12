@@ -100,6 +100,12 @@ namespace IntentSystem.Cli.Commands;
 ///   — never <c>claimed-but-silent</c>, since the unit is legitimately
 ///   waiting, not silently stalled. Names the canonical <c>automation
 ///   issue-block</c> reconcile command.</item>
+/// <item><c>pending-delegation-open</c> — an open durable notify delegation
+///   older than the stale threshold. It is informational: the recommendation
+///   is to inspect the task and, only after an attributed outcome judgment, use
+///   <c>notify dispose</c>; elapsed time never settles it. Disposition-settled
+///   and report-settled records are excluded from both this population and the
+///   open count.</item>
 /// </list>
 ///
 /// G546: <c>repair-pending</c> and <c>rereview-pending</c> stay exactly as
@@ -206,6 +212,13 @@ internal static class AutomationStalledWorkCommand
     /// <see cref="KindRepairPending"/>.
     /// </summary>
     public const string KindRereviewPending = "rereview-pending";
+
+    /// <summary>
+    /// G671: an open durable notify delegation past the stalled-work age
+    /// threshold. Informational only; the command never infers that a report
+    /// is no longer owed and never writes a disposition.
+    /// </summary>
+    public const string KindPendingDelegationOpen = "pending-delegation-open";
 
     /// <summary>
     /// G533: an issue claimed via <c>intent-issue-in-progress</c> (with no
@@ -549,6 +562,17 @@ internal static class AutomationStalledWorkCommand
         var excluded = new List<StalledWorkExcluded>();
         var warnings = new List<string>();
 
+        var openPendingDelegations = NotifyPendingDelegationStore.ReadOpen(
+            context.RepoRoot,
+            domain,
+            team: null,
+            out var pendingDelegationError)
+            .ToArray();
+        if (pendingDelegationError is not null)
+        {
+            warnings.Add($"pending delegation store could not be read: {pendingDelegationError}");
+        }
+
         CollectPublishedNotDelegated(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
         var branchLaneQueueState = TryLoadQueueStateForBranchLaneRouting(context, domain, repo, warnings);
         var closedPrs = branchLaneQueueState?.Items.Any(item => item.RoutingSnapshot is not null) == true
@@ -605,6 +629,7 @@ internal static class AutomationStalledWorkCommand
             items,
             excluded,
             warnings);
+        CollectPendingDelegations(openPendingDelegations, now, items);
 
         var operatorAttention = CollectOperatorAttention(context, domain, now, items);
 
@@ -632,6 +657,7 @@ internal static class AutomationStalledWorkCommand
             Repo = repo,
             StaleMinutesThreshold = staleMinutes,
             BacklogIdleMinutesThreshold = backlogIdleMinutes,
+            OpenPendingDelegations = openPendingDelegations.Length,
             // G589: a still-pending CI item remains visible, but it must not
             // by itself trip a heartbeat/watcher wake. The kind changes when
             // the exact head becomes terminal, and that terminal item is the
@@ -652,6 +678,28 @@ internal static class AutomationStalledWorkCommand
                 ? null
                 : operatorAttention.Error,
         };
+    }
+
+    private static void CollectPendingDelegations(
+        IReadOnlyList<NotifyPendingDelegation> openDelegations,
+        DateTimeOffset now,
+        List<StalledWorkItem> items)
+    {
+        foreach (var delegation in openDelegations)
+        {
+            var ageMinutes = Math.Max(0, (int)Math.Floor((now - delegation.DispatchedAt).TotalMinutes));
+            items.Add(new StalledWorkItem
+            {
+                Kind = KindPendingDelegationOpen,
+                ExecutionUnit = delegation.TaskId,
+                AgeMinutes = ageMinutes,
+                IsInformational = true,
+                RecommendedAction =
+                    $"inspect open notify delegation '{delegation.TaskId}' for team '{delegation.Team}'; "
+                    + "if its outcome is no longer owed, an attributed owner may run "
+                    + $"`intent-cli notify dispose --domain {delegation.Domain} --team {delegation.Team} --task-id {delegation.TaskId} ... --write`; elapsed time alone never settles it.",
+            });
+        }
     }
 
     /// <summary>
@@ -4016,6 +4064,7 @@ internal static class AutomationStalledWorkCommand
         writer.WriteLine();
         writer.WriteLine($"- stale_minutes_threshold: {result.StaleMinutesThreshold}");
         writer.WriteLine($"- backlog_idle_minutes_threshold: {result.BacklogIdleMinutesThreshold}");
+        writer.WriteLine($"- open_pending_delegations: {result.OpenPendingDelegations}");
         writer.WriteLine($"- stalled: {(result.Stalled ? "true" : "false")}");
         writer.WriteLine($"- items: {result.Items.Count}");
         writer.WriteLine($"- excluded: {result.Excluded.Count}");
@@ -4193,6 +4242,13 @@ internal sealed record AutomationStalledWorkResult
     /// <summary>G544: the <c>--backlog-idle-minutes</c> threshold used to gate <c>backlog-ready-idle</c>.</summary>
     [JsonPropertyName("backlog_idle_minutes_threshold")]
     public required int BacklogIdleMinutesThreshold { get; init; }
+
+    /// <summary>
+    /// G671: count of current open notify delegations for the requested
+    /// domain. Report-settled and disposition-settled records are excluded.
+    /// </summary>
+    [JsonPropertyName("open_pending_delegations")]
+    public required int OpenPendingDelegations { get; init; }
 
     [JsonPropertyName("stalled")]
     public required bool Stalled { get; init; }

@@ -973,6 +973,7 @@ internal static class GuideOrchestratorThreadCommand
                     "If the candidate has unmet dependencies, plan the chain instead of pausing: act on the EARLIEST unmet resolvable dependency (publish or route it), keep the dependent held, and escalate only ambiguous/cycle/cross-domain-unrouted cases.",
                     "The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER (implementation, review) — NOT at-most-one-message overall (G524): this wake's actions may include a publish plus its same-wake delegation, one repair message per stalled receiver, one operator escalation, and handling any pending receiver reports, all together.",
                     "Send workflow notifications only through `intent-cli notify`; it resolves the recorded session-layer mode and validates the recipient before delivery, failing closed on an unknown role (G524/G578).",
+                    "When an outcome is applied elsewhere, a review round supersedes the predecessor, or a recovery/re-dispatch path makes a report no longer owed, explicitly record the open delegation's disposition with `intent-cli notify dispose --domain <domain> --team <team> --task-id <task-id> --kind applied-elsewhere|superseded --actor <actor> --reason <reason> [--applied-outcome-evidence <evidence>|--superseding-task-id <task-id>] --write --format json`. This is an attributed judgment, never an automatic inference; it ends the report expectation but never refuses or drops a late report.",
                     "Apply the design-thread escalation filter: keep routine progress / CI-wait / success / closeout / idle internal; surface to the design thread ONLY human-needed decisions, with structured evidence and the exact decision needed. Never hide a failure that needs a human.",
                     Apply("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json`, and process every actionable item it reports before sleeping — never leave one for an unscheduled next wake; escalate explicitly if it is genuinely blocked on an operator decision. This includes a `backlog-ready-idle` item (G544, empty WIP + a ready packet + no activity past the idle threshold) — publish and delegate it in THIS wake, the same as any other issue-cut-ready candidate; only announce a following wake will handle it when that wake is actually scheduled."),
                 },
@@ -982,7 +983,10 @@ internal static class GuideOrchestratorThreadCommand
                         "REPAIR routine off-rail states yourself by messaging the appropriate thread back onto the "
                         + "official intent-cli workflow — e.g. a receiver that stalled, skipped `worker complete`, "
                         + "applied a label by hand, or has not replied. Routine recovery is a repair message, not an "
-                        + "escalation.",
+                        + "escalation. When that recovery or an outcome application means the original report will never "
+                        + "arrive, write an explicit `notify dispose` disposition at the cause site with its actor, "
+                        + "reason, and applicable superseding task or applied-outcome evidence; never silently close the "
+                        + "pending record and never reject a late report.",
                     Escalate =
                         "ESCALATE to the operator ONLY for: product/design judgment, credentials or security, a "
                         + "destructive local action, or an unresolved canonical ambiguity (intent-cli/GitHub facts "

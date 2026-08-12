@@ -11,6 +11,7 @@ internal static class NotifyCommand
     private const string OperationReport = "report";
     private const string OperationCollect = "collect";
     private const string OperationEscalate = "escalate";
+    private const string OperationDispose = "dispose";
     internal const string OperationStatus = "status";
     internal const string OperationSupervise = "supervise";
     private const string CompletionEventKind = "completion";
@@ -23,6 +24,8 @@ internal static class NotifyCommand
     private const int CopilotObservedPasteRiskWarningChars = 4096;
     private const string ReferenceFirstRemedy =
         "Use reference-first dispatch: put review substance in committed canonical review-context.md, push it, and delegate a terse pointer.";
+    private const string DispositionKindSuperseded = "superseded";
+    private const string DispositionKindAppliedElsewhere = "applied-elsewhere";
 
     private const string DelegateUsage =
         "Usage: intent-cli notify delegate --domain <d> --team <t> --from <role> --to <role> --report-to <role> "
@@ -43,6 +46,12 @@ internal static class NotifyCommand
         "Usage: intent-cli notify escalate --domain <d> --team <t> --from <role> --task-id <id> "
         + "--artifact <value> --summary <text> [--routing-root <host-root>] "
         + "[--dry-run|--write] [--format markdown|json]";
+
+    private const string DisposeUsage =
+        "Usage: intent-cli notify dispose --domain <d> --team <t> --task-id <id> "
+        + "--kind superseded|applied-elsewhere --actor <actor> --reason <text> "
+        + "[--superseding-task-id <id>] [--applied-outcome-evidence <text>] "
+        + "[--routing-root <host-root>] [--dry-run|--write] [--format markdown|json]";
 
     private const string StatusUsage =
         "Usage: intent-cli notify status --task-id <id> [--domain <d> --team <t>] "
@@ -93,6 +102,9 @@ internal static class NotifyCommand
     public static int ExecuteEscalate(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, OperationEscalate);
 
+    public static int ExecuteDispose(CliContext context, string[] args, TextWriter writer) =>
+        Execute(context, args, writer, OperationDispose);
+
     public static int ExecuteStatus(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, OperationStatus);
 
@@ -137,6 +149,11 @@ internal static class NotifyCommand
             return 1;
         }
 
+        if (string.Equals(operation, OperationDispose, StringComparison.Ordinal))
+        {
+            return ExecuteDispose(writer, options, routingRoot);
+        }
+
         if (string.Equals(operation, OperationStatus, StringComparison.Ordinal))
         {
             return ExecuteStatus(context, writer, options, routingRoot);
@@ -164,9 +181,11 @@ internal static class NotifyCommand
         if (string.Equals(operation, OperationReport, StringComparison.Ordinal))
         {
             var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
-            var openPending = pending.Resolved && pending.Record is { ReportArrived: false };
-            var unmatched = !openPending && pending.Error is null;
-            if (!openPending && !unmatched)
+            var openPending = pending.Resolved && pending.Record is { IsOpen: true };
+            var disposedPending = pending.Resolved
+                && pending.Record is { ReportArrived: false, Disposition: not null };
+            var unmatched = !openPending && !disposedPending && pending.Error is null;
+            if (!openPending && !disposedPending && !unmatched)
             {
                 Emit(writer, options.Format, FailureResult(operation, options, SessionLayerMode.Default, "unknown-task-id",
                     $"Report task id '{options.TaskId}' does not match an open pending delegation. Known open task ids: {FormatKnownTaskIds(pending.KnownTaskIds)}."
@@ -174,14 +193,21 @@ internal static class NotifyCommand
                 return 1;
             }
 
-            if (unmatched) reportAdvisory = BuildUnmatchedReportAdvisory(options.TaskId!, pending.KnownTaskIds);
+            if (disposedPending)
+            {
+                reportAdvisory = BuildDisposedReportAdvisory(pending.Record!);
+            }
+            else if (unmatched)
+            {
+                reportAdvisory = BuildUnmatchedReportAdvisory(options.TaskId!, pending.KnownTaskIds);
+            }
             persistedOutboxPath = NotifyReportOutboxStore.ResolvePath(routingRoot, options.Domain!, options.Team!);
             if (options.Write)
             {
                 persistedReportOutbox = new NotifyReportOutboxEntry
                 {
                     Domain = options.Domain!, Team = options.Team!, TaskId = options.TaskId!,
-                    ResultNonce = openPending ? pending.Record!.ResultNonce : null,
+                    ResultNonce = (openPending || disposedPending) ? pending.Record!.ResultNonce : null,
                     FromRole = options.FromRole!, ToRole = options.ToRole!, Status = options.Status!, Artifact = options.Artifact!,
                     Summary = NotifyEventWriter.NormalizeSummary(options.Summary!),
                     CreatedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(), DeliveryState = "prepared",
@@ -382,7 +408,7 @@ internal static class NotifyCommand
 
         var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
         var sameOpenGeneration = pending.Resolved
-            && pending.Record is { ReportArrived: false }
+            && pending.Record is { IsOpen: true }
             && string.Equals(pending.Record.ResultNonce, options.ResultNonce, StringComparison.Ordinal);
         if (existingGeneration.Entry is not null
             || (pending.Record is not null
@@ -402,6 +428,90 @@ internal static class NotifyCommand
 
         return null;
     }
+
+    private static int ExecuteDispose(TextWriter writer, NotifyOptions options, string routingRoot)
+    {
+        var lookup = NotifyPendingDelegationStore.Find(
+            routingRoot,
+            options.Domain,
+            options.Team,
+            options.TaskId!);
+        if (!lookup.Resolved || lookup.Record is null)
+        {
+            var cause = lookup.Error is null ? "unknown-task-id" : "pending-store-unreadable";
+            EmitDisposition(writer, options.Format, NotifyDispositionResult.Failure(
+                routingRoot,
+                options,
+                cause,
+                lookup.Error is null
+                    ? $"Task id '{options.TaskId}' is unknown; it cannot be disposed. Known open task ids: {FormatKnownTaskIds(lookup.KnownTaskIds)}."
+                    : lookup.Error,
+                lookup.Path));
+            return 1;
+        }
+
+        var record = lookup.Record;
+        if (!record.IsOpen)
+        {
+            var settledKind = record.SettlementBasis == "disposition"
+                ? "disposition-settled"
+                : "report-settled";
+            EmitDisposition(writer, options.Format, NotifyDispositionResult.Failure(
+                routingRoot,
+                options,
+                "already-settled",
+                $"Task id '{options.TaskId}' is already settled ({settledKind}); dispose applies only to an open pending delegation.",
+                lookup.Path,
+                record,
+                settledKind));
+            return 1;
+        }
+
+        var disposition = BuildDisposition(options);
+        if (!options.Write)
+        {
+            EmitDisposition(writer, options.Format, NotifyDispositionResult.Success(
+                routingRoot,
+                options,
+                disposition,
+                written: false,
+                path: lookup.Path ?? string.Empty,
+                record: record));
+            return 0;
+        }
+
+        var write = NotifyPendingDelegationStore.WriteDisposition(routingRoot, record, disposition);
+        if (!write.Written)
+        {
+            EmitDisposition(writer, options.Format, NotifyDispositionResult.Failure(
+                routingRoot,
+                options,
+                "pending-disposition-write-failed",
+                $"Could not record disposition for open task id '{options.TaskId}': {write.Error}",
+                write.Path,
+                record));
+            return 1;
+        }
+
+        EmitDisposition(writer, options.Format, NotifyDispositionResult.Success(
+            routingRoot,
+            options,
+            disposition,
+            written: true,
+            path: write.Path,
+            record: record));
+        return 0;
+    }
+
+    private static NotifyPendingDisposition BuildDisposition(NotifyOptions options) => new()
+    {
+        Kind = options.DispositionKind!,
+        Actor = options.Actor!,
+        Timestamp = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+        Reason = NotifyEventWriter.NormalizeSummary(options.Reason!),
+        SupersedingTaskId = options.SupersedingTaskId,
+        AppliedOutcomeEvidence = options.AppliedOutcomeEvidence,
+    };
 
     private static int ExecuteStatus(CliContext context, TextWriter writer, NotifyOptions options, string routingRoot)
     {
@@ -425,6 +535,36 @@ internal static class NotifyCommand
         }
 
         var record = lookup.Record;
+        if (record.Disposition is { } disposition)
+        {
+            EmitStatus(writer, options.Format, new NotifyStatusResult
+            {
+                Operation = NotifyCommand.OperationStatus,
+                RoutingRoot = routingRoot,
+                Domain = record.Domain,
+                Team = record.Team,
+                TaskId = record.TaskId,
+                RecipientRole = record.RecipientRole,
+                RecipientIdentity = record.RecipientIdentity,
+                ExpectedArtifact = record.ExpectedArtifact,
+                DispatchedAt = record.DispatchedAt,
+                ReportArrived = record.ReportArrived,
+                ReportStatus = record.ReportStatus,
+                ReportArtifact = record.ReportArtifact,
+                ReportSummary = record.ReportSummary,
+                SettlementBasis = "disposition",
+                Disposition = disposition,
+                LateReportDisagreement = record.ReportArrived
+                    ? BuildLateReportDisagreement(record)
+                    : null,
+                Verdict = "settled",
+                Summary = record.ReportArrived
+                    ? $"Task '{record.TaskId}' is settled with disposition '{disposition.Kind}', and a late report arrived; disagreement: {BuildLateReportDisagreement(record)}"
+                    : $"Task '{record.TaskId}' is settled with disposition '{disposition.Kind}' recorded by '{disposition.Actor}'. No report is owed; the disposition is administrative settlement, not message refusal.",
+            });
+            return 0;
+        }
+
         var transportMode = record.TransportMode;
         if (string.IsNullOrWhiteSpace(transportMode))
         {
@@ -542,6 +682,7 @@ internal static class NotifyCommand
             ReportStatus = record.ReportStatus,
             ReportArtifact = record.ReportArtifact,
             ReportSummary = record.ReportSummary,
+            SettlementBasis = record.SettlementBasis,
             Verdict = verdict,
             Cause = null,
             Summary = liveness.Summary + (record.ReportArrived
@@ -613,6 +754,16 @@ internal static class NotifyCommand
         IReadOnlyList<string> knownTaskIds) =>
         $"No open pending delegation matched supplied report task id '{taskId}'; the report was delivered "
         + $"without creating or resolving a pending record. Known open task ids: {FormatKnownTaskIds(knownTaskIds)}.";
+
+    private static string BuildDisposedReportAdvisory(NotifyPendingDelegation record) =>
+        $"Task '{record.TaskId}' was already settled with disposition '{record.Disposition!.Kind}' "
+        + $"by '{record.Disposition.Actor}' because: {record.Disposition.Reason}. "
+        + "The report was still delivered under the established carriage rule; disagreement: a late report arrived after the report expectation was disposed. "
+        + "The report does not erase the disposition.";
+
+    private static string BuildLateReportDisagreement(NotifyPendingDelegation record) =>
+        $"late report status '{record.ReportStatus ?? "<unknown>"}' arrived after disposition '{record.Disposition!.Kind}' "
+        + $"by '{record.Disposition.Actor}'; disposition remains the settlement basis";
 
     internal static void EmitSupervision(
         TextWriter writer,
@@ -717,6 +868,15 @@ internal static class NotifyCommand
         writer.WriteLine($"- activity verdict: {result.ActivityVerdict ?? "<unknown>"}");
         writer.WriteLine($"- activity inputs: {result.ActivityInputs ?? "<unknown>"}");
         writer.WriteLine($"- report arrived: {result.ReportArrived?.ToString().ToLowerInvariant() ?? "<unknown>"}");
+        writer.WriteLine($"- settlement basis: {result.SettlementBasis ?? "<unknown>"}");
+        if (result.Disposition is { } disposition)
+        {
+            writer.WriteLine($"- disposition: {disposition.Kind} by {disposition.Actor} at {disposition.Timestamp:O}; reason: {disposition.Reason}");
+        }
+        if (result.LateReportDisagreement is not null)
+        {
+            writer.WriteLine($"- late report disagreement: {result.LateReportDisagreement}");
+        }
         writer.WriteLine($"- verdict: {result.Verdict ?? "<unknown>"}");
         if (result.Cause is not null)
         {
@@ -1544,6 +1704,49 @@ internal static class NotifyCommand
         writer.WriteLine(result.Summary);
     }
 
+    private static void EmitDisposition(TextWriter writer, string format, NotifyDispositionResult result)
+    {
+        if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+        {
+            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            return;
+        }
+
+        writer.WriteLine($"# notify dispose — {result.TaskId}");
+        writer.WriteLine();
+        writer.WriteLine($"- command mode: {result.CommandMode}");
+        writer.WriteLine($"- written: {result.Written.ToString().ToLowerInvariant()}");
+        if (result.SettlementBasis is not null)
+        {
+            writer.WriteLine($"- settlement basis: {result.SettlementBasis}");
+        }
+        if (result.Disposition is { } disposition)
+        {
+            writer.WriteLine($"- disposition: {disposition.Kind}");
+            writer.WriteLine($"- actor: {disposition.Actor}");
+            writer.WriteLine($"- timestamp: {disposition.Timestamp:O}");
+            writer.WriteLine($"- reason: {disposition.Reason}");
+            if (disposition.SupersedingTaskId is not null)
+            {
+                writer.WriteLine($"- superseding task id: {disposition.SupersedingTaskId}");
+            }
+            if (disposition.AppliedOutcomeEvidence is not null)
+            {
+                writer.WriteLine($"- applied outcome evidence: {disposition.AppliedOutcomeEvidence}");
+            }
+        }
+        if (result.Cause is not null)
+        {
+            writer.WriteLine($"- cause: {result.Cause}");
+        }
+        if (result.PendingRecordPath is not null)
+        {
+            writer.WriteLine($"- pending record: {result.PendingRecordPath}");
+        }
+        writer.WriteLine();
+        writer.WriteLine(result.Summary);
+    }
+
     private static bool TryParse(string[] args, string operation, out NotifyOptions options, out string error)
     {
         options = null!;
@@ -1558,6 +1761,11 @@ internal static class NotifyCommand
         string? status = null;
         string? artifact = null;
         string? summary = null;
+        string? dispositionKind = null;
+        string? actor = null;
+        string? reason = null;
+        string? supersedingTaskId = null;
+        string? appliedOutcomeEvidence = null;
         string? routingRoot = null;
         string? repo = null;
         string? ownerRole = null;
@@ -1594,6 +1802,11 @@ internal static class NotifyCommand
                 case "--status": if (!ReadValue(args, ref index, argument, out status, out error)) return false; break;
                 case "--artifact": if (!ReadValue(args, ref index, argument, out artifact, out error)) return false; break;
                 case "--summary": if (!ReadValue(args, ref index, argument, out summary, out error)) return false; break;
+                case "--kind": if (!ReadValue(args, ref index, argument, out dispositionKind, out error)) return false; break;
+                case "--actor": if (!ReadValue(args, ref index, argument, out actor, out error)) return false; break;
+                case "--reason": if (!ReadValue(args, ref index, argument, out reason, out error)) return false; break;
+                case "--superseding-task-id": if (!ReadValue(args, ref index, argument, out supersedingTaskId, out error)) return false; break;
+                case "--applied-outcome-evidence": if (!ReadValue(args, ref index, argument, out appliedOutcomeEvidence, out error)) return false; break;
                 case "--routing-root": if (!ReadValue(args, ref index, argument, out routingRoot, out error)) return false; break;
                 case "--repo": if (!ReadValue(args, ref index, argument, out repo, out error)) return false; break;
                 case "--owner-role": if (!ReadValue(args, ref index, argument, out ownerRole, out error)) return false; break;
@@ -1714,6 +1927,11 @@ internal static class NotifyCommand
             Status = status,
             Artifact = artifact,
             Summary = summary,
+            DispositionKind = dispositionKind,
+            Actor = actor,
+            Reason = reason,
+            SupersedingTaskId = supersedingTaskId,
+            AppliedOutcomeEvidence = appliedOutcomeEvidence,
             RoutingRoot = routingRoot,
             Repo = repo,
             OwnerRole = ownerRole,
@@ -1744,6 +1962,8 @@ internal static class NotifyCommand
                 ? new[] { ("--domain", options.Domain), ("--team", options.Team), ("--task-id", options.TaskId) }
             : string.Equals(operation, OperationSupervise, StringComparison.Ordinal)
                 ? new[] { ("--domain", options.Domain), ("--team", options.Team) }
+            : string.Equals(operation, OperationDispose, StringComparison.Ordinal)
+                ? new[] { ("--domain", options.Domain), ("--team", options.Team), ("--task-id", options.TaskId) }
             : new[]
             {
                 ("--domain", options.Domain),
@@ -1866,6 +2086,36 @@ internal static class NotifyCommand
                 return false;
             }
         }
+        else if (string.Equals(operation, OperationDispose, StringComparison.Ordinal))
+        {
+            if (options.DispositionKind is not (DispositionKindSuperseded or DispositionKindAppliedElsewhere)
+                || !IsSafeIdentity(options.Actor)
+                || string.IsNullOrWhiteSpace(options.Reason))
+            {
+                error = "dispose requires --kind superseded|applied-elsewhere, a safe --actor, and --reason.";
+                return false;
+            }
+
+            if (options.SupersedingTaskId is not null && !IsSafeIdentity(options.SupersedingTaskId))
+            {
+                error = "--superseding-task-id must be a safe task id.";
+                return false;
+            }
+
+            if (options.DispositionKind == DispositionKindSuperseded
+                && !IsSafeIdentity(options.SupersedingTaskId))
+            {
+                error = "superseded disposition requires --superseding-task-id.";
+                return false;
+            }
+
+            if (options.DispositionKind == DispositionKindAppliedElsewhere
+                && string.IsNullOrWhiteSpace(options.AppliedOutcomeEvidence))
+            {
+                error = "applied-elsewhere disposition requires --applied-outcome-evidence.";
+                return false;
+            }
+        }
         else if (string.IsNullOrWhiteSpace(options.Artifact) || string.IsNullOrWhiteSpace(options.Summary))
         {
             error = "escalate requires --artifact and --summary.";
@@ -1918,6 +2168,7 @@ internal static class NotifyCommand
         OperationCollect => CollectUsage,
         OperationStatus => StatusUsage,
         OperationSupervise => SuperviseUsage,
+        OperationDispose => DisposeUsage,
         _ => EscalateUsage,
     };
 }
@@ -1937,6 +2188,11 @@ internal sealed record NotifyOptions
     public string? Status { get; init; }
     public string? Artifact { get; init; }
     public string? Summary { get; init; }
+    public string? DispositionKind { get; init; }
+    public string? Actor { get; init; }
+    public string? Reason { get; init; }
+    public string? SupersedingTaskId { get; init; }
+    public string? AppliedOutcomeEvidence { get; init; }
     public string? RoutingRoot { get; init; }
     public string? Repo { get; init; }
     public string? OwnerRole { get; init; }
@@ -1993,6 +2249,69 @@ internal sealed record NotifyResult
     [JsonPropertyName("summary")] public required string Summary { get; init; }
 }
 
+internal sealed record NotifyDispositionResult
+{
+    [JsonPropertyName("operation")] public required string Operation { get; init; }
+    [JsonPropertyName("routing_root")] public required string RoutingRoot { get; init; }
+    [JsonPropertyName("domain")] public required string Domain { get; init; }
+    [JsonPropertyName("team")] public required string Team { get; init; }
+    [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+    [JsonPropertyName("command_mode")] public required string CommandMode { get; init; }
+    [JsonPropertyName("written")] public required bool Written { get; init; }
+    [JsonPropertyName("settlement_basis")] public string? SettlementBasis { get; init; }
+    [JsonPropertyName("existing_settlement_basis")] public string? ExistingSettlementBasis { get; init; }
+    [JsonPropertyName("disposition")] public NotifyPendingDisposition? Disposition { get; init; }
+    [JsonPropertyName("pending_record_path")] public string? PendingRecordPath { get; init; }
+    [JsonPropertyName("cause")] public string? Cause { get; init; }
+    [JsonPropertyName("summary")] public required string Summary { get; init; }
+
+    public static NotifyDispositionResult Success(
+        string routingRoot,
+        NotifyOptions options,
+        NotifyPendingDisposition disposition,
+        bool written,
+        string path,
+        NotifyPendingDelegation record) => new()
+        {
+            Operation = "dispose",
+            RoutingRoot = routingRoot,
+            Domain = options.Domain!,
+            Team = options.Team!,
+            TaskId = options.TaskId!,
+            CommandMode = options.Write ? "write" : "dry-run",
+            Written = written,
+            SettlementBasis = "disposition",
+            Disposition = disposition,
+            PendingRecordPath = path,
+            Summary = written
+                ? $"Task '{record.TaskId}' was settled with disposition '{disposition.Kind}'; the open-delegation expectation ended and no transport was attempted."
+                : $"Task '{record.TaskId}' is eligible for disposition '{disposition.Kind}'; dry-run made no durable change and no transport was attempted.",
+        };
+
+    public static NotifyDispositionResult Failure(
+        string routingRoot,
+        NotifyOptions options,
+        string cause,
+        string summary,
+        string? path,
+        NotifyPendingDelegation? record = null,
+        string? existingSettlementBasis = null) => new()
+        {
+            Operation = "dispose",
+            RoutingRoot = routingRoot,
+            Domain = options.Domain!,
+            Team = options.Team!,
+            TaskId = options.TaskId!,
+            CommandMode = options.Write ? "write" : "dry-run",
+            Written = false,
+            ExistingSettlementBasis = existingSettlementBasis ?? record?.SettlementBasis,
+            Disposition = record?.Disposition,
+            PendingRecordPath = path,
+            Cause = cause,
+            Summary = summary,
+        };
+}
+
 internal sealed record NotifyStatusResult
 {
     [JsonPropertyName("operation")] public required string Operation { get; init; }
@@ -2019,6 +2338,9 @@ internal sealed record NotifyStatusResult
     [JsonPropertyName("report_status")] public string? ReportStatus { get; init; }
     [JsonPropertyName("report_artifact")] public string? ReportArtifact { get; init; }
     [JsonPropertyName("report_summary")] public string? ReportSummary { get; init; }
+    [JsonPropertyName("settlement_basis")] public string? SettlementBasis { get; init; }
+    [JsonPropertyName("disposition")] public NotifyPendingDisposition? Disposition { get; init; }
+    [JsonPropertyName("late_report_disagreement")] public string? LateReportDisagreement { get; init; }
     [JsonPropertyName("verdict")] public string? Verdict { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
@@ -2049,6 +2371,11 @@ internal sealed record NotifyStatusResult
             ReportStatus = record?.ReportStatus,
             ReportArtifact = record?.ReportArtifact,
             ReportSummary = record?.ReportSummary,
+            SettlementBasis = record?.SettlementBasis,
+            Disposition = record?.Disposition,
+            LateReportDisagreement = record is { ReportArrived: true, Disposition: not null }
+                ? $"late report arrived after disposition '{record.Disposition.Kind}'"
+                : null,
             Verdict = null,
             Cause = cause,
             Summary = summary,
