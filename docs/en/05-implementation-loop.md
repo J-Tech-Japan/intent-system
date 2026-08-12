@@ -60,6 +60,9 @@ copy a long loop body from this document.
 
 ## Preview: Git-backed cross-clone scope claims (G679)
 
+The decision and its boundaries are recorded in
+[ADR 0003](../adr/0003-git-push-cas-work-ownership.md).
+
 `worker claim` remains the GitHub issue/PR lifecycle transition above. The
 separate preview `claim` group coordinates one named unit of work across host
 clones without a server:

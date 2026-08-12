@@ -102,12 +102,21 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
 
 1. Check the evidence (below) — current intents, open questions, packet backlog, open PRs / review state, and CLI / queue health — before recommending.
 2. Use `{GuideDesignThreadCommand.CommandName}` as the design-role operating contract. Its four-outcome wake rule governs whether this wake has an outcome at all.
-3. When a domain and team are supplied, inspect recorded topology plus the supervision cycle. A recorded topology without a completed cycle/handoff includes `bootstrap-resume` first; absent topology is silent because bootstrap has not started; a completed cycle clears the recommendation.
-4. Inspect the recorded supervision cycle independently and include `supervision-setup` when no cycle is recorded.
-5. When a domain is supplied, inspect the independently declared realignment window and latest durable improve-run record. If no run falls within that window, include `realignment`; judge timestamp recency only, never review quality. With no window declaration, do not invent a cadence.
-6. Match the situation to exactly one action in the decision set (bootstrap-resume for a half-done bootstrap, supervision-setup when its check is missing, then realignment when its declared window is lapsed, then grill / stack / improve / inspect / issue-publish / review / recovery / idle).
-7. Return the recommendation output shape: the recommended action, the reason tied to the evidence you actually checked, the evidence checked, a paste-ready suggested prompt for that action, and the safety boundary.
-8. Stop there — the user decides whether to run the suggested prompt. next never auto-executes the chosen action.";
+3. Before starting a named execution unit, acquire `execution-unit:<EU>` with `intent-cli claim acquire`; before authoring release preparation, acquire `release-prep:{repoArg}:<version>`. Start only when the command returns `status=acquired` and `push_succeeded=true`; a local file or commit is not ownership.
+4. When a domain and team are supplied, inspect recorded topology plus the supervision cycle. A recorded topology without a completed cycle/handoff includes `bootstrap-resume` first; absent topology is silent because bootstrap has not started; a completed cycle clears the recommendation.
+5. Inspect the recorded supervision cycle independently and include `supervision-setup` when no cycle is recorded.
+6. When a domain is supplied, inspect the independently declared realignment window and latest durable improve-run record. If no run falls within that window, include `realignment`; judge timestamp recency only, never review quality. With no window declaration, do not invent a cadence.
+7. Match the situation to exactly one action in the decision set (bootstrap-resume for a half-done bootstrap, supervision-setup when its check is missing, then realignment when its declared window is lapsed, then grill / stack / improve / inspect / issue-publish / review / recovery / idle).
+8. Return the recommendation output shape: the recommended action, the reason tied to the evidence you actually checked, the evidence checked, a paste-ready suggested prompt for that action, and the safety boundary.
+9. Stop there — the user decides whether to run the suggested prompt. next never auto-executes the chosen action.";
+
+        var claimBeforeStart = new[]
+        {
+            "Claim before start (G679, preview-through-1.x): the design thread starts a named execution unit or release preparation only after the remote accepted the claim's plain push; a local file or commit is never ownership.",
+            $"Execution unit: `intent-cli claim acquire --scope execution-unit:<EU> --actor <actor> --team {teamArg} --write --format json`.",
+            $"Release preparation: `intent-cli claim acquire --scope release-prep:{repoArg}:<version> --actor <actor> --team {teamArg} --write --format json`.",
+            "Proceed only on `status=acquired` with `push_succeeded=true`. On `held`, stop and name `holder` plus `holder_team`; on `retry-exhausted`, stop and surface the unrelated-advance failure. Never force-push, infer ownership from age, or take over automatically.",
+        };
 
         var evidenceToCheck = new[]
         {
@@ -224,6 +233,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 + "and the recommendation output shape. It recommends ONE process tied to the evidence; it is read-only by default "
                 + "and never auto-executes the chosen action — the user decides whether to run the suggested prompt.",
             MeasuredIncident = GuideRoleContractGuidance.MeasuredIncident,
+            ClaimBeforeStart = claimBeforeStart,
             NotThis = new[]
             {
                 "next does NOT auto-execute the selected action — it recommends; the user runs the suggested prompt.",
@@ -366,6 +376,14 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             writer.WriteLine();
         }
         writer.WriteLine(result.Summary);
+        writer.WriteLine();
+
+        writer.WriteLine("## Claim before starting named work (G679 — preview-through-1.x)");
+        writer.WriteLine();
+        foreach (var item in result.ClaimBeforeStart)
+        {
+            writer.WriteLine($"- {item}");
+        }
         writer.WriteLine();
 
         writer.WriteLine("## Procedure");
@@ -728,6 +746,9 @@ internal sealed record GuideNextResult
 
     [JsonPropertyName("measured_incident")]
     public required string MeasuredIncident { get; init; }
+
+    [JsonPropertyName("claim_before_start")]
+    public required IReadOnlyList<string> ClaimBeforeStart { get; init; }
 
     [JsonPropertyName("not_this")]
     public required IReadOnlyList<string> NotThis { get; init; }

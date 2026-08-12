@@ -129,10 +129,11 @@ internal static class ClaimCommand
                         null, null, null, "No active claim exists for this scope.");
                 }
                 if (request.Operation == ClaimOperation.Release
-                    && !string.Equals(current!.Actor, request.Actor, StringComparison.Ordinal))
+                    && (!string.Equals(current!.Actor, request.Actor, StringComparison.Ordinal)
+                        || !string.Equals(current.Team, request.Team, StringComparison.Ordinal)))
                 {
                     return Held(request, relativeClaimPath, attempt, current,
-                        "Only the attributed holder may release; use explicit takeover otherwise.");
+                        "Only the complete attributed holder identity (actor and team) may release; use explicit takeover otherwise.");
                 }
                 if (request.Operation == ClaimOperation.Takeover
                     && !string.Equals(current!.Actor, request.DisplacedHolder, StringComparison.Ordinal))

@@ -117,6 +117,32 @@ public sealed class ClaimCommandG679Tests : IDisposable
     }
 
     [Fact]
+    public void Release_SameActorDifferentTeam_IsRefusedAndClaimRemains_G679()
+    {
+        using var repos = new ClaimRepositories();
+        Assert.Equal("acquired",
+            ClaimCommand.RunTransaction(repos.FirstClone, Request("shared-actor", "team-one")).Status);
+        var wrongTeamRelease = Request("shared-actor", "team-two") with
+        {
+            Operation = ClaimOperation.Release,
+            Reason = "different team attempted release",
+        };
+
+        var result = ClaimCommand.RunTransaction(repos.SecondClone, wrongTeamRelease);
+
+        Assert.Equal("held", result.Status);
+        Assert.False(result.PushSucceeded);
+        Assert.Equal("shared-actor", result.Holder);
+        Assert.Equal("team-one", result.HolderTeam);
+        Assert.Contains("actor and team", result.Detail, StringComparison.Ordinal);
+        var inspection = repos.CloneForInspection();
+        using var active = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(inspection, ClaimCommand.ClaimPath(wrongTeamRelease.Scope))));
+        Assert.Equal("shared-actor", active.RootElement.GetProperty("actor").GetString());
+        Assert.Equal("team-one", active.RootElement.GetProperty("team").GetString());
+    }
+
+    [Fact]
     public void TakeoverWithoutNamedDisplacedHolder_IsRefusedBeforeGitMutation_G679()
     {
         using var temp = new TempDirectory("claim-invalid-takeover-");

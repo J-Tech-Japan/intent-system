@@ -133,6 +133,7 @@ internal static class SessionLayerSections
         new(SessionLayerSwitchChecklist.Heading, SessionLayerSwitchChecklist.JsonProperty, Applicability.ModeIndependent),
         new("## Mode separation", "mode_separation", Applicability.ModeIndependent, Descriptive: true),
         new("## Role boundary (design authors; orchestrator coordinates)", "role_boundary", Applicability.ModeIndependent),
+        new("## Git-backed claim verification and routing (G679 — preview-through-1.x)", "claim_routing", Applicability.ModeIndependent),
         new("## Domain routing — single-domain vs multi-domain", "domain_routing", Applicability.ModeIndependent),
         new("## CI wait state", "ci_wait_state", Applicability.ModeIndependent),
         new("## Draft PR reviewability", "draft_pr_reviewability", Applicability.ModeIndependent),

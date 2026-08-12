@@ -59,6 +59,9 @@
 
 ## Preview: Git-backed cross-clone scope claim (G679)
 
+この decision と boundary は
+[ADR 0003](../adr/0003-git-push-cas-work-ownership.md) に記録しています。
+
 `worker claim` は上記の GitHub issue/PR lifecycle transition のままです。別の preview
 `claim` group は server なしで host clone 間の named work unit を調整します。
 
