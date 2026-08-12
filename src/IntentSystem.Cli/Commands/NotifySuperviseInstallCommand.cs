@@ -65,11 +65,21 @@ internal static class NotifySuperviseInstallCommand
         }
 
         var label = $"intent-cli.supervise.{options.Domain}.{options.Team}";
-        var superviseArguments = BuildSuperviseArguments(options, routingRoot);
-        var invocation = FormatShellInvocation("intent-cli", superviseArguments);
-        var artifact = BuildArtifact(options.Platform, label, superviseArguments);
+        var runtime = ResolveRuntime(options, routingRoot);
+        // Scheduler emission remains usable when the invoking process is a
+        // dotnet/dnx tool host and intent-cli is not itself PATH-visible. The
+        // unresolved runtime record names the gap while the long-standing
+        // bare command remains the operator-resolved artifact entrypoint.
+        var intentCliExecutable = runtime.IntentCli.Path ?? runtime.IntentCli.Name;
+        var superviseArguments = BuildSuperviseArguments(options, routingRoot, runtime);
+        var invocation = FormatShellInvocation(intentCliExecutable, superviseArguments);
+        var artifact = BuildArtifact(options.Platform, label, intentCliExecutable, superviseArguments, runtime.RecordedPath);
         var (registrationCommand, unregistrationCommand) = BuildOperatorCommands(options.Platform, label, artifactPath);
         var crossAuthored = !string.Equals(options.Platform, CurrentPlatform(), StringComparison.Ordinal);
+        var unresolvedBinaries = runtime.Binaries
+            .Where(binary => !binary.Resolved)
+            .Select(binary => binary.Name)
+            .ToArray();
         var verificationStatus = options.Platform is Windows or Linux
             ? "emitted-but-unverified"
             : "emission-verified-on-macos";
@@ -110,12 +120,62 @@ internal static class NotifySuperviseInstallCommand
             UnregistrationCommand = unregistrationCommand,
             CommandMode = options.Write ? "write" : "dry-run",
             ManagesProcess = false,
+            RecordedPath = runtime.RecordedPath,
+            RuntimeBinaries = runtime.Binaries,
+            UnresolvedBinaries = unresolvedBinaries,
             Summary = options.Write
-                ? $"Emitted the {options.Platform} supervisor artifact with event mode {(options.EventMode ? "enabled" : "disabled")}. intent-cli did not register, start, stop, or unregister it."
-                : $"Previewed the {options.Platform} supervisor artifact path and operator commands without writing or executing anything.",
+                ? $"Emitted the {options.Platform} supervisor artifact with event mode {(options.EventMode ? "enabled" : "disabled")}. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. intent-cli did not register, start, stop, or unregister it."
+                : $"Previewed the {options.Platform} supervisor artifact path and operator commands without writing or executing anything. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name.",
         };
         Emit(writer, options.Format, result);
         return 0;
+    }
+
+    private static NotifySuperviseRuntimeResolution ResolveRuntime(
+        InstallOptions options,
+        string routingRoot)
+    {
+        var recordedPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        var binaries = new List<NotifySuperviseRuntimeBinary>
+        {
+            ResolveBinary("intent-cli"),
+        };
+
+        var herdrRequired = options.EventMode;
+        if (!herdrRequired)
+        {
+            try
+            {
+                herdrRequired = SessionLayerModeStore.Resolve(routingRoot, options.Domain, options.Team).IsHerdrOnly;
+            }
+            catch (InvalidOperationException)
+            {
+                // Preserve the existing default routing behavior when a
+                // session-layer record is unreadable; the running loop will
+                // report that read failure through its normal surface.
+            }
+        }
+
+        var transportName = herdrRequired ? "herdr" : "bash";
+        var transportOverride = Environment.GetEnvironmentVariable(
+            herdrRequired
+                ? NotifyTransportPaths.HerdrExecutableEnvironmentVariable
+                : NotifyTransportPaths.BashExecutableEnvironmentVariable);
+        binaries.Add(ResolveBinary(transportName, transportOverride));
+        return new NotifySuperviseRuntimeResolution(binaries, recordedPath);
+    }
+
+    private static NotifySuperviseRuntimeBinary ResolveBinary(string name, string? configured = null)
+    {
+        var requested = string.IsNullOrWhiteSpace(configured) ? name : configured;
+        var path = NotifyTransportPaths.ResolveExecutable(requested);
+        return path is not null
+            ? new NotifySuperviseRuntimeBinary(name, path, true, null)
+            : new NotifySuperviseRuntimeBinary(
+                name,
+                null,
+                false,
+                $"'{name}' was not found as an absolute executable through the emission environment PATH.");
     }
 
     private static string ResolveDefaultArtifactPath(CliContext context, InstallOptions options)
@@ -135,7 +195,10 @@ internal static class NotifySuperviseInstallCommand
             label + extension);
     }
 
-    private static IReadOnlyList<string> BuildSuperviseArguments(InstallOptions options, string routingRoot)
+    private static IReadOnlyList<string> BuildSuperviseArguments(
+        InstallOptions options,
+        string routingRoot,
+        NotifySuperviseRuntimeResolution runtime)
     {
         var arguments = new List<string>
         {
@@ -151,22 +214,35 @@ internal static class NotifySuperviseInstallCommand
         {
             arguments.Add("--event-mode");
         }
+        foreach (var binary in runtime.Binaries.Where(binary => (binary.Name is "herdr" or "bash") && binary.Resolved))
+        {
+            arguments.Add(binary.Name == "herdr" ? "--herdr-executable" : "--bash-executable");
+            arguments.Add(binary.Path!);
+        }
         arguments.AddRange(["--routing-root", routingRoot, "--write", "--format", "json"]);
         return arguments;
     }
 
-    private static string BuildArtifact(string platform, string label, IReadOnlyList<string> arguments) => platform switch
+    private static string BuildArtifact(
+        string platform,
+        string label,
+        string intentCliExecutable,
+        IReadOnlyList<string> arguments,
+        string recordedPath) => platform switch
     {
-        MacOs => BuildLaunchdArtifact(label, arguments),
-        Windows => BuildTaskSchedulerArtifact(label, arguments),
-        _ => BuildSystemdArtifact(label, arguments),
+        MacOs => BuildLaunchdArtifact(label, intentCliExecutable, arguments, recordedPath),
+        Windows => BuildTaskSchedulerArtifact(label, intentCliExecutable, arguments, recordedPath),
+        _ => BuildSystemdArtifact(label, intentCliExecutable, arguments, recordedPath),
     };
 
-    private static string BuildLaunchdArtifact(string label, IReadOnlyList<string> arguments)
+    private static string BuildLaunchdArtifact(
+        string label,
+        string intentCliExecutable,
+        IReadOnlyList<string> arguments,
+        string recordedPath)
     {
         var programArguments = new StringBuilder()
-            .AppendLine("    <string>/usr/bin/env</string>")
-            .AppendLine("    <string>intent-cli</string>");
+            .Append("    <string>").Append(XmlEscape(intentCliExecutable)).AppendLine("</string>");
         foreach (var argument in arguments)
         {
             programArguments.Append("    <string>").Append(XmlEscape(argument)).AppendLine("</string>");
@@ -189,19 +265,28 @@ internal static class NotifySuperviseInstallCommand
   <true/>
   <key>ThrottleInterval</key>
   <integer>30</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{XmlEscape(recordedPath)}</string>
+  </dict>
 </dict>
 </plist>
 """;
     }
 
-    private static string BuildTaskSchedulerArtifact(string label, IReadOnlyList<string> arguments)
+    private static string BuildTaskSchedulerArtifact(
+        string label,
+        string intentCliExecutable,
+        IReadOnlyList<string> arguments,
+        string recordedPath)
     {
         var commandArguments = string.Join(" ", arguments.Select(QuoteWindowsArgument));
         return $"""
 <?xml version="1.0" encoding="UTF-8"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>{XmlEscape(label)} — emitted-but-unverified on macOS; operator-managed intent-cli supervision.</Description>
+    <Description>{XmlEscape(label)} — emitted-but-unverified on macOS; operator-managed intent-cli supervision. Recorded PATH: {XmlEscape(recordedPath)}</Description>
     <URI>\{XmlEscape(label)}</URI>
   </RegistrationInfo>
   <Triggers>
@@ -220,13 +305,17 @@ internal static class NotifySuperviseInstallCommand
     <Enabled>true</Enabled>
   </Settings>
   <Actions Context="Author">
-    <Exec><Command>intent-cli</Command><Arguments>{XmlEscape(commandArguments)}</Arguments></Exec>
+    <Exec><Command>{XmlEscape(intentCliExecutable)}</Command><Arguments>{XmlEscape(commandArguments)}</Arguments></Exec>
   </Actions>
 </Task>
 """;
     }
 
-    private static string BuildSystemdArtifact(string label, IReadOnlyList<string> arguments)
+    private static string BuildSystemdArtifact(
+        string label,
+        string intentCliExecutable,
+        IReadOnlyList<string> arguments,
+        string recordedPath)
     {
         var commandArguments = string.Join(" ", arguments.Select(QuoteSystemdArgument));
         return $"""
@@ -237,7 +326,8 @@ Description={label} operator-managed intent-cli supervision
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env intent-cli {commandArguments}
+Environment={QuoteSystemdArgument("PATH=" + recordedPath)}
+ExecStart={QuoteSystemdArgument(intentCliExecutable)} {commandArguments}
 Restart=always
 RestartSec=30
 
@@ -461,6 +551,12 @@ WantedBy=default.target
         writer.WriteLine($"- event mode: {result.EventMode.ToString().ToLowerInvariant()}");
         writer.WriteLine($"- artifact path: `{result.ArtifactPath}` (written: {result.ArtifactWritten.ToString().ToLowerInvariant()})");
         writer.WriteLine($"- supervise invocation: `{result.SuperviseInvocation}`");
+        writer.WriteLine($"- recorded PATH: `{result.RecordedPath}`");
+        writer.WriteLine($"- runtime binaries: {string.Join(", ", result.RuntimeBinaries.Select(binary => $"{binary.Name}={(binary.Path ?? "unresolved")}"))}");
+        if (result.UnresolvedBinaries.Count > 0)
+        {
+            writer.WriteLine($"- unresolved binaries: {string.Join(", ", result.UnresolvedBinaries)}");
+        }
         writer.WriteLine($"- registration command (operator action): `{result.RegistrationCommand}`");
         writer.WriteLine($"- unregistration command (operator action): `{result.UnregistrationCommand}`");
         writer.WriteLine("- process management executed by intent-cli: false");
@@ -484,6 +580,20 @@ WantedBy=default.target
         public required string Format { get; init; }
     }
 
+    private sealed record NotifySuperviseRuntimeResolution(
+        IReadOnlyList<NotifySuperviseRuntimeBinary> Binaries,
+        string RecordedPath)
+    {
+        public NotifySuperviseRuntimeBinary IntentCli =>
+            Binaries.Single(binary => string.Equals(binary.Name, "intent-cli", StringComparison.Ordinal));
+    }
+
+    private sealed record NotifySuperviseRuntimeBinary(
+        [property: JsonPropertyName("name")] string Name,
+        [property: JsonPropertyName("path")] string? Path,
+        [property: JsonPropertyName("resolved")] bool Resolved,
+        [property: JsonPropertyName("error")] string? Error);
+
     private sealed record InstallResult
     {
         [JsonPropertyName("operation")] public string Operation { get; init; } = "supervise-install";
@@ -500,6 +610,9 @@ WantedBy=default.target
         [JsonPropertyName("unregistration_command")] public required string UnregistrationCommand { get; init; }
         [JsonPropertyName("command_mode")] public required string CommandMode { get; init; }
         [JsonPropertyName("manages_process")] public required bool ManagesProcess { get; init; }
+        [JsonPropertyName("recorded_path")] public required string RecordedPath { get; init; }
+        [JsonPropertyName("runtime_binaries")] public required IReadOnlyList<NotifySuperviseRuntimeBinary> RuntimeBinaries { get; init; }
+        [JsonPropertyName("unresolved_binaries")] public required IReadOnlyList<string> UnresolvedBinaries { get; init; }
         [JsonPropertyName("summary")] public required string Summary { get; init; }
     }
 }

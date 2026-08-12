@@ -145,11 +145,16 @@ internal sealed class AgmsgNotifyTransport : INotifyTransport
 {
     private readonly INotifyProcessRunner runner;
     private readonly string scriptsDirectory;
+    private readonly string bashExecutable;
 
-    public AgmsgNotifyTransport(INotifyProcessRunner runner, string scriptsDirectory)
+    public AgmsgNotifyTransport(
+        INotifyProcessRunner runner,
+        string scriptsDirectory,
+        string? bashExecutable = null)
     {
         this.runner = runner;
         this.scriptsDirectory = scriptsDirectory;
+        this.bashExecutable = bashExecutable ?? "bash";
     }
 
     public NotifyDeliveryResult Deliver(
@@ -175,7 +180,7 @@ internal sealed class AgmsgNotifyTransport : INotifyTransport
         NotifyProcessResult roster;
         try
         {
-            roster = runner.Run("bash", [teamScript, team]);
+            roster = runner.Run(bashExecutable, [teamScript, team]);
         }
         catch (InvalidOperationException exception)
         {
@@ -215,7 +220,7 @@ internal sealed class AgmsgNotifyTransport : INotifyTransport
         NotifyProcessResult delivery;
         try
         {
-            delivery = runner.Run("bash", [sendScript, team, fromRole, toRole, payload]);
+            delivery = runner.Run(bashExecutable, [sendScript, team, fromRole, toRole, payload]);
         }
         catch (InvalidOperationException exception)
         {
@@ -943,6 +948,11 @@ internal static class NotifyTransportPaths
 {
     public const string AgmsgScriptsEnvironmentVariable = "INTENT_CLI_AGMSG_SCRIPTS";
     public const string HerdrExecutableEnvironmentVariable = "INTENT_CLI_HERDR_EXECUTABLE";
+    public const string BashExecutableEnvironmentVariable = "INTENT_CLI_BASH_EXECUTABLE";
+
+    // Test seams are deliberately path-only: production resolution never
+    // starts a shell or a process while emitting a scheduler artifact.
+    internal static Func<string, string?>? ExecutableResolverOverride { get; set; }
 
     public static string ResolveAgmsgScriptsDirectory()
     {
@@ -959,6 +969,84 @@ internal static class NotifyTransportPaths
     public static string ResolveHerdrExecutable()
     {
         var configured = Environment.GetEnvironmentVariable(HerdrExecutableEnvironmentVariable);
-        return string.IsNullOrWhiteSpace(configured) ? "herdr" : configured;
+        return ResolveExecutableOrName(string.IsNullOrWhiteSpace(configured) ? "herdr" : configured);
+    }
+
+    public static string ResolveBashExecutable()
+    {
+        var configured = Environment.GetEnvironmentVariable(BashExecutableEnvironmentVariable);
+        // Preserve the long-standing bare default for direct command/test
+        // runners; an explicit environment override is still resolved for
+        // scheduler emission and normal runtime use.
+        return string.IsNullOrWhiteSpace(configured) ? "bash" : ResolveExecutableOrName(configured);
+    }
+
+    public static string? ResolveIntentCliExecutable() => ResolveExecutable("intent-cli");
+
+    public static string? ResolveExecutable(string executable)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executable);
+        if (ExecutableResolverOverride is { } resolver)
+        {
+            return NormalizeResolvedPath(resolver(executable));
+        }
+
+        if (Path.IsPathRooted(executable))
+        {
+            return File.Exists(executable) ? Path.GetFullPath(executable) : null;
+        }
+
+        var processPath = Environment.ProcessPath;
+        if (string.Equals(executable, "intent-cli", StringComparison.Ordinal)
+            && IsIntentCliProcess(processPath))
+        {
+            return Path.GetFullPath(processPath!);
+        }
+
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = Path.Combine(directory, executable);
+            if (File.Exists(candidate))
+            {
+                return Path.GetFullPath(candidate);
+            }
+
+            if (OperatingSystem.IsWindows() && Path.GetExtension(executable).Length == 0)
+            {
+                foreach (var extension in new[] { ".exe", ".cmd", ".bat" })
+                {
+                    candidate = Path.Combine(directory, executable + extension);
+                    if (File.Exists(candidate))
+                    {
+                        return Path.GetFullPath(candidate);
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string ResolveExecutableOrName(string executable) =>
+        ResolveExecutable(executable) ?? executable;
+
+    private static string? NormalizeResolvedPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        return Path.IsPathRooted(path) ? Path.GetFullPath(path) : ResolveExecutable(path);
+    }
+
+    private static bool IsIntentCliProcess(string? processPath)
+    {
+        if (string.IsNullOrWhiteSpace(processPath) || !Path.IsPathRooted(processPath)) return false;
+        var name = Path.GetFileNameWithoutExtension(processPath);
+        return string.Equals(name, "intent-cli", StringComparison.OrdinalIgnoreCase)
+            && File.Exists(processPath);
     }
 }

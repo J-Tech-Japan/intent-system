@@ -564,6 +564,44 @@ unregistering/re-registering it with the printed operator commands.
 > event/interval de-duplication are post-freeze preview behavior. They make no
 > release decision and may change or be withdrawn during 1.x.
 
+### Scheduler self-sufficiency and truthful transport degradation (G675 — preview-through-1.x)
+
+`notify supervise install` emits a scheduler artifact that resolves the
+`intent-cli` executable absolutely. Every runtime transport binary used by the
+loop is also emitted as an absolute executable when resolvable; an unresolved
+binary is named in the emission result and the artifact carries the recorded
+PATH that covers any remaining command name. The artifact and guidance remain
+emit-only: intent-cli does not register, start, stop, replace, or manage a
+scheduler job.
+
+The operator verifies both the live PID and the first cycle record in
+`cycles.jsonl`; a loaded PID is not proof that a loop is alive. The guidance
+names the loaded-but-silently-exiting / exit-127 shape explicitly. G675's
+measured evidence is attributed to host macOS node 08 on 2026-08-12 in two
+separate acts: act one observed `/usr/bin/env intent-cli` under launchd's
+minimal PATH loaded but silently exiting with exit 127, and a same-machine
+audit found four accumulated supervisors; act two observed missing `herdr`
+produce ten false recipient losses in one cycle while the recipient was alive
+and mid-task. These are scheduler/transport facts, not recipient absence.
+
+When a transport process cannot be started, the failure is classified before
+any recipient liveness judgment as one cycle-level `supervision-degraded`
+finding with cause `transport-unavailable`, the binary, and the start error.
+It never becomes `recipient-lost` and is never repeated once per open
+delegation. A healthy recipient remains silent, and G648's genuine
+absence/foreground-process corroboration rules remain byte/semantically
+unchanged.
+
+The concrete optional second wake-source flag is `--event-mode`; it holds the
+blocking herdr wait for `pane.agent_status_changed` while the interval cycle
+remains the safety floor. G675 does not add duplicate-supervisor detection,
+recovery sequences, new verdict names, wake transports, or emission targets.
+
+> **Preview through 1.x (G675).** Scheduler executable resolution, recorded
+> PATH diagnostics, cycle-level transport degradation, and the rendered
+> verification guidance are post-freeze preview behavior outside the 1.0
+> compatibility promise. They may change or be withdrawn during 1.x.
+
 ### Escalation ladder and CI fallback (G657 — preview-through-1.x)
 
 The complete ladder is: seats do their assigned work; orchestration notices

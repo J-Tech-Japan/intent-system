@@ -34,6 +34,7 @@ internal sealed class NotifyMeasuredSupervisor
     private readonly INotifyProcessRunner runner;
     private readonly string herdrExecutable;
     private readonly string agmsgScriptsDirectory;
+    private readonly string bashExecutable;
     private readonly bool eventMode;
     private readonly IReadOnlyList<NotifyPreApprovalRule> preApprovalAccept;
     private readonly IReadOnlyList<NotifyPreApprovalRule> preApprovalEscalate;
@@ -61,7 +62,8 @@ internal sealed class NotifyMeasuredSupervisor
         string agmsgScriptsDirectory,
         bool eventMode = false,
         IReadOnlyList<NotifyPreApprovalRule>? preApprovalAccept = null,
-        IReadOnlyList<NotifyPreApprovalRule>? preApprovalEscalate = null)
+        IReadOnlyList<NotifyPreApprovalRule>? preApprovalEscalate = null,
+        string? bashExecutable = null)
     {
         this.context = context;
         this.routingRoot = routingRoot;
@@ -81,6 +83,7 @@ internal sealed class NotifyMeasuredSupervisor
         this.runner = runner;
         this.herdrExecutable = herdrExecutable;
         this.agmsgScriptsDirectory = agmsgScriptsDirectory;
+        this.bashExecutable = bashExecutable ?? "bash";
         this.eventMode = eventMode;
         this.preApprovalAccept = preApprovalAccept ?? [];
         this.preApprovalEscalate = preApprovalEscalate ?? [];
@@ -198,116 +201,151 @@ internal sealed class NotifyMeasuredSupervisor
             };
         }
 
-        // Keep G630's ordered, fail-closed recipient recovery unchanged.
-        var legacy = new NotifySupervisor(
-            context,
+        var transportFailures = NotifyTransportPreflight.Check(
             routingRoot,
             domain,
             team,
-            autoRedispatch,
-            write,
-            format,
+            openBefore,
+            eventMode,
             runner,
             herdrExecutable,
             agmsgScriptsDirectory,
-            notifier: DeliverRecoveryNotification).RunOnce();
-        actions.AddRange(legacy.Actions);
-        if (legacy.Error is not null)
+            bashExecutable);
+        var transportUnavailable = transportFailures.Count > 0;
+        foreach (var failure in transportFailures)
         {
-            warnings.Add(legacy.Error);
+            observations.Add(new NotifySupervisionObservation
+            {
+                Key = $"transport:{failure.Binary}",
+                Kind = "supervision-degraded",
+                OwnerRole = ownerRole,
+                Source = "supervision-transport-preflight",
+                Summary = $"Supervision degraded: transport unavailable; binary '{failure.Binary}' could not be started: {failure.Error} No recipient-lost judgment or per-delegation wake was made in this cycle.",
+                Cause = failure.Cause,
+                WakeSuppressed = true,
+            });
+        }
+
+        // Keep G630's ordered, fail-closed recipient recovery unchanged when
+        // the transport process itself is startable. A failed preflight exits
+        // this recipient path before any liveness judgment.
+        var legacy = new NotifySupervisorPass { Actions = [] };
+        if (!transportUnavailable)
+        {
+            legacy = new NotifySupervisor(
+                context,
+                routingRoot,
+                domain,
+                team,
+                autoRedispatch,
+                write,
+                format,
+                runner,
+                herdrExecutable,
+                agmsgScriptsDirectory,
+                notifier: DeliverRecoveryNotification,
+                bashExecutable: bashExecutable).RunOnce();
+            actions.AddRange(legacy.Actions);
+            if (legacy.Error is not null)
+            {
+                warnings.Add(legacy.Error);
+            }
         }
 
         var openByTask = openBefore.ToDictionary(item => item.TaskId, StringComparer.Ordinal);
         var observedSequences = new Dictionary<string, long>(StringComparer.Ordinal);
         var observedTimes = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var observedStatuses = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var pending in openBefore)
+        if (!transportUnavailable)
         {
-            var transportMode = string.IsNullOrWhiteSpace(pending.TransportMode)
-                ? SessionLayerMode.Agmsg
-                : pending.TransportMode!;
-            var activity = NotifyPendingLiveness.Probe(routingRoot, pending, transportMode, runner, herdrExecutable, agmsgScriptsDirectory);
-            if (!activity.Resolved || activity.Running != true || activity.StateChangeSequence is not { } sequence)
+            foreach (var pending in openBefore)
             {
-                continue;
-            }
+                var transportMode = string.IsNullOrWhiteSpace(pending.TransportMode)
+                    ? SessionLayerMode.Agmsg
+                    : pending.TransportMode!;
+                var activity = NotifyPendingLiveness.Probe(routingRoot, pending, transportMode, runner, herdrExecutable, agmsgScriptsDirectory, bashExecutable);
+                if (!activity.Resolved || activity.Running != true || activity.StateChangeSequence is not { } sequence)
+                {
+                    continue;
+                }
 
-            var paneKey = pending.WorkspaceId is not null && pending.PaneId is not null
-                ? $"activity:{pending.WorkspaceId}:{pending.PaneId}"
-                : $"activity:{pending.RecipientIdentity}";
-            observedSequences[paneKey] = sequence;
-            if (activity.LastStateChangeAt is { } changedAt)
-            {
-                observedTimes[paneKey] = changedAt;
-            }
+                var paneKey = pending.WorkspaceId is not null && pending.PaneId is not null
+                    ? $"activity:{pending.WorkspaceId}:{pending.PaneId}"
+                    : $"activity:{pending.RecipientIdentity}";
+                observedSequences[paneKey] = sequence;
+                if (activity.LastStateChangeAt is { } changedAt)
+                {
+                    observedTimes[paneKey] = changedAt;
+                }
 
-            long? priorStateChangeSequence = null;
-            if (previousCycle?.LastObservedStateChangeSequences.TryGetValue(paneKey, out var observedSequence) == true)
-            {
-                priorStateChangeSequence = observedSequence;
-            }
+                long? priorStateChangeSequence = null;
+                if (previousCycle?.LastObservedStateChangeSequences.TryGetValue(paneKey, out var observedSequence) == true)
+                {
+                    priorStateChangeSequence = observedSequence;
+                }
 
-            var hasPriorActivityObservation = priorStateChangeSequence.HasValue;
-            var advanced = priorStateChangeSequence is { } priorSequence && sequence > priorSequence;
-            var stateChangedAfterDispatch = activity.LastStateChangeAt is { } lastStateChangeAt
-                && lastStateChangeAt > pending.DispatchedAt;
-            var working = string.Equals(activity.AgentStatus, "working", StringComparison.Ordinal)
-                && (advanced || (!hasPriorActivityObservation && stateChangedAfterDispatch));
+                var hasPriorActivityObservation = priorStateChangeSequence.HasValue;
+                var advanced = priorStateChangeSequence is { } priorSequence && sequence > priorSequence;
+                var stateChangedAfterDispatch = activity.LastStateChangeAt is { } lastStateChangeAt
+                    && lastStateChangeAt > pending.DispatchedAt;
+                var working = string.Equals(activity.AgentStatus, "working", StringComparison.Ordinal)
+                    && (advanced || (!hasPriorActivityObservation && stateChangedAfterDispatch));
             // A first observation establishes a durable baseline but is never
             // proof that no activity occurred. Only a later observation can
             // classify an unchanged/non-working recipient as live-idle.
-            var idle = hasPriorActivityObservation && !working;
-            var beyondThreshold = declaredBoundSeconds.HasValue
-                && now - pending.DispatchedAt > TimeSpan.FromSeconds(declaredBoundSeconds.Value);
-            if (!pending.ReportArrived && idle && beyondThreshold)
+                var idle = hasPriorActivityObservation && !working;
+                var beyondThreshold = declaredBoundSeconds.HasValue
+                    && now - pending.DispatchedAt > TimeSpan.FromSeconds(declaredBoundSeconds.Value);
+                if (!pending.ReportArrived && idle && beyondThreshold)
+                {
+                    observations.Add(new NotifySupervisionObservation
+                    {
+                        Key = $"live-idle:{paneKey}",
+                        Kind = "live-idle-no-report",
+                        OwnerRole = pending.DelegatingRole ?? ownerRole,
+                        SubjectRole = pending.RecipientRole,
+                        Source = "herdr.activity",
+                        Summary = $"Recipient '{pending.RecipientRole}' is live-idle with no report beyond the declared {declaredBoundSeconds!.Value}s threshold; inspect the recorded terminal pane. No recovery sequence was entered.",
+                        DetectableAt = pending.DispatchedAt.AddSeconds(declaredBoundSeconds!.Value),
+                        WakeSuppressed = !IsOwnerSubject(pending.RecipientRole),
+                    });
+                }
+            }
+
+            observations.AddRange(ReadRecordedSeatTransitions(
+                now,
+                trigger,
+                previousCycle,
+                observedSequences,
+                observedTimes,
+                observedStatuses));
+            foreach (var action in legacy.Actions)
             {
+                var record = openByTask.GetValueOrDefault(action.TaskId);
+                var registrationLoss = string.Equals(
+                    action.Verdict,
+                    NotifyPendingLivenessResult.RegistrationLostProcessPresent,
+                    StringComparison.Ordinal);
+                var paneKey = record is { WorkspaceId: not null, PaneId: not null }
+                    ? $"registration:{record.WorkspaceId}:{record.PaneId}"
+                    : $"registration:{record?.RecipientIdentity ?? action.RecipientRole}";
                 observations.Add(new NotifySupervisionObservation
                 {
-                    Key = $"live-idle:{paneKey}",
-                    Kind = "live-idle-no-report",
-                    OwnerRole = pending.DelegatingRole ?? ownerRole,
-                    SubjectRole = pending.RecipientRole,
-                    Source = "herdr.activity",
-                    Summary = $"Recipient '{pending.RecipientRole}' is live-idle with no report beyond the declared {declaredBoundSeconds!.Value}s threshold; inspect the recorded terminal pane. No recovery sequence was entered.",
-                    DetectableAt = pending.DispatchedAt.AddSeconds(declaredBoundSeconds!.Value),
-                    WakeSuppressed = !IsOwnerSubject(pending.RecipientRole),
+                    Key = registrationLoss ? paneKey : $"recipient:{action.TaskId}",
+                    Kind = registrationLoss
+                        ? NotifyPendingLivenessResult.RegistrationLostProcessPresent
+                        : "recipient-lost",
+                    OwnerRole = record?.DelegatingRole ?? ownerRole,
+                    SubjectRole = action.RecipientRole,
+                    Source = registrationLoss ? "notify-pending-liveness" : "notify-pending",
+                    Summary = action.Summary,
+                    DetectableAt = null,
+                    WakeAlreadyAttempted = registrationLoss ? false : action.Recovered,
+                    WakeAlreadyDelivered = registrationLoss ? false : action.Recovered && action.Cause is null,
+                    ResendPermitted = registrationLoss ? true : null,
+                    WakeCause = action.Cause,
                 });
             }
-        }
-
-        observations.AddRange(ReadRecordedSeatTransitions(
-            now,
-            trigger,
-            previousCycle,
-            observedSequences,
-            observedTimes,
-            observedStatuses));
-        foreach (var action in legacy.Actions)
-        {
-            var record = openByTask.GetValueOrDefault(action.TaskId);
-            var registrationLoss = string.Equals(
-                action.Verdict,
-                NotifyPendingLivenessResult.RegistrationLostProcessPresent,
-                StringComparison.Ordinal);
-            var paneKey = record is { WorkspaceId: not null, PaneId: not null }
-                ? $"registration:{record.WorkspaceId}:{record.PaneId}"
-                : $"registration:{record?.RecipientIdentity ?? action.RecipientRole}";
-            observations.Add(new NotifySupervisionObservation
-            {
-                Key = registrationLoss ? paneKey : $"recipient:{action.TaskId}",
-                Kind = registrationLoss
-                    ? NotifyPendingLivenessResult.RegistrationLostProcessPresent
-                    : "recipient-lost",
-                OwnerRole = record?.DelegatingRole ?? ownerRole,
-                SubjectRole = action.RecipientRole,
-                Source = registrationLoss ? "notify-pending-liveness" : "notify-pending",
-                Summary = action.Summary,
-                DetectableAt = null,
-                WakeAlreadyAttempted = registrationLoss ? false : action.Recovered,
-                WakeAlreadyDelivered = registrationLoss ? false : action.Recovered && action.Cause is null,
-                ResendPermitted = registrationLoss ? true : null,
-                WakeCause = action.Cause,
-            });
         }
 
         if (!string.IsNullOrWhiteSpace(repo))
@@ -365,8 +403,11 @@ internal sealed class NotifyMeasuredSupervisor
         observations.AddRange(ReadUndeliveredEscalations(now, previousCycle is not null)
             .Where(observation => !acknowledgedEscalations.Contains(observation.Key)));
         observations.AddRange(ReadUndeliveredReportOutbox());
-        observations.AddRange(ReadRecipeDriftObservations());
-        observations.AddRange(ReadAbsentSeats(now));
+        if (!transportUnavailable)
+        {
+            observations.AddRange(ReadRecipeDriftObservations());
+            observations.AddRange(ReadAbsentSeats(now));
+        }
 
         if (absentSinceLastCycle)
         {
@@ -399,7 +440,20 @@ internal sealed class NotifyMeasuredSupervisor
                 // finding. Keep its durable record active, but do not emit a
                 // duplicate result on unchanged cycles and never wake or enter
                 // the G630 recovery path for it.
-                records.Add(existing with { Summary = observation.Summary });
+                var retained = existing with
+                {
+                    Summary = observation.Summary,
+                    Cause = observation.Cause ?? existing.Cause,
+                };
+                records.Add(retained);
+                if (string.Equals(observation.Kind, "supervision-degraded", StringComparison.Ordinal))
+                {
+                    // A transport dependency is a cycle fact, not a
+                    // once-only informational activity finding: surface one
+                    // degraded finding for each affected cycle, still once
+                    // for the cycle rather than once per delegation.
+                    findings.Add(ToFinding(retained));
+                }
                 continue;
             }
 
@@ -439,6 +493,7 @@ internal sealed class NotifyMeasuredSupervisor
                 WakeClass = ResolveWakeClass(observation),
                 Source = observation.Source,
                 Summary = observation.Summary,
+                Cause = observation.Cause,
                 ResendPermitted = observation.ResendPermitted,
                 DetectableAt = previousCycle is null ? null : observation.DetectableAt,
                 DetectableAtUnknown = previousCycle is null || observation.DetectableAt is null,
@@ -600,7 +655,7 @@ internal sealed class NotifyMeasuredSupervisor
 
         using var eventCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Task? eventMonitor = null;
-        if (eventMode)
+        if (eventMode && !first.Findings.Any(finding => string.Equals(finding.Kind, "supervision-degraded", StringComparison.Ordinal)))
         {
             eventMonitor = new NotifySupervisionEventMonitor(
                 routingRoot,
@@ -847,7 +902,8 @@ internal sealed class NotifyMeasuredSupervisor
             }),
             runner,
             herdrExecutable,
-            agmsgScriptsDirectory);
+            agmsgScriptsDirectory,
+            bashExecutable);
         return new NotifySupervisionWakeResult
         {
             Attempted = true,
@@ -869,7 +925,8 @@ internal sealed class NotifyMeasuredSupervisor
                 notification,
                 runner,
                 herdrExecutable,
-                agmsgScriptsDirectory);
+                agmsgScriptsDirectory,
+                bashExecutable);
         }
 
         var payload = JsonNode.Parse(notification)?.AsObject() ?? new JsonObject();
@@ -882,7 +939,8 @@ internal sealed class NotifyMeasuredSupervisor
             payload.ToJsonString(),
             runner,
             herdrExecutable,
-            agmsgScriptsDirectory);
+            agmsgScriptsDirectory,
+            bashExecutable);
     }
 
     private bool IsOwnerSubject(string? subjectRole) =>
@@ -1426,7 +1484,7 @@ internal sealed class NotifyMeasuredSupervisor
         SurfacedAt = record.SurfacedAt,
         WakeAttempted = record.WakeAttempted,
         WakeDelivered = record.WakeDelivered,
-        Cause = record.WakeCause,
+        Cause = record.Cause ?? record.WakeCause,
     };
 }
 
@@ -1443,6 +1501,7 @@ internal sealed record NotifySupervisionObservation
     public bool WakeAlreadyAttempted { get; init; }
     public bool WakeAlreadyDelivered { get; init; }
     public string? WakeCause { get; init; }
+    public string? Cause { get; init; }
     public bool WakeSuppressed { get; init; }
     public string? WorkspaceId { get; init; }
     public string? PaneId { get; init; }

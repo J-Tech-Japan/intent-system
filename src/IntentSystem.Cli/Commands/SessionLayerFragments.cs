@@ -314,6 +314,11 @@ internal static class SessionLayerFragments
             Operative("One canonical nudge per wake, never a batch.")),
         Fragment(
             S1,
+            Operative("- Measured `intent-cli notify supervise` keeps the interval cycle as the safety floor. "),
+            Operative("The optional SECOND wake source is enabled only by the concrete `--event-mode` flag: it holds blocking herdr waits for `pane.agent_status_changed` and re-arms after wait death/error. "),
+            Operative("It does not add a second supervisor or change finding, recovery, or wake-target semantics.")),
+        Fragment(
+            S1,
             Descriptive("- **blocking dialog** — the scan sees: an approval, selection, or trust prompt waiting for input."),
             Scaffold(" "),
             Operative("Recovery: record it and route it to orchestration under the durable per-team policy; design never answers or relays keys, and absent policy is escalate-only.")),
@@ -1217,6 +1222,11 @@ internal static class SessionLayerFragments
             Operative("This is the existing watchdog, not a second one: its safety rules apply verbatim (see the watchdog safety-rules reference below)."),
             Scaffold(" "),
             Operative("One canonical nudge per wake, never a batch.")),
+        Fragment(
+            "design_workspace_supervision",
+            Operative("Measured `intent-cli notify supervise` keeps the interval cycle as the safety floor. "),
+            Operative("The optional SECOND wake source is enabled only by the concrete `--event-mode` flag: it holds blocking herdr waits for `pane.agent_status_changed` and re-arms after wait death/error. "),
+            Operative("It does not add a second supervisor or change finding, recovery, or wake-target semantics.")),
         Fragment("design_workspace_supervision", Descriptive("blocking dialog")),
         Fragment("design_workspace_supervision", Descriptive("an approval, selection, or trust prompt waiting for input.")),
         Fragment("design_workspace_supervision", Operative("record it and route it to orchestration under the durable per-team policy; design never answers or relays keys, and absent policy is escalate-only.")),

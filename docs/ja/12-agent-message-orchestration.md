@@ -465,6 +465,45 @@ operator command で明示的に登録解除 / 再登録する必要がありま
 > **1.x を通じた preview (G659)。** event wait、transition / wait record、event / interval de-dup は
 > post-freeze preview です。release decision は行わず、1.x の間に変更・撤回できます。
 
+### scheduler の自己完結性と transport degradation の正直な分類 (G675 — preview-through-1.x)
+
+`notify supervise install` は scheduler artifact の emission 時に
+`intent-cli` executable を絶対パスへ解決します。loop が使う runtime transport
+binary も解決できる場合は絶対 executable として埋め込み、解決できない
+binary は emission result に名前を出し、残る command name を覆う記録済み
+PATH も artifact に残します。この surface は emit-only のままであり、
+intent-cli は scheduler job の register、start、stop、replace、manage を
+行いません。
+
+operator は live PID と最初の cycle record である `cycles.jsonl` の両方を
+確認します。loaded PID だけでは loop が生きている証拠になりません。
+guidance は loaded-but-silently-exiting / exit-127 という形を明示します。
+G675 の実測は 2026-08-12、host macOS node 08 における別 attribution の
+二つの act です。act one は launchd の minimal PATH で
+`/usr/bin/env intent-cli` が loaded だが silently exiting、exit 127 になる
+ことを確認し、同じ machine の audit は accumulated supervisor が 4 件ある
+ことを確認しました。act two は `herdr` 欠落により、recipient が alive で
+mid-task のままなのに 1 cycle で false recipient loss が 10 件出る形を確認
+しました。これは recipient absence ではなく scheduler / transport の事実です。
+
+transport process を start できない場合は recipient liveness を一度も判定
+する前に、cycle-level の `supervision-degraded` finding 一件として分類します。
+cause は `transport-unavailable` とし、binary と start error を含めます。
+`recipient-lost` にはせず、open delegation ごとに繰り返しません。healthy
+recipient は従来どおり silent であり、G648 の genuine absence と
+foreground-process corroboration rule は byte/semantic とも変更しません。
+
+optional な第 2 wake source の具体的な flag は `--event-mode` です。
+`pane.agent_status_changed` のための blocking herdr wait を保持しますが、
+interval cycle が safety floor として残ります。G675 は duplicate-supervisor
+detection、recovery sequence、新しい verdict name、wake transport、emission
+target を追加しません。
+
+> **1.x を通じた preview (G675)。** scheduler executable resolution、記録済み
+> PATH diagnostics、cycle-level transport degradation、rendered verification
+> guidance は post-freeze preview であり、1.0 compatibility promise の対象外です。
+> 1.x の間に変更または撤回できます。
+
 ### escalation ladder と CI fallback (G657 — preview-through-1.x)
 
 完全な ladder は次のとおりです。各 seat は割り当てられた作業を行い、orchestration は通常の stall を検知して
