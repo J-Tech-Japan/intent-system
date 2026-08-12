@@ -100,15 +100,25 @@ internal static class AutomationHostReviewPreflightCommand
         IReadOnlyList<GitHubAutomationIssueCandidate> publishedIntentTargetIssues;
         try
         {
-            intentTargetPrs = lister.ListPullRequests(repo!, [WorkerNextActionConstants.Labels.IntentTarget]);
-            allOpenPrs = lister.ListPullRequests(repo!, []);
-            intentTargetIssues = lister.ListIssues(repo!, [WorkerNextActionConstants.Labels.IntentTarget]);
+            intentTargetPrs = lister.ListPullRequests(
+                repo!,
+                [WorkerNextActionConstants.Labels.IntentTarget],
+                GitHubAutomationReadSurface.HostReviewPreflight);
+            allOpenPrs = lister.ListPullRequests(
+                repo!,
+                [],
+                GitHubAutomationReadSurface.HostReviewPreflight);
+            intentTargetIssues = lister.ListIssues(
+                repo!,
+                [WorkerNextActionConstants.Labels.IntentTarget],
+                GitHubAutomationReadSurface.HostReviewPreflight);
             publishedIntentTargetIssues = lister.ListIssues(
                 repo!,
                 [
                     WorkerNextActionConstants.Labels.IntentTarget,
                     WorkerNextActionConstants.Labels.IntentPrCreated
-                ]);
+                ],
+                GitHubAutomationReadSurface.HostReviewPreflight);
         }
         catch (GitHubApiRequestException exception)
         {

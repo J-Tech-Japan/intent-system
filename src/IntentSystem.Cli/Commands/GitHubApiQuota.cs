@@ -6,10 +6,10 @@ using System.Text.Json.Serialization;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G673: stable machine-readable vocabulary for an upstream GitHub API
-/// availability observation.  The candidate lister still uses <c>gh</c> for
-/// its normal queries; this type only describes the structured quota signal
-/// returned by the GitHub rate-limit endpoint.
+/// G673/G674: stable machine-readable vocabulary for an upstream GitHub API
+/// availability observation. Candidate issue reads use REST while the
+/// unverified PR remainder stays on GraphQL; this type describes the
+/// structured quota signal for either dependency.
 /// </summary>
 internal static class GitHubApiQuotaConstants
 {
@@ -20,6 +20,7 @@ internal static class GitHubApiQuotaConstants
     public const string QuotaObservationFailedCause = "github-api-rate-limit-unavailable";
     public const string DetectionUnavailableCause = "detection-unavailable";
     public const string GraphQlResource = "graphql";
+    public const string RestCoreResource = "core";
 }
 
 /// <summary>One resource row from <c>gh api rate_limit</c>.</summary>
@@ -68,6 +69,20 @@ internal sealed record GitHubApiDegradedState
 
     [JsonPropertyName("reset_at")]
     public string? ResetAt { get; init; }
+
+    /// <summary>
+    /// G674: identifies the surface's read dependency when the quota state is
+    /// emitted. REST-backed issue reads use <c>rest-core</c>; reads with an
+    /// unverified field remain explicitly <c>graphql-bound</c>.
+    /// </summary>
+    [JsonPropertyName("dependency")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Dependency { get; init; }
+
+    /// <summary>G674: fields that kept this read GraphQL-bound.</summary>
+    [JsonPropertyName("unverified_fields")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? UnverifiedFields { get; init; }
 }
 
 /// <summary>Structured snapshot of all resources reported by GitHub.</summary>
@@ -93,6 +108,20 @@ internal sealed record GitHubApiQuotaReport
 
     public GitHubApiQuotaResource? Find(string resource) => Resources.FirstOrDefault(row =>
         string.Equals(row.Resource, resource, StringComparison.OrdinalIgnoreCase));
+
+    public GitHubApiDegradedState? Exhausted(string resource)
+    {
+        var row = Find(resource);
+        return row?.Remaining is <= 0
+            ? new GitHubApiDegradedState
+            {
+                Resource = row.Resource,
+                Remaining = row.Remaining,
+                Reset = row.Reset,
+                ResetAt = row.ResetAt,
+            }
+            : null;
+    }
 }
 
 /// <summary>
@@ -102,6 +131,15 @@ internal sealed record GitHubApiQuotaReport
 internal static class GitHubApiQuotaParser
 {
     public static GitHubApiQuotaReport? Parse(string? json)
+        => Parse(json, GitHubApiQuotaConstants.GraphQlResource);
+
+    /// <summary>
+    /// Parse the snapshot against the resource used by the failed read.
+    /// G673's parameterless form remains GraphQL-oriented for the doctor and
+    /// compatibility fixtures; G674 uses this overload so a REST failure is
+    /// not misclassified from an exhausted GraphQL row.
+    /// </summary>
+    public static GitHubApiQuotaReport? Parse(string? json, string resourceName)
     {
         if (string.IsNullOrWhiteSpace(json))
         {
@@ -141,9 +179,9 @@ internal static class GitHubApiQuotaParser
                 resources.Add(rate);
             }
 
-            var graphql = resources.FirstOrDefault(row =>
-                string.Equals(row.Resource, GitHubApiQuotaConstants.GraphQlResource, StringComparison.OrdinalIgnoreCase));
-            if (graphql is null)
+            var observed = resources.FirstOrDefault(row =>
+                string.Equals(row.Resource, resourceName, StringComparison.OrdinalIgnoreCase));
+            if (observed is null)
             {
                 return new GitHubApiQuotaReport
                 {
@@ -153,8 +191,8 @@ internal static class GitHubApiQuotaParser
                 };
             }
 
-            var degraded = graphql?.Remaining is <= 0
-                ? ToDegradedState(graphql!)
+            var degraded = observed.Remaining is <= 0
+                ? ToDegradedState(observed)
                 : null;
 
             return new GitHubApiQuotaReport
@@ -339,7 +377,10 @@ internal static class GitHubApiFailureFactory
         string? stderr,
         string? stdout,
         int exitCode,
-        IGitHubApiQuotaProbe? quotaProbe)
+        IGitHubApiQuotaProbe? quotaProbe,
+        string? quotaResource = null,
+        string? dependency = null,
+        IReadOnlyList<string>? unverifiedFields = null)
     {
         var classification = GitHubCliJsonBoundary.ClassifyProcessFailure(stderr, stdout);
         var errorBody = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
@@ -360,9 +401,23 @@ internal static class GitHubApiFailureFactory
         }
 
         var quota = quotaProbe?.Read();
-        var degraded = quota?.DegradedState;
+        var degraded = quotaResource is null
+            ? quota?.DegradedState
+            : quota?.Exhausted(quotaResource)
+                ?? (quota?.DegradedState is { } observed
+                    && string.Equals(observed.Resource, quotaResource, StringComparison.OrdinalIgnoreCase)
+                    ? observed
+                    : null);
         if (degraded is not null)
         {
+            if (dependency is not null || unverifiedFields is not null)
+            {
+                degraded = degraded with
+                {
+                    Dependency = dependency,
+                    UnverifiedFields = unverifiedFields,
+                };
+            }
             return new GitHubApiQuotaExceededException(operation, degraded);
         }
 

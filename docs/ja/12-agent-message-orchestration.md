@@ -87,6 +87,23 @@ measurement（`graphql.remaining == 0`、5,046 requests/hour）であり、こ�
 publish cycle で GraphQL refusal（REST core は 4999/5000）を観測したことは host corroboration
 です。#1442 の再帰属ではありません。
 
+### GraphQL remainder を明示した REST read (G674 — preview-through-1.x)
+
+#1442 の surface inventory は issue-list read の正確な field mapping を記録します。
+これは `core` 上の `GET /repos/{owner}/{repo}/issues` で、`number`、`title`、
+`html_url`、`created_at`、`body`、`updated_at`、`labels[].name`、`state` を既存の
+candidate shape に対応させます。`pull_request` marker は adapter の filter だけに使います。
+PR read は caller が `closingIssuesReferences` を消費する箇所では引き続き
+`graphql-bound` です。stalled-work とその heartbeat も、check-runs だけでは
+field-complete ではない GraphQL の `CheckRun`/`StatusContext` `statusCheckRollup`
+remainder を保持します。
+
+degraded state がその read によって発生したとき、`dependency` は `rest-core` または
+`graphql-bound` を示し、`unverified_fields` は migration を妨げた field を示します。
+これは transport/quota の attribution だけであり、wake / supervision semantics、caller
+output、認証、mutation path は変わりません。この preview slice に cache、batch、budget、
+retry、sleep、reset scheduler はありません。
+
 design wake の有効な outcome は 4 種類だけです。canonical workflow を進める、新しい実進捗の
 evidence を確認する、次の actionable な design / packet / issue candidate を見つけて provenance
 付きで orchestration に渡す、人間だけが解決できる blocker を報告する、のいずれかです。

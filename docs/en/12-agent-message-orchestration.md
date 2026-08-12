@@ -95,6 +95,24 @@ the remote-herdr measurement (`graphql.remaining == 0`, 5,046 requests/hour),
 while this host's same-day GraphQL refusal during the G667 publish cycle with
 REST core at 4999/5000 is host corroboration, not a re-attribution of #1442.
 
+### REST reads with an explicit GraphQL remainder (G674 — preview-through-1.x)
+
+The #1442 surface inventory now records the exact field mapping for the
+issue-list reads: `GET /repos/{owner}/{repo}/issues` over `core`, with
+`number`, `title`, `html_url`, `created_at`, `body`, `updated_at`,
+`labels[].name`, and `state` mapped to the existing candidate shape. The
+`pull_request` marker is only an adapter filter. The PR reads remain
+`graphql-bound` where the caller consumes `closingIssuesReferences`; stalled-
+work and its heartbeat also retain the GraphQL `CheckRun`/`StatusContext`
+`statusCheckRollup` remainder because check-runs alone are not field-complete.
+
+When a degraded state is caused by one of those reads, `dependency` names
+`rest-core` or `graphql-bound` and `unverified_fields` names the fields that
+prevented migration. This is a transport/quota attribution only: wake and
+supervision semantics, caller output, authentication, and mutation paths are
+unchanged. There is no cache, batching, budget, retry, sleep, or reset
+scheduler in this preview slice.
+
 A design wake has exactly four valid outcome shapes: advance the canonical
 workflow; confirm new evidence of real progress; discover the next actionable
 design, packet, or issue candidate and hand it to orchestration; or report a

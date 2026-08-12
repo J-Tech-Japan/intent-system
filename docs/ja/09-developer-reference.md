@@ -686,6 +686,39 @@ kind では `— FYI:` prose `` で終わります — そのため読み手（�
 orchestrator でも）が「transition は不要」を actionable な次コマンドと
 取り違えることはありません。
 
+### REST GitHub read の equivalence と GraphQL-bound remainder (G674 — preview-through-1.x)
+
+issue #1442 で測定した 6 つの GitHub-consulting surface は、完全な
+field set の検証が済んだ issue-list projection だけを REST に切り替えます。
+正確な endpoint は `gh api --paginate --slurp` で呼ぶ
+`GET /repos/{owner}/{repo}/issues?state=open&labels=<...>` です。field の
+対応は `number`、`title`、`html_url -> url`、`created_at -> createdAt`、
+`body`、`updated_at -> updatedAt`、`labels[].name`、`state`（既存の大文字
+語彙へ normalize）です。REST の `pull_request` marker は、従来の
+`gh issue list` と同じ issue-only の結果を保つため adapter 内だけで使います。
+
+surface ごとの dependency は明示します:
+
+| surface | 検証済み REST read (`core`) | 残る GraphQL-bound read |
+|---|---|---|
+| `worker next-action` | `intent-target` issue list | open PR list: `closingIssuesReferences` |
+| `host-loop-next-action` | open issue list | open PR list: `closingIssuesReferences` |
+| `host-review-preflight` | `intent-target` と published issue list | open PR list: `closingIssuesReferences` |
+| `reconcile` | published issue list | open PR list: `closingIssuesReferences` |
+| `stalled-work` | open issue list | open/merged/closed PR list: `closingIssuesReferences` と `statusCheckRollup` union |
+| `heartbeat` | stalled-work から継承する issue list | stalled-work から継承する PR read |
+
+`closingIssuesReferences` にはこの slice で検証済みの field-complete な
+REST equivalent がなく、check-runs endpoint だけでも GraphQL の
+`CheckRun`/`StatusContext` union と同値だとは証明できません。したがって
+body text や partial な check-runs response で近似せず、これらの read は
+GraphQL-bound のままです。quota で止まったとき、G673 degraded state は
+`dependency: graphql-bound` と `unverified_fields` を追加します。REST
+failure は `core` resource と `dependency: rest-core` で分類します。これに
+より caller output、mutation path、認証、`gh` binary を変えずに read ごとの
+quota dependency を表せます。pagination は endpoint の順序付き page traversal
+だけであり、cache、batch budget、retry、sleep、reset scheduler は追加しません。
+
 ### next-slice と backlog idle の shared publish-gate readiness (G670, preview-through-1.x)
 
 `intent next-slice` と `automation stalled-work` は、`issue publish-flow` が

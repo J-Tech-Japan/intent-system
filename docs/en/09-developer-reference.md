@@ -673,6 +673,40 @@ wake procedure and from an external heartbeat are separate follow-up slices.
 informational one, so a reader (human or orchestrator) can never mistake
 "no transition needed" for an actionable next command.
 
+### REST GitHub read equivalence and GraphQL-bound remainders (G674 — preview-through-1.x)
+
+The six GitHub-consulting surfaces measured in issue #1442 use the verified
+REST issue-list projection where its complete field set is proven. The exact
+endpoint is `GET /repos/{owner}/{repo}/issues?state=open&labels=<...>` via
+`gh api --paginate --slurp`; REST fields map as follows:
+`number`, `title`, `html_url -> url`, `created_at -> createdAt`, `body`,
+`updated_at -> updatedAt`, `labels[].name`, and `state` (normalized to the
+existing upper-case vocabulary). The REST-only `pull_request` marker is used
+only to preserve `gh issue list`'s issue-only result.
+
+The per-surface dependency is intentionally explicit:
+
+| surface | verified REST read (`core`) | remaining GraphQL-bound read |
+|---|---|---|
+| `worker next-action` | `intent-target` issue list | open PR list: `closingIssuesReferences` |
+| `host-loop-next-action` | open issue list | open PR list: `closingIssuesReferences` |
+| `host-review-preflight` | `intent-target` and published issue lists | open PR lists: `closingIssuesReferences` |
+| `reconcile` | published issue list | open PR list: `closingIssuesReferences` |
+| `stalled-work` | open issue list | open, merged, and closed PR lists: `closingIssuesReferences` and the `statusCheckRollup` union |
+| `heartbeat` | inherited stalled-work issue list | inherited stalled-work PR reads |
+
+`closingIssuesReferences` has no field-complete REST equivalent verified by
+this slice, and the check-runs endpoint alone does not prove equivalence to
+the GraphQL `CheckRun`/`StatusContext` union. Those reads therefore remain
+GraphQL-bound rather than being approximated from body text or a partial
+check-runs response. When such a read is quota-blocked, G673's degraded state
+adds `dependency: graphql-bound` and `unverified_fields`; a REST failure is
+classified against the `core` resource and uses `dependency: rest-core`.
+This keeps quota reporting per read dependency without changing any caller
+output, mutation path, authentication behavior, or `gh` binary. Pagination
+is only the endpoint's ordered page traversal; there is no cache, batch
+budget, retry, sleep, or reset scheduler.
+
 ### Shared publish-gate readiness for next-slice and backlog idle (G670, preview-through-1.x)
 
 `intent next-slice` and `automation stalled-work` consult the exact shared

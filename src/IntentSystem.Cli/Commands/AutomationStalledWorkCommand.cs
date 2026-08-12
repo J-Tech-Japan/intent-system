@@ -581,9 +581,18 @@ internal static class AutomationStalledWorkCommand
             }
         }
 
-        var openIssues = ReadGitHub(() => lister.ListIssues(repo, Array.Empty<string>()));
-        var openPrs = ReadGitHub(() => lister.ListPullRequests(repo, Array.Empty<string>()));
-        var mergedPrs = ReadGitHub(() => lister.ListMergedPullRequests(repo, Array.Empty<string>()));
+        var openIssues = ReadGitHub(() => lister.ListIssues(
+            repo,
+            Array.Empty<string>(),
+            GitHubAutomationReadSurface.StalledWork));
+        var openPrs = ReadGitHub(() => lister.ListPullRequests(
+            repo,
+            Array.Empty<string>(),
+            GitHubAutomationReadSurface.StalledWork));
+        var mergedPrs = ReadGitHub(() => lister.ListMergedPullRequests(
+            repo,
+            Array.Empty<string>(),
+            GitHubAutomationReadSurface.StalledWork));
 
         var candidateDomains = DomainCandidateScanner.Scan(context);
         var items = new List<StalledWorkItem>();
@@ -603,7 +612,10 @@ internal static class AutomationStalledWorkCommand
         CollectPublishedNotDelegated(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
         var branchLaneQueueState = TryLoadQueueStateForBranchLaneRouting(context, domain, repo, warnings);
         var closedPrs = branchLaneQueueState?.Items.Any(item => item.RoutingSnapshot is not null) == true
-            ? ReadGitHub(() => lister.ListClosedPullRequests(repo, Array.Empty<string>()))
+            ? ReadGitHub(() => lister.ListClosedPullRequests(
+                repo,
+                Array.Empty<string>(),
+                GitHubAutomationReadSurface.StalledWork))
             : Array.Empty<GitHubAutomationPrCandidate>();
         if (githubApiFailure is not null)
         {

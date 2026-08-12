@@ -158,8 +158,14 @@ internal static class AutomationHostLoopNextActionCommand
         try
         {
             var lister = CandidateListerFactory?.Invoke() ?? new GhCliGitHubAutomationCandidateLister();
-            openPrs = lister.ListPullRequests(parsed.Repo, requiredLabels: Array.Empty<string>());
-            openIssues = lister.ListIssues(parsed.Repo, requiredLabels: Array.Empty<string>());
+            openPrs = lister.ListPullRequests(
+                parsed.Repo,
+                requiredLabels: Array.Empty<string>(),
+                surface: GitHubAutomationReadSurface.HostLoopNextAction);
+            openIssues = lister.ListIssues(
+                parsed.Repo,
+                requiredLabels: Array.Empty<string>(),
+                surface: GitHubAutomationReadSurface.HostLoopNextAction);
         }
         catch (GitHubApiRequestException exception)
         {
