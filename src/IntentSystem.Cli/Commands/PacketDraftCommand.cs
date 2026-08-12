@@ -139,9 +139,19 @@ internal static class PacketDraftCommand
         {
             baseBranchPolicy = CliRuntimeContracts.DefaultBaseBranchPolicy;
         }
-        var expectedBaseBranch = BaseBranchPolicyContract.IsKnownPolicy(baseBranchPolicy)
+        var policyDefaultBaseBranch = BaseBranchPolicyContract.IsKnownPolicy(baseBranchPolicy)
             ? BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy)
             : CliRuntimeContracts.DirectMainBaseBranch;
+        // G667: use the shared effective-branch judgment so a configured
+        // implementation_base_branch is carried into newly drafted issue
+        // bodies, while the policy default remains byte-identical when no
+        // implementation branch is configured.
+        var branchDecision = ImplementationBaseBranchResolver.Resolve(
+            explicitBranch: null,
+            configuredBranch: context.Config.Project.ImplementationBaseBranch,
+            sameRepoTopologyBranch: null,
+            policyDefaultBranch: policyDefaultBaseBranch);
+        var expectedBaseBranch = branchDecision.Branch;
 
         // G530: review-context.md's generated "Facet context" block scopes
         // to whatever `intent_references` an EXISTING packet.yaml on disk

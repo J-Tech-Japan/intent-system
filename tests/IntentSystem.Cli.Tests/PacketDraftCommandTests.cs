@@ -742,6 +742,92 @@ public sealed class PacketDraftCommandTests
     }
 
     [Fact]
+    public void Execute_G667_ConfiguredImplementationBaseBranch_UsesConfiguredBranch()
+    {
+        using var workspace = new PacketDraftWorkspace();
+        var context = workspace.Context with
+        {
+            Config = workspace.Context.Config with
+            {
+                Project = workspace.Context.Config.Project with
+                {
+                    BaseBranchPolicy = CliRuntimeContracts.DirectMainBaseBranchPolicy,
+                    ImplementationBaseBranch = "develop"
+                }
+            }
+        };
+        using var writer = new StringWriter();
+
+        var exitCode = PacketDraftCommand.Execute(
+            context,
+            ["--execution-unit", "G667", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var githubBody = File.ReadAllText(
+            Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G667", "github-body.md"));
+
+        Assert.Contains("Expected PR base branch: `develop`", githubBody, StringComparison.Ordinal);
+        Assert.Contains("Open all child PRs against `develop` directly.", githubBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("Expected PR base branch: `main`", githubBody, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(CliRuntimeContracts.DirectMainBaseBranchPolicy, "main")]
+    [InlineData(CliRuntimeContracts.MainAiBaseBranchPolicy, "main-ai")]
+    public void Execute_G667_AbsentImplementationBaseBranch_PreservesPolicyDefaultScaffold(
+        string policy,
+        string expectedBranch)
+    {
+        using var baselineWorkspace = new PacketDraftWorkspace();
+        using var explicitEmptyWorkspace = new PacketDraftWorkspace();
+        var baselineContext = baselineWorkspace.Context with
+        {
+            Config = baselineWorkspace.Context.Config with
+            {
+                Project = baselineWorkspace.Context.Config.Project with
+                {
+                    BaseBranchPolicy = policy
+                }
+            }
+        };
+        var explicitEmptyContext = explicitEmptyWorkspace.Context with
+        {
+            Config = explicitEmptyWorkspace.Context.Config with
+            {
+                Project = explicitEmptyWorkspace.Context.Config.Project with
+                {
+                    BaseBranchPolicy = policy,
+                    ImplementationBaseBranch = string.Empty
+                }
+            }
+        };
+        using var baselineWriter = new StringWriter();
+        using var explicitEmptyWriter = new StringWriter();
+
+        Assert.Equal(
+            0,
+            PacketDraftCommand.Execute(
+                baselineContext,
+                ["--execution-unit", "G667-default"],
+                baselineWriter));
+        Assert.Equal(
+            0,
+            PacketDraftCommand.Execute(
+                explicitEmptyContext,
+                ["--execution-unit", "G667-empty"],
+                explicitEmptyWriter));
+
+        var baselineBody = File.ReadAllText(
+            Path.Combine(baselineWorkspace.RepoRoot, ".intent-cli", "issues", "G667-default", "github-body.md"));
+        var explicitEmptyBody = File.ReadAllText(
+            Path.Combine(explicitEmptyWorkspace.RepoRoot, ".intent-cli", "issues", "G667-empty", "github-body.md"));
+
+        Assert.Equal(baselineBody, explicitEmptyBody);
+        Assert.Contains($"Expected PR base branch: `{expectedBranch}`", baselineBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GeneratesOptionalIntentMaintenanceMetadata_WithoutAddingRequiredSections()
     {
         // G461 AC: new generated packet templates include the optional intent

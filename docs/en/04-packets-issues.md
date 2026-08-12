@@ -64,6 +64,21 @@ The current intent-cli domain is the measured example—it has no facet nodes—
 human/agent semantic alignment review remains necessary. Do not author facet
 nodes merely to manufacture a green result in this slice.
 
+## Effective PR base branch in a new packet draft
+
+`packet draft` fills the `Expected PR base branch` line in the new
+`github-body.md` through the same effective-branch judgment used by the
+automation surfaces:
+
+- when `[project] implementation_base_branch` is configured, that branch is
+  used;
+- when it is absent, the default branch of `base_branch_policy` is used
+  (`direct-main` → `main`, `main-ai` → `main-ai`).
+
+This behavior applies only to newly scaffolded packet bodies. `packet draft`
+does not rewrite existing packets or published issue bodies, and an absent
+`implementation_base_branch` keeps the prior scaffold output byte-for-byte.
+
 ## Alternative: timer-loop setup
 
 Use [Implementation loop setup](05-implementation-loop.md) and then
