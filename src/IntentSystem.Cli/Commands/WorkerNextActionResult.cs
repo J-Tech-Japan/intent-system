@@ -199,6 +199,8 @@ internal static class WorkerNextActionConstants
     {
         public const string RepairRequired = "repair-required";
         public const string ReadyToImplement = "ready-to-implement";
+        public const string ClaimRefused = "claim-refused";
+        public const string ClaimScopeUnresolved = "claim-scope-unresolved";
 
         /// <summary>
         /// G325: emitted alongside <see cref="Actions.Wait"/> when an

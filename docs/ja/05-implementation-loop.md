@@ -68,6 +68,7 @@
 ```bash
 intent-cli claim acquire --scope execution-unit:<EU> --actor <actor> --team <team> --write --format json
 intent-cli claim acquire --scope release-prep:<owner/repo>:<version> --actor <actor> --team <team> --write --format json
+intent-cli claim verify --scope <scope> --team <team> --format json
 ```
 
 acquire は厳密に `git pull --ff-only` → `.intent-cli/claims/` 配下に immutable record を
@@ -89,6 +90,24 @@ fresh host は `.gitattributes` に次の exact line をこの順序で置きま
 existing host は自動 migrate しません。最後の specific line は broad union rule の後へ、
 明示的に review した commit でのみ追加します。
 
+### Preview: claim-aware start surface (G680)
+
+packet draft、queue seed/publish-flow、worker next-action、release-prep は同じ
+`claim verify` judgment を使います。Git worktree では verifier が current branch を最初に
+fetch し、fresh な `origin` ref の claims tree を読みます。local absence や stale local record を
+ownership / no-store の証拠にはせず、fresh canonical Git evidence を確立できなければ fail closed
+します。canonical に claims store が存在しない host だけは legacy single-team output を
+byte-identical に維持します。store が設定されている場合、invoking team が matching scope を
+保持している必要があります。unheld / other-team の拒否は scope、holder、holder team を
+名指します。next-slice は同じ judgment を recommendation mode で使い、unheld と own-team
+unit は candidate のまま、claimed-elsewhere unit は holder evidence 付きで除外します。
+これにより start が拒否する作業を recommendation が促しません。
+
+番号は claim-then-draft です。scaffold 前に `execution-unit:<N>` を claim し、N に負けたら
+fast-forward、次番号を再計算し、その番号を exactly once retry します。GitHub lifecycle label
+は visible な defence in depth のままで acquisition fact ではありません。review/closeout gate と
+`worker complete` は変更しません。
+
 ## コマンドリファレンス（agent・メンテナ・トラブルシューティング向け）
 
 > **注意:** 以下のコマンドは AI agent が内部で実行します。ループの詳細条件は
@@ -97,7 +116,7 @@ existing host は自動 migrate しません。最後の specific line は broad
 
 ```bash
 # 対象を 1 つだけ選ぶ（手動の label-walking はしない）
-intent-cli worker next-action --repo <owner>/<repo> --github-only --format json
+intent-cli worker next-action --repo <owner>/<repo> --team <team> --github-only --format json
 
 # issue-to-pr: claim → 最小実装 → ready-for-review の PR を作成
 intent-cli worker claim --kind issue --number <n> --repo <owner>/<repo> --github-only --write --format json

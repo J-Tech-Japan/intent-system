@@ -146,6 +146,7 @@ internal static class CommandRouter
             ["claim"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["acquire"] = ClaimCommand.ExecuteAcquire,
+                ["verify"] = ClaimVerificationCommand.Execute,
                 ["release"] = ClaimCommand.ExecuteRelease,
                 ["takeover"] = ClaimCommand.ExecuteTakeover,
             },
@@ -638,7 +639,7 @@ internal static class CommandRouter
             ["automation"] = "`intent-cli automation summary --domain <d> --format json` (capability JSON), `intent-cli automation doctor --format json` (CLI freshness).",
             ["session-layer"] = "`intent-cli session-layer show --domain <d> [--team <t>]` (which transport is in force), `session-layer set` to change it, and `session-layer topology record|show|validate --domain <d> --team <t>` for the delivery mapping.",
             ["notify"] = "`intent-cli notify delegate|report|escalate|dispose|status|supervise --domain <d> --team <t> ...`; use `intent-cli notify supervise install ...` to emit an operator-managed scheduler artifact without registration or process execution (canonical role workflow, explicit pending-delegation disposition, pending-delegation query, and preview recovery supervisor; transport follows the recorded session-layer mode).",
-            ["claim"] = "`intent-cli claim acquire --scope execution-unit:<EU> --actor <actor> --team <team> --write`; release/takeover are explicit attributed pushes and age never changes ownership.",
+            ["claim"] = "`intent-cli claim acquire --scope execution-unit:<EU> --actor <actor> --team <team> --write`, then `intent-cli claim verify --scope <scope> --team <team>` before a start surface; release/takeover are explicit attributed pushes and age never changes ownership.",
             ["judgment-wait"] = "`intent-cli judgment-wait query --domain <d> [--team <t>] --format json` (durable records of a judgment blocking progress, owned by any judging party); use `open|resolve|supersede --write` for explicit lifecycle transitions.",
             ["operator-attention"] = "Deprecated alias through 1.x; use `intent-cli judgment-wait query --domain <d> [--team <t>] --format json`. Machine output includes `deprecation_warning` naming the replacement.",
             ["bug"] = "`intent-cli guide worker pr-comment-fix --format json` (repair guidance), `intent-cli bug report`/`triage` for new-bug intake.",
