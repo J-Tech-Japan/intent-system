@@ -167,6 +167,49 @@ public sealed class ProjectionCommandTests
             File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "packet.yaml")));
     }
 
+    [Fact]
+    public void Execute_G668_ProjectionRegeneratePreservesMaterializedRoutingSnapshot()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var packetYaml = BranchLaneRoutingYaml.InjectIntoPacketYaml(
+            CreatePacketYaml("G668"),
+            "hotfix",
+            BranchLaneResolver.SourceExplicit,
+            new BranchRoutingSnapshot
+            {
+                LaneId = "hotfix",
+                DefinitionRevision = "registry-r1",
+                StartBranch = "main",
+                PrBaseBranch = "main",
+                LandingMode = "direct"
+            });
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G668", "packet.yaml"),
+            packetYaml);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G668", "implementation.md"),
+            "stale implementation");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G668", "review-context.md"),
+            "stale review context");
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            ["projection", "regenerate", "G668"],
+            CreateContext(repoRoot),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var regenerated = File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "issues", "G668", "packet.yaml"));
+        Assert.Contains("branch_lane: hotfix", regenerated, StringComparison.Ordinal);
+        Assert.Contains("branch_lane_source: explicit", regenerated, StringComparison.Ordinal);
+        Assert.Contains("definition_revision: registry-r1", regenerated, StringComparison.Ordinal);
+        Assert.Contains("start_branch: main", regenerated, StringComparison.Ordinal);
+        Assert.Contains("pr_base_branch: main", regenerated, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext

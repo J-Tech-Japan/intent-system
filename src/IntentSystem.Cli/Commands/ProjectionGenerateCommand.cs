@@ -47,11 +47,42 @@ internal static class ProjectionGenerateCommand
 
         try
         {
-            var packetContract = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetYamlPath));
+            var sourceYaml = File.ReadAllText(packetYamlPath);
+            var packetContract = ProjectionPacketSerializer.Deserialize(sourceYaml);
             EnsureExecutionUnitMatches(executionUnit, packetContract.ImplementationIssuePacket.SourceExecutionUnit);
             var packet = PacketGenerator.Generate(
                 packetContract.ImplementationIssuePacket,
                 packetContract.ReviewContextPacket);
+
+            // G668: the projection library intentionally owns only its legacy
+            // packet contract. Preserve the CLI-owned lane membership and
+            // immutable routing snapshot when regenerate reparses that packet;
+            // registry edits can never retarget an accepted projection.
+            var routingSnapshot = BranchLaneResolver.TryReadSnapshot(sourceYaml);
+            if (routingSnapshot is not null)
+            {
+                var document = PacketYamlDocument.TryParse(sourceYaml, out var parsed, out var parseError)
+                    ? parsed
+                    : throw new InvalidOperationException(
+                        $"Projection packet YAML could not be parsed for branch-lane preservation: {parseError}");
+                var declaredLane = BranchLaneResolver.TryReadDeclaredLane(document!.Fields);
+                var laneSource = BranchLaneResolver.TryReadLaneSource(document.Fields);
+                if (string.IsNullOrWhiteSpace(declaredLane)
+                    || string.IsNullOrWhiteSpace(laneSource))
+                {
+                    throw new InvalidOperationException(
+                        "routing_snapshot requires branch_lane and branch_lane_source in the projection packet YAML.");
+                }
+
+                packet = packet with
+                {
+                    PacketYaml = BranchLaneRoutingYaml.InjectIntoPacketYaml(
+                        packet.PacketYaml,
+                        declaredLane,
+                        laneSource,
+                        routingSnapshot)
+                };
+            }
 
             ProjectionArtifactWriter.Write(
                 packet,

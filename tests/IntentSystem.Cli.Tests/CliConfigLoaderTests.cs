@@ -1,4 +1,5 @@
 using IntentSystem.Cli.Infrastructure;
+using IntentSystem.Cli.Commands;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -80,6 +81,106 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("../Sekiban-dcb/dcb", config.Project.WorkRepoPath);
         Assert.Equal("../MyIntentHost", config.Project.ParentIntentRepoRoot);
         Assert.Equal("implementation", config.Roles.Implement);
+    }
+
+    [Fact]
+    public void Load_G668_ProjectSection_ParsesNamedBranchLaneRegistry()
+    {
+        var toml = """
+        [project]
+        domain = "intent-cli"
+        artifact_root = ".intent-cli"
+
+        [project.branch_lanes]
+        default_lane = "continuous"
+        definition_revision = "registry-r1"
+
+        [project.branch_lanes.continuous]
+        start_branch = "develop"
+        pr_base_branch = "develop"
+        landing_mode = "direct"
+
+        [project.branch_lanes.hotfix]
+        start_branch = "main"
+        pr_base_branch = "main"
+        landing_mode = "direct"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        var registry = config.Project.BranchLanes["intent-cli"];
+        Assert.Equal("registry-r1", registry.DefinitionRevision);
+        Assert.Equal("continuous", registry.DefaultLane);
+        Assert.Equal("develop", registry.Lanes["continuous"].StartBranch);
+        Assert.Equal("develop", registry.Lanes["continuous"].PrBaseBranch);
+        Assert.Equal("main", registry.Lanes["hotfix"].StartBranch);
+    }
+
+    [Fact]
+    public void Load_G668_RootSectionAcceptsLaneTableArrayAndDerivesRevision()
+    {
+        var toml = """
+        default_domain = "intent-cli"
+        artifact_root = ".intent-cli"
+
+        [branch_lanes]
+        default_lane = "continuous"
+
+        [[branch_lanes.lanes]]
+        id = "continuous"
+        start_branch = "develop"
+        pr_base_branch = "develop"
+        landing_mode = "direct"
+
+        [[branch_lanes.lanes]]
+        id = "hotfix"
+        start_branch = "main"
+        pr_base_branch = "main"
+        landing_mode = "direct"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        var registry = config.Project.BranchLanes["intent-cli"];
+        Assert.StartsWith("derived:", registry.DefinitionRevision, StringComparison.Ordinal);
+        Assert.Equal(2, registry.Lanes.Count);
+        Assert.Equal("main", registry.Lanes["hotfix"].PrBaseBranch);
+    }
+
+    [Fact]
+    public void Load_G668_PerDomainRegistriesKeepIndependentDefaultsAndLanes()
+    {
+        var toml = """
+        [project]
+        domain = "intent-cli"
+        artifact_root = ".intent-cli"
+
+        [project.branch_lanes.intent-cli]
+        default_lane = "continuous"
+        definition_revision = "intent-r1"
+
+        [project.branch_lanes.intent-cli.continuous]
+        start_branch = "develop"
+        pr_base_branch = "develop"
+        landing_mode = "direct"
+
+        [project.branch_lanes."sekiban-as-a-service"]
+        default_lane = "release"
+        definition_revision = "sekiban-r2"
+
+        [project.branch_lanes."sekiban-as-a-service".release]
+        start_branch = "release"
+        pr_base_branch = "main"
+        landing_mode = "integration-batch"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.Equal(2, config.Project.BranchLanes.Count);
+        Assert.Equal("continuous", config.Project.BranchLanes["intent-cli"].DefaultLane);
+        Assert.Equal("develop", config.Project.BranchLanes["intent-cli"].Lanes["continuous"].PrBaseBranch);
+        Assert.Equal("release", config.Project.BranchLanes["sekiban-as-a-service"].DefaultLane);
+        Assert.Equal("main", config.Project.BranchLanes["sekiban-as-a-service"].Lanes["release"].PrBaseBranch);
     }
 
     [Fact]

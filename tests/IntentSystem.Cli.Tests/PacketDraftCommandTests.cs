@@ -772,6 +772,106 @@ public sealed class PacketDraftCommandTests
         Assert.DoesNotContain("Expected PR base branch: `main`", githubBody, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_G668_DefaultLaneMaterializesImmutableRoutingSnapshot()
+    {
+        using var workspace = new PacketDraftWorkspace();
+        var context = workspace.WithBranchLanes();
+        using var writer = new StringWriter();
+
+        var exitCode = PacketDraftCommand.Execute(
+            context,
+            ["--execution-unit", "G668-default", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var packetDir = Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G668-default");
+        var packetYaml = File.ReadAllText(Path.Combine(packetDir, "packet.yaml"));
+        var githubBody = File.ReadAllText(Path.Combine(packetDir, "github-body.md"));
+
+        Assert.Contains("branch_lane: continuous", packetYaml, StringComparison.Ordinal);
+        Assert.Contains("branch_lane_source: domain-default", packetYaml, StringComparison.Ordinal);
+        Assert.Contains("lane_id: continuous", packetYaml, StringComparison.Ordinal);
+        Assert.Contains("definition_revision: registry-r1", packetYaml, StringComparison.Ordinal);
+        Assert.Contains("start_branch: develop", packetYaml, StringComparison.Ordinal);
+        Assert.Contains("pr_base_branch: develop", packetYaml, StringComparison.Ordinal);
+        Assert.Contains("Policy: `named-lane`", githubBody, StringComparison.Ordinal);
+        Assert.Contains("Lane membership: `domain-default`", githubBody, StringComparison.Ordinal);
+        Assert.Contains("Expected PR base branch: `develop`", githubBody, StringComparison.Ordinal);
+        Assert.Contains("registry edits do not retarget", githubBody, StringComparison.Ordinal);
+
+        using var json = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("continuous", json.RootElement.GetProperty("branch_lane").GetString());
+        Assert.Equal("domain-default", json.RootElement.GetProperty("branch_lane_source").GetString());
+        Assert.Equal("develop", json.RootElement.GetProperty("routing_snapshot").GetProperty("pr_base_branch").GetString());
+    }
+
+    [Fact]
+    public void Execute_G668_ExplicitLaneIsDistinguishableFromDomainDefault()
+    {
+        using var workspace = new PacketDraftWorkspace();
+        var context = workspace.WithBranchLanes();
+        using var writer = new StringWriter();
+
+        var exitCode = PacketDraftCommand.Execute(
+            context,
+            ["--execution-unit", "G668-hotfix", "--lane", "hotfix", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var packetDir = Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G668-hotfix");
+        var packetYaml = File.ReadAllText(Path.Combine(packetDir, "packet.yaml"));
+        var githubBody = File.ReadAllText(Path.Combine(packetDir, "github-body.md"));
+
+        Assert.Contains("branch_lane: hotfix", packetYaml, StringComparison.Ordinal);
+        Assert.Contains("branch_lane_source: explicit", packetYaml, StringComparison.Ordinal);
+        Assert.Contains("start_branch: main", packetYaml, StringComparison.Ordinal);
+        Assert.Contains("Expected PR base branch: `main`", githubBody, StringComparison.Ordinal);
+
+        using var json = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("hotfix", json.RootElement.GetProperty("branch_lane").GetString());
+        Assert.Equal("explicit", json.RootElement.GetProperty("branch_lane_source").GetString());
+    }
+
+    [Fact]
+    public void Execute_G668_DomainOverrideUsesMatchingRegistryDefault()
+    {
+        using var workspace = new PacketDraftWorkspace();
+        var context = workspace.WithBranchLanes();
+
+        using var intentWriter = new StringWriter();
+        var intentExitCode = PacketDraftCommand.Execute(
+            context,
+            ["--execution-unit", "G668-intent-domain", "--format", "json"],
+            intentWriter);
+
+        using var sekibanWriter = new StringWriter();
+        var sekibanExitCode = PacketDraftCommand.Execute(
+            context,
+            [
+                "--execution-unit", "G668-sekiban-domain",
+                "--domain", "sekiban-as-a-service",
+                "--format", "json"
+            ],
+            sekibanWriter);
+
+        Assert.Equal(0, intentExitCode);
+        Assert.Equal(0, sekibanExitCode);
+
+        var intentPacket = File.ReadAllText(Path.Combine(
+            workspace.RepoRoot, ".intent-cli", "issues", "G668-intent-domain", "packet.yaml"));
+        var sekibanPacket = File.ReadAllText(Path.Combine(
+            workspace.RepoRoot, ".intent-cli", "issues", "G668-sekiban-domain", "packet.yaml"));
+
+        Assert.Contains("domain: intent-cli", intentPacket, StringComparison.Ordinal);
+        Assert.Contains("branch_lane: continuous", intentPacket, StringComparison.Ordinal);
+        Assert.Contains("pr_base_branch: develop", intentPacket, StringComparison.Ordinal);
+        Assert.Contains("domain: sekiban-as-a-service", sekibanPacket, StringComparison.Ordinal);
+        Assert.Contains("branch_lane: release", sekibanPacket, StringComparison.Ordinal);
+        Assert.Contains("pr_base_branch: main", sekibanPacket, StringComparison.Ordinal);
+        Assert.DoesNotContain("branch_lane: continuous", sekibanPacket, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(CliRuntimeContracts.DirectMainBaseBranchPolicy, "main")]
     [InlineData(CliRuntimeContracts.MainAiBaseBranchPolicy, "main-ai")]
@@ -887,6 +987,59 @@ public sealed class PacketDraftCommandTests
         public string RepoRoot { get; }
 
         public CliContext Context { get; }
+
+        public CliContext WithBranchLanes()
+        {
+            return Context with
+            {
+                Config = Context.Config with
+                {
+                    Project = Context.Config.Project with
+                    {
+                        BranchLanes = new Dictionary<string, BranchLaneRegistry>(StringComparer.Ordinal)
+                        {
+                            ["intent-cli"] = new BranchLaneRegistry
+                            {
+                                DefaultLane = "continuous",
+                                DefinitionRevision = "registry-r1",
+                                Lanes = new Dictionary<string, BranchLaneDefinition>(StringComparer.Ordinal)
+                                {
+                                    ["continuous"] = new BranchLaneDefinition
+                                    {
+                                        Id = "continuous",
+                                        StartBranch = "develop",
+                                        PrBaseBranch = "develop",
+                                        LandingMode = "direct"
+                                    },
+                                    ["hotfix"] = new BranchLaneDefinition
+                                    {
+                                        Id = "hotfix",
+                                        StartBranch = "main",
+                                        PrBaseBranch = "main",
+                                        LandingMode = "direct"
+                                    }
+                                }
+                            },
+                            ["sekiban-as-a-service"] = new BranchLaneRegistry
+                            {
+                                DefaultLane = "release",
+                                DefinitionRevision = "sekiban-r1",
+                                Lanes = new Dictionary<string, BranchLaneDefinition>(StringComparer.Ordinal)
+                                {
+                                    ["release"] = new BranchLaneDefinition
+                                    {
+                                        Id = "release",
+                                        StartBranch = "release",
+                                        PrBaseBranch = "main",
+                                        LandingMode = "integration-batch"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+        }
 
         /// <summary>G530: writes a facet-annotated intent-tree node under `intents/&lt;domain&gt;/&lt;relativePath&gt;`.</summary>
         public void WriteFacetNode(string relativePath, IReadOnlyList<string> facets, string title)

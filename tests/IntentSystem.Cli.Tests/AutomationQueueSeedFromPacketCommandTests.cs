@@ -47,6 +47,144 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G668_ValidatedPacketCarriesRoutingSnapshotInDryRunResult()
+    {
+        workspace.WritePreparedPacket("Z4R-G668", targetRepo: "J-Tech-Creations/Zero4Racer", domain: "intent-cli");
+        workspace.WriteBindings("intent-cli", "^Z4R-G[0-9]+$");
+        var packetPath = Path.Combine(workspace.RootPath, ".intent-cli", "issues", "Z4R-G668", "packet.yaml");
+        File.WriteAllText(packetPath, """
+        implementation_issue_packet:
+          source_execution_unit: Z4R-G668
+          issue_title: Demo
+          target_repo: J-Tech-Creations/Zero4Racer
+          branch_lane: hotfix
+          branch_lane_source: explicit
+          routing_snapshot:
+            lane_id: hotfix
+            definition_revision: registry-r1
+            start_branch: main
+            pr_base_branch: main
+            landing_mode: direct
+        """);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            workspace.Context,
+            [
+                "--execution-unit", "Z4R-G668",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Creations/Zero4Racer",
+                "--format", "json",
+            ],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var snapshot = document.RootElement.GetProperty("routing_snapshot");
+        Assert.Equal("hotfix", snapshot.GetProperty("lane_id").GetString());
+        Assert.Equal("main", snapshot.GetProperty("pr_base_branch").GetString());
+    }
+
+    [Fact]
+    public void Execute_G668_WriteProjectsSnapshotIntoQueue_AndKeepsItAfterRegistryEdit()
+    {
+        workspace.WritePreparedPacketWithRoutingSnapshot(
+            "Z4R-G669",
+            targetRepo: "J-Tech-Creations/Zero4Racer",
+            laneId: "hotfix",
+            definitionRevision: "registry-r1",
+            startBranch: "main",
+            prBaseBranch: "main",
+            landingMode: "direct");
+        workspace.WriteBindings("intent-cli", "^Z4R-G[0-9]+$");
+
+        using var firstWriter = new StringWriter();
+        var firstExitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            workspace.Context,
+            [
+                "--execution-unit", "Z4R-G669",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Creations/Zero4Racer",
+                "--write",
+                "--format", "json",
+            ],
+            firstWriter);
+
+        Assert.Equal(0, firstExitCode);
+        var firstState = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        var firstSnapshot = Assert.Single(firstState.Items).RoutingSnapshot;
+        Assert.NotNull(firstSnapshot);
+        Assert.Equal("registry-r1", firstSnapshot.DefinitionRevision);
+        Assert.Equal("main", firstSnapshot.PrBaseBranch);
+
+        // Simulate a later registry/packet edit. The queue projection is the
+        // accepted routing fact and must not be rewritten by re-seeding.
+        workspace.WritePreparedPacketWithRoutingSnapshot(
+            "Z4R-G669",
+            targetRepo: "J-Tech-Creations/Zero4Racer",
+            laneId: "continuous",
+            definitionRevision: "registry-r2",
+            startBranch: "develop",
+            prBaseBranch: "develop",
+            landingMode: "integration-batch");
+        var changedContext = workspace.Context with
+        {
+            Config = workspace.Context.Config with
+            {
+                Project = workspace.Context.Config.Project with
+                {
+                    BranchLanes = new Dictionary<string, BranchLaneRegistry>(StringComparer.Ordinal)
+                    {
+                        ["intent-cli"] = new BranchLaneRegistry
+                        {
+                            DefaultLane = "continuous",
+                            DefinitionRevision = "registry-r2",
+                            Lanes = new Dictionary<string, BranchLaneDefinition>(StringComparer.Ordinal)
+                            {
+                                ["continuous"] = new BranchLaneDefinition
+                                {
+                                    Id = "continuous",
+                                    StartBranch = "develop",
+                                    PrBaseBranch = "develop",
+                                    LandingMode = "integration-batch",
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        };
+
+        using var secondWriter = new StringWriter();
+        var secondExitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            changedContext,
+            [
+                "--execution-unit", "Z4R-G669",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Creations/Zero4Racer",
+                "--write",
+                "--format", "json",
+            ],
+            secondWriter);
+
+        Assert.Equal(0, secondExitCode);
+        using var secondResult = JsonDocument.Parse(secondWriter.ToString());
+        Assert.Equal(
+            AutomationQueueSeedFromPacketCommand.ClassificationAlreadySeeded,
+            secondResult.RootElement.GetProperty("classification").GetString());
+
+        var finalState = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        var finalSnapshot = Assert.Single(finalState.Items).RoutingSnapshot;
+        Assert.NotNull(finalSnapshot);
+        Assert.Equal("hotfix", finalSnapshot.LaneId);
+        Assert.Equal("registry-r1", finalSnapshot.DefinitionRevision);
+        Assert.Equal("main", finalSnapshot.StartBranch);
+        Assert.Equal("main", finalSnapshot.PrBaseBranch);
+        Assert.Equal("direct", finalSnapshot.LandingMode);
+        Assert.Contains("\"routing_snapshot\"", File.ReadAllText(workspace.QueueStatePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_ValidatedPacket_Write_InsertsQueuedItem_AndAppendsRunsEvent()
     {
         // G363 AC2: --write inserts a queued item with packet-derived
@@ -913,6 +1051,33 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
             File.WriteAllText(Path.Combine(dir, "review-context.md"), "# review\n");
             File.WriteAllText(Path.Combine(dir, "github-body.md"),
                 "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n## Base Branch Policy\nx\n");
+        }
+
+        public void WritePreparedPacketWithRoutingSnapshot(
+            string executionUnit,
+            string targetRepo,
+            string laneId,
+            string definitionRevision,
+            string startBranch,
+            string prBaseBranch,
+            string landingMode)
+        {
+            WritePreparedPacket(executionUnit, targetRepo, domain: "intent-cli");
+            var packetPath = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit, "packet.yaml");
+            File.WriteAllText(packetPath, $"""
+            implementation_issue_packet:
+              source_execution_unit: {executionUnit}
+              issue_title: Demo
+              target_repo: {targetRepo}
+              branch_lane: {laneId}
+              branch_lane_source: explicit
+              routing_snapshot:
+                lane_id: {laneId}
+                definition_revision: {definitionRevision}
+                start_branch: {startBranch}
+                pr_base_branch: {prBaseBranch}
+                landing_mode: {landingMode}
+            """);
         }
 
         public void WriteBindings(string domain, string executionUnitRegex)

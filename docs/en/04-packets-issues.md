@@ -79,6 +79,53 @@ This behavior applies only to newly scaffolded packet bodies. `packet draft`
 does not rewrite existing packets or published issue bodies, and an absent
 `implementation_base_branch` keeps the prior scaffold output byte-for-byte.
 
+## Named branch lanes (G668 — preview-through-1.x)
+
+Hosts may declare one small named branch-lane registry per domain under
+`[project.branch_lanes.<domain>]`:
+
+```toml
+[project.branch_lanes."intent-cli"]
+default_lane = "continuous"
+definition_revision = "registry-r1"
+
+[project.branch_lanes."intent-cli".continuous]
+start_branch = "develop"
+pr_base_branch = "develop"
+landing_mode = "direct"
+
+[project.branch_lanes."intent-cli".hotfix]
+start_branch = "main"
+pr_base_branch = "main"
+landing_mode = "direct"
+
+[project.branch_lanes."sekiban-as-a-service"]
+default_lane = "release"
+definition_revision = "sekiban-r1"
+
+[project.branch_lanes."sekiban-as-a-service".release]
+start_branch = "release"
+pr_base_branch = "main"
+landing_mode = "integration-batch"
+```
+
+Run `packet draft --lane hotfix` to choose a lane explicitly. With no `--lane`,
+the configured `default_lane` is selected and recorded as
+`branch_lane_source: domain-default`; an explicit choice is recorded as
+`branch_lane_source: explicit`. The draft materializes `branch_lane` and a
+`routing_snapshot` containing the lane id, definition revision, start branch,
+PR base branch, and landing mode in `packet.yaml` and `github-body.md`.
+
+That snapshot is the accepted packet's routing fact. Queue seeding, projection
+regeneration, review guidance, and worker base-branch checks use the materialized
+snapshot; changing the registry later does not retarget an existing packet.
+Domain selection resolves only the registry matching the packet's selected
+domain. Hosts without a matching registry retain the legacy `direct-main` /
+`main-ai` policy names, fields, output, and byte-for-byte packet draft behavior.
+The previous singleton `[project.branch_lanes]` spelling remains readable for
+compatibility, but is scoped only to the configured project domain. Named lanes
+are preview-through-1.x and do not manage or create branches.
+
 ## Alternative: timer-loop setup
 
 Use [Implementation loop setup](05-implementation-loop.md) and then

@@ -77,6 +77,50 @@ automation の各サーフェスと同じ effective-branch の判定で埋めま
 packet や公開済み issue 本文を書き換えず、`implementation_base_branch` が無い場合は従来の
 scaffold 出力を byte 単位で維持します。
 
+## 名前付き branch lane (G668 — preview-through-1.x)
+
+host は domain ごとに `[project.branch_lanes.<domain>]` の下へ、名前付き
+branch lane の registry を宣言できます:
+
+```toml
+[project.branch_lanes."intent-cli"]
+default_lane = "continuous"
+definition_revision = "registry-r1"
+
+[project.branch_lanes."intent-cli".continuous]
+start_branch = "develop"
+pr_base_branch = "develop"
+landing_mode = "direct"
+
+[project.branch_lanes."intent-cli".hotfix]
+start_branch = "main"
+pr_base_branch = "main"
+landing_mode = "direct"
+
+[project.branch_lanes."sekiban-as-a-service"]
+default_lane = "release"
+definition_revision = "sekiban-r1"
+
+[project.branch_lanes."sekiban-as-a-service".release]
+start_branch = "release"
+pr_base_branch = "main"
+landing_mode = "integration-batch"
+```
+
+`packet draft --lane hotfix` で lane を明示的に選べます。`--lane` を省略すると設定された
+`default_lane` を選び、`branch_lane_source: domain-default` として記録します。明示選択は
+`branch_lane_source: explicit` です。draft は lane id、definition revision、start branch、
+PR base branch、landing mode を含む `branch_lane` と `routing_snapshot` を `packet.yaml`
+および `github-body.md` に materialize します。
+
+この snapshot が accepted packet の routing の事実です。queue seed、projection regeneration、
+review guidance、worker の base-branch check は materialize 済み snapshot を使い、後から registry
+を編集しても既存 packet の宛先は変わりません。domain 選択は一致する registry だけを解決し、
+一致する registry がない host は従来の `direct-main` / `main-ai` policy 名・field・出力と packet
+draft の byte 単位互換性を維持します。以前の単一形 `[project.branch_lanes]` も互換性のため
+読み込めますが、設定された project domain だけに scope されます。
+名前付き lane は preview-through-1.x であり、branch の作成・管理は行いません。
+
 ## 代替: timer-loop のセットアップ
 
 timer-loop の alternative を選ぶときだけ、[実装ループの設定](05-implementation-loop.md)、続けて

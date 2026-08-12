@@ -1,4 +1,5 @@
 using IntentSystem.Cli.Models;
+using IntentSystem.Cli.Commands;
 using Tomlyn;
 using Tomlyn.Model;
 
@@ -57,6 +58,7 @@ internal static class CliConfigLoader
         var parentIntentRepoRoot = TryGetOptionalString(rootTable, CliRuntimeContracts.ParentIntentRepoRootKey)
             ?? string.Empty;
         var baseBranchPolicy = ReadBaseBranchPolicy(rootTable, "CLI config root");
+        var branchLanes = ReadBranchLanes(rootTable, "CLI config root", domain);
         var stableBranch = TryGetOptionalString(rootTable, CliRuntimeContracts.StableBranchKey)
             ?? string.Empty;
         var implementationBaseBranch = TryGetOptionalString(rootTable, CliRuntimeContracts.ImplementationBaseBranchKey)
@@ -81,6 +83,7 @@ internal static class CliConfigLoader
             workRepoPath,
             parentIntentRepoRoot,
             baseBranchPolicy,
+            branchLanes,
             stableBranch,
             implementationBaseBranch,
             metadataBranch,
@@ -121,6 +124,7 @@ internal static class CliConfigLoader
         var parentIntentRepoRoot = TryGetOptionalString(projectTable, CliRuntimeContracts.ParentIntentRepoRootKey)
             ?? string.Empty;
         var baseBranchPolicy = ReadBaseBranchPolicy(projectTable, "CLI config [project] section");
+        var branchLanes = ReadBranchLanes(projectTable, "CLI config [project] section", domain);
         var stableBranch = TryGetOptionalString(projectTable, CliRuntimeContracts.StableBranchKey)
             ?? string.Empty;
         var implementationBaseBranch = TryGetOptionalString(projectTable, CliRuntimeContracts.ImplementationBaseBranchKey)
@@ -145,6 +149,7 @@ internal static class CliConfigLoader
             workRepoPath,
             parentIntentRepoRoot,
             baseBranchPolicy,
+            branchLanes,
             stableBranch,
             implementationBaseBranch,
             metadataBranch,
@@ -165,6 +170,7 @@ internal static class CliConfigLoader
         string workRepoPath,
         string parentIntentRepoRoot,
         string baseBranchPolicy,
+        IReadOnlyDictionary<string, BranchLaneRegistry> branchLanes,
         string stableBranch,
         string implementationBaseBranch,
         string metadataBranch,
@@ -186,6 +192,7 @@ internal static class CliConfigLoader
                 WorkRepoPath = workRepoPath,
                 ParentIntentRepoRoot = parentIntentRepoRoot,
                 BaseBranchPolicy = baseBranchPolicy,
+                BranchLanes = branchLanes,
                 StableBranch = stableBranch,
                 ImplementationBaseBranch = implementationBaseBranch,
                 MetadataBranch = metadataBranch,
@@ -219,6 +226,203 @@ internal static class CliConfigLoader
         }
 
         return value;
+    }
+
+    /// <summary>
+    /// G668: reads the preview named-lane registries. The canonical form is:
+    ///
+    /// <code>
+    /// [project.branch_lanes.intent-cli]
+    /// default_lane = "continuous"
+    /// definition_revision = "r1"
+    ///
+    /// [project.branch_lanes.intent-cli.continuous]
+    /// start_branch = "develop"
+    /// pr_base_branch = "develop"
+    /// landing_mode = "direct"
+    /// </code>
+    ///
+    /// Root-level <c>[branch_lanes.&lt;domain&gt;]</c> is accepted for the
+    /// root-key config shape. A <c>[[...branch_lanes.&lt;domain&gt;.lanes]]</c>
+    /// table-array form is also accepted. The previous singleton
+    /// <c>[project.branch_lanes]</c> / <c>[branch_lanes]</c> spelling remains
+    /// accepted, but is scoped only to the config's declared domain rather
+    /// than becoming a host-wide registry.
+    /// </summary>
+    private static IReadOnlyDictionary<string, BranchLaneRegistry> ReadBranchLanes(
+        TomlTable table,
+        string contractName,
+        string defaultDomain)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentException.ThrowIfNullOrWhiteSpace(contractName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(defaultDomain);
+
+        var empty = new Dictionary<string, BranchLaneRegistry>(StringComparer.Ordinal);
+
+        if (!table.TryGetValue(CliRuntimeContracts.BranchLanesSectionName, out var raw)
+            || raw is not TomlTable registryTable)
+        {
+            return empty;
+        }
+
+        // A direct default/revision/lanes key is the pre-repair singleton
+        // shape. Keep it readable, but bind it to the declared domain so it
+        // cannot accidentally serve every domain in a multi-domain host.
+        if (LooksLikeRegistryTable(registryTable))
+        {
+            empty.Add(
+                defaultDomain,
+                ReadBranchLaneRegistry(registryTable, contractName));
+            return empty;
+        }
+
+        foreach (var pair in registryTable)
+        {
+            if (pair.Value is not TomlTable domainTable)
+            {
+                throw new InvalidOperationException(
+                    $"{contractName} '{CliRuntimeContracts.BranchLanesSectionName}' domain '{pair.Key}' must be a TOML table.");
+            }
+
+            if (empty.ContainsKey(pair.Key))
+            {
+                throw new InvalidOperationException(
+                    $"{contractName} declares duplicate branch-lane domain '{pair.Key}'.");
+            }
+
+            empty.Add(
+                pair.Key,
+                ReadBranchLaneRegistry(domainTable, $"{contractName} domain '{pair.Key}'"));
+        }
+
+        if (empty.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"{contractName} '{CliRuntimeContracts.BranchLanesSectionName}' must declare at least one domain registry.");
+        }
+
+        return empty;
+    }
+
+    private static bool LooksLikeRegistryTable(TomlTable table)
+    {
+        return table.ContainsKey(CliRuntimeContracts.BranchLanesDefaultLaneKey)
+            || table.ContainsKey(CliRuntimeContracts.BranchLanesDefinitionRevisionKey)
+            || table.ContainsKey(CliRuntimeContracts.BranchLanesRevisionKey)
+            || table.ContainsKey(CliRuntimeContracts.BranchLanesLanesKey)
+            || table.Values.OfType<TomlTable>().Any(LooksLikeLaneTable);
+    }
+
+    private static bool LooksLikeLaneTable(TomlTable table)
+    {
+        return table.ContainsKey(CliRuntimeContracts.BranchLaneStartBranchKey)
+            || table.ContainsKey(CliRuntimeContracts.BranchLanePrBaseBranchKey)
+            || table.ContainsKey(CliRuntimeContracts.BranchLaneLandingModeKey);
+    }
+
+    private static BranchLaneRegistry ReadBranchLaneRegistry(TomlTable registryTable, string contractName)
+    {
+        var defaultLane = TryGetOptionalString(registryTable, CliRuntimeContracts.BranchLanesDefaultLaneKey);
+        var declaredRevision = TryGetOptionalString(registryTable, CliRuntimeContracts.BranchLanesDefinitionRevisionKey)
+            ?? TryGetOptionalString(registryTable, CliRuntimeContracts.BranchLanesRevisionKey);
+        var lanes = new Dictionary<string, BranchLaneDefinition>(StringComparer.Ordinal);
+
+        if (registryTable.TryGetValue(CliRuntimeContracts.BranchLanesLanesKey, out var laneArrayRaw))
+        {
+            if (laneArrayRaw is not TomlTableArray laneArray)
+            {
+                throw new InvalidOperationException(
+                    $"{contractName} '{CliRuntimeContracts.BranchLanesLanesKey}' must be an array of tables.");
+            }
+
+            foreach (var laneTable in laneArray)
+            {
+                var id = TryGetOptionalString(laneTable, CliRuntimeContracts.BranchLaneIdKey)
+                    ?? TryGetOptionalString(laneTable, CliRuntimeContracts.BranchLaneNameKey);
+                if (string.IsNullOrWhiteSpace(id))
+                {
+                    throw new InvalidOperationException(
+                        $"{contractName} branch-lane entries must declare '{CliRuntimeContracts.BranchLaneIdKey}' or '{CliRuntimeContracts.BranchLaneNameKey}'.");
+                }
+
+                AddBranchLane(lanes, ReadBranchLane(laneTable, id.Trim()), contractName);
+            }
+        }
+
+        foreach (var pair in registryTable)
+        {
+            if (pair.Key is CliRuntimeContracts.BranchLanesDefaultLaneKey
+                or CliRuntimeContracts.BranchLanesDefinitionRevisionKey
+                or CliRuntimeContracts.BranchLanesRevisionKey
+                or CliRuntimeContracts.BranchLanesLanesKey)
+            {
+                continue;
+            }
+
+            if (pair.Value is TomlTable laneTable)
+            {
+                AddBranchLane(lanes, ReadBranchLane(laneTable, pair.Key), contractName);
+            }
+        }
+
+        if (lanes.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"{contractName} '{CliRuntimeContracts.BranchLanesSectionName}' must declare at least one named lane.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(defaultLane) && !lanes.ContainsKey(defaultLane))
+        {
+            throw new InvalidOperationException(
+                $"{contractName} default_lane '{defaultLane}' does not name a configured branch lane.");
+        }
+
+        return new BranchLaneRegistry
+        {
+            DefaultLane = defaultLane,
+            DefinitionRevision = BranchLaneResolver.ComputeDefinitionRevision(lanes, declaredRevision),
+            Lanes = lanes
+        };
+    }
+
+    private static BranchLaneDefinition ReadBranchLane(TomlTable table, string id)
+    {
+        var startBranch = RequireBranchLaneString(table, CliRuntimeContracts.BranchLaneStartBranchKey, id);
+        var prBaseBranch = RequireBranchLaneString(table, CliRuntimeContracts.BranchLanePrBaseBranchKey, id);
+        var landingMode = RequireBranchLaneString(table, CliRuntimeContracts.BranchLaneLandingModeKey, id);
+
+        return new BranchLaneDefinition
+        {
+            Id = id,
+            StartBranch = startBranch,
+            PrBaseBranch = prBaseBranch,
+            LandingMode = landingMode
+        };
+    }
+
+    private static string RequireBranchLaneString(TomlTable table, string key, string laneId)
+    {
+        var value = TryGetOptionalString(table, key);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new InvalidOperationException(
+                $"Branch lane '{laneId}' must declare '{key}'.");
+        }
+
+        return value.Trim();
+    }
+
+    private static void AddBranchLane(
+        IDictionary<string, BranchLaneDefinition> lanes,
+        BranchLaneDefinition lane,
+        string contractName)
+    {
+        if (!lanes.TryAdd(lane.Id, lane))
+        {
+            throw new InvalidOperationException(
+                $"{contractName} declares duplicate branch lane '{lane.Id}'.");
+        }
     }
 
     private static void RejectObsoleteWorkflowEngineKey(TomlTable table, string contractName)
