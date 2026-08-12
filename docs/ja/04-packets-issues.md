@@ -121,6 +121,38 @@ draft の byte 単位互換性を維持します。以前の単一形 `[project.
 読み込めますが、設定された project domain だけに scope されます。
 名前付き lane は preview-through-1.x であり、branch の作成・管理は行いません。
 
+## lane decision record と publish gate (G669 — preview-through-1.x)
+
+lane の宣言は routing の事実であり、judgment そのものではありません。
+`branch_lane` を持つ packet が publish boundary を越えるには、design が lane id、
+解決済み branch、rationale、actor、timestamp、evidence、definition revision、
+fingerprint を含む propose record を記録します:
+
+```text
+intent-cli automation branch-lane-propose-record \
+  --execution-unit G669 --actor design --rationale "..." --evidence "..." --write
+```
+
+orchestration はその propose を独立に検証し、固有の actor、timestamp、evidence と
+同じ routing fingerprint を持つ別の confirm record を記録します。`packet.yaml` や
+`github-body.md` の prose は、どちらの record の代わりにもなりません:
+
+```text
+intent-cli automation branch-lane-confirm-record \
+  --execution-unit G669 --actor orchestration --evidence "..." --write
+```
+
+record は `.intent-cli/branch-lane-decisions/<execution-unit>/propose.json` と
+`confirm.json` に保存します。propose が無い confirm は拒否され、publish は GitHub
+operation の前に missing、mismatch、malformed、または同一 actor の record を拒否します。
+`branch_lane` が無い legacy packet は従来の publish path をそのまま維持します。
+
+`automation stalled-work` は、confirmation が無い queued lane item が stale threshold を
+越えたときだけ `branch-lane-decision-pending` を出します。packet、issue body、queue
+snapshot、観測した PR base branch が食い違う場合は、PR が closed でも直ちに
+`branch-routing-conflict` を出し、観測した全 value を列挙します。legacy packet には
+どちらの classification も出しません。
+
 ## 代替: timer-loop のセットアップ
 
 timer-loop の alternative を選ぶときだけ、[実装ループの設定](05-implementation-loop.md)、続けて
