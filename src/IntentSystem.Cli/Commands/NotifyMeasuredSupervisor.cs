@@ -38,6 +38,8 @@ internal sealed class NotifyMeasuredSupervisor
     private readonly bool eventMode;
     private readonly IReadOnlyList<NotifyPreApprovalRule> preApprovalAccept;
     private readonly IReadOnlyList<NotifyPreApprovalRule> preApprovalEscalate;
+    private readonly NotifySupervisionWriterIdentity writerIdentity;
+    private readonly Func<NotifySupervisionWriterIdentity, bool> writerIsLive;
     private readonly object supervisionSync = new();
     private readonly object writerSync = new();
 
@@ -63,7 +65,9 @@ internal sealed class NotifyMeasuredSupervisor
         bool eventMode = false,
         IReadOnlyList<NotifyPreApprovalRule>? preApprovalAccept = null,
         IReadOnlyList<NotifyPreApprovalRule>? preApprovalEscalate = null,
-        string? bashExecutable = null)
+        string? bashExecutable = null,
+        NotifySupervisionWriterIdentity? writerIdentity = null,
+        Func<NotifySupervisionWriterIdentity, bool>? writerIsLive = null)
     {
         this.context = context;
         this.routingRoot = routingRoot;
@@ -87,6 +91,8 @@ internal sealed class NotifyMeasuredSupervisor
         this.eventMode = eventMode;
         this.preApprovalAccept = preApprovalAccept ?? [];
         this.preApprovalEscalate = preApprovalEscalate ?? [];
+        this.writerIdentity = writerIdentity ?? NotifySupervisionWriterIdentity.Current();
+        this.writerIsLive = writerIsLive ?? (other => other.IsLiveOn(this.writerIdentity));
     }
 
     public NotifySupervisorPass RunOnce() => RunOnce("interval");
@@ -157,6 +163,10 @@ internal sealed class NotifyMeasuredSupervisor
         var absenceThresholdKind = bound.BoundSeconds is null
             ? "configured-interval"
             : "declared-bound";
+        var duplicateSupervisor = DetectDuplicateSupervisor(
+            previousCycle,
+            now,
+            absenceThresholdSeconds);
         var absentSinceLastCycle = string.Equals(trigger, "interval", StringComparison.Ordinal)
             && gapSeconds is { } gap
             && gap > absenceThresholdSeconds;
@@ -183,6 +193,10 @@ internal sealed class NotifyMeasuredSupervisor
         var observations = new List<NotifySupervisionObservation>();
         var actions = new List<NotifySupervisorAction>();
         var warnings = new List<string>();
+        if (duplicateSupervisor is not null)
+        {
+            observations.Add(duplicateSupervisor);
+        }
         var boundBelowInterval = declaredBoundSeconds.HasValue && declaredBoundSeconds.Value < intervalSeconds;
         if (boundBelowInterval)
         {
@@ -446,12 +460,11 @@ internal sealed class NotifyMeasuredSupervisor
                     Cause = observation.Cause ?? existing.Cause,
                 };
                 records.Add(retained);
-                if (string.Equals(observation.Kind, "supervision-degraded", StringComparison.Ordinal))
+                if (observation.Kind is "supervision-degraded" or "duplicate-supervisor")
                 {
-                    // A transport dependency is a cycle fact, not a
-                    // once-only informational activity finding: surface one
-                    // degraded finding for each affected cycle, still once
-                    // for the cycle rather than once per delegation.
+                    // Cycle-level facts are not once-only activity findings:
+                    // surface one finding for each cycle, still once for the
+                    // cycle rather than once per delegation or observation.
                     findings.Add(ToFinding(retained));
                 }
                 continue;
@@ -574,6 +587,7 @@ internal sealed class NotifyMeasuredSupervisor
             CycleId = Guid.NewGuid().ToString("N"),
             StartedAt = now,
             CompletedAt = completedAt,
+            Writer = writerIdentity,
             Trigger = trigger,
             IntervalSeconds = intervalSeconds,
             CadenceIntervalSeconds = cadenceIntervalSeconds,
@@ -826,6 +840,38 @@ internal sealed class NotifyMeasuredSupervisor
 
     private static int FallbackAbsenceThresholdSeconds(int cadenceSeconds) =>
         Math.Max(cadenceSeconds * 2, cadenceSeconds + FallbackAbsenceHeadroomSeconds);
+
+    private NotifySupervisionObservation? DetectDuplicateSupervisor(
+        NotifySupervisionCycle? previousCycle,
+        DateTimeOffset now,
+        int recentThresholdSeconds)
+    {
+        var otherWriter = previousCycle?.Writer;
+        if (otherWriter is null
+            || writerIdentity.IsSameWriter(otherWriter)
+            || !writerIsLive(otherWriter))
+        {
+            return null;
+        }
+
+        var ageSeconds = Math.Max(0, (long)(now - previousCycle!.CompletedAt).TotalSeconds);
+        if (ageSeconds > recentThresholdSeconds)
+        {
+            return null;
+        }
+
+        var label = $"intent-cli.supervise.{domain}.{team}";
+        return new NotifySupervisionObservation
+        {
+            Key = "supervisor:duplicate",
+            Kind = "duplicate-supervisor",
+            OwnerRole = ownerRole,
+            Source = "supervision-cycle",
+            Summary = $"Duplicate supervisor detected: current writer pid={writerIdentity.Pid}, process_start_time={writerIdentity.ProcessStartTime:O}, host='{writerIdentity.Host}'; other live writer pid={otherWriter.Pid}, process_start_time={otherWriter.ProcessStartTime:O}, host='{otherWriter.Host}'; other cycle age={ageSeconds}s (recent threshold={recentThresholdSeconds}s). Duplicate-wake cost: both writers can wake the same stall, duplicating wakes for the same stall. Remedy: converge on the G658 per-team scheduler label '{label}'. Detection only; no process was killed, stopped, ranked, elected, locked, or leased, and duplicate seat processes are out of scope.",
+            DetectableAt = previousCycle.CompletedAt,
+            WakeSuppressed = true,
+        };
+    }
 
     private NotifySupervisionWakeResult WakeOwner(
         NotifySupervisionObservation observation,
@@ -1230,6 +1276,7 @@ internal sealed class NotifyMeasuredSupervisor
                 CycleId = Guid.NewGuid().ToString("N"),
                 StartedAt = waitEvent.ObservedAt,
                 CompletedAt = waitEvent.ObservedAt,
+                Writer = writerIdentity,
                 Trigger = "event-wait",
                 IntervalSeconds = intervalSeconds,
                 CadenceIntervalSeconds = state.LastIntervalCycle?.CadenceIntervalSeconds ?? intervalSeconds,
