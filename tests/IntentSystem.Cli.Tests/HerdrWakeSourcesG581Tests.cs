@@ -12,7 +12,7 @@ public sealed class HerdrWakeSourcesG581Tests : IDisposable
     // G673 extends the shared orchestrator guidance; keep the snapshot
     // assertion explicit so a future wake-source change remains intentional.
     private const string G594AgmsgGuideSha256 =
-        "5EA252680AE261E94A7525FCB364D8452D0FED375ACF1586F1812D3AB2D2BA49";
+        "852B6731B69CDA4D89E8C2375829254B774D447963DA69882CAE5F789B5E26AB";
 
     private readonly string root = Directory.CreateTempSubdirectory("herdr-wake-g581-").FullName;
 

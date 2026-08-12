@@ -885,6 +885,25 @@ internal static class GuideOrchestratorThreadCommand
                     + "to design; design rules on decomposition and prioritization; the orchestrator refuses to "
                     + "author packets.",
             },
+            ClaimRouting = new OrchestratorClaimRouting
+            {
+                Summary =
+                    "G679 preview-through-1.x orchestration route: verify the Git-backed scope claim before coordinating named execution-unit or release-prep work. This is guide-level verification only; G680 owns command-level consumer enforcement.",
+                Verification = new[]
+                {
+                    "Require the design/claimant result to report `status=acquired`, `push_succeeded=true`, `scope`, `claim_path`, `holder`, and the pushed `commit`; a local claim file or local commit is never sufficient.",
+                    "Fast-forward from origin and re-read the active record at the returned `claim_path`; require its scope, actor, and team to match the intended execution-unit or release-prep owner before publish/delegation coordination.",
+                    "Use `execution-unit:<EU>` for one execution unit and `release-prep:<owner/repo>:<version>` for release preparation. Unknown scope kinds are invalid; do not substitute issue labels or queue state as ownership.",
+                },
+                RejectDisambiguation = new[]
+                {
+                    "`held`: the rejected push was followed by a fetch and the same-scope origin record exists. Stop this lane and report the named `holder` and `holder_team`; do not publish, delegate, or retry as though the advance were unrelated.",
+                    "Unrelated remote advance: no same-scope origin claim exists, so the claim command reapplies on a fresh fast-forwarded base with its bounded retry. Continue only if that later plain push returns `acquired`; `retry-exhausted` is an explicit stop, never `held`.",
+                    "No claim path uses force push. Takeover and release remain explicit attributed commands; orchestration never infers either transition.",
+                },
+                ClaimStaleRoute =
+                    "When `automation stalled-work` emits detect-only `claim-stale`, retain actor, team, scope, age, and `last_evidence`; route those facts to operator judgment. Time alone never releases, expires, reassigns, or takes over the claim. After judgment, only an explicit attributed `claim release` or `claim takeover --displaced-holder ...` may change ownership.",
+            },
             DomainRouting = new OrchestratorDomainRouting
             {
                 Mode = mode,
@@ -4077,6 +4096,27 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine("```");
         writer.WriteLine();
 
+        writer.WriteLine("## Git-backed claim verification and routing (G679 — preview-through-1.x)");
+        writer.WriteLine();
+        writer.WriteLine(guide.ClaimRouting.Summary);
+        writer.WriteLine();
+        writer.WriteLine("### Verify before coordinating named work");
+        writer.WriteLine();
+        foreach (var item in guide.ClaimRouting.Verification)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Reject disambiguation");
+        writer.WriteLine();
+        foreach (var item in guide.ClaimRouting.RejectDisambiguation)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"### `claim-stale` route\n\n{guide.ClaimRouting.ClaimStaleRoute}");
+        writer.WriteLine();
+
         writer.WriteLine("## Setup (starting orchestrator mode)");
         writer.WriteLine();
         writer.WriteLine(guide.Setup.Summary);
@@ -4884,6 +4924,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("role_boundary")]
     public required OrchestratorRoleBoundary RoleBoundary { get; init; }
 
+    [JsonPropertyName("claim_routing")]
+    public required OrchestratorClaimRouting ClaimRouting { get; init; }
+
     [JsonPropertyName("domain_routing")]
     public required OrchestratorDomainRouting DomainRouting { get; init; }
 
@@ -5013,6 +5056,21 @@ internal sealed record OrchestratorRoleBoundary
     /// <summary>G540: neither thread decides design content alone — intent shaping, packet content/acceptance criteria, release scope, and prioritization rulings are always consulted between design and orchestrator.</summary>
     [JsonPropertyName("double_check_rule")]
     public required string DoubleCheckRule { get; init; }
+}
+
+internal sealed record OrchestratorClaimRouting
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("verification")]
+    public required IReadOnlyList<string> Verification { get; init; }
+
+    [JsonPropertyName("reject_disambiguation")]
+    public required IReadOnlyList<string> RejectDisambiguation { get; init; }
+
+    [JsonPropertyName("claim_stale_route")]
+    public required string ClaimStaleRoute { get; init; }
 }
 
 internal sealed record OrchestratorModeSeparation

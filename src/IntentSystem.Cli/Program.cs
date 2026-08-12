@@ -49,6 +49,7 @@ internal static class Program
                 || IsWorkerCommand(args)
                 || IsSkillCommand(args)
                 || IsNotifyCommand(args)
+                || IsClaimCommand(args)
                 || IsHelpCommand(args))
             {
                 return CommandRouter.Execute(args, CreateBootstrapContext(currentDirectory, args), Console.Out);
@@ -147,6 +148,12 @@ internal static class Program
     private static bool IsNotifyCommand(string[] args)
     {
         return args.Length >= 1 && string.Equals(args[0], "notify", StringComparison.Ordinal);
+    }
+
+    /// <summary>G679: claims operate from an ordinary Git checkout and do not require host config.</summary>
+    private static bool IsClaimCommand(string[] args)
+    {
+        return args.Length >= 1 && string.Equals(args[0], "claim", StringComparison.Ordinal);
     }
 
     private static bool IsGuideOneshotCommand(string[] args)

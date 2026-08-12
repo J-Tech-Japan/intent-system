@@ -58,6 +58,40 @@ copy a long loop body from this document.
 - A child agent never applies `intent-target` (host-owned) or `intent-pr-created` (issue-side marker) to a PR
 - `linked_pr_synced: false` from `worker complete` is the expected child-cwd warning — record it and move on
 
+## Preview: Git-backed cross-clone scope claims (G679)
+
+The decision and its boundaries are recorded in
+[ADR 0003](../adr/0003-git-push-cas-work-ownership.md).
+
+`worker claim` remains the GitHub issue/PR lifecycle transition above. The
+separate preview `claim` group coordinates one named unit of work across host
+clones without a server:
+
+```bash
+intent-cli claim acquire --scope execution-unit:<EU> --actor <actor> --team <team> --write --format json
+intent-cli claim acquire --scope release-prep:<owner/repo>:<version> --actor <actor> --team <team> --write --format json
+```
+
+Acquisition is exactly `git pull --ff-only` → create the immutable record under
+`.intent-cli/claims/` → commit → plain push. Only push success means acquired.
+If the same scope appeared after a rejected push, the result is `held` and names
+the holder; an unrelated advance is reapplied from a fresh base with a bounded
+retry. Release and takeover require explicit actor/team/reason attribution, and
+takeover names the displaced holder. Age never expires or transfers a claim;
+`automation stalled-work` only reports `claim-stale` with actor, team, scope,
+age, and last evidence.
+
+Fresh hosts put these exact lines in `.gitattributes`, in this order:
+
+```gitattributes
+.intent-cli/runs.jsonl merge=union
+.intent-cli/**/*.jsonl merge=union
+.intent-cli/claims/** -merge
+```
+
+Existing hosts are not migrated automatically. Add the final, more-specific
+line after broad union rules only through an explicit reviewed commit.
+
 ## Command reference (for agents, maintainers, and troubleshooting)
 
 > **Note:** The commands below are run by the AI agent internally. The authoritative

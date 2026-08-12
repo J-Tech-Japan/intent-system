@@ -57,6 +57,38 @@
 - child agent は PR に `intent-target`（host 所有）や `intent-pr-created`（issue 側マーカー）を付けない
 - `worker complete` の `linked_pr_synced: false` は child-cwd で想定される警告 — 記録して先に進む
 
+## Preview: Git-backed cross-clone scope claim (G679)
+
+この decision と boundary は
+[ADR 0003](../adr/0003-git-push-cas-work-ownership.md) に記録しています。
+
+`worker claim` は上記の GitHub issue/PR lifecycle transition のままです。別の preview
+`claim` group は server なしで host clone 間の named work unit を調整します。
+
+```bash
+intent-cli claim acquire --scope execution-unit:<EU> --actor <actor> --team <team> --write --format json
+intent-cli claim acquire --scope release-prep:<owner/repo>:<version> --actor <actor> --team <team> --write --format json
+```
+
+acquire は厳密に `git pull --ff-only` → `.intent-cli/claims/` 配下に immutable record を
+作成 → commit → plain push です。push 成功だけが acquire の事実です。push reject 後に
+同じ scope が現れた場合は holder を名指す `held`、無関係な advance なら fresh base から
+bounded retry で再適用します。release / takeover は actor/team/reason の明示的 attribution が
+必要で、takeover は displaced holder を名指します。age で claim を expire / transfer しません。
+`automation stalled-work` は actor、team、scope、age、last evidence を持つ `claim-stale` を
+detect-only で報告します。
+
+fresh host は `.gitattributes` に次の exact line をこの順序で置きます。
+
+```gitattributes
+.intent-cli/runs.jsonl merge=union
+.intent-cli/**/*.jsonl merge=union
+.intent-cli/claims/** -merge
+```
+
+existing host は自動 migrate しません。最後の specific line は broad union rule の後へ、
+明示的に review した commit でのみ追加します。
+
 ## コマンドリファレンス（agent・メンテナ・トラブルシューティング向け）
 
 > **注意:** 以下のコマンドは AI agent が内部で実行します。ループの詳細条件は
