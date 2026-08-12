@@ -88,6 +88,20 @@ internal static class AutomationIssuePublishCommand
             return 1;
         }
 
+        // G669: the host-owned label transition is also a publish boundary.
+        // A lane-declaring packet must carry both independent decision records
+        // before any issue is promoted; legacy packets remain unaffected.
+        if (!string.IsNullOrWhiteSpace(executionUnit))
+        {
+            var laneDecisionGate = BranchLaneDecisionGate.Evaluate(resolvedWorkdir, executionUnit!);
+            if (!laneDecisionGate.Passed)
+            {
+                writer.WriteLine(laneDecisionGate.Error
+                    ?? "lane decision records are incomplete; both propose and confirm records are required.");
+                return 1;
+            }
+        }
+
         IGitHubLabelMutator mutator;
         try
         {

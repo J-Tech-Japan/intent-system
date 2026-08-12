@@ -179,6 +179,33 @@ internal static class IssuePublishFlowCommand
             return 1;
         }
 
+        // G669: a lane-declaring packet is publishable only after the
+        // independent design proposal and orchestration confirmation are both
+        // recorded in the CLI-owned decision store. Legacy packets have no
+        // lane declaration and deliberately pass this gate unchanged.
+        var laneDecisionGate = BranchLaneDecisionGate.Evaluate(context.RepoRoot, executionUnit!);
+        if (!laneDecisionGate.Passed)
+        {
+            var laneGateResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                packetExists: true,
+                githubBodyPresent: githubBodyPresent,
+                missingSections: missing,
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: laneDecisionGate.Error
+                    ?? "lane decision records are incomplete; both propose and confirm records are required.",
+                titleSource: titleSource);
+            EmitResult(writer, laneGateResult, format);
+            return 1;
+        }
+
         var queueStatePathForIdempotency = context.GetQueueStatePath();
         var runLogPathForIdempotency = context.GetRunLogPath();
 

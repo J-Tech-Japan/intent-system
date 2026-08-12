@@ -126,6 +126,42 @@ The previous singleton `[project.branch_lanes]` spelling remains readable for
 compatibility, but is scoped only to the configured project domain. Named lanes
 are preview-through-1.x and do not manage or create branches.
 
+## Lane decision records and the publish gate (G669 — preview-through-1.x)
+
+A lane declaration is a routing fact, not a judgment. Before a
+lane-declaring packet can cross the publish boundary, design records a
+proposal with the lane id, resolved branches, rationale, actor, timestamp,
+evidence, definition revision, and a fingerprint:
+
+```text
+intent-cli automation branch-lane-propose-record \
+  --execution-unit G669 --actor design --rationale "..." --evidence "..." --write
+```
+
+Orchestration independently confirms that proposal. Confirmation is a
+separate record with its own actor, timestamp, evidence, and the same routing
+fingerprint; prose in `packet.yaml` or `github-body.md` never counts as either
+record:
+
+```text
+intent-cli automation branch-lane-confirm-record \
+  --execution-unit G669 --actor orchestration --evidence "..." --write
+```
+
+The records live under
+`.intent-cli/branch-lane-decisions/<execution-unit>/propose.json` and
+`confirm.json`. A confirm without a proposal is refused, and publish refuses
+missing, mismatched, malformed, or non-independent records before any GitHub
+operation. Legacy packets without `branch_lane` retain the previous publish
+path unchanged.
+
+`automation stalled-work` reports
+`branch-lane-decision-pending` only for an aged queued lane item whose
+confirmation is absent. It reports `branch-routing-conflict` immediately when
+the packet, issue body, queue snapshot, and observed PR base branch disagree;
+the conflict includes every observed value and remains detectable for a
+closed PR. Neither classification is emitted for a legacy packet.
+
 ## Alternative: timer-loop setup
 
 Use [Implementation loop setup](05-implementation-loop.md) and then

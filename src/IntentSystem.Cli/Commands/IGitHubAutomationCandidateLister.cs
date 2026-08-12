@@ -30,6 +30,15 @@ internal interface IGitHubAutomationCandidateLister
         string repo,
         IReadOnlyCollection<string> requiredLabels)
         => Array.Empty<GitHubAutomationPrCandidate>();
+
+    /// <summary>
+    /// G669: list CLOSED pull requests so a routing conflict remains visible
+    /// after the PR closes. Existing fakes retain the empty default.
+    /// </summary>
+    IReadOnlyList<GitHubAutomationPrCandidate> ListClosedPullRequests(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels)
+        => Array.Empty<GitHubAutomationPrCandidate>();
 }
 
 /// <summary>
@@ -70,6 +79,10 @@ internal sealed record GitHubAutomationPrCandidate
     /// </summary>
     [JsonPropertyName("state")]
     public string State { get; init; } = string.Empty;
+
+    /// <summary>G669: the PR's actual target branch.</summary>
+    [JsonPropertyName("baseRefName")]
+    public string BaseRefName { get; init; } = string.Empty;
 
     /// <summary>
     /// G319: GitHub PR draft flag from <c>gh pr list --json isDraft</c>.
@@ -136,6 +149,10 @@ internal sealed record GitHubAutomationIssueCandidate
     [JsonPropertyName("createdAt")]
     public string CreatedAt { get; init; } = string.Empty;
 
+    /// <summary>G669: issue body declaration used for routing corroboration.</summary>
+    [JsonPropertyName("body")]
+    public string Body { get; init; } = string.Empty;
+
     /// <summary>
     /// G533: GitHub's own "last modified" timestamp — bumped by any
     /// label change, comment, or other timeline event on the issue, so it
@@ -187,13 +204,13 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
     // "last observable issue activity" (label change, comment, etc.)
     // without a dedicated per-issue timeline-events fetch, used by
     // `automation stalled-work`'s claimed-but-silent detection.
-    internal const string ListJsonFields = "number,title,url,createdAt,updatedAt,labels,state";
+    internal const string ListJsonFields = "number,title,url,body,createdAt,updatedAt,labels,state";
 
     // G319: also request `isDraft` so the host-loop-next-action analyzer
     // can map an approved-but-draft PR to `approved-pr-draft-blocked`
     // (G297) instead of attempting a merge.
     internal const string PrListJsonFields =
-        "number,title,url,body,createdAt,updatedAt,labels,closingIssuesReferences,state,isDraft,headRefOid,statusCheckRollup";
+        "number,title,url,body,baseRefName,createdAt,updatedAt,labels,closingIssuesReferences,state,isDraft,headRefOid,statusCheckRollup";
 
     /// <summary>
     /// G206: builds the <c>gh pr list</c> argument list shared by the live
@@ -254,6 +271,30 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
         return args;
     }
 
+    internal static IReadOnlyList<string> BuildClosedPrListArguments(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+        ArgumentNullException.ThrowIfNull(requiredLabels);
+
+        var args = new List<string>
+        {
+            "pr",
+            "list",
+            "--repo", repo,
+            "--state", "closed",
+            "--json", PrListJsonFields,
+            "--limit", "200"
+        };
+        foreach (var label in requiredLabels)
+        {
+            args.Add("--label");
+            args.Add(label);
+        }
+        return args;
+    }
+
     internal static IReadOnlyList<string> BuildIssueListArguments(
         string repo,
         IReadOnlyCollection<string> requiredLabels)
@@ -294,6 +335,15 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
         var args = BuildIssueListArguments(repo, requiredLabels);
         var stdout = RunGh(args, $"list issues in {repo}");
         return DeserializeList<GitHubAutomationIssueCandidate>(stdout, $"`gh issue list` for {repo}");
+    }
+
+    public IReadOnlyList<GitHubAutomationPrCandidate> ListClosedPullRequests(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels)
+    {
+        var args = BuildClosedPrListArguments(repo, requiredLabels);
+        var stdout = RunGh(args, $"list closed PRs in {repo}");
+        return DeserializeList<GitHubAutomationPrCandidate>(stdout, $"gh pr list state closed for {repo}");
     }
 
     public IReadOnlyList<GitHubAutomationPrCandidate> ListMergedPullRequests(

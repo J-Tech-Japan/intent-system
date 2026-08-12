@@ -166,6 +166,8 @@ internal static class AutomationStalledWorkCommand
     public const string KindCiFailedNotTransitioned = "ci-failed-not-transitioned";
     public const string KindCiHeadMoved = "ci-head-moved";
     public const string KindMergedNotClosedOut = "merged-not-closed-out";
+    public const string KindBranchLaneDecisionPending = "branch-lane-decision-pending";
+    public const string KindBranchRoutingConflict = "branch-routing-conflict";
 
     /// <summary>
     /// G596: an explicitly opened durable obligation that only the human
@@ -548,6 +550,29 @@ internal static class AutomationStalledWorkCommand
         var warnings = new List<string>();
 
         CollectPublishedNotDelegated(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
+        var branchLaneQueueState = TryLoadQueueStateForBranchLaneRouting(context, domain, repo, warnings);
+        var closedPrs = branchLaneQueueState?.Items.Any(item => item.RoutingSnapshot is not null) == true
+            ? lister.ListClosedPullRequests(repo, Array.Empty<string>())
+            : Array.Empty<GitHubAutomationPrCandidate>();
+        CollectBranchLaneDecisionPending(
+            context,
+            domain,
+            candidateDomains,
+            repo,
+            now,
+            branchLaneQueueState,
+            items,
+            excluded);
+        CollectBranchRoutingConflicts(
+            context,
+            domain,
+            candidateDomains,
+            repo,
+            openIssues,
+            openPrs.Concat(mergedPrs).Concat(closedPrs).ToArray(),
+            branchLaneQueueState,
+            items,
+            excluded);
         CollectApprovedNotMerged(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded, warnings);
         var ciWaitRead = CiWaitStore.ReadOpen(context.RepoRoot, domain, repo);
         if (ciWaitRead.Error is not null)
@@ -589,6 +614,7 @@ internal static class AutomationStalledWorkCommand
             // generic GitHub staleness threshold before becoming visible.
             .Where(item => item.Kind is KindOperatorAttentionPending or KindOperatorAttentionCannotDetermine
                 or KindCiPending or KindCiAllGreenNotTransitioned or KindCiFailedNotTransitioned or KindCiHeadMoved
+                or KindBranchRoutingConflict
                 || item.AgeMinutes >= staleMinutes)
             .OrderByDescending(item => item.AgeMinutes)
             .ToArray();
@@ -693,6 +719,330 @@ internal static class AutomationStalledWorkCommand
                     ? OperatorAttentionQueryStatus.NoAttentionPending
                     : OperatorAttentionQueryStatus.CheckNotCompleted,
         };
+    }
+
+    private static QueueState? TryLoadQueueStateForBranchLaneRouting(
+        CliContext context,
+        string domain,
+        string repo,
+        List<string> warnings)
+    {
+        var location = RuntimeScopedStateResolver.ResolveQueueStatePathForRead(context.RepoRoot, domain, repo);
+        if (!File.Exists(location.Path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return QueueStateSerializer.Deserialize(File.ReadAllText(location.Path));
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException)
+        {
+            warnings.Add($"queue-state at '{location.Path}' could not be parsed; skipped branch-lane routing findings: {exception.Message}");
+            return null;
+        }
+    }
+
+    private static void CollectBranchLaneDecisionPending(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
+        string repo,
+        DateTimeOffset now,
+        QueueState? queueState,
+        List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded)
+    {
+        if (queueState is null)
+        {
+            return;
+        }
+
+        foreach (var queueItem in queueState.Items.Where(item =>
+                     item.State == QueueItemState.Queued && item.RoutingSnapshot is not null))
+        {
+            if (!TryReadLanePacketSnapshot(context, queueItem.ExecutionUnit, out _))
+            {
+                continue;
+            }
+
+            var packetDomain = ReadPacketDeclaredDomain(context, queueItem.ExecutionUnit);
+            if (!TryConfirmDomain(
+                    domain,
+                    new ExecutionUnitResolution(queueItem.ExecutionUnit, true, false, Array.Empty<string>()),
+                    packetDomain,
+                    candidateDomains,
+                    repo,
+                    out var reason,
+                    out var detail))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindBranchLaneDecisionPending,
+                    ExecutionUnit = queueItem.ExecutionUnit,
+                    Issue = null,
+                    Pr = null,
+                    Reason = reason,
+                    Detail = detail,
+                });
+                continue;
+            }
+
+            var gate = BranchLaneDecisionGate.Evaluate(context.RepoRoot, queueItem.ExecutionUnit);
+            if (gate.Passed)
+            {
+                continue;
+            }
+
+            var propose = BranchLaneDecisionStore.ReadPropose(context.RepoRoot, queueItem.ExecutionUnit);
+            var confirm = BranchLaneDecisionStore.ReadConfirm(context.RepoRoot, queueItem.ExecutionUnit);
+            var ageSource = propose.Record?.RecordedAt ?? queueState.UpdatedAt;
+            var ageMinutes = ComputeAgeMinutesFromInstant(ClampToNow(ageSource, now), now);
+            var missing = propose.Record is null
+                ? "propose and confirm"
+                : confirm.Record is null
+                    ? "confirm"
+                    : "valid propose/confirm pair";
+
+            items.Add(new StalledWorkItem
+            {
+                Kind = KindBranchLaneDecisionPending,
+                ExecutionUnit = queueItem.ExecutionUnit,
+                Issue = queueItem.LinkedIssue is { Number: int issueNumber } linkedIssue
+                    ? new StalledWorkRef
+                    {
+                        Number = issueNumber,
+                        Url = linkedIssue.Url ?? string.Empty,
+                    }
+                    : null,
+                Pr = null,
+                AgeMinutes = ageMinutes,
+                IsInformational = false,
+                RecommendedAction =
+                    $"record the missing {missing} lane decision for {queueItem.ExecutionUnit}; "
+                    + "confirmation must be an independent orchestration judgment with actor, timestamp, evidence, and fingerprint. "
+                    + $"Gate detail: {gate.Error}",
+                RequiredActor = propose.Record is null ? "design" : "orchestration",
+                OrchestratorActionable = false,
+                BlockingReference = BranchLaneDecisionStore.ResolveRelativePath(queueItem.ExecutionUnit, true),
+                DedupeKey = $"branch-lane-decision-pending:{queueItem.ExecutionUnit}",
+            });
+        }
+    }
+
+    private static void CollectBranchRoutingConflicts(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
+        string repo,
+        IReadOnlyList<GitHubAutomationIssueCandidate> issues,
+        IReadOnlyList<GitHubAutomationPrCandidate> prs,
+        QueueState? queueState,
+        List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded)
+    {
+        if (queueState is null)
+        {
+            return;
+        }
+
+        var distinctPrs = prs
+            .Where(pr => pr.Number > 0)
+            .GroupBy(pr => pr.Number)
+            .Select(group => group.First())
+            .ToArray();
+
+        foreach (var queueItem in queueState.Items.Where(item => item.RoutingSnapshot is not null))
+        {
+            if (!TryReadLanePacketSnapshot(context, queueItem.ExecutionUnit, out var packetSnapshot))
+            {
+                continue;
+            }
+
+            var packetDomain = ReadPacketDeclaredDomain(context, queueItem.ExecutionUnit);
+            if (!TryConfirmDomain(
+                    domain,
+                    new ExecutionUnitResolution(queueItem.ExecutionUnit, true, false, Array.Empty<string>()),
+                    packetDomain,
+                    candidateDomains,
+                    repo,
+                    out var reason,
+                    out var detail))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindBranchRoutingConflict,
+                    ExecutionUnit = queueItem.ExecutionUnit,
+                    Issue = null,
+                    Pr = null,
+                    Reason = reason,
+                    Detail = detail,
+                });
+                continue;
+            }
+
+            var linkedIssueNumber = queueItem.LinkedIssue is { Number: int queueIssueNumber }
+                && string.Equals(queueItem.LinkedIssue.Repo, repo, StringComparison.OrdinalIgnoreCase)
+                ? queueIssueNumber
+                : (int?)null;
+            var issue = linkedIssueNumber is int knownIssue
+                ? issues.FirstOrDefault(candidate => candidate.Number == knownIssue && IsOpen(candidate.State))
+                : issues.FirstOrDefault(candidate =>
+                    IsOpen(candidate.State)
+                    && ResolveExecutionUnit(context, candidate.Title).ExecutionUnit == queueItem.ExecutionUnit);
+
+            var pr = distinctPrs.FirstOrDefault(candidate =>
+                issue is not null
+                    && candidate.ClosingIssuesReferences.Any(reference =>
+                        reference.Number == issue.Number && ReferenceMatchesRepo(reference, repo)));
+            if (pr is null && queueItem.LinkedPr is not null)
+            {
+                pr = distinctPrs.FirstOrDefault(candidate =>
+                    MatchesLinkedPr(queueItem, repo, candidate.Number.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            }
+
+            var values = new Dictionary<string, string>(StringComparer.Ordinal);
+            AddRoutingSnapshotValues(values, "packet", packetSnapshot);
+            AddRoutingSnapshotValues(values, "queue", queueItem.RoutingSnapshot!);
+            if (issue is not null)
+            {
+                foreach (var pair in ReadIssueRoutingValues(issue.Body))
+                {
+                    values[$"issue.{pair.Key}"] = pair.Value;
+                }
+            }
+            if (pr is not null && !string.IsNullOrWhiteSpace(pr.BaseRefName))
+            {
+                values["pr.pr_base_branch"] = pr.BaseRefName;
+            }
+
+            if (!HasRoutingConflict(values))
+            {
+                continue;
+            }
+
+            var issueRef = issue is null
+                ? null
+                : new StalledWorkRef { Number = issue.Number, Url = issue.Url };
+            var prRef = pr is null
+                ? null
+                : new StalledWorkRef { Number = pr.Number, Url = pr.Url };
+
+            items.Add(new StalledWorkItem
+            {
+                Kind = KindBranchRoutingConflict,
+                ExecutionUnit = queueItem.ExecutionUnit,
+                Issue = issueRef,
+                Pr = prRef,
+                AgeMinutes = 0,
+                IsInformational = false,
+                RecommendedAction =
+                    $"resolve branch routing conflict for {queueItem.ExecutionUnit} before publish; "
+                    + string.Join(", ", values.Select(pair => $"{pair.Key}={pair.Value}")),
+                RequiredActor = "orchestration",
+                OrchestratorActionable = false,
+                RoutingValues = values,
+                DedupeKey = $"branch-routing-conflict:{queueItem.ExecutionUnit}",
+            });
+        }
+    }
+
+    private static bool TryReadLanePacketSnapshot(
+        CliContext context,
+        string executionUnit,
+        out BranchRoutingSnapshot snapshot)
+    {
+        snapshot = default!;
+        var path = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit, "packet.yaml");
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (!PacketYamlDocument.TryParse(File.ReadAllText(path), out var document, out _)
+                || document is null
+                || string.IsNullOrWhiteSpace(BranchLaneResolver.TryReadDeclaredLane(document.Fields)))
+            {
+                return false;
+            }
+
+            snapshot = BranchLaneResolver.TryReadSnapshot(document.Fields)
+                ?? throw new InvalidOperationException("lane-declaring packet has no complete routing snapshot.");
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static void AddRoutingSnapshotValues(
+        IDictionary<string, string> values,
+        string source,
+        BranchRoutingSnapshot snapshot)
+    {
+        values[$"{source}.lane_id"] = snapshot.LaneId;
+        values[$"{source}.definition_revision"] = snapshot.DefinitionRevision;
+        values[$"{source}.start_branch"] = snapshot.StartBranch;
+        values[$"{source}.pr_base_branch"] = snapshot.PrBaseBranch;
+        values[$"{source}.landing_mode"] = snapshot.LandingMode;
+    }
+
+    private static void AddRoutingSnapshotValues(
+        IDictionary<string, string> values,
+        string source,
+        QueueRoutingSnapshot snapshot)
+    {
+        values[$"{source}.lane_id"] = snapshot.LaneId;
+        values[$"{source}.definition_revision"] = snapshot.DefinitionRevision;
+        values[$"{source}.start_branch"] = snapshot.StartBranch;
+        values[$"{source}.pr_base_branch"] = snapshot.PrBaseBranch;
+        values[$"{source}.landing_mode"] = snapshot.LandingMode;
+    }
+
+    private static bool HasRoutingConflict(IReadOnlyDictionary<string, string> values)
+    {
+        return values
+            .GroupBy(pair => pair.Key[(pair.Key.IndexOf('.', StringComparison.Ordinal) + 1)..], StringComparer.Ordinal)
+            .Any(group => group
+                .Select(pair => pair.Value)
+                .Distinct(StringComparer.Ordinal)
+                .Skip(1)
+                .Any());
+    }
+
+    private static IReadOnlyDictionary<string, string> ReadIssueRoutingValues(string? body)
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return values;
+        }
+
+        AddIssueValue(values, body, "lane_id", "Lane");
+        AddIssueValue(values, body, "definition_revision", "Registry definition revision");
+        AddIssueValue(values, body, "start_branch", "Start branch");
+        AddIssueValue(values, body, "pr_base_branch", "Expected PR base branch");
+        AddIssueValue(values, body, "landing_mode", "Landing mode");
+        return values;
+    }
+
+    private static void AddIssueValue(
+        IDictionary<string, string> values,
+        string body,
+        string key,
+        string label)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(
+            body,
+            $@"(?im)^\s*(?:[-*]\s*)?{System.Text.RegularExpressions.Regex.Escape(label)}\s*:\s*[\x60]?(?<value>[A-Za-z0-9._/-]+)[\x60]?\s*$");
+        if (match.Success)
+        {
+            values[key] = match.Groups["value"].Value;
+        }
     }
 
     /// <summary>
@@ -3638,6 +3988,11 @@ internal static class AutomationStalledWorkCommand
                 {
                     writer.WriteLine($"- declared_guide_roles: {string.Join(", ", declaredRoles)}");
                 }
+                if (item.RoutingValues is { Count: > 0 } routingValues)
+                {
+                    writer.WriteLine(
+                        $"- routing_values: {string.Join(", ", routingValues.Select(pair => $"{pair.Key}={pair.Value}"))}");
+                }
                 // G533: informational kinds never recommend a transition —
                 // rendered as `status` (descriptive prose) rather than
                 // `recommended_action` (always a runnable command) so a
@@ -3862,6 +4217,15 @@ internal sealed record StalledWorkItem
     [JsonPropertyName("blocking_reference")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? BlockingReference { get; init; }
+
+    /// <summary>
+    /// G669: the independently observed routing values for a conflict. The
+    /// keys identify packet, issue, queue, and PR sources so no disagreement
+    /// is collapsed into one guessed branch.
+    /// </summary>
+    [JsonPropertyName("routing_values")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyDictionary<string, string>? RoutingValues { get; init; }
 }
 
 internal sealed record StalledWorkCiBreakdown

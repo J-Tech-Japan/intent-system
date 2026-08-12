@@ -80,6 +80,8 @@ internal static class CommandRouter
         "automation queue-dependency-reconcile [--execution-unit <u>] [--dry-run|--write]",
         "automation knowledge-writeback-record --execution-unit <u> --commit <host-sha> [--target <path>]... [--dry-run|--write]",
         "automation guide-reachability-record --execution-unit <u> --commit <host-sha> [--dry-run|--write]",
+        "automation branch-lane-propose-record --execution-unit <u> --actor <actor> --rationale <text> --evidence <text> [--write]",
+        "automation branch-lane-confirm-record --execution-unit <u> --actor <actor> --evidence <text> [--write]",
         "automation pr-transition --transition review-start --write",
         "automation pr-transition --transition request-update --write",
         "automation pr-transition --transition approved --write",
@@ -242,6 +244,9 @@ internal static class CommandRouter
                 ["knowledge-writeback-record"] = AutomationKnowledgeWriteBackRecordCommand.Execute,
                 // G645: records a performed guide route update.
                 ["guide-reachability-record"] = AutomationGuideReachabilityRecordCommand.Execute,
+                // G669: record the independent design/orchestration lane judgments.
+                ["branch-lane-propose-record"] = BranchLaneDecisionCommand.ExecutePropose,
+                ["branch-lane-confirm-record"] = BranchLaneDecisionCommand.ExecuteConfirm,
                 ["label-palette-audit"] = AutomationLabelPaletteAuditCommand.Execute,
                 ["label-palette-sync"] = AutomationLabelPaletteSyncCommand.Execute,
                 ["pr-transition"] = AutomationPrTransitionCommand.Execute,
