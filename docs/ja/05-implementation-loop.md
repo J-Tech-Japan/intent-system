@@ -93,9 +93,13 @@ existing host は自動 migrate しません。最後の specific line は broad
 ### Preview: claim-aware start surface (G680)
 
 packet draft、queue seed/publish-flow、worker next-action、release-prep は同じ
-`claim verify` judgment を使います。store が設定されている場合、invoking team が matching
-scope を保持している必要があります。unheld / other-team の拒否は scope、holder、holder team
-を名指します。next-slice は同じ judgment を recommendation mode で使い、unheld と own-team
+`claim verify` judgment を使います。Git worktree では verifier が current branch を最初に
+fetch し、fresh な `origin` ref の claims tree を読みます。local absence や stale local record を
+ownership / no-store の証拠にはせず、fresh canonical Git evidence を確立できなければ fail closed
+します。canonical に claims store が存在しない host だけは legacy single-team output を
+byte-identical に維持します。store が設定されている場合、invoking team が matching scope を
+保持している必要があります。unheld / other-team の拒否は scope、holder、holder team を
+名指します。next-slice は同じ judgment を recommendation mode で使い、unheld と own-team
 unit は candidate のまま、claimed-elsewhere unit は holder evidence 付きで除外します。
 これにより start が拒否する作業を recommendation が促しません。
 

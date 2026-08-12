@@ -96,12 +96,16 @@ line after broad union rules only through an explicit reviewed commit.
 ### Preview: claim-aware start surfaces (G680)
 
 Packet draft, queue seed/publish-flow, worker next-action, and release-prep use
-the same `claim verify` judgment. A configured store requires the invoking
-team to hold the matching scope; unheld and other-team refusals name scope,
-holder, and holder team. Next-slice uses that same judgment in recommendation
-mode: unheld and own-team units remain candidates, while claimed-elsewhere
-units are excluded with holder evidence, so it never urges what start will
-refuse.
+the same `claim verify` judgment. In a Git worktree the verifier first fetches
+the current branch and reads the claims tree from the fresh `origin` ref; local
+absence or a stale local record is never proof of ownership or no-store. If
+fresh canonical Git evidence cannot be established it fails closed. A genuine
+canonical no-store host keeps legacy single-team output byte-identical. A
+configured store requires the invoking team to hold the matching scope;
+unheld and other-team refusals name scope, holder, and holder team. Next-slice
+uses that same judgment in recommendation mode: unheld and own-team units
+remain candidates, while claimed-elsewhere units are excluded with holder
+evidence, so it never urges what start will refuse.
 
 Numbering is claim-then-draft. Claim `execution-unit:<N>` before scaffolding;
 after losing N, fast-forward, recompute, and retry the next number exactly once.

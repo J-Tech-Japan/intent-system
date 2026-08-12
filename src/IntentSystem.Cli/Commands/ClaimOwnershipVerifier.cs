@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -24,8 +26,33 @@ internal static class ClaimOwnershipVerifier
         ArgumentException.ThrowIfNullOrWhiteSpace(repoRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(scope);
 
-        var storePath = Path.Combine(repoRoot, ClaimCommand.ClaimsDirectory.Replace('/', Path.DirectorySeparatorChar));
-        if (!Directory.Exists(storePath))
+        // Vocabulary is part of the G679 primitive contract. Validate before
+        // either local or canonical no-store compatibility can pass.
+        if (!ClaimCommand.TryValidateScope(scope, out var scopeError))
+        {
+            return Refused(
+                ClaimOwnershipVerification.StatusInvalid,
+                scope,
+                invokingTeam,
+                null,
+                null,
+                $"claim verification refused scope '{scope}': {scopeError}",
+                storeConfigured: false);
+        }
+
+        var evidence = ReadCanonicalEvidence(repoRoot, scope);
+        if (!evidence.Available)
+        {
+            return Refused(
+                ClaimOwnershipVerification.StatusCanonicalUnavailable,
+                scope,
+                invokingTeam,
+                null,
+                null,
+                $"claim verification refused scope '{scope}': fresh canonical Git evidence is unavailable ({evidence.Detail}).");
+        }
+
+        if (!evidence.StoreConfigured)
         {
             return new ClaimOwnershipVerification(
                 Passed: true,
@@ -38,19 +65,7 @@ internal static class ClaimOwnershipVerifier
                 Detail: "No claims store is configured; legacy single-team behavior applies unchanged.");
         }
 
-        if (!ClaimCommand.TryValidateScope(scope, out var scopeError))
-        {
-            return Refused(
-                ClaimOwnershipVerification.StatusInvalid,
-                scope,
-                invokingTeam,
-                null,
-                null,
-                $"claim verification refused scope '{scope}': {scopeError}");
-        }
-
-        var claimPath = Path.Combine(repoRoot, ClaimCommand.ClaimPath(scope).Replace('/', Path.DirectorySeparatorChar));
-        if (!File.Exists(claimPath))
+        if (evidence.RecordJson is null)
         {
             if (allowUnheld)
             {
@@ -77,7 +92,7 @@ internal static class ClaimOwnershipVerifier
         ClaimRecord? record;
         try
         {
-            record = JsonSerializer.Deserialize<ClaimRecord>(File.ReadAllText(claimPath), JsonOptions);
+            record = JsonSerializer.Deserialize<ClaimRecord>(evidence.RecordJson, JsonOptions);
         }
         catch (JsonException exception)
         {
@@ -89,17 +104,6 @@ internal static class ClaimOwnershipVerifier
                 null,
                 $"claim verification refused scope '{scope}': active record is invalid ({exception.Message}).");
         }
-        catch (IOException exception)
-        {
-            return Refused(
-                ClaimOwnershipVerification.StatusInvalid,
-                scope,
-                invokingTeam,
-                null,
-                null,
-                $"claim verification refused scope '{scope}': active record could not be read ({exception.Message}).");
-        }
-
         if (record is null || !string.Equals(record.Scope, scope, StringComparison.Ordinal))
         {
             return Refused(
@@ -144,23 +148,172 @@ internal static class ClaimOwnershipVerifier
             Detail: $"Scope '{scope}' is held by actor '{record.Actor}' on invoking team '{record.Team}'.");
     }
 
+    internal static ClaimStoreProbe ProbeStore(string repoRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repoRoot);
+        var evidence = ReadCanonicalEvidence(repoRoot, "execution-unit:claim-store-probe");
+        return new ClaimStoreProbe(evidence.Available, evidence.StoreConfigured, evidence.Detail);
+    }
+
+    /// <summary>
+    /// A Git worktree must use the pushed remote fact, never local absence or
+    /// a stale local record. Non-Git roots retain the local evidence path used
+    /// by deterministic command fixtures and embedded callers.
+    /// </summary>
+    private static CanonicalClaimEvidence ReadCanonicalEvidence(string repoRoot, string scope)
+    {
+        var inside = RunGit(repoRoot, ["rev-parse", "--is-inside-work-tree"]);
+        if (inside.ExitCode != 0
+            || !string.Equals(inside.StandardOutput.Trim(), "true", StringComparison.Ordinal))
+        {
+            return ReadLocalEvidence(repoRoot, scope);
+        }
+
+        var branch = RunGit(repoRoot, ["branch", "--show-current"]);
+        if (branch.ExitCode != 0 || string.IsNullOrWhiteSpace(branch.StandardOutput))
+        {
+            return CanonicalClaimEvidence.Unavailable("the current Git checkout has no named branch");
+        }
+
+        var origin = RunGit(repoRoot, ["remote", "get-url", "origin"]);
+        if (origin.ExitCode != 0 || string.IsNullOrWhiteSpace(origin.StandardOutput))
+        {
+            return CanonicalClaimEvidence.Unavailable("the current Git checkout has no origin remote");
+        }
+
+        var branchName = branch.StandardOutput.Trim();
+        var remoteRef = $"refs/remotes/origin/{branchName}";
+        var fetch = RunGit(repoRoot,
+            ["fetch", "--quiet", "origin", $"+refs/heads/{branchName}:{remoteRef}"]);
+        if (fetch.ExitCode != 0)
+        {
+            return CanonicalClaimEvidence.Unavailable(
+                string.IsNullOrWhiteSpace(fetch.StandardError)
+                    ? "fetching the current branch from origin failed"
+                    : fetch.StandardError.Trim());
+        }
+
+        var tree = RunGit(repoRoot,
+            ["ls-tree", "-r", "--name-only", remoteRef, "--", ClaimCommand.ClaimsDirectory]);
+        if (tree.ExitCode != 0)
+        {
+            return CanonicalClaimEvidence.Unavailable(
+                string.IsNullOrWhiteSpace(tree.StandardError)
+                    ? "reading the canonical claims tree failed"
+                    : tree.StandardError.Trim());
+        }
+
+        var claimPaths = tree.StandardOutput
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(path => path.StartsWith(ClaimCommand.ClaimsDirectory + "/", StringComparison.Ordinal))
+            .ToArray();
+        var storeConfigured = claimPaths.Length > 0;
+        if (!storeConfigured)
+        {
+            return CanonicalClaimEvidence.NoStore;
+        }
+
+        var claimPath = ClaimCommand.ClaimPath(scope);
+        if (!claimPaths.Contains(claimPath, StringComparer.Ordinal))
+        {
+            return CanonicalClaimEvidence.Unheld;
+        }
+
+        var show = RunGit(repoRoot, ["show", $"{remoteRef}:{claimPath}"]);
+        if (show.ExitCode != 0)
+        {
+            return CanonicalClaimEvidence.Unavailable(
+                string.IsNullOrWhiteSpace(show.StandardError)
+                    ? "reading the canonical active claim failed"
+                    : show.StandardError.Trim());
+        }
+
+        return new CanonicalClaimEvidence(true, true, show.StandardOutput, "fresh origin record");
+    }
+
+    private static CanonicalClaimEvidence ReadLocalEvidence(string repoRoot, string scope)
+    {
+        var storePath = Path.Combine(
+            repoRoot, ClaimCommand.ClaimsDirectory.Replace('/', Path.DirectorySeparatorChar));
+        if (!Directory.Exists(storePath)) return CanonicalClaimEvidence.NoStore;
+
+        var claimPath = Path.Combine(
+            repoRoot, ClaimCommand.ClaimPath(scope).Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(claimPath)) return CanonicalClaimEvidence.Unheld;
+        try
+        {
+            return new CanonicalClaimEvidence(true, true, File.ReadAllText(claimPath), "local fixture record");
+        }
+        catch (IOException exception)
+        {
+            return CanonicalClaimEvidence.Unavailable(exception.Message);
+        }
+    }
+
+    private static GitResult RunGit(string workdir, IReadOnlyList<string> arguments)
+    {
+        var startInfo = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = workdir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        try
+        {
+            using var process = Process.Start(startInfo);
+            if (process is null) return new GitResult(1, string.Empty, "failed to start git");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            return new GitResult(process.ExitCode, stdout, stderr);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            return new GitResult(1, string.Empty, exception.Message);
+        }
+    }
+
     private static ClaimOwnershipVerification Refused(
         string status,
         string scope,
         string? invokingTeam,
         string? holder,
         string? holderTeam,
-        string detail) =>
+        string detail,
+        bool storeConfigured = true) =>
         new(
             Passed: false,
             Status: status,
             Scope: scope,
-            StoreConfigured: true,
+            StoreConfigured: storeConfigured,
             InvokingTeam: invokingTeam,
             Holder: holder,
             HolderTeam: holderTeam,
             Detail: detail);
+
+    private sealed record CanonicalClaimEvidence(
+        bool Available,
+        bool StoreConfigured,
+        string? RecordJson,
+        string Detail)
+    {
+        public static CanonicalClaimEvidence NoStore { get; } =
+            new(true, false, null, "canonical claims store absent");
+        public static CanonicalClaimEvidence Unheld { get; } =
+            new(true, true, null, "canonical scope unheld");
+        public static CanonicalClaimEvidence Unavailable(string detail) =>
+            new(false, false, null, detail);
+    }
+
+    private sealed record GitResult(int ExitCode, string StandardOutput, string StandardError);
 }
+
+internal sealed record ClaimStoreProbe(bool Available, bool StoreConfigured, string Detail);
 
 internal static class ClaimVerificationCommand
 {
@@ -267,4 +420,5 @@ internal sealed record ClaimOwnershipVerification(
     public const string StatusHeldByOtherTeam = "held-by-other-team";
     public const string StatusTeamRequired = "team-required";
     public const string StatusInvalid = "invalid";
+    public const string StatusCanonicalUnavailable = "canonical-unavailable";
 }

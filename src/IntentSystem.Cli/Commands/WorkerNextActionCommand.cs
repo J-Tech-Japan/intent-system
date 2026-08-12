@@ -331,8 +331,25 @@ internal static class WorkerNextActionCommand
         IReadOnlyList<GitHubAutomationIssueCandidate> issues)
     {
         if (!string.Equals(result.Action, WorkerNextActionConstants.Actions.IssueToPr, StringComparison.Ordinal)
-            || result.Number is not { } issueNumber
-            || !Directory.Exists(Path.Combine(repoRoot, ClaimCommand.ClaimsDirectory.Replace('/', Path.DirectorySeparatorChar))))
+            || result.Number is not { } issueNumber)
+        {
+            return result;
+        }
+
+        var store = ClaimOwnershipVerifier.ProbeStore(repoRoot);
+        if (!store.Available)
+        {
+            return result with
+            {
+                Action = WorkerNextActionConstants.Actions.Wait,
+                Reason = $"claim verification refused issue #{issueNumber}: fresh canonical Git evidence is unavailable ({store.Detail}).",
+                SourceClassification = WorkerNextActionConstants.SourceClassifications.ClaimRefused,
+                MustCreatePr = null,
+                AllowedTerminalOutcomes = null,
+                ForbiddenTerminalOutcomes = null,
+            };
+        }
+        if (!store.StoreConfigured)
         {
             return result;
         }
@@ -354,6 +371,10 @@ internal static class WorkerNextActionCommand
 
         var verification = ClaimOwnershipVerifier.Verify(
             repoRoot, $"execution-unit:{executionUnit}", team);
+        if (verification.Status == ClaimOwnershipVerification.StatusNotConfigured)
+        {
+            return result;
+        }
         if (verification.Passed)
         {
             return result;
