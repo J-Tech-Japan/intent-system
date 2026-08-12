@@ -108,15 +108,15 @@ internal static class GuideDesignThreadCommand
             },
             ResidualApproval = new DesignThreadResidualApproval
             {
-                PreviewStatus = "preview-through-1.x (G666)",
+                PreviewStatus = "preview-through-1.x (G666/G682)",
                 Layers = new[]
                 {
-                    "Eliminate routine launch prompts with the kind's recorded unattended-launch recipe.",
-                    "Orchestration alone adjudicates any residual prompt, and only when a durable per-team pre-approval policy names that agent kind and prompt class.",
-                    "Design receives only the resulting escalation-class event; it never relays keystrokes or answers the prompt.",
+                    "Interim in-contract path: eliminate each known dialog through agent-side allow configuration recorded in that kind's G636 unattended-launch recipe fields; never answer the dialog.",
+                    "Until G683 supplies a real prompt-class producer, every residual pre-approval rule is loudly inapplicable and every residual prompt is escalate-only by construction; no class is fabricated and no policy is treated as live.",
+                    "Design receives only the escalation-class event; it never relays keystrokes or answers the prompt.",
                 },
-                NoPolicyRule = "No recorded per-team policy means escalate-only: accept nothing by default.",
-                Incident = "On 2026-08-11 in workspace wK, a Claude app safety boundary correctly blocked a request for design to relay an approval keystroke; advice to use a nonexistent `/approvals` surface also failed. The durable correction is recipe-first launch plus orchestration-owned policy, not another relay path.",
+                NoPolicyRule = "With or without a recorded policy, residual prompts are escalate-only by construction until G683 provides a real producer; accept nothing and fabricate no class.",
+                Incident = "G666 measured the 2026-08-11 workspace wK Claude app safety relay refusal. Operator-filed #1469 then measured a 0.19.0 supervision cycle with 47 keys and no prompt/dialog/class/adjudication producer key, a review seat wedged three times in one day, and orchestration correctly refusing to fabricate a class. This is the same configured-looking-but-inert failure shape as #1465; the interim correction is agent-side allow configuration recorded in the G636 kind recipe fields, never a dialog answer.",
                 WatcherBoundary = "Supervision may detect and record a recipe mismatch or residual wait, but never restarts or corrects a seat, answers a dialog, or sends keys.",
                 Formula = "four judgment-bearing threads plus one supervision process; approval handling creates no fifth seat.",
             },
@@ -156,6 +156,7 @@ internal static class GuideDesignThreadCommand
                 "No behavior change outside guide rendering and reachability surfaces.",
                 "No terminal parsing, provider launch, hidden fifth role, or design-owned stall recovery.",
                 "No design-thread approval-keystroke relay and no watcher restart, correction, dialog answer, or key send.",
+                "No prompt-class emission, simulation, matching, validation, adjudication, or answer behavior before G683.",
                 "No canonical identity inferred from prose, transport state, or an unaccepted candidate.",
                 "No publication, contract, priority, release, destructive, permission, security, or credential decision is silently broadened.",
             },

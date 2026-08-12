@@ -809,14 +809,14 @@ internal sealed class NotifyMeasuredSupervisor
         var declarationSupplied = preApprovalAccept.Count > 0 || preApprovalEscalate.Count > 0;
         if (declarationSupplied)
         {
-            var policy = new NotifyPreApprovalPolicy
+            var policy = NotifyPreApprovalPolicyStore.WithCurrentApplicability(new NotifyPreApprovalPolicy
             {
                 Domain = domain,
                 Team = team,
                 RecordedAt = now,
                 Accept = preApprovalAccept,
                 Escalate = preApprovalEscalate,
-            };
+            });
             var recorded = NotifyPreApprovalPolicyStore.Record(artifactRoot, policy, write);
             if (recorded.Error is not null)
             {
@@ -825,28 +825,44 @@ internal sealed class NotifyMeasuredSupervisor
             return new NotifyPreApprovalPolicyStatus
             {
                 Recorded = recorded.Applied,
-                Status = recorded.Applied ? "recorded" : "preview-unrecorded",
+                Status = policy.Applicable
+                    ? recorded.Applied ? "recorded" : "preview-unrecorded"
+                    : recorded.Applied ? "recorded-inapplicable" : "preview-inapplicable",
                 DefaultDecision = "escalate",
                 Path = recorded.Path,
                 Accept = policy.Accept,
                 Escalate = policy.Escalate,
-                Summary = recorded.Applied
-                    ? "Recorded the per-team pre-approval policy for orchestration adjudication. Unmatched prompt shapes escalate."
-                    : "Dry-run: the per-team pre-approval policy was not recorded. Until a write succeeds, adjudication remains escalate-only.",
+                Applicable = policy.Applicable,
+                ApplicabilityStatus = policy.ApplicabilityStatus,
+                InapplicableAgentKinds = policy.InapplicableAgentKinds,
+                InapplicabilityReason = policy.InapplicabilityReason,
+                Summary = PolicySummary(policy, recorded.Applied, write),
             };
         }
 
         if (read.Policy is { } existing)
         {
+            if (read.RefreshRequired && write)
+            {
+                var refreshed = NotifyPreApprovalPolicyStore.Record(artifactRoot, existing, write: true);
+                if (refreshed.Error is not null)
+                {
+                    error = $"pre-approval-policy-write-failed: {refreshed.Error}";
+                }
+            }
             return new NotifyPreApprovalPolicyStatus
             {
                 Recorded = true,
-                Status = "recorded",
+                Status = existing.Applicable ? "recorded" : "recorded-inapplicable",
                 DefaultDecision = "escalate",
                 Path = read.Path,
                 Accept = existing.Accept,
                 Escalate = existing.Escalate,
-                Summary = "A durable per-team pre-approval policy is recorded for orchestration; every unmatched prompt shape escalates.",
+                Applicable = existing.Applicable,
+                ApplicabilityStatus = existing.ApplicabilityStatus,
+                InapplicableAgentKinds = existing.InapplicableAgentKinds,
+                InapplicabilityReason = existing.InapplicabilityReason,
+                Summary = PolicySummary(existing, recorded: true, write),
             };
         }
 
@@ -861,8 +877,31 @@ internal sealed class NotifyMeasuredSupervisor
         Path = path,
         Accept = [],
         Escalate = [],
+        Applicable = false,
+        ApplicabilityStatus = "not-recorded",
+        InapplicableAgentKinds = [],
+        InapplicabilityReason = null,
         Summary = "No per-team pre-approval policy is recorded; orchestration must escalate every residual prompt and accept none.",
     };
+
+    private static string PolicySummary(NotifyPreApprovalPolicy policy, bool recorded, bool write)
+    {
+        if (!policy.Applicable)
+        {
+            var kinds = string.Join(", ", policy.InapplicableAgentKinds.Select(kind => $"'{kind}'"));
+            var prefix = recorded
+                ? "The per-team pre-approval policy is recorded but inapplicable"
+                : write
+                    ? "The per-team pre-approval policy could not be recorded and is inapplicable"
+                    : "Dry-run: the proposed per-team pre-approval policy is inapplicable";
+            return $"{prefix}: no prompt-class producer is registered for agent kind(s) {kinds}. "
+                + "The affected rules cannot currently apply; residual prompts are escalate-only by construction until G683.";
+        }
+
+        return recorded
+            ? "A durable per-team pre-approval policy is recorded and every named agent kind has a prompt-class producer; every unmatched prompt shape escalates."
+            : "Dry-run: every named agent kind has a prompt-class producer, but the per-team pre-approval policy was not recorded. Until a write succeeds, adjudication remains escalate-only.";
+    }
 
     private static int FallbackAbsenceThresholdSeconds(int cadenceSeconds) =>
         Math.Max(cadenceSeconds * 2, cadenceSeconds + FallbackAbsenceHeadroomSeconds);

@@ -308,20 +308,25 @@ intent-cli automation guide-reachability-record --execution-unit <unit> --commit
 guide-reachability-pending を出します。この debt は merge/closeout を阻害せず、explicit no-surface は
 silent です。これは 1.0 promise の対象外の preview surface です。compatibility ledger を参照してください。
 
-### 3 層の residual approval と recipe drift（G666 — preview-through-1.x）
+### 3 層の residual approval honesty と recipe drift（G666/G682 — preview-through-1.x）
 
 unattended approval model は正確に 3 層です。第 1 に agent kind ごとの recorded
-recipe で routine launch prompt を除去します。第 2 に residual prompt の agent-kind
-と prompt-class の組を永続 per-team policy が明示した場合だけ、orchestration が
-adjudication を所有します。第 3 に design は escalation-class event だけを受け取り、
-prompt への応答も keystroke relay も行いません。policy がない場合、または rule が
-一致しない場合は escalate-only であり、default accept ではありません。
+recipe の G636 fields に agent-side allow configuration を記録し、既知 dialog を除去します。
+dialog への応答による除去は禁止です。第 2 に、G683 が real prompt-class producer を提供する
+まで residual policy rule はすべて明示的に inapplicable で、residual prompt は構造上
+escalate-only です。orchestration は class を捏造せず adjudication もしません。第 3 に design
+は escalation-class event だけを受け取り、prompt への応答も keystroke relay も行いません。
+producer absent 中の recorded policy は accept を意味しません。
 
 standing supervisor に repeatable な
 `--pre-approve <agent-kind>:<prompt-class>` と
 `--pre-escalate <agent-kind>:<prompt-class>` を `--write` とともに指定して policy を
-記録します。2 つの list は同時に宣言します。これは adjudication policy の記録であり、
-intent-cli は dialog に応答せず key も送りません。
+記録します。2 つの list は同時に宣言します。record-time output、stored policy、EVERY
+supervision cycle は rule ごとに `applicable: false`、
+`applicability_status: inapplicable-no-prompt-class-producer`、agent kind、理由を返します。
+状態は producer registry から毎回再計算され、kind に real producer が存在すれば自動的に
+解消します。この記録は prompt class の emission、simulation、matching、validation、
+adjudication を行わず、intent-cli は dialog に応答せず key も送りません。
 
 各 supervision cycle は running recorded seat の structured argv と kind ごとの recorded
 recipe も比較します。argument order と whitespace は同値です。mismatch は observed shape
@@ -332,8 +337,12 @@ send を一切行いません。
 これにより **judgment を担う 4 thread と 1 supervision process** を維持し、第 5 の
 approval seat を追加しません。2026-08-11 の workspace wK では Claude app safety が
 design-thread keystroke relay を正しく拒み、存在しない `/approvals` surface の助言でも
-復旧できませんでした。永続 remedy は recipe-first launch と orchestration-owned policy
-です。同じ contract は `intent-cli guide orchestrator-thread` と
+復旧できませんでした。別の attribution として、operator-filed #1469 は 0.19.0 cycle の
+47 keys に prompt/dialog/class/adjudication producer key がないこと、review seat が 1 日に
+3 回停止したこと、orchestration が class 捏造を正しく拒否したことを実測しました。これは
+#1465 の configured-looking-but-inert failure shape と共通です。interim の in-contract remedy は
+上記 recipe layer の agent-side allow configuration を G636 fields に記録することであり、answer
+path ではありません。同じ contract は `intent-cli guide orchestrator-thread` と
 `intent-cli guide design-thread` の両方で、Markdown/JSON、team の有無を問わず表示します。
 
 ### bounded な recipient supervision (G630)

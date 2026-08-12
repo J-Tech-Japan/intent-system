@@ -8,6 +8,10 @@ internal sealed record NotifyPreApprovalRule
 {
     [JsonPropertyName("agent_kind")] public required string AgentKind { get; init; }
     [JsonPropertyName("prompt_class")] public required string PromptClass { get; init; }
+    [JsonPropertyName("applicable")] public bool Applicable { get; init; }
+    [JsonPropertyName("applicability_status")] public string ApplicabilityStatus { get; init; } =
+        NotifyPromptClassProducerRegistry.InapplicableStatus;
+    [JsonPropertyName("inapplicability_reason")] public string? InapplicabilityReason { get; init; }
 
     public override string ToString() => $"{AgentKind}:{PromptClass}";
 }
@@ -19,6 +23,11 @@ internal sealed record NotifyPreApprovalPolicy
     [JsonPropertyName("recorded_at")] public required DateTimeOffset RecordedAt { get; init; }
     [JsonPropertyName("accept")] public required IReadOnlyList<NotifyPreApprovalRule> Accept { get; init; }
     [JsonPropertyName("escalate")] public required IReadOnlyList<NotifyPreApprovalRule> Escalate { get; init; }
+    [JsonPropertyName("applicable")] public bool Applicable { get; init; }
+    [JsonPropertyName("applicability_status")] public string ApplicabilityStatus { get; init; } =
+        NotifyPromptClassProducerRegistry.InapplicableStatus;
+    [JsonPropertyName("inapplicable_agent_kinds")] public IReadOnlyList<string> InapplicableAgentKinds { get; init; } = [];
+    [JsonPropertyName("inapplicability_reason")] public string? InapplicabilityReason { get; init; }
 }
 
 internal sealed record NotifyPreApprovalPolicyStatus
@@ -29,6 +38,10 @@ internal sealed record NotifyPreApprovalPolicyStatus
     [JsonPropertyName("path")] public required string Path { get; init; }
     [JsonPropertyName("accept")] public required IReadOnlyList<NotifyPreApprovalRule> Accept { get; init; }
     [JsonPropertyName("escalate")] public required IReadOnlyList<NotifyPreApprovalRule> Escalate { get; init; }
+    [JsonPropertyName("applicable")] public required bool Applicable { get; init; }
+    [JsonPropertyName("applicability_status")] public required string ApplicabilityStatus { get; init; }
+    [JsonPropertyName("inapplicable_agent_kinds")] public required IReadOnlyList<string> InapplicableAgentKinds { get; init; }
+    [JsonPropertyName("inapplicability_reason")] public string? InapplicabilityReason { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
 }
 
@@ -37,7 +50,30 @@ internal sealed record NotifyPreApprovalPolicyReadResult
     public required bool Resolved { get; init; }
     public required string Path { get; init; }
     public NotifyPreApprovalPolicy? Policy { get; init; }
+    public bool RefreshRequired { get; init; }
     public string? Error { get; init; }
+}
+
+/// <summary>
+/// G682 records only whether a real prompt-class producer exists for an agent
+/// kind. It does not emit, parse, match, validate, adjudicate, or answer a
+/// prompt. G683 owns adding the first production registration.
+/// </summary>
+internal static class NotifyPromptClassProducerRegistry
+{
+    public const string ApplicableStatus = "applicable";
+    public const string InapplicableStatus = "inapplicable-no-prompt-class-producer";
+
+    private static readonly IReadOnlySet<string> ProducerKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    internal static Func<string, bool>? AvailabilityOverride { get; set; }
+
+    public static bool HasProducer(string agentKind) =>
+        AvailabilityOverride?.Invoke(agentKind) ?? ProducerKinds.Contains(agentKind);
+
+    public static string MissingReason(string agentKind) =>
+        $"No prompt-class producer is registered for agent kind '{agentKind}'. This rule cannot currently apply; "
+        + "residual prompts are escalate-only by construction until G683 provides a real producer.";
 }
 
 /// <summary>
@@ -75,7 +111,14 @@ internal static class NotifyPreApprovalPolicyStore
                 throw new InvalidDataException(
                     $"The policy identifies '{policy.Domain}/{policy.Team}', not requested '{domain}/{team}'.");
             }
-            return new NotifyPreApprovalPolicyReadResult { Resolved = true, Path = path, Policy = policy };
+            var current = WithCurrentApplicability(policy);
+            return new NotifyPreApprovalPolicyReadResult
+            {
+                Resolved = true,
+                Path = path,
+                Policy = current,
+                RefreshRequired = !ApplicabilityEquals(policy, current),
+            };
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
         {
@@ -94,7 +137,8 @@ internal static class NotifyPreApprovalPolicyStore
         bool write)
     {
         var path = ResolvePath(artifactRoot, policy.Domain, policy.Team);
-        var content = JsonSerializer.Serialize(policy, JsonOptions) + Environment.NewLine;
+        var current = WithCurrentApplicability(policy);
+        var content = JsonSerializer.Serialize(current, JsonOptions) + Environment.NewLine;
         if (!write)
         {
             return new NotifySupervisionWriteResult(false, false, path, null);
@@ -137,6 +181,66 @@ internal static class NotifyPreApprovalPolicyStore
         rule = new NotifyPreApprovalRule { AgentKind = parts[0], PromptClass = parts[1] };
         return true;
     }
+
+    public static NotifyPreApprovalPolicy WithCurrentApplicability(NotifyPreApprovalPolicy policy)
+    {
+        var accept = policy.Accept.Select(WithCurrentApplicability).ToArray();
+        var escalate = policy.Escalate.Select(WithCurrentApplicability).ToArray();
+        var rules = accept.Concat(escalate).ToArray();
+        var unavailableKinds = rules
+            .Where(rule => !rule.Applicable)
+            .Select(rule => rule.AgentKind)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(kind => kind, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var applicable = unavailableKinds.Length == 0;
+        return policy with
+        {
+            Accept = accept,
+            Escalate = escalate,
+            Applicable = applicable,
+            ApplicabilityStatus = applicable
+                ? NotifyPromptClassProducerRegistry.ApplicableStatus
+                : NotifyPromptClassProducerRegistry.InapplicableStatus,
+            InapplicableAgentKinds = unavailableKinds,
+            InapplicabilityReason = applicable
+                ? null
+                : "One or more recorded rules name an agent kind with no prompt-class producer. "
+                    + "Those rules cannot currently apply; residual prompts are escalate-only by construction until G683.",
+        };
+    }
+
+    private static NotifyPreApprovalRule WithCurrentApplicability(NotifyPreApprovalRule rule)
+    {
+        var applicable = NotifyPromptClassProducerRegistry.HasProducer(rule.AgentKind);
+        return rule with
+        {
+            Applicable = applicable,
+            ApplicabilityStatus = applicable
+                ? NotifyPromptClassProducerRegistry.ApplicableStatus
+                : NotifyPromptClassProducerRegistry.InapplicableStatus,
+            InapplicabilityReason = applicable
+                ? null
+                : NotifyPromptClassProducerRegistry.MissingReason(rule.AgentKind),
+        };
+    }
+
+    private static bool ApplicabilityEquals(NotifyPreApprovalPolicy left, NotifyPreApprovalPolicy right) =>
+        left.Applicable == right.Applicable
+        && string.Equals(left.ApplicabilityStatus, right.ApplicabilityStatus, StringComparison.Ordinal)
+        && left.InapplicableAgentKinds.SequenceEqual(right.InapplicableAgentKinds, StringComparer.OrdinalIgnoreCase)
+        && string.Equals(left.InapplicabilityReason, right.InapplicabilityReason, StringComparison.Ordinal)
+        && RulesApplicabilityEquals(left.Accept, right.Accept)
+        && RulesApplicabilityEquals(left.Escalate, right.Escalate);
+
+    private static bool RulesApplicabilityEquals(
+        IReadOnlyList<NotifyPreApprovalRule> left,
+        IReadOnlyList<NotifyPreApprovalRule> right) =>
+        left.Count == right.Count
+        && left.Zip(right).All(pair =>
+            pair.First.Applicable == pair.Second.Applicable
+            && string.Equals(pair.First.ApplicabilityStatus, pair.Second.ApplicabilityStatus, StringComparison.Ordinal)
+            && string.Equals(pair.First.InapplicabilityReason, pair.Second.InapplicabilityReason, StringComparison.Ordinal));
 
     private static bool Matches(NotifyPreApprovalRule rule, string agentKind, string promptClass) =>
         string.Equals(rule.AgentKind, agentKind, StringComparison.OrdinalIgnoreCase)

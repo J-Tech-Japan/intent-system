@@ -823,8 +823,16 @@ internal static class NotifyCommand
         }
         if (pass.PreApprovalPolicy is { } policy)
         {
-            writer.WriteLine($"- pre-approval policy: {policy.Status}; default={policy.DefaultDecision}; recorded={policy.Recorded.ToString().ToLowerInvariant()}; path={policy.Path}");
+            writer.WriteLine($"- pre-approval policy: {policy.Status}; default={policy.DefaultDecision}; recorded={policy.Recorded.ToString().ToLowerInvariant()}; applicable={policy.Applicable.ToString().ToLowerInvariant()}; applicability={policy.ApplicabilityStatus}; path={policy.Path}");
             writer.WriteLine($"  - {policy.Summary}");
+            if (policy.InapplicableAgentKinds.Count > 0)
+            {
+                writer.WriteLine($"  - inapplicable agent kinds: {string.Join(", ", policy.InapplicableAgentKinds)}");
+            }
+            if (policy.InapplicabilityReason is not null)
+            {
+                writer.WriteLine($"  - inapplicability reason: {policy.InapplicabilityReason}");
+            }
         }
         if (pass.Liveness is { } liveness)
         {

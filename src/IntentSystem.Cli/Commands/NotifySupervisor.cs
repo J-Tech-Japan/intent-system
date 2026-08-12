@@ -31,7 +31,11 @@ internal sealed record NotifySupervisorPass
     public NotifySupervisionLiveness? Liveness { get; init; }
     public IReadOnlyList<string> Warnings { get; init; } = [];
     public string? Error { get; init; }
-    public bool Silent => Actions.Count == 0 && Findings.Count == 0 && Warnings.Count == 0 && Error is null;
+    public bool Silent => Actions.Count == 0
+        && Findings.Count == 0
+        && Warnings.Count == 0
+        && Error is null
+        && PreApprovalPolicy is not { Recorded: true, Applicable: false };
     public int ExitCode => Error is null
         && Actions.All(action => action.Cause is null)
         && Findings.All(finding => finding.Cause is null)
