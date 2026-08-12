@@ -657,6 +657,28 @@ wake procedure and from an external heartbeat are separate follow-up slices.
 informational one, so a reader (human or orchestrator) can never mistake
 "no transition needed" for an actionable next command.
 
+### Shared publish-gate readiness for next-slice and backlog idle (G670, preview-through-1.x)
+
+`intent next-slice` and `automation stalled-work` consult the exact shared
+publish-gate readiness judgment used by `issue publish-flow`. They do not keep
+a second "looks like a placeholder" test beside the gate:
+
+- A packet whose `github-body.md` is missing a required section, or whose
+  `Related Links` is placeholder-only, is excluded from next-slice
+  issue-cut-ready candidacy. The preview keeps the existing `notes` channel
+  and names the execution unit plus the gate's cause (for example, the
+  missing section or the TODO-only Related Links refusal).
+- `backlog-ready-idle` projects the same exclusion into its existing
+  `excluded[]` output with `reason: contract-incomplete`. It never emits a
+  publish command for that unit. A different, completed candidate can still
+  produce the normal G544 item after `--backlog-idle-minutes` has elapsed.
+- Filling the packet is sufficient. On the next read, the same shared
+  judgment returns `issue-cut-ready`, so the unit re-enters automatically;
+  there is no marker, repair command, or packet field to maintain.
+- G474 lifecycle retirement/absorption/supersession remains an independent
+  exclusion, and G544's WIP and idle-time gating remains unchanged. This is a
+  preview-through-1.x behavior refinement, not a new stalled-work kind.
+
 ### Durable judgment waits (G596, G623)
 
 A judgment that blocks progress is state, not a notification that may scroll

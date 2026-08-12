@@ -672,6 +672,29 @@ kind では `— FYI:` prose `` で終わります — そのため読み手（�
 orchestrator でも）が「transition は不要」を actionable な次コマンドと
 取り違えることはありません。
 
+### next-slice と backlog idle の shared publish-gate readiness (G670, preview-through-1.x)
+
+`intent next-slice` と `automation stalled-work` は、`issue publish-flow` が
+使うのと**同じ shared publish-gate readiness judgment**を参照します。
+gate の横に「placeholder らしい」という別の判定を複製しません。
+
+- `github-body.md` の required section が欠けている packet、または
+  `Related Links` が placeholder のみの packet は、next-slice の
+  issue-cut-ready 候補から除外されます。既存の `notes` channel に
+  execution unit と gate の cause（欠けている section や TODO のみの
+  Related Links 拒否など）が明示され、黙って消えません。
+- `backlog-ready-idle` は同じ除外を既存の `excluded[]` に
+  `reason: contract-incomplete` として出します。その unit に対する
+  publish command は出しません。別の完成済み candidate は、
+  `--backlog-idle-minutes` の通常の threshold を満たせば G544 の item として
+  従来どおり報告されます。
+- packet を埋めるだけで十分です。次の read では同じ judgment が
+  `issue-cut-ready` を返すため、unit は自動的に候補へ戻ります。marker、
+  repair command、packet field の保守は不要です。
+- G474 の lifecycle retirement/absorption/supersession は独立した除外のまま、
+  G544 の WIP と idle-time gating も不変です。これは preview-through-1.x の
+  挙動修正であり、新しい stalled-work kind ではありません。
+
 ### 判断待ちの永続記録 (G596, G623)
 
 進行を止める判断は、流れて消える通知ではなく state です。判断を担う party が

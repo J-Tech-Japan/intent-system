@@ -357,6 +357,15 @@ internal static class IntentNextSliceCommand
         // candidates. Stale human-only markers (STATUS: ABSORBED) are excluded
         // from selection too and surfaced as a repair recommendation.
         var legacyRetirementMarkerUnits = new List<string>();
+        // G670: packets rejected by the shared publish-gate judgment are not
+        // candidates. Keep the structured evidence for stalled-work and use
+        // the existing notes channel to make every exclusion visible in the
+        // next-slice preview.
+        var publishReadinessExclusions = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Keep the first rejected packet as a diagnostic candidate only when
+        // no publishable packet survives. Its gap analysis remains useful to
+        // the design thread, but it can never produce issue-cut-ready.
+        IntentNextSliceCandidate? rejectedDiagnosticCandidate = null;
         // G534 review repair: diagnostics for unreadable/blank/unknown
         // lifecycle.yaml sidecars and queue-vs-lifecycle contradictions —
         // surfaced the same way legacy human markers are, so the operator
@@ -423,7 +432,18 @@ internal static class IntentNextSliceCommand
                     continue;
                 }
 
-                candidate = BuildCandidate(executionUnit, directory);
+                var builtCandidate = BuildCandidate(executionUnit, directory);
+                if (!builtCandidate.PublishGateReady)
+                {
+                    rejectedDiagnosticCandidate ??= builtCandidate;
+                    publishReadinessExclusions.TryAdd(
+                        executionUnit,
+                        builtCandidate.NotReadyReason
+                            ?? "the shared publish gate rejected the packet's contract content");
+                    continue;
+                }
+
+                candidate = builtCandidate;
                 break;
             }
 
@@ -490,11 +510,27 @@ internal static class IntentNextSliceCommand
                         continue;
                     }
 
-                    candidate = BuildCandidate(executionUnit, directory);
+                    var builtCandidate = BuildCandidate(executionUnit, directory);
+                    if (!builtCandidate.PublishGateReady)
+                    {
+                        rejectedDiagnosticCandidate ??= builtCandidate;
+                        publishReadinessExclusions.TryAdd(
+                            executionUnit,
+                            builtCandidate.NotReadyReason
+                                ?? "the shared publish gate rejected the packet's contract content");
+                        continue;
+                    }
+
+                    candidate = builtCandidate;
                     break;
                 }
             }
         }
+
+        // Preserve the existing diagnostic output for an incomplete packet,
+        // while keeping it outside the publishable candidate lane. A later
+        // complete packet always wins and is selected above.
+        candidate ??= rejectedDiagnosticCandidate;
 
         var recommendedOutcome = ComputeRecommendedOutcome(
             clarificationOpen,
@@ -539,6 +575,13 @@ internal static class IntentNextSliceCommand
             notes.AddRange(lifecycleDiagnostics);
         }
 
+        foreach (var exclusion in publishReadinessExclusions)
+        {
+            notes.Add(
+                $"packet '{exclusion.Key}' was excluded from next-slice issue-cut-ready candidacy "
+                + $"by the shared publish gate: {exclusion.Value}");
+        }
+
         return new IntentNextSliceResult
         {
             Domain = domain,
@@ -557,7 +600,14 @@ internal static class IntentNextSliceCommand
             RuntimeCreationAllowed = runtimeCreationAllowed,
             StateLayout = stateLayout,
             Warnings = warnings,
-            Notes = notes
+            Notes = notes,
+            ReadinessExclusions = publishReadinessExclusions
+                .Select(exclusion => new IntentNextSliceReadinessExclusion
+                {
+                    ExecutionUnit = exclusion.Key,
+                    Cause = exclusion.Value,
+                })
+                .ToArray()
         };
     }
 
@@ -653,27 +703,14 @@ internal static class IntentNextSliceCommand
     {
         var githubBodyPath = Path.Combine(directory, "github-body.md");
         var githubBodyPresent = File.Exists(githubBodyPath);
-        var missing = new List<string>();
-        IssueValidateBodyResult? publishGate = null;
-
-        if (githubBodyPresent)
-        {
-            var content = File.ReadAllText(githubBodyPath);
-            // G661: reuse the publish gate's own judgment. In particular, a
-            // freshly scaffolded `- TODO` Related Links section is present but
-            // not valid, so it remains visibly not-ready instead of being
-            // surfaced as work the publish path will refuse.
-            publishGate = IssueValidateBodyValidator.Validate(githubBodyPath, content);
-            missing.AddRange(publishGate.MissingHeadings);
-            if (publishGate.RelatedLinksInvalid)
-            {
-                missing.Add("Related Links");
-            }
-        }
-        else
-        {
-            missing.AddRange(RequiredContractSections);
-        }
+        var content = githubBodyPresent ? File.ReadAllText(githubBodyPath) : null;
+        // G670: BuildCandidate consumes the same publish-gate judgment as
+        // issue publish-flow. A scaffold's placeholder-only Related Links (or
+        // any other missing contract content) is therefore excluded by the
+        // selection loop instead of becoming a false ready candidate.
+        var publishGate = NextSliceReadinessEvaluator.EvaluatePublishGate(
+            executionUnit, githubBodyPath, content);
+        var missing = publishGate.MissingContractSections;
 
         // G328: surface packet provenance so downstream tooling (host
         // loop / packet publish / closeout) can audit which role
@@ -694,12 +731,11 @@ internal static class IntentNextSliceCommand
             ExecutionUnit = executionUnit,
             PacketDirectory = directory,
             GithubBodyPresent = githubBodyPresent,
-            MissingContractSections = missing.Distinct(StringComparer.Ordinal).ToArray(),
-            PublishGateReady = publishGate?.IsValid == true,
-            NotReadyReason = publishGate?.IsValid == false
-                ? publishGate.RelatedLinksReason
-                    ?? $"publish gate rejected missing section(s): {string.Join(", ", publishGate.MissingHeadings)}"
-                : githubBodyPresent ? null : "github-body.md is missing.",
+            MissingContractSections = missing,
+            PublishGateReady = publishGate.Judgment.IssueCutReady,
+            NotReadyReason = publishGate.Judgment.IssueCutReady
+                ? null
+                : publishGate.Judgment.Reason,
             GapAnalysis = gapAnalysis,
             Provenance = provenance
         };
@@ -1242,6 +1278,24 @@ internal sealed record IntentNextSliceResult
 
     [JsonPropertyName("notes")]
     public required IReadOnlyList<string> Notes { get; init; }
+
+    /// <summary>
+    /// G670: structured internal handoff for stalled-work. The property is
+    /// intentionally excluded from command JSON; the public preview uses the
+    /// existing <c>notes</c> channel, while stalled-work projects the same
+    /// gate evidence into its existing <c>excluded[]</c> output.
+    /// </summary>
+    [JsonIgnore]
+    internal IReadOnlyList<IntentNextSliceReadinessExclusion> ReadinessExclusions { get; init; }
+        = Array.Empty<IntentNextSliceReadinessExclusion>();
+}
+
+/// <summary>G670: a packet excluded by the shared publish-gate judgment.</summary>
+internal sealed record IntentNextSliceReadinessExclusion
+{
+    public required string ExecutionUnit { get; init; }
+
+    public required string Cause { get; init; }
 }
 
 internal sealed record IntentNextSliceCandidate
