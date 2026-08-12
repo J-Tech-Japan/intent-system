@@ -204,22 +204,18 @@ internal static class HostLoopNextActionAnalyzer
                 {
                     return Result(ClassificationOperatorMergeCiWait, mutationAllowed: false,
                         null,
-                        new[]
-                        {
+                        LandingEvidence(approvedPr,
                             $"PR #{approvedPr.Number} ({approvedPr.Url}) is approved on operator-merge lane `{approvedPr.LaneId}` but its exact-head checks are not all green.",
-                            "Automation must neither merge nor enter awaiting-operator-merge before the green gate. Wait for check state to change; do not urge or age-escalate the human landing step."
-                        },
+                            "Automation must neither merge nor enter awaiting-operator-merge before the green gate. Wait for check state to change; do not urge or age-escalate the human landing step."),
                         $"Operator-merge PR #{approvedPr.Number} is waiting for green checks; no merge action is permitted.");
                 }
 
                 return Result(ClassificationAwaitingOperatorMerge, mutationAllowed: false,
                     null,
-                    new[]
-                    {
+                    LandingEvidence(approvedPr,
                         $"PR #{approvedPr.Number} ({approvedPr.Url}) carries `intent-pr-approved` and exact-head checks are green on operator-merge lane `{approvedPr.LaneId}`.",
                         "This is a patient human-owned wait: keep it visible, notify design once on entry, and never merge, urge, remind, or age-escalate it.",
-                        $"After a human merges PR #{approvedPr.Number}, GitHub merge detection resumes the canonical `closeout pr --pr {approvedPr.Number} --pr-merged true` continuation automatically."
-                    },
+                        $"After a human merges PR #{approvedPr.Number}, GitHub merge detection resumes the canonical `closeout pr --pr {approvedPr.Number} --pr-merged true` continuation automatically."),
                     $"PR #{approvedPr.Number} is awaiting the operator merge on lane `{approvedPr.LaneId}`; no intent-cli merge action is permitted.");
             }
 
@@ -250,11 +246,9 @@ internal static class HostLoopNextActionAnalyzer
             {
                 return Result(ClassificationApprovedPrMetadataBlocked, mutationAllowed: false,
                     $"intent-cli review closeout-plan --pr {approvedPr.Number} --repo {input.Repo} --format json",
-                    new[]
-                    {
+                    LandingEvidence(approvedPr,
                         $"PR #{approvedPr.Number} ({approvedPr.Url}) carries `intent-pr-approved` but host metadata is inconsistent (e.g. queue-state linked_pr missing, linked_issue mismatch, packet directory missing).",
-                        "Run `review closeout-plan` to surface the structured `host-metadata-blocked` reason and the `recommended_recovery_command` (typically `automation publish-recovery --write` for G313/G315 cases). Host metadata blockers MUST NOT become PR repair comments."
-                    },
+                        "Run `review closeout-plan` to surface the structured `host-metadata-blocked` reason and the `recommended_recovery_command` (typically `automation publish-recovery --write` for G313/G315 cases). Host metadata blockers MUST NOT become PR repair comments."),
                     $"Approved PR #{approvedPr.Number} host-metadata-blocked — run closeout-plan + publish-recovery before merge.");
             }
 
@@ -441,6 +435,18 @@ internal static class HostLoopNextActionAnalyzer
             Evidence = evidence,
             Summary = summary
         };
+
+    private static IReadOnlyList<string> LandingEvidence(
+        ApprovedPrContinuation approvedPr,
+        params string[] evidence)
+    {
+        if (string.IsNullOrWhiteSpace(approvedPr.LandingAuthorityEvidence))
+        {
+            return evidence;
+        }
+
+        return [.. evidence, approvedPr.LandingAuthorityEvidence];
+    }
 }
 
 internal sealed record HostLoopNextActionInput
@@ -596,14 +602,20 @@ internal sealed record ApprovedPrContinuation
     /// </summary>
     public int? LinkedIssueNumber { get; init; }
 
-    /// <summary>G678: immutable lane id projected from the source issue.</summary>
+    /// <summary>G678: immutable lane id, or GitHub-only issue fallback.</summary>
     public string? LaneId { get; init; }
 
-    /// <summary>G678: landing authority projected from the source issue.</summary>
+    /// <summary>G678: immutable landing authority, or GitHub-only issue fallback.</summary>
     public string? LandingMode { get; init; }
 
     /// <summary>G678: exact-head status rollup is terminal and green.</summary>
     public bool ChecksGreen { get; init; }
+
+    /// <summary>
+    /// G678 repair: read-only provenance or fail-closed reason from immutable
+    /// queue/packet resolution. Null keeps legacy/direct output unchanged.
+    /// </summary>
+    public string? LandingAuthorityEvidence { get; init; }
 }
 
 internal sealed record HostLoopNextActionResult

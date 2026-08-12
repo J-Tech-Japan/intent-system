@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -190,6 +192,9 @@ internal static class AutomationHostLoopNextActionCommand
 
         var actionableReviewPr = FindActionableReviewPr(openPrs);
         var approvedPr = FindApprovedPrPendingContinuation(
+            context,
+            parsed.Repo,
+            parsed.Domain,
             openPrs,
             openIssues,
             parsed.ApprovedPrMergeStateStatus,
@@ -532,6 +537,9 @@ internal static class AutomationHostLoopNextActionCommand
     /// the review-pr / request-update lanes own them.
     /// </summary>
     private static ApprovedPrContinuation? FindApprovedPrPendingContinuation(
+        CliContext context,
+        string repo,
+        string? domain,
         IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
         IReadOnlyList<GitHubAutomationIssueCandidate> openIssues,
         string? mergeStateStatusOverride,
@@ -561,17 +569,24 @@ internal static class AutomationHostLoopNextActionCommand
             }
 
             int? linkedIssueNumber = null;
-            BranchLaneIssueProjection? laneProjection = null;
+            GitHubAutomationIssueCandidate? linkedIssue = null;
             if (pr.ClosingIssuesReferences is { Count: > 0 })
             {
                 var first = pr.ClosingIssuesReferences[0];
                 if (first.Number > 0)
                 {
                     linkedIssueNumber = first.Number;
-                    laneProjection = BranchLaneLandingModes.TryReadIssueProjection(
-                        openIssues.FirstOrDefault(issue => issue.Number == first.Number)?.Body);
+                    linkedIssue = openIssues.FirstOrDefault(issue => issue.Number == first.Number);
                 }
             }
+
+            var landing = ResolveApprovedPrLandingAuthority(
+                context,
+                repo,
+                domain,
+                pr.Number,
+                linkedIssueNumber,
+                linkedIssue?.Body);
 
             return new ApprovedPrContinuation
             {
@@ -579,15 +594,174 @@ internal static class AutomationHostLoopNextActionCommand
                 Url = pr.Url,
                 IsDraft = pr.IsDraft,
                 MergeStateStatus = mergeStateStatusOverride,
-                HostMetadataBlocked = hostMetadataBlocked,
+                HostMetadataBlocked = hostMetadataBlocked || landing.UnsafeAmbiguity,
                 LinkedIssueNumber = linkedIssueNumber,
-                LaneId = laneProjection?.LaneId,
-                LandingMode = laneProjection?.LandingMode,
+                LaneId = landing.LaneId,
+                LandingMode = landing.LandingMode,
+                LandingAuthorityEvidence = landing.Evidence,
                 ChecksGreen = AutomationStalledWorkCommand.HasAllGreenChecks(pr),
             };
         }
         return null;
     }
+
+    /// <summary>
+    /// G678 repair: host runtime state resolves landing authority from the
+    /// immutable queue/packet snapshot before consulting GitHub. The issue
+    /// projection is an explicitly GitHub-only fallback for selectors where
+    /// no linked immutable artifact is available. Mutable projection drift
+    /// never overrides a snapshot; ambiguity between immutable sources fails
+    /// closed through <see cref="ApprovedPrContinuation.HostMetadataBlocked"/>.
+    /// </summary>
+    private static ApprovedPrLandingResolution ResolveApprovedPrLandingAuthority(
+        CliContext context,
+        string repo,
+        string? domain,
+        int prNumber,
+        int? linkedIssueNumber,
+        string? linkedIssueBody)
+    {
+        var issueProjection = BranchLaneLandingModes.TryReadIssueProjection(linkedIssueBody);
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            return ApprovedPrLandingResolution.GitHubFallback(issueProjection);
+        }
+
+        var queueLocation = RuntimeScopedStateResolver.ResolveQueueStatePathForRead(
+            context.RepoRoot,
+            domain,
+            repo);
+        if (!File.Exists(queueLocation.Path))
+        {
+            return ApprovedPrLandingResolution.GitHubFallback(issueProjection);
+        }
+
+        QueueState queueState;
+        try
+        {
+            queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueLocation.Path));
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException)
+        {
+            return ApprovedPrLandingResolution.Blocked(
+                $"immutable queue-state could not be read safely: {exception.Message}");
+        }
+
+        var linkedCandidates = queueState.Items.Where(item =>
+                GitHubWorkItemIdentity.MatchesPullRequest(item, repo, prNumber)
+                || (linkedIssueNumber is { } issueNumber
+                    && GitHubWorkItemIdentity.MatchesIssue(item.LinkedIssue, repo, issueNumber)))
+            .ToArray();
+
+        if (linkedCandidates.Length == 0)
+        {
+            return ApprovedPrLandingResolution.Blocked(
+                $"immutable routing could not be resolved: queue-state has no item linked to PR #{prNumber}/issue #{linkedIssueNumber}");
+        }
+        if (linkedCandidates.Length > 1)
+        {
+            return ApprovedPrLandingResolution.Blocked(
+                $"immutable routing is ambiguous: {linkedCandidates.Length} queue items match PR #{prNumber}/issue #{linkedIssueNumber}");
+        }
+
+        var queueItem = linkedCandidates[0];
+        var packet = ReadPacketRoutingSnapshot(context, queueItem);
+        if (packet.Error is not null)
+        {
+            return ApprovedPrLandingResolution.Blocked(packet.Error);
+        }
+
+        var queueSnapshot = queueItem.RoutingSnapshot is null
+            ? null
+            : ToBranchSnapshot(queueItem.RoutingSnapshot);
+        if (queueSnapshot is not null
+            && packet.Snapshot is not null
+            && !SnapshotsMatch(queueSnapshot, packet.Snapshot))
+        {
+            return ApprovedPrLandingResolution.Blocked(
+                $"immutable queue and packet routing snapshots disagree for {queueItem.ExecutionUnit}");
+        }
+
+        var immutable = queueSnapshot ?? packet.Snapshot;
+        if (immutable is null)
+        {
+            // Pre-G668 queue items did not declare lane snapshots. Preserve
+            // their existing issue-projection/undeclared behavior.
+            return ApprovedPrLandingResolution.GitHubFallback(issueProjection);
+        }
+
+        var source = queueSnapshot is not null && packet.Snapshot is not null
+            ? "immutable queue+packet routing snapshot"
+            : queueSnapshot is not null
+                ? "immutable queue routing snapshot"
+                : "immutable packet routing snapshot";
+        var drift = issueProjection is not null
+            && (!string.Equals(issueProjection.LaneId, immutable.LaneId, StringComparison.Ordinal)
+                || !string.Equals(issueProjection.LandingMode, immutable.LandingMode, StringComparison.Ordinal));
+        var evidence = drift
+            ? $"{source} is authoritative; mismatched GitHub issue projection was ignored"
+            : $"landing authority resolved from {source}";
+        return new ApprovedPrLandingResolution(
+            immutable.LaneId,
+            immutable.LandingMode,
+            UnsafeAmbiguity: false,
+            evidence);
+    }
+
+    private static PacketRoutingRead ReadPacketRoutingSnapshot(CliContext context, QueueItem queueItem)
+    {
+        var declaredPath = queueItem.PacketPaths.Yaml;
+        var path = Path.IsPathRooted(declaredPath)
+            ? declaredPath
+            : Path.GetFullPath(Path.Combine(context.RepoRoot, declaredPath));
+        if (!File.Exists(path))
+        {
+            return new PacketRoutingRead(null, null);
+        }
+
+        try
+        {
+            if (!PacketYamlDocument.TryParse(File.ReadAllText(path), out var document, out var error)
+                || document is null)
+            {
+                return new PacketRoutingRead(
+                    null,
+                    $"immutable packet routing could not be parsed for {queueItem.ExecutionUnit}: {error}");
+            }
+
+            var snapshot = BranchLaneResolver.TryReadSnapshot(document.Fields);
+            var declaredLane = BranchLaneResolver.TryReadDeclaredLane(document.Fields);
+            if (!string.IsNullOrWhiteSpace(declaredLane) && snapshot is null)
+            {
+                return new PacketRoutingRead(
+                    null,
+                    $"immutable packet for {queueItem.ExecutionUnit} declares a lane without a complete routing snapshot");
+            }
+            return new PacketRoutingRead(snapshot, null);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            return new PacketRoutingRead(
+                null,
+                $"immutable packet routing is unsafe for {queueItem.ExecutionUnit}: {exception.Message}");
+        }
+    }
+
+    private static BranchRoutingSnapshot ToBranchSnapshot(QueueRoutingSnapshot snapshot) => new()
+    {
+        LaneId = snapshot.LaneId,
+        DefinitionRevision = snapshot.DefinitionRevision,
+        StartBranch = snapshot.StartBranch,
+        PrBaseBranch = snapshot.PrBaseBranch,
+        LandingMode = snapshot.LandingMode,
+    };
+
+    private static bool SnapshotsMatch(BranchRoutingSnapshot left, BranchRoutingSnapshot right) =>
+        string.Equals(left.LaneId, right.LaneId, StringComparison.Ordinal)
+        && string.Equals(left.DefinitionRevision, right.DefinitionRevision, StringComparison.Ordinal)
+        && string.Equals(left.StartBranch, right.StartBranch, StringComparison.Ordinal)
+        && string.Equals(left.PrBaseBranch, right.PrBaseBranch, StringComparison.Ordinal)
+        && string.Equals(left.LandingMode, right.LandingMode, StringComparison.Ordinal);
 
     private static bool OpenIntentTargetExists(
         IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
@@ -835,6 +1009,27 @@ internal static class AutomationHostLoopNextActionCommand
         };
         return true;
     }
+
+    private sealed record ApprovedPrLandingResolution(
+        string? LaneId,
+        string? LandingMode,
+        bool UnsafeAmbiguity,
+        string? Evidence)
+    {
+        public static ApprovedPrLandingResolution GitHubFallback(BranchLaneIssueProjection? projection) =>
+            new(
+                projection?.LaneId,
+                projection?.LandingMode,
+                UnsafeAmbiguity: false,
+                projection is null
+                    ? null
+                    : "landing authority resolved from GitHub issue projection fallback; no linked immutable snapshot was available");
+
+        public static ApprovedPrLandingResolution Blocked(string evidence) =>
+            new(null, null, UnsafeAmbiguity: true, evidence);
+    }
+
+    private sealed record PacketRoutingRead(BranchRoutingSnapshot? Snapshot, string? Error);
 
     private sealed record ParsedArgs
     {

@@ -2,6 +2,8 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -63,6 +65,168 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
             .Select(e => e.GetString()!).ToArray();
         Assert.Contains(evidence, e => e.Contains("#571", StringComparison.Ordinal));
         Assert.Contains(evidence, e => e.Contains("Closes #570", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("Lane: `main-hotfix`\nLanding mode: `direct`\n")]
+    public void Execute_ImmutableOperatorMergeSnapshotOverridesAbsentOrMismatchedIssueProjection_G678(
+        string? issueBody)
+    {
+        var root = Directory.CreateTempSubdirectory("host-loop-g678-operator-").FullName;
+        try
+        {
+            var context = CreateContext(root);
+            WriteRoutingState(context, BranchLaneLandingModes.OperatorMerge);
+            AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+                prs:
+                [
+                    NewPr(1468, isDraft: false, state: "OPEN",
+                        labels: ["intent-target", "intent-pr-approved"],
+                        closingIssue: 1467,
+                        checksGreen: true),
+                ],
+                issues: [NewIssue(1467, ["intent-target", "intent-pr-created"], issueBody, "G678 operator merge")]);
+            AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ =>
+                new FakeNextSliceProbe(new NextSliceProbeResult
+                {
+                    RecommendedOutcome = "skip-next-slice-due-to-wip",
+                    ExecutionUnit = null,
+                });
+
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                context,
+                ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            using var doc = JsonDocument.Parse(writer.ToString());
+            var result = doc.RootElement;
+            Assert.Equal("awaiting-operator-merge", result.GetProperty("classification").GetString());
+            Assert.False(result.GetProperty("mutation_allowed").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, result.GetProperty("recommended_command").ValueKind);
+            Assert.Contains(result.GetProperty("evidence").EnumerateArray(), item =>
+                item.GetString()!.Contains("immutable queue+packet routing snapshot", StringComparison.Ordinal));
+            Assert.DoesNotContain("merge via", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Execute_ImmutableDirectSnapshotPreservesDirectContinuationDespiteMutableProjection_G678()
+    {
+        var root = Directory.CreateTempSubdirectory("host-loop-g678-direct-").FullName;
+        try
+        {
+            var context = CreateContext(root);
+            WriteRoutingState(context, BranchLaneLandingModes.Direct);
+            AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+                prs:
+                [
+                    NewPr(1468, isDraft: false, state: "OPEN",
+                        labels: ["intent-target", "intent-pr-approved"],
+                        closingIssue: 1467,
+                        checksGreen: true),
+                ],
+                issues:
+                [
+                    NewIssue(1467, ["intent-target", "intent-pr-created"],
+                        "Lane: `main-hotfix`\nLanding mode: `operator-merge`\n",
+                        "G678 operator merge"),
+                ]);
+
+            using var writer = new StringWriter();
+            Assert.Equal(0, AutomationHostLoopNextActionCommand.Execute(
+                context,
+                ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
+                writer));
+
+            using var doc = JsonDocument.Parse(writer.ToString());
+            Assert.Equal("approved-pr-merge-closeout", doc.RootElement.GetProperty("classification").GetString());
+            Assert.True(doc.RootElement.GetProperty("mutation_allowed").GetBoolean());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Execute_NoImmutableSnapshotOrIssueProjectionPreservesUndeclaredDirectContinuation_G678()
+    {
+        var root = Directory.CreateTempSubdirectory("host-loop-g678-undeclared-").FullName;
+        try
+        {
+            var context = CreateContext(root);
+            AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+                prs:
+                [
+                    NewPr(1468, isDraft: false, state: "OPEN",
+                        labels: ["intent-target", "intent-pr-approved"],
+                        closingIssue: 1467,
+                        checksGreen: true),
+                ],
+                issues: [NewIssue(1467, ["intent-target", "intent-pr-created"], null, "G678 operator merge")]);
+
+            using var writer = new StringWriter();
+            Assert.Equal(0, AutomationHostLoopNextActionCommand.Execute(
+                context,
+                ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
+                writer));
+
+            using var doc = JsonDocument.Parse(writer.ToString());
+            Assert.Equal("approved-pr-merge-closeout", doc.RootElement.GetProperty("classification").GetString());
+            Assert.True(doc.RootElement.GetProperty("mutation_allowed").GetBoolean());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Execute_ConflictingImmutableSnapshotsFailClosedWithoutMergeCommand_G678()
+    {
+        var root = Directory.CreateTempSubdirectory("host-loop-g678-conflict-").FullName;
+        try
+        {
+            var context = CreateContext(root);
+            WriteRoutingState(
+                context,
+                BranchLaneLandingModes.OperatorMerge,
+                packetLandingMode: BranchLaneLandingModes.Direct);
+            AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+                prs:
+                [
+                    NewPr(1468, isDraft: false, state: "OPEN",
+                        labels: ["intent-target", "intent-pr-approved"],
+                        closingIssue: 1467,
+                        checksGreen: true),
+                ],
+                issues: [NewIssue(1467, ["intent-target", "intent-pr-created"], null, "G678 operator merge")]);
+
+            using var writer = new StringWriter();
+            Assert.Equal(0, AutomationHostLoopNextActionCommand.Execute(
+                context,
+                ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
+                writer));
+
+            using var doc = JsonDocument.Parse(writer.ToString());
+            var result = doc.RootElement;
+            Assert.Equal("approved-pr-metadata-blocked", result.GetProperty("classification").GetString());
+            Assert.False(result.GetProperty("mutation_allowed").GetBoolean());
+            Assert.DoesNotContain("merge", result.GetProperty("recommended_command").GetString()!, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(result.GetProperty("evidence").EnumerateArray(), item =>
+                item.GetString()!.Contains("snapshots disagree", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
@@ -196,7 +360,8 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
         bool isDraft,
         string state,
         IReadOnlyList<string> labels,
-        int? closingIssue = null)
+        int? closingIssue = null,
+        bool checksGreen = false)
     {
         var refs = closingIssue is int issueNumber
             ? new[]
@@ -215,20 +380,105 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
             Labels = labels.Select(name => new GitHubAutomationLabel { Name = name }).ToArray(),
             ClosingIssuesReferences = refs,
             State = state,
-            IsDraft = isDraft
+            IsDraft = isDraft,
+            HeadRefOid = checksGreen ? "g678-head" : string.Empty,
+            StatusCheckRollup = checksGreen
+                ?
+                [
+                    new GitHubAutomationStatusCheckCandidate
+                    {
+                        TypeName = "CheckRun",
+                        Status = "COMPLETED",
+                        Conclusion = "SUCCESS",
+                    },
+                ]
+                : [],
         };
     }
 
-    private static GitHubAutomationIssueCandidate NewIssue(int number, IReadOnlyList<string> labels) =>
+    private static GitHubAutomationIssueCandidate NewIssue(
+        int number,
+        IReadOnlyList<string> labels,
+        string? body = null,
+        string? title = null) =>
         new()
         {
             Number = number,
-            Title = $"issue {number}",
+            Title = title ?? $"issue {number}",
             Url = $"https://github.com/J-Tech-Japan/intent-system/issues/{number}",
             CreatedAt = "2026-05-10T00:00:00Z",
             Labels = labels.Select(name => new GitHubAutomationLabel { Name = name }).ToArray(),
-            State = "OPEN"
+            State = "OPEN",
+            Body = body ?? string.Empty,
         };
+
+    private static void WriteRoutingState(
+        CliContext context,
+        string queueLandingMode,
+        string? packetLandingMode = null)
+    {
+        packetLandingMode ??= queueLandingMode;
+        var queuePath = context.GetQueueStatePath();
+        Directory.CreateDirectory(Path.GetDirectoryName(queuePath)!);
+        var queue = new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = new DateTimeOffset(2026, 8, 12, 18, 0, 0, TimeSpan.Zero),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G678",
+                    Title = "G678 operator merge",
+                    State = QueueItemState.Review,
+                    Dependencies = [],
+                    BlockedBy = [],
+                    ClarificationReturnPath = string.Empty,
+                    PacketPaths = new PacketPaths
+                    {
+                        Yaml = ".intent-cli/issues/G678/packet.yaml",
+                        Implementation = ".intent-cli/issues/G678/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G678/review-context.md",
+                    },
+                    RoutingSnapshot = QueueSnapshot(queueLandingMode),
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = "J-Tech-Japan/intent-system",
+                        Number = 1467,
+                        Url = "https://github.com/J-Tech-Japan/intent-system/issues/1467",
+                    },
+                    LinkedPr = "1468",
+                    WorkerRole = "implementation",
+                    ReviewRole = "review",
+                    Priority = "normal",
+                },
+            ],
+        };
+        File.WriteAllText(queuePath, QueueStateSerializer.Serialize(queue));
+
+        var packetPath = Path.Combine(context.RepoRoot, ".intent-cli", "issues", "G678", "packet.yaml");
+        Directory.CreateDirectory(Path.GetDirectoryName(packetPath)!);
+        File.WriteAllText(packetPath, $$"""
+            implementation_issue_packet:
+              source_execution_unit: G678
+              branch_lane: main-hotfix
+              routing_snapshot:
+                lane_id: main-hotfix
+                definition_revision: registry-g678
+                start_branch: main
+                pr_base_branch: main
+                landing_mode: {{packetLandingMode}}
+            """);
+    }
+
+    private static QueueRoutingSnapshot QueueSnapshot(string landingMode) => new()
+    {
+        LaneId = "main-hotfix",
+        DefinitionRevision = "registry-g678",
+        StartBranch = "main",
+        PrBaseBranch = "main",
+        LandingMode = landingMode,
+    };
 
     // --- G318: automatic intent next-slice --dry-run probe ----------------
 
@@ -1271,9 +1521,12 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
     }
 
     private static CliContext CreateContext() =>
+        CreateContext(Path.GetTempPath());
+
+    private static CliContext CreateContext(string repoRoot) =>
         new()
         {
-            RepoRoot = Path.GetTempPath(),
+            RepoRoot = repoRoot,
             Config = new CliConfig
             {
                 Project = new ProjectConfig
