@@ -602,6 +602,36 @@ recovery sequences, new verdict names, wake transports, or emission targets.
 > verification guidance are post-freeze preview behavior outside the 1.0
 > compatibility promise. They may change or be withdrawn during 1.x.
 
+### Duplicate supervisor detection (G676 — preview-through-1.x)
+
+New supervision cycles add a nullable `writer` object to `cycles.jsonl` with
+`pid`, `process_start_time`, and `host`. The reader keeps accepting legacy
+cycle records without that object; a legacy record is not evidence of a
+duplicate. At the start of a cycle, the loop compares the latest recent cycle
+with its own writer identity. A different writer is a duplicate only when its
+process is live and its cycle age is within the same declared-bound or
+cadence-based recent threshold used for supervision liveness. The loop emits
+exactly one `duplicate-supervisor` finding per cycle, naming the current and
+other writers, the other cycle's age, the duplicate-wake cost for the same
+stall, and the G658 per-team scheduler label
+`intent-cli.supervise.<domain>.<team>` as the remedy.
+
+Dead writers, stale cycles, the same writer, and legacy cycles produce no
+duplicate finding. This is detection only: intent-cli does not kill, stop,
+rank, elect, lock, or lease a supervisor, and duplicate seat processes remain
+outside this slice. Before registering a scheduler artifact, the operator
+checks for and stops stale hand-run supervisors that survived a session
+restart; intent-cli does not perform that stop. The measured G676 incident on
+this machine on 2026-08-12 found four concurrent loops for one team and
+duplicate wakes for the same stalls. That incident attribution explains why
+the per-team G658 artifact is the remedy; it does not grant supervision a new
+recovery authority.
+
+> **Preview through 1.x (G676).** Additive writer identity, duplicate-supervisor
+> detection, and the stale hand-run cleanup guidance are post-freeze preview
+> behavior outside the 1.0 compatibility promise. They may change or be
+> withdrawn during 1.x and are formalised only by a later MAJOR release.
+
 ### Escalation ladder and CI fallback (G657 — preview-through-1.x)
 
 The complete ladder is: seats do their assigned work; orchestration notices

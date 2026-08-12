@@ -504,6 +504,33 @@ target を追加しません。
 > guidance は post-freeze preview であり、1.0 compatibility promise の対象外です。
 > 1.x の間に変更または撤回できます。
 
+### duplicate supervisor の検出 (G676 — preview-through-1.x)
+
+新しい supervision cycle は `cycles.jsonl` に nullable な `writer` object を
+追加し、`pid`、`process_start_time`、`host` を記録します。reader はその object を
+持たない legacy cycle も読み続けます。legacy record は duplicate の証拠にはなりません。
+cycle 開始時、loop は直近の cycle と自分の writer identity を比較します。別の writer
+であり、その process が live で、cycle age が同じ declared bound または cadence-based
+の liveness 用 recent threshold 内にある場合だけ duplicate とします。このとき cycle
+ごとに exactly one の `duplicate-supervisor` finding を出力し、current / other の
+両 writer、other cycle の age、同じ stall への duplicate wake cost、そして remedy として
+G658 の team ごとの scheduler label `intent-cli.supervise.<domain>.<team>` を明示します。
+
+dead writer、stale cycle、同じ writer、legacy cycle では duplicate finding を出しません。
+これは detection のみです。intent-cli は supervisor を終了、停止、順位付け、選出、ロック、
+リースせず、duplicate seat process もこの slice の範囲外です。scheduler artifact を
+register する前に、operator は session restart 後も残った stale hand-run supervisor を
+確認して停止しますが、intent-cli はその停止を実行しません。G676 の実測 incident は
+この machine の 2026-08-12 に、1 team に 4 concurrent loops が存在し、同じ stall に
+duplicate wake が出ることを確認しました。この attribution は team ごとの G658 artifact
+を remedy とする理由であり、supervision に新しい recovery 権限を与えるものでは
+ありません。
+
+> **1.x を通じた preview (G676)。** additive writer identity、duplicate-supervisor
+> detection、stale hand-run cleanup guidance は post-freeze preview であり、1.0
+> compatibility promise の対象外です。1.x の間に変更または撤回でき、後続 MAJOR でのみ
+> 正式化します。
+
 ### escalation ladder と CI fallback (G657 — preview-through-1.x)
 
 完全な ladder は次のとおりです。各 seat は割り当てられた作業を行い、orchestration は通常の stall を検知して

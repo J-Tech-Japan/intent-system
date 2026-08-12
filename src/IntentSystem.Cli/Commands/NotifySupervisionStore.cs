@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -316,6 +317,9 @@ internal sealed record NotifySupervisionCycle
     [JsonPropertyName("cycle_id")] public required string CycleId { get; init; }
     [JsonPropertyName("started_at")] public required DateTimeOffset StartedAt { get; init; }
     [JsonPropertyName("completed_at")] public required DateTimeOffset CompletedAt { get; init; }
+    // G676 is additive: cycles written before writer identity existed remain
+    // readable and simply do not participate in duplicate detection.
+    [JsonPropertyName("writer")] public NotifySupervisionWriterIdentity? Writer { get; init; }
     [JsonPropertyName("trigger")] public string Trigger { get; init; } = "interval";
     [JsonPropertyName("interval_seconds")] public required int IntervalSeconds { get; init; }
     [JsonPropertyName("cadence_interval_seconds")] public int? CadenceIntervalSeconds { get; init; }
@@ -332,6 +336,70 @@ internal sealed record NotifySupervisionCycle
     [JsonPropertyName("last_observed_agent_statuses")] public IReadOnlyDictionary<string, string> LastObservedAgentStatuses { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
     [JsonPropertyName("transitions")] public IReadOnlyList<NotifySupervisionTransition> Transitions { get; init; } = [];
     [JsonPropertyName("wait_events")] public IReadOnlyList<NotifySupervisionWaitEvent> WaitEvents { get; init; } = [];
+}
+
+internal sealed record NotifySupervisionWriterIdentity
+{
+    [JsonPropertyName("pid")] public required int Pid { get; init; }
+    [JsonPropertyName("process_start_time")] public required DateTimeOffset ProcessStartTime { get; init; }
+    [JsonPropertyName("host")] public required string Host { get; init; }
+
+    public static NotifySupervisionWriterIdentity Current()
+    {
+        DateTimeOffset processStartTime;
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            processStartTime = new DateTimeOffset(process.StartTime.ToUniversalTime());
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // The identity remains additive even on a platform that refuses
+            // to expose process metadata. A current timestamp makes the
+            // record explicit but cannot falsely match a later live process.
+            processStartTime = DateTimeOffset.UtcNow;
+        }
+
+        return new NotifySupervisionWriterIdentity
+        {
+            Pid = Environment.ProcessId,
+            ProcessStartTime = processStartTime,
+            Host = Environment.MachineName,
+        };
+    }
+
+    public bool IsSameWriter(NotifySupervisionWriterIdentity other) =>
+        Pid == other.Pid
+        && ProcessStartTime == other.ProcessStartTime
+        && string.Equals(Host, other.Host, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsLiveOn(NotifySupervisionWriterIdentity current)
+    {
+        if (!string.Equals(Host, current.Host, StringComparison.OrdinalIgnoreCase) || Pid <= 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(Pid);
+            if (process.HasExited)
+            {
+                return false;
+            }
+
+            var actualStart = new DateTimeOffset(process.StartTime.ToUniversalTime());
+            return actualStart == ProcessStartTime;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or InvalidOperationException
+                or System.ComponentModel.Win32Exception
+                or NotSupportedException)
+        {
+            return false;
+        }
+    }
 }
 
 internal sealed record NotifySupervisionTransition
