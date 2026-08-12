@@ -191,6 +191,7 @@ internal static class AutomationHostLoopNextActionCommand
         var actionableReviewPr = FindActionableReviewPr(openPrs);
         var approvedPr = FindApprovedPrPendingContinuation(
             openPrs,
+            openIssues,
             parsed.ApprovedPrMergeStateStatus,
             parsed.ApprovedPrMetadataBlocked);
         var openIntentTargetExists = OpenIntentTargetExists(openPrs, openIssues);
@@ -532,6 +533,7 @@ internal static class AutomationHostLoopNextActionCommand
     /// </summary>
     private static ApprovedPrContinuation? FindApprovedPrPendingContinuation(
         IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
+        IReadOnlyList<GitHubAutomationIssueCandidate> openIssues,
         string? mergeStateStatusOverride,
         bool hostMetadataBlocked)
     {
@@ -559,12 +561,15 @@ internal static class AutomationHostLoopNextActionCommand
             }
 
             int? linkedIssueNumber = null;
+            BranchLaneIssueProjection? laneProjection = null;
             if (pr.ClosingIssuesReferences is { Count: > 0 })
             {
                 var first = pr.ClosingIssuesReferences[0];
                 if (first.Number > 0)
                 {
                     linkedIssueNumber = first.Number;
+                    laneProjection = BranchLaneLandingModes.TryReadIssueProjection(
+                        openIssues.FirstOrDefault(issue => issue.Number == first.Number)?.Body);
                 }
             }
 
@@ -575,7 +580,10 @@ internal static class AutomationHostLoopNextActionCommand
                 IsDraft = pr.IsDraft,
                 MergeStateStatus = mergeStateStatusOverride,
                 HostMetadataBlocked = hostMetadataBlocked,
-                LinkedIssueNumber = linkedIssueNumber
+                LinkedIssueNumber = linkedIssueNumber,
+                LaneId = laneProjection?.LaneId,
+                LandingMode = laneProjection?.LandingMode,
+                ChecksGreen = AutomationStalledWorkCommand.HasAllGreenChecks(pr),
             };
         }
         return null;

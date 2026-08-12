@@ -56,6 +56,57 @@ internal sealed record BranchLaneSelection
 }
 
 /// <summary>
+/// G678's additive landing-authority vocabulary.  The immutable packet/queue
+/// routing snapshot remains the authority; issue-body parsing is only a
+/// GitHub-only projection fallback for selectors that cannot read host state.
+/// </summary>
+internal static class BranchLaneLandingModes
+{
+    public const string Direct = "direct";
+    public const string IntegrationBatch = "integration-batch";
+    public const string OperatorMerge = "operator-merge";
+
+    public static bool IsOperatorMerge(string? landingMode) =>
+        string.Equals(landingMode?.Trim(), OperatorMerge, StringComparison.Ordinal);
+
+    public static BranchLaneIssueProjection? TryReadIssueProjection(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return null;
+        }
+
+        var laneId = ReadLabel(body, "Lane");
+        var landingMode = ReadLabel(body, "Landing mode");
+        if (string.IsNullOrWhiteSpace(laneId) || string.IsNullOrWhiteSpace(landingMode))
+        {
+            return null;
+        }
+
+        return new BranchLaneIssueProjection
+        {
+            LaneId = laneId,
+            LandingMode = landingMode,
+        };
+    }
+
+    private static string? ReadLabel(string body, string label)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(
+            body,
+            $@"(?im)^\s*(?:[-*]\s*)?{System.Text.RegularExpressions.Regex.Escape(label)}\s*:\s*[\x60]?(?<value>[A-Za-z0-9._/-]+)[\x60]?\s*$");
+        return match.Success ? match.Groups["value"].Value : null;
+    }
+}
+
+internal sealed record BranchLaneIssueProjection
+{
+    public required string LaneId { get; init; }
+
+    public required string LandingMode { get; init; }
+}
+
+/// <summary>
 /// Resolves the G668 registry and keeps the pre-G668 policy path intact when
 /// no registry is configured. The compatibility adapter is deliberately
 /// internal: legacy policy names and their existing JSON surfaces do not
@@ -181,8 +232,8 @@ internal static class BranchLaneResolver
                 effectivePolicy,
                 CliRuntimeContracts.MainAiBaseBranchPolicy,
                 StringComparison.Ordinal)
-                ? "integration-batch"
-                : "direct"
+                ? BranchLaneLandingModes.IntegrationBatch
+                : BranchLaneLandingModes.Direct
         };
     }
 

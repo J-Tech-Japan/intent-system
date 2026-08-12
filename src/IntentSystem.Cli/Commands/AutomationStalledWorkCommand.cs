@@ -176,6 +176,19 @@ internal static class AutomationStalledWorkCommand
     public const string KindBranchRoutingConflict = "branch-routing-conflict";
 
     /// <summary>
+    /// G678: approved + green on an operator-merge lane is a visible patient
+    /// state, not stalled work. It is emitted immediately with zero age and
+    /// never carries a merge recommendation.
+    /// </summary>
+    public const string KindAwaitingOperatorMerge = "awaiting-operator-merge";
+
+    /// <summary>
+    /// G678: the human merge has landed and the ordinary closeout continuation
+    /// can resume immediately. This kind recommends closeout only, never merge.
+    /// </summary>
+    public const string KindOperatorMergeDetected = "operator-merge-detected";
+
+    /// <summary>
     /// G596: an explicitly opened durable obligation that only the human
     /// operator can clear. It is actionable, but never orchestrator-actionable.
     /// </summary>
@@ -689,7 +702,7 @@ internal static class AutomationStalledWorkCommand
             // generic GitHub staleness threshold before becoming visible.
             .Where(item => item.Kind is KindOperatorAttentionPending or KindOperatorAttentionCannotDetermine
                 or KindCiPending or KindCiAllGreenNotTransitioned or KindCiFailedNotTransitioned or KindCiHeadMoved
-                or KindBranchRoutingConflict
+                or KindBranchRoutingConflict or KindAwaitingOperatorMerge or KindOperatorMergeDetected
                 || item.AgeMinutes >= staleMinutes)
             .OrderByDescending(item => item.AgeMinutes)
             .ToArray();
@@ -714,7 +727,7 @@ internal static class AutomationStalledWorkCommand
             // dedupe-ready actionable signal. Other historical informational
             // kinds retain their established stalled semantics.
             Stalled = githubApiFailure is not null
-                || filtered.Any(item => item.Kind != KindCiPending),
+                || filtered.Any(item => item.Kind is not KindCiPending and not KindAwaitingOperatorMerge),
             Items = resultItems,
             Excluded = excluded,
             Warnings = warnings,
@@ -1270,9 +1283,9 @@ internal static class AutomationStalledWorkCommand
             }
 
             var resolution = ResolveExecutionUnit(context, matchedIssue.Title);
-            if (queueState?.Items.FirstOrDefault(candidate =>
-                    string.Equals(candidate.ExecutionUnit, resolution.ExecutionUnit, StringComparison.Ordinal))
-                is { State: QueueItemState.Blocked })
+            var queueItem = queueState?.Items.FirstOrDefault(candidate =>
+                string.Equals(candidate.ExecutionUnit, resolution.ExecutionUnit, StringComparison.Ordinal));
+            if (queueItem is { State: QueueItemState.Blocked })
             {
                 continue;
             }
@@ -1291,6 +1304,55 @@ internal static class AutomationStalledWorkCommand
                     Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
                     Reason = reason,
                     Detail = detail,
+                });
+                continue;
+            }
+
+            var landing = ResolveLandingProjection(
+                context,
+                resolution.ExecutionUnit,
+                queueItem?.RoutingSnapshot,
+                matchedIssue.Body);
+            if (BranchLaneLandingModes.IsOperatorMerge(landing.LandingMode))
+            {
+                var ci = ProjectCiState(pr);
+                // Approval alone does not enter the patient state: the
+                // published contract requires the exact head to be green.
+                // Still, an operator lane can never fall through to the
+                // merge-urging direct-lane finding while CI is pending or
+                // failed.
+                if (ci is not { Outcome: StalledWorkCiOutcomes.AllGreen })
+                {
+                    continue;
+                }
+                var greenCi = ci.Value;
+
+                items.Add(new StalledWorkItem
+                {
+                    Kind = KindAwaitingOperatorMerge,
+                    ExecutionUnit = resolution.ExecutionUnit,
+                    Issue = new StalledWorkRef { Number = matchedIssue.Number, Url = matchedIssue.Url },
+                    Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
+                    AgeMinutes = 0,
+                    IsInformational = true,
+                    RecommendedAction =
+                        $"none — PR #{pr.Number} is approved and green on operator-merge lane '{landing.LaneId}'; "
+                        + "wait patiently for the human merge. Do not merge, urge, remind, or age-escalate. "
+                        + "After GitHub reports merged, resume with canonical closeout only.",
+                    PrHeadSha = pr.HeadRefOid,
+                    CiOutcome = greenCi.Outcome,
+                    CiBreakdown = greenCi.Breakdown,
+                    DedupeKey = $"awaiting-operator-merge:{resolution.ExecutionUnit}:pr-{pr.Number}:{pr.HeadRefOid}",
+                    RequiredActor = "operator",
+                    OrchestratorActionable = false,
+                    LaneId = landing.LaneId,
+                    LandingMode = BranchLaneLandingModes.OperatorMerge,
+                    ApprovalEvidence =
+                    [
+                        WorkerPrReviewPreflightConstants.Labels.IntentPrApproved,
+                        $"exact-head:{pr.HeadRefOid}",
+                        $"checks:{StalledWorkCiOutcomes.AllGreen}",
+                    ],
                 });
                 continue;
             }
@@ -1333,6 +1395,26 @@ internal static class AutomationStalledWorkCommand
             warnings.Add($"queue-state at '{queueStateLocation.Path}' could not be parsed: {exception.Message}; skipped the approved-not-merged blocked exemption.");
             return null;
         }
+    }
+
+    private static (string? LaneId, string? LandingMode) ResolveLandingProjection(
+        CliContext context,
+        string executionUnit,
+        QueueRoutingSnapshot? queueSnapshot,
+        string? issueBody)
+    {
+        if (queueSnapshot is not null)
+        {
+            return (queueSnapshot.LaneId, queueSnapshot.LandingMode);
+        }
+
+        if (TryReadLanePacketSnapshot(context, executionUnit, out var packetSnapshot))
+        {
+            return (packetSnapshot.LaneId, packetSnapshot.LandingMode);
+        }
+
+        var issueProjection = BranchLaneLandingModes.TryReadIssueProjection(issueBody);
+        return (issueProjection?.LaneId, issueProjection?.LandingMode);
     }
 
     private static void CollectPublishedNotDelegated(
@@ -1683,6 +1765,9 @@ internal static class AutomationStalledWorkCommand
                 Total = passed + failed + skipped + pending,
             });
     }
+
+    internal static bool HasAllGreenChecks(GitHubAutomationPrCandidate pr) =>
+        ProjectCiState(pr) is { Outcome: StalledWorkCiOutcomes.AllGreen };
 
     private static StalledWorkCheckOutcome ClassifyCheck(GitHubAutomationStatusCheckCandidate check)
     {
@@ -2044,19 +2129,30 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
+            var landing = ResolveLandingProjection(
+                context,
+                matchedItem.ExecutionUnit,
+                matchedItem.RoutingSnapshot,
+                issueBody: null);
+            var operatorMerge = BranchLaneLandingModes.IsOperatorMerge(landing.LandingMode);
             items.Add(new StalledWorkItem
             {
-                Kind = KindMergedNotClosedOut,
+                Kind = operatorMerge ? KindOperatorMergeDetected : KindMergedNotClosedOut,
                 ExecutionUnit = matchedItem.ExecutionUnit,
                 Issue = issueRef,
                 Pr = prRef,
                 // Best-effort merge-time proxy: `gh pr list` does not expose a
                 // dedicated `mergedAt` field in the requested field set;
                 // `updatedAt` is set to the merge time for a merged PR.
-                AgeMinutes = ComputeAgeMinutes(pr.UpdatedAt, now),
+                AgeMinutes = operatorMerge ? 0 : ComputeAgeMinutes(pr.UpdatedAt, now),
                 IsInformational = false,
                 RecommendedAction =
                     $"intent-cli closeout pr --pr {pr.Number} --repo {repo} --domain {domain} --pr-merged true --write --format json",
+                DedupeKey = operatorMerge
+                    ? $"operator-merge-detected:{matchedItem.ExecutionUnit}:pr-{pr.Number}"
+                    : null,
+                LaneId = operatorMerge ? landing.LaneId : null,
+                LandingMode = operatorMerge ? landing.LandingMode : null,
             });
         }
     }
@@ -4172,6 +4268,18 @@ internal static class AutomationStalledWorkCommand
                 {
                     writer.WriteLine($"- pr: #{pr.Number} — {pr.Url}");
                 }
+                if (item.LaneId is { } laneId)
+                {
+                    writer.WriteLine($"- lane_id: {laneId}");
+                }
+                if (item.LandingMode is { } landingMode)
+                {
+                    writer.WriteLine($"- landing_mode: {landingMode}");
+                }
+                if (item.ApprovalEvidence is { Count: > 0 } approvalEvidence)
+                {
+                    writer.WriteLine($"- approval_evidence: {string.Join(", ", approvalEvidence)}");
+                }
                 if (item.PrHeadSha is { } headSha)
                 {
                     writer.WriteLine($"- pr_head_sha: {headSha}");
@@ -4547,6 +4655,21 @@ internal sealed record StalledWorkItem
     [JsonPropertyName("routing_values")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyDictionary<string, string>? RoutingValues { get; init; }
+
+    /// <summary>G678: immutable lane identity for operator-merge states.</summary>
+    [JsonPropertyName("lane_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LaneId { get; init; }
+
+    /// <summary>G678: landing authority copied from the routing snapshot.</summary>
+    [JsonPropertyName("landing_mode")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LandingMode { get; init; }
+
+    /// <summary>G678: evidence that the patient state's approval gate passed.</summary>
+    [JsonPropertyName("approval_evidence")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? ApprovalEvidence { get; init; }
 }
 
 internal sealed record StalledWorkCiBreakdown

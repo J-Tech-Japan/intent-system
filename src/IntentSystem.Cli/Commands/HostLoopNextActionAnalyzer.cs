@@ -59,6 +59,8 @@ internal static class HostLoopNextActionAnalyzer
     // already-approved-but-unmerged PR is completed before the wake stops
     // for "an open intent-target exists".
     public const string ClassificationApprovedPrMergeCloseout = "approved-pr-merge-closeout";
+    public const string ClassificationAwaitingOperatorMerge = "awaiting-operator-merge";
+    public const string ClassificationOperatorMergeCiWait = "operator-merge-ci-wait";
     public const string ClassificationApprovedPrDraftBlocked = "approved-pr-draft-blocked";
     public const string ClassificationApprovedPrMergeBlocked = "approved-pr-merge-blocked";
     public const string ClassificationApprovedPrMetadataBlocked = "approved-pr-metadata-blocked";
@@ -194,6 +196,33 @@ internal static class HostLoopNextActionAnalyzer
         // wip-cap-blocked.
         if (input.ApprovedPrPendingMergeCloseout is { } approvedPr)
         {
+            if (BranchLaneLandingModes.IsOperatorMerge(approvedPr.LandingMode)
+                && !approvedPr.IsDraft
+                && !approvedPr.HostMetadataBlocked)
+            {
+                if (!approvedPr.ChecksGreen)
+                {
+                    return Result(ClassificationOperatorMergeCiWait, mutationAllowed: false,
+                        null,
+                        new[]
+                        {
+                            $"PR #{approvedPr.Number} ({approvedPr.Url}) is approved on operator-merge lane `{approvedPr.LaneId}` but its exact-head checks are not all green.",
+                            "Automation must neither merge nor enter awaiting-operator-merge before the green gate. Wait for check state to change; do not urge or age-escalate the human landing step."
+                        },
+                        $"Operator-merge PR #{approvedPr.Number} is waiting for green checks; no merge action is permitted.");
+                }
+
+                return Result(ClassificationAwaitingOperatorMerge, mutationAllowed: false,
+                    null,
+                    new[]
+                    {
+                        $"PR #{approvedPr.Number} ({approvedPr.Url}) carries `intent-pr-approved` and exact-head checks are green on operator-merge lane `{approvedPr.LaneId}`.",
+                        "This is a patient human-owned wait: keep it visible, notify design once on entry, and never merge, urge, remind, or age-escalate it.",
+                        $"After a human merges PR #{approvedPr.Number}, GitHub merge detection resumes the canonical `closeout pr --pr {approvedPr.Number} --pr-merged true` continuation automatically."
+                    },
+                    $"PR #{approvedPr.Number} is awaiting the operator merge on lane `{approvedPr.LaneId}`; no intent-cli merge action is permitted.");
+            }
+
             if (approvedPr.IsDraft)
             {
                 return Result(ClassificationApprovedPrDraftBlocked, mutationAllowed: false,
@@ -566,6 +595,15 @@ internal sealed record ApprovedPrContinuation
     /// <c>closeout pr --write</c> validates the G311 closing reference.
     /// </summary>
     public int? LinkedIssueNumber { get; init; }
+
+    /// <summary>G678: immutable lane id projected from the source issue.</summary>
+    public string? LaneId { get; init; }
+
+    /// <summary>G678: landing authority projected from the source issue.</summary>
+    public string? LandingMode { get; init; }
+
+    /// <summary>G678: exact-head status rollup is terminal and green.</summary>
+    public bool ChecksGreen { get; init; }
 }
 
 internal sealed record HostLoopNextActionResult

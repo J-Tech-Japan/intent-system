@@ -975,7 +975,7 @@ internal static class GuideOrchestratorThreadCommand
                     "Send workflow notifications only through `intent-cli notify`; it resolves the recorded session-layer mode and validates the recipient before delivery, failing closed on an unknown role (G524/G578).",
                     "When an outcome is applied elsewhere, a review round supersedes the predecessor, or a recovery/re-dispatch path makes a report no longer owed, explicitly record the open delegation's disposition with `intent-cli notify dispose --domain <domain> --team <team> --task-id <task-id> --kind applied-elsewhere|superseded --actor <actor> --reason <reason> [--applied-outcome-evidence <evidence>|--superseding-task-id <task-id>] --write --format json`. This is an attributed judgment, never an automatic inference; it ends the report expectation but never refuses or drops a late report.",
                     "Apply the design-thread escalation filter: keep routine progress / CI-wait / success / closeout / idle internal; surface to the design thread ONLY human-needed decisions, with structured evidence and the exact decision needed. Never hide a failure that needs a human.",
-                    Apply("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json`, and process every actionable item it reports before sleeping — never leave one for an unscheduled next wake; escalate explicitly if it is genuinely blocked on an operator decision. This includes a `backlog-ready-idle` item (G544, empty WIP + a ready packet + no activity past the idle threshold) — publish and delegate it in THIS wake, the same as any other issue-cut-ready candidate; only announce a following wake will handle it when that wake is actually scheduled."),
+                    Apply("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json`, and process every actionable item it reports before sleeping — never leave one for an unscheduled next wake; `awaiting-operator-merge` is informational patient state and is never urged or age-escalated. Escalate explicitly only when another item is genuinely blocked on an operator decision. This includes a `backlog-ready-idle` item (G544, empty WIP + a ready packet + no activity past the idle threshold) — publish and delegate it in THIS wake, the same as any other issue-cut-ready candidate; only announce a following wake will handle it when that wake is actually scheduled."),
                     Apply("G673 last-net honesty: if stalled-work or heartbeat returns `detection_available=false` / `cause=github-api-quota-exhausted`, do not treat an empty item list as healthy. Record the exhausted resource and `reset_at`, retain and review `partial=true` local findings, and let orchestration decide whether to wait deliberately; no automatic retry, sleep, reset scheduling, or request budgeting is performed. Issue #1442 is the separately attributed remote-herdr measurement; this host's same-day G667 observation is corroboration."),
                 },
                 RepairVsEscalate = new OrchestratorRepairEscalate
@@ -1018,8 +1018,10 @@ internal static class GuideOrchestratorThreadCommand
                         State = "green",
                         Routing =
                             "GREEN — all required checks passed. Route to review/closeout: delegate the PR to the review "
-                            + "thread (or orchestrate merge/closeout of an already-approved PR) through intent-cli review "
-                            + "surfaces. Re-verify the checks are still green at delegation time.",
+                            + "thread through intent-cli review surfaces. For an already-approved PR, inspect the immutable "
+                            + "lane landing_mode before landing: direct continues merge/closeout; operator-merge enters "
+                            + "visible `awaiting-operator-merge`, notifies design once, and waits for a human merge without "
+                            + "urging or age escalation. Re-verify the checks are still green at delegation time.",
                     },
                     new OrchestratorCiState
                     {
@@ -1045,7 +1047,9 @@ internal static class GuideOrchestratorThreadCommand
                 + "feedback on a draft when the domain's review policy allows it. But the reviewer must use the canonical "
                 + "intent-cli review surfaces (`review closeout-plan`, `guide review`, `automation pr-transition`, "
                 + "`closeout pr`); merge/approval stays gated by those surfaces. A draft is never approved/merged by hand "
-                + "or by raw label edits, and never via host-metadata editing.",
+                + "or by raw label edits, and never via host-metadata editing. After approval, read the lane's immutable "
+                + "landing_mode: no intent-cli path may merge an `operator-merge` lane; it waits patiently in "
+                + "`awaiting-operator-merge` until a human merge is detected, then resumes closeout only.",
             NextSlicePublication = new OrchestratorNextSlicePublication
             {
                 Summary =
@@ -1248,7 +1252,7 @@ internal static class GuideOrchestratorThreadCommand
                     + "must be classified as green or failed rather than deduped as the pending wait.",
                     "Successful implementation (PR opened, CI green).",
                     "Successful review / approval.",
-                    "Closeout of an already-approved PR.",
+                    "Closeout of an already-approved direct-lane PR, or closeout-only continuation after a human merge is detected on an operator-merge lane.",
                     "Idle wakes with no actionable change.",
                 },
                 EscalateWhen = new[]
@@ -2048,9 +2052,11 @@ internal static class GuideOrchestratorThreadCommand
                         + "wait again (receivers are never scheduled; the orchestrator is message-driven by default, with an explicit fallback/legacy timer as the only case where it is scheduled). When delegated a PR, run the "
                         + "official host review/closeout through intent-cli surfaces (`review closeout-plan`, `guide "
                         + "review`, `automation pr-transition`, `closeout pr`) — notify never replaces semantic review or "
-                        + "authorizes a merge. Perform semantic review only when you are the packet `review_role` or "
-                        + "explicitly assigned (G480); otherwise orchestrate the merge/closeout of an already-approved "
-                        + "PR. If you need a review worktree, allocate it under the MANAGED root "
+                        + "authorizes a merge. An `operator-merge` lane stops after approved + green in "
+                        + "`awaiting-operator-merge`; that patient state is not review debt, is never urged or "
+                        + "age-escalated, and resumes at closeout only after a human merge is detected. Perform semantic review only when you are the packet `review_role` or "
+                        + "explicitly assigned (G480); otherwise inspect landing_mode and orchestrate merge/closeout of an already-approved "
+                        + "direct-lane PR, or the patient wait and post-human-merge closeout-only continuation for an operator-merge PR. If you need a review worktree, allocate it under the MANAGED root "
                         + "(`.intent-cli/worktrees/review-<unit>`) — NEVER a raw `/tmp/...review...` path, and NEVER "
                         + "`rm -rf /tmp/... && git worktree add ...`; remove it only with `git worktree remove` once it "
                         + "is a registered, clean worktree. A non-registered, dirty, or otherwise unsafe stale path is a "
@@ -2114,7 +2120,7 @@ internal static class GuideOrchestratorThreadCommand
                 "The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER, not at-most-one-message overall (G524): a publish this wake must be delegated to implementation in this SAME wake — never defer that delegation to an unscheduled next wake — alongside any repair requests (one per stalled receiver) or one operator escalation.",
                 "Send workflow notifications only through `intent-cli notify`; it resolves the recorded transport and validates the recipient before delivery, failing closed on an unknown role (G524/G578).",
                 "Do not launch implement/review recurring timers for this domain/repo while orchestrating.",
-                Apply("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json`, and process every actionable item before sleeping — never leave one for an unscheduled next wake; escalate explicitly if it is genuinely blocked on an operator decision."),
+                Apply("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json`, and process every actionable item before sleeping — never leave one for an unscheduled next wake; `awaiting-operator-merge` is deliberately informational patient state, not actionable review debt, and receives no urge or age escalation. Escalate explicitly only when a different item is genuinely blocked on an operator decision."),
             },
             SafetyBoundaries = new[]
             {

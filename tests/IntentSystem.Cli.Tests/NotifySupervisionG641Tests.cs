@@ -445,6 +445,51 @@ public sealed class NotifySupervisionG641Tests : IDisposable
     }
 
     [Fact]
+    public void OperatorMergePatientStateNotifiesDesignOnceThenHumanMergeWakesCloseout_G678()
+    {
+        var context = CreateContext();
+        RecordMode(context, SessionLayerMode.HerdrOnly);
+        WriteTopology(includeDesign: true);
+        var runner = new FakeRunner
+        {
+            AgentsJson = RunningAgentsJson("design", "orchestration", "implementation"),
+        };
+        var merged = false;
+        var supervisor = CreateSupervisor(
+            context,
+            "unused-agmsg",
+            runner,
+            write: true,
+            boundSeconds: null,
+            repo: "J-Tech-Japan/intent-system",
+            stalledWorkAnalyzer: () => OperatorMergeResult(merged));
+
+        var first = supervisor.RunOnce();
+        var waiting = Assert.Single(first.Findings, finding =>
+            finding.Kind == AutomationStalledWorkCommand.KindAwaitingOperatorMerge);
+        Assert.Equal("design", waiting.WakeTargetRole);
+        Assert.True(waiting.WakeDelivered);
+        Assert.Single(runner.Calls, call =>
+            call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wG641:p0"]));
+
+        now = now.AddSeconds(1);
+        var second = supervisor.RunOnce();
+        Assert.DoesNotContain(second.Findings, finding =>
+            finding.Kind == AutomationStalledWorkCommand.KindAwaitingOperatorMerge);
+        Assert.Single(runner.Calls, call =>
+            call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wG641:p0"]));
+
+        merged = true;
+        now = now.AddSeconds(1);
+        var closeout = supervisor.RunOnce();
+        Assert.Contains(closeout.Findings, finding =>
+            finding.Kind == AutomationStalledWorkCommand.KindOperatorMergeDetected
+            && finding.WakeTargetRole == "orchestration");
+        Assert.Single(runner.Calls, call =>
+            call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wG641:p0"]));
+    }
+
+    [Fact]
     public void EnglishAndJapaneseGuidanceNameTheMeasuredPreviewContract_G641()
     {
         var rootPath = RepoVersionPolicySource.RepoRoot();
@@ -483,12 +528,14 @@ public sealed class NotifySupervisionG641Tests : IDisposable
         FakeRunner runner,
         bool write,
         int? boundSeconds,
-        int intervalSeconds = 300) => new(
+        int intervalSeconds = 300,
+        string? repo = null,
+        Func<AutomationStalledWorkResult>? stalledWorkAnalyzer = null) => new(
         context,
         root,
         Domain,
         Team,
-        repo: null,
+        repo,
         ownerRole: "orchestration",
         intervalSeconds: intervalSeconds,
         declaredBoundSeconds: boundSeconds,
@@ -501,7 +548,52 @@ public sealed class NotifySupervisionG641Tests : IDisposable
         format: "json",
         runner,
         herdrExecutable: "fake-herdr",
-        agmsgScriptsDirectory: scripts);
+        agmsgScriptsDirectory: scripts,
+        stalledWorkAnalyzer: stalledWorkAnalyzer);
+
+    private static AutomationStalledWorkResult OperatorMergeResult(bool merged) => new()
+    {
+        Domain = Domain,
+        Repo = "J-Tech-Japan/intent-system",
+        StaleMinutesThreshold = 45,
+        BacklogIdleMinutesThreshold = 45,
+        OpenPendingDelegations = 0,
+        Stalled = merged,
+        Items =
+        [
+            new StalledWorkItem
+            {
+                Kind = merged
+                    ? AutomationStalledWorkCommand.KindOperatorMergeDetected
+                    : AutomationStalledWorkCommand.KindAwaitingOperatorMerge,
+                ExecutionUnit = "G678",
+                Pr = new StalledWorkRef
+                {
+                    Number = 1468,
+                    Url = "https://github.com/J-Tech-Japan/intent-system/pull/1468",
+                },
+                AgeMinutes = 0,
+                IsInformational = !merged,
+                RecommendedAction = merged
+                    ? "run canonical closeout pr for human-merged PR #1468"
+                    : "await human operator merge of approved all-green PR #1468",
+                DedupeKey = merged
+                    ? "operator-merge-detected:G678:pr-1468:g678-head"
+                    : "awaiting-operator-merge:G678:pr-1468:g678-head",
+                PrHeadSha = "g678-head",
+                CiOutcome = StalledWorkCiOutcomes.AllGreen,
+                LaneId = "main-hotfix",
+                LandingMode = BranchLaneLandingModes.OperatorMerge,
+                ApprovalEvidence = ["intent-pr-approved"],
+                RequiredActor = merged ? "orchestration" : "operator",
+                OrchestratorActionable = merged,
+            },
+        ],
+        Excluded = [],
+        Warnings = [],
+        OperatorAttentionStatus = null,
+        OperatorAttentionError = null,
+    };
 
     private static string HerdrAgentsJson(long stateChangeSequence) => JsonSerializer.Serialize(new
     {

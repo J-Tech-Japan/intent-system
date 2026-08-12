@@ -103,7 +103,7 @@ public sealed class CliConfigLoaderTests
         [project.branch_lanes.hotfix]
         start_branch = "main"
         pr_base_branch = "main"
-        landing_mode = "direct"
+        landing_mode = "operator-merge"
         """;
 
         var config = CliConfigLoader.Load(toml);
@@ -114,6 +114,7 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("develop", registry.Lanes["continuous"].StartBranch);
         Assert.Equal("develop", registry.Lanes["continuous"].PrBaseBranch);
         Assert.Equal("main", registry.Lanes["hotfix"].StartBranch);
+        Assert.Equal(BranchLaneLandingModes.OperatorMerge, registry.Lanes["hotfix"].LandingMode);
     }
 
     [Fact]

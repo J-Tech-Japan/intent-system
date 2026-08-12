@@ -206,7 +206,7 @@ internal static class TaskCommand
             Workdir = parsed.Workdir,
             Domain = parsed.Domain,
             TargetRepo = parsed.TargetRepo,
-            Summary = $"Host-review {parsed.Repo}#{parsed.Pr} for domain `{parsed.Domain}`. Decision branches: pass → approve+merge+closeout (G297 — `--pr-merged` gate); fail → actionable comment + request-update (G316 classification); host-metadata blockers → recovery via `automation publish-recovery` / `automation reconcile`, never PR comments (G287/G313/G315).",
+            Summary = $"Host-review {parsed.Repo}#{parsed.Pr} for domain `{parsed.Domain}`. Decision branches: pass → approve, then direct merge+closeout or operator-merge patient wait followed by post-human-merge closeout (G678/G297); fail → actionable comment + request-update (G316 classification); host-metadata blockers → recovery via `automation publish-recovery` / `automation reconcile`, never PR comments (G287/G313/G315).",
             Preconditions = new[]
             {
                 "Operator/controller has authoritatively selected this PR number — no `host-review-preflight` selector pass is performed by this planner.",
@@ -222,9 +222,11 @@ internal static class TaskCommand
                 $"# Read packet_paths (packet.yaml/implementation.md/review-context.md/github-body.md) and intent_reference_paths (PR-specific paths from packet only — never broad domain dirs); cite each in the approval summary.",
                 "# Decision A: review passes — emit approval summary satisfying `approval_summary_requirements` (packet contract, AC, OOS, intent reference, tests-pass-paired-with-evidence, G311 Closes ref). Then:",
                 $"  intent-cli automation pr-transition --transition approved --repo {parsed.Repo} --pr {parsed.Pr} --write --format json",
-                "  # merge via host's existing merge step",
+                "  # inspect immutable routing_snapshot.landing_mode before any landing action",
+                "  # direct: merge via the host's existing merge step, verify merged, then close out",
+                $"  # operator-merge: enter awaiting-operator-merge; never merge/urge/age-escalate; after human merge run closeout only",
                 $"  IS_MERGED=$(gh pr view {parsed.Pr} --repo {parsed.Repo} --json merged --jq .merged)",
-                $"  intent-cli closeout pr --pr {parsed.Pr} --repo {parsed.Repo} --pr-merged $IS_MERGED --write --format json",
+                $"  intent-cli closeout pr --pr {parsed.Pr} --repo {parsed.Repo} --pr-merged $IS_MERGED --write --format json   # only after merged == true",
                 "# Decision B: review needs implementation repair (`blocker_classification: implementation-review-finding`) — leave actionable PR comment satisfying `request_update_requirements` (classify each finding implementation-finding | host-metadata-blocked | intent-ambiguity; tie to packet/intent clause). Then:",
                 $"  intent-cli automation pr-transition --transition request-update --repo {parsed.Repo} --pr {parsed.Pr} --write --format json",
                 "# Decision C: host-metadata-blocked (no queue item, missing linked_issue/linked_pr, etc.) — DO NOT post PR comment (G287). Run recovery:",
@@ -252,7 +254,7 @@ internal static class TaskCommand
                 "`task review-pr` is the explicit-target counterpart to autonomous host-review. Selector-driven host-review-preflight remains valid; this is for controllers who already know the PR.",
                 "G316 is non-negotiable: every approval summary must satisfy `guide review` `approval_summary_requirements`.",
                 "Never launch AI providers from intent-cli; this planner only emits text the controller runs.",
-                "G454: `intent-pr-approved` is intermediate, not terminal — see `continuation_contract`. After approval, the same wake MUST merge, verify `merged == true`, and run `closeout pr` unless a concrete gate blocks merge. A recoverable blocker is repaired and retried once before declaring the PR blocked."
+                "G454/G678: `intent-pr-approved` is intermediate — see `continuation_contract`. Direct lanes merge+closeout; operator-merge lanes wait in visible patient state and resume closeout only after a human merge. No intent-cli path merges an operator-merge lane."
             },
             Prohibitions = GuidanceProhibitionCatalog.All,
             ContinuationContract = HostLoopContinuationContract.Default
