@@ -160,12 +160,13 @@ public sealed class ReleaseNotesV0170DocsTests
         var root = RepoVersionPolicySource.RepoRoot();
         var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
         var v0180Notes = File.ReadAllText(Path.Combine(root, "docs", language, "release-notes-v0.18.0.md"));
+        var policy = RepoVersionPolicySource.Read();
+        var currentNotes = $"release-notes-v{policy.NextVersion}.md";
 
         Assert.False(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.17.1.md")));
         Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.18.0.md")));
-        Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.19.0.md")));
-        Assert.Contains("release-notes-v0.19.0.md", reference, StringComparison.Ordinal);
-        Assert.Contains("release-notes-v0.18.0.md", reference, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(root, "docs", language, currentNotes)));
+        Assert.Contains(currentNotes, reference, StringComparison.Ordinal);
         Assert.Contains("release-notes-v0.17.0.md", v0180Notes, StringComparison.Ordinal);
         Assert.Contains("ReleaseNotesV0180DocsTests", reference, StringComparison.Ordinal);
         Assert.Contains("ReleaseNotesV0190DocsTests", reference, StringComparison.Ordinal);

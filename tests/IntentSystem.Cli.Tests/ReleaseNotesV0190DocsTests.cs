@@ -118,23 +118,40 @@ public sealed class ReleaseNotesV0190DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void CurrentPolicyAndReadinessPointAtRealV0190Notes(string language)
+    public void CurrentPolicyAndReadinessFollowVersionPolicyWhileV0190NotesStayReal(string language)
     {
         var root = RepoVersionPolicySource.RepoRoot();
         var policy = RepoVersionPolicySource.Read();
         var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
         var notes = Read(language);
+        var currentNotes = $"release-notes-v{policy.NextVersion}.md";
+        var shippedNotes = $"release-notes-v{policy.StableVersion}.md";
 
-        Assert.Equal("0.18.0", policy.StableVersion);
-        Assert.Equal("0.19.0", policy.NextVersion);
-        Assert.Contains("release-notes-v0.19.0.md", reference, StringComparison.Ordinal);
+        RepoVersionPolicySource.AssertReleaseToBeCutIsAheadOfPublishedStable(policy);
+        Assert.True(File.Exists(Path.Combine(root, "docs", language, currentNotes)));
+        Assert.True(File.Exists(Path.Combine(root, "docs", language, shippedNotes)));
+        Assert.Contains(currentNotes, reference, StringComparison.Ordinal);
+        Assert.Contains(shippedNotes, reference, StringComparison.Ordinal);
         Assert.Contains(
-            language == "en" ? "Next release readiness (v0.19.0)" : "次リリース準備(v0.19.0)",
+            language == "en"
+                ? $"Next release readiness (v{policy.NextVersion})"
+                : $"次リリース準備(v{policy.NextVersion})",
             reference,
             StringComparison.Ordinal);
         Assert.DoesNotContain("DRAFT /", notes, StringComparison.Ordinal);
         Assert.Contains("Release-readiness gate", notes, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(language == "en" ? "Publishing v0.19.0" : "v0.19.0 の publish", notes, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("en", "11866387f4fe8017bfbc3b8e3dad089435dee9c1da426dadecdfd50ec2bc5221")]
+    [InlineData("ja", "2383b58cc3a21910469f2a78c899d2df50592d79c62ab0c0d832dbbfbe509702")]
+    public void PublishedV0190NotesRemainByteForByteFrozen(string language, string expectedSha256)
+    {
+        var bytes = File.ReadAllBytes(Path.Combine(
+            RepoVersionPolicySource.RepoRoot(), "docs", language, "release-notes-v0.19.0.md"));
+
+        Assert.Equal(expectedSha256, Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)));
     }
 
     private static string Read(string language) => File.ReadAllText(Path.Combine(
