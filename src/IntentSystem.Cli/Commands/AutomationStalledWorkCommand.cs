@@ -176,6 +176,12 @@ internal static class AutomationStalledWorkCommand
     public const string KindBranchRoutingConflict = "branch-routing-conflict";
 
     /// <summary>
+    /// G679: an aged Git-backed claim is evidence for an operator decision,
+    /// never authority to release, replace, or expire ownership.
+    /// </summary>
+    public const string KindClaimStale = "claim-stale";
+
+    /// <summary>
     /// G678: approved + green on an operator-merge lane is a visible patient
     /// state, not stalled work. It is emitted immediately with zero age and
     /// never carries a merge recommendation.
@@ -622,6 +628,11 @@ internal static class AutomationStalledWorkCommand
             warnings.Add($"pending delegation store could not be read: {pendingDelegationError}");
         }
 
+        // G679: claim files are entirely local/Git-backed evidence. Collect
+        // them even when every GitHub-derived lane is quota-inoperable; the
+        // result-level partial marker is applied below without losing them.
+        CollectStaleClaims(context, now, staleMinutes, items, warnings);
+
         CollectPublishedNotDelegated(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
         var branchLaneQueueState = TryLoadQueueStateForBranchLaneRouting(context, domain, repo, warnings);
         var closedPrs = branchLaneQueueState?.Items.Any(item => item.RoutingSnapshot is not null) == true
@@ -767,6 +778,69 @@ internal static class AutomationStalledWorkCommand
 
         return $"cause={exception.Cause}; operation={exception.Operation}; detection is unavailable; "
             + "local-only findings are partial. No automatic retry or wait is scheduled.";
+    }
+
+    private static void CollectStaleClaims(
+        CliContext context,
+        DateTimeOffset now,
+        int staleMinutes,
+        List<StalledWorkItem> items,
+        List<string> warnings)
+    {
+        var claimsRoot = Path.Combine(context.RepoRoot, ".intent-cli", "claims");
+        if (!Directory.Exists(claimsRoot))
+        {
+            return;
+        }
+
+        // Active records live directly under claims/. History is attributed
+        // evidence, not active ownership and must never become a stale claim.
+        foreach (var path in Directory.EnumerateFiles(claimsRoot, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            ClaimRecord? claim;
+            try
+            {
+                claim = JsonSerializer.Deserialize<ClaimRecord>(File.ReadAllText(path), JsonOptions);
+            }
+            catch (Exception exception) when (exception is IOException or JsonException)
+            {
+                warnings.Add($"claim record could not be read at '{path}': {exception.Message}");
+                continue;
+            }
+
+            if (claim is null || !ClaimCommand.TryValidateScope(claim.Scope, out _))
+            {
+                warnings.Add($"claim record could not be trusted at '{path}': missing or unsupported scope");
+                continue;
+            }
+
+            var ageMinutes = Math.Max(0, (int)Math.Floor((now - claim.ClaimedAt.ToUniversalTime()).TotalMinutes));
+            if (ageMinutes < staleMinutes)
+            {
+                continue;
+            }
+
+            var executionUnit = claim.Scope.StartsWith("execution-unit:", StringComparison.Ordinal)
+                ? claim.Scope["execution-unit:".Length..]
+                : claim.Scope;
+            items.Add(new StalledWorkItem
+            {
+                Kind = KindClaimStale,
+                ExecutionUnit = executionUnit,
+                AgeMinutes = ageMinutes,
+                IsInformational = true,
+                RecommendedAction =
+                    $"Inspect claim '{claim.Scope}' held by '{claim.Actor}' on team '{claim.Team}'. "
+                    + "Age never changes ownership; use an explicit attributed claim release or takeover only after judgment.",
+                ClaimActor = claim.Actor,
+                ClaimTeam = claim.Team,
+                ClaimScope = claim.Scope,
+                LastEvidenceAt = claim.ClaimedAt.ToUniversalTime(),
+                RecordPath = Path.GetRelativePath(context.RepoRoot, path).Replace('\\', '/'),
+                RequiredActor = "operator",
+                OrchestratorActionable = false,
+            });
+        }
     }
 
     private static void CollectPendingDelegations(
@@ -4344,6 +4418,22 @@ internal static class AutomationStalledWorkCommand
                 {
                     writer.WriteLine($"- record_path: {recordPath}");
                 }
+                if (item.ClaimActor is { } claimActor)
+                {
+                    writer.WriteLine($"- claim_actor: {claimActor}");
+                }
+                if (item.ClaimTeam is { } claimTeam)
+                {
+                    writer.WriteLine($"- claim_team: {claimTeam}");
+                }
+                if (item.ClaimScope is { } claimScope)
+                {
+                    writer.WriteLine($"- claim_scope: {claimScope}");
+                }
+                if (item.LastEvidenceAt is { } lastEvidenceAt)
+                {
+                    writer.WriteLine($"- last_evidence: {lastEvidenceAt:O}");
+                }
                 if (item.DeclaredGuideSurfaces is { Count: > 0 } declaredGuides)
                 {
                     writer.WriteLine($"- declared_guide_surfaces: {string.Join(", ", declaredGuides)}");
@@ -4611,6 +4701,23 @@ internal sealed record StalledWorkItem
     [JsonPropertyName("record_path")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RecordPath { get; init; }
+
+    /// <summary>G679: attributed holder for a stale Git-backed claim.</summary>
+    [JsonPropertyName("claim_actor")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ClaimActor { get; init; }
+
+    [JsonPropertyName("claim_team")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ClaimTeam { get; init; }
+
+    [JsonPropertyName("claim_scope")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ClaimScope { get; init; }
+
+    [JsonPropertyName("last_evidence")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? LastEvidenceAt { get; init; }
 
     /// <summary>
     /// G645: guide surfaces the packet declared for a role-facing addition.

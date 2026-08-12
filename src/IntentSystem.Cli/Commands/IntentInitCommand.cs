@@ -32,6 +32,9 @@ internal static class IntentInitCommand
     [
         ".intent-cli/runs.jsonl merge=union",
         ".intent-cli/**/*.jsonl merge=union",
+        // G679: this later, more-specific rule must override broad JSONL/union
+        // policies. A same-scope claim conflict is rejected, never merged.
+        ".intent-cli/claims/** -merge",
     ];
 
     internal static readonly IReadOnlyList<string> SupervisionTelemetryGitIgnoreLines =
@@ -242,8 +245,8 @@ internal static class IntentInitCommand
         steps.Add($"Use `intent-cli interview record-answer --write` (chat-first) to durably record durable Q/A for '{domain}'.");
         steps.Add($"Use `intent-cli intent next-slice --domain {domain} --dry-run` to plan the first publishable slice.");
         steps.Add(freshHost
-            ? "Fresh-host git defaults include merge=union for append-only .intent-cli JSONL stores and ignores for supervision cycles/stalls telemetry. Commit and push those repo policy files with the host scaffold."
-            : "Existing host detected: no .gitattributes or .gitignore migration was performed. Apply the exact reported lines manually if desired; intent-cli never auto-migrates them.");
+            ? "Fresh-host git defaults include merge=union for append-only .intent-cli JSONL stores, then .intent-cli/claims/** -merge so claims never union-merge, plus ignores for supervision cycles/stalls telemetry. Commit and push those repo policy files with the host scaffold."
+            : "Existing host detected: no .gitattributes or .gitignore migration was performed. Add `.intent-cli/claims/** -merge` after broad union rules, together with the other exact reported lines, only through an explicit reviewed commit; intent-cli never auto-migrates them.");
         steps.Add("Run this command from the parent host repository, never inside `.intent-cli/worktrees/**`.");
 
         return steps;
