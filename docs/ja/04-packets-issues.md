@@ -64,6 +64,19 @@ facet check は publish 前に必須ですが、結果は正直に記述しま�
 alignment review が引き続き必要です。この slice で green result を作るためだけに facet node
 を author してはいけません。
 
+## 新しい packet draft での有効な PR base branch
+
+`packet draft` は、新しく作る `github-body.md` の `Expected PR base branch` を、
+automation の各サーフェスと同じ effective-branch の判定で埋めます:
+
+- `[project] implementation_base_branch` が設定されていれば、そのブランチを使う;
+- 設定されていなければ、`base_branch_policy` の default branch を使う
+  （`direct-main` → `main`、`main-ai` → `main-ai`）。
+
+この挙動は新しく scaffold する packet body にだけ適用されます。`packet draft` は既存の
+packet や公開済み issue 本文を書き換えず、`implementation_base_branch` が無い場合は従来の
+scaffold 出力を byte 単位で維持します。
+
 ## 代替: timer-loop のセットアップ
 
 timer-loop の alternative を選ぶときだけ、[実装ループの設定](05-implementation-loop.md)、続けて
