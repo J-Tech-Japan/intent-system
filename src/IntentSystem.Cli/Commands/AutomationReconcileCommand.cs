@@ -174,10 +174,14 @@ internal static class AutomationReconcileCommand
             IReadOnlyList<GitHubAutomationIssueCandidate> publishedIssues;
             try
             {
-                openPrs = lister.ListPullRequests(repo!, Array.Empty<string>());
+                openPrs = lister.ListPullRequests(
+                    repo!,
+                    Array.Empty<string>(),
+                    GitHubAutomationReadSurface.Reconcile);
                 publishedIssues = lister.ListIssues(
                     repo!,
-                    [WorkerNextActionConstants.Labels.IntentTarget]);
+                    [WorkerNextActionConstants.Labels.IntentTarget],
+                    GitHubAutomationReadSurface.Reconcile);
             }
             catch (GitHubApiRequestException exception)
             {

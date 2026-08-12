@@ -714,7 +714,23 @@ public sealed class WorkerNextActionCommandTests : IDisposable
     }
 
     [Fact]
-    public void Adapter_IssueListArguments_RequestSupportedSubsetWithLabelFilter()
+    public void Adapter_RestIssueListArguments_RequestVerifiedFieldsWithLabelFilter()
+    {
+        var args = GhCliGitHubAutomationCandidateLister.BuildRestIssueListArguments(
+            "J-Tech-Japan/intent-system",
+            new[] { "intent-target" });
+
+        Assert.Equal("api", args[0]);
+        Assert.Contains("repos/J-Tech-Japan/intent-system/issues", args);
+        Assert.Contains("state=open", args);
+        Assert.Contains("per_page=100", args);
+        Assert.Contains("labels=intent-target", args);
+        Assert.Contains("--paginate", args);
+        Assert.Contains("--slurp", args);
+    }
+
+    [Fact]
+    public void Adapter_IssueListArguments_KeepLegacyGraphQlPathForUnmeasuredCallers()
     {
         var args = GhCliGitHubAutomationCandidateLister.BuildIssueListArguments(
             "J-Tech-Japan/intent-system",

@@ -16,9 +16,27 @@ internal interface IGitHubAutomationCandidateLister
         string repo,
         IReadOnlyCollection<string> requiredLabels);
 
+    /// <summary>
+    /// G674: surface-aware overload. Existing fakes keep their old method and
+    /// therefore remain valid; the production adapter uses the surface to
+    /// attach the precise GraphQL-bound field remainder to a failure.
+    /// </summary>
+    IReadOnlyList<GitHubAutomationPrCandidate> ListPullRequests(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels,
+        GitHubAutomationReadSurface surface)
+        => ListPullRequests(repo, requiredLabels);
+
     IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(
         string repo,
         IReadOnlyCollection<string> requiredLabels);
+
+    /// <summary>G674: surface-aware REST issue-list overload.</summary>
+    IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels,
+        GitHubAutomationReadSurface surface)
+        => ListIssues(repo, requiredLabels);
 
     /// <summary>
     /// G448: list MERGED pull requests (with closing-issue references) for the
@@ -31,6 +49,12 @@ internal interface IGitHubAutomationCandidateLister
         IReadOnlyCollection<string> requiredLabels)
         => Array.Empty<GitHubAutomationPrCandidate>();
 
+    IReadOnlyList<GitHubAutomationPrCandidate> ListMergedPullRequests(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels,
+        GitHubAutomationReadSurface surface)
+        => ListMergedPullRequests(repo, requiredLabels);
+
     /// <summary>
     /// G669: list CLOSED pull requests so a routing conflict remains visible
     /// after the PR closes. Existing fakes retain the empty default.
@@ -39,6 +63,12 @@ internal interface IGitHubAutomationCandidateLister
         string repo,
         IReadOnlyCollection<string> requiredLabels)
         => Array.Empty<GitHubAutomationPrCandidate>();
+
+    IReadOnlyList<GitHubAutomationPrCandidate> ListClosedPullRequests(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels,
+        GitHubAutomationReadSurface surface)
+        => ListClosedPullRequests(repo, requiredLabels);
 }
 
 /// <summary>
@@ -182,11 +212,14 @@ internal sealed record GitHubAutomationLabel
     public string Name { get; init; } = string.Empty;
 }
 
+/// <summary>G674: captured read-only <c>gh</c> process result for adapter tests.</summary>
+internal sealed record GhCliProcessResult(int ExitCode, string Stdout, string Stderr);
+
 /// <summary>
-/// G206: Default lister that shells out to <c>gh pr list</c> and
-/// <c>gh issue list</c>. The only file in the worker next-action surface
-/// permitted to call <c>Process.Start</c> — the analyzer and command layers
-/// must remain pure. Both calls request stable supported field subsets.
+/// G206/G674: default lister that shells out to <c>gh pr list</c> for the
+/// GraphQL-bound PR reads and <c>gh api</c> for the verified REST issue reads.
+/// The only file in the worker next-action surface permitted to call
+/// <c>Process.Start</c> — the analyzer and command layers must remain pure.
 /// PR listing also includes body and closing issue metadata so host selectors
 /// can model issue-linked PR fallback without extra mutation-capable calls.
 /// </summary>
@@ -197,6 +230,13 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
     /// made after a failed GitHub read. Production leaves this null.
     /// </summary>
     internal static Func<IGitHubApiQuotaProbe>? QuotaProbeFactory { get; set; }
+
+    /// <summary>
+    /// G674 test seam for the read-only <c>gh</c> invocation. Production leaves
+    /// this null; tests use it to prove the REST adapter shape without a
+    /// network call or a replacement transport binary.
+    /// </summary>
+    internal static Func<IReadOnlyList<string>, GhCliProcessResult>? ProcessRunner { get; set; }
 
     /// <summary>
     /// G206: comma-separated <c>gh pr list --json</c> field list. Exposed
@@ -247,8 +287,34 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
     }
 
     /// <summary>
-    /// G206: builds the <c>gh issue list</c> argument list.
+    /// G206: builds the legacy <c>gh issue list</c> argument list. The
+    /// surface-aware overload below is the only REST path; keeping this
+    /// builder preserves unmeasured callers' transport and output contract.
     /// </summary>
+    internal static IReadOnlyList<string> BuildIssueListArguments(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+        ArgumentNullException.ThrowIfNull(requiredLabels);
+
+        var args = new List<string>
+        {
+            "issue",
+            "list",
+            "--repo", repo,
+            "--state", "open",
+            "--json", ListJsonFields,
+            "--limit", "200"
+        };
+        foreach (var label in requiredLabels)
+        {
+            args.Add("--label");
+            args.Add(label);
+        }
+        return args;
+    }
+
     /// <summary>
     /// G448: builds the <c>gh pr list --state merged</c> argument list used by
     /// the unified state doctor's merged-PR lane.
@@ -301,7 +367,13 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
         return args;
     }
 
-    internal static IReadOnlyList<string> BuildIssueListArguments(
+    /// <summary>
+    /// G674: builds the REST issue-list request. <c>--paginate --slurp</c>
+    /// preserves the old adapter's 200-row upper bound by flattening the
+    /// server's ordered pages in the deserializer; no cross-agent cache,
+    /// batch, or retry machinery is introduced.
+    /// </summary>
+    internal static IReadOnlyList<string> BuildRestIssueListArguments(
         string repo,
         IReadOnlyCollection<string> requiredLabels)
     {
@@ -310,18 +382,20 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
 
         var args = new List<string>
         {
-            "issue",
-            "list",
-            "--repo", repo,
-            "--state", "open",
-            "--json", ListJsonFields,
-            "--limit", "200"
+            "api",
+            $"repos/{repo}/issues",
+            "--method", "GET",
+            "--raw-field", "state=open",
+            "--raw-field", "per_page=100",
+            "--paginate",
+            "--slurp",
         };
-        foreach (var label in requiredLabels)
+        if (requiredLabels.Count > 0)
         {
-            args.Add("--label");
-            args.Add(label);
+            args.Add("--raw-field");
+            args.Add($"labels={string.Join(',', requiredLabels)}");
         }
+
         return args;
     }
 
@@ -334,6 +408,21 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
         return DeserializeList<GitHubAutomationPrCandidate>(stdout, $"`gh pr list` for {repo}");
     }
 
+    public IReadOnlyList<GitHubAutomationPrCandidate> ListPullRequests(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels,
+        GitHubAutomationReadSurface surface)
+    {
+        var args = BuildPrListArguments(repo, requiredLabels);
+        var stdout = RunGh(
+            args,
+            $"list PRs in {repo}",
+            GitHubApiQuotaConstants.GraphQlResource,
+            GitHubApiReadDependencies.GraphQlBound,
+            GitHubApiReadInventory.UnverifiedFieldsFor(surface));
+        return DeserializeList<GitHubAutomationPrCandidate>(stdout, $"`gh pr list` for {repo}");
+    }
+
     public IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(
         string repo,
         IReadOnlyCollection<string> requiredLabels)
@@ -343,12 +432,41 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
         return DeserializeList<GitHubAutomationIssueCandidate>(stdout, $"`gh issue list` for {repo}");
     }
 
+    public IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels,
+        GitHubAutomationReadSurface surface)
+    {
+        var args = BuildRestIssueListArguments(repo, requiredLabels);
+        var stdout = RunGh(
+            args,
+            $"list issues in {repo} via REST",
+            GitHubApiQuotaConstants.RestCoreResource,
+            GitHubApiReadDependencies.RestCore);
+        return DeserializeRestIssueList(stdout, $"`gh api repos/{repo}/issues` for {repo}");
+    }
+
     public IReadOnlyList<GitHubAutomationPrCandidate> ListClosedPullRequests(
         string repo,
         IReadOnlyCollection<string> requiredLabels)
     {
         var args = BuildClosedPrListArguments(repo, requiredLabels);
         var stdout = RunGh(args, $"list closed PRs in {repo}");
+        return DeserializeList<GitHubAutomationPrCandidate>(stdout, $"gh pr list state closed for {repo}");
+    }
+
+    public IReadOnlyList<GitHubAutomationPrCandidate> ListClosedPullRequests(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels,
+        GitHubAutomationReadSurface surface)
+    {
+        var args = BuildClosedPrListArguments(repo, requiredLabels);
+        var stdout = RunGh(
+            args,
+            $"list closed PRs in {repo}",
+            GitHubApiQuotaConstants.GraphQlResource,
+            GitHubApiReadDependencies.GraphQlBound,
+            GitHubApiReadInventory.UnverifiedFieldsFor(surface));
         return DeserializeList<GitHubAutomationPrCandidate>(stdout, $"gh pr list state closed for {repo}");
     }
 
@@ -361,37 +479,33 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
         return DeserializeList<GitHubAutomationPrCandidate>(stdout, $"`gh pr list --state merged` for {repo}");
     }
 
-    private static string RunGh(IReadOnlyList<string> arguments, string description)
+    public IReadOnlyList<GitHubAutomationPrCandidate> ListMergedPullRequests(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels,
+        GitHubAutomationReadSurface surface)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "gh",
-            // G484: decode gh stdout/stderr as UTF-8 regardless of the ambient
-            // console code page (Windows cp932) so Japanese payloads stay valid.
-            StandardOutputEncoding = ProcessOutputEncoding.Utf8NoBom,
-            StandardErrorEncoding = ProcessOutputEncoding.Utf8NoBom,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
+        var args = BuildMergedPrListArguments(repo, requiredLabels);
+        var stdout = RunGh(
+            args,
+            $"list merged PRs in {repo}",
+            GitHubApiQuotaConstants.GraphQlResource,
+            GitHubApiReadDependencies.GraphQlBound,
+            GitHubApiReadInventory.UnverifiedFieldsFor(surface));
+        return DeserializeList<GitHubAutomationPrCandidate>(stdout, $"`gh pr list --state merged` for {repo}");
+    }
 
-        string stdout;
-        string stderr;
-        int exitCode;
+    private static string RunGh(
+        IReadOnlyList<string> arguments,
+        string description,
+        string? quotaResource = null,
+        string? dependency = null,
+        IReadOnlyList<string>? unverifiedFields = null)
+    {
+        GhCliProcessResult processResult;
         try
         {
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException(
-                    $"failed to start `gh` process to {description}");
-            stdout = process.StandardOutput.ReadToEnd();
-            stderr = process.StandardError.ReadToEnd();
-            process.WaitForExit();
-            exitCode = process.ExitCode;
+            processResult = ProcessRunner?.Invoke(arguments)
+                ?? RunGhProcess(arguments, description);
         }
         catch (Exception exception) when (
             exception is System.ComponentModel.Win32Exception
@@ -405,20 +519,53 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
                 innerException: exception);
         }
 
-        if (exitCode != 0)
+        if (processResult.ExitCode != 0)
         {
             // G673: only the API's structured rate-limit response can name a
             // quota failure. No stderr/free-text quota matching is used.
             var quotaProbe = QuotaProbeFactory?.Invoke() ?? new GhCliGitHubApiQuotaProbe();
             throw GitHubApiFailureFactory.FromGhFailure(
                 description,
-                stderr,
-                stdout,
-                exitCode,
-                quotaProbe);
+                processResult.Stderr,
+                processResult.Stdout,
+                processResult.ExitCode,
+                quotaProbe,
+                quotaResource,
+                dependency,
+                unverifiedFields);
         }
 
-        return stdout;
+        return processResult.Stdout;
+    }
+
+    private static GhCliProcessResult RunGhProcess(
+        IReadOnlyList<string> arguments,
+        string description)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "gh",
+            // G484: decode gh stdout/stderr as UTF-8 regardless of the ambient
+            // console code page (Windows cp932) so Japanese payloads stay valid.
+            StandardOutputEncoding = ProcessOutputEncoding.Utf8NoBom,
+            StandardErrorEncoding = ProcessOutputEncoding.Utf8NoBom,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException(
+                $"failed to start `gh` process to {description}");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return new GhCliProcessResult(process.ExitCode, stdout, stderr);
     }
 
     /// <summary>
@@ -460,4 +607,119 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
                 innerException: exception);
         }
     }
+
+    /// <summary>
+    /// G674: maps the REST issues endpoint to the pre-existing issue-candidate
+    /// shape. GitHub's REST issue collection includes pull requests, so the
+    /// adapter excludes rows carrying the REST-only <c>pull_request</c>
+    /// marker before exposing anything to the analyzers. Slurped pages are
+    /// flattened in server order and capped at the old <c>--limit 200</c>.
+    /// </summary>
+    internal static IReadOnlyList<GitHubAutomationIssueCandidate> DeserializeRestIssueList(
+        string stdout,
+        string callDescription)
+    {
+        var extraction = GitHubCliJsonBoundary.ExtractJsonArray(stdout, callDescription);
+        if (!extraction.Succeeded)
+        {
+            throw GitHubApiFailureFactory.JsonInvalid(
+                callDescription,
+                extraction.DiagnosticMessage ?? "gh stdout was not valid JSON");
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(extraction.Json);
+            var candidates = new List<GitHubAutomationIssueCandidate>();
+            foreach (var pageOrIssue in document.RootElement.EnumerateArray())
+            {
+                if (pageOrIssue.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var issue in pageOrIssue.EnumerateArray())
+                    {
+                        AddRestIssue(issue, candidates);
+                    }
+                }
+                else
+                {
+                    AddRestIssue(pageOrIssue, candidates);
+                }
+
+                if (candidates.Count >= 200)
+                {
+                    break;
+                }
+            }
+
+            return candidates.Take(200).ToArray();
+        }
+        catch (JsonException exception)
+        {
+            throw new GitHubApiRequestException(
+                GitHubCliJsonBoundary.Classifications.GithubJsonInvalid,
+                callDescription,
+                $"[{GitHubCliJsonBoundary.Classifications.GithubJsonInvalid}] could not map {callDescription} REST JSON: "
+                + $"{exception.Message}; sanitized preview: \"{GitHubCliJsonBoundary.SanitizePreview(extraction.Json)}\"",
+                innerException: exception);
+        }
+    }
+
+    private static void AddRestIssue(
+        JsonElement issue,
+        List<GitHubAutomationIssueCandidate> candidates)
+    {
+        if (issue.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException("REST issue page contained a non-object row.");
+        }
+
+        // The REST collection is intentionally an issue+PR collection. The
+        // old `gh issue list` contract returned issues only.
+        if (issue.TryGetProperty("pull_request", out var pullRequest)
+            && pullRequest.ValueKind is not JsonValueKind.Null
+            and not JsonValueKind.Undefined)
+        {
+            return;
+        }
+
+        var labels = new List<GitHubAutomationLabel>();
+        if (issue.TryGetProperty("labels", out var labelArray)
+            && labelArray.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var label in labelArray.EnumerateArray())
+            {
+                if (label.ValueKind == JsonValueKind.Object
+                    && label.TryGetProperty("name", out var name)
+                    && name.ValueKind == JsonValueKind.String)
+                {
+                    labels.Add(new GitHubAutomationLabel { Name = name.GetString() ?? string.Empty });
+                }
+            }
+        }
+
+        candidates.Add(new GitHubAutomationIssueCandidate
+        {
+            Number = ReadInt32(issue, "number"),
+            Title = ReadString(issue, "title"),
+            Url = ReadString(issue, "html_url"),
+            CreatedAt = ReadString(issue, "created_at"),
+            Body = ReadString(issue, "body"),
+            UpdatedAt = ReadString(issue, "updated_at"),
+            Labels = labels,
+            State = ReadString(issue, "state").ToUpperInvariant(),
+        });
+    }
+
+    private static int ReadInt32(JsonElement value, string propertyName) =>
+        value.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.Number
+            && property.TryGetInt32(out var number)
+                ? number
+                : 0;
+
+    private static string ReadString(JsonElement value, string propertyName) =>
+        value.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.String
+                ? property.GetString() ?? string.Empty
+                : string.Empty;
 }

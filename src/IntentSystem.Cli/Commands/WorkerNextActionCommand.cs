@@ -95,10 +95,12 @@ internal static class WorkerNextActionCommand
         {
             prs = lister.ListPullRequests(
                 repo!,
-                new[] { WorkerNextActionConstants.Labels.IntentTarget });
+                new[] { WorkerNextActionConstants.Labels.IntentTarget },
+                GitHubAutomationReadSurface.WorkerNextAction);
             issues = lister.ListIssues(
                 repo!,
-                new[] { WorkerNextActionConstants.Labels.IntentTarget });
+                new[] { WorkerNextActionConstants.Labels.IntentTarget },
+                GitHubAutomationReadSurface.WorkerNextAction);
         }
         catch (GitHubApiRequestException exception)
         {
