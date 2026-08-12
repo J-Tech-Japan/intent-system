@@ -227,6 +227,33 @@ implementation / review の settle を数秒単位で wake します。独立し
 herdr 0.8.0 で実測し、他 version / platform は unverified です。
 install emission は compatibility promise 上 1.x までの preview です。
 
+## Notify — pending delegation の明示的な disposition（G671 — preview-through-1.x）
+
+role 間の message は notify lifecycle command を使います。matching report がなくても
+open delegation の outcome が supersede された、または別の場所で適用済みになった場合は、
+次の command で明示的に記録します。
+
+```bash
+intent-cli notify dispose --domain <domain> --team <team> \
+  --task-id <task-id> --kind superseded|applied-elsewhere \
+  --actor <actor> --reason <reason> \
+  [--superseding-task-id <task-id>] \
+  [--applied-outcome-evidence <evidence>] --write --format json
+```
+
+`superseded` には superseding task id、`applied-elsewhere` には outcome evidence が必要です。
+record には kind、actor、timestamp、reason、および該当する evidence を保存します。
+`notify status` は `settlement_basis: disposition` を表示し、report settlement と区別します。
+disposed record は `notify supervise` と `stalled-work` の open 集計から外れます。disposition は
+automatic や時間経過で作られず、unknown / 既に settled の task id は拒否します。disposed task の
+遅い `notify report` も配信し、disposition を保持したまま disagreement を表示します。この post-freeze
+surface は compatibility promise 上 1.x まで preview です。
+
+`automation stalled-work` も、open notify record が設定された stale threshold を超えた場合に
+informational な `pending-delegation-open` item を返し、未処理の `open_pending_delegations` count を
+表示します。report-settled と disposition-settled は除外され、scan は read-only のままで disposition を
+推測・選択・write しません。
+
 ## Stack — packet backlog 作成 + 最初の issue publish
 
 名前付きの**前方計画**プロセス（G464）です。`stack` は現在の intents を読み、

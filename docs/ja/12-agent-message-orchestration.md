@@ -172,6 +172,12 @@ intent-cli notify escalate --domain <domain> --team <team> --from <sender-role> 
 # supervision / re-dispatch をせずに 1 件の委譲を確認する。
 intent-cli notify status --task-id <task-id> [--domain <domain> --team <team>] \
   [--routing-root <host-root>] --format json
+
+# outcome が別の場所で適用済みになった open delegation を明示的に settle する。
+intent-cli notify dispose --domain <domain> --team <team> \
+  --task-id <task-id> --kind superseded|applied-elsewhere --actor <actor> \
+  --reason <reason> [--superseding-task-id <task-id>] \
+  [--applied-outcome-evidence <evidence>] --write --format json
 ```
 
 delivery は recipient の recorded residency から 1 度だけ判定し、同じ judgment を
@@ -211,6 +217,18 @@ process の corroboration がない場合だけ `lost` です。herdr の regist
 process が残っている場合は `registration-lost-process-present` という別の state を返し、
 process が消えたとは推測しません。経過時間だけで verdict を変えることはありません。
 
+report がなくても outcome が確定している open delegation は、`notify dispose --write` で
+明示的な disposition を記録できます。この command は actor、timestamp、reason と disposition kind を要求します。
+`superseded` には superseding task id、`applied-elsewhere` には適用済み outcome の evidence が必要です。
+`notify status` は `settled` と `settlement_basis: disposition` を返し、report による settled と区別して
+disposition を表示します。disposed record は `notify supervise` と `stalled-work` の open 集計に入りません。
+automatic disposition はなく、経過時間だけで状態は終了しません。unknown または既に settled の task id は
+拒否し、supplied id と state を示します。
+
+disposed task に遅れて届いた `notify report` も通常の message-carriage rule で配信します。disposition を
+消去したり record を再オープンしたりせず、status と report advisory は late-report disagreement を明示します。
+message を黙らせず、2 つの outcome を operator が reconcile できるようにします。
+
 **活動証拠 (G652 — 1.x を通じた preview)。** 実行中 process は作業の証拠ではありません。herdr では status が `agent_status`、`state_change_seq`、最後の状態変更時刻も示します。`working` には working agent と進行する活動が必要です。sequence baseline がまだない場合、status は `live-idle` を断定せず `activity-unknown` を返します。dispatch 後の状態変更時刻は cold-start の `working` の十分な証拠です。supervision は最初の baseline を live-idle finding なしで記録し、その後に変化しない live-idle recipient に report がなければ一度だけ表示して terminal の確認を remedy として示します。この finding のために terminal content を読んだり recovery に入ったりしません。declared bound が configured interval より小さい場合は、supervise start と各 cycle で structural false alarm warning を出し、CLI が黙って補正する値ではありません。
 
 **report outbox (G653 — 1.x を通じた preview)。** `notify report --write` は transport を試す前に sender-side outbox entry を保存します。entry は task id、result nonce、status、artifact、summary、delivery timestamp を保持し、delivery failure は完了した作業を失わず `undelivered` として残ります。supervision は entry と `notify collect` の remedy を表示するだけで自動送信しません。recipient-side terminal の `ORCH_RESULT` は人間向けの record のままで、intent-cli は terminal を `parse` しません。visible result に arrived report がないときは、recipient を `re-delegate` したり task を `redo` したりせず persisted outbox entry を `collect` します。collection は同じ task id の original report だけを一度送信し、already-delivered entry は拒否します。entry は dispatch generation（result nonce）単位なので、再委譲された task id も新しい report を運べ、unmatched report も message として継続します。undelivered の current generation に対する二回目の report は fail-closed で拒否し、正確な `notify collect` recovery command を示します。
@@ -222,9 +240,9 @@ pending state の mutation に置きます。認識されない identifier を�
 依頼したことを知らなかった unsolicited report や escalation への回答という、情報を運ぶ message を
 黙らせてしまいます。
 
-> **1.x を通じた preview (G629)。** pending-delegation record と `notify status` は
-> v0.12.0 freeze 後に追加されました。1.0 compatibility promise の対象外であり、1.x の間に
-> 変更・撤回できます。後続 MAJOR release でのみ正式化します。[compatibility ledger]
+> **1.x を通じた preview (G629/G671)。** pending-delegation record、explicit disposition、
+> `notify status` は v0.12.0 freeze 後に追加されました。1.0 compatibility promise の対象外であり、
+> 1.x の間に変更・撤回できます。後続 MAJOR release でのみ正式化します。[compatibility ledger]
 > (1.0-compatibility-ledger.md) の preview row を参照してください。
 
 ### guide reachability (G645 — preview-through-1.x)

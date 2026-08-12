@@ -6,6 +6,16 @@ namespace IntentSystem.Cli.Commands;
 
 internal sealed record NotifyPendingStoreWriteResult(bool Written, string Path, string? Error);
 
+internal sealed record NotifyPendingDisposition
+{
+    [JsonPropertyName("kind")] public required string Kind { get; init; }
+    [JsonPropertyName("actor")] public required string Actor { get; init; }
+    [JsonPropertyName("timestamp")] public required DateTimeOffset Timestamp { get; init; }
+    [JsonPropertyName("reason")] public required string Reason { get; init; }
+    [JsonPropertyName("superseding_task_id")] public string? SupersedingTaskId { get; init; }
+    [JsonPropertyName("applied_outcome_evidence")] public string? AppliedOutcomeEvidence { get; init; }
+}
+
 internal sealed record NotifyPendingDelegation
 {
     [JsonPropertyName("domain")] public required string Domain { get; init; }
@@ -34,6 +44,10 @@ internal sealed record NotifyPendingDelegation
     [JsonPropertyName("report_artifact")] public string? ReportArtifact { get; init; }
     [JsonPropertyName("report_summary")] public string? ReportSummary { get; init; }
     [JsonPropertyName("reported_at")] public DateTimeOffset? ReportedAt { get; init; }
+    [JsonPropertyName("disposition")] public NotifyPendingDisposition? Disposition { get; init; }
+
+    internal bool IsOpen => !ReportArrived && Disposition is null;
+    internal string SettlementBasis => Disposition is not null ? "disposition" : ReportArrived ? "report" : "open";
 }
 
 internal sealed record NotifyPendingLookup
@@ -47,10 +61,10 @@ internal sealed record NotifyPendingLookup
 
 /// <summary>
 /// Durable, team-scoped delegation lifecycle records. Each line is either a
-/// dispatch snapshot or the matching report snapshot; the latest line for a
-/// task is the authoritative state. The append-only shape keeps dispatch and
-/// resolution auditable without making the existing six-field event channel a
-/// second, incompatible state store.
+/// dispatch, disposition, or matching report snapshot; the latest line for a
+/// task is the authoritative state. The append-only shape keeps dispatch,
+/// explicit settlement, and resolution auditable without making the existing
+/// six-field event channel a second, incompatible state store.
 /// </summary>
 internal static class NotifyPendingDelegationStore
 {
@@ -58,6 +72,7 @@ internal static class NotifyPendingDelegationStore
     private const string FileName = "pending.jsonl";
     private const string DispatchEvent = "dispatch";
     private const string ReportEvent = "report";
+    private const string DispositionEvent = "disposition";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -109,6 +124,7 @@ internal static class NotifyPendingDelegationStore
                 ReportArtifact = null,
                 ReportSummary = null,
                 ReportedAt = null,
+                Disposition = null,
             });
         }
     }
@@ -132,6 +148,48 @@ internal static class NotifyPendingDelegationStore
                 ReportSummary = summary,
                 ReportedAt = reportedAt,
             });
+        }
+    }
+
+    public static NotifyPendingStoreWriteResult WriteDisposition(
+        string routingRoot,
+        NotifyPendingDelegation record,
+        NotifyPendingDisposition disposition)
+    {
+        var path = ResolvePath(routingRoot, record.Domain, record.Team);
+        lock (Sync)
+        {
+            var current = ReadCurrent(path, out var readError);
+            if (readError is not null)
+            {
+                return new NotifyPendingStoreWriteResult(false, path, readError);
+            }
+
+            if (!current.TryGetValue(record.TaskId, out var currentRecord))
+            {
+                return new NotifyPendingStoreWriteResult(
+                    false,
+                    path,
+                    $"Task '{record.TaskId}' is unknown in the pending delegation store.");
+            }
+
+            if (!currentRecord.IsOpen)
+            {
+                return new NotifyPendingStoreWriteResult(
+                    false,
+                    path,
+                    $"Task '{record.TaskId}' is already settled ({currentRecord.SettlementBasis}).");
+            }
+
+            if (!string.Equals(currentRecord.ResultNonce, record.ResultNonce, StringComparison.Ordinal))
+            {
+                return new NotifyPendingStoreWriteResult(
+                    false,
+                    path,
+                    $"Task '{record.TaskId}' changed before its disposition could be recorded.");
+            }
+
+            return Append(path, currentRecord with { Disposition = disposition });
         }
     }
 
@@ -172,7 +230,7 @@ internal static class NotifyPendingDelegationStore
 
             foreach (var record in current.Values)
             {
-                if (!record.ReportArrived)
+                if (record.IsOpen)
                 {
                     known.Add(record.TaskId);
                 }
@@ -239,7 +297,7 @@ internal static class NotifyPendingDelegationStore
                 return [];
             }
 
-            records.AddRange(current.Values.Where(value => !value.ReportArrived));
+            records.AddRange(current.Values.Where(value => value.IsOpen));
         }
 
         return records.OrderBy(value => value.DispatchedAt).ToArray();
@@ -249,7 +307,11 @@ internal static class NotifyPendingDelegationStore
     {
         var eventRecord = new NotifyPendingEvent
         {
-            Event = record.ReportArrived ? ReportEvent : DispatchEvent,
+            Event = record.ReportArrived
+                ? ReportEvent
+                : record.Disposition is not null
+                    ? DispositionEvent
+                    : DispatchEvent,
             Domain = record.Domain,
             Team = record.Team,
             TaskId = record.TaskId,
@@ -276,6 +338,7 @@ internal static class NotifyPendingDelegationStore
             ReportArtifact = record.ReportArtifact,
             ReportSummary = record.ReportSummary,
             ReportedAt = record.ReportedAt,
+            Disposition = record.Disposition,
         };
         var line = JsonSerializer.Serialize(eventRecord, JsonOptions);
         if (WriteOverride is { } writeOverride)
@@ -317,7 +380,7 @@ internal static class NotifyPendingDelegationStore
 
                 var eventRecord = JsonSerializer.Deserialize<NotifyPendingEvent>(line, JsonOptions)
                     ?? throw new InvalidDataException("pending record line was empty.");
-                if (eventRecord.Event is not (DispatchEvent or ReportEvent)
+                if (eventRecord.Event is not (DispatchEvent or ReportEvent or DispositionEvent)
                     || string.IsNullOrWhiteSpace(eventRecord.TaskId))
                 {
                     throw new InvalidDataException("pending record line has an unsupported event shape.");
@@ -333,17 +396,38 @@ internal static class NotifyPendingDelegationStore
                         ReportArtifact = null,
                         ReportSummary = null,
                         ReportedAt = null,
+                        Disposition = null,
                     };
                     continue;
                 }
 
-                if (!current.ContainsKey(record.TaskId))
+                if (!current.TryGetValue(record.TaskId, out var existing))
                 {
                     throw new InvalidDataException(
                         $"report event for task '{record.TaskId}' has no preceding dispatch.");
                 }
 
-                current[record.TaskId] = record with { ReportArrived = true };
+                if (eventRecord.Event == ReportEvent)
+                {
+                    current[record.TaskId] = record with
+                    {
+                        ReportArrived = true,
+                        Disposition = record.Disposition ?? existing.Disposition,
+                    };
+                    continue;
+                }
+
+                if (eventRecord.Disposition is null || !existing.IsOpen)
+                {
+                    throw new InvalidDataException(
+                        $"disposition event for task '{record.TaskId}' does not settle an open dispatch.");
+                }
+
+                current[record.TaskId] = record with
+                {
+                    ReportArrived = false,
+                    Disposition = eventRecord.Disposition,
+                };
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
@@ -362,9 +446,19 @@ internal static class NotifyPendingDelegationStore
             return [ResolvePath(root, domain, team)];
         }
 
-        if (!string.IsNullOrWhiteSpace(domain) || !string.IsNullOrWhiteSpace(team))
+        if (!string.IsNullOrWhiteSpace(domain))
         {
-            throw new ArgumentException("--domain and --team must be supplied together.");
+            var domainRoot = Path.Combine(root, RelativeDirectory, ValidateSegment(domain, "domain"));
+            return !Directory.Exists(domainRoot)
+                ? []
+                : Directory.EnumerateFiles(domainRoot, FileName, SearchOption.AllDirectories)
+                    .OrderBy(path => path, StringComparer.Ordinal)
+                    .ToArray();
+        }
+
+        if (!string.IsNullOrWhiteSpace(team))
+        {
+            throw new ArgumentException("--team cannot be supplied without --domain.");
         }
 
         var notifyRoot = Path.Combine(root, RelativeDirectory);
@@ -421,6 +515,7 @@ internal static class NotifyPendingDelegationStore
         [JsonPropertyName("report_artifact")] public string? ReportArtifact { get; init; }
         [JsonPropertyName("report_summary")] public string? ReportSummary { get; init; }
         [JsonPropertyName("reported_at")] public DateTimeOffset? ReportedAt { get; init; }
+        [JsonPropertyName("disposition")] public NotifyPendingDisposition? Disposition { get; init; }
 
         public NotifyPendingDelegation ToRecord() => new()
         {
@@ -450,6 +545,7 @@ internal static class NotifyPendingDelegationStore
             ReportArtifact = ReportArtifact,
             ReportSummary = ReportSummary,
             ReportedAt = ReportedAt,
+            Disposition = Disposition,
         };
     }
 

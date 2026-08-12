@@ -46,6 +46,72 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_DispositionSettledDelegationLeavesSupervisionAndStalledWorkOpenPopulation_G671()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        var disposed = new NotifyPendingDelegation
+        {
+            Domain = "intent-cli",
+            Team = "intent-cli-dev",
+            TaskId = "G671-disposed",
+            RecipientRole = "implementation",
+            RecipientIdentity = "wH:p1",
+            ExpectedArtifact = "PR",
+            ResultNonce = "g671-disposed-nonce",
+            DispatchedAt = FixedNow.AddHours(-6),
+        };
+        Assert.True(NotifyPendingDelegationStore.WriteDispatch(workspace.RootPath, disposed).Written);
+        Assert.True(NotifyPendingDelegationStore.WriteDisposition(
+            workspace.RootPath,
+            disposed,
+            new NotifyPendingDisposition
+            {
+                Kind = "applied-elsewhere",
+                Actor = "orchestration",
+                Timestamp = FixedNow,
+                Reason = "the outcome was already applied",
+                AppliedOutcomeEvidence = "host transition evidence",
+            }).Written);
+
+        var open = disposed with
+        {
+            TaskId = "G671-open",
+            ResultNonce = "g671-open-nonce",
+            DispatchedAt = FixedNow.AddHours(-6).AddMinutes(1),
+        };
+        Assert.True(NotifyPendingDelegationStore.WriteDispatch(workspace.RootPath, open).Written);
+
+        var supervisor = new NotifySupervisor(
+            workspace.Context,
+            workspace.RootPath,
+            "intent-cli",
+            "intent-cli-dev",
+            autoRedispatch: false,
+            write: false,
+            format: "json",
+            runner: new EmptyNotifyProcessRunner(),
+            herdrExecutable: "herdr",
+            agmsgScriptsDirectory: "agmsg");
+        var supervision = supervisor.RunOnce();
+        Assert.DoesNotContain(supervision.Actions, action => action.TaskId == "G671-disposed");
+
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--stale-minutes", "0", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(1, doc.RootElement.GetProperty("open_pending_delegations").GetInt32());
+        var item = Assert.Single(
+            doc.RootElement.GetProperty("items").EnumerateArray(),
+            candidate => candidate.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindPendingDelegationOpen);
+        Assert.Equal("G671-open", item.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
     public void Execute_PublishedNotDelegated_FiresWhenPacketConfirmsRequestedDomain()
     {
         using var workspace = new StalledWorkWorkspace();
@@ -3277,6 +3343,7 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
               "repo": "J-Tech-Japan/intent-system",
               "stale_minutes_threshold": 0,
               "backlog_idle_minutes_threshold": 45,
+              "open_pending_delegations": 0,
               "stalled": true,
               "items": [
                 {
@@ -3696,6 +3763,12 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         public IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(string repo, IReadOnlyCollection<string> requiredLabels) => issues;
 
         public IReadOnlyList<GitHubAutomationPrCandidate> ListMergedPullRequests(string repo, IReadOnlyCollection<string> requiredLabels) => mergedPrs;
+    }
+
+    private sealed class EmptyNotifyProcessRunner : INotifyProcessRunner
+    {
+        public NotifyProcessResult Run(string fileName, IReadOnlyList<string> arguments) =>
+            new(0, string.Empty, string.Empty);
     }
 
     private sealed class StalledWorkWorkspace : IDisposable

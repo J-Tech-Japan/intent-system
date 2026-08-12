@@ -189,6 +189,12 @@ intent-cli notify escalate --domain <domain> --team <team> --from <sender-role> 
 # Inspect one dispatched task without supervision or re-dispatch.
 intent-cli notify status --task-id <task-id> [--domain <domain> --team <team>] \
   [--routing-root <host-root>] --format json
+
+# Explicitly settle an open delegation when its outcome is known elsewhere.
+intent-cli notify dispose --domain <domain> --team <team> \
+  --task-id <task-id> --kind superseded|applied-elsewhere --actor <actor> \
+  --reason <reason> [--superseding-task-id <task-id>] \
+  [--applied-outcome-evidence <evidence>] --write --format json
 ```
 
 Delivery is judged once from the recipient's recorded residency, and the same
@@ -234,6 +240,21 @@ registration but a process remains, status reports the distinct
 `registration-lost-process-present` state and directs an operator to repair the
 registration; it does not infer process loss.
 
+An open delegation may be settled explicitly with `notify dispose --write` when
+the outcome is known without a report. The command requires an actor,
+timestamp, reason, and one of the named kinds: `superseded` requires a
+superseding task id, while `applied-elsewhere` requires evidence of the applied
+outcome. `notify status` reports this as `settled` with
+`settlement_basis: disposition` and exposes the disposition separately from a
+report-settled record. Disposed records are not counted as open by
+`notify supervise` or `stalled-work`. There is no automatic or elapsed-time
+disposition; unknown and already-settled task ids are refused and named.
+
+A late `notify report` for a disposed task is still delivered under the normal
+message-carriage rule. It does not erase the disposition or reopen the record;
+status and report advisories name the late-report disagreement so that an
+operator can reconcile the two outcomes without silently dropping the message.
+
 **Activity evidence (G652 — preview-through-1.x).** A running process is not
 evidence of work. For herdr, status also names `agent_status`,
 `state_change_seq`, and the last state-change time: `working` requires a
@@ -275,11 +296,11 @@ unrecognised identifier would silence unsolicited reports and answers to
 escalations—the messages whose information the recipient did not know to
 request.
 
-> **Preview through 1.x (G629).** Pending-delegation records and `notify
-> status` were added after the v0.12.0 freeze. They are outside the 1.0
-> compatibility promise, may change or be withdrawn during 1.x, and are
-> formalised only by a later MAJOR release. See the [compatibility
-> ledger](1.0-compatibility-ledger.md) preview rows.
+> **Preview through 1.x (G629/G671).** Pending-delegation records, explicit
+> dispositions, and `notify status` were added after the v0.12.0 freeze. They
+> are outside the 1.0 compatibility promise, may change or be withdrawn during
+> 1.x, and are formalised only by a later MAJOR release. See the
+> [compatibility ledger](1.0-compatibility-ledger.md) preview rows.
 
 ### Guide reachability (G645 — preview-through-1.x)
 

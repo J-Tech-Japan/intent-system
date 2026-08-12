@@ -671,6 +671,11 @@ internal static class SessionLayerFragments
         Fragment(S4, Operative("- Send workflow notifications only through `intent-cli notify`; it resolves the recorded session-layer mode and validates the recipient before delivery, failing closed on an unknown role (G524/G578).")),
         Fragment(
             S4,
+            Operative("- When an outcome is applied elsewhere, a review round supersedes the predecessor, or a recovery/re-dispatch path makes a report no longer owed, explicitly record the open delegation's disposition with `intent-cli notify dispose --domain <domain> --team <team> --task-id <task-id> --kind applied-elsewhere|superseded --actor <actor> --reason <reason> [--applied-outcome-evidence <evidence>|--superseding-task-id <task-id>] --write --format json`."),
+            Scaffold(" "),
+            Operative("This is an attributed judgment, never an automatic inference; it ends the report expectation but never refuses or drops a late report.")),
+        Fragment(
+            S4,
             Operative("- Apply the design-thread escalation filter: keep routine progress / CI-wait / success / closeout / idle internal; surface to the design thread ONLY human-needed decisions, with structured evidence and the exact decision needed."),
             Scaffold(" "),
             Operative("Never hide a failure that needs a human.")),
@@ -683,7 +688,9 @@ internal static class SessionLayerFragments
             S4,
             Operative("- **repair** — REPAIR routine off-rail states yourself by messaging the appropriate thread back onto the official intent-cli workflow — e.g. a receiver that stalled, skipped `worker complete`, applied a label by hand, or has not replied."),
             Scaffold(" "),
-            Operative("Routine recovery is a repair message, not an escalation.")),
+            Operative("Routine recovery is a repair message, not an escalation."),
+            Scaffold(" "),
+            Operative("When that recovery or an outcome application means the original report will never arrive, write an explicit `notify dispose` disposition at the cause site with its actor, reason, and applicable superseding task or applied-outcome evidence; never silently close the pending record and never reject a late report.")),
         Fragment(
             S4,
             Operative("- **escalate** — ESCALATE to the operator ONLY for: product/design judgment, credentials or security, a destructive local action, or an unresolved canonical ambiguity (intent-cli/GitHub facts genuinely conflict or are missing)."),
@@ -1593,6 +1600,18 @@ internal static class SessionLayerFragments
         Fragment("scheduling", Operative("Send workflow notifications only through `intent-cli notify`; it resolves the recorded session-layer mode and validates the recipient before delivery, failing closed on an unknown role (G524/G578).")),
         Fragment(
             "scheduling",
+            Operative("When an outcome is applied elsewhere, a review round supersedes the predecessor, or a recovery/re-dispatch path makes a report no longer owed, explicitly record the open delegation's disposition with `intent-cli notify dispose --domain <domain> --team <team> --task-id <task-id> --kind applied-elsewhere|superseded --actor <actor> --reason <reason> [--applied-outcome-evidence <evidence>|--superseding-task-id <task-id>] --write --format json`."),
+            Scaffold(" "),
+            Operative("This is an attributed judgment, never an automatic inference; it ends the report expectation but never refuses or drops a late report.")),
+        Fragment(
+            "scheduling",
+            Operative("REPAIR routine off-rail states yourself by messaging the appropriate thread back onto the official intent-cli workflow — e.g. a receiver that stalled, skipped `worker complete`, applied a label by hand, or has not replied."),
+            Scaffold(" "),
+            Operative("Routine recovery is a repair message, not an escalation."),
+            Scaffold(" "),
+            Operative("When that recovery or an outcome application means the original report will never arrive, write an explicit `notify dispose` disposition at the cause site with its actor, reason, and applicable superseding task or applied-outcome evidence; never silently close the pending record and never reject a late report.")),
+        Fragment(
+            "scheduling",
             Operative("Apply the design-thread escalation filter: keep routine progress / CI-wait / success / closeout / idle internal; surface to the design thread ONLY human-needed decisions, with structured evidence and the exact decision needed."),
             Scaffold(" "),
             Operative("Never hide a failure that needs a human.")),
@@ -1601,11 +1620,6 @@ internal static class SessionLayerFragments
             Operative("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain __DOMAIN__ --repo __OWNER__/__REPO__ --format json`, and process every actionable item it reports before sleeping — never leave one for an unscheduled next wake; escalate explicitly if it is genuinely blocked on an operator decision."),
             Scaffold(" "),
             Operative("This includes a `backlog-ready-idle` item (G544, empty WIP + a ready packet + no activity past the idle threshold) — publish and delegate it in THIS wake, the same as any other issue-cut-ready candidate; only announce a following wake will handle it when that wake is actually scheduled.")),
-        Fragment(
-            "scheduling",
-            Operative("REPAIR routine off-rail states yourself by messaging the appropriate thread back onto the official intent-cli workflow — e.g. a receiver that stalled, skipped `worker complete`, applied a label by hand, or has not replied."),
-            Scaffold(" "),
-            Operative("Routine recovery is a repair message, not an escalation.")),
         Fragment(
             "scheduling",
             Operative("ESCALATE to the operator ONLY for: product/design judgment, credentials or security, a destructive local action, or an unresolved canonical ambiguity (intent-cli/GitHub facts genuinely conflict or are missing)."),
