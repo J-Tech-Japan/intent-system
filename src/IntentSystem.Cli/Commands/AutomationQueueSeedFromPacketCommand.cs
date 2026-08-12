@@ -43,6 +43,7 @@ internal static class AutomationQueueSeedFromPacketCommand
     public const string ClassificationUnsafe = "unsafe-prepared-packet";
     public const string ClassificationPacketDirectoryMissing = "packet-directory-missing";
     public const string ReasonDomainResolutionFailed = "domain-resolution-failed";
+    public const string ReasonRoutingSnapshotInvalid = "routing-snapshot-invalid";
 
     public const string SeedEventName = "queue_seeded_from_packet";
 
@@ -239,6 +240,37 @@ internal static class AutomationQueueSeedFromPacketCommand
             return 1;
         }
 
+        BranchRoutingSnapshot? routingSnapshot;
+        try
+        {
+            // G668: queue seeding carries the already-materialised packet
+            // snapshot forward for reviewers. It never resolves against the
+            // current registry, and a partial snapshot fails closed.
+            routingSnapshot = BranchLaneResolver.TryReadSnapshot(packetDocument!.Fields);
+        }
+        catch (InvalidOperationException exception)
+        {
+            var invalidSnapshot = new QueueSeedFromPacketResult
+            {
+                Classification = ClassificationUnsafe,
+                ExecutionUnit = executionUnit,
+                PacketDirectory = packetDirectoryRelative,
+                Write = write,
+                ContractPublishable = false,
+                UnsafeReason = ReasonRoutingSnapshotInvalid,
+                RefusalReasons = [ReasonRoutingSnapshotInvalid],
+                RecommendedActions =
+                [
+                    exception.Message,
+                    "Repair the packet routing_snapshot and re-run queue readiness before seeding.",
+                    BuildReadinessRerun(executionUnit, domain, targetRepo),
+                ],
+                Summary = $"refusing to seed queue-state from `{packetDirectoryRelative}`: {exception.Message}",
+            };
+            EmitResult(writer, format, invalidSnapshot);
+            return 1;
+        }
+
         // PR #830 review repair #2: resolve the canonical clarification
         // return path for the host domain so packets that omit the
         // `clarification_return_path` field still seed with a usable
@@ -282,7 +314,8 @@ internal static class AutomationQueueSeedFromPacketCommand
             defaultClarificationReturnPath,
             defaultWorkerRole,
             defaultReviewRole,
-            defaultPriority);
+            defaultPriority,
+            routingSnapshot);
 
         // Read current queue-state (if present). Missing file is OK —
         // we'll create one with this seed as the sole item.
@@ -305,8 +338,9 @@ internal static class AutomationQueueSeedFromPacketCommand
         // canonical identifier). Operators re-running the command on
         // a unit that's already in the queue get a no-op signal so
         // they can move on rather than treating the run as failure.
-        if (existing is not null
-            && existing.Items.Any(item => string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal)))
+        var existingItem = existing?.Items.FirstOrDefault(
+            item => string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+        if (existingItem is not null)
         {
             var already = new QueueSeedFromPacketResult
             {
@@ -316,7 +350,10 @@ internal static class AutomationQueueSeedFromPacketCommand
                 Write = write,
                 ContractPublishable = true,
                 Summary = $"queue-state already contains an entry for `{executionUnit}`; nothing to seed.",
-                SeededItem = seed,
+                SeededItem = existingItem,
+                RoutingSnapshot = existingItem.RoutingSnapshot is null
+                    ? null
+                    : BranchLaneResolver.FromQueueProjection(existingItem.RoutingSnapshot),
             };
             EmitResult(writer, format, already);
             return 0;
@@ -332,6 +369,7 @@ internal static class AutomationQueueSeedFromPacketCommand
                 Write = false,
                 ContractPublishable = true,
                 SeededItem = seed,
+                RoutingSnapshot = routingSnapshot,
                 Summary = $"prepared packet `{packetDirectoryRelative}` validated; queue-state would be seeded with a new queued item for `{executionUnit}`. "
                     + "Re-run with `--write` to persist.",
                 RecommendedActions = new[]
@@ -382,6 +420,7 @@ internal static class AutomationQueueSeedFromPacketCommand
             Write = true,
             ContractPublishable = true,
             SeededItem = seed,
+            RoutingSnapshot = routingSnapshot,
             Summary = $"seeded queue-state with a new queued item for `{executionUnit}` from validated packet `{packetDirectoryRelative}`. "
                 + $"Appended `{SeedEventName}` event to `.intent-cli/runs.jsonl`.",
         };
@@ -402,7 +441,8 @@ internal static class AutomationQueueSeedFromPacketCommand
         string defaultClarificationReturnPath,
         string defaultWorkerRole,
         string defaultReviewRole,
-        string defaultPriority)
+        string defaultPriority,
+        BranchRoutingSnapshot? routingSnapshot = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
         ArgumentNullException.ThrowIfNull(packet);
@@ -494,6 +534,9 @@ internal static class AutomationQueueSeedFromPacketCommand
                 ReviewContext = packetDir + PreparedPacketCommitReadyAnalyzer.FileNameReviewContextMarkdown,
                 Yaml = packetDir + PreparedPacketCommitReadyAnalyzer.FileNamePacketYaml,
             },
+            RoutingSnapshot = routingSnapshot is null
+                ? null
+                : BranchLaneResolver.ToQueueProjection(routingSnapshot),
             WorkerRole = workerRole,
             ReviewRole = reviewRole,
             Priority = priority,
@@ -717,5 +760,8 @@ internal sealed record QueueSeedFromPacketResult
     public IReadOnlyList<string> MissingCanonicalFiles { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> MissingContractSections { get; init; } = Array.Empty<string>();
     public QueueItem? SeededItem { get; init; }
+    [JsonPropertyName("routing_snapshot")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BranchRoutingSnapshot? RoutingSnapshot { get; init; }
     public IReadOnlyList<string> RecommendedActions { get; init; } = Array.Empty<string>();
 }

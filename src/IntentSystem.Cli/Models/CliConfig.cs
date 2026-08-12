@@ -1,5 +1,7 @@
 namespace IntentSystem.Cli.Models;
 
+using IntentSystem.Cli.Commands;
+
 internal sealed record CliConfig
 {
     public required ProjectConfig Project { get; init; }
@@ -26,6 +28,13 @@ internal sealed record ProjectConfig
     public string ParentIntentRepoRoot { get; init; } = string.Empty;
 
     public string BaseBranchPolicy { get; init; } = CliRuntimeContracts.DefaultBaseBranchPolicy;
+
+    /// <summary>
+    /// G668 preview named branch lanes keyed by domain. An empty map keeps the
+    /// legacy <c>base_branch_policy</c> path byte-for-byte compatible.
+    /// </summary>
+    public IReadOnlyDictionary<string, BranchLaneRegistry> BranchLanes { get; init; }
+        = new Dictionary<string, BranchLaneRegistry>(StringComparer.Ordinal);
 
     /// <summary>G350: final stable branch in same-repo topology (e.g. "main"). Empty = not configured.</summary>
     public string StableBranch { get; init; } = string.Empty;

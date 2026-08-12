@@ -279,8 +279,22 @@ internal static class GuideReviewCommand
         IReadOnlyList<string> packetFiles = Array.Empty<string>();
         IReadOnlyList<GuideReviewPacketPath> packetPaths = Array.Empty<GuideReviewPacketPath>();
         string? reviewContextHead = null;
+        string? branchLane = null;
+        string? branchLaneSource = null;
+        BranchRoutingSnapshot? routingSnapshot = null;
         if (matchedItem is not null)
         {
+            // G668: a seeded queue item is the durable review projection. It
+            // must win over packet.yaml so edits to the mutable packet or
+            // registry cannot retarget an already accepted unit. Queue items
+            // from before this optional field was introduced continue through
+            // the packet fallback below.
+            if (matchedItem.RoutingSnapshot is { } queuedSnapshot)
+            {
+                routingSnapshot = BranchLaneResolver.FromQueueProjection(queuedSnapshot);
+                branchLane = routingSnapshot.LaneId;
+            }
+
             packetDirectory = Path.Combine(context.RepoRoot, ".intent-cli", "issues", matchedItem.ExecutionUnit);
             if (Directory.Exists(packetDirectory))
             {
@@ -293,6 +307,41 @@ internal static class GuideReviewCommand
                 if (File.Exists(reviewContextPath))
                 {
                     reviewContextHead = string.Join('\n', File.ReadAllLines(reviewContextPath).Take(ReviewContextHeadLines));
+                }
+
+                var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
+                if (File.Exists(packetYamlPath))
+                {
+                    try
+                    {
+                        var packetYaml = File.ReadAllText(packetYamlPath);
+                        if (PacketYamlDocument.TryParse(packetYaml, out var packetDocument, out _)
+                            && packetDocument is not null)
+                        {
+                            branchLaneSource = BranchLaneResolver.TryReadLaneSource(packetDocument.Fields);
+                            if (routingSnapshot is null)
+                            {
+                                branchLane = BranchLaneResolver.TryReadDeclaredLane(packetDocument.Fields);
+                                routingSnapshot = BranchLaneResolver.TryReadSnapshot(packetDocument.Fields);
+                            }
+                        }
+                        // Legacy review packets may be intentionally sparse
+                        // or use a shape that only the older review flow
+                        // understands. Do not turn that pre-G668 condition
+                        // into a new readiness gap; only a parseable packet
+                        // with a malformed routing declaration is actionable.
+                    }
+                    catch (InvalidOperationException exception)
+                    {
+                        gaps.Add($"packet routing snapshot is invalid: {exception.Message}");
+                    }
+                    catch (IOException)
+                    {
+                        // The existing packet/reference reader already treats
+                        // an unreadable optional artifact as absent. Keep the
+                        // same compatibility behavior for the optional lane
+                        // projection.
+                    }
                 }
             }
             else
@@ -342,6 +391,9 @@ internal static class GuideReviewCommand
             PacketDirectory = packetDirectory,
             PacketFiles = packetFiles,
             PacketPaths = packetPaths,
+            BranchLane = branchLane,
+            BranchLaneSource = branchLaneSource,
+            RoutingSnapshot = routingSnapshot,
             IntentReferencePaths = intentReferencePaths,
             ReviewContextHead = reviewContextHead,
             ReviewChecklist = ReviewChecklist,
@@ -516,6 +568,16 @@ internal static class GuideReviewCommand
             {
                 writer.WriteLine($"  - {path.Name}: {path.Path} (exists: {(path.Exists ? "yes" : "no")})");
             }
+        }
+        if (result.RoutingSnapshot is { } snapshot)
+        {
+            writer.WriteLine("- immutable routing snapshot:");
+            writer.WriteLine($"  - lane: `{snapshot.LaneId}` (membership: `{result.BranchLaneSource ?? "unknown"}`)");
+            writer.WriteLine($"  - definition revision: `{snapshot.DefinitionRevision}`");
+            writer.WriteLine($"  - start branch: `{snapshot.StartBranch}`");
+            writer.WriteLine($"  - PR base branch: `{snapshot.PrBaseBranch}`");
+            writer.WriteLine($"  - landing mode: `{snapshot.LandingMode}`");
+            writer.WriteLine("  - registry edits after acceptance do not retarget this packet.");
         }
         writer.WriteLine();
 
@@ -829,6 +891,15 @@ internal sealed record GuideReviewResult
     /// </summary>
     [JsonPropertyName("packet_paths")]
     public required IReadOnlyList<GuideReviewPacketPath> PacketPaths { get; init; }
+
+    [JsonPropertyName("branch_lane")]
+    public string? BranchLane { get; init; }
+
+    [JsonPropertyName("branch_lane_source")]
+    public string? BranchLaneSource { get; init; }
+
+    [JsonPropertyName("routing_snapshot")]
+    public BranchRoutingSnapshot? RoutingSnapshot { get; init; }
 
     /// <summary>
     /// G316: structured intent-reference directory entries

@@ -61,7 +61,7 @@ internal static class PacketDraftCommand
     private const string FacetContextEndMarker = "<!-- END GENERATED FACET CONTEXT (G530) -->";
 
     private const string UsageLine =
-        "Usage: intent-cli packet draft --execution-unit <id> [--domain <name>] [--target-repo <owner/repo>] [--dry-run] [--format markdown|json]";
+        "Usage: intent-cli packet draft --execution-unit <id> [--domain <name>] [--target-repo <owner/repo>] [--lane <id>] [--dry-run] [--format markdown|json]";
 
     private static readonly Regex ExecutionUnitPattern = new(
         @"^[A-Za-z][A-Za-z0-9-]*$",
@@ -84,7 +84,7 @@ internal static class PacketDraftCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var executionUnit, out var domainOverride, out var targetRepo, out var dryRun, out var format, out var error))
+        if (!TryParseArguments(args, out var executionUnit, out var domainOverride, out var targetRepo, out var laneOverride, out var dryRun, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -98,7 +98,7 @@ internal static class PacketDraftCommand
             return 1;
         }
 
-        var result = Draft(context, executionUnit!, domainOverride, targetRepo, dryRun);
+        var result = Draft(context, executionUnit!, domainOverride, targetRepo, dryRun, laneOverride);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -118,7 +118,8 @@ internal static class PacketDraftCommand
         string executionUnit,
         string? domainOverride,
         string? targetRepo,
-        bool dryRun)
+        bool dryRun,
+        string? laneOverride = null)
     {
         var domain = string.IsNullOrWhiteSpace(domainOverride)
             ? context.Config.Project.Domain
@@ -126,6 +127,13 @@ internal static class PacketDraftCommand
 
         var packetDirectory = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit);
         var mode = dryRun ? ModeDryRun : ModeWrite;
+        // G668: validate the named-lane choice before creating a packet
+        // directory so an unknown/unsupported selection has no artifact side
+        // effect.
+        var laneSelection = BranchLaneResolver.ResolveForDraft(
+            context.Config.Project,
+            domain,
+            laneOverride);
 
         if (!dryRun)
         {
@@ -142,6 +150,9 @@ internal static class PacketDraftCommand
         var policyDefaultBaseBranch = BaseBranchPolicyContract.IsKnownPolicy(baseBranchPolicy)
             ? BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy)
             : CliRuntimeContracts.DirectMainBaseBranch;
+        // G668: a configured named lane owns both the packet start branch and
+        // the expected PR base branch. Registry-less projects continue through
+        // the G667 shared effective-branch judgment below.
         // G667: use the shared effective-branch judgment so a configured
         // implementation_base_branch is carried into newly drafted issue
         // bodies, while the policy default remains byte-identical when no
@@ -151,7 +162,11 @@ internal static class PacketDraftCommand
             configuredBranch: context.Config.Project.ImplementationBaseBranch,
             sameRepoTopologyBranch: null,
             policyDefaultBranch: policyDefaultBaseBranch);
-        var expectedBaseBranch = branchDecision.Branch;
+        var expectedBaseBranch = laneSelection?.Snapshot.PrBaseBranch ?? branchDecision.Branch;
+        if (laneSelection is not null)
+        {
+            baseBranchPolicy = "named-lane";
+        }
 
         // G530: review-context.md's generated "Facet context" block scopes
         // to whatever `intent_references` an EXISTING packet.yaml on disk
@@ -170,9 +185,9 @@ internal static class PacketDraftCommand
 
         var planned = new[]
         {
-            ("packet.yaml", BuildPacketYaml(executionUnit, domain, targetRepo)),
+            ("packet.yaml", BuildPacketYaml(executionUnit, domain, targetRepo, laneSelection)),
             ("implementation.md", BuildImplementationMd(executionUnit)),
-            ("github-body.md", BuildGithubBodyMd(executionUnit, baseBranchPolicy, expectedBaseBranch))
+            ("github-body.md", BuildGithubBodyMd(executionUnit, baseBranchPolicy, expectedBaseBranch, laneSelection))
         };
 
         var files = new List<PacketDraftFile>();
@@ -256,18 +271,28 @@ internal static class PacketDraftCommand
             RefusalReasons = readiness.RefusalReasons,
             RecommendedActions = recommendedActions,
             ContractPublishable = readiness.Classification == PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady,
+            BranchLane = laneSelection?.Snapshot.LaneId,
+            BranchLaneSource = laneSelection?.Source,
+            RoutingSnapshot = laneSelection?.Snapshot,
         };
     }
 
-    private static string BuildPacketYaml(string executionUnit, string domain, string? targetRepo)
+    private static string BuildPacketYaml(
+        string executionUnit,
+        string domain,
+        string? targetRepo,
+        BranchLaneSelection? laneSelection)
     {
         var repoLine = targetRepo ?? "<owner/repo>";
+        var routingFields = laneSelection is null
+            ? string.Empty
+            : "\n" + BranchLaneRoutingYaml.RenderFields(laneSelection);
         return $"""
             implementation_issue_packet:
               issue_title: "{executionUnit} TODO short title"
               issue_kind: feature
               source_execution_unit: {executionUnit}
-              domain: {domain}
+              domain: {domain}{routingFields}
               target_repo: {repoLine}
               target_path: <comma- or space-separated paths>
               target_part: "<one-line target description>"
@@ -695,12 +720,21 @@ internal static class PacketDraftCommand
         return Path.Combine(baseRoot!, "intents", domain);
     }
 
-    private static string BuildGithubBodyMd(string executionUnit, string baseBranchPolicy, string expectedBaseBranch)
+    private static string BuildGithubBodyMd(
+        string executionUnit,
+        string baseBranchPolicy,
+        string expectedBaseBranch,
+        BranchLaneSelection? laneSelection)
     {
         // G347: derive policy-specific branch instruction for the mandatory contract section.
-        var branchInstruction = string.Equals(baseBranchPolicy, CliRuntimeContracts.MainAiBaseBranchPolicy, StringComparison.Ordinal)
+        var branchInstruction = laneSelection is not null
+            ? $"Open all child PRs against `{expectedBaseBranch}`; the immutable routing snapshot records lane `{laneSelection.Snapshot.LaneId}` with landing mode `{laneSelection.Snapshot.LandingMode}`."
+            : string.Equals(baseBranchPolicy, CliRuntimeContracts.MainAiBaseBranchPolicy, StringComparison.Ordinal)
             ? $"Open all child PRs against `{expectedBaseBranch}`. Do NOT target `main` directly — the human operator periodically merges `{expectedBaseBranch}` → `main`."
             : $"Open all child PRs against `{expectedBaseBranch}` directly.";
+        var routingSnapshotSection = laneSelection is null
+            ? $"Policy: `{baseBranchPolicy}`\nExpected PR base branch: `{expectedBaseBranch}`"
+            : $"Policy: `{baseBranchPolicy}`\nLane: `{laneSelection.Snapshot.LaneId}`\nLane membership: `{laneSelection.Source}`\nRegistry definition revision: `{laneSelection.Snapshot.DefinitionRevision}`\nStart branch: `{laneSelection.Snapshot.StartBranch}`\nLanding mode: `{laneSelection.Snapshot.LandingMode}`\nExpected PR base branch: `{laneSelection.Snapshot.PrBaseBranch}`\nRouting snapshot: immutable for this execution unit; later registry edits do not retarget it.";
 
         return $"""
             ## Goal
@@ -770,8 +804,7 @@ internal static class PacketDraftCommand
 
             ## Base Branch Policy
 
-            Policy: `{baseBranchPolicy}`
-            Expected PR base branch: `{expectedBaseBranch}`
+            {routingSnapshotSection}
 
             {branchInstruction}
             """;
@@ -848,6 +881,7 @@ internal static class PacketDraftCommand
         out string? executionUnit,
         out string? domainOverride,
         out string? targetRepo,
+        out string? laneOverride,
         out bool dryRun,
         out string format,
         out string error)
@@ -855,6 +889,7 @@ internal static class PacketDraftCommand
         executionUnit = null;
         domainOverride = null;
         targetRepo = null;
+        laneOverride = null;
         dryRun = false;
         format = FormatMarkdown;
         error = string.Empty;
@@ -894,6 +929,17 @@ internal static class PacketDraftCommand
                     }
 
                     targetRepo = args[index + 1];
+                    index++;
+                    break;
+
+                case "--lane":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--lane requires a value.";
+                        return false;
+                    }
+
+                    laneOverride = args[index + 1];
                     index++;
                     break;
 
@@ -989,6 +1035,15 @@ internal sealed record PacketDraftResult
     /// </summary>
     [JsonPropertyName("contract_publishable")]
     public bool ContractPublishable { get; init; }
+
+    [JsonPropertyName("branch_lane")]
+    public string? BranchLane { get; init; }
+
+    [JsonPropertyName("branch_lane_source")]
+    public string? BranchLaneSource { get; init; }
+
+    [JsonPropertyName("routing_snapshot")]
+    public BranchRoutingSnapshot? RoutingSnapshot { get; init; }
 }
 
 internal sealed record PacketDraftFile

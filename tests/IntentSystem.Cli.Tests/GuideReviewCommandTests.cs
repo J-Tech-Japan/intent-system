@@ -2,6 +2,8 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -57,6 +59,87 @@ public sealed class GuideReviewCommandTests
         Assert.Contains("## Device-gated evidence policy (G445)", output, StringComparison.Ordinal);
         Assert.Contains("Approve-with-recorded-gap", output, StringComparison.Ordinal);
         Assert.Contains("HARD-BLOCK", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G668_ReviewGuidanceSurfacesImmutableRoutingSnapshot()
+    {
+        using var workspace = new GuideReviewWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G668", "review", title: "named lanes", linkedPr: "1445"));
+        workspace.WriteFile(".intent-cli/issues/G668/packet.yaml", """
+        implementation_issue_packet:
+          source_execution_unit: G668
+          branch_lane: hotfix
+          branch_lane_source: explicit
+          routing_snapshot:
+            lane_id: hotfix
+            definition_revision: registry-r1
+            start_branch: main
+            pr_base_branch: main
+            landing_mode: direct
+        """);
+
+        using var writer = new StringWriter();
+        var exitCode = GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "1445", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("hotfix", document.RootElement.GetProperty("branch_lane").GetString());
+        Assert.Equal("explicit", document.RootElement.GetProperty("branch_lane_source").GetString());
+        Assert.Equal(
+            "registry-r1",
+            document.RootElement.GetProperty("routing_snapshot").GetProperty("definition_revision").GetString());
+    }
+
+    [Fact]
+    public void Execute_G668_ReviewPrefersDurableQueueSnapshotOverEditedPacket()
+    {
+        using var workspace = new GuideReviewWorkspace();
+        var queueState = BuildQueueStateWithRoutingSnapshot(
+            "G668",
+            "review",
+            title: "named lanes",
+            linkedPr: "1445",
+            new QueueRoutingSnapshot
+            {
+                LaneId = "hotfix",
+                DefinitionRevision = "registry-r1",
+                StartBranch = "main",
+                PrBaseBranch = "main",
+                LandingMode = "direct",
+            });
+        workspace.WriteQueueState(queueState);
+        Assert.NotNull(QueueStateSerializer.Deserialize(queueState).Items.Single().RoutingSnapshot);
+        workspace.WriteFile(".intent-cli/issues/G668/packet.yaml", """
+        implementation_issue_packet:
+          source_execution_unit: G668
+          branch_lane: continuous
+          branch_lane_source: explicit
+          routing_snapshot:
+            lane_id: continuous
+            definition_revision: registry-r2
+            start_branch: develop
+            pr_base_branch: develop
+            landing_mode: integration-batch
+        """);
+
+        using var writer = new StringWriter();
+        var exitCode = GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "1445", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("hotfix", document.RootElement.GetProperty("branch_lane").GetString());
+        Assert.Equal("explicit", document.RootElement.GetProperty("branch_lane_source").GetString());
+        var snapshot = document.RootElement.GetProperty("routing_snapshot");
+        Assert.Equal("registry-r1", snapshot.GetProperty("definition_revision").GetString());
+        Assert.Equal("main", snapshot.GetProperty("pr_base_branch").GetString());
+        Assert.Equal("direct", snapshot.GetProperty("landing_mode").GetString());
     }
 
     [Fact]
@@ -734,6 +817,24 @@ public sealed class GuideReviewCommandTests
               ]
             }
             """;
+    }
+
+    private static string BuildQueueStateWithRoutingSnapshot(
+        string executionUnit,
+        string state,
+        string title,
+        string? linkedPr,
+        QueueRoutingSnapshot snapshot)
+    {
+        var snapshotJson = "                  \"routing_snapshot\": {\n"
+            + $"                    \"lane_id\": \"{snapshot.LaneId}\",\n"
+            + $"                    \"definition_revision\": \"{snapshot.DefinitionRevision}\",\n"
+            + $"                    \"start_branch\": \"{snapshot.StartBranch}\",\n"
+            + $"                    \"pr_base_branch\": \"{snapshot.PrBaseBranch}\",\n"
+            + $"                    \"landing_mode\": \"{snapshot.LandingMode}\"\n"
+            + "                  },\n";
+        return BuildQueueState(executionUnit, state, title, linkedPr)
+            .Replace("\"linked_pr\":", snapshotJson + "                  \"linked_pr\":", StringComparison.Ordinal);
     }
 
     private sealed class GuideReviewWorkspace : IDisposable

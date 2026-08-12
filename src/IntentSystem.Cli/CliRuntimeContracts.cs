@@ -32,6 +32,17 @@ internal static class CliRuntimeContracts
     public const string RetryBudgetKey = "retry_budget";
     public const string PostFixWorktreeProgressPolicyKey = "post_fix_worktree_progress_policy";
     public const string BaseBranchPolicyKey = "base_branch_policy";
+    // G668: named branch-lane registry keys.
+    public const string BranchLanesSectionName = "branch_lanes";
+    public const string BranchLanesDefaultLaneKey = "default_lane";
+    public const string BranchLanesDefinitionRevisionKey = "definition_revision";
+    public const string BranchLanesRevisionKey = "revision";
+    public const string BranchLanesLanesKey = "lanes";
+    public const string BranchLaneIdKey = "id";
+    public const string BranchLaneNameKey = "name";
+    public const string BranchLaneStartBranchKey = "start_branch";
+    public const string BranchLanePrBaseBranchKey = "pr_base_branch";
+    public const string BranchLaneLandingModeKey = "landing_mode";
     public const string DirectMainBaseBranchPolicy = "direct-main";
     public const string MainAiBaseBranchPolicy = "main-ai";
     public const string DefaultBaseBranchPolicy = DirectMainBaseBranchPolicy;

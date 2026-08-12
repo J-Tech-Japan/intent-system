@@ -19,6 +19,12 @@ public sealed record QueueItem
 
     public required PacketPaths PacketPaths { get; init; }
 
+    /// <summary>
+    /// Optional G668 routing projection. Null is the legacy/recovery shape;
+    /// when present it is the immutable routing fact for this queue item.
+    /// </summary>
+    public QueueRoutingSnapshot? RoutingSnapshot { get; init; }
+
     public LinkedIssue? LinkedIssue { get; init; }
 
     [JsonConverter(typeof(LinkedPrJsonConverter))]
