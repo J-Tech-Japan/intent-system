@@ -18,7 +18,7 @@ internal static class GuideOnboardingCommand
     private const string FormatMarkdown = "markdown";
 
     private const string UsageLine =
-        "Usage: intent-cli guide onboarding [--format markdown|json]";
+        "Usage: intent-cli guide onboarding [--role <role>] [--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -32,14 +32,14 @@ internal static class GuideOnboardingCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var format, out var error))
+        if (!TryParseArguments(args, out var role, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
             return 1;
         }
 
-        var result = BuildResult();
+        var result = BuildResult(role);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -55,9 +55,14 @@ internal static class GuideOnboardingCommand
     }
 
     internal static GuideOnboardingResult BuildResult()
+        => BuildResult(role: null);
+
+    internal static GuideOnboardingResult BuildResult(string? role)
     {
         return new GuideOnboardingResult
         {
+            InvokingRole = GuideRoleContractGuidance.Normalize(role),
+            RoleContractFirst = GuideRoleContractGuidance.Resolve(role),
             Summary = "AI-agent onboarding smoke: the first calls a fresh agent should make to learn the collaboration model from intent-cli itself, without reading local skill files or copied rules folders.",
             FirstCallSequence = new[]
             {
@@ -166,7 +171,8 @@ internal static class GuideOnboardingCommand
                 DispatcherSkillCarveOut.Sentence,
                 "Operator acceptance is required before any mutating call (out of scope for this onboarding smoke).",
                 "`intent-target` and `intent-pr-created` label transitions stay behind explicit publish/closeout commands; onboarding never touches labels."
-            }
+            },
+            MeasuredIncident = GuideRoleContractGuidance.MeasuredIncident,
         };
     }
 
@@ -174,7 +180,20 @@ internal static class GuideOnboardingCommand
     {
         writer.WriteLine("# Guide onboarding — zero-local-rules smoke path");
         writer.WriteLine();
+        if (result.RoleContractFirst is { } roleContract)
+        {
+            writer.WriteLine("## Read your role contract first (G672 — preview-through-1.x)");
+            writer.WriteLine();
+            writer.WriteLine($"- role: `{roleContract.Role}`");
+            writer.WriteLine($"- operating guide: `{roleContract.Guide}`");
+            writer.WriteLine($"- {roleContract.Instruction}");
+            writer.WriteLine();
+        }
         writer.WriteLine(result.Summary);
+        writer.WriteLine();
+        writer.WriteLine("## Measured incident record (G672 — preview-through-1.x)");
+        writer.WriteLine();
+        writer.WriteLine(result.MeasuredIncident);
         writer.WriteLine();
 
         writer.WriteLine("## First-call sequence");
@@ -210,8 +229,9 @@ internal static class GuideOnboardingCommand
         }
     }
 
-    private static bool TryParseArguments(string[] args, out string format, out string error)
+    private static bool TryParseArguments(string[] args, out string? role, out string format, out string error)
     {
+        role = null;
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -220,6 +240,17 @@ internal static class GuideOnboardingCommand
             var argument = args[index];
             switch (argument)
             {
+                case "--role":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--role requires a value.";
+                        return false;
+                    }
+
+                    role = args[index + 1].Trim();
+                    index++;
+                    break;
+
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -252,7 +283,7 @@ internal static class GuideOnboardingCommand
     {
         writer.WriteLine("guide onboarding");
         writer.WriteLine(UsageLine);
-        writer.WriteLine("Read-only first-call sequence for an AI agent with no local skill files or copied rules.");
+        writer.WriteLine("Read-only first-call sequence for an AI agent with no local skill files or copied rules. With --role, a role that has an installed operating contract receives that pointer before the sequence; roles without a contract receive no invented instruction.");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -264,8 +295,18 @@ internal static class GuideOnboardingCommand
 
 internal sealed record GuideOnboardingResult
 {
+    [JsonPropertyName("invoking_role")]
+    public string? InvokingRole { get; init; }
+
+    [JsonPropertyName("role_contract_first")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GuideRoleContractPointer? RoleContractFirst { get; init; }
+
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    [JsonPropertyName("measured_incident")]
+    public required string MeasuredIncident { get; init; }
 
     [JsonPropertyName("first_call_sequence")]
     public required IReadOnlyList<GuideOnboardingStep> FirstCallSequence { get; init; }

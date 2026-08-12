@@ -158,8 +158,8 @@ internal static class GuideHelpCommand
         new GuideSubcommandEntry
         {
             Name = "next",
-            Purpose = "Design-side action advisor (G465/G644/G662): recommends one design-side process, checks supervision setup with --domain plus --team, and recommends realignment when no durable improve run falls within the independently declared recency window. Read-only and recency-only; never grades quality, schedules, or auto-executes.",
-            Example = "intent-cli guide next --domain <domain> --team <team> --target-repo <owner/repo> --format markdown"
+            Purpose = "Design-side action advisor (G465/G644/G662/G672): recommends one design-side process, checks supervision setup with --domain plus --team, and recommends realignment when no durable improve run falls within the independently declared recency window. With optional --role, a role that has an installed contract receives its pointer first; roles without a contract receive no invented pointer. Read-only and recency-only; never grades quality, schedules, or auto-executes.",
+            Example = "intent-cli guide next --domain <domain> --team <team> --target-repo <owner/repo> --role design --format markdown"
         },
         new GuideSubcommandEntry
         {
@@ -170,8 +170,8 @@ internal static class GuideHelpCommand
         new GuideSubcommandEntry
         {
             Name = "onboarding",
-            Purpose = "First-call sequence for a fresh agent. Ordered list of guide / automation surfaces to read before any mutation.",
-            Example = "intent-cli guide onboarding --format json"
+            Purpose = "First-call sequence for a fresh agent. With optional --role, a role that has an installed contract receives its pointer before the unchanged ordered list of guide / automation surfaces to read before any mutation.",
+            Example = "intent-cli guide onboarding --role implementation --format json"
         },
         new GuideSubcommandEntry
         {

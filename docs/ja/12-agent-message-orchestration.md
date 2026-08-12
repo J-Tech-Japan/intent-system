@@ -54,6 +54,23 @@ agent kind に依存しない contract は `intent-cli guide design-thread` で�
 内容は `agmsg` / `herdr-only` と team 指定の有無で変わりません。guide を再読するのは
 CLI version または session-layer configuration が変わったときで、wake ごとではありません。
 
+### role contract の precedence（G672 — preview-through-1.x）
+
+`guide next` または `guide onboarding` を `--role` 付きで呼ぶと、contract を持つ role の
+installed operating contract が最初の read-before-acting instruction になります。`design` は
+`intent-cli guide design-thread`、`orchestration` は `intent-cli guide orchestrator-thread`、
+`implementation` は `intent-cli guide worker issue-to-pr`、`review` は `intent-cli guide review` です。
+contract がない role には invented pointer を出しません。これは新しい pointer の順序だけを
+追加し、既存 procedure の削除・reorder、contract text、wake ごとの reread を変更しません。
+CLI version または session-layer configuration の変更後に再読します。
+
+**Measured incident record（attributed field evidence）。** issue #1441 sections D/B-1 の
+operator-filed feedback（remote-herdr、48 units）では、数日間 design seat が自分の contract を読まず、
+rule に反する parallel detector を作り、undeclared bound、default interval、no event mode、
+session-scoped nohup process の二度の unnoticed death を含む supervision を運用し、seven findings が
+mis-filed になったと記録されています。これは incident の記録であり、substantive B-1 question の
+解決ではありません。
+
 design wake の有効な outcome は 4 種類だけです。canonical workflow を進める、新しい実進捗の
 evidence を確認する、次の actionable な design / packet / issue candidate を見つけて provenance
 付きで orchestration に渡す、人間だけが解決できる blocker を報告する、のいずれかです。
@@ -403,6 +420,8 @@ transition key を使うため、同時に観測しても 1 transition / 1 wake 
 owner から design への escalation、recovery の権限、team ごと exactly one supervisor の rule は
 変わらず、event mode は第 2 の standing loop を作りません。実測 evidence は macOS 上の
 `herdr 0.8.0` です。他の herdr version と platform は unverified です。
+concrete な wake-source flag は `--event-mode` で、対応する herdr observation は
+`pane.agent_status_changed`（normative SECOND wake source）です。
 
 G659 が hand-written transition watcher に取って代わるのは operator が event mode を採用
 した場合だけです。intent-cli は watcher の探索、強制終了、強制置換を行いません。G658 scheduler artifact は

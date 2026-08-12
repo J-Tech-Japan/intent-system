@@ -116,6 +116,8 @@ internal static class HerdrOnlyOperatingGuide
         1. **Canonical notify report (primary and most informative):** the receiver's embedded `intent-cli notify report` carries task id, status, artifact, and summary directly to orchestration, but it depends on the worker cooperating and running its required final command.
         2. **Observed agent state change (normative SECOND wake source):** independently subscribe to herdr `pane.agent_status_changed` for every watched role. This depends only on herdr observing the agent process, so it still wakes orchestration when a worker omits its report; the event carries no task outcome.
 
+        The concrete invocation for this second source is `intent-cli notify supervise --domain <domain> --team <team> --event-mode`. `--event-mode` keeps the blocking per-seat herdr wait inside the supervisor process and re-arms it after failure; the independent interval cycle remains the safety floor and event mode does not turn a state change into an outcome.
+
         For the socket API measured on herdr 0.8.0, call `events.subscribe` with one subscription entry per watched pane because `pane.agent_status_changed` requires `pane_id`:
 
         ```json
@@ -229,6 +231,8 @@ internal static class HerdrOnlyOperatingGuide
             ["state_change"] = new JsonObject
             {
                 ["role"] = "Normative SECOND wake source; depends only on herdr observation and carries no outcome.",
+                ["flag"] = "--event-mode",
+                ["invocation"] = "intent-cli notify supervise --domain <domain> --team <team> --event-mode",
                 ["measured_version"] = "herdr 0.8.0",
                 ["method"] = "events.subscribe",
                 ["subscription"] = "{\"type\":\"pane.agent_status_changed\",\"pane_id\":\"<resolved-pane-id>\"}",
