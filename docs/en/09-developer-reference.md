@@ -2628,7 +2628,7 @@ literal:
 ```
 
 The shape is written with placeholders on purpose: **read the actual values from
-`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0190)
+`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0191)
 for the line currently being cut. A worked example here would be a second copy
 of the version pair that goes stale on the next roll — the defect G557/G560
 exist to remove.
@@ -2721,34 +2721,33 @@ For the same reason the version-flow example above uses placeholders rather than
 a worked version pair: a second copy of the current versions is a second thing
 to keep in sync, and it goes stale on exactly the roll nobody is watching.
 
-### Next release readiness (v0.19.0)
+### Next release readiness (v0.19.1)
 
-**`v0.18.0` shipped** (GitHub Release + NuGet), and the next prepared line is
-`0.19.0`. [The v0.19.0 notes](release-notes-v0.19.0.md) are the real
-prepare-only release candidate for exactly G666–G676. See
-[release-notes-v0.18.0.md](release-notes-v0.18.0.md) for the preceding shipped
-scope; it is linked, not restated.
+**`v0.19.0` shipped** (GitHub Release + NuGet), and the next prepared line is
+`0.19.1`. [The v0.19.1 notes stub](release-notes-v0.19.1.md) is the required
+prepare-only placeholder. See [release-notes-v0.19.0.md](release-notes-v0.19.0.md)
+for the preceding shipped scope; it is linked, not restated.
 
-**Release-readiness verification (run before merging the `v0.19.0`
+**Release-readiness verification (run before merging the `v0.19.1`
 release-preparation PR):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.18.0 (published), nextVersion 0.19.0 (to release)
+cat eng/version.json   # stableVersion 0.19.0 (published), nextVersion 0.19.1 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.19.0-<sha>-G<unit>   (NOT a stale literal)
+#   expected shape: intent-cli 0.19.1-<sha>-G<unit>   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.19.0.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.19.1.nupkg
 
 # 4. Confirm G475, the shipped release-note checks, and the release/version guards.
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
-  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 
 # 5. Run the complete Release suite.
 dotnet test IntentSystem.sln -c Release
@@ -2757,10 +2756,10 @@ dotnet test IntentSystem.sln -c Release
 After the preparation merge lands on `main` and the readiness evidence holds,
 the operator must explicitly approve Release creation. Only then may a
 maintainer/operator (or authorized external release automation) create and
-publish the GitHub Release for `v0.19.0`; publishing it triggers `release.yml`
+publish the GitHub Release for `v0.19.1`; publishing it triggers `release.yml`
 (`on: release: published`) to build and publish the NuGet package and the
 per-platform binary artifacts. **Then roll `eng/version.json` immediately** —
-`stableVersion → 0.19.0`, `nextVersion → 0.19.1` — carrying, per **steps 4–6** of the
+`stableVersion → 0.19.1`, `nextVersion → 0.19.2` — carrying, per **steps 4–6** of the
 [post-release version roll](#post-release-version-roll-g554--required-immediate):
 the **DRAFT note stubs in the same commit** (step 4), the **"Next release
 readiness" section refreshed to the new line in both language mirrors** (step
