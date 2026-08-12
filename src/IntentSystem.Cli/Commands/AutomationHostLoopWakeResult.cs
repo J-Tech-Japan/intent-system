@@ -125,6 +125,38 @@ internal sealed record AutomationHostLoopWakeResult
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    /// <summary>G673: preserve the named GitHub availability state from the
+    /// delegated host-loop-next-action surface.</summary>
+    [JsonPropertyName("github_api_status")]
+    public string GithubApiStatus { get; init; } = GitHubApiQuotaConstants.Healthy;
+
+    [JsonPropertyName("degraded")]
+    public bool Degraded { get; init; }
+
+    [JsonPropertyName("cause")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Cause { get; init; }
+
+    [JsonPropertyName("degraded_state")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GitHubApiDegradedState? DegradedState { get; init; }
+
+    [JsonPropertyName("resource")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Resource => DegradedState?.Resource;
+
+    [JsonPropertyName("remaining")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Remaining => DegradedState?.Remaining;
+
+    [JsonPropertyName("reset")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Reset => DegradedState?.Reset;
+
+    [JsonPropertyName("reset_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResetAt => DegradedState?.ResetAt;
 }
 
 internal static class AutomationHostLoopWakeModes

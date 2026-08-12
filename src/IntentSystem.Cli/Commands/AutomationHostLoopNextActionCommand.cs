@@ -161,6 +161,21 @@ internal static class AutomationHostLoopNextActionCommand
             openPrs = lister.ListPullRequests(parsed.Repo, requiredLabels: Array.Empty<string>());
             openIssues = lister.ListIssues(parsed.Repo, requiredLabels: Array.Empty<string>());
         }
+        catch (GitHubApiRequestException exception)
+        {
+            var degraded = BuildGitHubUnavailableResult(parsed.Repo, parsed.Domain, exception);
+            if (string.Equals(parsed.Format, FormatJson, StringComparison.Ordinal))
+            {
+                writer.Write(JsonSerializer.Serialize(degraded, JsonOptions));
+                writer.WriteLine();
+            }
+            else
+            {
+                WriteMarkdown(writer, degraded);
+            }
+
+            return exception.IsQuotaDegraded ? 0 : 1;
+        }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
             writer.WriteLine($"failed to list automation candidates for {parsed.Repo}: {exception.Message}");
@@ -395,6 +410,38 @@ internal static class AutomationHostLoopNextActionCommand
         }
         return 0;
     }
+
+    private static HostLoopNextActionEmittedResult BuildGitHubUnavailableResult(
+        string repo,
+        string? domain,
+        GitHubApiRequestException exception) =>
+        new()
+        {
+            Repo = repo,
+            Domain = domain,
+            Classification = exception.IsQuotaDegraded
+                ? GitHubApiQuotaConstants.DetectionUnavailableCause
+                : "github-api-error",
+            MutationAllowed = false,
+            RecommendedCommand = null,
+            CandidateExecutionUnit = null,
+            Evidence = new[]
+            {
+                $"cause={exception.Cause}; operation={exception.Operation}; message={exception.Message}",
+                exception.DegradedState is { } state
+                    ? $"resource={state.Resource}; remaining={state.Remaining?.ToString() ?? "unknown"}; reset_at={state.ResetAt ?? state.Reset?.ToString() ?? "unknown"}"
+                    : "No quota state was observed; this is not classified as quota exhaustion.",
+            },
+            Summary = exception.IsQuotaDegraded
+                ? "GitHub-backed host-loop detection is unavailable because a named API quota is exhausted; no host mutation is recommended."
+                : $"GitHub-backed host-loop detection failed with non-quota cause '{exception.Cause}'.",
+            Degraded = exception.IsQuotaDegraded,
+            GithubApiStatus = exception.IsQuotaDegraded
+                ? GitHubApiQuotaConstants.Degraded
+                : GitHubApiQuotaConstants.Error,
+            Cause = exception.Cause,
+            DegradedState = exception.DegradedState,
+        };
 
     /// <summary>
     /// G365: structured emission for the
@@ -815,4 +862,26 @@ internal sealed record HostLoopNextActionEmittedResult
 
     [JsonPropertyName("evidence")] public required IReadOnlyList<string> Evidence { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
+
+    /// <summary>G673: structured upstream GitHub availability.</summary>
+    [JsonPropertyName("github_api_status")] public string GithubApiStatus { get; init; } = GitHubApiQuotaConstants.Healthy;
+    [JsonPropertyName("degraded")] public bool Degraded { get; init; }
+    [JsonPropertyName("cause")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Cause { get; init; }
+    [JsonPropertyName("degraded_state")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GitHubApiDegradedState? DegradedState { get; init; }
+    [JsonPropertyName("resource")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Resource => DegradedState?.Resource;
+    [JsonPropertyName("remaining")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Remaining => DegradedState?.Remaining;
+    [JsonPropertyName("reset")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Reset => DegradedState?.Reset;
+    [JsonPropertyName("reset_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResetAt => DegradedState?.ResetAt;
 }

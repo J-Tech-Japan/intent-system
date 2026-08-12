@@ -71,6 +71,22 @@ session-scoped nohup process の二度の unnoticed death を含む supervision 
 mis-filed になったと記録されています。これは incident の記録であり、substantive B-1 question の
 解決ではありません。
 
+### GitHub quota を named な last-net blind spot として扱う（G673 — preview-through-1.x）
+
+periodic な `automation stalled-work` check は引き続き last net であり、wake / supervision
+class は変更しません。GitHub API quota failure は healthy な empty result ではありません。
+影響した surface は `cause: github-api-quota-exhausted`、exhausted な `resource`、その
+`reset` / `reset_at` を出力します。`automation heartbeat` と `stalled-work` は
+`detection_available: false` を返し、`stalled-work` は local-only findings を
+`partial: true` で保持します。reset を記録し、wait するかどうかは orchestration が
+意図的に判断します。この slice は automatic retry、sleep、reset scheduling、request budgeting、
+transport migration、cache を追加しません。
+
+これは attribution を分けた measured incident record です。issue #1442 は remote-herdr の
+measurement（`graphql.remaining == 0`、5,046 requests/hour）であり、この host が同日 G667
+publish cycle で GraphQL refusal（REST core は 4999/5000）を観測したことは host corroboration
+です。#1442 の再帰属ではありません。
+
 design wake の有効な outcome は 4 種類だけです。canonical workflow を進める、新しい実進捗の
 evidence を確認する、次の actionable な design / packet / issue candidate を見つけて provenance
 付きで orchestration に渡す、人間だけが解決できる blocker を報告する、のいずれかです。

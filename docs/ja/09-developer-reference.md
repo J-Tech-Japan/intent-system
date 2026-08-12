@@ -288,6 +288,20 @@ queue-state、`runs.jsonl` を変更することは一切ありません — inf
 な kind も、それが推奨する status check を自分で送ることはありません。
 それは人間/orchestrator の行動として残ります。
 
+#### G673 degraded GitHub detection
+
+GitHub read が失敗し、structured な `gh api rate_limit` observation が query の resource exhaustion
+を示した場合、result は `cause: github-api-quota-exhausted` と、`degraded_state.resource`、
+`degraded_state.remaining`、`degraded_state.reset` / `reset_at` を持ちます。これは成功した
+`action: none` / empty scan と、`github-command-failed`、`github-auth-failed`、
+`github-json-invalid` とを区別します。
+
+named state を観測した後、scanner は GitHub-derived lane を追加で読まず、local collector は継続します。
+result は `partial: true`、`detection_available: false`、`detection_status: unavailable` を持ち、
+保持した local item にも `partial: true` を付けます。partial な空 scan を healthy verdict に変換しては
+いけません。command は retry、sleep、reset scheduling、request budget、transport change、cache、
+batching を行いません。
+
 すべての item は `is_informational`（`bool`）を持ち、2 つのグループを
 区別します:
 

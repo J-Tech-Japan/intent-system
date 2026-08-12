@@ -301,6 +301,22 @@ queue-state by hand. It never mutates GitHub labels, queue-state, or
 `runs.jsonl` — and an informational kind never sends the status-check it
 recommends; that remains a human/orchestrator action.
 
+#### G673 degraded GitHub detection
+
+When a GitHub read fails and the structured `gh api rate_limit` observation
+shows the query's resource exhausted, the result carries
+`cause: github-api-quota-exhausted` plus `degraded_state.resource`,
+`degraded_state.remaining`, and `degraded_state.reset`/`reset_at`. This is
+distinct from `action: none` / an empty successful scan and from
+`github-command-failed`, `github-auth-failed`, or `github-json-invalid`.
+
+The scanner skips further GitHub-derived lanes after the named observation but
+continues local collectors. Its result has `partial: true`,
+`detection_available: false`, `detection_status: unavailable`, and marks each
+retained local item `partial: true`. Consumers must not turn an empty partial
+scan into a healthy verdict. The command does not retry, sleep, schedule the
+reset, budget requests, change transport, cache, or batch.
+
 Every item carries `is_informational` (`bool`) distinguishing two families:
 
 **Actionable categories** (`is_informational: false` — `recommended_action`
