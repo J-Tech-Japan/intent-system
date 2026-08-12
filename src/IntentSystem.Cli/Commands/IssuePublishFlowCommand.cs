@@ -122,15 +122,13 @@ internal static class IssuePublishFlowCommand
 
         var githubBodyPresent = File.Exists(githubBodyPath);
         var githubBody = githubBodyPresent ? File.ReadAllText(githubBodyPath) : null;
-        var validation = githubBody is null
-            ? null
-            : IssueValidateBodyValidator.Validate(githubBodyPath, githubBody);
-        IReadOnlyList<string> missing = validation is null
-            ? PacketDraftCommand.RequiredContractSections
-            : validation.MissingHeadings
-                .Concat(validation.RelatedLinksInvalid ? ["Related Links"] : Array.Empty<string>())
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
+        // G670: this is the exact publish-gate readiness judgment consumed by
+        // next-slice and stalled-work. Keep the validator and its named cause
+        // in one shared result so no consumer can drift into a parallel
+        // placeholder heuristic.
+        var publishGateReadiness = NextSliceReadinessEvaluator.EvaluatePublishGate(
+            executionUnit!, githubBodyPath, githubBody);
+        var missing = publishGateReadiness.MissingContractSections;
 
         // G290: prefer `packet.yaml` `title:` over the body H1 fallback so a
         // packet with valid metadata never publishes as `<id> (untitled)`.
@@ -154,9 +152,7 @@ internal static class IssuePublishFlowCommand
         // contract-completeness verdict so a candidate publish-flow rejects is
         // exactly one that next-slice / packet-draft / diagnostics will not
         // report issue-cut-ready. ContractComplete requires the body present AND
-        // no missing required sections.
-        var contractComplete = githubBodyPresent && validation?.IsValid == true;
-        if (!NextSliceReadinessEvaluator.IsPublishable(executionUnit!, contractComplete))
+        if (!publishGateReadiness.Judgment.IssueCutReady)
         {
             var validationResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
                 packetExists: true,

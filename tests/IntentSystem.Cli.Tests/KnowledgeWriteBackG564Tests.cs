@@ -186,6 +186,68 @@ public sealed class KnowledgeWriteBackG564Tests : IDisposable
     }
 
     [Fact]
+    public void G670ReadinessExclusionIsReconciledWhenKnowledgeCollectorFindsALaterExclusion_G564()
+    {
+        // G670 runs before G564. A placeholder packet may initially add its
+        // named backlog-ready-idle exclusion, but that preview is not the
+        // sole explanation once the later knowledge collector finds its
+        // official unreadable-metadata exclusion.
+        using var workspace = new WriteBackWorkspace();
+        var bindingsPath = Path.Combine(workspace.RootPath, "intents", "intent-cli", "automation", "bindings.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(bindingsPath)!);
+        File.WriteAllText(bindingsPath, "---\nexecution_unit_regex: '.*'\n---\n");
+        Assert.Equal(0, PacketDraftCommand.Execute(
+            workspace.Context,
+            ["--execution-unit", "G670", "--target-repo", Repo],
+            TextWriter.Null));
+
+        workspace.WritePacket("G564", """
+            implementation_issue_packet:
+              source_execution_unit: G564
+              domain: intent-cli
+            knowledge_updates:
+              intent_tree:
+                required: yes-please
+                target_paths: []
+            """);
+        workspace.WriteCloseout("G564", FixedNow.AddMinutes(-120));
+        File.WriteAllText(workspace.Context.GetQueueStatePath(), """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-08-15T12:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G670",
+                  "title": "G670 title",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {
+                    "implementation": ".intent-cli/issues/G670/implementation.md",
+                    "review_context": ".intent-cli/issues/G670/review-context.md",
+                    "yaml": ".intent-cli/issues/G670/packet.yaml"
+                  },
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        var result = workspace.RunStalledWorkResult();
+        Assert.DoesNotContain(
+            result.GetProperty("excluded").EnumerateArray(),
+            exclusion => exclusion.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle
+                && exclusion.GetProperty("reason").GetString() == NextSliceReadinessClass.ContractIncomplete);
+        var knowledgeExclusion = Assert.Single(
+            result.GetProperty("excluded").EnumerateArray(),
+            exclusion => exclusion.GetProperty("reason").GetString() == AutomationStalledWorkCommand.ReasonKnowledgeMetadataUnreadable);
+        Assert.Equal(AutomationStalledWorkCommand.KindKnowledgeWritebackPending, knowledgeExclusion.GetProperty("kind").GetString());
+    }
+
+    [Fact]
     public void AnUnreadableRecord_IsExcludedWithItsPath_NotCountedAsCleared_G564()
     {
         using var workspace = new WriteBackWorkspace();

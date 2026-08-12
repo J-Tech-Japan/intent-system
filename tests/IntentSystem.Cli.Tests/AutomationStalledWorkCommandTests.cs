@@ -2828,6 +2828,201 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G670_BacklogReadyIdleNamesPublishGateExclusionAndReentersWhenFilled()
+    {
+        // G670: use the real packet scaffold so the fixture exercises the
+        // publish gate's placeholder-only Related Links refusal rather than
+        // duplicating a placeholder detector in this test.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(
+            "intents/intent-cli/automation/bindings.md",
+            "---\nexecution_unit_regex: '.*'\n---\n");
+        Assert.Equal(0, PacketDraftCommand.Execute(
+            workspace.Context,
+            ["--execution-unit", "G670", "--target-repo", "J-Tech-Japan/intent-system"],
+            TextWriter.Null));
+        workspace.WriteQueueState(BuildReadyQueueStateJson("G670"));
+        workspace.WriteFile(".intent-cli/runs.jsonl", BuildRunsLogLine("G669", FixedNow.AddMinutes(-100)));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using (var publishWriter = new StringWriter())
+        {
+            var publishExitCode = IssuePublishFlowCommand.Execute(
+                workspace.Context,
+                ["G670", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+                publishWriter);
+            Assert.Equal(1, publishExitCode);
+            using var publishResult = JsonDocument.Parse(publishWriter.ToString());
+            Assert.Contains(
+                "Related Links",
+                publishResult.RootElement.GetProperty("error").GetString()!,
+                StringComparison.Ordinal);
+        }
+
+        JsonDocument Scan()
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationStalledWorkCommand.Execute(
+                workspace.Context,
+                ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+                writer);
+            Assert.Equal(0, exitCode);
+            return JsonDocument.Parse(writer.ToString());
+        }
+
+        using (var blank = Scan())
+        {
+            Assert.False(blank.RootElement.GetProperty("stalled").GetBoolean());
+            Assert.DoesNotContain(
+                blank.RootElement.GetProperty("items").EnumerateArray(),
+                item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle);
+            var excluded = Assert.Single(
+                blank.RootElement.GetProperty("excluded").EnumerateArray(),
+                item => item.GetProperty("execution_unit").GetString() == "G670");
+            Assert.Equal(NextSliceReadinessClass.ContractIncomplete, excluded.GetProperty("reason").GetString());
+            var detail = excluded.GetProperty("detail").GetString()!;
+            Assert.Contains("shared publish gate", detail, StringComparison.Ordinal);
+            Assert.Contains("Related Links", detail, StringComparison.Ordinal);
+            Assert.Contains("no publish action", detail, StringComparison.Ordinal);
+        }
+
+        workspace.WriteFile(
+            ".intent-cli/issues/G670/github-body.md",
+            BuildCompleteContractBody());
+
+        using var filled = Scan();
+        var item = Assert.Single(
+            filled.RootElement.GetProperty("items").EnumerateArray(),
+            candidate => candidate.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle);
+        Assert.Equal("G670", item.GetProperty("execution_unit").GetString());
+        Assert.DoesNotContain(
+            filled.RootElement.GetProperty("excluded").EnumerateArray(),
+            exclusion => exclusion.GetProperty("execution_unit").GetString() == "G670");
+    }
+
+    [Fact]
+    public void Execute_G670_DoesNotProjectExclusionWhenClarificationBlocksBacklogLane()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(
+            "intents/intent-cli/automation/bindings.md",
+            "---\nexecution_unit_regex: '.*'\n---\n");
+        Assert.Equal(0, PacketDraftCommand.Execute(
+            workspace.Context,
+            ["--execution-unit", "G670", "--target-repo", "J-Tech-Japan/intent-system"],
+            TextWriter.Null));
+        workspace.WriteQueueState(BuildReadyQueueStateJson("G670"));
+        workspace.WriteFile(".intent-cli/runs.jsonl", BuildRunsLogLine("G669", FixedNow.AddMinutes(-100)));
+        workspace.WriteFile(
+            "intents/intent-cli/clarifications/open.md",
+            "## Open Questions\n\n- [ ] Design must decide whether this lane may proceed.\n");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.DoesNotContain(
+            doc.RootElement.GetProperty("excluded").EnumerateArray(),
+            exclusion => exclusion.GetProperty("reason").GetString() == NextSliceReadinessClass.ContractIncomplete);
+        Assert.DoesNotContain(
+            doc.RootElement.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle);
+    }
+
+    [Fact]
+    public void Execute_G670_DoesNotProjectExclusionDuringMergedCloseoutLane()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(
+            "intents/intent-cli/automation/bindings.md",
+            "---\nexecution_unit_regex: '.*'\n---\n");
+        Assert.Equal(0, PacketDraftCommand.Execute(
+            workspace.Context,
+            ["--execution-unit", "G670", "--target-repo", "J-Tech-Japan/intent-system"],
+            TextWriter.Null));
+        workspace.WritePacketDomain("G500", "intent-cli");
+        workspace.WriteQueueState(BuildQueueStateJson(
+            BuildQueueItem(
+                "G500",
+                QueueItemState.Review,
+                "https://github.com/J-Tech-Japan/intent-system/pull/1200",
+                1199),
+            BuildQueueItem("G670", QueueItemState.Queued, string.Empty, null)));
+        workspace.WriteFile(".intent-cli/runs.jsonl", BuildRunsLogLine("G669", FixedNow.AddMinutes(-100)));
+        var mergedPr = BuildPr(
+            1200,
+            "G500: Some merged change",
+            FixedNow.AddHours(-3),
+            state: "MERGED",
+            closingIssueNumber: 1199);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Contains(
+            doc.RootElement.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindMergedNotClosedOut);
+        Assert.DoesNotContain(
+            doc.RootElement.GetProperty("excluded").EnumerateArray(),
+            exclusion => exclusion.GetProperty("execution_unit").GetString() == "G670");
+    }
+
+    [Fact]
+    public void Execute_G670_DoesNotProjectExclusionAfterDomainContradiction()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(
+            "intents/intent-cli/automation/bindings.md",
+            "---\nexecution_unit_regex: '.*'\n---\n");
+        Assert.Equal(0, PacketDraftCommand.Execute(
+            workspace.Context,
+            ["--execution-unit", "G670", "--target-repo", "J-Tech-Japan/intent-system"],
+            TextWriter.Null));
+        workspace.WritePacketDomain("SKS-G700", "sekiban-as-a-service");
+        workspace.WriteQueueState(BuildQueueStateJson(
+            BuildQueueItem(
+                "SKS-G700",
+                QueueItemState.Review,
+                "https://github.com/J-Tech-Japan/intent-system/pull/1300",
+                1299),
+            BuildQueueItem("G670", QueueItemState.Queued, string.Empty, null)));
+        workspace.WriteFile(".intent-cli/runs.jsonl", BuildRunsLogLine("G669", FixedNow.AddMinutes(-100)));
+        var mergedPr = BuildPr(
+            1300,
+            "SKS-G700: Some other domain's merged change",
+            FixedNow.AddHours(-3),
+            state: "MERGED",
+            closingIssueNumber: 1299);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Contains(
+            doc.RootElement.GetProperty("excluded").EnumerateArray(),
+            exclusion => exclusion.GetProperty("reason").GetString() == PacketDomainResolution.ReasonContradiction);
+        Assert.DoesNotContain(
+            doc.RootElement.GetProperty("excluded").EnumerateArray(),
+            exclusion => exclusion.GetProperty("execution_unit").GetString() == "G670");
+    }
+
+    [Fact]
     public void Execute_BacklogReadyIdle_DoesNotFire_WithEmptyBacklog()
     {
         // No queue-state at all, no open issues/PRs -- genuinely idle, not

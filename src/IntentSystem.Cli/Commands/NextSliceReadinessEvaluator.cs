@@ -35,6 +35,67 @@ namespace IntentSystem.Cli.Commands;
 internal static class NextSliceReadinessEvaluator
 {
     /// <summary>
+    /// G670: evaluate the exact contract readiness judgment used by
+    /// <c>issue publish-flow</c>. Consumers that decide whether a packet is
+    /// ready must use this result instead of reconstructing placeholder or
+    /// incomplete-content rules beside the publish gate.
+    /// </summary>
+    public static NextSlicePublishGateReadiness EvaluatePublishGate(
+        string candidateExecutionUnit,
+        string sourcePath,
+        string? githubBody)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(candidateExecutionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+
+        var validation = githubBody is null
+            ? null
+            : IssueValidateBodyValidator.Validate(sourcePath, githubBody);
+        var missing = validation is null
+            ? PublishContractSections.Required
+            : validation.MissingHeadings
+                .Concat(validation.RelatedLinksInvalid ? ["Related Links"] : Array.Empty<string>())
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+
+        var failureDetails = new List<string>();
+        if (githubBody is null)
+        {
+            failureDetails.Add("github-body.md is missing");
+        }
+        else
+        {
+            if (validation is not null && validation.MissingHeadings.Count > 0)
+            {
+                failureDetails.Add(
+                    $"missing required section(s): {string.Join(", ", validation.MissingHeadings)}");
+            }
+
+            if (validation?.RelatedLinksInvalid == true)
+            {
+                failureDetails.Add(validation.RelatedLinksReason ?? "Related Links is placeholder-only or invalid");
+            }
+        }
+
+        var judgment = Evaluate(new NextSliceReadinessInput
+        {
+            HasCandidate = true,
+            CandidateExecutionUnit = candidateExecutionUnit,
+            ContractComplete = githubBody is not null && validation?.IsValid == true,
+            MissingContractSections = missing,
+            ContractFailureReason = failureDetails.Count == 0
+                ? null
+                : string.Join("; ", failureDetails),
+        });
+
+        return new NextSlicePublishGateReadiness
+        {
+            Judgment = judgment,
+            MissingContractSections = missing,
+        };
+    }
+
+    /// <summary>
     /// G449: shared adapter every publish-readiness surface calls for the
     /// contract-completeness gate (intent next-slice, packet draft validation,
     /// issue publish-flow, host-review diagnostics). Returns true only when the
@@ -85,11 +146,14 @@ internal static class NextSliceReadinessEvaluator
             var missing = input.MissingContractSections.Count > 0
                 ? input.MissingContractSections
                 : new[] { "one or more required contract sections are missing" };
+            var reason = string.IsNullOrWhiteSpace(input.ContractFailureReason)
+                ? string.Empty
+                : $" Cause: {input.ContractFailureReason}.";
             return new NextSliceReadinessResult
             {
                 ReadinessClass = NextSliceReadinessClass.ContractIncomplete,
                 ExecutionUnit = unit,
-                Reason = $"candidate '{unit ?? "<unknown>"}' has an incomplete issue/packet contract; publish-flow would reject it.",
+                Reason = $"candidate '{unit ?? "<unknown>"}' has an incomplete issue/packet contract; publish-flow would reject it.{reason}",
                 Evidence = missing.Select(section => $"missing/invalid contract: {section}").ToArray(),
             };
         }
@@ -181,11 +245,25 @@ internal sealed record NextSliceReadinessInput
     /// <summary>Names of missing/invalid contract sections (evidence only).</summary>
     public IReadOnlyList<string> MissingContractSections { get; init; } = Array.Empty<string>();
 
+    /// <summary>
+    /// G670: the publish gate's named refusal cause. This is evidence for the
+    /// shared judgment, not a second placeholder heuristic.
+    /// </summary>
+    public string? ContractFailureReason { get; init; }
+
     public bool OpenHardClarification { get; init; }
     public string? ClarificationSummary { get; init; }
 
     /// <summary>An existing open GitHub issue/PR for the candidate, if any.</summary>
     public NextSliceExistingReference? ExistingGitHubReference { get; init; }
+}
+
+/// <summary>G670: the shared publish-gate verdict plus its named missing-content evidence.</summary>
+internal sealed record NextSlicePublishGateReadiness
+{
+    public required NextSliceReadinessResult Judgment { get; init; }
+
+    public required IReadOnlyList<string> MissingContractSections { get; init; }
 }
 
 /// <summary>

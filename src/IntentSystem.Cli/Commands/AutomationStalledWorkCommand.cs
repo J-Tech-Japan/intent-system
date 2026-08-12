@@ -608,6 +608,13 @@ internal static class AutomationStalledWorkCommand
 
         var operatorAttention = CollectOperatorAttention(context, domain, now, items);
 
+        // G670: knowledge/guide/operator collectors intentionally run after
+        // backlog-ready-idle. Reconcile only the exact G670 preview records
+        // once every official collector has contributed, so a later item or
+        // exclusion cannot leave a placeholder explanation alongside the
+        // actual stalled-work finding.
+        ReconcileG670ContractIncompleteExclusions(items, excluded);
+
         var filtered = items
             // G596: explicit human obligations and unreadable human-obligation
             // state are load-bearing immediately; they do not wait for the
@@ -646,6 +653,42 @@ internal static class AutomationStalledWorkCommand
                 : operatorAttention.Error,
         };
     }
+
+    /// <summary>
+    /// G670: keeps a backlog-ready-idle contract-incomplete exclusion only
+    /// when it is the sole explanation/action lane. The detail-shape check is
+    /// deliberate: <see cref="KindBacklogReadyIdle"/> and the shared reason
+    /// are existing public fields, so the source wording distinguishes this
+    /// preview from any future contract-incomplete exclusion using the same
+    /// kind/reason pair for another purpose.
+    /// </summary>
+    private static void ReconcileG670ContractIncompleteExclusions(
+        List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded)
+    {
+        if (!excluded.Any(IsG670ContractIncompleteExclusion))
+        {
+            return;
+        }
+
+        var hasOtherItem = items.Count > 0;
+        var hasOtherExclusion = excluded.Any(candidate => !IsG670ContractIncompleteExclusion(candidate));
+        if (!hasOtherItem && !hasOtherExclusion)
+        {
+            return;
+        }
+
+        excluded.RemoveAll(IsG670ContractIncompleteExclusion);
+    }
+
+    private static bool IsG670ContractIncompleteExclusion(StalledWorkExcluded candidate) =>
+        string.Equals(candidate.Kind, KindBacklogReadyIdle, StringComparison.Ordinal)
+        && string.Equals(candidate.Reason, NextSliceReadinessClass.ContractIncomplete, StringComparison.Ordinal)
+        && !string.IsNullOrWhiteSpace(candidate.ExecutionUnit)
+        && candidate.Detail.Contains(
+            "was excluded from backlog-ready-idle candidacy by the shared publish gate:",
+            StringComparison.Ordinal)
+        && candidate.Detail.Contains("no publish action is emitted for this unit.", StringComparison.Ordinal);
 
     private static OperatorAttentionReadResult CollectOperatorAttention(
         CliContext context,
@@ -2325,6 +2368,13 @@ internal static class AutomationStalledWorkCommand
             return;
         }
 
+        // Keep the pre-existing item/exclusion counts separate from G574's
+        // own blocked-state diagnostics. They are consulted only by the
+        // incomplete-candidate G670 preview branch below; the publishable
+        // G544 flow remains independent of unrelated collector evidence.
+        var itemsBeforeBacklogBlockedState = items.Count;
+        var exclusionsBeforeBacklogBlockedState = excluded.Count;
+
         // G574: inspect the two-field blocked representation before asking
         // next-slice for a publishable candidate. The selector's fallback can
         // surface state=blocked packets, while the reverse half-converged
@@ -2353,6 +2403,87 @@ internal static class AutomationStalledWorkCommand
             return;
         }
 
+        // G670: only an incomplete candidate is a readiness-preview lane.
+        // Keep its evidence subject to the existing G544 eligibility gates;
+        // notably, G574 diagnostics created above are not part of the
+        // pre-existing snapshots, so a later eligible unit keeps its G544
+        // behavior.
+        if (nextSlice.Candidate is { PublishGateReady: false } incompleteCandidate
+            && nextSlice.ReadinessExclusions.Count > 0)
+        {
+            if (itemsBeforeBacklogBlockedState > 0
+                || exclusionsBeforeBacklogBlockedState > 0
+                || nextSlice.Wip.Count > 0
+                || nextSlice.ClarificationOpen)
+            {
+                return;
+            }
+
+            var incompleteExecutionUnit = incompleteCandidate.ExecutionUnit;
+            if (nonPublishableUnits.Contains(incompleteExecutionUnit))
+            {
+                return;
+            }
+
+            // An incomplete packet is not a publishable G544 candidate, so
+            // runs.jsonl is only an eligibility probe for the named G670
+            // exclusion. Missing, malformed, empty, or young evidence is
+            // deliberately silent; the activity-data-unusable diagnostic
+            // belongs to the original publishable-candidate flow below.
+            var incompleteRunLogPath = context.GetRunLogPath();
+            if (!File.Exists(incompleteRunLogPath))
+            {
+                return;
+            }
+
+            DateTimeOffset? incompleteLastActivity = null;
+            try
+            {
+                foreach (var runEvent in RunLogSerializer.DeserializeAll(File.ReadAllText(incompleteRunLogPath)))
+                {
+                    if (incompleteLastActivity is null || runEvent.Ts > incompleteLastActivity.Value)
+                    {
+                        incompleteLastActivity = runEvent.Ts;
+                    }
+                }
+            }
+            catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException)
+            {
+                return;
+            }
+
+            if (incompleteLastActivity is null)
+            {
+                return;
+            }
+
+            var incompleteIdleMinutes = ComputeAgeMinutesFromInstant(
+                ClampToNow(incompleteLastActivity.Value, now),
+                now);
+            if (incompleteIdleMinutes < backlogIdleMinutes)
+            {
+                return;
+            }
+
+            foreach (var exclusion in nextSlice.ReadinessExclusions)
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindBacklogReadyIdle,
+                    ExecutionUnit = exclusion.ExecutionUnit,
+                    Issue = null,
+                    Pr = null,
+                    Reason = NextSliceReadinessClass.ContractIncomplete,
+                    Detail = $"packet '{exclusion.ExecutionUnit}' was excluded from backlog-ready-idle candidacy by the shared publish gate: {exclusion.Cause}; no publish action is emitted for this unit.",
+                });
+            }
+
+            return;
+        }
+
+        // G544: preserve the original publishable-candidate flow. Its
+        // activity-data-unusable exclusions and its tolerance of unrelated
+        // domain collectors are intentionally unchanged.
         if (nextSlice.Candidate is null
             || !string.Equals(nextSlice.RecommendedOutcome, NextSliceReadinessClass.IssueCutReady, StringComparison.Ordinal))
         {

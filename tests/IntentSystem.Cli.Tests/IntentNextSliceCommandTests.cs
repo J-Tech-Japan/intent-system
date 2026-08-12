@@ -3788,7 +3788,67 @@ public sealed class IntentNextSliceCommandTests
         var candidate = result.RootElement.GetProperty("candidate");
         Assert.False(candidate.GetProperty("publish_gate_ready").GetBoolean());
         Assert.Contains("Related Links", candidate.GetProperty("not_ready_reason").GetString()!, StringComparison.Ordinal);
-        Assert.Contains("Related Links", candidate.GetProperty("missing_contract_sections").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            "Related Links",
+            candidate.GetProperty("missing_contract_sections").EnumerateArray().Select(item => item.GetString()));
+        var notes = result.RootElement.GetProperty("notes").EnumerateArray().Select(item => item.GetString()!).ToArray();
+        Assert.Contains(notes, note => note.Contains("G661", StringComparison.Ordinal) || note.Contains("packet 'G661'", StringComparison.Ordinal));
+        Assert.Contains(notes, note => note.Contains("Related Links", StringComparison.Ordinal));
+        Assert.Contains(notes, note => note.Contains("shared publish gate", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_G670_FillingRejectedScaffoldAutomaticallyReentersCandidacy()
+    {
+        using var workspace = new IntentNextSliceWorkspace();
+        Assert.Equal(0, PacketDraftCommand.Execute(
+            workspace.Context,
+            ["--execution-unit", "G670", "--target-repo", "J-Tech-Japan/intent-system"],
+            TextWriter.Null));
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-08-10T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G670",
+                  "title": "TODO short title",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using (var blankWriter = new StringWriter())
+        {
+            Assert.Equal(0, IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], blankWriter));
+            using var blank = JsonDocument.Parse(blankWriter.ToString());
+            Assert.False(blank.RootElement.GetProperty("candidate").GetProperty("publish_gate_ready").GetBoolean());
+            Assert.Contains(
+                blank.RootElement.GetProperty("notes").EnumerateArray(),
+                note => note.GetString()!.Contains("G670", StringComparison.Ordinal));
+        }
+
+        workspace.WriteFile(
+            ".intent-cli/issues/G670/github-body.md",
+            BuildCompleteContractBody());
+
+        using var filledWriter = new StringWriter();
+        Assert.Equal(0, IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], filledWriter));
+        using var filled = JsonDocument.Parse(filledWriter.ToString());
+        Assert.Equal("issue-cut-ready", filled.RootElement.GetProperty("recommended_outcome").GetString());
+        Assert.Equal("G670", filled.RootElement.GetProperty("candidate").GetProperty("execution_unit").GetString());
+        Assert.DoesNotContain(
+            filled.RootElement.GetProperty("notes").EnumerateArray(),
+            note => note.GetString()!.Contains("G670' was excluded", StringComparison.Ordinal));
     }
 
     private sealed class IntentNextSliceWorkspace : IDisposable
