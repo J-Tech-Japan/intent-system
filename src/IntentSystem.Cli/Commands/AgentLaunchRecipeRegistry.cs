@@ -52,6 +52,12 @@ internal sealed record AgentPromptClassRecipe
 
     [JsonPropertyName("provenance")]
     public required string Provenance { get; init; }
+
+    [JsonPropertyName("payload_kind")]
+    public string PayloadKind { get; init; } = "none";
+
+    [JsonPropertyName("scoped_policy_required")]
+    public bool ScopedPolicyRequired { get; init; }
 }
 
 internal sealed record AgentPromptClassObservation
@@ -60,6 +66,7 @@ internal sealed record AgentPromptClassObservation
     public required string PromptClass { get; init; }
     public required string ObservedText { get; init; }
     public AgentPromptClassRecipe? Recipe { get; init; }
+    public ShellCommandPromptPayload? ShellCommand { get; init; }
     public bool Known => Recipe is not null;
 }
 
@@ -334,6 +341,18 @@ internal static class AgentLaunchRecipeRegistry
                         Provenance =
                             "G582/G636 recorded the next-launch hook-trust screen as a launch gate; this literal class makes that existing recipe fact reviewable rather than guessed.",
                     },
+                    new AgentPromptClassRecipe
+                    {
+                        PromptClass = ShellCommandPolicyRegistry.PromptClass,
+                        LiteralTextFragments = ["Would you like to run the following command?"],
+                        ExactAnswerScope =
+                            "No bare shell answer is valid. A recorded project-test, owned-scratch-delete, or exact-command-once scoped policy must match the extracted command and current dialog before orchestration may answer.",
+                        AnswerKeys = [],
+                        Provenance =
+                            "G689 records the Codex shell-command vocabulary as a class-and-payload producer; command scope and answer authority remain separate policy layers.",
+                        PayloadKind = "shell-command",
+                        ScopedPolicyRequired = true,
+                    },
                 ],
                 StartupGates =
                     "The operator supplies the mapped pane and role roots. --sandbox workspace-write and "
@@ -422,6 +441,21 @@ internal static class AgentLaunchRecipeRegistry
 
     public static AgentPromptClassObservation Classify(string kind, string observedText)
     {
+        if (string.Equals(kind, ShellCommandPolicyRegistry.AgentKind, StringComparison.OrdinalIgnoreCase)
+            && ShellCommandPromptRecognizer.TryExtract(observedText, out var shellCommand))
+        {
+            var shellRecipe = Find(kind)?.PromptClasses.FirstOrDefault(candidate =>
+                string.Equals(candidate.PromptClass, ShellCommandPolicyRegistry.PromptClass, StringComparison.OrdinalIgnoreCase));
+            return new AgentPromptClassObservation
+            {
+                AgentKind = kind,
+                PromptClass = shellRecipe?.PromptClass ?? ShellCommandPolicyRegistry.PromptClass,
+                ObservedText = observedText,
+                Recipe = shellRecipe,
+                ShellCommand = shellCommand,
+            };
+        }
+
         var matches = Find(kind)?.PromptClasses
             .Where(candidate => MatchesActivePrompt(candidate, observedText))
             .ToArray() ?? [];

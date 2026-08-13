@@ -64,6 +64,7 @@ internal static class NotifyCommand
         + "[--repair-silent-minutes <m>] [--auto-redispatch] [--event-mode] [--once] [--routing-root <host-root>] [--dry-run|--write] "
         + "[--herdr-executable <absolute-path>] [--bash-executable <absolute-path>] "
         + "[--pre-approve <agent-kind>:<prompt-class>]... [--pre-escalate <agent-kind>:<prompt-class>]... "
+        + "[--shell-policy <json>]... "
         + "[--format markdown|json]\n"
         + "Event mode: --event-mode keeps the blocking per-seat herdr wait inside this supervisor process and re-arms it after failure. It is the implementation of the normative SECOND wake source from herdr pane.agent_status_changed, alongside the independent interval safety floor; it does not change outcome or label behavior.\n"
         + NotifySuperviseInstallCommand.Usage;
@@ -726,7 +727,8 @@ internal static class NotifyCommand
             options.EventMode,
             options.PreApprovalAcceptRules,
             options.PreApprovalEscalateRules,
-            options.BashExecutable ?? BashExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveBashExecutable());
+            options.BashExecutable ?? BashExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveBashExecutable(),
+            scopedPolicies: options.ScopedPolicies);
         using var cancellation = new CancellationTokenSource();
         ConsoleCancelEventHandler? cancelHandler = null;
         if (!Console.IsOutputRedirected)
@@ -1801,6 +1803,7 @@ internal static class NotifyCommand
         var expectedArtifacts = new List<string>();
         var preApprovalAcceptRules = new List<NotifyPreApprovalRule>();
         var preApprovalEscalateRules = new List<NotifyPreApprovalRule>();
+        var scopedPolicies = new List<NotifyScopedPromptPolicy>();
         var write = false;
         var autoRedispatch = false;
         var once = false;
@@ -1917,6 +1920,33 @@ internal static class NotifyCommand
                     }
                     preApprovalEscalateRules.Add(escalateRule!);
                     break;
+                case "--shell-policy":
+                case "--pre-approve-shell":
+                    if (!ReadValue(args, ref index, argument, out var shellPolicyValue, out error))
+                    {
+                        return false;
+                    }
+                    NotifyScopedPromptPolicy? shellPolicy;
+                    try
+                    {
+                        shellPolicy = JsonSerializer.Deserialize<NotifyScopedPromptPolicy>(shellPolicyValue!, JsonOptions);
+                    }
+                    catch (JsonException exception)
+                    {
+                        error = $"{argument} requires one scoped policy JSON object: {exception.Message}";
+                        return false;
+                    }
+                    if (shellPolicy is null)
+                    {
+                        error = $"{argument} requires one scoped policy JSON object.";
+                        return false;
+                    }
+                    if (!NotifyPreApprovalPolicyStore.TryValidateScopedPolicy(shellPolicy, out error))
+                    {
+                        return false;
+                    }
+                    scopedPolicies.Add(shellPolicy);
+                    break;
                 case "--input":
                     if (!ReadValue(args, ref index, argument, out var input, out error)) return false;
                     inputs.Add(input!);
@@ -1977,6 +2007,7 @@ internal static class NotifyCommand
             RepairSilentMinutes = repairSilentMinutes,
             PreApprovalAcceptRules = preApprovalAcceptRules,
             PreApprovalEscalateRules = preApprovalEscalateRules,
+            ScopedPolicies = scopedPolicies,
             Write = write,
             AutoRedispatch = autoRedispatch,
             Once = once,
@@ -2094,6 +2125,10 @@ internal static class NotifyCommand
                 options.PreApprovalAcceptRules,
                 options.PreApprovalEscalateRules,
                 out error))
+            {
+                return false;
+            }
+            if (!NotifyPreApprovalPolicyStore.TryValidateScopedPolicies(options.ScopedPolicies, out error))
             {
                 return false;
             }
@@ -2254,6 +2289,7 @@ internal sealed record NotifyOptions
     public int? RepairSilentMinutes { get; init; }
     public required IReadOnlyList<NotifyPreApprovalRule> PreApprovalAcceptRules { get; init; }
     public required IReadOnlyList<NotifyPreApprovalRule> PreApprovalEscalateRules { get; init; }
+    public required IReadOnlyList<NotifyScopedPromptPolicy> ScopedPolicies { get; init; }
     public bool AutoRedispatch { get; init; }
     public bool Once { get; init; }
     public bool EventMode { get; init; }

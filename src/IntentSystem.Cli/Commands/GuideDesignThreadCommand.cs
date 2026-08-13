@@ -108,16 +108,16 @@ internal static class GuideDesignThreadCommand
             },
             ResidualApproval = new DesignThreadResidualApproval
             {
-                PreviewStatus = "preview-through-1.x (G666/G682/G683)",
+                PreviewStatus = "preview-through-1.x (G666/G682/G683/G689)",
                 Layers = new[]
                 {
                     "Interim in-contract path: eliminate each known dialog through agent-side allow configuration recorded in that kind's G636 unattended-launch recipe fields; never answer the dialog.",
                     "G683 supervision reads dialog-blocked seats and emits only exact recipe-registry classes; unmatched text is class unknown and escalate-only, never fuzzy-classified.",
-                    "A validated matched pre-approve wakes orchestration with the exact rule, observed text, and answer scope; orchestration performs only that bounded recipe answer and audits it. Design reads the audit, never answers, and never relays keystrokes.",
+                    "G689 adds the shell-command class and extracts a payload without granting a bare answer; every compound AST segment needs project-test, owned-scratch-delete, or exact-command-once scope, with digest/dialog audit. A validated match wakes orchestration only; design never answers; design never relays keystrokes.",
                 },
-                NoPolicyRule = "Without an exact validated pre-approve match, residual prompts are escalate-only; unknown, unmatched, and pre-escalate prompts execute no answer.",
+                NoPolicyRule = "Without an exact validated pre-approve match or matching shell scoped policy, residual prompts are escalate-only; unknown, unmatched, bare shell classes, and pre-escalate prompts execute no answer.",
                 Incident = "G666 measured the 2026-08-11 workspace wK Claude app safety relay refusal. Operator-filed #1469 then measured a 0.19.0 supervision cycle with 47 keys and no prompt/dialog/class/adjudication producer key, a review seat wedged three times in one day, and orchestration correctly refusing to fabricate a class. This is the same configured-looking-but-inert failure shape as #1465; the interim correction is agent-side allow configuration recorded in the G636 kind recipe fields, never a dialog answer.",
-                WatcherBoundary = "Supervision classifies only literal registry entries. Its sole answer path is the audited, orchestration-owned exact key sequence of a matched pre-approve rule; it never exposes an unscoped relay.",
+                WatcherBoundary = "Supervision classifies only literal registry entries and verifies every shell AST segment against scoped policy. Its sole answer path is the audited, orchestration-owned exact key sequence of a matched pre-approve rule; it never exposes an unscoped relay.",
                 Formula = "four judgment-bearing threads plus one supervision process; approval handling creates no fifth seat.",
             },
             MergeAuthority = new DesignThreadMergeAuthority

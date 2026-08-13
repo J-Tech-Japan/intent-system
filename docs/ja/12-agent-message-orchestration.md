@@ -370,6 +370,19 @@ producer-covered kind は G682 の inapplicability を自動的に解消し、un
 `codex:github-comment-post`、別途記録済みの codex launch-hook trust dialog、G636 launch recipe の
 `copilot:launch-limited-permissions` です。
 
+G689 はこの vocabulary に measured な `codex:shell-command` class を追加します。
+class producer は dialog を認識して command payload を抽出しますが、payload を answerable にはしません。
+shell policy instance は `--shell-policy <json>` で記録し、shipped inventory は
+`intent-cli prompt-class list` または `intent-cli prompt-class describe codex:shell-command` で読み取ります。
+shell answer が有効なのは、compound shell-AST のすべての segment が scoped policy に覆われ、監査に
+matched scope が記録される場合だけです。`project-test` は recorded `dotnet test` argv prefix を
+recorded cwd/root/path constraint に束縛し、read-only ではなく test execution です。
+`owned-scratch-delete` は同じ wake の scratch ledger にある exact path だけを要求し、bare `/tmp` を
+認可しません。`exact-command-once` は normalized AST digest と current dialog hash を束ね、bounded answer
+1 回の後に消費されます。unknown syntax、command substitution、redirect、uncovered または root 外の
+segment はエスカレーション対象です。persistent allowance は operator-only のままで、shell answer path は
+orchestration-only、design は回答しません。
+
 各 supervision cycle は running recorded seat の structured argv と kind ごとの recorded
 recipe も比較します。比較対象は security envelope、すなわち sandbox mode、approval mode、
 writable roots/add-dirs、network access だけです。bound の欠落、extra root、より広い envelope は
@@ -1504,9 +1517,11 @@ drop の確認は **オペレーターに可視** です: 生きたセッショ�
 
 1. **自分自身が要求した作業の確認** — プロンプトが、この設計スレッドが直前に開始した操作と
    一致すること（同じ対象・同じ操作）。
-2. **read-only であると検証済みのコマンド承認** — pane に表示された正確なコマンドを読み、
-   read-only であると検証すること。書き込み・削除・インストール・publish・状態変更を伴うものは
-   エスカレーション（「おそらく read-only」は検証ではありません）。
+2. **read-only であると検証済みのコマンド承認**（shell 以外の attended case のみ） — pane に表示された
+   正確なコマンドを読み、read-only であると検証すること。書き込み・削除・インストール・publish・状態変更を
+   伴うものはエスカレーション（「おそらく read-only」は検証ではありません）。G689 の
+   `codex:shell-command` class は design-thread の権限対象外です。`project-test` も read-only
+   ではなく、shell answer は scoped policy と audit を通じた orchestration-only です。
 3. **自分自身がインストールした hook の trust 画面** — 自身の hook-trust ケース。自分が
    インストールしていないものの trust 画面は受諾対象ではありません。
 4. **オペレーターが事前承認した mode 変更** — 事前承認は具体的かつ事前でなければならず、読んだ
