@@ -163,7 +163,11 @@ internal static class NotifyPreApprovalPolicyStore
 
     public static string Adjudicate(NotifyPreApprovalPolicy? policy, string agentKind, string promptClass)
     {
-        if (policy?.Accept.Any(rule => Matches(rule, agentKind, promptClass)) == true)
+        if (policy?.Applicable != true)
+        {
+            return "escalate";
+        }
+        if (policy.Accept.Any(rule => rule.Applicable && Matches(rule, agentKind, promptClass)))
         {
             return "accept";
         }

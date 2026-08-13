@@ -30,7 +30,7 @@ public sealed class ApprovalRecipeDriftG666Tests : IDisposable
     }
 
     [Fact]
-    public void Policy_IsDurableExactAndEscalateOnlyWithoutAMatch()
+    public void Policy_IsDurableAndEscalateOnlyWhileItsProducerIsAbsent()
     {
         var policy = new NotifyPreApprovalPolicy
         {
@@ -45,7 +45,9 @@ public sealed class ApprovalRecipeDriftG666Tests : IDisposable
         Assert.True(NotifyPreApprovalPolicyStore.Record(root, policy, write: true).Applied);
         var read = NotifyPreApprovalPolicyStore.Read(root, Domain, Team);
         Assert.True(read.Resolved, read.Error);
-        Assert.Equal("accept", NotifyPreApprovalPolicyStore.Adjudicate(read.Policy, "CODEX", "read-only"));
+        Assert.False(read.Policy!.Applicable);
+        Assert.False(Assert.Single(read.Policy.Accept).Applicable);
+        Assert.Equal("escalate", NotifyPreApprovalPolicyStore.Adjudicate(read.Policy, "CODEX", "read-only"));
         Assert.Equal("escalate", NotifyPreApprovalPolicyStore.Adjudicate(read.Policy, "codex", "credential"));
         Assert.Equal("escalate", NotifyPreApprovalPolicyStore.Adjudicate(read.Policy, "codex", "unmatched"));
     }

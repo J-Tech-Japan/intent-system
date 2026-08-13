@@ -37,6 +37,15 @@ public sealed class PreApprovalApplicabilityG682Tests : IDisposable
             AssertInapplicable(stored.RootElement, recorded: null);
         }
 
+        var artifactRoot = Directory.GetParent(policyPath)!.Parent!.Parent!.FullName;
+        var reloaded = NotifyPreApprovalPolicyStore.Read(artifactRoot, Domain, Team);
+        Assert.True(reloaded.Resolved, reloaded.Error);
+        Assert.False(reloaded.Policy!.Applicable);
+        Assert.False(Assert.Single(reloaded.Policy.Accept).Applicable);
+        Assert.Equal(
+            "escalate",
+            NotifyPreApprovalPolicyStore.Adjudicate(reloaded.Policy, "codex", "github-comment"));
+
         var nextCycle = RunSupervise();
         Assert.Equal(0, nextCycle.ExitCode);
         Assert.False(nextCycle.Output.GetProperty("silent").GetBoolean());
@@ -80,6 +89,50 @@ public sealed class PreApprovalApplicabilityG682Tests : IDisposable
             Assert.Contains(NotifyPromptClassProducerRegistry.InapplicableStatus, ledger, StringComparison.Ordinal);
             Assert.Contains("G684", ledger, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void Adjudication_FailsClosedAtBothPolicyAndRuleApplicabilityBoundaries_G682()
+    {
+        var applicableRule = new NotifyPreApprovalRule
+        {
+            AgentKind = "codex",
+            PromptClass = "github-comment",
+            Applicable = true,
+            ApplicabilityStatus = NotifyPromptClassProducerRegistry.ApplicableStatus,
+        };
+        var policy = new NotifyPreApprovalPolicy
+        {
+            Domain = Domain,
+            Team = Team,
+            RecordedAt = DateTimeOffset.Parse("2026-08-12T18:00:00Z"),
+            Accept = [applicableRule],
+            Escalate = [],
+            Applicable = false,
+            ApplicabilityStatus = NotifyPromptClassProducerRegistry.InapplicableStatus,
+        };
+
+        Assert.Equal(
+            "escalate",
+            NotifyPreApprovalPolicyStore.Adjudicate(policy, "codex", "github-comment"));
+        Assert.Equal(
+            "escalate",
+            NotifyPreApprovalPolicyStore.Adjudicate(
+                policy with
+                {
+                    Applicable = true,
+                    ApplicabilityStatus = NotifyPromptClassProducerRegistry.ApplicableStatus,
+                    Accept =
+                    [
+                        applicableRule with
+                        {
+                            Applicable = false,
+                            ApplicabilityStatus = NotifyPromptClassProducerRegistry.InapplicableStatus,
+                        },
+                    ],
+                },
+                "codex",
+                "github-comment"));
     }
 
     private (int ExitCode, JsonElement Output) RunSupervise(params string[] policyArguments)
