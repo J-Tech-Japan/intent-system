@@ -157,6 +157,28 @@ public sealed class EnvelopeProfileG686Tests : IDisposable
         Assert.DoesNotContain(runner.Calls, call => call.Arguments.SequenceEqual(["agent", "list"]));
     }
 
+    [Theory]
+    [InlineData("override-scalar")]
+    [InlineData("override-array")]
+    [InlineData("override-malformed-object")]
+    [InlineData("profile-array-scalar")]
+    [InlineData("profile-map-scalar")]
+    public void Supervision_MalformedProfileShapesBecomeDistinctProfileInvalidFindings(string invalidShape)
+    {
+        var context = CreateContext();
+        WriteMalformedTopology(invalidShape);
+
+        var resolution = NotifyRoleTopologyStore.Resolve(root, Domain, Team);
+        Assert.False(resolution.Resolved);
+        Assert.Equal("profile-invalid", resolution.Cause);
+
+        var runner = new ProfileRunner();
+        var pass = CreateSupervisor(context, runner, write: false).RunOnce();
+        var finding = Assert.Single(pass.Findings, item => item.Kind == "profile-invalid");
+        Assert.Equal("profile-invalid", finding.Cause);
+        Assert.DoesNotContain(runner.Calls, call => call.Arguments.SequenceEqual(["agent", "list"]));
+    }
+
     [Fact]
     public void NoProfilePreservesRegistryComparatorAndTopLevelProfileIsNotParsedAsRole()
     {
@@ -279,6 +301,51 @@ public sealed class EnvelopeProfileG686Tests : IDisposable
             ["domain"] = Domain, ["team"] = Team, ["workspace_id"] = "wG686",
             ["envelope_profiles"] = profiles, ["roles"] = roles,
         };
+        var path = NotifyRoleTopologyStore.ResolvePath(root, Domain, Team);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, topology.ToJsonString());
+    }
+
+    private void WriteMalformedTopology(string invalidShape)
+    {
+        var role = new JsonObject
+        {
+            ["resident"] = "herdr",
+            ["workspace_id"] = "wG686",
+            ["pane_id"] = "wG686:p1",
+            ["kind"] = "codex",
+        };
+        var topology = new JsonObject
+        {
+            ["domain"] = Domain,
+            ["team"] = Team,
+            ["workspace_id"] = "wG686",
+            ["roles"] = new JsonObject { ["orchestration"] = role },
+        };
+
+        switch (invalidShape)
+        {
+            case "override-scalar":
+                role["envelope_profile_override"] = "bad";
+                break;
+            case "override-array":
+                role["envelope_profile_override"] = new JsonArray("bad");
+                break;
+            case "override-malformed-object":
+                role["envelope_profile_override"] = new JsonObject { ["kind"] = "codex" };
+                break;
+            case "profile-array-scalar":
+                role["envelope_profile"] = "bad";
+                topology["envelope_profiles"] = new JsonArray("bad");
+                break;
+            case "profile-map-scalar":
+                role["envelope_profile"] = "bad";
+                topology["envelope_profiles"] = new JsonObject { ["bad"] = "bad" };
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(invalidShape), invalidShape, null);
+        }
+
         var path = NotifyRoleTopologyStore.ResolvePath(root, Domain, Team);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, topology.ToJsonString());
