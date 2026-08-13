@@ -2357,7 +2357,7 @@ internal static class GuideOrchestratorThreadCommand
                     + "supervision failure, not a shortcut.",
                 ApprovalModel = new OrchestratorApprovalModel
                 {
-                    PreviewStatus = "preview-through-1.x (G666/G682/G683/G684)",
+                    PreviewStatus = "preview-through-1.x (G666/G682/G683/G684/G686)",
                     Layers = new[]
                     {
                         "recipe — eliminate known dialogs through agent-side allow configuration recorded in the G636 kind recipe fields; never answer dialogs",
@@ -2370,7 +2370,10 @@ internal static class GuideOrchestratorThreadCommand
                     InapplicabilityRule = "Every recorded rule whose named agent kind has no prompt-class producer returns applicable=false, status=inapplicable-no-prompt-class-producer, and a concrete reason at record time, in the stored policy, and in every supervision cycle. Producer registration clears it automatically.",
                     InterimRecipePath = "Eliminate known dialogs through agent-side allow configuration recorded in the G636 kind recipe fields; this is recipe-layer configuration, never dialog answering.",
                     Incident = "Operator-filed #1469 measured 47 supervision-cycle keys with no prompt/dialog/class/adjudication producer key, a review seat wedged three times in one day, and orchestration correctly refusing to fabricate a class. It shares #1465's configured-looking-but-inert shape. The earlier G666 workspace wK relay refusal remains attributed separately.",
-                    RecipeDrift = "Each supervision cycle compares a running seat's observed argv envelope with its kind's recorded recipe: sandbox mode, approval mode, writable roots/add-dirs, and network access only. Missing bounds, extra roots, and broader envelopes are alarming; narrower envelopes are informational. Model and reasoning effort are operator-choice wish fields excluded by design. A mismatch emits once per seat per cycle, names both shapes, wakes nobody, and acts on nothing; a conforming or wish-only-different seat is silent.",
+                    RecipeDrift = "Each supervision cycle compares a running seat's observed argv envelope with the role's operator-recorded typed envelope profile when one is referenced or overridden, otherwise the kind registry recipe: sandbox mode, approval mode, writable roots/add-dirs, and network access only. Missing bounds, extra roots, and broader envelopes are alarming; narrower envelopes are informational. Model and reasoning effort are operator-choice wish fields excluded by design. A mismatch emits once per seat per cycle, names both shapes, wakes nobody, and acts on nothing; a conforming or wish-only-different seat is silent.",
+                    EnvelopeProfileRecordCommand = Fill("intent-cli session-layer topology record-profile --domain <domain> --team <team> --profile-name <name> --kind <kind> --sandbox-mode <mode> --approval-mode <mode> --roots-policy <policy> --network-access <value> --transport-mode <mode> --evidence <text> --current-digest <digest|absent> --confirm-record-profile --write --format json"),
+                    EnvelopeProfilePrecedence = "An operator-recorded profile is the baseline only for the role that references it or carries the typed override. No profile is byte-identical G684 registry behavior; a dangling reference or kind mismatch emits distinct profile-invalid and never falls back silently.",
+                    ProfileInvalidFinding = "profile-invalid names the role, profile reference or override, and the kind mismatch/dangling cause; it is detection-only, wakes nobody, and does not repair topology.",
                     WatcherBoundary = "The watcher classifies literal registry entries only. The sole answer path is an audited orchestration-owned exact key sequence for a matched pre-approve; no generic key relay exists.",
                     Formula = "four judgment-bearing threads plus one supervision process; no fifth approval seat",
                 },
@@ -3728,6 +3731,9 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **interim recipe path:** {unattended.ApprovalModel.InterimRecipePath}");
         writer.WriteLine($"- **measured incident:** {unattended.ApprovalModel.Incident}");
         writer.WriteLine($"- **recipe drift:** {unattended.ApprovalModel.RecipeDrift}");
+        writer.WriteLine($"- **typed envelope profile command:** `{unattended.ApprovalModel.EnvelopeProfileRecordCommand}`");
+        writer.WriteLine($"- **profile precedence:** {unattended.ApprovalModel.EnvelopeProfilePrecedence}");
+        writer.WriteLine($"- **profile-invalid finding:** {unattended.ApprovalModel.ProfileInvalidFinding}");
         writer.WriteLine($"- **watcher boundary:** {unattended.ApprovalModel.WatcherBoundary}");
         writer.WriteLine($"- **team formula:** {unattended.ApprovalModel.Formula}");
         writer.WriteLine();
@@ -5859,6 +5865,15 @@ internal sealed record OrchestratorApprovalModel
 
     [JsonPropertyName("recipe_drift")]
     public required string RecipeDrift { get; init; }
+
+    [JsonPropertyName("envelope_profile_record_command")]
+    public required string EnvelopeProfileRecordCommand { get; init; }
+
+    [JsonPropertyName("envelope_profile_precedence")]
+    public required string EnvelopeProfilePrecedence { get; init; }
+
+    [JsonPropertyName("profile_invalid_finding")]
+    public required string ProfileInvalidFinding { get; init; }
 
     [JsonPropertyName("watcher_boundary")]
     public required string WatcherBoundary { get; init; }

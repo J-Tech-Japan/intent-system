@@ -479,7 +479,7 @@ internal sealed class NotifyMeasuredSupervisor
                     Cause = observation.Cause ?? existing.Cause,
                 };
                 records.Add(retained);
-                if (observation.Kind is "supervision-degraded" or "duplicate-supervisor" or "recipe-drift")
+                if (observation.Kind is "supervision-degraded" or "duplicate-supervisor" or "recipe-drift" or "profile-invalid")
                 {
                     // Cycle-level facts are not once-only activity findings:
                     // surface one finding for each cycle, still once for the
@@ -1396,6 +1396,24 @@ internal sealed class NotifyMeasuredSupervisor
         var topology = NotifyRoleTopologyStore.Resolve(routingRoot, domain, team);
         if (!topology.Resolved || topology.Topology is null)
         {
+            if (string.Equals(topology.Cause, "profile-invalid", StringComparison.Ordinal))
+            {
+                return
+                [
+                    new NotifySupervisionObservation
+                    {
+                        Key = $"profile-invalid:{domain}:{team}",
+                        Kind = "profile-invalid",
+                        OwnerRole = ownerRole,
+                        Source = "recorded-topology+envelope-profile",
+                        Summary = topology.Summary + " No registry fallback is permitted; G686 treats this as a distinct profile-invalid finding.",
+                        WakeAlreadyAttempted = false,
+                        WakeAlreadyDelivered = false,
+                        WakeSuppressed = true,
+                        Cause = "profile-invalid",
+                    },
+                ];
+            }
             return [];
         }
 
@@ -1403,7 +1421,9 @@ internal sealed class NotifyMeasuredSupervisor
             .Where(entry => string.Equals(entry.Value.Resident, NotifyRecordedRole.HerdrResident, StringComparison.Ordinal)
                 && !string.IsNullOrWhiteSpace(entry.Value.PaneId)
                 && !string.IsNullOrWhiteSpace(entry.Value.Kind)
-                && AgentLaunchRecipeRegistry.Find(entry.Value.Kind) is not null)
+                && (entry.Value.EnvelopeProfileOverride is not null
+                    || entry.Value.EnvelopeProfileReference is not null
+                    || AgentLaunchRecipeRegistry.Find(entry.Value.Kind) is not null))
             .ToArray();
         if (recordedSeats.Length == 0)
         {
@@ -1437,7 +1457,15 @@ internal sealed class NotifyMeasuredSupervisor
         var observations = new List<NotifySupervisionObservation>();
         foreach (var (role, recorded) in recordedSeats)
         {
-            var recipe = AgentLaunchRecipeRegistry.Find(recorded.Kind!)!;
+            var profile = recorded.EnvelopeProfileOverride
+                ?? (recorded.EnvelopeProfileReference is { } profileName
+                    ? topology.Topology.EnvelopeProfiles.GetValueOrDefault(profileName)
+                    : null);
+            var recipe = profile is null ? AgentLaunchRecipeRegistry.Find(recorded.Kind!) : null;
+            if (profile is null && recipe is null)
+            {
+                continue;
+            }
 
             var workspaceId = recorded.WorkspaceId ?? topology.Topology.WorkspaceId;
             var running = agents.Any(agent =>
@@ -1455,13 +1483,15 @@ internal sealed class NotifyMeasuredSupervisor
                 continue;
             }
 
-            var comparison = AgentLaunchShapeComparer.Compare(
-                recorded.Kind!,
-                recipe,
-                processInfo.Processes,
-                recorded.LaunchArguments,
-                recorded.Cwd,
-                requireConcreteSeatRoots: true);
+            var comparison = profile is not null
+                ? AgentLaunchShapeComparer.Compare(recorded.Kind!, profile, processInfo.Processes)
+                : AgentLaunchShapeComparer.Compare(
+                    recorded.Kind!,
+                    recipe!,
+                    processInfo.Processes,
+                    recorded.LaunchArguments,
+                    recorded.Cwd,
+                    requireConcreteSeatRoots: true);
             if (!comparison.Resolved || comparison.Conforming)
             {
                 continue;
@@ -1473,9 +1503,12 @@ internal sealed class NotifyMeasuredSupervisor
                 Kind = "recipe-drift",
                 OwnerRole = ownerRole,
                 SubjectRole = role,
-                Source = "recorded-topology+agent-launch-recipe+pane.process-info",
+                Source = profile is null
+                    ? "recorded-topology+agent-launch-recipe+pane.process-info"
+                    : "recorded-topology+envelope-profile+pane.process-info",
                 Summary = $"Running seat '{role}' at workspace '{workspaceId}' pane '{recorded.PaneId}' has recipe drift: "
-                    + $"observed launch shape `{comparison.ObservedShape}`; recorded '{recorded.Kind}' recipe "
+                    + $"observed launch shape `{comparison.ObservedShape}`; recorded '{recorded.Kind}' "
+                    + (profile is null ? "recipe " : $"envelope profile '{profile.Name}' ")
                     + $"`{comparison.RecordedShape}`. Classification: "
                     + (comparison.Drift == AgentLaunchEnvelopeDrift.Alarming ? "alarming" : "informational-narrower")
                     + $"; {comparison.Summary}. Model and reasoning effort are operator-choice wish fields excluded "

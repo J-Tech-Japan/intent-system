@@ -61,6 +61,41 @@ internal static partial class AgentLaunchShapeComparer
         bool requireConcreteSeatRoots = false)
     {
         var recordedShape = FormatRecorded(recipe, recordedLaunchArguments, recordedCwd);
+        var expected = BindConcreteSeatEnvelope(
+            kind,
+            ParseExpected(kind, recipe.Invocation),
+            recordedLaunchArguments,
+            recordedCwd);
+        return CompareExpected(kind, recordedShape, expected, processes, requireConcreteSeatRoots);
+    }
+
+    public static AgentLaunchShapeComparison Compare(
+        string kind,
+        AgentLaunchEnvelopeProfile profile,
+        IReadOnlyList<NotifyPaneProcess> processes)
+    {
+        if (!string.Equals(kind, profile.Kind, StringComparison.OrdinalIgnoreCase))
+        {
+            return new AgentLaunchShapeComparison
+            {
+                Resolved = false,
+                Conforming = false,
+                Drift = AgentLaunchEnvelopeDrift.Alarming,
+                RecordedShape = FormatRecorded(profile),
+                Summary = $"Envelope profile '{profile.Name}' kind '{profile.Kind}' does not match recorded seat kind '{kind}'; profile-invalid is fail-closed.",
+            };
+        }
+
+        return CompareExpected(kind, FormatRecorded(profile), ExpectedFromProfile(profile), processes, false);
+    }
+
+    private static AgentLaunchShapeComparison CompareExpected(
+        string kind,
+        string recordedShape,
+        IReadOnlyList<ExpectedOption> expected,
+        IReadOnlyList<NotifyPaneProcess> processes,
+        bool requireConcreteSeatRoots)
+    {
         var candidates = processes
             .Where(process => LooksLikeKind(process, kind) && process.Argv is { Count: > 0 })
             .ToArray();
@@ -76,11 +111,6 @@ internal static partial class AgentLaunchShapeComparer
             };
         }
 
-        var expected = BindConcreteSeatEnvelope(
-            kind,
-            ParseExpected(kind, recipe.Invocation),
-            recordedLaunchArguments,
-            recordedCwd);
         var concreteRootsResolved = expected
             .Where(item => item.Name == RootOption)
             .All(item => !IsPlaceholder(item.Value));
@@ -106,7 +136,7 @@ internal static partial class AgentLaunchShapeComparer
                 Drift = AgentLaunchEnvelopeDrift.None,
                 RecordedShape = recordedShape,
                 ObservedShape = FormatObserved(selected.Process),
-                Summary = $"Observed launch envelope conforms structurally to the recorded '{kind}' recipe; model and reasoning effort are excluded by design.",
+                Summary = $"Observed launch envelope conforms structurally to the recorded '{kind}' baseline; model and reasoning effort are excluded by design.",
             };
         }
 
@@ -123,6 +153,30 @@ internal static partial class AgentLaunchShapeComparer
             Summary = $"Observed launch envelope for agent kind '{kind}' has {classification} recipe drift: "
                 + string.Join("; ", selected.Result.Differences),
         };
+    }
+
+    private static IReadOnlyList<ExpectedOption> ExpectedFromProfile(AgentLaunchEnvelopeProfile profile)
+    {
+        var expected = new List<ExpectedOption>
+        {
+            new(SandboxOption, profile.SandboxMode, Optional: false),
+            new(ApprovalOption, profile.ApprovalMode, Optional: false),
+            new(NetworkOption, profile.NetworkAccess, Optional: false),
+        };
+        expected.AddRange(profile.WritableRoots
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .Select(root => new ExpectedOption(RootOption, NormalizeRoot(root), Optional: false)));
+
+        if (string.Equals(profile.Kind, "copilot", StringComparison.OrdinalIgnoreCase))
+        {
+            expected.AddRange(ParseTokens(profile.Kind, profile.PermissionOptions)
+                .Where(option => option.Name == "--allow-all-tools" || CopilotUrlOptions.Contains(option.Name))
+                .Select(option => new ExpectedOption(option.Name, option.Value, Optional: false)));
+            expected.AddRange(profile.NetworkUrls
+                .Select(url => new ExpectedOption("--allow-url", url, Optional: false)));
+        }
+
+        return expected;
     }
 
     private static IReadOnlyList<ExpectedOption> BindConcreteSeatEnvelope(
@@ -654,6 +708,12 @@ internal static partial class AgentLaunchShapeComparer
             ? recipe.Invocation
             : $"{recipe.Invocation} [concrete seat cwd root: {NormalizeRoot(recordedCwd)}]";
     }
+
+    private static string FormatRecorded(AgentLaunchEnvelopeProfile profile) =>
+        $"profile '{profile.Name}' kind={profile.Kind}; sandbox={profile.SandboxMode}; approval={profile.ApprovalMode}; "
+        + $"roots_policy={profile.RootsPolicy}; writable_roots=[{string.Join(", ", profile.WritableRoots)}]; "
+        + $"network={profile.NetworkAccess}; transport={profile.TransportMode}; evidence={profile.Evidence}; "
+        + $"recorded_at={profile.RecordedAt}; digest={profile.Digest ?? "<computed>"}";
 
     [GeneratedRegex(@"\[(?<optional>[^\]]+)\]|(?<required>[^\s]+(?:\s+(?!\[)[^\s]+)?)")]
     private static partial Regex RecipeToken();

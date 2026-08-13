@@ -15,7 +15,7 @@ internal static class SessionLayerTopologyCommand
     private const string FormatMarkdown = "markdown";
 
     private const string Usage =
-        "Usage: intent-cli session-layer topology record|show|validate|update-kind|update-field|retire-legacy [options]";
+        "Usage: intent-cli session-layer topology record|record-profile|show|validate|update-kind|update-field|retire-legacy [options]";
     private const string RecordUsage =
         "Usage: intent-cli session-layer topology record --domain <name> --team <name> --role <name> --resident herdr "
         + "--workspace-id <id> --pane-id <id> --cwd <path> [--kind <kind>] [--delivery-method inline|file-backed] [--dry-run|--write] "
@@ -37,6 +37,13 @@ internal static class SessionLayerTopologyCommand
     private const string RetireLegacyUsage =
         "Usage: intent-cli session-layer topology retire-legacy --domain <name> --team <name> "
         + "--evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write [--format json]";
+    private const string RecordProfileUsage =
+        "Usage: intent-cli session-layer topology record-profile --domain <name> --team <name> "
+        + "--profile-name <name> --kind <kind> --sandbox-mode <mode> --approval-mode <mode> "
+        + "--roots-policy <policy> [--writable-root <path>]... --network-access <value> "
+        + "--transport-mode <mode> --evidence <text> [--permission-option <flag>]... "
+        + "[--network-url <url>]... [--recorded-at <timestamp>] [--role <role> [--role-override]] "
+        + "--current-digest <digest|absent> --confirm-record-profile [--dry-run|--write] --format json";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -60,12 +67,14 @@ internal static class SessionLayerTopologyCommand
             writer.WriteLine(UpdateKindUsage);
             writer.WriteLine(UpdateFieldUsage);
             writer.WriteLine(RetireLegacyUsage);
+            writer.WriteLine(RecordProfileUsage);
             return args.Length == 0 ? 1 : 0;
         }
 
         return args[0] switch
         {
             "record" => ExecuteRecord(context, args[1..], writer),
+            "record-profile" => ExecuteRecordProfile(context, args[1..], writer),
             "show" => ExecuteShow(context, args[1..], writer),
             "validate" => ExecuteValidate(context, args[1..], writer),
             "update-kind" => ExecuteUpdateKind(context, args[1..], writer),
@@ -133,6 +142,7 @@ internal static class SessionLayerTopologyCommand
                 WorkspaceId = null,
                 RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
                 Roles = [],
+                EnvelopeProfiles = [],
                 Findings = validation.Findings,
                 Summary = $"Recorded delivery topology for team '{team}' is invalid; no delivery targets were "
                     + "invented or resolved." + FormatWarnings(validation.Warnings),
@@ -151,6 +161,7 @@ internal static class SessionLayerTopologyCommand
                 WorkspaceId = null,
                 RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
                 Roles = [],
+                EnvelopeProfiles = [],
                 Findings =
                 [
                     new SessionLayerTopologyFinding(
@@ -179,6 +190,16 @@ internal static class SessionLayerTopologyCommand
                     WorkspaceId = topology.WorkspaceId,
                     RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
                     Roles = roles,
+                    EnvelopeProfiles = topology.EnvelopeProfiles.Values
+                        .OrderBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
+                        .Select(profile => new SessionLayerTopologyShownProfile
+                        {
+                            Name = profile.Name,
+                            Kind = profile.Kind,
+                            Digest = profile.Digest,
+                            RecordedAt = profile.RecordedAt,
+                        })
+                        .ToArray(),
                     Findings =
                     [
                         new SessionLayerTopologyFinding(
@@ -213,6 +234,16 @@ internal static class SessionLayerTopologyCommand
             WorkspaceId = topology.WorkspaceId,
             RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
             Roles = roles,
+            EnvelopeProfiles = topology.EnvelopeProfiles.Values
+                .OrderBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(profile => new SessionLayerTopologyShownProfile
+                {
+                    Name = profile.Name,
+                    Kind = profile.Kind,
+                    Digest = profile.Digest,
+                    RecordedAt = profile.RecordedAt,
+                })
+                .ToArray(),
             Findings = [],
             Summary = $"Resolved {roles.Count} recorded delivery target(s) for team '{team}' without sending."
                 + FormatWarnings(topologyResolution.Warnings),
@@ -238,6 +269,26 @@ internal static class SessionLayerTopologyCommand
 
         var result = SessionLayerTopologyWriter.Record(context.RepoRoot, request!);
         EmitRecord(writer, request!.Format, result);
+        return result.Conflict ? 1 : 0;
+    }
+
+    internal static int ExecuteRecordProfile(CliContext context, string[] args, TextWriter writer)
+    {
+        if (IsHelp(args))
+        {
+            writer.WriteLine(RecordProfileUsage);
+            return 0;
+        }
+
+        if (!TryParseRecordProfileArguments(args, out var request, out var error))
+        {
+            writer.WriteLine(error);
+            writer.WriteLine(RecordProfileUsage);
+            return 1;
+        }
+
+        var result = SessionLayerTopologyWriter.RecordProfile(context.RepoRoot, request!);
+        WriteJson(writer, result);
         return result.Conflict ? 1 : 0;
     }
 
@@ -290,6 +341,133 @@ internal static class SessionLayerTopologyCommand
         var result = SessionLayerTopologyWriter.RetireLegacy(context.RepoRoot, request!);
         WriteJson(writer, result);
         return result.Conflict ? 1 : 0;
+    }
+
+    private static bool TryParseRecordProfileArguments(
+        string[] args,
+        out SessionLayerTopologyProfileRecordRequest? request,
+        out string error)
+    {
+        request = null;
+        error = string.Empty;
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        var writableRoots = new List<string>();
+        var permissionOptions = new List<string>();
+        var networkUrls = new List<string>();
+        var confirm = false;
+        var roleOverride = false;
+        var requestedWrite = false;
+        var requestedDryRun = false;
+        var format = string.Empty;
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            var option = args[index];
+            switch (option)
+            {
+                case "--confirm-record-profile":
+                    confirm = true;
+                    break;
+                case "--role-override":
+                    roleOverride = true;
+                    break;
+                case "--write":
+                    requestedWrite = true;
+                    break;
+                case "--dry-run":
+                    requestedDryRun = true;
+                    break;
+                case "--writable-root":
+                    if (!TryReadValue(args, ref index, option, out var writableRoot, out error)) return false;
+                    writableRoots.Add(writableRoot!);
+                    break;
+                case "--permission-option":
+                    if (!TryReadValue(args, ref index, option, out var permissionOption, out error)) return false;
+                    permissionOptions.Add(permissionOption!);
+                    break;
+                case "--network-url":
+                    if (!TryReadValue(args, ref index, option, out var networkUrl, out error)) return false;
+                    networkUrls.Add(networkUrl!);
+                    break;
+                case "--format":
+                    if (!TryReadValue(args, ref index, option, out var requestedFormat, out error)) return false;
+                    format = requestedFormat!;
+                    break;
+                case "--domain" or "--team" or "--profile-name" or "--kind" or "--sandbox-mode"
+                    or "--approval-mode" or "--roots-policy" or "--network-access" or "--transport-mode"
+                    or "--evidence" or "--recorded-at" or "--role" or "--current-digest":
+                    if (!TryReadValue(args, ref index, option, out var value, out error)) return false;
+                    values[option] = value!;
+                    break;
+                default:
+                    error = $"Unknown argument '{option}'.";
+                    return false;
+            }
+        }
+
+        var required = new[]
+        {
+            "--domain", "--team", "--profile-name", "--kind", "--sandbox-mode", "--approval-mode",
+            "--roots-policy", "--network-access", "--transport-mode", "--evidence", "--current-digest",
+        };
+        if (!confirm || (!requestedWrite && !requestedDryRun) || !string.Equals(format, FormatJson, StringComparison.Ordinal)
+            || required.Any(name => !values.TryGetValue(name, out var value) || string.IsNullOrWhiteSpace(value)))
+        {
+            error = "--domain, --team, --profile-name, --kind, --sandbox-mode, --approval-mode, --roots-policy, "
+                + "--network-access, --transport-mode, --evidence, --current-digest, --confirm-record-profile, "
+                + "--format json, and either --write or --dry-run are required.";
+            return false;
+        }
+
+        if (values["--profile-name"].IndexOf('/') >= 0
+            || values["--profile-name"].IndexOf('\\') >= 0
+            || values["--profile-name"] is "." or "..")
+        {
+            error = "--profile-name must be a safe single profile name.";
+            return false;
+        }
+
+        if (!DateTimeOffset.TryParse(values.GetValueOrDefault("--recorded-at") ?? DateTimeOffset.UtcNow.ToString("O"), out _))
+        {
+            error = "--recorded-at must be a valid timestamp.";
+            return false;
+        }
+
+        if (roleOverride && !values.ContainsKey("--role"))
+        {
+            error = "--role-override requires --role.";
+            return false;
+        }
+
+        if (!string.Equals(values["--current-digest"], "absent", StringComparison.OrdinalIgnoreCase)
+            && values["--current-digest"].Length < 16)
+        {
+            error = "--current-digest must be 'absent' or the digest returned by a previous record-profile operation.";
+            return false;
+        }
+
+        request = new SessionLayerTopologyProfileRecordRequest
+        {
+            Domain = values["--domain"],
+            Team = values["--team"],
+            ProfileName = values["--profile-name"],
+            Kind = values["--kind"],
+            SandboxMode = values["--sandbox-mode"],
+            ApprovalMode = values["--approval-mode"],
+            RootsPolicy = values["--roots-policy"],
+            WritableRoots = writableRoots,
+            NetworkAccess = values["--network-access"],
+            TransportMode = values["--transport-mode"],
+            Evidence = values["--evidence"],
+            RecordedAt = values.GetValueOrDefault("--recorded-at") ?? DateTimeOffset.UtcNow.ToString("O"),
+            PermissionOptions = permissionOptions,
+            NetworkUrls = networkUrls,
+            Role = values.GetValueOrDefault("--role"),
+            RoleOverride = roleOverride,
+            CurrentDigest = values["--current-digest"],
+            Write = requestedWrite && !requestedDryRun,
+        };
+        return true;
     }
 
     private static bool TryParseUpdateKindArguments(string[] args, out SessionLayerTopologyKindUpdateRequest? request, out string error)
@@ -667,6 +845,10 @@ internal static class SessionLayerTopologyCommand
             writer.WriteLine($"- {role.Role}: resident={role.Resident}; delivery_target={role.DeliveryTargetKind}:"
                 + $"{role.DeliveryTarget}");
         }
+        foreach (var profile in result.EnvelopeProfiles)
+        {
+            writer.WriteLine($"- envelope_profile={profile.Name}; kind={profile.Kind}; digest={profile.Digest}; recorded_at={profile.RecordedAt}");
+        }
         foreach (var finding in result.Findings)
         {
             writer.WriteLine($"- role={finding.Role}; field={finding.Field}; cause={finding.Cause}; {finding.Message}");
@@ -845,6 +1027,236 @@ internal static class SessionLayerTopologyWriter
                 ? $"Recorded operator-supplied role '{request.Role}' for team '{request.Team}'."
                 : $"Dry-run: would record operator-supplied role '{request.Role}' for team '{request.Team}'.",
         };
+    }
+
+    public static SessionLayerTopologyProfileRecordResult RecordProfile(
+        string routingRoot,
+        SessionLayerTopologyProfileRecordRequest request)
+    {
+        var path = NotifyRoleTopologyStore.ResolvePath(routingRoot, request.Domain, request.Team);
+        JsonObject root;
+        try
+        {
+            root = File.Exists(path)
+                ? JsonNode.Parse(File.ReadAllText(path)) as JsonObject
+                    ?? throw new JsonException("the root is not a JSON object")
+                : new JsonObject
+                {
+                    ["domain"] = request.Domain,
+                    ["team"] = request.Team,
+                    ["roles"] = new JsonObject(),
+                };
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return ProfileConflict(request, path, $"Topology file '{path}' is unreadable: {exception.Message}");
+        }
+
+        var recordedDomain = ReadString(root, "domain");
+        if (!string.Equals(recordedDomain, request.Domain, StringComparison.Ordinal))
+        {
+            return ProfileConflict(request, path,
+                $"Topology file '{path}' identifies domain '{recordedDomain ?? "missing"}', not requested domain "
+                + $"'{request.Domain}'. Refusing to overwrite a copied or misplaced machine record.");
+        }
+
+        if (!TrySelectTeamForWrite(root, request.Team, out var team, out var selectError))
+        {
+            return ProfileConflict(request, path, selectError);
+        }
+
+        JsonObject profileMap;
+        if (team!.TryGetPropertyValue("envelope_profiles", out var profileNode))
+        {
+            if (profileNode is not JsonObject existingMap || existingMap.ContainsKey("kind"))
+            {
+                return ProfileConflict(request, path,
+                    "Topology field 'envelope_profiles' must be a named object map; refusing to reshape it.");
+            }
+            profileMap = existingMap;
+        }
+        else if (team.TryGetPropertyValue("profiles", out var legacyProfileNode))
+        {
+            if (legacyProfileNode is not JsonObject legacyMap || legacyMap.ContainsKey("kind"))
+            {
+                return ProfileConflict(request, path,
+                    "Topology field 'profiles' must be a named object map; refusing to reshape it.");
+            }
+            profileMap = legacyMap;
+        }
+        else
+        {
+            profileMap = new JsonObject();
+            team["envelope_profiles"] = profileMap;
+        }
+
+        AgentLaunchEnvelopeProfile? existingProfile = null;
+        if (profileMap.TryGetPropertyValue(request.ProfileName, out var existingProfileNode))
+        {
+            if (existingProfileNode is null)
+            {
+                return ProfileConflict(request, path, $"Envelope profile '{request.ProfileName}' is null; refusing to replace it.");
+            }
+
+            try
+            {
+                using var profileDocument = JsonDocument.Parse(existingProfileNode.ToJsonString());
+                if (!AgentLaunchEnvelopeProfileCodec.TryRead(
+                        profileDocument.RootElement,
+                        request.ProfileName,
+                        out existingProfile,
+                        out var profileError))
+                {
+                    return ProfileConflict(request, path, profileError);
+                }
+            }
+            catch (JsonException exception)
+            {
+                return ProfileConflict(request, path,
+                    $"Envelope profile '{request.ProfileName}' is not valid JSON: {exception.Message}");
+            }
+        }
+
+        var profile = AgentLaunchEnvelopeProfileCodec.WithDigest(new AgentLaunchEnvelopeProfile
+        {
+            Name = request.ProfileName,
+            Kind = request.Kind,
+            SandboxMode = request.SandboxMode,
+            ApprovalMode = request.ApprovalMode,
+            RootsPolicy = request.RootsPolicy,
+            WritableRoots = request.WritableRoots,
+            NetworkAccess = request.NetworkAccess,
+            TransportMode = request.TransportMode,
+            Evidence = request.Evidence,
+            RecordedAt = request.RecordedAt,
+            PermissionOptions = request.PermissionOptions,
+            NetworkUrls = request.NetworkUrls,
+        });
+
+        if (existingProfile is null
+            ? !string.Equals(request.CurrentDigest, "absent", StringComparison.OrdinalIgnoreCase)
+            : !string.Equals(request.CurrentDigest, existingProfile.Digest, StringComparison.OrdinalIgnoreCase))
+        {
+            return ProfileConflict(request, path,
+                existingProfile is null
+                    ? $"Envelope profile '{request.ProfileName}' is absent, but current digest was '{request.CurrentDigest}'. Refusing stale or ambiguous creation."
+                    : $"Envelope profile '{request.ProfileName}' current digest is '{existingProfile.Digest}', not supplied digest '{request.CurrentDigest}'. Refusing stale CAS update.");
+        }
+
+        var profileChanged = existingProfile is null
+            || !string.Equals(existingProfile.Digest, profile.Digest, StringComparison.OrdinalIgnoreCase);
+        var bindingChanged = false;
+        if (request.Role is { } roleName)
+        {
+            if (!TrySelectRolesForWrite(team, out var roles, out var rolesError)
+                || !roles!.TryGetPropertyValue(roleName, out var roleNode)
+                || roleNode is not JsonObject role)
+            {
+                return ProfileConflict(request, path,
+                    $"Role '{roleName}' is not a valid existing topology role. {rolesError}");
+            }
+
+            var roleKind = ReadString(role, "kind");
+            if (!string.Equals(roleKind, request.Kind, StringComparison.OrdinalIgnoreCase))
+            {
+                return ProfileConflict(request, path,
+                    $"Role '{roleName}' records kind '{roleKind ?? "missing"}', not profile kind '{request.Kind}'. Refusing a kind-mismatched baseline.");
+            }
+
+            if (request.RoleOverride)
+            {
+                var oldOverrideDigest = TryReadRoleOverrideDigest(role);
+                bindingChanged = !string.Equals(oldOverrideDigest, profile.Digest, StringComparison.OrdinalIgnoreCase)
+                    || ReadString(role, "envelope_profile") is not null
+                    || ReadString(role, "envelope_profile_ref") is not null;
+                role["envelope_profile_override"] = AgentLaunchEnvelopeProfileCodec.ToJsonObject(profile);
+                role.Remove("envelope_profile");
+                role.Remove("envelope_profile_ref");
+                role.Remove("profile_override");
+            }
+            else
+            {
+                bindingChanged = !string.Equals(ReadString(role, "envelope_profile"), request.ProfileName, StringComparison.Ordinal)
+                    || ReadString(role, "envelope_profile_ref") is not null
+                    || role.ContainsKey("envelope_profile_override")
+                    || role.ContainsKey("profile_override");
+                role["envelope_profile"] = request.ProfileName;
+                role.Remove("envelope_profile_ref");
+                role.Remove("envelope_profile_override");
+                role.Remove("profile_override");
+            }
+        }
+
+        profileMap[request.ProfileName] = AgentLaunchEnvelopeProfileCodec.ToJsonObject(profile);
+        var changed = profileChanged || bindingChanged;
+        var applied = false;
+        if (request.Write && changed)
+        {
+            try
+            {
+                EnsureLocalIgnore(routingRoot);
+                WriteAtomically(path, root.ToJsonString(FileJsonOptions) + Environment.NewLine);
+                applied = true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return ProfileConflict(request, path, $"Topology file '{path}' could not be written: {exception.Message}");
+            }
+        }
+
+        return new SessionLayerTopologyProfileRecordResult
+        {
+            Team = request.Team,
+            ProfileName = request.ProfileName,
+            Role = request.Role,
+            Mode = request.Write ? "write" : "dry-run",
+            RecordPath = NotifyRoleTopologyStore.RelativePathFor(request.Domain, request.Team),
+            Applied = applied,
+            Changed = changed,
+            AlreadyRecorded = !changed,
+            Conflict = false,
+            Digest = profile.Digest!,
+            Summary = request.Write
+                ? changed
+                    ? $"Recorded operator-supplied envelope profile '{request.ProfileName}' for kind '{request.Kind}'."
+                    : $"Envelope profile '{request.ProfileName}' and its binding were already exactly recorded; idempotent no-op."
+                : changed
+                    ? $"Dry-run: would record envelope profile '{request.ProfileName}' for kind '{request.Kind}'."
+                    : $"Dry-run: envelope profile '{request.ProfileName}' and its binding already exactly match.",
+        };
+    }
+
+    private static string? TryReadRoleOverrideDigest(JsonObject role)
+    {
+        foreach (var property in new[] { "envelope_profile_override", "profile_override" })
+        {
+            if (!role.TryGetPropertyValue(property, out var node) || node is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(node.ToJsonString());
+                var profileName = document.RootElement.TryGetProperty("name", out var nameElement)
+                    && nameElement.ValueKind == JsonValueKind.String
+                    ? nameElement.GetString() ?? $"role:{property}"
+                    : $"role:{property}";
+                return AgentLaunchEnvelopeProfileCodec.TryRead(
+                    document.RootElement,
+                    profileName,
+                    out var profile,
+                    out _)
+                    ? profile?.Digest
+                    : null;
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     public static SessionLayerTopologyKindUpdateResult UpdateKind(string routingRoot, SessionLayerTopologyKindUpdateRequest request)
@@ -1138,7 +1550,8 @@ internal static class SessionLayerTopologyWriter
     }
 
     private static bool IsEnvelopeProperty(string property) => property is
-        "schema_version" or "team" or "workspace" or "workspace_id" or "tab_id" or "updated_at" or "roles";
+        "schema_version" or "team" or "workspace" or "workspace_id" or "tab_id" or "updated_at" or "roles"
+        or "envelope_profiles" or "profiles";
 
     private static void WriteAtomically(string path, string content)
     {
@@ -1185,6 +1598,24 @@ internal static class SessionLayerTopologyWriter
             Changed = false,
             AlreadyRecorded = false,
             Conflict = true,
+            Summary = summary,
+        };
+
+    private static SessionLayerTopologyProfileRecordResult ProfileConflict(
+        SessionLayerTopologyProfileRecordRequest request,
+        string path,
+        string summary) => new()
+        {
+            Team = request.Team,
+            ProfileName = request.ProfileName,
+            Role = request.Role,
+            Mode = request.Write ? "write" : "dry-run",
+            RecordPath = NotifyRoleTopologyStore.RelativePathFor(request.Domain, request.Team),
+            Applied = false,
+            Changed = false,
+            AlreadyRecorded = false,
+            Conflict = true,
+            Digest = string.Empty,
             Summary = summary,
         };
 }
@@ -1234,6 +1665,43 @@ internal sealed record SessionLayerTopologyRecordResult
     public required string Summary { get; init; }
 }
 
+internal sealed record SessionLayerTopologyProfileRecordRequest
+{
+    public required string Domain { get; init; }
+    public required string Team { get; init; }
+    public required string ProfileName { get; init; }
+    public required string Kind { get; init; }
+    public required string SandboxMode { get; init; }
+    public required string ApprovalMode { get; init; }
+    public required string RootsPolicy { get; init; }
+    public required IReadOnlyList<string> WritableRoots { get; init; }
+    public required string NetworkAccess { get; init; }
+    public required string TransportMode { get; init; }
+    public required string Evidence { get; init; }
+    public required string RecordedAt { get; init; }
+    public required IReadOnlyList<string> PermissionOptions { get; init; }
+    public required IReadOnlyList<string> NetworkUrls { get; init; }
+    public string? Role { get; init; }
+    public required bool RoleOverride { get; init; }
+    public required string CurrentDigest { get; init; }
+    public required bool Write { get; init; }
+}
+
+internal sealed record SessionLayerTopologyProfileRecordResult
+{
+    public required string Team { get; init; }
+    public required string ProfileName { get; init; }
+    public string? Role { get; init; }
+    public required string Mode { get; init; }
+    public required string RecordPath { get; init; }
+    public required bool Applied { get; init; }
+    public required bool Changed { get; init; }
+    public required bool AlreadyRecorded { get; init; }
+    public required bool Conflict { get; init; }
+    public required string Digest { get; init; }
+    public required string Summary { get; init; }
+}
+
 internal sealed record SessionLayerTopologyKindUpdateRequest(string Domain, string Team, string Role, string CurrentKind, string NewKind, bool Write);
 internal sealed record SessionLayerTopologyKindUpdateResult(
     string Team,
@@ -1267,8 +1735,17 @@ internal sealed record SessionLayerTopologyShowResult
     public required string? WorkspaceId { get; init; }
     public required string RecordPath { get; init; }
     public required IReadOnlyList<SessionLayerTopologyShownRole> Roles { get; init; }
+    public required IReadOnlyList<SessionLayerTopologyShownProfile> EnvelopeProfiles { get; init; }
     public required IReadOnlyList<SessionLayerTopologyFinding> Findings { get; init; }
     public required string Summary { get; init; }
+}
+
+internal sealed record SessionLayerTopologyShownProfile
+{
+    public required string Name { get; init; }
+    public required string Kind { get; init; }
+    public required string? Digest { get; init; }
+    public required string RecordedAt { get; init; }
 }
 
 internal sealed record SessionLayerTopologyShownRole

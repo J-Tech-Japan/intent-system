@@ -64,6 +64,33 @@ exact invocation plus error text as `refused`. Never guess a bare id or consult
 a shipped list. The append-only ledger is host-local; these commands launch no
 provider and perform no provider validation.
 
+### Operator-recorded envelope profiles (G686 — preview-through-1.x)
+
+Record a named typed comparator baseline with a current-digest CAS. This is the
+only profile write surface; `update-kind`, `update-field`, and generic JSON
+editing do not record profiles:
+
+```bash
+intent-cli session-layer topology record-profile \
+  --domain <domain> --team <team> --profile-name <name> --kind <kind> \
+  --sandbox-mode <mode> --approval-mode <mode> --roots-policy <policy> \
+  [--writable-root <path>]... --network-access <value> \
+  --transport-mode <mode> --evidence <text> \
+  [--permission-option <flag>]... [--network-url <url>]... \
+  [--role <role> [--role-override]] --current-digest <digest|absent> \
+  --confirm-record-profile --write --format json
+```
+
+The profile is an operator-recorded fact and is never learned from observed
+argv. A role reference (`envelope_profile`) or typed role override takes
+precedence over the G684 kind registry for that role. No profile preserves the
+registry comparator byte-for-byte. A dangling reference or kind mismatch is a
+machine-readable `profile-invalid` finding; it never silently falls back to the
+registry. The command is confirmation-, kind-, and digest-guarded, and does not
+launch, recover, or mutate a seat. Profile comparison remains detection-only
+and retains G684's exact security fields, cadence, model/reasoning exclusion,
+and preview-through-1.x status.
+
 ## Design / intents
 
 ```bash
