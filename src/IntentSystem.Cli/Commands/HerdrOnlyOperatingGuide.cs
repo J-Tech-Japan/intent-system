@@ -80,6 +80,8 @@ internal static class HerdrOnlyOperatingGuide
         - **measured facts** —
         {{codexMeasurements}}
 
+        Each supervision cycle compares every running seat's observed argv with the recorded kind recipe for sandbox mode, approval mode, writable roots/add-dirs, and network access only. Missing bounds, extra roots, or a broader envelope are alarming; a narrower envelope is informational. Model and reasoning effort are operator-choice wish fields excluded by design. A `recipe-drift` finding names both shapes once per seat per cycle, wakes nobody, and acts on nothing; conforming and wish-only-different seats are silent.
+
         Role identity in herdr-only is this verified logical-role→pane mapping. There is no agmsg identity or separate role-switching step.
 
         ## Herdr-only dispatch and artifact handoff
@@ -209,6 +211,7 @@ internal static class HerdrOnlyOperatingGuide
                     .ToArray()),
             ["registry_boundary"] = "Only measured kinds have entries. Unmeasured kinds such as Cursor and opencode remain placeholders by name only; update-kind surfaces a recorded recipe or an explicit absent notice, never invented flags. The recorded kind is the human's current wish, a requested switch is one step, and recovery never changes a kind unattended.",
             ["seat_kind_intake"] = "Before launch, ask the human which CLI and model each seat (design, orchestrator, implementation, review) should run; record each answer as that role's kind with topology record --kind or the confirmed topology update-kind command. Do not guess a default model.",
+            ["recipe_drift"] = "Each supervision cycle compares every running seat's observed argv with the recorded kind recipe for sandbox mode, approval mode, writable roots/add-dirs, and network access only. Missing bounds, extra roots, or a broader envelope are alarming; a narrower envelope is informational. Model and reasoning effort are operator-choice wish fields excluded by design. A recipe-drift finding names both shapes once per seat per cycle, wakes nobody, and acts on nothing; conforming and wish-only-different seats are silent.",
             ["codex_recipe"] = JsonSerializer.SerializeToNode(
                 AgentLaunchRecipeRegistry.Find("codex")
                     ?? throw new InvalidOperationException("The measured Codex launch recipe is missing from the registry.")),

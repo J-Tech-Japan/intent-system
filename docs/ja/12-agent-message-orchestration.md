@@ -337,9 +337,14 @@ producer-covered kind は G682 の inapplicability を自動的に解消し、un
 `copilot:launch-limited-permissions` です。
 
 各 supervision cycle は running recorded seat の structured argv と kind ごとの recorded
-recipe も比較します。argument order と whitespace は同値です。mismatch は observed shape
-と recorded shape の両方を示す `recipe-drift` finding を seat ごと、cycle ごとに 1 回出し、
-conforming seat では無出力です。watcher は seat の restart/correction を行いません。input 操作は
+recipe も比較します。比較対象は security envelope、すなわち sandbox mode、approval mode、
+writable roots/add-dirs、network access だけです。bound の欠落、extra root、より広い envelope は
+`recipe-envelope-alarming`、より狭い envelope は informational な
+`recipe-envelope-narrower` です。model と reasoning effort は operator-choice の wish field として
+設計上比較から除外されるため、wish だけの差分は無出力です。argument order と whitespace は
+同値です。mismatch は observed shape と recorded shape の両方を示す `recipe-drift` finding を
+seat ごと、cycle ごとに 1 回出し、conforming seat では無出力です。finding は誰にも通知せず、
+watcher は seat の restart/correction を行いません。input 操作は
 一致する policy、永続的な実行前監査、orchestration-only 通知の後に registry の exact bounded
 `agent send-keys` sequence を実行する場合だけです。generic keystroke relay と design answer path は
 ありません。prompt の監査記録は既存の `cycles.jsonl` stream を共有し、seat、pane、class、rule、actor、

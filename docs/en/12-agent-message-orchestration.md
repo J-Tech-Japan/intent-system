@@ -407,10 +407,16 @@ recorded codex launch-hook trust dialog, and
 `copilot:launch-limited-permissions` from the G636 launch recipe.
 
 Each supervision cycle also compares the structured argv of every running
-recorded seat with its kind's recorded recipe. Argument order and whitespace
-are equivalent. A mismatch emits one `recipe-drift` finding per seat per cycle
-and names both the observed and recorded shapes; a conforming seat is silent.
-The watcher never restarts or corrects a seat. Its only input operation is the
+recorded seat with its kind's recorded recipe. The comparison covers exactly
+the security envelope: sandbox mode, approval mode, writable roots/add-dirs,
+and network access. Missing bounds, extra roots, and a broader envelope are
+`recipe-envelope-alarming`; a narrower envelope is
+`recipe-envelope-narrower` and informational. Model and reasoning effort are
+operator-choice wish fields excluded by design, so a wish-only difference is
+silent. Argument order and whitespace are equivalent. A mismatch emits one
+`recipe-drift` finding per seat per cycle and names both the observed and
+recorded shapes; a conforming seat is silent. The finding wakes nobody, and
+the watcher never restarts or corrects a seat. Its only input operation is the
 registry's exact bounded `agent send-keys` sequence after a matching policy,
 durable pre-execution audit, and orchestration-only wake; there is no generic
 keystroke relay or design answer path. Prompt audits share the existing

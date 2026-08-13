@@ -2,24 +2,66 @@ using System.Text.RegularExpressions;
 
 namespace IntentSystem.Cli.Commands;
 
+internal enum AgentLaunchEnvelopeDrift
+{
+    None,
+    Informational,
+    Alarming,
+}
+
 internal sealed record AgentLaunchShapeComparison
 {
     public required bool Resolved { get; init; }
     public required bool Conforming { get; init; }
+    public required AgentLaunchEnvelopeDrift Drift { get; init; }
     public required string RecordedShape { get; init; }
     public string? ObservedShape { get; init; }
     public required string Summary { get; init; }
 }
 
 /// <summary>
-/// G666 compares structured process argv with the measured per-kind recipe.
-/// It deliberately does not read terminal text. Option order and whitespace
-/// are immaterial; recorded placeholders accept one concrete value and square
-/// bracket groups remain optional.
+/// G684 compares only the security envelope in structured process argv. Model
+/// and reasoning effort are human-selected wish fields and never participate.
+/// Option order and whitespace are immaterial; recorded placeholders accept a
+/// concrete value and square-bracket groups remain optional.
 /// </summary>
 internal static partial class AgentLaunchShapeComparer
 {
     private sealed record ExpectedOption(string Name, string? Value, bool Optional);
+    private sealed record ParsedOption(string Name, string? Value);
+    private sealed record EnvelopeResult(AgentLaunchEnvelopeDrift Drift, IReadOnlyList<string> Differences);
+
+    private static readonly HashSet<string> SandboxOptions = new(StringComparer.Ordinal)
+    {
+        "--sandbox",
+        "--sandbox-mode",
+    };
+
+    private static readonly HashSet<string> ApprovalOptions = new(StringComparer.Ordinal)
+    {
+        "--ask-for-approval",
+        "--approval-mode",
+        "--approval-policy",
+    };
+
+    private static readonly HashSet<string> RootOptions = new(StringComparer.Ordinal)
+    {
+        "--add-dir",
+        "--writable-root",
+    };
+
+    private static readonly HashSet<string> NetworkOptions = new(StringComparer.Ordinal)
+    {
+        "--network",
+        "--network-access",
+    };
+
+    private static readonly HashSet<string> BroadEnvelopeFlags = new(StringComparer.Ordinal)
+    {
+        "--allow-all-paths",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--yolo",
+    };
 
     public static AgentLaunchShapeComparison Compare(
         string kind,
@@ -35,41 +77,273 @@ internal static partial class AgentLaunchShapeComparer
             {
                 Resolved = false,
                 Conforming = false,
+                Drift = AgentLaunchEnvelopeDrift.None,
                 RecordedShape = recipe.Invocation,
                 Summary = $"No structured argv for running agent kind '{kind}' was available; recipe conformance was not inferred.",
             };
         }
 
         var expected = ParseExpected(recipe.Invocation);
-        foreach (var process in candidates)
+        var comparisons = candidates
+            .Select(process => (Process: process, Result: CompareEnvelope(expected, ParseObserved(process.Argv!))))
+            .ToArray();
+        var selected = comparisons
+            .OrderBy(item => item.Result.Drift)
+            .ThenBy(item => item.Process.Argv!.Count)
+            .ThenBy(item => item.Process.Pid)
+            .First();
+
+        if (selected.Result.Drift == AgentLaunchEnvelopeDrift.None)
         {
-            var observed = ParseObserved(process.Argv!);
-            if (Matches(expected, observed))
+            return new AgentLaunchShapeComparison
             {
-                return new AgentLaunchShapeComparison
-                {
-                    Resolved = true,
-                    Conforming = true,
-                    RecordedShape = recipe.Invocation,
-                    ObservedShape = FormatObserved(process),
-                    Summary = $"Observed launch shape conforms structurally to the recorded '{kind}' recipe.",
-                };
-            }
+                Resolved = true,
+                Conforming = true,
+                Drift = AgentLaunchEnvelopeDrift.None,
+                RecordedShape = recipe.Invocation,
+                ObservedShape = FormatObserved(selected.Process),
+                Summary = $"Observed launch envelope conforms structurally to the recorded '{kind}' recipe; model and reasoning effort are excluded by design.",
+            };
         }
 
-        var selected = candidates
-            .OrderBy(process => process.Argv!.Count)
-            .ThenBy(process => process.Pid)
-            .First();
+        var classification = selected.Result.Drift == AgentLaunchEnvelopeDrift.Alarming
+            ? "alarming"
+            : "informational (narrower)";
         return new AgentLaunchShapeComparison
         {
             Resolved = true,
             Conforming = false,
+            Drift = selected.Result.Drift,
             RecordedShape = recipe.Invocation,
-            ObservedShape = FormatObserved(selected),
-            Summary = $"Observed launch shape for agent kind '{kind}' does not conform to its recorded recipe.",
+            ObservedShape = FormatObserved(selected.Process),
+            Summary = $"Observed launch envelope for agent kind '{kind}' has {classification} recipe drift: "
+                + string.Join("; ", selected.Result.Differences),
         };
     }
+
+    private static EnvelopeResult CompareEnvelope(
+        IReadOnlyList<ExpectedOption> expected,
+        IReadOnlyList<ParsedOption> observed)
+    {
+        var alarming = new List<string>();
+        var informational = new List<string>();
+
+        CompareScalar("sandbox mode", SandboxOptions, expected, observed, SandboxRank, alarming, informational);
+        CompareScalar("approval mode", ApprovalOptions, expected, observed, ApprovalRank, alarming, informational);
+        CompareRoots(expected, observed, alarming, informational);
+        CompareNetwork(expected, observed, alarming, informational);
+
+        var broadFlags = observed
+            .Where(item => BroadEnvelopeFlags.Contains(item.Name))
+            .Select(item => item.Name)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (broadFlags.Length > 0)
+        {
+            alarming.Add($"broader blanket envelope flag(s) present: {string.Join(", ", broadFlags)}");
+        }
+
+        if (alarming.Count > 0)
+        {
+            return new EnvelopeResult(AgentLaunchEnvelopeDrift.Alarming, alarming.Concat(informational).ToArray());
+        }
+
+        return informational.Count > 0
+            ? new EnvelopeResult(AgentLaunchEnvelopeDrift.Informational, informational)
+            : new EnvelopeResult(AgentLaunchEnvelopeDrift.None, []);
+    }
+
+    private static void CompareScalar(
+        string field,
+        IReadOnlySet<string> names,
+        IReadOnlyList<ExpectedOption> expected,
+        IReadOnlyList<ParsedOption> observed,
+        Func<string, int?> rank,
+        List<string> alarming,
+        List<string> informational)
+    {
+        var recorded = expected.FirstOrDefault(item => names.Contains(item.Name));
+        var actual = observed.LastOrDefault(item => names.Contains(item.Name));
+        if (recorded is null)
+        {
+            if (actual is not null && rank(actual.Value ?? string.Empty) is > 0)
+            {
+                alarming.Add($"{field} '{actual.Value ?? "<missing-value>"}' is broader than the recipe's implicit bounded default");
+            }
+            return;
+        }
+
+        if (actual is null)
+        {
+            if (!recorded.Optional)
+            {
+                alarming.Add($"required {field} '{recorded.Value ?? "<flag>"}' is missing");
+            }
+            return;
+        }
+
+        if (OptionValueMatches(recorded.Value, actual.Value))
+        {
+            return;
+        }
+
+        var recordedRank = rank(recorded.Value ?? string.Empty);
+        var observedRank = rank(actual.Value ?? string.Empty);
+        if (recordedRank is not null && observedRank is not null && observedRank < recordedRank)
+        {
+            informational.Add($"{field} '{actual.Value}' is narrower than recorded '{recorded.Value}'");
+        }
+        else
+        {
+            alarming.Add($"{field} '{actual.Value ?? "<missing-value>"}' is broader than or incompatible with recorded '{recorded.Value ?? "<flag>"}'");
+        }
+    }
+
+    private static void CompareRoots(
+        IReadOnlyList<ExpectedOption> expected,
+        IReadOnlyList<ParsedOption> observed,
+        List<string> alarming,
+        List<string> informational)
+    {
+        var recordedRoots = expected.Where(item => RootOptions.Contains(item.Name)).ToArray();
+        var observedRoots = observed.Where(item => RootOptions.Contains(item.Name)).ToArray();
+        if (recordedRoots.Length == 0)
+        {
+            if (observedRoots.Length > 0)
+            {
+                alarming.Add($"{observedRoots.Length} writable root(s) are present beyond the recorded recipe");
+            }
+            return;
+        }
+
+        if (observedRoots.Length == 0 && recordedRoots.Any(item => !item.Optional))
+        {
+            alarming.Add("required writable-root/add-dir bound is missing");
+            return;
+        }
+
+        var remaining = observedRoots.ToList();
+        var missingRequired = new List<ExpectedOption>();
+        foreach (var root in recordedRoots.Where(item => !item.Optional))
+        {
+            var index = remaining.FindIndex(candidate =>
+                string.Equals(candidate.Name, root.Name, StringComparison.Ordinal)
+                && OptionValueMatches(root.Value, candidate.Value));
+            if (index >= 0)
+            {
+                remaining.RemoveAt(index);
+            }
+            else
+            {
+                missingRequired.Add(root);
+            }
+        }
+
+        foreach (var root in recordedRoots.Where(item => item.Optional))
+        {
+            var index = remaining.FindIndex(candidate =>
+                string.Equals(candidate.Name, root.Name, StringComparison.Ordinal)
+                && OptionValueMatches(root.Value, candidate.Value));
+            if (index >= 0)
+            {
+                remaining.RemoveAt(index);
+            }
+        }
+
+        if (remaining.Count > 0)
+        {
+            alarming.Add($"extra writable root(s) broaden the envelope: {string.Join(", ", remaining.Select(item => item.Value ?? "<missing-value>"))}");
+        }
+        if (missingRequired.Count > 0)
+        {
+            informational.Add($"fewer writable root(s) narrow the envelope; absent recorded root(s): {string.Join(", ", missingRequired.Select(item => item.Value ?? item.Name))}");
+        }
+    }
+
+    private static void CompareNetwork(
+        IReadOnlyList<ExpectedOption> expected,
+        IReadOnlyList<ParsedOption> observed,
+        List<string> alarming,
+        List<string> informational)
+    {
+        var recorded = FindNetwork(expected.Select(item => new ParsedOption(item.Name, item.Value)));
+        var actual = FindNetwork(observed);
+        if (recorded is null && actual is null)
+        {
+            return;
+        }
+
+        var recordedRank = NetworkRank(recorded ?? "disabled");
+        var observedRank = NetworkRank(actual ?? "disabled");
+        if (recordedRank is null || observedRank is null)
+        {
+            if (!string.Equals(recorded, actual, StringComparison.OrdinalIgnoreCase))
+            {
+                alarming.Add($"network access '{actual ?? "<implicit-disabled>"}' is incompatible with recorded '{recorded ?? "<implicit-disabled>"}'");
+            }
+        }
+        else if (observedRank > recordedRank)
+        {
+            alarming.Add($"network access '{actual}' is broader than recorded '{recorded ?? "<implicit-disabled>"}'");
+        }
+        else if (observedRank < recordedRank)
+        {
+            informational.Add($"network access '{actual ?? "<implicit-disabled>"}' is narrower than recorded '{recorded}'");
+        }
+    }
+
+    private static string? FindNetwork(IEnumerable<ParsedOption> options)
+    {
+        foreach (var option in options.Reverse())
+        {
+            if (NetworkOptions.Contains(option.Name))
+            {
+                return option.Value ?? "enabled";
+            }
+            if (option.Name is "--config" or "-c"
+                && option.Value is { } config
+                && TryReadConfig(config, "sandbox_workspace_write.network_access", out var value))
+            {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static bool TryReadConfig(string config, string key, out string value)
+    {
+        var separator = config.IndexOf('=');
+        if (separator > 0 && string.Equals(config[..separator].Trim(), key, StringComparison.Ordinal))
+        {
+            value = config[(separator + 1)..].Trim();
+            return true;
+        }
+        value = string.Empty;
+        return false;
+    }
+
+    private static int? SandboxRank(string value) => value.ToLowerInvariant() switch
+    {
+        "read-only" => 0,
+        "workspace-write" => 1,
+        "danger-full-access" => 2,
+        _ => null,
+    };
+
+    private static int? ApprovalRank(string value) => value.ToLowerInvariant() switch
+    {
+        "untrusted" => 0,
+        "on-request" or "on-failure" => 1,
+        "never" => 2,
+        _ => null,
+    };
+
+    private static int? NetworkRank(string value) => value.ToLowerInvariant() switch
+    {
+        "false" or "disabled" or "deny" or "none" or "restricted" => 0,
+        "true" or "enabled" or "allow" or "full" => 1,
+        _ => null,
+    };
 
     private static IReadOnlyList<ExpectedOption> ParseExpected(string invocation)
     {
@@ -83,80 +357,57 @@ internal static partial class AgentLaunchShapeComparer
             var tokens = Tokenize(text);
             for (var index = 0; index < tokens.Count; index++)
             {
-                if (!tokens[index].StartsWith("--", StringComparison.Ordinal))
+                if (!IsOption(tokens[index]))
                 {
                     continue;
                 }
 
-                var value = index + 1 < tokens.Count && !tokens[index + 1].StartsWith("--", StringComparison.Ordinal)
+                var parsed = SplitOption(tokens[index]);
+                var value = parsed.Value ?? (index + 1 < tokens.Count && !IsOption(tokens[index + 1])
                     ? tokens[++index]
-                    : null;
-                result.Add(new ExpectedOption(tokens[index - (value is null ? 0 : 1)], value, optional));
+                    : null);
+                result.Add(new ExpectedOption(parsed.Name, value, optional));
             }
         }
         return result;
     }
 
-    private static IReadOnlyList<(string Name, string? Value)> ParseObserved(IReadOnlyList<string> argv)
+    private static IReadOnlyList<ParsedOption> ParseObserved(IReadOnlyList<string> argv)
     {
-        var result = new List<(string Name, string? Value)>();
-        var firstOption = argv.Select((value, index) => (value, index))
-            .FirstOrDefault(item => item.value.StartsWith("--", StringComparison.Ordinal)).index;
-        if (firstOption == 0 && !argv[0].StartsWith("--", StringComparison.Ordinal))
+        var result = new List<ParsedOption>();
+        for (var index = 0; index < argv.Count; index++)
         {
-            return result;
-        }
-
-        for (var index = firstOption; index < argv.Count; index++)
-        {
-            if (!argv[index].StartsWith("--", StringComparison.Ordinal))
+            if (!IsOption(argv[index]))
             {
                 continue;
             }
 
-            var name = argv[index];
-            var value = index + 1 < argv.Count && !argv[index + 1].StartsWith("--", StringComparison.Ordinal)
+            var parsed = SplitOption(argv[index]);
+            var value = parsed.Value ?? (index + 1 < argv.Count && !IsOption(argv[index + 1])
                 ? argv[++index]
-                : null;
-            result.Add((name, value));
+                : null);
+            result.Add(new ParsedOption(parsed.Name, value));
         }
         return result;
     }
 
-    private static bool Matches(
-        IReadOnlyList<ExpectedOption> expected,
-        IReadOnlyList<(string Name, string? Value)> observed)
+    private static ParsedOption SplitOption(string token)
     {
-        var remaining = observed.ToList();
-        foreach (var item in expected.Where(item => !item.Optional))
-        {
-            var index = remaining.FindIndex(candidate => OptionMatches(item, candidate));
-            if (index < 0)
-            {
-                return false;
-            }
-            remaining.RemoveAt(index);
-        }
-
-        foreach (var item in expected.Where(item => item.Optional))
-        {
-            var index = remaining.FindIndex(candidate => OptionMatches(item, candidate));
-            if (index >= 0)
-            {
-                remaining.RemoveAt(index);
-            }
-        }
-
-        return remaining.Count == 0;
+        var separator = token.IndexOf('=');
+        return separator > 0
+            ? new ParsedOption(token[..separator], token[(separator + 1)..])
+            : new ParsedOption(token, null);
     }
 
-    private static bool OptionMatches(ExpectedOption expected, (string Name, string? Value) observed) =>
-        string.Equals(expected.Name, observed.Name, StringComparison.Ordinal)
-        && (expected.Value is null
-            ? observed.Value is null
-            : IsPlaceholder(expected.Value)
-                ? !string.IsNullOrWhiteSpace(observed.Value)
-                : string.Equals(expected.Value, observed.Value, StringComparison.Ordinal));
+    private static bool IsOption(string value) =>
+        value.StartsWith("--", StringComparison.Ordinal) || string.Equals(value, "-c", StringComparison.Ordinal);
+
+    private static bool OptionValueMatches(string? expected, string? observed) =>
+        expected is null
+            ? observed is null
+            : IsPlaceholder(expected)
+                ? !string.IsNullOrWhiteSpace(observed)
+                : string.Equals(expected, observed, StringComparison.Ordinal);
 
     private static bool LooksLikeKind(NotifyPaneProcess process, string kind)
     {
