@@ -47,6 +47,40 @@ recorded topology があれば `join-and-delegate` となり、workspace や sea
 integration を追加しません。既存 recipe、deployment rule、4 judgment thread + 1
 supervision process formula、preview-through-1.x boundary を変更せず構成します。
 
+### host-local model resolution（G685 — preview-through-1.x）
+
+bootstrap、seat recovery、kind switch では、operator の informal な model / effort 名を
+必ず次の順序で解決します。
+
+1. `intent-cli session-layer model-resolution query` で host-local measured ledger を検索する。
+2. miss の場合は `herdr agent list` を実行し、`result.agents[].agent` が resolved kind と
+   完全一致する running entry を残し、workspace と pane の順に並べる。選択した pane ごとに
+   `herdr pane process-info --pane <selected-pane-id>` を実行する。
+3. `result.process_info.foreground_processes[].argv` を読み、選択した同一 kind の seat
+   すべてで full invocation が一致するときだけ再利用する。
+4. 読み取り可能な一致 argv が無い場合は human に質問する。
+
+bare model id を推測せず、shipped list を参照しません。intent-cli が出荷するのは実測済みの
+stable flag grammar だけです。Codex は `--model <id> -c
+model_reasoning_effort=<level>`、Claude は `--model <id> --effort <level>` を使います。
+他 kind の grammar は発明しません。
+
+表示された launch attempt ごとに、retry または続行の前に対応する記録 step が必須です。
+READY の後は、取得した informal name、kind、exact launched invocation、banner / running argv
+evidence を含む、表示済みの `model-resolution record --outcome verified` command を実行します。
+refusal の後は、取得した exact invocation と error text を含む、表示済みの
+`--outcome refused` command を実行します。次回 query は negative evidence を明示し、
+同一 invocation の retry を許可しません。JSONL ledger は machine-local な
+`.intent-cli/model-resolution/ledger.jsonl` にあり、configuration ではなく measurement です。
+sharing mechanism も catalogue もありません。
+
+2026-08-12 の btx-mvc setup で、`--model sol` は account-shaped HTTP 400 になりました。
+別 workspace の running Codex argv を読むことで working full invocation を回復しました。その
+provider id は host-local evidence のままで、intent-cli とこの guide には意図的に収録しません。
+
+これらの command は provider を起動せず、provider API に対して id を検証しません。
+G647 envelope field と G684 の model / effort を wish とする drift semantics は不変です。
+
 ## design thread の運用 contract（G654 — preview-through-1.x）
 
 agent kind に依存しない contract は `intent-cli guide design-thread` で表示します。
@@ -748,7 +782,7 @@ opencode など）は名前だけの placeholder のままにし、推測した 
 #### Copilot — 実測済みの最初のレシピ
 
 ```text
-herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model claude-opus-5 --mode autopilot --allow-all-tools --add-dir <role-work-root> [--add-dir <host-routing-root>] --max-autopilot-continues 10
+herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --mode autopilot --allow-all-tools --add-dir <role-work-root> [--add-dir <host-routing-root>] --max-autopilot-continues 10
 ```
 
 - **role-derived root。** 各 role には checkout または worktree 用の境界付き

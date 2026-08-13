@@ -2307,6 +2307,22 @@ internal static class GuideOrchestratorThreadCommand
                 RecordedKinds = AgentLaunchRecipeRegistry.RecordedKinds
                     .OrderBy(kind => kind, StringComparer.OrdinalIgnoreCase)
                     .ToArray(),
+                ModelFlagGrammars = AgentLaunchRecipeRegistry.RecordedModelFlagGrammars
+                    .OrderBy(grammar => grammar.Kind, StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                ModelResolution = new OrchestratorModelResolution
+                {
+                    PreviewStatus = AgentModelResolutionGuidance.PreviewStatus,
+                    ResolutionOrder = AgentModelResolutionGuidance.ResolutionOrder,
+                    NeverGuessRule = AgentModelResolutionGuidance.NeverGuessRule,
+                    QueryCommand = AgentModelResolutionGuidance.QueryCommand,
+                    RecordCommand = AgentModelResolutionGuidance.RecordCommand,
+                    Incident = AgentModelResolutionGuidance.Incident,
+                    LiveArgvFallback = AgentModelResolutionGuidance.LiveArgvFallback,
+                    LaunchEvidenceWorkflow = AgentModelResolutionGuidance.LaunchEvidenceWorkflow,
+                    Boundary =
+                        "Use this order for initial seat creation, recovery, and kind switch. intent-cli records and emits text only: it launches no provider, validates no model id, fetches no catalogue, and shares no ledger across hosts. G647 envelope fields and G684 envelope/wish drift semantics are unchanged.",
+                },
                 RequiredRecipeFields = new[]
                 {
                     "the launch invocation and agent kind",
@@ -3668,6 +3684,32 @@ internal static class GuideOrchestratorThreadCommand
             + "A target kind without a recorded recipe is named as absent at `topology update-kind`; do not "
             + "invent a bounded invocation. The recorded kind is the human's current wish, a requested switch "
             + "is one step, and recovery never changes a kind unattended.");
+        writer.WriteLine();
+        writer.WriteLine("#### Model and effort resolution (G685)");
+        writer.WriteLine();
+        writer.WriteLine($"- status: **{unattended.ModelResolution.PreviewStatus}**");
+        writer.WriteLine("- measured flag grammar (placeholders only):");
+        foreach (var grammar in unattended.ModelFlagGrammars)
+        {
+            writer.WriteLine($"  - **{grammar.Kind}** — model `{grammar.Model}`; effort `{grammar.Effort}`");
+        }
+        foreach (var item in unattended.ModelResolution.ResolutionOrder)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine($"- {unattended.ModelResolution.NeverGuessRule}");
+        writer.WriteLine($"- query before initial launch, recovery, or kind switch: `{unattended.ModelResolution.QueryCommand}`");
+        writer.WriteLine($"- live same-kind selection: {unattended.ModelResolution.LiveArgvFallback.Selection}");
+        writer.WriteLine($"- live list (read-only): `{unattended.ModelResolution.LiveArgvFallback.ListCommand}`");
+        writer.WriteLine($"- argv inspection (read-only): `{unattended.ModelResolution.LiveArgvFallback.InspectCommand}`");
+        writer.WriteLine($"- argv field: `{unattended.ModelResolution.LiveArgvFallback.ArgvPath}`");
+        writer.WriteLine($"- agreement: {unattended.ModelResolution.LiveArgvFallback.AgreementRule}");
+        writer.WriteLine($"- human fallback: {unattended.ModelResolution.LiveArgvFallback.HumanFallback}");
+        writer.WriteLine($"- **mandatory launch evidence:** {unattended.ModelResolution.LaunchEvidenceWorkflow.Rule}");
+        writer.WriteLine($"- verified READY record: `{unattended.ModelResolution.LaunchEvidenceWorkflow.Verified.Command}`");
+        writer.WriteLine($"- refusal record: `{unattended.ModelResolution.LaunchEvidenceWorkflow.Refused.Command}`");
+        writer.WriteLine($"- measured incident: {unattended.ModelResolution.Incident}");
+        writer.WriteLine($"- boundary: {unattended.ModelResolution.Boundary}");
         writer.WriteLine();
         writer.WriteLine($"> **Unattended READY branch:** {unattended.ReadyBranch}");
         writer.WriteLine();
@@ -5737,6 +5779,12 @@ internal sealed record OrchestratorUnattendedLaunchRecipes
     [JsonPropertyName("recorded_kinds")]
     public required IReadOnlyList<string> RecordedKinds { get; init; }
 
+    [JsonPropertyName("model_flag_grammars")]
+    public required IReadOnlyList<AgentModelFlagGrammar> ModelFlagGrammars { get; init; }
+
+    [JsonPropertyName("model_resolution")]
+    public required OrchestratorModelResolution ModelResolution { get; init; }
+
     [JsonPropertyName("central_autopilot_supervision_rule")]
     public required string CentralAutopilotSupervisionRule { get; init; }
 
@@ -5751,6 +5799,36 @@ internal sealed record OrchestratorUnattendedLaunchRecipes
 
     [JsonPropertyName("approval_model")]
     public required OrchestratorApprovalModel ApprovalModel { get; init; }
+}
+
+internal sealed record OrchestratorModelResolution
+{
+    [JsonPropertyName("preview_status")]
+    public required string PreviewStatus { get; init; }
+
+    [JsonPropertyName("resolution_order")]
+    public required IReadOnlyList<string> ResolutionOrder { get; init; }
+
+    [JsonPropertyName("never_guess_rule")]
+    public required string NeverGuessRule { get; init; }
+
+    [JsonPropertyName("query_command")]
+    public required string QueryCommand { get; init; }
+
+    [JsonPropertyName("record_command")]
+    public required string RecordCommand { get; init; }
+
+    [JsonPropertyName("incident")]
+    public required string Incident { get; init; }
+
+    [JsonPropertyName("live_argv_fallback")]
+    public required AgentLiveArgvFallback LiveArgvFallback { get; init; }
+
+    [JsonPropertyName("launch_evidence_workflow")]
+    public required AgentLaunchEvidenceWorkflow LaunchEvidenceWorkflow { get; init; }
+
+    [JsonPropertyName("boundary")]
+    public required string Boundary { get; init; }
 }
 
 internal sealed record OrchestratorApprovalModel

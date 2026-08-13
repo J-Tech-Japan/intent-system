@@ -37,6 +37,33 @@ intent-cli intent status
 intent-cli guide intent-work setup --format json
 ```
 
+### Host-local model-resolution ledger (G685 — preview-through-1.x)
+
+```bash
+intent-cli session-layer model-resolution query --kind <codex|claude> \
+  --informal-name <name> [--candidate-invocation <full-invocation>] --format json
+intent-cli session-layer model-resolution record --kind <codex|claude> \
+  --informal-name <name> --outcome verified --invocation <full-invocation> \
+  --evidence <banner-or-argv-evidence> --write --format json
+intent-cli session-layer model-resolution record --kind <codex|claude> \
+  --informal-name <name> --outcome refused --invocation <refused-invocation> \
+  --error <error-text> --write --format json
+```
+
+Resolve in order: ledger hit, currently-running same-kind seat argv, then ask
+the human. On a miss, run `herdr agent list`, select running entries whose
+`result.agents[].agent` exactly equals the resolved kind, then inspect each with
+`herdr pane process-info --pane <selected-pane-id>` and read
+`result.process_info.foreground_processes[].argv`. Reuse the full invocation
+only when all selected same-kind seats agree; otherwise ask the human.
+
+Every rendered launch attempt has one mandatory matching record step before
+retry or continuation. After READY, record the captured exact invocation plus
+banner/running-argv evidence as `verified`; after refusal, record the captured
+exact invocation plus error text as `refused`. Never guess a bare id or consult
+a shipped list. The append-only ledger is host-local; these commands launch no
+provider and perform no provider validation.
+
 ## Design / intents
 
 ```bash
