@@ -487,6 +487,11 @@ internal sealed record NotifyPromptAudit
     [JsonPropertyName("prompt_class")] public required string PromptClass { get; init; }
     [JsonPropertyName("rule")] public required string Rule { get; init; }
     [JsonPropertyName("actor")] public required string Actor { get; init; }
+    [JsonPropertyName("decision_actor_role")] public string? DecisionActorRole { get; init; }
+    [JsonPropertyName("mechanical_executor")] public string? MechanicalExecutor { get; init; }
+    [JsonPropertyName("scope_or_rule_id")] public string? ScopeOrRuleId { get; init; }
+    [JsonPropertyName("state_change_sequence")] public long? StateChangeSequence { get; init; }
+    [JsonPropertyName("observed_text_hash")] public string? ObservedTextHash { get; init; }
     [JsonPropertyName("timestamp")] public required DateTimeOffset Timestamp { get; init; }
     [JsonPropertyName("outcome")] public required string Outcome { get; init; }
     [JsonPropertyName("exact_answer_scope")] public string? ExactAnswerScope { get; init; }

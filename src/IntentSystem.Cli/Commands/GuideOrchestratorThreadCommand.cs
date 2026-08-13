@@ -2287,15 +2287,20 @@ internal static class GuideOrchestratorThreadCommand
                     + "is test execution rather than read-only, owned-scratch-delete names exact wake-ledger paths, and "
                     + "exact-command-once binds one normalized AST digest to the current dialog hash. "
                     + "unknown text is escalate-only. Only a validated matched pre-approve lets orchestration execute "
-                    + "the registry's exact bounded answer after durable audit. Design never relays keys.",
+                    + "the registry's exact bounded answer after durable audit. G690 resolves `answerable_by` from the "
+                    + "exact class and matched scope; the canonical `notify adjudicate` surface requires pane, "
+                    + "state-change sequence, and observed-text CAS before execution. Design never relays keys.",
                 AuthorityBoundary =
                     "attending a pane is not authority to decide for the operator. G683 never fabricates a class: unknown, "
                     + "unmatched, and matched pre-escalate prompts execute no answer. G689 never treats class recognition "
                     + "or a scope name as authority: unknown syntax, command substitution, redirects, out-of-root paths, "
                     + "and uncovered AST segments escalate. A matched pre-approve carries its rule, "
-                    + "observed text, and exact scope to orchestration and is audited before execution. Design never answers a dialog "
-                    + "or relays keystrokes; credential, security, permission, destructive, and product choices remain "
-                    + "in the existing escalation set.",
+                    + "observed text, and exact scope to the shared adjudication pipeline and is audited before execution. "
+                    + "A design actor may answer only through the canonical `notify adjudicate` surface when the class "
+                    + "and scope declare it, live CAS matches, and no hard risk-floor tag is present; no shipped class or "
+                    + "scope is design-answerable in this slice. Direct relay, direct send-keys, fuzzy classification, "
+                    + "and unscoped forwarding remain forbidden; credential, security, permission, destructive, "
+                    + "product-decision, and unverifiable choices remain in the escalation set.",
             },
             UnattendedLaunchRecipes = new OrchestratorUnattendedLaunchRecipes
             {
@@ -2363,12 +2368,12 @@ internal static class GuideOrchestratorThreadCommand
                     + "supervision failure, not a shortcut.",
                 ApprovalModel = new OrchestratorApprovalModel
                 {
-                    PreviewStatus = "preview-through-1.x (G666/G682/G683/G684/G686)",
+                    PreviewStatus = "preview-through-1.x (G666/G682/G683/G684/G686/G689/G690)",
                     Layers = new[]
                     {
                         "recipe/class — eliminate known dialogs through agent-side allow configuration recorded in the G636 kind recipe fields; G689's shell-command producer recognizes and extracts a command payload without answering dialogs",
                         "producer/policy — exact recipe-registry classes validate rules; G689 scoped policy instances cover every shell AST segment with project-test, owned-scratch-delete, or exact-command-once; unknown pairs and bare shell classes are refused",
-                        "execution/audit — matched pre-approve wakes orchestration for only the recorded answer scope, AST digest, and current dialog hash; persistent options stay operator-only, everything else is escalate-only, and design never answers",
+                        "execution/audit — the shared adjudication pipeline resolves answerable_by and risk tags, and canonical notify adjudicate rechecks pane, state-change sequence, and text hash before the bounded answer; persistent options stay operator-only, hard-floor and capability-denied prompts escalate, and no shipped class is design-answerable",
                     },
                     PolicyRecordCommand = Fill("intent-cli notify supervise --domain <domain> --team <team> --repo <owner/repo> --owner-role orchestration --pre-approve <agent-kind>:<prompt-class> --pre-escalate <agent-kind>:<prompt-class> [--shell-policy <json>] --write"),
                     NoPolicyRule = "Without an exact validated pre-approve match or a matching scoped shell policy instance, residual prompts are escalate-only; accept nothing and fabricate no class. A bare `--pre-approve codex:shell-command` is structurally refused.",
@@ -2380,7 +2385,7 @@ internal static class GuideOrchestratorThreadCommand
                     EnvelopeProfileRecordCommand = Fill("intent-cli session-layer topology record-profile --domain <domain> --team <team> --profile-name <name> --kind <kind> --sandbox-mode <mode> --approval-mode <mode> --roots-policy <policy> --network-access <value> --transport-mode <mode> --evidence <text> --current-digest <digest|absent> --confirm-record-profile --write --format json"),
                     EnvelopeProfilePrecedence = "An operator-recorded profile is the baseline only for the role that references it or carries the typed override. No profile is byte-identical G684 registry behavior; a dangling reference or kind mismatch emits distinct profile-invalid and never falls back silently.",
                     ProfileInvalidFinding = "profile-invalid names the role, profile reference or override, and the kind mismatch/dangling cause; it is detection-only, wakes nobody, and does not repair topology.",
-                    WatcherBoundary = "The watcher classifies literal registry entries only and uses the read-only `intent-cli prompt-class list|describe` inventory for inspection. For G689 it verifies the extracted shell AST and every segment against scoped policy instances. The sole answer path is an audited orchestration-owned bounded key sequence for a matched pre-approve; no generic key relay exists.",
+                    WatcherBoundary = "The watcher classifies literal registry entries only and uses the read-only `intent-cli prompt-class list|describe` inventory for inspection. For G689 it verifies the extracted shell AST and every segment against scoped policy instances. G690 routes any declared authority through `intent-cli notify adjudicate`, resolves class/scope `answerable_by` plus the hard risk floor, and requires live pane/state-sequence/text-hash CAS; no generic key relay or unscoped design path exists.",
                     Formula = "four judgment-bearing threads plus one supervision process; no fifth approval seat",
                 },
             },
@@ -2610,11 +2615,11 @@ internal static class GuideOrchestratorThreadCommand
         return new OrchestratorDesignWorkspaceSupervision
         {
             Summary = Fill(
-                "G666/G689 preview-through-1.x applies the three-layer approval model. G689's shell-command class extracts command payloads but keeps all shell answer authority orchestration-only. Under authority the OPERATOR granted it, the design thread drives the team's SESSION LAYER through "
+                "G666/G689/G690 preview-through-1.x applies the three-layer approval model plus scoped adjudication authority. G689's shell-command class extracts command payloads but keeps all shipped shell answer authority orchestration-only; G690 resolves any future capability only through class, scope, risk-floor, audit, and live-CAS checks. Under authority the OPERATOR granted it, the design thread drives the team's SESSION LAYER through "
                 + "the workspace manager: it provisions the team (see `Terminal-workspace provisioning`), keeps the "
                 + "sessions alive and correctly held, and supervises for stalls. It records blocking waits and routes "
-                + "them to orchestration; it never answers a dialog or relays keystrokes. This adds a session-layer role — it moves NO workflow "
-                + "authority."),
+                + "them to the canonical adjudication boundary; it never relays keystrokes or bypasses class, scope, "
+                + "risk-floor, audit, or live-CAS checks. This adds a session-layer role — it moves NO workflow authority."),
             GrantedAuthority = new OrchestratorSupervisionAuthority
             {
                 Summary =
@@ -2631,7 +2636,7 @@ internal static class GuideOrchestratorThreadCommand
                     "PROVISIONING — build the team's workspace, folders, panes, launches, and role initialization per `Terminal-workspace provisioning` (G549); supervision references that section rather than repeating it.",
                     "SESSION LIFECYCLE — investigate an unresponsive session and, when it must be replaced, do so through the graceful drop that honors one-holder exclusivity.",
                     "STALL SUPERVISION — run the three supervision layers below so a stall is noticed by a layer that is actually running, not by luck.",
-                    "BLOCKING DIALOGS — detect and record the wait, then route it to orchestration; design never answers or relays keys.",
+                    "BLOCKING DIALOGS — detect and record the wait, then route it to the canonical adjudication boundary; design never relays keys or bypasses class, scope, risk-floor, audit, or live-CAS checks.",
                 },
                 WorkflowStateOwnershipUnchanged =
                     "workflow state ownership does not move. Labels, queue-state, publication, delegation, CI/review gating, and closeout remain with intent-cli, GitHub, and the "
@@ -2693,8 +2698,8 @@ internal static class GuideOrchestratorThreadCommand
                         + "looks, so this layer is the fast one.",
                     Note =
                         "Scanning uses structured process state, and what the scan finds routes by STATE, not by one rule for "
-                        + "everything. A blocking dialog is recorded and routed to orchestration under the durable "
-                        + "per-team policy; design never answers it. An `agent-absent` shell "
+                        + "everything. A blocking dialog is recorded and routed to the canonical adjudication surface under the durable "
+                        + "per-team policy; design cannot bypass exact class, scope, risk-floor, audit, or live-CAS checks. An `agent-absent` shell "
                         + "prompt is NOT a dialog and must never be routed through dialog handling: it goes to the "
                         + "shim-safe relaunch recovery (recreating the app-server when that is what died), followed "
                         + "by the COMPLETE verified-liveness re-check — report, settle delay, all three checks. See "
@@ -2728,8 +2733,7 @@ internal static class GuideOrchestratorThreadCommand
                     State = "blocking dialog",
                     WhatTheScanSees = "an approval, selection, or trust prompt waiting for input.",
                     Recovery =
-                        "record it and route it to orchestration under the durable per-team policy; design never "
-                        + "answers or relays keys, and absent policy is escalate-only.",
+                        "record it and route it to the canonical adjudication surface under the durable per-team policy; direct design relay is forbidden and absent policy is escalate-only.",
                 },
                 new OrchestratorPaneStuckState
                 {
@@ -2756,20 +2760,20 @@ internal static class GuideOrchestratorThreadCommand
                 + "follow-up. Field cost of forgetting: a claim-now lost inside a session-restart window left a "
                 + "published issue stalled for 5.5 HOURS because no supervision layer happened to be running.",
             VerifiedReadRule =
-                "the design thread never answers a dialog. G683 supervision emits exact recipe-registry classes plus observed text; G689 additionally verifies the extracted shell AST and every segment against a scoped policy; unknown text stays escalate-only; unknown syntax and uncovered shell segments stay escalate-only. Only a validated matched pre-approve permits orchestration's audited exact-scope answer.",
+                "the canonical adjudication surface is the only bounded answer path; design may use it only for a declared class/scope capability with no hard-floor tag and matching pane/state-sequence/text-hash CAS. G683 supervision emits exact recipe-registry classes plus observed text; G689 additionally verifies the extracted shell AST and every segment against a scoped policy; unknown text stays escalate-only; unknown syntax and uncovered shell segments stay escalate-only. Only a validated matched pre-approve, declared capability, absent hard-floor tag, durable audit, and live CAS permit a bounded exact-scope answer; no shipped class or scope is design-answerable in this slice.",
             MayAnswer = new[]
             {
                 new OrchestratorSupervisionMayAnswer
                 {
                     Dialog = SupervisionMayAnswerClasses.RequestedConfirmations,
                     Verification =
-                        "answer only when an exact registry class matches a validated pre-approve rule; orchestration audits and executes only its recorded scope, and design never answers it.",
+                        "answer only through canonical `notify adjudicate` when an exact registry class, validated pre-approve, declared capability, absent hard-floor tag, and live pane/state-sequence/text-hash CAS all match; shipped classes remain orchestration-only.",
                 },
                 new OrchestratorSupervisionMayAnswer
                 {
                     Dialog = SupervisionMayAnswerClasses.VerifiedReadOnlyCommandApprovals,
                     Verification =
-                        "for non-shell attended cases only, answer through the same exact registry + validated pre-approve + durable-audit path; G689 shell-command is not read-only authority even for project-test, so it requires orchestration-only scoped policy for every AST segment; otherwise escalate.",
+                        "for non-shell attended cases only, use the same exact registry + validated pre-approve + durable-audit path through canonical adjudicate; G689 shell-command is not read-only authority even for project-test, so every AST segment remains orchestration-only; otherwise escalate.",
                 },
                 new OrchestratorSupervisionMayAnswer
                 {
@@ -2782,7 +2786,7 @@ internal static class GuideOrchestratorThreadCommand
                 {
                     Dialog = SupervisionMayAnswerClasses.PreauthorizedModeChanges,
                     Verification =
-                        "preauthorization alone is insufficient: require exact registry class, validated rule, durable audit, and registry-bounded orchestration execution. Unknown text escalates; design never answers.",
+                        "preauthorization alone is insufficient: require exact registry class, validated rule, durable audit, declared capability, hard-floor check, live CAS, and bounded execution. Unknown text escalates; no shipped class is design-answerable.",
                 },
             },
             MustEscalate = new[]
@@ -2813,15 +2817,15 @@ internal static class GuideOrchestratorThreadCommand
                 {
                     Category = "credential, security, and permission waits",
                     Reason =
-                        "these are NEVER answerable by the design thread, with or without prior authorization: they "
-                        + "always remain unanswered and always escalate to the operator. No grant makes them "
-                        + "answerable.",
+                        "these are in G690's hard risk floor and are never answerable by the design thread, with or without "
+                        + "prior authorization: they always remain unanswered and escalate to the operator. No grant "
+                        + "makes them answerable.",
                 },
             },
             BoundarySentence =
                 "UNSTICKING A SESSION IS NOT DECIDING FOR IT. The design thread's job is to keep the session layer "
                 + "alive so the role can do its own work — not to make the role's choices, and not to make the "
-                + "operator's. It never answers residual approval dialogs or relays keystrokes. This preserves four "
+                + "operator's. It never relays keystrokes or bypasses the canonical adjudication checks. This preserves four "
                 + "judgment-bearing threads plus one supervision process. Measured 2026-08-11 in workspace wK, "
                 + "Claude app safety blocked the relay and nonexistent `/approvals` advice failed; recipe-first "
                 + "launch plus orchestration-owned policy is the durable remedy.",
@@ -3889,7 +3893,7 @@ internal static class GuideOrchestratorThreadCommand
 
         writer.WriteLine("### Blocking dialogs — the boundary");
         writer.WriteLine();
-        writer.WriteLine($"> **Detection, adjudication, and escalation boundary (G682/G683):** {supervision.VerifiedReadRule}");
+        writer.WriteLine($"> **Detection, adjudication, and escalation boundary (G682/G683/G690):** {supervision.VerifiedReadRule}");
         writer.WriteLine();
         writer.WriteLine("#### Residual prompts: exact matched pre-approve or escalate-only (G683)");
         writer.WriteLine();

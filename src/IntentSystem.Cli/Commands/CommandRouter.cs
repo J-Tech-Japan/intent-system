@@ -144,7 +144,8 @@ internal static class CommandRouter
                 ["escalate"] = NotifyCommand.ExecuteEscalate,
                 ["dispose"] = NotifyCommand.ExecuteDispose,
                 ["status"] = NotifyCommand.ExecuteStatus,
-                ["supervise"] = NotifyCommand.ExecuteSupervise
+                ["supervise"] = NotifyCommand.ExecuteSupervise,
+                ["adjudicate"] = NotifyAdjudicateCommand.Execute
             },
             ["prompt-class"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
@@ -646,7 +647,7 @@ internal static class CommandRouter
             ["issue"] = "`intent-cli issue publish-flow <id> --repo <r> --write --format json` then `intent-cli automation issue-publish --write`.",
             ["automation"] = "`intent-cli automation summary --domain <d> --format json` (capability JSON), `intent-cli automation doctor --format json` (CLI freshness).",
             ["session-layer"] = "`intent-cli session-layer show --domain <d> [--team <t>]` (which transport is in force), `session-layer set` to change it, `session-layer topology record|show|validate --domain <d> --team <t>` for the delivery mapping, and `session-layer model-resolution record|query` for the host-local measured launch ledger.",
-            ["notify"] = "`intent-cli notify delegate|report|escalate|dispose|status|supervise --domain <d> --team <t> ...`; use `intent-cli notify supervise install ...` to emit an operator-managed scheduler artifact without registration or process execution (canonical role workflow, explicit pending-delegation disposition, pending-delegation query, and preview recovery supervisor; transport follows the recorded session-layer mode).",
+            ["notify"] = "`intent-cli notify delegate|report|escalate|dispose|status|supervise|adjudicate --domain <d> --team <t> ...`; `notify adjudicate` is the canonical capability-checked design prompt surface and requires a live pane CAS; use `intent-cli notify supervise install ...` to emit an operator-managed scheduler artifact without registration or process execution.",
             ["prompt-class"] = "`intent-cli prompt-class list [--format json]` and `intent-cli prompt-class describe codex:shell-command --format json` (read-only registry and shipped shell-scope inspection; policy recording remains under `notify supervise`).",
             ["claim"] = "`intent-cli claim acquire --scope execution-unit:<EU> --actor <actor> --team <team> --write`, then `intent-cli claim verify --scope <scope> --team <team>` before a start surface; release/takeover are explicit attributed pushes and age never changes ownership.",
             ["judgment-wait"] = "`intent-cli judgment-wait query --domain <d> [--team <t>] --format json` (durable records of a judgment blocking progress, owned by any judging party); use `open|resolve|supersede --write` for explicit lifecycle transitions.",

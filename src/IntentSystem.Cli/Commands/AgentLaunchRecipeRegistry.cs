@@ -58,6 +58,17 @@ internal sealed record AgentPromptClassRecipe
 
     [JsonPropertyName("scoped_policy_required")]
     public bool ScopedPolicyRequired { get; init; }
+
+    /// <summary>
+    /// G690: the declared decision authority for this exact class. The
+    /// historical default remains orchestration until a class is explicitly
+    /// measured and reviewed for another role.
+    /// </summary>
+    [JsonPropertyName("answerable_by")]
+    public string AnswerableBy { get; init; } = PromptCapabilityResolver.OrchestrationRole;
+
+    [JsonPropertyName("risk_tags")]
+    public IReadOnlyList<string> RiskTags { get; init; } = [];
 }
 
 internal sealed record AgentPromptClassObservation
@@ -352,6 +363,7 @@ internal static class AgentLaunchRecipeRegistry
                             "G689 records the Codex shell-command vocabulary as a class-and-payload producer; command scope and answer authority remain separate policy layers.",
                         PayloadKind = "shell-command",
                         ScopedPolicyRequired = true,
+                        AnswerableBy = PromptCapabilityResolver.OrchestrationRole,
                     },
                 ],
                 StartupGates =
