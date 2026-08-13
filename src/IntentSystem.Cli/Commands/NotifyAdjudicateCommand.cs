@@ -41,7 +41,7 @@ internal static class NotifyAdjudicateCommand
         var topology = NotifyRoleTopologyStore.Resolve(options.RoutingRoot!, options.Domain!, options.Team!);
         if (!topology.Resolved || topology.Topology is null)
         {
-            return Emit(writer, options, Refused("topology-unresolved", topology.Summary));
+            return Emit(writer, options, Refused(options.ActorRole, "topology-unresolved", topology.Summary));
         }
 
         var roleRecord = topology.Topology.Roles.Values.FirstOrDefault(role =>
@@ -50,6 +50,7 @@ internal static class NotifyAdjudicateCommand
         if (roleRecord is null)
         {
             return Emit(writer, options, Refused(
+                options.ActorRole,
                 "pane-unrecorded",
                 $"Pane '{options.Pane}' is not a recorded herdr pane in the requested topology."));
         }
@@ -57,7 +58,10 @@ internal static class NotifyAdjudicateCommand
         var live = ReadLive(runner, executable, topology.Topology.WorkspaceId, options.Pane!);
         if (!live.Resolved || live.Agent is null)
         {
-            return Emit(writer, options, Refused("live-dialog-unreadable", live.Error ?? "The live dialog could not be read."));
+            return Emit(writer, options, Refused(
+                options.ActorRole,
+                "live-dialog-unreadable",
+                live.Error ?? "The live dialog could not be read."));
         }
 
         var initialCas = PromptDialogCas.Verify(
@@ -69,13 +73,14 @@ internal static class NotifyAdjudicateCommand
             live.TextHash);
         if (!initialCas.Matches)
         {
-            return Emit(writer, options, Refused("stale-dialog-cas-refused", initialCas.Summary));
+            return Emit(writer, options, Refused(options.ActorRole, "stale-dialog-cas-refused", initialCas.Summary));
         }
 
         var classified = AgentLaunchRecipeRegistry.Classify(options.AgentKind!, live.Text);
         if (!classified.Known || !string.Equals(classified.PromptClass, options.PromptClass, StringComparison.Ordinal))
         {
             return Emit(writer, options, Refused(
+                options.ActorRole,
                 "prompt-class-mismatch",
                 $"The live pane classified as '{classified.PromptClass}', not the supplied exact class '{options.PromptClass}'."));
         }
@@ -84,12 +89,32 @@ internal static class NotifyAdjudicateCommand
         var state = NotifySupervisionStore.Read(artifactRoot, options.Domain!, options.Team!);
         if (!state.Resolved)
         {
-            return Emit(writer, options, Refused("supervision-state-unreadable", state.Error ?? "Supervision state could not be read."));
+            return Emit(writer, options, Refused(
+                options.ActorRole,
+                "supervision-state-unreadable",
+                state.Error ?? "Supervision state could not be read."));
         }
         var policy = NotifyPreApprovalPolicyStore.Read(artifactRoot, options.Domain!, options.Team!);
         if (!policy.Resolved)
         {
-            return Emit(writer, options, Refused("policy-unreadable", policy.Error ?? "Pre-approval policy could not be read."));
+            return Emit(writer, options, Refused(
+                options.ActorRole,
+                "policy-unreadable",
+                policy.Error ?? "Pre-approval policy could not be read."));
+        }
+
+        // A caller may provide --cycle-id as a compatibility assertion, but it
+        // is never an authority input. The current/last recorded supervision
+        // cycle is the only identity passed to policy evaluation. A mismatch
+        // is refused before the shared pipeline can see the shell payload.
+        var trustedCycleId = state.TrustedCycleId;
+        if (options.CycleId is not null
+            && !string.Equals(options.CycleId, trustedCycleId, StringComparison.Ordinal))
+        {
+            return Emit(writer, options, Refused(
+                options.ActorRole,
+                "cycle-identity-mismatch",
+                $"The supplied cycle identity '{options.CycleId}' does not match the recorded current/last supervision cycle '{trustedCycleId ?? "none"}'; caller-supplied wake identities cannot authorize a stale scope."));
         }
 
         var authorization = PromptAdjudicationPipeline.Evaluate(
@@ -98,7 +123,7 @@ internal static class NotifyAdjudicateCommand
             options.ActorRole,
             roleRecord.Cwd ?? live.Agent.Cwd,
             state.PromptAudits,
-            options.CycleId ?? state.LastCycle?.CycleId);
+            trustedCycleId);
         if (authorization.Decision != "accept")
         {
             return Emit(writer, options, Result(authorization, live, audited: false, executed: false));
@@ -107,7 +132,7 @@ internal static class NotifyAdjudicateCommand
         var auditPath = NotifySupervisionStore.ResolveCyclePath(artifactRoot, options.Domain!, options.Team!);
         var audit = new NotifyPromptAudit
         {
-            CycleId = options.CycleId ?? state.LastCycle?.CycleId,
+            CycleId = trustedCycleId,
             AttemptId = Guid.NewGuid().ToString("N"),
             PromptKey = $"adjudicated-prompt:{topology.Topology.WorkspaceId}:{options.Pane}:{live.TextHash[..16]}",
             Seat = "design-adjudication",
@@ -137,7 +162,10 @@ internal static class NotifyAdjudicateCommand
         var initialAudit = NotifySupervisionStore.RecordPromptAudit(auditPath, audit, write: true);
         if (!initialAudit.Applied)
         {
-            return Emit(writer, options, Refused("audit-write-failed", initialAudit.Error ?? "Authorization audit was not appended."));
+            return Emit(writer, options, Refused(
+                options.ActorRole,
+                "audit-write-failed",
+                initialAudit.Error ?? "Authorization audit was not appended."));
         }
 
         var reread = ReadLive(runner, executable, topology.Topology.WorkspaceId, options.Pane!);
@@ -161,7 +189,8 @@ internal static class NotifyAdjudicateCommand
                 audit with { Timestamp = Now(), Outcome = "stale-dialog-cas-refused", Rule = audit.Rule + " (stale-dialog-cas-refused)" },
                 write: true);
             return Emit(writer, options, Result(authorization, live, audited: true, executed: false)
-                with { Summary = authorization.Summary + $" No key was sent: {cas.Summary}" });
+                with { Summary = authorization.Summary + $" No key was sent: {cas.Summary}" },
+                exitCode: 1);
         }
 
         var pending = NotifySupervisionStore.RecordPromptAudit(
@@ -171,6 +200,7 @@ internal static class NotifyAdjudicateCommand
         if (!pending.Applied)
         {
             return Emit(writer, options, Refused(
+                options.ActorRole,
                 "execution-pending-audit-failed",
                 pending.Error ?? "Execution-pending audit was not appended."));
         }
@@ -185,17 +215,30 @@ internal static class NotifyAdjudicateCommand
             execution = new NotifyProcessResult(1, string.Empty, exception.Message);
         }
         var outcome = execution.ExitCode == 0 ? "bounded-answer-executed" : "bounded-answer-failed";
-        _ = NotifySupervisionStore.RecordPromptAudit(
+        var terminalAudit = NotifySupervisionStore.RecordPromptAudit(
             auditPath,
             audit with { Timestamp = Now(), Outcome = outcome },
             write: true);
+        if (!terminalAudit.Applied)
+        {
+            return Emit(writer, options, Result(authorization, live, audited: true, executed: execution.ExitCode == 0)
+                with
+                {
+                    Decision = "escalate",
+                    Rule = authorization.Rule + " (terminal-audit-write-failed)",
+                    Summary = $"The bounded answer {(execution.ExitCode == 0 ? "was sent" : "failed")}, but its terminal audit could not be durably appended: {terminalAudit.Error ?? "not applied"}. Reconciliation is required.",
+                    MechanicalExecutor = null,
+                },
+                exitCode: 1);
+        }
         return Emit(writer, options, Result(authorization, live, audited: true, executed: execution.ExitCode == 0)
             with
             {
                 Summary = execution.ExitCode == 0
                     ? authorization.Summary + $" Executed only registry keys [{string.Join(", ", authorization.AnswerKeys)}]."
                     : authorization.Summary + $" The bounded answer failed: {execution.StandardError}",
-            });
+            },
+            exitCode: execution.ExitCode == 0 ? 0 : 1);
     }
 
     private static DateTimeOffset Now() =>
@@ -221,12 +264,12 @@ internal static class NotifyAdjudicateCommand
         Executed = executed,
     };
 
-    private static AdjudicationResult Refused(string rule, string summary) => new()
+    private static AdjudicationResult Refused(string? actorRole, string rule, string summary) => new()
     {
         Decision = "escalate",
         Rule = rule,
         Summary = summary,
-        ActorRole = "design",
+        ActorRole = NormalizeActorRole(actorRole),
         Audited = false,
         Executed = false,
     };
@@ -369,6 +412,11 @@ internal static class NotifyAdjudicateCommand
             error = "--text-hash must be a 64-character SHA-256 value.";
             return false;
         }
+        if (cycle is not null && !IsSafeCycleIdentity(cycle))
+        {
+            error = "--cycle-id must be a non-empty safe wake/cycle identity.";
+            return false;
+        }
         if (new[] { domain!, team!, actor!, kind!, prompt!, pane! }.Any(value => !Safe(value)))
         {
             error = "role, domain, team, agent kind, prompt class, and pane values must be safe identifiers.";
@@ -410,16 +458,24 @@ internal static class NotifyAdjudicateCommand
     private static bool Safe(string value) =>
         value.Length > 0 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-' or ':');
 
-    private static int Emit(TextWriter writer, Options options, AdjudicationResult result)
+    private static int Emit(TextWriter writer, Options options, AdjudicationResult result, int? exitCode = null)
     {
+        var processExitCode = exitCode
+            ?? (string.Equals(result.Decision, "accept", StringComparison.Ordinal) ? 0 : 1);
         if (options.Format == "json")
         {
-            writer.WriteLine(JsonSerializer.Serialize(new { command = "notify adjudicate", result }, JsonOptions));
+            writer.WriteLine(JsonSerializer.Serialize(new
+            {
+                command = "notify adjudicate",
+                exit_code = processExitCode,
+                result,
+            }, JsonOptions));
         }
         else
         {
             writer.WriteLine("# Prompt adjudication");
             writer.WriteLine();
+            writer.WriteLine($"- exit-code: {processExitCode}");
             writer.WriteLine($"- decision: {result.Decision}");
             writer.WriteLine($"- rule: {result.Rule}");
             writer.WriteLine($"- actor: {result.ActorRole}");
@@ -427,8 +483,15 @@ internal static class NotifyAdjudicateCommand
             writer.WriteLine($"- audited: {result.Audited}; executed: {result.Executed}");
             writer.WriteLine($"- summary: {result.Summary}");
         }
-        return 0;
+        return processExitCode;
     }
+
+    private static string NormalizeActorRole(string? actorRole) =>
+        string.IsNullOrWhiteSpace(actorRole) ? "unknown" : actorRole.Trim().ToLowerInvariant();
+
+    private static bool IsSafeCycleIdentity(string value) =>
+        value.Length > 0
+        && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
 
     private sealed record Options
     {

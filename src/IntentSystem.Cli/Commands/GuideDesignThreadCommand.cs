@@ -108,16 +108,16 @@ internal static class GuideDesignThreadCommand
             },
             ResidualApproval = new DesignThreadResidualApproval
             {
-                PreviewStatus = "preview-through-1.x (G666/G682/G683/G689)",
+                PreviewStatus = "preview-through-1.x (G666/G682/G683/G689/G690)",
                 Layers = new[]
                 {
                     "Interim in-contract path: eliminate each known dialog through agent-side allow configuration recorded in that kind's G636 unattended-launch recipe fields; never answer the dialog.",
                     "G683 supervision reads dialog-blocked seats and emits only exact recipe-registry classes; unmatched text is class unknown and escalate-only, never fuzzy-classified.",
-                    "G689 adds the shell-command class and extracts a payload without granting a bare answer; every compound AST segment needs project-test, owned-scratch-delete, or exact-command-once scope, with digest/dialog audit. A validated match wakes orchestration only; design never answers; design never relays keystrokes.",
+                    "G689 adds the shell-command class and extracts a payload without granting a bare answer; every compound AST segment needs project-test, owned-scratch-delete, or exact-command-once scope, with digest/dialog audit. G690 routes any declared authority through canonical `intent-cli notify adjudicate`: exact class/scope `answerable_by`, the hard risk floor, durable audit, and live pane/state-sequence/text-hash CAS must all permit the bounded answer. Design has no unscoped relay or direct `send-keys` path and never relays keystrokes.",
                 },
-                NoPolicyRule = "Without an exact validated pre-approve match or matching shell scoped policy, residual prompts are escalate-only; unknown, unmatched, bare shell classes, and pre-escalate prompts execute no answer.",
-                Incident = "G666 measured the 2026-08-11 workspace wK Claude app safety relay refusal. Operator-filed #1469 then measured a 0.19.0 supervision cycle with 47 keys and no prompt/dialog/class/adjudication producer key, a review seat wedged three times in one day, and orchestration correctly refusing to fabricate a class. This is the same configured-looking-but-inert failure shape as #1465; the interim correction is agent-side allow configuration recorded in the G636 kind recipe fields, never a dialog answer.",
-                WatcherBoundary = "Supervision classifies only literal registry entries and verifies every shell AST segment against scoped policy. Its sole answer path is the audited, orchestration-owned exact key sequence of a matched pre-approve rule; it never exposes an unscoped relay.",
+                NoPolicyRule = "Without an exact validated pre-approve match or matching shell scoped policy, residual prompts are escalate-only; unknown, unmatched, bare shell classes, pre-escalate prompts, capability-denied prompts, and hard-risk-floor prompts execute no answer. A permitted answer still goes only through `notify adjudicate` with declared `answerable_by` and live CAS; no unscoped relay is valid.",
+                Incident = "G666 measured the 2026-08-11 workspace wK Claude app safety relay refusal. Operator-filed #1469 then measured a 0.19.0 supervision cycle with 47 keys and no prompt/dialog/class/adjudication producer key, a review seat wedged three times in one day, and orchestration correctly refusing to fabricate a class. This is the same configured-looking-but-inert failure shape as #1465; the interim correction is agent-side allow configuration recorded in the G636 kind recipe fields, while G690 keeps residual adjudication scoped, audited, and CAS-bound.",
+                WatcherBoundary = "Supervision classifies only literal registry entries and verifies every shell AST segment against scoped policy. A declared actor uses only canonical `notify adjudicate`; the shared pipeline resolves class/scope `answerable_by`, applies the hard risk floor, and rechecks live pane/state-sequence/text-hash CAS. For G689 owned-scratch-delete, policy evaluation receives the recorded current/last supervision cycle identity, so stale or caller-mismatched wake identities fail closed. No generic relay or direct `send-keys` path is exposed.",
                 Formula = "four judgment-bearing threads plus one supervision process; approval handling creates no fifth seat.",
             },
             MergeAuthority = new DesignThreadMergeAuthority
@@ -156,7 +156,7 @@ internal static class GuideDesignThreadCommand
                 "No behavior change outside guide rendering and reachability surfaces.",
                 "No terminal parsing, provider launch, hidden fifth role, or design-owned stall recovery.",
                 "No design-thread approval-keystroke relay and no watcher restart, correction, dialog answer, or key send.",
-                "No fuzzy prompt classification, unvalidated rule, unaudited answer, unscoped key relay, or design answer path.",
+                "No fuzzy prompt classification, unvalidated rule, unaudited answer, unscoped key relay, or unscoped design answer path.",
                 "No canonical identity inferred from prose, transport state, or an unaccepted candidate.",
                 "No publication, contract, priority, release, destructive, permission, security, or credential decision is silently broadened.",
             },

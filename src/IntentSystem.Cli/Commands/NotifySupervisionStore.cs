@@ -529,6 +529,12 @@ internal sealed record NotifySupervisionReadResult
     public required string Directory { get; init; }
     public NotifySupervisionBound? Bound { get; init; }
     public NotifySupervisionCycle? LastCycle { get; init; }
+    /// <summary>
+    /// The only cycle identity a command-side adjudication may trust. It is
+    /// derived from the latest recorded supervision cycle, never from a CLI
+    /// argument or a policy payload.
+    /// </summary>
+    public string? TrustedCycleId => LastCycle?.CycleId;
     public NotifySupervisionCycle? LastIntervalCycle { get; init; }
     public required IReadOnlyDictionary<string, NotifySupervisionStallRecord> ActiveStalls { get; init; }
     public required IReadOnlyList<NotifySupervisionStallRecord> StallHistory { get; init; }

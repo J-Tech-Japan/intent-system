@@ -577,17 +577,30 @@ internal static class ShellCommandPolicyRegistry
             ExactAnswerScope = null,
             CommandDigest = payload.CommandDigest,
             DialogHash = payload.DialogHash,
-            AnswerableBy = scopes is null
-                ? PromptCapabilityResolver.OrchestrationRole
-                : scopes.Select(scope => FindScope(scope)?.AnswerableBy ?? PromptCapabilityResolver.OrchestrationRole)
-                    .Distinct(StringComparer.Ordinal)
-                    .SingleOrDefault() ?? PromptCapabilityResolver.OrchestrationRole,
+            AnswerableBy = ResolveAnswerableBy(scopes),
             RiskTags = (scopes ?? [])
                 .SelectMany(scope => FindScope(scope)?.RiskTags ?? [])
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(tag => tag, StringComparer.Ordinal)
                 .ToArray(),
         };
+
+    private static string ResolveAnswerableBy(IReadOnlyList<string>? scopes)
+    {
+        if (scopes is null)
+        {
+            return PromptCapabilityResolver.OrchestrationRole;
+        }
+
+        var roles = scopes
+            .Select(scope => FindScope(scope)?.AnswerableBy ?? PromptCapabilityResolver.OrchestrationRole)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(role => role, StringComparer.Ordinal)
+            .ToArray();
+        return roles.Length == 0
+            ? PromptCapabilityResolver.OrchestrationRole
+            : string.Join(",", roles);
+    }
 
     private static string Rule(string prefix, IEnumerable<string> scopes)
     {
