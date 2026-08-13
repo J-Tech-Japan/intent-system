@@ -117,6 +117,7 @@ internal sealed class NotifyMeasuredSupervisor
     private NotifySupervisorPass RunOnceCore(string trigger)
     {
         var now = (NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        var cycleId = Guid.NewGuid().ToString("N");
         var state = NotifySupervisionStore.Read(
             context.ResolveSupervisionArtifactRootPath(),
             domain,
@@ -131,7 +132,7 @@ internal sealed class NotifyMeasuredSupervisor
         }
 
         var bound = ResolveBound(state, now);
-        var preApprovalPolicy = ResolvePreApprovalPolicy(now, out var policyError);
+        var preApprovalPolicy = ResolvePreApprovalPolicy(now, cycleId, out var policyError);
         if (policyError is not null)
         {
             return new NotifySupervisorPass
@@ -441,7 +442,7 @@ internal sealed class NotifyMeasuredSupervisor
         if (!transportUnavailable)
         {
             observations.AddRange(ReadRecipeDriftObservations());
-            observations.AddRange(ReadObservedPrompts(state.PromptAudits));
+            observations.AddRange(ReadObservedPrompts(state.PromptAudits, cycleId));
             observations.AddRange(ReadAbsentSeats(now));
         }
 
@@ -619,7 +620,7 @@ internal sealed class NotifyMeasuredSupervisor
         var completedAt = (NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var cycle = new NotifySupervisionCycle
         {
-            CycleId = Guid.NewGuid().ToString("N"),
+            CycleId = cycleId,
             StartedAt = now,
             CompletedAt = completedAt,
             Writer = writerIdentity,
@@ -804,6 +805,7 @@ internal sealed class NotifyMeasuredSupervisor
 
     private NotifyPreApprovalPolicyStatus ResolvePreApprovalPolicy(
         DateTimeOffset now,
+        string cycleId,
         out string? error)
     {
         error = null;
@@ -820,6 +822,13 @@ internal sealed class NotifyMeasuredSupervisor
             || scopedPolicies.Count > 0;
         if (declarationSupplied)
         {
+            var boundScopedPolicies = BindScopedPoliciesToCycle(scopedPolicies, cycleId, out var bindingError);
+            if (bindingError is not null)
+            {
+                error = $"pre-approval-policy-cycle-binding-failed: {bindingError}";
+                return MissingPolicyStatus(read.Path, "invalid-cycle-binding");
+            }
+
             var policy = NotifyPreApprovalPolicyStore.WithCurrentApplicability(new NotifyPreApprovalPolicy
             {
                 Domain = domain,
@@ -827,7 +836,7 @@ internal sealed class NotifyMeasuredSupervisor
                 RecordedAt = now,
                 Accept = preApprovalAccept,
                 Escalate = preApprovalEscalate,
-                ScopedPolicies = scopedPolicies,
+                ScopedPolicies = boundScopedPolicies,
             });
             var recorded = NotifyPreApprovalPolicyStore.Record(artifactRoot, policy, write);
             if (recorded.Error is not null)
@@ -881,6 +890,39 @@ internal sealed class NotifyMeasuredSupervisor
         }
 
         return MissingPolicyStatus(read.Path, "escalate-only");
+    }
+
+    private static IReadOnlyList<NotifyScopedPromptPolicy> BindScopedPoliciesToCycle(
+        IReadOnlyList<NotifyScopedPromptPolicy> policies,
+        string cycleId,
+        out string? error)
+    {
+        error = null;
+        var bound = new List<NotifyScopedPromptPolicy>(policies.Count);
+        foreach (var policy in policies)
+        {
+            if (!string.Equals(policy.Scope, ShellCommandPolicyRegistry.OwnedScratchDeleteScope, StringComparison.Ordinal))
+            {
+                bound.Add(policy);
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(policy.ScratchLedgerCycleId))
+            {
+                bound.Add(policy with { ScratchLedgerCycleId = cycleId });
+                continue;
+            }
+
+            if (!string.Equals(policy.ScratchLedgerCycleId, cycleId, StringComparison.Ordinal))
+            {
+                error = $"owned-scratch-delete policy '{policy.PolicyId}' carries scratch_ledger_cycle_id '{policy.ScratchLedgerCycleId}', which is not the current wake/cycle identity '{cycleId}'; stale identities are refused.";
+                return [];
+            }
+
+            bound.Add(policy);
+        }
+
+        return bound;
     }
 
     private static NotifyPreApprovalPolicyStatus MissingPolicyStatus(string path, string status) => new()
@@ -1540,7 +1582,8 @@ internal sealed class NotifyMeasuredSupervisor
     }
 
     private IReadOnlyList<NotifySupervisionObservation> ReadObservedPrompts(
-        IReadOnlyList<NotifyPromptAudit> promptAudits)
+        IReadOnlyList<NotifyPromptAudit> promptAudits,
+        string cycleId)
     {
         var topology = NotifyRoleTopologyStore.Resolve(routingRoot, domain, team);
         if (!topology.Resolved || topology.Topology is null)
@@ -1624,7 +1667,8 @@ internal sealed class NotifyMeasuredSupervisor
                     shellPayload,
                     policy?.ScopedPolicies ?? [],
                     recorded.Cwd,
-                    promptAudits)
+                    promptAudits,
+                    currentCycleId: cycleId)
                 : null;
             var escalateRule = policy?.Escalate.FirstOrDefault(rule =>
                 rule.Applicable && RuleMatches(rule, agentKind, classified.PromptClass));
@@ -1657,6 +1701,7 @@ internal sealed class NotifyMeasuredSupervisor
             }
             var prompt = new NotifyObservedPrompt
             {
+                CycleId = cycleId,
                 AgentKind = agentKind,
                 Pane = recorded.PaneId,
                 ObservedText = observedText,
@@ -1712,6 +1757,7 @@ internal sealed class NotifyMeasuredSupervisor
             : prompt.Decision == "accept" ? "authorized-before-execution" : "escalate-only";
         var audit = new NotifyPromptAudit
         {
+            CycleId = prompt.CycleId,
             AttemptId = attemptId,
             PromptKey = observation.Key,
             Seat = observation.SubjectRole ?? "unknown",
@@ -1761,6 +1807,7 @@ internal sealed class NotifyMeasuredSupervisor
                 matched_scopes = prompt.MatchedScopes,
                 command_digest = prompt.CommandDigest,
                 dialog_hash = prompt.DialogHash,
+                cycle_id = prompt.CycleId,
                 policy_summary = prompt.PolicySummary,
                 answer_keys = prompt.Decision == "accept" ? prompt.AnswerKeys : null,
                 must_transition = false,
@@ -2020,6 +2067,9 @@ internal sealed record NotifySupervisionObservation
 
 internal sealed record NotifyObservedPrompt
 {
+    [System.Text.Json.Serialization.JsonPropertyName("cycle_id")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? CycleId { get; init; }
     [System.Text.Json.Serialization.JsonPropertyName("agent_kind")]
     public required string AgentKind { get; init; }
     [System.Text.Json.Serialization.JsonPropertyName("pane")]

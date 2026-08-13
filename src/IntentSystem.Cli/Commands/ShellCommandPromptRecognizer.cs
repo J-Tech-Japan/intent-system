@@ -38,12 +38,28 @@ internal static class ShellCommandPromptRecognizer
 
         var commandLines = new List<string>();
         var insideFence = false;
+        var choiceBlockStarted = false;
         for (var index = headerIndex + 1; index < lines.Length; index++)
         {
             var line = Normalize(lines[index]);
             if (line.Length == 0 || IsFrame(line))
             {
                 continue;
+            }
+
+            if (!insideFence && choiceBlockStarted)
+            {
+                if (IsChoice(line))
+                {
+                    continue;
+                }
+
+                // Once terminal choice chrome has started, any residual
+                // non-choice content could be a hidden command tail. Do not
+                // truncate the payload at the first choice-looking line:
+                // reject the whole extraction so no unevaluated segment can
+                // reach policy authorization.
+                return false;
             }
 
             if (line.StartsWith("```", StringComparison.Ordinal))
@@ -56,7 +72,7 @@ internal static class ShellCommandPromptRecognizer
             {
                 if (commandLines.Count > 0)
                 {
-                    break;
+                    choiceBlockStarted = true;
                 }
 
                 continue;

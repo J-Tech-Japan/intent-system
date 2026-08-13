@@ -478,6 +478,7 @@ internal sealed record NotifySupervisionWaitEvent
 
 internal sealed record NotifyPromptAudit
 {
+    [JsonPropertyName("cycle_id")] public string? CycleId { get; init; }
     [JsonPropertyName("attempt_id")] public string? AttemptId { get; init; }
     [JsonPropertyName("prompt_key")] public required string PromptKey { get; init; }
     [JsonPropertyName("seat")] public required string Seat { get; init; }

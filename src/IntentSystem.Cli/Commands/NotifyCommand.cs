@@ -1941,7 +1941,10 @@ internal static class NotifyCommand
                         error = $"{argument} requires one scoped policy JSON object.";
                         return false;
                     }
-                    if (!NotifyPreApprovalPolicyStore.TryValidateScopedPolicy(shellPolicy, out error))
+                    if (!NotifyPreApprovalPolicyStore.TryValidateScopedPolicy(
+                        shellPolicy,
+                        out error,
+                        requireScratchLedgerCycleId: false))
                     {
                         return false;
                     }
@@ -2128,7 +2131,10 @@ internal static class NotifyCommand
             {
                 return false;
             }
-            if (!NotifyPreApprovalPolicyStore.TryValidateScopedPolicies(options.ScopedPolicies, out error))
+            if (!NotifyPreApprovalPolicyStore.TryValidateScopedPolicies(
+                options.ScopedPolicies,
+                out error,
+                requireScratchLedgerCycleId: false))
             {
                 return false;
             }

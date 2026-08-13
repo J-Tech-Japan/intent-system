@@ -8,6 +8,7 @@ public sealed class ShellCommandPolicyG689Tests
     private const string Cwd = "/repo";
     private const string Root = "/repo";
     private const string Scratch = "/tmp/intent-g689-owned-scratch";
+    private const string CurrentCycleId = "cycle-current";
 
     [Fact]
     public void Classify_ExtractsShellPayload_AndRequiresScopedPolicy()
@@ -27,6 +28,24 @@ public sealed class ShellCommandPolicyG689Tests
     }
 
     [Fact]
+    public void Classify_FailsClosedWhenChoiceBlockHasResidualCommandTail()
+    {
+        var observed = "Would you like to run the following command?\n\n"
+            + "$ dotnet test tests/IntentSystem.Cli.Tests.csproj\n"
+            + "read -p \"continue? [y/n]\" answer\n"
+            + "rm -rf " + Scratch + "\n\n"
+            + "1. Allow once\n2. Deny";
+
+        Assert.False(ShellCommandPromptRecognizer.TryExtract(observed, out var payload));
+        Assert.Null(payload);
+
+        var classified = AgentLaunchRecipeRegistry.Classify("codex", observed);
+
+        Assert.Equal("unknown", classified.PromptClass);
+        Assert.Null(classified.ShellCommand);
+    }
+
+    [Fact]
     public void Evaluate_RequiresEveryCompoundSegmentToHaveItsOwnScope()
     {
         var classified = Classify("dotnet test tests/IntentSystem.Cli.Tests.csproj && rm -rf " + Scratch);
@@ -37,7 +56,7 @@ public sealed class ShellCommandPolicyG689Tests
         };
 
         var accepted = ShellCommandPolicyRegistry.Evaluate(
-            classified.ShellCommand!, policies, Cwd);
+            classified.ShellCommand!, policies, Cwd, currentCycleId: CurrentCycleId);
 
         Assert.Equal("accept", accepted.Decision);
         Assert.Contains("project-test", accepted.MatchedScopes);
@@ -47,10 +66,35 @@ public sealed class ShellCommandPolicyG689Tests
         var refused = ShellCommandPolicyRegistry.Evaluate(
             Classify("dotnet test tests/IntentSystem.Cli.Tests.csproj && rm -rf /tmp").ShellCommand!,
             policies,
-            Cwd);
+            Cwd,
+            currentCycleId: CurrentCycleId);
 
         Assert.Equal("escalate", refused.Decision);
         Assert.Contains("shell-segment-out-of-scope", refused.Rule, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OwnedScratchDelete_RefusesStaleCycleIdentity()
+    {
+        var payload = Classify("rm -rf " + Scratch).ShellCommand!;
+        var current = OwnedScratchPolicy();
+
+        var accepted = ShellCommandPolicyRegistry.Evaluate(
+            payload,
+            [current],
+            Cwd,
+            currentCycleId: CurrentCycleId);
+        Assert.Equal("accept", accepted.Decision);
+
+        var stale = ShellCommandPolicyRegistry.Evaluate(
+            payload,
+            [current with { ScratchLedgerCycleId = "cycle-stale" }],
+            Cwd,
+            currentCycleId: CurrentCycleId);
+        Assert.Equal("escalate", stale.Decision);
+        Assert.Contains("owned-scratch-delete-stale-cycle", stale.Rule, StringComparison.Ordinal);
+        Assert.Empty(stale.AnswerKeys);
+        Assert.Null(stale.ExactAnswerScope);
     }
 
     [Fact]
@@ -139,6 +183,31 @@ public sealed class ShellCommandPolicyG689Tests
         Assert.Contains("project-test", json, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void OwnedScratchDelete_RequiresAndPersistsCycleIdentity()
+    {
+        var policy = OwnedScratchPolicy();
+
+        Assert.True(NotifyPreApprovalPolicyStore.TryValidateScopedPolicy(policy, out var error), error);
+        var current = NotifyPreApprovalPolicyStore.WithCurrentApplicability(new NotifyPreApprovalPolicy
+        {
+            Domain = "intent-cli",
+            Team = "intent-cli-dev",
+            RecordedAt = DateTimeOffset.UtcNow,
+            Accept = [],
+            Escalate = [],
+            ScopedPolicies = [policy],
+        });
+        var json = JsonSerializer.Serialize(current);
+        Assert.Contains("scratch_ledger_cycle_id", json, StringComparison.Ordinal);
+        Assert.Contains(CurrentCycleId, json, StringComparison.Ordinal);
+
+        Assert.False(NotifyPreApprovalPolicyStore.TryValidateScopedPolicy(
+            policy with { ScratchLedgerCycleId = null },
+            out var missingIdentity));
+        Assert.Contains("wake/cycle identity", missingIdentity, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static AgentPromptClassObservation Classify(string command)
     {
         var classified = AgentLaunchRecipeRegistry.Classify("codex", Prompt(command));
@@ -177,6 +246,7 @@ public sealed class ShellCommandPolicyG689Tests
         Cwd = Cwd,
         PathConstraints = [Scratch],
         ScratchLedgerPaths = [Scratch],
+        ScratchLedgerCycleId = CurrentCycleId,
         EffectTags = ["destructive"],
         Applicable = true,
     };

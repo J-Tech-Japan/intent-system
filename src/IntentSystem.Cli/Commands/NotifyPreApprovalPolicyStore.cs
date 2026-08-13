@@ -219,7 +219,10 @@ internal static class NotifyPreApprovalPolicyStore
         return false;
     }
 
-    public static bool TryValidateScopedPolicy(NotifyScopedPromptPolicy policy, out string error)
+    public static bool TryValidateScopedPolicy(
+        NotifyScopedPromptPolicy policy,
+        out string error,
+        bool requireScratchLedgerCycleId = true)
     {
         if (!AgentLaunchRecipeRegistry.TryFindPromptClass(policy.AgentKind, policy.PromptClass, out var prompt)
             || prompt?.ScopedPolicyRequired != true)
@@ -228,16 +231,20 @@ internal static class NotifyPreApprovalPolicyStore
             return false;
         }
 
-        return ShellCommandPolicyRegistry.TryValidate(policy, out error);
+        return ShellCommandPolicyRegistry.TryValidate(
+            policy,
+            out error,
+            requireScratchLedgerCycleId);
     }
 
     public static bool TryValidateScopedPolicies(
         IReadOnlyList<NotifyScopedPromptPolicy> policies,
-        out string error)
+        out string error,
+        bool requireScratchLedgerCycleId = true)
     {
         foreach (var policy in policies)
         {
-            if (!TryValidateScopedPolicy(policy, out error))
+            if (!TryValidateScopedPolicy(policy, out error, requireScratchLedgerCycleId))
             {
                 return false;
             }

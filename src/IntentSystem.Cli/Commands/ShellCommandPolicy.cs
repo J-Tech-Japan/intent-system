@@ -70,6 +70,7 @@ internal sealed record NotifyScopedPromptPolicy
     [JsonPropertyName("answerable_by")] public string AnswerableBy { get; init; } = "orchestration";
     [JsonPropertyName("answer_keys")] public IReadOnlyList<string> AnswerKeys { get; init; } = [];
     [JsonPropertyName("scratch_ledger_paths")] public IReadOnlyList<string> ScratchLedgerPaths { get; init; } = [];
+    [JsonPropertyName("scratch_ledger_cycle_id")] public string? ScratchLedgerCycleId { get; init; }
     [JsonPropertyName("command_digest")] public string? CommandDigest { get; init; }
     [JsonPropertyName("dialog_hash")] public string? DialogHash { get; init; }
     [JsonPropertyName("applicable")] public bool Applicable { get; init; }
@@ -135,7 +136,7 @@ internal static class ShellCommandPolicyRegistry
                 Name = OwnedScratchDeleteScope,
                 Category = "destructive-scratch-cleanup",
                 Description =
-                    "An exact rm -f path recorded in the same wake's scratch ledger; destructive cleanup is orchestration-only and never a broad /tmp allowance.",
+                    "An exact rm -f path recorded in the current cycle's scratch ledger; stale wake identities are refused, destructive cleanup is orchestration-only, and a broad /tmp allowance is never valid.",
                 AnswerKeys = ["y", "enter"],
                 Persistence = "per-dialog",
                 AnswerableBy = OrchestrationRole,
@@ -163,7 +164,8 @@ internal static class ShellCommandPolicyRegistry
 
     public static bool TryValidate(
         NotifyScopedPromptPolicy policy,
-        out string error)
+        out string error,
+        bool requireScratchLedgerCycleId = true)
     {
         if (!string.Equals(policy.AgentKind, AgentKind, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(policy.PromptClass, PromptClass, StringComparison.OrdinalIgnoreCase))
@@ -275,6 +277,20 @@ internal static class ShellCommandPolicyRegistry
                 return false;
             }
 
+            if (string.IsNullOrWhiteSpace(policy.ScratchLedgerCycleId))
+            {
+                if (requireScratchLedgerCycleId)
+                {
+                    error = "owned-scratch-delete requires the current wake/cycle identity in scratch_ledger_cycle_id; an unbound scratch ledger cannot authorize deletion.";
+                    return false;
+                }
+            }
+            else if (!IsCycleIdentity(policy.ScratchLedgerCycleId))
+            {
+                error = "scratch_ledger_cycle_id must be a non-empty safe wake/cycle identity.";
+                return false;
+            }
+
             if (!policy.ScratchLedgerPaths.All(path => policy.PathConstraints.Any(constraint => SamePathFrom(path, constraint, policy.Cwd))))
             {
                 error = "Every owned-scratch-delete scratch ledger path must be an exact path constraint.";
@@ -310,7 +326,8 @@ internal static class ShellCommandPolicyRegistry
         ShellCommandPromptPayload payload,
         IReadOnlyList<NotifyScopedPromptPolicy> policies,
         string? cwd,
-        IReadOnlyList<NotifyPromptAudit>? promptAudits = null)
+        IReadOnlyList<NotifyPromptAudit>? promptAudits = null,
+        string? currentCycleId = null)
     {
         var rulePrefix = $"{AgentKind}:{PromptClass}";
         if (!payload.Parse.Parsed)
@@ -382,10 +399,29 @@ internal static class ShellCommandPolicyRegistry
         var matches = new List<NotifyScopedPromptPolicy>();
         foreach (var segment in payload.Parse.Segments)
         {
+            var declaredOwnedPolicies = policies
+                .Where(policy => policy.Applicable
+                    && string.Equals(policy.AgentKind, AgentKind, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(policy.PromptClass, PromptClass, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(policy.Scope, OwnedScratchDeleteScope, StringComparison.Ordinal))
+                .ToArray();
+            if (IsOwnedScratchSegment(segment)
+                && declaredOwnedPolicies.Length > 0
+                && !validPolicies.Any(policy => string.Equals(policy.Scope, OwnedScratchDeleteScope, StringComparison.Ordinal)
+                    && string.Equals(policy.ScratchLedgerCycleId, currentCycleId, StringComparison.Ordinal)))
+            {
+                return Refused(
+                    Rule(rulePrefix, matches.Select(policy => policy.Scope)),
+                    payload,
+                    "owned-scratch-delete-stale-cycle",
+                    "The owned-scratch-delete policy is bound to a different or missing wake/cycle identity; stale scratch ledger entries cannot authorize deletion.",
+                    matches.Select(policy => policy.Scope).Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToArray());
+            }
+
             var candidates = validPolicies
                 .Where(policy => string.Equals(policy.Scope, ProjectTestScope, StringComparison.Ordinal)
                     || string.Equals(policy.Scope, OwnedScratchDeleteScope, StringComparison.Ordinal))
-                .Where(policy => MatchesSegment(policy, segment, cwd))
+                .Where(policy => MatchesSegment(policy, segment, cwd, currentCycleId))
                 .OrderBy(policy => policy.Scope, StringComparer.Ordinal)
                 .ToArray();
             if (candidates.Length == 0)
@@ -429,7 +465,8 @@ internal static class ShellCommandPolicyRegistry
     private static bool MatchesSegment(
         NotifyScopedPromptPolicy policy,
         ShellCommandSegment segment,
-        string? cwd)
+        string? cwd,
+        string? currentCycleId)
     {
         var scope = policy.Scope;
         if (scope == ProjectTestScope)
@@ -455,6 +492,11 @@ internal static class ShellCommandPolicyRegistry
 
         if (scope == OwnedScratchDeleteScope)
         {
+            if (!string.Equals(policy.ScratchLedgerCycleId, currentCycleId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
             if (segment.Redirects.Count > 0
                 || segment.HasHeredoc
                 || cwd is null
@@ -486,6 +528,10 @@ internal static class ShellCommandPolicyRegistry
 
         return false;
     }
+
+    private static bool IsOwnedScratchSegment(ShellCommandSegment segment) =>
+        segment.Argv.Count > 0
+        && string.Equals(segment.Argv[0], "rm", StringComparison.Ordinal);
 
     private static ShellCommandPolicyAuthorization Authorization(
         NotifyScopedPromptPolicy policy,
@@ -610,6 +656,9 @@ internal static class ShellCommandPolicyRegistry
 
     private static bool IsDigest(string? value) => value is { Length: 64 }
         && value.All(char.IsAsciiHexDigit);
+
+    private static bool IsCycleIdentity(string value) => value.Length > 0
+        && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
 }
 
 /// <summary>
