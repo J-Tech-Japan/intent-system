@@ -373,9 +373,7 @@ internal static class AgentLaunchRecipeRegistry
     public static AgentPromptClassObservation Classify(string kind, string observedText)
     {
         var matches = Find(kind)?.PromptClasses
-            .Where(candidate => candidate.LiteralTextFragments.Count > 0
-                && candidate.LiteralTextFragments.All(fragment =>
-                    observedText.Contains(fragment, StringComparison.Ordinal)))
+            .Where(candidate => MatchesActivePrompt(candidate, observedText))
             .ToArray() ?? [];
         var match = matches.Length == 1 ? matches[0] : null;
         return new AgentPromptClassObservation
@@ -385,6 +383,95 @@ internal static class AgentLaunchRecipeRegistry
             ObservedText = observedText,
             Recipe = match,
         };
+    }
+
+    /// <summary>
+    /// A blocked pane read is still a screen snapshot, not a prompt object.
+    /// Match the recipe fragments in order and require everything after the
+    /// final fragment to be terminal choice chrome. Any later prose is a
+    /// newer, unclassified prompt and therefore fails closed as unknown.
+    /// </summary>
+    private static bool MatchesActivePrompt(AgentPromptClassRecipe recipe, string observedText)
+    {
+        if (recipe.LiteralTextFragments.Count == 0)
+        {
+            return false;
+        }
+
+        var lines = observedText.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var matchedLine = -1;
+        foreach (var fragment in recipe.LiteralTextFragments)
+        {
+            matchedLine = Array.FindIndex(
+                lines,
+                matchedLine + 1,
+                line => string.Equals(
+                    NormalizeDialogLine(line, removeChoicePrefix: true),
+                    fragment,
+                    StringComparison.Ordinal));
+            if (matchedLine < 0)
+            {
+                return false;
+            }
+        }
+
+        return lines.Skip(matchedLine + 1).All(IsDialogChoiceChrome);
+    }
+
+    private static bool IsDialogChoiceChrome(string line)
+    {
+        var trimmed = line.Trim().Trim('│', '┃', '║').Trim();
+        if (trimmed.Length == 0)
+        {
+            return true;
+        }
+
+        if (trimmed.All(character => character is '┌' or '└' or '├' or '┤' or '─'
+            or '╭' or '╰' or '╯' or '╮' or '┬' or '┴' or '┼'))
+        {
+            return true;
+        }
+
+        if (trimmed[0] is '›' or '❯' or '○' or '●')
+        {
+            return true;
+        }
+
+        var digitCount = 0;
+        while (digitCount < trimmed.Length && char.IsAsciiDigit(trimmed[digitCount]))
+        {
+            digitCount++;
+        }
+        return digitCount > 0
+            && digitCount < trimmed.Length
+            && trimmed[digitCount] is '.' or ')';
+    }
+
+    private static string NormalizeDialogLine(string line, bool removeChoicePrefix)
+    {
+        var normalized = line.Trim().Trim('│', '┃', '║').Trim();
+        if (!removeChoicePrefix || normalized.Length == 0)
+        {
+            return normalized;
+        }
+
+        if (normalized[0] is '›' or '❯' or '○' or '●' or '>')
+        {
+            return normalized[1..].TrimStart();
+        }
+
+        var digitCount = 0;
+        while (digitCount < normalized.Length && char.IsAsciiDigit(normalized[digitCount]))
+        {
+            digitCount++;
+        }
+        if (digitCount > 0
+            && digitCount < normalized.Length
+            && normalized[digitCount] is '.' or ')')
+        {
+            return normalized[(digitCount + 1)..].TrimStart();
+        }
+        return normalized;
     }
 
     public static AgentLaunchRecipeResolution Describe(string kind)

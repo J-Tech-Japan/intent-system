@@ -26,7 +26,15 @@ public sealed class PromptAdjudicationG683Tests : IDisposable
         RecordMode(context);
         WriteTopology();
         RecordPolicy(context);
-        var runner = new PromptRunner("Allow GitHub to add a comment to a pull request?");
+        var pendingWasDurableBeforeSend = false;
+        var runner = new PromptRunner(
+            "Allow GitHub to add a comment to a pull request?",
+            beforeSendKeys: () =>
+            {
+                pendingWasDurableBeforeSend = NotifySupervisionStore.Read(
+                    context.ResolveSupervisionArtifactRootPath(), Domain, Team).PromptAudits.Any(audit =>
+                        audit.Outcome == "bounded-answer-execution-pending");
+            });
 
         var pass = CreateSupervisor(context, runner).RunOnce();
 
@@ -39,6 +47,7 @@ public sealed class PromptAdjudicationG683Tests : IDisposable
         Assert.Contains("always-allow", finding.Prompt.ExactAnswerScope, StringComparison.Ordinal);
         Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
             ["agent", "send-keys", "wG683:p2", "2", "enter"]));
+        Assert.True(pendingWasDurableBeforeSend);
         Assert.Contains(runner.Calls, call =>
             call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wG683:p1"])
             && call.Arguments[3].Contains("github-comment-post", StringComparison.Ordinal)
@@ -73,7 +82,10 @@ public sealed class PromptAdjudicationG683Tests : IDisposable
         Assert.Collection(
             state.PromptAudits.Where(audit => audit.PromptClass == "github-comment-post"),
             audit => AssertAudit(audit, "authorized-before-execution"),
+            audit => AssertAudit(audit, "bounded-answer-execution-pending"),
             audit => AssertAudit(audit, "bounded-answer-executed"));
+        Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+            ["agent", "read", "wG683:p2", "--source", "detection", "--lines", "200"]));
     }
 
     [Fact]
@@ -104,6 +116,32 @@ public sealed class PromptAdjudicationG683Tests : IDisposable
         Assert.Equal("orchestration", audit.Actor);
         Assert.Equal("escalate-only", audit.Outcome);
         Assert.Equal("unknown", audit.PromptClass);
+    }
+
+    [Fact]
+    public void StaleKnownDialogFollowedByCurrentUnknown_IsUnknownEscalateOnly_G683Repair()
+    {
+        var context = CreateContext();
+        RecordMode(context);
+        WriteTopology();
+        RecordPolicy(context);
+        var runner = new PromptRunner(
+            "Allow GitHub to add a comment to a pull request?\n"
+            + "1. Allow once\n"
+            + "2. Always allow\n"
+            + "A current unknown approval is now active");
+
+        var finding = Assert.Single(
+            CreateSupervisor(context, runner).RunOnce().Findings,
+            item => item.Kind == "observed-prompt");
+
+        Assert.Equal("unknown", finding.Prompt!.PromptClass);
+        Assert.Equal("escalate", finding.Prompt.Decision);
+        Assert.Null(finding.Prompt.ExactAnswerScope);
+        Assert.DoesNotContain(runner.Calls, call =>
+            call.Arguments.Take(2).SequenceEqual(["agent", "send-keys"]));
+        Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+            ["agent", "read", "wG683:p2", "--source", "detection", "--lines", "200"]));
     }
 
     [Theory]
@@ -171,6 +209,116 @@ public sealed class PromptAdjudicationG683Tests : IDisposable
             writer);
         Assert.Equal(1, exit);
         Assert.Contains("Known values", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConflictingApproveAndEscalatePair_IsRejectedAndEscalationWinsForLegacyPolicy_G683Repair()
+    {
+        var context = CreateContext();
+        using (var writer = new StringWriter())
+        {
+            var exit = CommandRouter.Execute(
+                [
+                    "notify", "supervise", "--domain", Domain, "--team", Team,
+                    "--routing-root", root, "--once", "--write", "--format", "json",
+                    "--pre-approve", "codex:github-comment-post",
+                    "--pre-escalate", "codex:github-comment-post",
+                ],
+                context,
+                writer);
+            Assert.Equal(1, exit);
+            Assert.Contains("cannot be recorded in both", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("codex:github-comment-post", writer.ToString(), StringComparison.Ordinal);
+        }
+
+        var conflicting = NotifyPreApprovalPolicyStore.WithCurrentApplicability(new NotifyPreApprovalPolicy
+        {
+            Domain = Domain,
+            Team = Team,
+            RecordedAt = now,
+            Accept = [new NotifyPreApprovalRule { AgentKind = "codex", PromptClass = "github-comment-post" }],
+            Escalate = [new NotifyPreApprovalRule { AgentKind = "codex", PromptClass = "github-comment-post" }],
+        });
+        var refused = NotifyPreApprovalPolicyStore.Record(
+            context.ResolveSupervisionArtifactRootPath(), conflicting, write: true);
+        Assert.False(refused.Applied);
+        Assert.Contains("cannot be recorded in both", refused.Error, StringComparison.Ordinal);
+        Assert.Equal("escalate", NotifyPreApprovalPolicyStore.Adjudicate(
+            conflicting, "codex", "github-comment-post"));
+
+        RecordMode(context);
+        WriteTopology();
+        var policyPath = NotifyPreApprovalPolicyStore.ResolvePath(
+            context.ResolveSupervisionArtifactRootPath(), Domain, Team);
+        Directory.CreateDirectory(Path.GetDirectoryName(policyPath)!);
+        File.WriteAllText(policyPath, JsonSerializer.Serialize(conflicting));
+        var runner = new PromptRunner("Allow GitHub to add a comment to a pull request?");
+
+        var finding = Assert.Single(
+            CreateSupervisor(context, runner).RunOnce().Findings,
+            item => item.Kind == "observed-prompt");
+        Assert.Equal("escalate", finding.Prompt!.Decision);
+        Assert.Equal("codex:github-comment-post", finding.Prompt.Rule);
+        Assert.DoesNotContain(runner.Calls, call =>
+            call.Arguments.Take(2).SequenceEqual(["agent", "send-keys"]));
+    }
+
+    [Fact]
+    public void FinalAuditFailure_LeavesDurablePendingAndReconcilesWithoutRetry_G683Repair()
+    {
+        var context = CreateContext();
+        RecordMode(context);
+        WriteTopology();
+        RecordPolicy(context);
+        var pendingWasDurableBeforeSend = false;
+        var runner = new PromptRunner(
+            "Allow GitHub to add a comment to a pull request?",
+            beforeSendKeys: () =>
+            {
+                pendingWasDurableBeforeSend = NotifySupervisionStore.Read(
+                    context.ResolveSupervisionArtifactRootPath(), Domain, Team).PromptAudits.Any(audit =>
+                        audit.Outcome == "bounded-answer-execution-pending");
+            });
+        NotifySupervisionStore.WriteOverride = (path, line) =>
+        {
+            if (line.Contains("\"outcome\":\"bounded-answer-executed\"", StringComparison.Ordinal))
+            {
+                return new NotifySupervisionWriteResult(false, false, path, "injected final audit failure");
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.AppendAllText(path, line);
+            return new NotifySupervisionWriteResult(true, false, path, null);
+        };
+
+        var first = CreateSupervisor(context, runner).RunOnce();
+
+        var firstFinding = Assert.Single(first.Findings, item => item.Kind == "observed-prompt");
+        Assert.Equal("prompt-final-audit-write-failed", firstFinding.Cause);
+        Assert.Single(runner.Calls, call =>
+            call.Arguments.Take(2).SequenceEqual(["agent", "send-keys"]));
+        Assert.True(pendingWasDurableBeforeSend);
+        var pendingState = NotifySupervisionStore.Read(
+            context.ResolveSupervisionArtifactRootPath(), Domain, Team);
+        Assert.Contains(pendingState.PromptAudits, audit =>
+            audit.Outcome == "authorized-before-execution");
+        var pending = Assert.Single(pendingState.PromptAudits, audit =>
+            audit.Outcome == "bounded-answer-execution-pending");
+        Assert.False(string.IsNullOrWhiteSpace(pending.AttemptId));
+        Assert.DoesNotContain(pendingState.PromptAudits, audit =>
+            audit.Outcome == "bounded-answer-executed");
+
+        NotifySupervisionStore.WriteOverride = null;
+        var second = CreateSupervisor(context, runner).RunOnce();
+
+        var reconciledFinding = Assert.Single(second.Findings, item => item.Kind == "observed-prompt");
+        Assert.Equal("escalate", reconciledFinding.Prompt!.Decision);
+        Assert.Single(runner.Calls, call =>
+            call.Arguments.Take(2).SequenceEqual(["agent", "send-keys"]));
+        var reconciledState = NotifySupervisionStore.Read(
+            context.ResolveSupervisionArtifactRootPath(), Domain, Team);
+        var reconciliation = Assert.Single(reconciledState.PromptAudits, audit =>
+            audit.Outcome == "bounded-answer-outcome-unknown-reconciliation-required");
+        Assert.Equal(pending.AttemptId, reconciliation.AttemptId);
     }
 
     [Fact]
@@ -275,13 +423,20 @@ public sealed class PromptAdjudicationG683Tests : IDisposable
         Assert.Equal(outcome, audit.Outcome);
     }
 
-    private sealed class PromptRunner(string promptText, string agentKind = "codex") : INotifyProcessRunner
+    private sealed class PromptRunner(
+        string promptText,
+        string agentKind = "codex",
+        Action? beforeSendKeys = null) : INotifyProcessRunner
     {
         public List<(string FileName, IReadOnlyList<string> Arguments)> Calls { get; } = [];
 
         public NotifyProcessResult Run(string fileName, IReadOnlyList<string> arguments)
         {
             Calls.Add((fileName, arguments.ToArray()));
+            if (arguments.Take(2).SequenceEqual(["agent", "send-keys"]))
+            {
+                beforeSendKeys?.Invoke();
+            }
             if (arguments.SequenceEqual(["agent", "list"]))
             {
                 return new NotifyProcessResult(0, JsonSerializer.Serialize(new

@@ -135,6 +135,10 @@ internal static class NotifyPreApprovalPolicyStore
         bool write)
     {
         var path = ResolvePath(artifactRoot, policy.Domain, policy.Team);
+        if (!TryValidateNoOverlap(policy.Accept, policy.Escalate, out var overlapError))
+        {
+            return new NotifySupervisionWriteResult(false, false, path, overlapError);
+        }
         var current = WithCurrentApplicability(policy);
         var content = JsonSerializer.Serialize(current, JsonOptions) + Environment.NewLine;
         if (!write)
@@ -162,6 +166,10 @@ internal static class NotifyPreApprovalPolicyStore
     public static string Adjudicate(NotifyPreApprovalPolicy? policy, string agentKind, string promptClass)
     {
         if (policy?.Applicable != true)
+        {
+            return "escalate";
+        }
+        if (policy.Escalate.Any(rule => rule.Applicable && Matches(rule, agentKind, promptClass)))
         {
             return "escalate";
         }
@@ -195,6 +203,27 @@ internal static class NotifyPreApprovalPolicyStore
         var known = AgentLaunchRecipeRegistry.KnownPairs;
         error = $"Unknown prompt policy pair '{rule}'. Known values: "
             + (known.Count == 0 ? "none" : string.Join(", ", known)) + ".";
+        return false;
+    }
+
+    public static bool TryValidateNoOverlap(
+        IReadOnlyList<NotifyPreApprovalRule> accept,
+        IReadOnlyList<NotifyPreApprovalRule> escalate,
+        out string error)
+    {
+        var overlaps = accept
+            .Select(rule => rule.ToString())
+            .Intersect(escalate.Select(rule => rule.ToString()), StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (overlaps.Length == 0)
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        error = "A prompt policy pair cannot be recorded in both --pre-approve and --pre-escalate. "
+            + $"Conflicting values: {string.Join(", ", overlaps)}. Remove the overlap; escalation remains the fail-closed runtime precedence.";
         return false;
     }
 

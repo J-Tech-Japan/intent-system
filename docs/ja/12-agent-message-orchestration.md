@@ -312,19 +312,24 @@ silent です。これは 1.0 promise の対象外の preview surface です。c
 
 unattended approval model は正確に 3 層です。第 1 に agent kind ごとの recorded
 recipe の G636 fields に agent-side allow configuration を記録し、既知 dialog を除去します。
-第 2 に G683 supervision は dialog-blocked pane を読み、kind ごとの recipe entry にある literal
-fragment がすべて一致した場合だけ agent kind、pane、observed text、stable class を出力します。
-registry 外の text は class `unknown` で、曖昧な分類を行わず escalate-only です。
+第 2 に G683 supervision は dialog-blocked pane の bottom detection snapshot を読み、kind ごとの
+recipe entry にある ordered literal fragment が current trailing dialog を構成する場合だけ agent kind、
+pane、observed text、stable class を出力します。古い known dialog の後に新しい未分類 text がある場合は
+class `unknown` で、曖昧な分類を行わず escalate-only です。
 第 3 に検証済みの recorded pre-approve が正確に一致した場合だけ、orchestration に rule、
 observed dialog、recipe の exact answer scope を通知します。orchestration は authorization
-を実行前に永続記録し、その recorded key sequence だけを実行します。design は監査記録を
-読みますが、prompt への応答も keystroke relay も行いません。
+と execution-pending transition を実行前に永続記録し、その recorded key sequence だけを実行して
+terminal outcome を記録します。未解決の pending transition は answer retry を抑止し、
+reconciliation-required になります。design は監査記録を読みますが、prompt への応答も
+keystroke relay も行いません。
 
 standing supervisor に repeatable な
 `--pre-approve <agent-kind>:<prompt-class>` と
 `--pre-escalate <agent-kind>:<prompt-class>` を `--write` とともに指定して policy を
 記録します。2 つの list は同時に宣言します。各 pair は reviewable recipe vocabulary に対して
-検証され、unknown pair は拒否されて既知の `kind:class` 値がすべて表示されます。
+検証され、unknown pair は拒否されて既知の `kind:class` 値がすべて表示されます。同じ pair を
+両方の list に記録することは拒否され、legacy conflicting record では escalation が fail-closed で
+優先されます。
 producer-covered kind は G682 の inapplicability を自動的に解消し、uncovered kind は
 `inapplicable-no-prompt-class-producer` を維持します。matched pre-escalate、unmatched、
 `unknown` はすべて escalate-only として監査記録され、answer を実行しません。最初の vocabulary は

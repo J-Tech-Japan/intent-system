@@ -2090,6 +2090,13 @@ internal static class NotifyCommand
                 error = "A recorded pre-approval policy requires at least one --pre-approve and one --pre-escalate rule; without both, omit them and remain escalate-only.";
                 return false;
             }
+            if (!NotifyPreApprovalPolicyStore.TryValidateNoOverlap(
+                options.PreApprovalAcceptRules,
+                options.PreApprovalEscalateRules,
+                out error))
+            {
+                return false;
+            }
         }
         else if (string.Equals(operation, OperationDelegate, StringComparison.Ordinal))
         {

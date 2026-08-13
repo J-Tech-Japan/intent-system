@@ -378,21 +378,27 @@ compatibility ledger.
 
 The unattended approval model has exactly three layers. First, eliminate each
 known dialog through agent-side allow configuration recorded in the agent
-kind's G636 recipe fields. Second, G683 supervision reads a dialog-blocked pane
-and emits the agent kind, pane, observed text, and a stable class only when all
-literal fragments in that kind's recipe entry match. Text outside the registry
-is class `unknown`: it is never fuzzy-classified and remains escalate-only.
+kind's G636 recipe fields. Second, G683 supervision reads the bottom detection
+snapshot of a dialog-blocked pane and emits the agent kind, pane, observed text,
+and a stable class only when the ordered literal fragments in that kind's recipe
+entry form the current trailing dialog. A stale known dialog followed by newer
+unclassified text is class `unknown`: it is never fuzzy-classified and remains
+escalate-only.
 Third, only a validated recorded pre-approve match wakes orchestration with the
 rule, observed dialog, and exact recipe answer scope. Orchestration durably
-audits authorization before executing only that recorded key sequence. Design
-reads the audit and never answers the prompt or relays keystrokes.
+audits authorization and an execution-pending transition before executing only
+that recorded key sequence, then records the terminal outcome. An unresolved
+pending transition suppresses answer retry and becomes reconciliation-required.
+Design reads the audit and never answers the prompt or relays keystrokes.
 
 Record the policy on the standing supervisor with repeatable
 `--pre-approve <agent-kind>:<prompt-class>` and
 `--pre-escalate <agent-kind>:<prompt-class>` flags plus `--write`. The two lists
 must be declared together. Every pair is validated against the reviewable
 recipe vocabulary; an unknown pair is refused and the error names all known
-`kind:class` values. Producer-covered kinds clear G682's inapplicability
+`kind:class` values. The same pair cannot appear in both lists; recording is
+refused, and escalation has fail-closed precedence for a legacy conflicting
+record. Producer-covered kinds clear G682's inapplicability
 automatically, while uncovered kinds retain
 `inapplicable-no-prompt-class-producer`. Matched pre-escalate, unmatched, and
 `unknown` observations are all audited as escalate-only and execute no answer.

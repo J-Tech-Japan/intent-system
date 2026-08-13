@@ -438,7 +438,7 @@ internal sealed class NotifyMeasuredSupervisor
         if (!transportUnavailable)
         {
             observations.AddRange(ReadRecipeDriftObservations());
-            observations.AddRange(ReadObservedPrompts());
+            observations.AddRange(ReadObservedPrompts(state.PromptAudits));
             observations.AddRange(ReadAbsentSeats(now));
         }
 
@@ -1481,7 +1481,8 @@ internal sealed class NotifyMeasuredSupervisor
         return observations;
     }
 
-    private IReadOnlyList<NotifySupervisionObservation> ReadObservedPrompts()
+    private IReadOnlyList<NotifySupervisionObservation> ReadObservedPrompts(
+        IReadOnlyList<NotifyPromptAudit> promptAudits)
     {
         var topology = NotifyRoleTopologyStore.Resolve(routingRoot, domain, team);
         if (!topology.Resolved || topology.Topology is null)
@@ -1547,7 +1548,7 @@ internal sealed class NotifyMeasuredSupervisor
             {
                 paneRead = runner.Run(
                     herdrExecutable,
-                    ["agent", "read", recorded.PaneId, "--source", "recent-unwrapped", "--lines", "200"]);
+                    ["agent", "read", recorded.PaneId, "--source", "detection", "--lines", "200"]);
             }
             catch (InvalidOperationException)
             {
@@ -1560,22 +1561,29 @@ internal sealed class NotifyMeasuredSupervisor
             }
 
             var classified = AgentLaunchRecipeRegistry.Classify(agentKind, observedText);
-            var acceptRule = classified.Known && policy?.Applicable == true
-                ? policy.Accept.FirstOrDefault(rule => RuleMatches(rule, agentKind, classified.PromptClass))
-                : null;
             var escalateRule = policy?.Escalate.FirstOrDefault(rule =>
                 rule.Applicable && RuleMatches(rule, agentKind, classified.PromptClass));
+            var acceptRule = escalateRule is null && classified.Known && policy?.Applicable == true
+                ? policy.Accept.FirstOrDefault(rule => RuleMatches(rule, agentKind, classified.PromptClass))
+                : null;
             var decision = acceptRule is not null
                 && string.Equals(ownerRole, OrchestrationRole, StringComparison.Ordinal)
                     ? "accept"
                     : "escalate";
-            var rule = acceptRule?.ToString()
-                ?? escalateRule?.ToString()
+            var rule = escalateRule?.ToString()
+                ?? acceptRule?.ToString()
                 ?? (policy?.Applicable == false ? "policy-inapplicable" : "unmatched");
             var textHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(observedText)))[..16].ToLowerInvariant();
             var sequence = classified.Known && agent.StateChangeSequence is { } stateSequence
                 ? $"{classified.PromptClass}:{stateSequence.ToString(CultureInfo.InvariantCulture)}"
                 : $"{classified.PromptClass}:{textHash}";
+            var promptKey = $"observed-prompt:{workspaceId}:{recorded.PaneId}:{sequence}";
+            var pendingExecution = FindUnresolvedPromptExecution(promptAudits, promptKey);
+            if (pendingExecution is not null)
+            {
+                decision = "escalate";
+                rule = pendingExecution.Rule;
+            }
             var prompt = new NotifyObservedPrompt
             {
                 AgentKind = agentKind,
@@ -1584,18 +1592,21 @@ internal sealed class NotifyMeasuredSupervisor
                 PromptClass = classified.PromptClass,
                 Decision = decision,
                 Rule = rule,
+                ReconciliationAttemptId = pendingExecution?.AttemptId,
                 ExactAnswerScope = decision == "accept" ? classified.Recipe?.ExactAnswerScope : null,
                 AnswerKeys = decision == "accept" ? classified.Recipe?.AnswerKeys ?? [] : [],
             };
             observations.Add(new NotifySupervisionObservation
             {
-                Key = $"observed-prompt:{workspaceId}:{recorded.PaneId}:{sequence}",
+                Key = promptKey,
                 Kind = "observed-prompt",
                 OwnerRole = OrchestrationRole,
                 SubjectRole = role,
                 Source = "herdr.agent-status+agent.read+agent-launch-recipe",
                 Summary = $"Dialog-blocked seat '{role}' kind '{agentKind}' pane '{recorded.PaneId}' emitted prompt-class '{classified.PromptClass}' with decision '{decision}'. "
-                    + (classified.Known
+                    + (pendingExecution is not null
+                        ? "A durable execution-pending audit has no terminal outcome; reconciliation is required and no answer may be retried."
+                        : classified.Known
                         ? "The class is an exact literal registry match; no fuzzy classification was used."
                         : "The observed text matched no recorded literal class, so class 'unknown' is escalate-only and no answer is available."),
                 WorkspaceId = workspaceId,
@@ -1614,9 +1625,13 @@ internal sealed class NotifyMeasuredSupervisor
     {
         var auditPath = NotifySupervisionStore.ResolveCyclePath(
             context.ResolveSupervisionArtifactRootPath(), domain, team);
-        var initialOutcome = prompt.Decision == "accept" ? "authorized-before-execution" : "escalate-only";
+        var attemptId = prompt.ReconciliationAttemptId ?? Guid.NewGuid().ToString("N");
+        var initialOutcome = prompt.ReconciliationAttemptId is not null
+            ? "bounded-answer-outcome-unknown-reconciliation-required"
+            : prompt.Decision == "accept" ? "authorized-before-execution" : "escalate-only";
         var audit = new NotifyPromptAudit
         {
+            AttemptId = attemptId,
             PromptKey = observation.Key,
             Seat = observation.SubjectRole ?? "unknown",
             Pane = prompt.Pane,
@@ -1679,6 +1694,25 @@ internal sealed class NotifyMeasuredSupervisor
             };
         }
 
+        var pendingAudit = NotifySupervisionStore.RecordPromptAudit(
+            auditPath,
+            audit with
+            {
+                Timestamp = (NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+                Outcome = "bounded-answer-execution-pending",
+            },
+            write: true);
+        if (!pendingAudit.Applied)
+        {
+            return new NotifySupervisionWakeResult
+            {
+                Attempted = true,
+                Delivered = true,
+                Cause = "prompt-execution-intent-audit-write-failed",
+                Summary = $"Orchestration received the bounded prompt, but its execution-pending audit could not be durably appended: {pendingAudit.Error ?? "not applied"}. No answer was attempted.",
+            };
+        }
+
         NotifyProcessResult execution;
         try
         {
@@ -1702,9 +1736,9 @@ internal sealed class NotifyMeasuredSupervisor
             return new NotifySupervisionWakeResult
             {
                 Attempted = true,
-                Delivered = true,
+                Delivered = false,
                 Cause = "prompt-final-audit-write-failed",
-                Summary = $"The bounded answer returned exit {execution.ExitCode}, but its final audit could not be appended: {finalAudit.Error ?? "not applied"}.",
+                Summary = $"The bounded answer returned exit {execution.ExitCode}, but its final audit could not be appended: {finalAudit.Error ?? "not applied"}. The durable execution-pending record prevents an unaudited retry and requires reconciliation.",
             };
         }
         return new NotifySupervisionWakeResult
@@ -1722,6 +1756,18 @@ internal sealed class NotifyMeasuredSupervisor
         rule.Applicable
         && string.Equals(rule.AgentKind, agentKind, StringComparison.OrdinalIgnoreCase)
         && string.Equals(rule.PromptClass, promptClass, StringComparison.OrdinalIgnoreCase);
+
+    private static NotifyPromptAudit? FindUnresolvedPromptExecution(
+        IReadOnlyList<NotifyPromptAudit> audits,
+        string promptKey) => audits
+        .Where(audit => string.Equals(audit.PromptKey, promptKey, StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(audit.AttemptId))
+        .GroupBy(audit => audit.AttemptId!, StringComparer.Ordinal)
+        .Select(group => group.OrderBy(audit => audit.Timestamp).Last())
+        .LastOrDefault(audit => string.Equals(
+            audit.Outcome,
+            "bounded-answer-execution-pending",
+            StringComparison.Ordinal));
 
     private IReadOnlyList<NotifySupervisionObservation> ReadAbsentSeats(DateTimeOffset now)
     {
@@ -1898,6 +1944,8 @@ internal sealed record NotifyObservedPrompt
     public required string Decision { get; init; }
     [System.Text.Json.Serialization.JsonPropertyName("rule")]
     public required string Rule { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? ReconciliationAttemptId { get; init; }
     [System.Text.Json.Serialization.JsonPropertyName("exact_answer_scope")]
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? ExactAnswerScope { get; init; }
