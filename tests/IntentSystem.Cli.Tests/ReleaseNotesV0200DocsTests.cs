@@ -4,8 +4,9 @@ using IntentSystem.Cli.Infrastructure;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G687 keeps the v0.20.0 prepare-only notes bilingual, derived from the
-/// v0.19.0..main first-parent history, and bounded exactly to G678-G686.
+/// G687 keeps the published v0.20.0 notes bilingual and frozen after the
+/// v0.19.0..main first-parent preparation, while the current next-version
+/// readiness points at the post-release v0.20.1 stub.
 /// </summary>
 public sealed class ReleaseNotesV0200DocsTests
 {
@@ -117,14 +118,15 @@ public sealed class ReleaseNotesV0200DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void CurrentPolicyAndReadinessFollowVersionPolicyAndOldStubsAreGone(string language)
+    public void CurrentPolicyAndReadinessFollowVersionPolicyAndPublishedNotesStayFrozen(string language)
     {
         var root = RepoVersionPolicySource.RepoRoot();
         var policy = RepoVersionPolicySource.Read();
         var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
-        var notes = Read(language);
         var currentNotes = $"release-notes-v{policy.NextVersion}.md";
         var shippedNotes = $"release-notes-v{policy.StableVersion}.md";
+        var notes = Read(language);
+        var currentStub = File.ReadAllText(Path.Combine(root, "docs", language, currentNotes));
 
         RepoVersionPolicySource.AssertReleaseToBeCutIsAheadOfPublishedStable(policy);
         Assert.True(File.Exists(Path.Combine(root, "docs", language, currentNotes)));
@@ -139,8 +141,15 @@ public sealed class ReleaseNotesV0200DocsTests
                 : $"次リリース準備(v{policy.NextVersion})",
             reference,
             StringComparison.Ordinal);
-        Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.NextVersion}", notes, StringComparison.Ordinal);
-        Assert.Contains($"releases/tag/v{policy.NextVersion}", notes, StringComparison.Ordinal);
+        Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.StableVersion}", notes, StringComparison.Ordinal);
+        Assert.Contains($"releases/tag/v{policy.StableVersion}", notes, StringComparison.Ordinal);
+        Assert.Contains("DRAFT /", currentStub, StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "UNRELEASED" : "未リリース",
+            currentStub,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.NextVersion}", currentStub, StringComparison.Ordinal);
+        Assert.Contains($"releases/tag/v{policy.NextVersion}", currentStub, StringComparison.Ordinal);
         Assert.DoesNotContain("DRAFT /", notes, StringComparison.Ordinal);
     }
 
@@ -157,6 +166,17 @@ public sealed class ReleaseNotesV0200DocsTests
             Assert.Contains(unit.Merge, english, StringComparison.Ordinal);
             Assert.Contains(unit.Merge, japanese, StringComparison.Ordinal);
         }
+    }
+
+    [Theory]
+    [InlineData("en", "f00b7326cb82b49b77c9c3e48d001aa8ba97a1ac24b46c5b84dfc682efeb3aeb")]
+    [InlineData("ja", "541a80688f3aea78d32f4c73dd60bb80d189ad44603ae53717261ba52a9db9b6")]
+    public void PublishedV0200NotesRemainByteForByteFrozen(string language, string expectedSha256)
+    {
+        var bytes = File.ReadAllBytes(Path.Combine(
+            RepoVersionPolicySource.RepoRoot(), "docs", language, "release-notes-v0.20.0.md"));
+
+        Assert.Equal(expectedSha256, Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)));
     }
 
     private static string Read(string language) => File.ReadAllText(Path.Combine(

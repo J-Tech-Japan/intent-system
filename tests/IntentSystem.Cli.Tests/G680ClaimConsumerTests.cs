@@ -378,7 +378,7 @@ public sealed class G680ClaimConsumerTests : IDisposable
             var ledger = File.ReadAllText(Path.Combine(root, "docs", language, "1.0-compatibility-ledger.md"));
             Assert.Contains("claim-then-draft", packets, StringComparison.Ordinal);
             Assert.Contains("claim verify", loop, StringComparison.Ordinal);
-            Assert.Contains("release-prep:<owner/repo>:0.20.0", release, StringComparison.Ordinal);
+            Assert.Contains("release-prep:<owner/repo>:0.20.1", release, StringComparison.Ordinal);
             Assert.Contains("G680", ledger, StringComparison.Ordinal);
             Assert.Contains("preview-through-1.x", ledger, StringComparison.Ordinal);
         }
