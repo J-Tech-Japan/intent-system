@@ -179,6 +179,97 @@ public sealed class EnvelopeProfileG686Tests : IDisposable
         Assert.DoesNotContain(runner.Calls, call => call.Arguments.SequenceEqual(["agent", "list"]));
     }
 
+    [Theory]
+    [InlineData("envelope_profile", "array")]
+    [InlineData("envelope_profile", "object")]
+    [InlineData("envelope_profile", "number")]
+    [InlineData("envelope_profile", "bool")]
+    [InlineData("envelope_profile_ref", "array")]
+    [InlineData("envelope_profile_ref", "object")]
+    [InlineData("envelope_profile_ref", "number")]
+    [InlineData("envelope_profile_ref", "bool")]
+    public void TopologyValidateShowAndSupervision_RejectPresentNonStringProfileReferences(
+        string propertyName,
+        string shape)
+    {
+        var context = CreateContext();
+        WriteReferenceTopology(propertyName, MalformedReference(shape));
+
+        using var validateWriter = new StringWriter();
+        var validateExit = SessionLayerTopologyCommand.ExecuteValidate(
+            context,
+            ["--domain", Domain, "--team", Team, "--format", "json"],
+            validateWriter);
+        Assert.Equal(1, validateExit);
+        Assert.Contains("profile-invalid", validateWriter.ToString(), StringComparison.Ordinal);
+
+        using var showWriter = new StringWriter();
+        var showExit = SessionLayerTopologyCommand.ExecuteShow(
+            context,
+            ["--domain", Domain, "--team", Team, "--format", "json"],
+            showWriter);
+        Assert.Equal(1, showExit);
+        Assert.Contains("profile-invalid", showWriter.ToString(), StringComparison.Ordinal);
+
+        var resolution = NotifyRoleTopologyStore.Resolve(root, Domain, Team);
+        Assert.False(resolution.Resolved);
+        Assert.Equal("profile-invalid", resolution.Cause);
+
+        var runner = new ProfileRunner();
+        var pass = CreateSupervisor(context, runner, write: false).RunOnce();
+        var finding = Assert.Single(pass.Findings, item => item.Kind == "profile-invalid");
+        Assert.Equal("profile-invalid", finding.Cause);
+        Assert.DoesNotContain(runner.Calls, call => call.Arguments.SequenceEqual(["agent", "list"]));
+    }
+
+    [Theory]
+    [InlineData("envelope_profile")]
+    [InlineData("envelope_profile_ref")]
+    public void NullProfileReferenceRemainsTheIntentionalUnprofiledRegistryCase(string propertyName)
+    {
+        var context = CreateContext();
+        WriteReferenceTopology(propertyName, JsonNode.Parse("null")!);
+
+        using var validateWriter = new StringWriter();
+        Assert.Equal(0, SessionLayerTopologyCommand.ExecuteValidate(
+            context,
+            ["--domain", Domain, "--team", Team, "--format", "json"],
+            validateWriter));
+        Assert.DoesNotContain("profile-invalid", validateWriter.ToString(), StringComparison.Ordinal);
+
+        using var showWriter = new StringWriter();
+        Assert.Equal(0, SessionLayerTopologyCommand.ExecuteShow(
+            context,
+            ["--domain", Domain, "--team", Team, "--format", "json"],
+            showWriter));
+        Assert.DoesNotContain("profile-invalid", showWriter.ToString(), StringComparison.Ordinal);
+
+        var resolution = NotifyRoleTopologyStore.Resolve(root, Domain, Team);
+        Assert.True(resolution.Resolved, resolution.Summary);
+        Assert.Null(resolution.Topology!.Roles["orchestration"].EnvelopeProfileReference);
+    }
+
+    [Fact]
+    public void InvalidReferenceWinsOverValidAliasAndOverrideWithoutRegistryFallback()
+    {
+        var context = CreateContext();
+        WriteReferenceTopology(
+            "envelope_profile",
+            new JsonArray("not-a-reference"),
+            explicitReference: "codex-operator",
+            includeValidOverride: true);
+
+        var resolution = NotifyRoleTopologyStore.Resolve(root, Domain, Team);
+        Assert.False(resolution.Resolved);
+        Assert.Equal("profile-invalid", resolution.Cause);
+        Assert.Contains("envelope_profile", resolution.Summary, StringComparison.Ordinal);
+
+        var runner = new ProfileRunner();
+        var pass = CreateSupervisor(context, runner, write: false).RunOnce();
+        Assert.Single(pass.Findings, item => item.Kind == "profile-invalid");
+        Assert.DoesNotContain(runner.Calls, call => call.Arguments.SequenceEqual(["agent", "list"]));
+    }
+
     [Fact]
     public void NoProfilePreservesRegistryComparatorAndTopLevelProfileIsNotParsedAsRole()
     {
@@ -350,6 +441,58 @@ public sealed class EnvelopeProfileG686Tests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, topology.ToJsonString());
     }
+
+    private void WriteReferenceTopology(
+        string propertyName,
+        JsonNode? referenceValue,
+        string? explicitReference = null,
+        bool includeValidOverride = false)
+    {
+        var role = new JsonObject
+        {
+            ["resident"] = "herdr",
+            ["workspace_id"] = "wG686",
+            ["pane_id"] = "wG686:p1",
+            ["kind"] = "codex",
+            ["cwd"] = "/registry",
+            ["launch_args"] = new JsonArray("--sandbox", "workspace-write", "--ask-for-approval", "never", "--add-dir", "/registry"),
+            [propertyName] = referenceValue,
+        };
+        if (explicitReference is not null)
+        {
+            role["envelope_profile_ref"] = explicitReference;
+        }
+
+        var topology = new JsonObject
+        {
+            ["domain"] = Domain,
+            ["team"] = Team,
+            ["workspace_id"] = "wG686",
+            ["roles"] = new JsonObject { ["orchestration"] = role },
+        };
+        if (includeValidOverride)
+        {
+            var profile = AgentLaunchEnvelopeProfileCodec.WithDigest(Profile("codex-operator", "/profile"));
+            topology["envelope_profiles"] = new JsonObject
+            {
+                [profile.Name] = AgentLaunchEnvelopeProfileCodec.ToJsonObject(profile),
+            };
+            role["envelope_profile_override"] = AgentLaunchEnvelopeProfileCodec.ToJsonObject(profile);
+        }
+
+        var path = NotifyRoleTopologyStore.ResolvePath(root, Domain, Team);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, topology.ToJsonString());
+    }
+
+    private static JsonNode MalformedReference(string shape) => shape switch
+    {
+        "array" => new JsonArray("not-a-reference"),
+        "object" => new JsonObject { ["name"] = "not-a-reference" },
+        "number" => JsonValue.Create(42)!,
+        "bool" => JsonValue.Create(true)!,
+        _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
+    };
 
     private NotifyMeasuredSupervisor CreateSupervisor(CliContext context, INotifyProcessRunner runner, bool write) =>
         new(context, root, Domain, Team, repo: null, ownerRole: "orchestration", intervalSeconds: 300,

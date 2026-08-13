@@ -701,9 +701,45 @@ internal static class NotifyRoleTopologyStore
 
     private static string? ReadProfileReference(JsonElement element, out string? error)
     {
-        var direct = ReadString(element, "envelope_profile");
-        var explicitReference = ReadString(element, "envelope_profile_ref");
-        if (direct is not null
+        string? referenceError = null;
+
+        bool TryReadReference(string propertyName, out bool present, out string? value)
+        {
+            present = false;
+            value = null;
+            if (element.ValueKind != JsonValueKind.Object
+                || !element.TryGetProperty(propertyName, out var candidate))
+            {
+                return true;
+            }
+
+            present = true;
+            if (candidate.ValueKind == JsonValueKind.Null)
+            {
+                return true;
+            }
+
+            if (candidate.ValueKind != JsonValueKind.String)
+            {
+                referenceError = $"field '{propertyName}' is present with JSON kind '{candidate.ValueKind}', but a profile reference must be a string or null.";
+                return false;
+            }
+
+            value = candidate.GetString();
+            return true;
+        }
+
+        if (!TryReadReference("envelope_profile", out var directPresent, out var direct)
+            || !TryReadReference("envelope_profile_ref", out var explicitPresent, out var explicitReference))
+        {
+            error = referenceError;
+            return null;
+        }
+
+        error = null;
+        if (directPresent
+            && explicitPresent
+            && direct is not null
             && explicitReference is not null
             && !string.Equals(direct, explicitReference, StringComparison.Ordinal))
         {
@@ -711,7 +747,6 @@ internal static class NotifyRoleTopologyStore
             return null;
         }
 
-        error = null;
         return direct ?? explicitReference;
     }
 
