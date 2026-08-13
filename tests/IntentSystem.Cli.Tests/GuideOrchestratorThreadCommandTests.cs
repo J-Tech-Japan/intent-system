@@ -2037,9 +2037,9 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("never fabricates a class", output, StringComparison.Ordinal);
         Assert.Contains("unknown, unmatched, and matched pre-escalate prompts execute no answer", output, StringComparison.Ordinal);
         Assert.Contains("audited before execution", output, StringComparison.Ordinal);
-        Assert.Contains("Design never answers a dialog or relays keystrokes", output, StringComparison.Ordinal);
+        Assert.Contains("A design actor may answer only through the canonical `notify adjudicate` surface", output, StringComparison.Ordinal);
         Assert.DoesNotContain("ONLY to read-pane TRUST/ALLOWLIST", output, StringComparison.Ordinal);
-        Assert.Contains("existing escalation set", output, StringComparison.Ordinal);
+        Assert.Contains("remain in the escalation set", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2197,13 +2197,13 @@ public sealed class GuideOrchestratorThreadCommandTests
 
         // G683: the authority boundary states the exact, audited operative policy.
         var authorityBoundary = launchRules.GetProperty("authority_boundary").GetString()!;
-        Assert.Contains("orchestration", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("no shipped class or scope is design-answerable", authorityBoundary, StringComparison.Ordinal);
         Assert.Contains("never fabricates a class", authorityBoundary, StringComparison.Ordinal);
         Assert.Contains("matched pre-escalate prompts execute no answer", authorityBoundary, StringComparison.Ordinal);
         Assert.Contains("audited before execution", authorityBoundary, StringComparison.Ordinal);
         Assert.DoesNotContain("read-pane TRUST/ALLOWLIST", authorityBoundary, StringComparison.Ordinal);
-        Assert.Contains("Design never answers", authorityBoundary, StringComparison.Ordinal);
-        Assert.Contains("existing escalation set", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("A design actor may answer only through the canonical `notify adjudicate` surface", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("remain in the escalation set", authorityBoundary, StringComparison.Ordinal);
 
         var unattended = provisioning.GetProperty("unattended_launch_recipes");
         var recipeFields = unattended.GetProperty("required_recipe_fields").EnumerateArray()
@@ -2351,8 +2351,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
 
         // G683: exact detection routes only validated pre-approve to bounded orchestration execution.
-        Assert.Contains("> **Detection, adjudication, and escalation boundary (G682/G683):**", output, StringComparison.Ordinal);
-        Assert.Contains("the design thread never answers a dialog", output, StringComparison.Ordinal);
+        Assert.Contains("> **Detection, adjudication, and escalation boundary (G682/G683/G690):**", output, StringComparison.Ordinal);
+        Assert.Contains("the canonical adjudication surface is the only bounded answer path", output, StringComparison.Ordinal);
         Assert.Contains("exact recipe-registry classes plus observed text", output, StringComparison.Ordinal);
         Assert.Contains("unknown text stays escalate-only", output, StringComparison.Ordinal);
 
@@ -2370,7 +2370,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("**choices that embed a product or design decision**", output, StringComparison.Ordinal);
         Assert.Contains("**credential, security, and permission waits**", output, StringComparison.Ordinal);
         // Credential/security/permission stays absolute, matching G549's boundary.
-        Assert.Contains("NEVER answerable by the design thread, with or without prior authorization", output, StringComparison.Ordinal);
+        Assert.Contains("in G690's hard risk floor and are never answerable by the design thread", output, StringComparison.Ordinal);
 
         // AC: the boundary sentence.
         Assert.Contains("UNSTICKING A SESSION IS NOT DECIDING FOR IT", output, StringComparison.Ordinal);
@@ -2440,7 +2440,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains(layers, l => l.Layer == "periodic state watchdog" && l.Cadence.Contains("tens-of-minutes", StringComparison.Ordinal));
 
         Assert.Contains("5.5 HOURS", supervision.GetProperty("rearm_rule").GetString(), StringComparison.Ordinal);
-        Assert.Contains("never answers a dialog", supervision.GetProperty("verified_read_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("canonical adjudication surface", supervision.GetProperty("verified_read_rule").GetString(), StringComparison.Ordinal);
         Assert.Contains("exact recipe-registry classes", supervision.GetProperty("verified_read_rule").GetString(), StringComparison.Ordinal);
         Assert.Contains("unknown text stays escalate-only", supervision.GetProperty("verified_read_rule").GetString(), StringComparison.Ordinal);
 

@@ -413,7 +413,7 @@ does not block merge or closeout, and an explicit no-surface declaration is
 silent. This is a preview surface outside the 1.0 promise; see the
 compatibility ledger.
 
-### Live three-layer residual approval path and recipe drift (G666/G682/G683 — preview-through-1.x)
+### Scoped adjudication authority, live CAS, and recipe drift (G666/G682/G683/G689/G690 — preview-through-1.x)
 
 The unattended approval model has exactly three layers. First, eliminate each
 known dialog through agent-side allow configuration recorded in the agent
@@ -423,12 +423,28 @@ and a stable class only when the ordered literal fragments in that kind's recipe
 entry form the current trailing dialog. A stale known dialog followed by newer
 unclassified text is class `unknown`: it is never fuzzy-classified and remains
 escalate-only.
-Third, only a validated recorded pre-approve match wakes orchestration with the
-rule, observed dialog, and exact recipe answer scope. Orchestration durably
-audits authorization and an execution-pending transition before executing only
-that recorded key sequence, then records the terminal outcome. An unresolved
-pending transition suppresses answer retry and becomes reconciliation-required.
-Design reads the audit and never answers the prompt or relays keystrokes.
+Third, only a validated recorded pre-approve match wakes the canonical
+adjudication surface with the rule, observed dialog, and exact recipe answer
+scope. Orchestration durably audits authorization and an execution-pending
+transition before executing only that recorded key sequence, then records the
+terminal outcome. An unresolved pending transition suppresses answer retry and
+becomes reconciliation-required.
+
+G690 replaces the absolute "design never answers" shortcut with a declared
+authority boundary. A prompt class and each matched shell scope carry
+`answerable_by`; the effective capability is their intersection. A design actor
+may use only `intent-cli notify adjudicate` when the exact class is declared
+design-answerable, the scope matches, no hard risk-floor tag is present, and
+the recorded pane, state-change sequence, and observed-text SHA-256 still
+match the live dialog. The command re-reads that CAS immediately before the
+bounded `herdr agent send-keys`; any pane, sequence, or text mutation refuses
+the answer and records `stale-dialog-cas-refused`. Decision actor and
+mechanical executor are separate audit fields. Direct relay, direct
+`send-keys`, fuzzy classification, and unscoped forwarding are never a design
+authority path. No shipped class or scope is design-answerable in this slice;
+the capability boundary is implemented for a future explicitly declared class.
+The hard floor is always escalation for `destructive`, `credential`,
+`permission-change`, `security`, `product-decision`, or `unverifiable` prompts.
 
 Record the policy on the standing supervisor with repeatable
 `--pre-approve <agent-kind>:<prompt-class>` and
@@ -459,8 +475,11 @@ from the same wake's scratch ledger and never authorizes bare `/tmp`.
 `exact-command-once` binds one normalized AST digest to the current dialog
 hash and is consumed after one bounded answer. Unknown syntax, command
 substitution, redirects, and uncovered or out-of-root segments escalate.
-Persistent allowances remain operator-only; the shell answer path remains
-orchestration-only and design never answers it.
+Persistent allowances remain operator-only. G689's shipped shell scopes,
+including `owned-scratch-delete`, remain orchestration-only and retain the
+same-wake scratch-ledger identity requirement; G690 does not weaken that
+contract. Any future design-answerable class still has to use the canonical
+adjudication surface and live CAS.
 
 Each supervision cycle also compares the structured argv of every running
 recorded seat with its kind's recorded recipe. The comparison covers exactly

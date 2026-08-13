@@ -1527,8 +1527,8 @@ public sealed class SessionLayerModeG570Tests : IDisposable
     [Theory]
     [InlineData("READ the pane first")]
     [InlineData("Confirm the role is still held by that session before concluding anything")]
-    [InlineData("route it to orchestration; design never answers")]
-    [InlineData("the design thread never answers a dialog")]
+    [InlineData("route it to the canonical adjudication boundary")]
+    [InlineData("canonical adjudication surface")]
     [InlineData("Never delete another team's workspace")]
     [InlineData("if you cannot positively establish ownership, the object is READ-ONLY to you")]
     [InlineData("Never reuse, repurpose, or borrow another team's workspace")]
@@ -1734,10 +1734,10 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         // Supervision mechanism and the duty inside the same sentence run are
         // typed apart rather than sharing the fragment's verdict.
         var supervision = all.First(d =>
-            d.Text.Contains("It records blocking waits and routes them to orchestration", StringComparison.Ordinal));
+            d.Text.Contains("It records blocking waits and routes them to the canonical adjudication boundary", StringComparison.Ordinal));
         Assert.Contains(
             supervision.Clauses!,
-            c => c.Text.Contains("It records blocking waits and routes them to orchestration", StringComparison.Ordinal)
+            c => c.Text.Contains("It records blocking waits and routes them to the canonical adjudication boundary", StringComparison.Ordinal)
                 && c.Type == SessionLayerSections.FragmentType.ModeIndependentOperative);
     }
 

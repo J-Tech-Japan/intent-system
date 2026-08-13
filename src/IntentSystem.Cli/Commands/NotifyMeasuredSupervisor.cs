@@ -17,7 +17,6 @@ internal sealed class NotifyMeasuredSupervisor
 {
     private const int FallbackAbsenceHeadroomSeconds = 60;
     private const string DesignRole = "design";
-    private const string OrchestrationRole = "orchestration";
 
     private readonly CliContext context;
     private readonly string routingRoot;
@@ -1122,9 +1121,8 @@ internal sealed class NotifyMeasuredSupervisor
         string.Equals(subjectRole, ownerRole, StringComparison.Ordinal);
 
     private string ResolveWakeTarget(NotifySupervisionObservation observation) =>
-        observation.Prompt is not null
-            ? OrchestrationRole
-            : IsOwnerSubject(observation.SubjectRole) ? DesignRole : observation.OwnerRole;
+        observation.Prompt?.AdjudicationTargetRole
+            ?? (IsOwnerSubject(observation.SubjectRole) ? DesignRole : observation.OwnerRole);
 
     private string? ResolveWakeClass(NotifySupervisionObservation observation) =>
         observation.Prompt is { Decision: "accept" }
@@ -1662,42 +1660,36 @@ internal sealed class NotifyMeasuredSupervisor
             }
 
             var classified = AgentLaunchRecipeRegistry.Classify(agentKind, observedText);
-            var shellAuthorization = classified.ShellCommand is { } shellPayload
-                ? ShellCommandPolicyRegistry.Evaluate(
-                    shellPayload,
-                    policy?.ScopedPolicies ?? [],
-                    recorded.Cwd,
-                    promptAudits,
-                    currentCycleId: cycleId)
-                : null;
-            var escalateRule = policy?.Escalate.FirstOrDefault(rule =>
-                rule.Applicable && RuleMatches(rule, agentKind, classified.PromptClass));
-            var acceptRule = escalateRule is null && classified.Known && policy?.Applicable == true
-                ? policy.Accept.FirstOrDefault(rule => RuleMatches(rule, agentKind, classified.PromptClass))
-                : null;
-            var decision = shellAuthorization is not null
-                ? shellAuthorization.Decision == "accept"
-                    && string.Equals(ownerRole, OrchestrationRole, StringComparison.Ordinal)
-                        ? "accept"
-                        : "escalate"
-                : acceptRule is not null
-                    && string.Equals(ownerRole, OrchestrationRole, StringComparison.Ordinal)
-                        ? "accept"
-                        : "escalate";
-            var rule = shellAuthorization?.Rule
-                ?? escalateRule?.ToString()
-                ?? acceptRule?.ToString()
-                ?? (policy?.Applicable == false ? "policy-inapplicable" : "unmatched");
-            var textHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(observedText)))[..16].ToLowerInvariant();
+            var authorization = PromptAdjudicationPipeline.Evaluate(
+                classified,
+                policy,
+                actorRole: null,
+                recorded.Cwd,
+                promptAudits,
+                currentCycleId: cycleId);
+            var decision = authorization.Decision;
+            var rule = authorization.Rule;
+            var textHash = PromptDialogCas.HashText(observedText);
+            var shortTextHash = textHash[..16];
             var sequence = classified.Known && agent.StateChangeSequence is { } stateSequence
                 ? $"{classified.PromptClass}:{stateSequence.ToString(CultureInfo.InvariantCulture)}"
-                : $"{classified.PromptClass}:{textHash}";
+                : $"{classified.PromptClass}:{shortTextHash}";
             var promptKey = $"observed-prompt:{workspaceId}:{recorded.PaneId}:{sequence}";
             var pendingExecution = FindUnresolvedPromptExecution(promptAudits, promptKey);
             if (pendingExecution is not null)
             {
                 decision = "escalate";
                 rule = pendingExecution.Rule;
+                authorization = authorization with
+                {
+                    Decision = decision,
+                    Rule = rule,
+                    Summary = "A durable bounded-answer execution is still pending; reconciliation is required and no retry is authorized.",
+                    AnswerKeys = [],
+                    ExactAnswerScope = null,
+                    MechanicalExecutor = null,
+                    ScopeOrRuleId = rule,
+                };
             }
             var prompt = new NotifyObservedPrompt
             {
@@ -1709,32 +1701,31 @@ internal sealed class NotifyMeasuredSupervisor
                 Decision = decision,
                 Rule = rule,
                 ReconciliationAttemptId = pendingExecution?.AttemptId,
-                ExactAnswerScope = decision == "accept"
-                    ? shellAuthorization?.ExactAnswerScope ?? classified.Recipe?.ExactAnswerScope
-                    : null,
-                AnswerKeys = decision == "accept"
-                    ? shellAuthorization?.AnswerKeys ?? classified.Recipe?.AnswerKeys ?? []
-                    : [],
-                MatchedScopes = shellAuthorization?.MatchedScopes ?? [],
-                CommandDigest = shellAuthorization?.CommandDigest,
-                DialogHash = shellAuthorization?.DialogHash,
-                PolicySummary = shellAuthorization?.Summary,
+                ExactAnswerScope = decision == "accept" ? authorization.ExactAnswerScope : null,
+                AnswerKeys = decision == "accept" ? authorization.AnswerKeys : [],
+                MatchedScopes = authorization.MatchedScopes,
+                CommandDigest = authorization.CommandDigest,
+                DialogHash = authorization.DialogHash,
+                PolicySummary = authorization.Summary,
+                AnswerableBy = authorization.AnswerableBy,
+                RiskTags = authorization.RiskTags,
+                DecisionActorRole = authorization.DecisionActorRole,
+                AdjudicationTargetRole = authorization.DecisionActorRole,
+                ScopeOrRuleId = authorization.ScopeOrRuleId,
+                StateChangeSequence = agent.StateChangeSequence,
+                ObservedTextHash = textHash,
             };
             observations.Add(new NotifySupervisionObservation
             {
                 Key = promptKey,
                 Kind = "observed-prompt",
-                OwnerRole = OrchestrationRole,
+                OwnerRole = authorization.DecisionActorRole,
                 SubjectRole = role,
-                Source = "herdr.agent-status+agent.read+agent-launch-recipe",
+                Source = "herdr.agent-status+agent.read+agent-launch-recipe+g690-adjudication",
                 Summary = $"Dialog-blocked seat '{role}' kind '{agentKind}' pane '{recorded.PaneId}' emitted prompt-class '{classified.PromptClass}' with decision '{decision}'. "
                     + (pendingExecution is not null
                         ? "A durable execution-pending audit has no terminal outcome; reconciliation is required and no answer may be retried."
-                        : shellAuthorization is not null
-                        ? shellAuthorization.Summary
-                        : classified.Known
-                        ? "The class is an exact literal registry match; no fuzzy classification was used."
-                        : "The observed text matched no recorded literal class, so class 'unknown' is escalate-only and no answer is available."),
+                        : authorization.Summary),
                 WorkspaceId = workspaceId,
                 PaneId = recorded.PaneId,
                 Prompt = prompt,
@@ -1765,7 +1756,12 @@ internal sealed class NotifyMeasuredSupervisor
             AgentKind = prompt.AgentKind,
             PromptClass = prompt.PromptClass,
             Rule = prompt.Rule,
-            Actor = OrchestrationRole,
+            Actor = prompt.DecisionActorRole,
+            DecisionActorRole = prompt.DecisionActorRole,
+            MechanicalExecutor = prompt.MechanicalExecutor,
+            ScopeOrRuleId = prompt.ScopeOrRuleId,
+            StateChangeSequence = prompt.StateChangeSequence,
+            ObservedTextHash = prompt.ObservedTextHash,
             Timestamp = now,
             Outcome = initialOutcome,
             ExactAnswerScope = prompt.ExactAnswerScope,
@@ -1795,7 +1791,7 @@ internal sealed class NotifyMeasuredSupervisor
                 source = observation.Source,
                 key = observation.Key,
                 subject_role = observation.SubjectRole,
-                wake_target_role = OrchestrationRole,
+                wake_target_role = prompt.AdjudicationTargetRole,
                 wake_class = ResolveWakeClass(observation),
                 agent_kind = prompt.AgentKind,
                 pane = prompt.Pane,
@@ -1807,6 +1803,13 @@ internal sealed class NotifyMeasuredSupervisor
                 matched_scopes = prompt.MatchedScopes,
                 command_digest = prompt.CommandDigest,
                 dialog_hash = prompt.DialogHash,
+                answerable_by = prompt.AnswerableBy,
+                risk_tags = prompt.RiskTags,
+                decision_actor_role = prompt.DecisionActorRole,
+                mechanical_executor = prompt.MechanicalExecutor,
+                scope_or_rule_id = prompt.ScopeOrRuleId,
+                state_change_sequence = prompt.StateChangeSequence,
+                observed_text_hash = prompt.ObservedTextHash,
                 cycle_id = prompt.CycleId,
                 policy_summary = prompt.PolicySummary,
                 answer_keys = prompt.Decision == "accept" ? prompt.AnswerKeys : null,
@@ -1826,6 +1829,39 @@ internal sealed class NotifyMeasuredSupervisor
                 Summary = prompt.Decision == "accept"
                     ? $"{delivery.Summary} The bounded answer was not executed because the orchestration wake was not delivered."
                     : $"{delivery.Summary} Escalate-only adjudication executed no answer.",
+            };
+        }
+
+        var cas = VerifyLivePromptCas(observation.WorkspaceId, prompt);
+        if (!cas.Matches)
+        {
+            var casAudit = NotifySupervisionStore.RecordPromptAudit(
+                auditPath,
+                audit with
+                {
+                    Timestamp = (NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+                    Outcome = "stale-dialog-cas-refused",
+                    Rule = prompt.Rule + " (stale-dialog-cas-refused)",
+                },
+                write: true);
+            return new NotifySupervisionWakeResult
+            {
+                Attempted = true,
+                Delivered = true,
+                Cause = "stale-dialog-cas-refused",
+                Summary = $"The wake was delivered, but no key was sent: {cas.Summary}"
+                    + (casAudit.Applied ? " The CAS refusal was audited." : $" The CAS refusal audit failed: {casAudit.Error ?? "not applied"}."),
+            };
+        }
+
+        if (!string.Equals(prompt.DecisionActorRole, PromptCapabilityResolver.OrchestrationRole, StringComparison.Ordinal))
+        {
+            return new NotifySupervisionWakeResult
+            {
+                Attempted = true,
+                Delivered = true,
+                Cause = null,
+                Summary = "The declared decision actor was notified, but the supervisor did not execute keys; the actor must use canonical notify adjudicate for any bounded answer.",
             };
         }
 
@@ -1887,10 +1923,65 @@ internal sealed class NotifyMeasuredSupervisor
         };
     }
 
-    private static bool RuleMatches(NotifyPreApprovalRule rule, string agentKind, string promptClass) =>
-        rule.Applicable
-        && string.Equals(rule.AgentKind, agentKind, StringComparison.OrdinalIgnoreCase)
-        && string.Equals(rule.PromptClass, promptClass, StringComparison.OrdinalIgnoreCase);
+    private PromptDialogCasResult VerifyLivePromptCas(string? workspaceId, NotifyObservedPrompt prompt)
+    {
+        NotifyProcessResult roster;
+        try
+        {
+            roster = runner.Run(herdrExecutable, ["agent", "list"]);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return new PromptDialogCasResult { Matches = false, Summary = $"The live agent roster could not be read: {exception.Message}" };
+        }
+        if (roster.ExitCode != 0)
+        {
+            return new PromptDialogCasResult { Matches = false, Summary = "The live agent roster could not be read before bounded execution." };
+        }
+
+        IReadOnlyList<HerdrAgentState> agents;
+        try
+        {
+            agents = HerdrNotifyTransport.ParseAgents(roster.StandardOutput);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return new PromptDialogCasResult { Matches = false, Summary = $"The live agent roster was not parseable: {exception.Message}" };
+        }
+
+        var agent = agents.SingleOrDefault(candidate =>
+            string.Equals(candidate.PaneId, prompt.Pane, StringComparison.Ordinal)
+            && (workspaceId is null || string.Equals(candidate.WorkspaceId, workspaceId, StringComparison.Ordinal)));
+        if (agent is null)
+        {
+            return new PromptDialogCasResult { Matches = false, Summary = "The adjudicated pane is no longer present in the live roster." };
+        }
+
+        NotifyProcessResult paneRead;
+        try
+        {
+            paneRead = runner.Run(
+                herdrExecutable,
+                ["agent", "read", prompt.Pane, "--source", "detection", "--lines", "200"]);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return new PromptDialogCasResult { Matches = false, Summary = $"The live dialog could not be reread: {exception.Message}" };
+        }
+        if (paneRead.ExitCode != 0)
+        {
+            return new PromptDialogCasResult { Matches = false, Summary = "The live dialog could not be reread before bounded execution." };
+        }
+
+        var liveText = paneRead.StandardOutput.Trim();
+        return PromptDialogCas.Verify(
+            prompt.Pane,
+            agent.PaneId ?? string.Empty,
+            prompt.StateChangeSequence,
+            agent.StateChangeSequence,
+            prompt.ObservedTextHash ?? string.Empty,
+            PromptDialogCas.HashText(liveText));
+    }
 
     private static NotifyPromptAudit? FindUnresolvedPromptExecution(
         IReadOnlyList<NotifyPromptAudit> audits,
@@ -2098,6 +2189,24 @@ internal sealed record NotifyObservedPrompt
     [System.Text.Json.Serialization.JsonPropertyName("policy_summary")]
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? PolicySummary { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("answerable_by")]
+    public string AnswerableBy { get; init; } = PromptCapabilityResolver.OrchestrationRole;
+    [System.Text.Json.Serialization.JsonPropertyName("risk_tags")]
+    public IReadOnlyList<string> RiskTags { get; init; } = [];
+    [System.Text.Json.Serialization.JsonPropertyName("decision_actor_role")]
+    public string DecisionActorRole { get; init; } = PromptCapabilityResolver.OrchestrationRole;
+    [System.Text.Json.Serialization.JsonPropertyName("adjudication_target_role")]
+    public string AdjudicationTargetRole { get; init; } = PromptCapabilityResolver.OrchestrationRole;
+    [System.Text.Json.Serialization.JsonPropertyName("mechanical_executor")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? MechanicalExecutor { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("scope_or_rule_id")]
+    public string ScopeOrRuleId { get; init; } = string.Empty;
+    [System.Text.Json.Serialization.JsonPropertyName("state_change_sequence")]
+    public long? StateChangeSequence { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("observed_text_hash")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? ObservedTextHash { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public IReadOnlyList<string> AnswerKeys { get; init; } = [];
 }

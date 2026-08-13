@@ -101,6 +101,8 @@ internal static class PromptClassCommand
                         PromptClass = recipe.PromptClass,
                         PayloadKind = recipe.PayloadKind,
                         ScopedPolicyRequired = recipe.ScopedPolicyRequired,
+                        AnswerableBy = recipe.AnswerableBy,
+                        RiskTags = recipe.RiskTags,
                         ExactAnswerScope = recipe.ExactAnswerScope,
                         LiteralTextFragments = recipe.LiteralTextFragments,
                         Provenance = recipe.Provenance,
@@ -120,11 +122,11 @@ internal static class PromptClassCommand
             {
                 writer.WriteLine("# Prompt classes");
                 writer.WriteLine();
-                writer.WriteLine("| agent kind | prompt class | payload | scoped policy | scopes |");
-                writer.WriteLine("| --- | --- | --- | --- | --- |");
+                writer.WriteLine("| agent kind | prompt class | payload | answerable by | risk floor | scoped policy | scopes |");
+                writer.WriteLine("| --- | --- | --- | --- | --- | --- | --- |");
                 foreach (var descriptor in classes)
                 {
-                    writer.WriteLine($"| `{descriptor.AgentKind}` | `{descriptor.PromptClass}` | `{descriptor.PayloadKind}` | `{descriptor.ScopedPolicyRequired}` | {string.Join(", ", descriptor.Scopes.Select(scope => $"`{scope}`"))} |");
+                    writer.WriteLine($"| `{descriptor.AgentKind}` | `{descriptor.PromptClass}` | `{descriptor.PayloadKind}` | `{descriptor.AnswerableBy}` | {string.Join(", ", descriptor.RiskTags.Select(tag => $"`{tag}`"))} | `{descriptor.ScopedPolicyRequired}` | {string.Join(", ", descriptor.Scopes.Select(scope => $"`{scope}`"))} |");
                 }
             }
             return 0;
@@ -158,6 +160,8 @@ internal static class PromptClassCommand
             PromptClass = recipe!.PromptClass,
             PayloadKind = recipe.PayloadKind,
             ScopedPolicyRequired = recipe.ScopedPolicyRequired,
+            AnswerableBy = recipe.AnswerableBy,
+            RiskTags = recipe.RiskTags,
             ExactAnswerScope = recipe.ExactAnswerScope,
             LiteralTextFragments = recipe.LiteralTextFragments,
             Provenance = recipe.Provenance,
@@ -174,6 +178,8 @@ internal static class PromptClassCommand
             writer.WriteLine($"# {result.AgentKind}:{result.PromptClass}");
             writer.WriteLine();
             writer.WriteLine($"- payload kind: `{result.PayloadKind}`");
+            writer.WriteLine($"- answerable by: `{result.AnswerableBy}`");
+            writer.WriteLine($"- risk tags: {string.Join(", ", result.RiskTags.Select(tag => $"`{tag}`"))}");
             writer.WriteLine($"- scoped policy required: `{result.ScopedPolicyRequired}`");
             writer.WriteLine($"- literal fragments: {string.Join(", ", result.LiteralTextFragments.Select(fragment => $"`{fragment}`"))}");
             writer.WriteLine($"- scopes: {string.Join(", ", result.Scopes.Select(scope => $"`{scope}`"))}");
@@ -189,6 +195,8 @@ internal static class PromptClassCommand
         [JsonPropertyName("prompt_class")] public required string PromptClass { get; init; }
         [JsonPropertyName("payload_kind")] public required string PayloadKind { get; init; }
         [JsonPropertyName("scoped_policy_required")] public bool ScopedPolicyRequired { get; init; }
+        [JsonPropertyName("answerable_by")] public required string AnswerableBy { get; init; }
+        [JsonPropertyName("risk_tags")] public required IReadOnlyList<string> RiskTags { get; init; }
         [JsonPropertyName("literal_text_fragments")] public required IReadOnlyList<string> LiteralTextFragments { get; init; }
         [JsonPropertyName("exact_answer_scope")] public required string ExactAnswerScope { get; init; }
         [JsonPropertyName("provenance")] public required string Provenance { get; init; }

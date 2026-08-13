@@ -89,6 +89,7 @@ internal sealed record ShellCommandScopeDefinition
     public required IReadOnlyList<string> AnswerKeys { get; init; }
     public required string Persistence { get; init; }
     public required string AnswerableBy { get; init; }
+    public IReadOnlyList<string> RiskTags { get; init; } = [];
 }
 
 internal sealed record ShellCommandPolicyAuthorization
@@ -101,6 +102,8 @@ internal sealed record ShellCommandPolicyAuthorization
     public string? ExactAnswerScope { get; init; }
     public string? CommandDigest { get; init; }
     public string? DialogHash { get; init; }
+    public required string AnswerableBy { get; init; }
+    public IReadOnlyList<string> RiskTags { get; init; } = [];
 }
 
 /// <summary>
@@ -116,8 +119,6 @@ internal static class ShellCommandPolicyRegistry
     public const string ProjectTestScope = "project-test";
     public const string OwnedScratchDeleteScope = "owned-scratch-delete";
     public const string ExactCommandOnceScope = "exact-command-once";
-    public const string OrchestrationRole = "orchestration";
-
     private static readonly IReadOnlyDictionary<string, ShellCommandScopeDefinition> Definitions =
         new Dictionary<string, ShellCommandScopeDefinition>(StringComparer.Ordinal)
         {
@@ -129,7 +130,7 @@ internal static class ShellCommandPolicyRegistry
                     "A recorded test invocation whose argv token sequence is bound to a project root. Tests execute arbitrary code and are not read-only.",
                 AnswerKeys = ["y", "enter"],
                 Persistence = "per-dialog",
-                AnswerableBy = OrchestrationRole,
+                AnswerableBy = PromptCapabilityResolver.OrchestrationRole,
             },
             [OwnedScratchDeleteScope] = new ShellCommandScopeDefinition
             {
@@ -139,7 +140,8 @@ internal static class ShellCommandPolicyRegistry
                     "An exact rm -f path recorded in the current cycle's scratch ledger; stale wake identities are refused, destructive cleanup is orchestration-only, and a broad /tmp allowance is never valid.",
                 AnswerKeys = ["y", "enter"],
                 Persistence = "per-dialog",
-                AnswerableBy = OrchestrationRole,
+                AnswerableBy = PromptCapabilityResolver.OrchestrationRole,
+                RiskTags = [PromptRiskFloor.Destructive],
             },
             [ExactCommandOnceScope] = new ShellCommandScopeDefinition
             {
@@ -149,7 +151,7 @@ internal static class ShellCommandPolicyRegistry
                     "One normalized shell AST digest paired with the current dialog hash; the authorization is consumed after one bounded answer.",
                 AnswerKeys = ["y", "enter"],
                 Persistence = "single-use-per-dialog",
-                AnswerableBy = OrchestrationRole,
+                AnswerableBy = PromptCapabilityResolver.OrchestrationRole,
             },
         };
 
@@ -192,9 +194,9 @@ internal static class ShellCommandPolicyRegistry
             return false;
         }
 
-        if (!string.Equals(policy.AnswerableBy, OrchestrationRole, StringComparison.Ordinal))
+        if (!string.Equals(policy.AnswerableBy, scope.AnswerableBy, StringComparison.Ordinal))
         {
-            error = $"Shell command answers remain {OrchestrationRole}-only until the authority slice changes; answerable_by cannot be '{policy.AnswerableBy}'.";
+            error = $"Shell scope '{policy.Scope}' declares answerable_by='{scope.AnswerableBy}'; the policy cannot override it with '{policy.AnswerableBy}'.";
             return false;
         }
 
@@ -552,6 +554,12 @@ internal static class ShellCommandPolicyRegistry
                 : null,
             CommandDigest = payload.CommandDigest,
             DialogHash = payload.DialogHash,
+            AnswerableBy = FindScope(policy.Scope)?.AnswerableBy ?? PromptCapabilityResolver.OrchestrationRole,
+            RiskTags = scopes
+                .SelectMany(scope => FindScope(scope)?.RiskTags ?? [])
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(tag => tag, StringComparer.Ordinal)
+                .ToArray(),
         };
 
     private static ShellCommandPolicyAuthorization Refused(
@@ -569,7 +577,30 @@ internal static class ShellCommandPolicyRegistry
             ExactAnswerScope = null,
             CommandDigest = payload.CommandDigest,
             DialogHash = payload.DialogHash,
+            AnswerableBy = ResolveAnswerableBy(scopes),
+            RiskTags = (scopes ?? [])
+                .SelectMany(scope => FindScope(scope)?.RiskTags ?? [])
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(tag => tag, StringComparer.Ordinal)
+                .ToArray(),
         };
+
+    private static string ResolveAnswerableBy(IReadOnlyList<string>? scopes)
+    {
+        if (scopes is null)
+        {
+            return PromptCapabilityResolver.OrchestrationRole;
+        }
+
+        var roles = scopes
+            .Select(scope => FindScope(scope)?.AnswerableBy ?? PromptCapabilityResolver.OrchestrationRole)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(role => role, StringComparer.Ordinal)
+            .ToArray();
+        return roles.Length == 0
+            ? PromptCapabilityResolver.OrchestrationRole
+            : string.Join(",", roles);
+    }
 
     private static string Rule(string prefix, IEnumerable<string> scopes)
     {

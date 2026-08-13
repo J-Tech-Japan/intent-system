@@ -64,6 +64,18 @@ public sealed class GuideDesignThreadG654Tests
         Assert.Contains("greater than", root.GetProperty("monitoring").GetProperty("bound_rule").GetString()!, StringComparison.Ordinal);
         Assert.Contains("persistent AGENTS", root.GetProperty("monitoring").GetProperty("deployment_rule").GetString()!, StringComparison.Ordinal);
         Assert.Contains("minimal concrete operation", root.GetProperty("reporting").GetProperty("human_action_rule").GetString()!, StringComparison.Ordinal);
+
+        var residual = root.GetProperty("residual_approval");
+        var residualText = Join(residual.GetProperty("layers"))
+            + "\n"
+            + residual.GetProperty("no_policy_rule").GetString()
+            + "\n"
+            + residual.GetProperty("watcher_boundary").GetString();
+        Assert.Contains("notify adjudicate", residualText, StringComparison.Ordinal);
+        Assert.Contains("answerable_by", residualText, StringComparison.Ordinal);
+        Assert.Contains("hard risk floor", residualText, StringComparison.Ordinal);
+        Assert.Contains("caller-mismatched", residualText, StringComparison.Ordinal);
+        Assert.DoesNotContain("design never answers", residualText, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -113,6 +125,8 @@ public sealed class GuideDesignThreadG654Tests
         foreach (var ledger in new[] { enLedger, jaLedger })
         {
             Assert.Contains("| `guide design-thread` |", ledger, StringComparison.Ordinal);
+            Assert.Contains("| `notify adjudicate` |", ledger, StringComparison.Ordinal);
+            Assert.Contains("exit_code", ledger, StringComparison.Ordinal);
             Assert.Contains("preview-through-1.x", ledger, StringComparison.Ordinal);
         }
     }

@@ -267,8 +267,8 @@ public sealed class GuideCoherenceG563Tests
         Assert.Contains("Residual prompts: exact matched pre-approve or escalate-only (G683)", output, StringComparison.Ordinal);
         Assert.Contains("exact recipe-registry classes plus observed text", output, StringComparison.Ordinal);
         Assert.Contains("validated matched pre-approve", output, StringComparison.Ordinal);
-        Assert.Contains("Design never answers", output, StringComparison.Ordinal);
-        Assert.Contains("credential, security, permission, destructive, and product choices remain in the existing escalation set", output, StringComparison.Ordinal);
+        Assert.Contains("no shipped class or scope is design-answerable", output, StringComparison.Ordinal);
+        Assert.Contains("credential, security, permission, destructive, product-decision, and unverifiable choices remain in the escalation set", output, StringComparison.Ordinal);
     }
 
     [Fact]

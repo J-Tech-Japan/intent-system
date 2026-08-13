@@ -342,7 +342,7 @@ intent-cli automation guide-reachability-record --execution-unit <unit> --commit
 guide-reachability-pending を出します。この debt は merge/closeout を阻害せず、explicit no-surface は
 silent です。これは 1.0 promise の対象外の preview surface です。compatibility ledger を参照してください。
 
-### live な 3 層 residual approval path と recipe drift（G666/G682/G683 — preview-through-1.x）
+### scoped adjudication 権限、live CAS、recipe drift（G666/G682/G683/G689/G690 — preview-through-1.x）
 
 unattended approval model は正確に 3 層です。第 1 に agent kind ごとの recorded
 recipe の G636 fields に agent-side allow configuration を記録し、既知 dialog を除去します。
@@ -350,12 +350,24 @@ recipe の G636 fields に agent-side allow configuration を記録し、既知 
 recipe entry にある ordered literal fragment が current trailing dialog を構成する場合だけ agent kind、
 pane、observed text、stable class を出力します。古い known dialog の後に新しい未分類 text がある場合は
 class `unknown` で、曖昧な分類を行わず escalate-only です。
-第 3 に検証済みの recorded pre-approve が正確に一致した場合だけ、orchestration に rule、
-observed dialog、recipe の exact answer scope を通知します。orchestration は authorization
-と execution-pending transition を実行前に永続記録し、その recorded key sequence だけを実行して
+第 3 に検証済みの recorded pre-approve が正確に一致した場合だけ、canonical adjudication surface に
+rule、observed dialog、recipe の exact answer scope を渡します。orchestration は authorization と
+execution-pending transition を実行前に永続記録し、その recorded key sequence だけを実行して
 terminal outcome を記録します。未解決の pending transition は answer retry を抑止し、
-reconciliation-required になります。design は監査記録を読みますが、prompt への応答も
-keystroke relay も行いません。
+reconciliation-required になります。
+
+G690 は「design は決して回答しない」という絶対的な shortcut を、宣言された権限境界に
+置き換えます。prompt class と一致した shell scope は `answerable_by` を持ち、実効 capability は
+両者の intersection です。design actor が使えるのは、exact class が design-answerable と宣言され、
+scope が一致し、hard risk floor tag がなく、記録した pane、state-change sequence、observed-text の
+SHA-256 が live dialog と一致する場合に限る `intent-cli notify adjudicate` だけです。command は
+bounded な `herdr agent send-keys` の直前に CAS を再読し、pane / sequence / text の mutation があれば
+回答を拒否して `stale-dialog-cas-refused` を記録します。decision actor と mechanical executor は
+監査上の別 field です。direct relay、direct `send-keys`、fuzzy classification、unscoped forwarding は
+design の権限経路ではありません。この slice では shipped class / scope に design-answerable なものを
+追加しません。将来の明示的な class のための capability boundary だけを実装します。hard floor は
+`destructive`、`credential`、`permission-change`、`security`、`product-decision`、`unverifiable` で、
+常に escalation です。
 
 standing supervisor に repeatable な
 `--pre-approve <agent-kind>:<prompt-class>` と
@@ -380,8 +392,10 @@ recorded cwd/root/path constraint に束縛し、read-only ではなく test exe
 `owned-scratch-delete` は同じ wake の scratch ledger にある exact path だけを要求し、bare `/tmp` を
 認可しません。`exact-command-once` は normalized AST digest と current dialog hash を束ね、bounded answer
 1 回の後に消費されます。unknown syntax、command substitution、redirect、uncovered または root 外の
-segment はエスカレーション対象です。persistent allowance は operator-only のままで、shell answer path は
-orchestration-only、design は回答しません。
+segment はエスカレーション対象です。persistent allowance は operator-only のままです。G689 の shipped
+shell scope（`owned-scratch-delete` を含む）は orchestration-only で、同じ wake の scratch-ledger identity
+要件も維持します。G690 はこの contract を弱めません。将来 design-answerable な class が追加されても、
+canonical adjudication surface と live CAS が必須です。
 
 各 supervision cycle は running recorded seat の structured argv と kind ごとの recorded
 recipe も比較します。比較対象は security envelope、すなわち sandbox mode、approval mode、
