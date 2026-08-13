@@ -36,6 +36,23 @@ intent-cli intent status
 intent-cli guide intent-work setup --format json
 ```
 
+### host-local model-resolution ledger（G685 — preview-through-1.x）
+
+```bash
+intent-cli session-layer model-resolution query --kind <codex|claude> \
+  --informal-name <name> [--candidate-invocation <full-invocation>] --format json
+intent-cli session-layer model-resolution record --kind <codex|claude> \
+  --informal-name <name> --outcome verified --invocation <full-invocation> \
+  --evidence <banner-or-argv-evidence> --write --format json
+intent-cli session-layer model-resolution record --kind <codex|claude> \
+  --informal-name <name> --outcome refused --invocation <refused-invocation> \
+  --error <error-text> --write --format json
+```
+
+ledger hit、currently-running same-kind seat argv、human への質問の順で解決します。
+bare id を推測せず、shipped list を参照しません。追記専用 ledger は host-local です。
+これらの command は provider を起動せず provider 側の検証もしません。
+
 ## デザイン / intent
 
 ```bash

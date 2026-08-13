@@ -47,6 +47,35 @@ recorded topology があれば `join-and-delegate` となり、workspace や sea
 integration を追加しません。既存 recipe、deployment rule、4 judgment thread + 1
 supervision process formula、preview-through-1.x boundary を変更せず構成します。
 
+### host-local model resolution（G685 — preview-through-1.x）
+
+bootstrap、seat recovery、kind switch では、operator の informal な model / effort 名を
+必ず次の順序で解決します。
+
+1. `intent-cli session-layer model-resolution query` で host-local measured ledger を検索する。
+2. miss の場合は、同じ kind の currently-running seat の argv を読み、その measured な full
+   invocation を再利用する。
+3. どちらでも解決しない場合は human に質問する。
+
+bare model id を推測せず、shipped list を参照しません。intent-cli が出荷するのは実測済みの
+stable flag grammar だけです。Codex は `--model <id> -c
+model_reasoning_effort=<level>`、Claude は `--model <id> --effort <level>` を使います。
+他 kind の grammar は発明しません。
+
+verified launch の後は `model-resolution record --outcome verified` で informal name、kind、
+full invocation、evidence、timestamp を追記します。refusal の後は `--outcome refused` で
+refused invocation と error text を追記します。次回 query は negative evidence を明示し、
+同一 invocation の retry を許可しません。JSONL ledger は machine-local な
+`.intent-cli/model-resolution/ledger.jsonl` にあり、configuration ではなく measurement です。
+sharing mechanism も catalogue もありません。
+
+2026-08-12 の btx-mvc setup で、`--model sol` は account-shaped HTTP 400 になりました。
+別 workspace の running Codex argv を読むことで working full invocation を回復しました。その
+provider id は host-local evidence のままで、intent-cli とこの guide には意図的に収録しません。
+
+これらの command は provider を起動せず、provider API に対して id を検証しません。
+G647 envelope field と G684 の model / effort を wish とする drift semantics は不変です。
+
 ## design thread の運用 contract（G654 — preview-through-1.x）
 
 agent kind に依存しない contract は `intent-cli guide design-thread` で表示します。
@@ -748,7 +777,7 @@ opencode など）は名前だけの placeholder のままにし、推測した 
 #### Copilot — 実測済みの最初のレシピ
 
 ```text
-herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model claude-opus-5 --mode autopilot --allow-all-tools --add-dir <role-work-root> [--add-dir <host-routing-root>] --max-autopilot-continues 10
+herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --mode autopilot --allow-all-tools --add-dir <role-work-root> [--add-dir <host-routing-root>] --max-autopilot-continues 10
 ```
 
 - **role-derived root。** 各 role には checkout または worktree 用の境界付き

@@ -101,7 +101,6 @@ internal static class CliRuntimeContracts
     public const string AutoContinuePostFixWorktreeProgressPolicy = "auto-continue";
     public const string DefaultPostFixWorktreeProgressPolicy = ConfirmPostFixWorktreeProgressPolicy;
     public const string DefaultDirectRunModel = "default";
-    public const string DefaultCodexDirectRunModel = "gpt-5.4-mini";
     public const string DefaultDirectRunTransport = "stdio";
 
     public static string GetIntentCliDirectoryPath(string repoRoot)

@@ -9,10 +9,10 @@ namespace IntentSystem.Cli.Tests;
 
 public sealed class HerdrWakeSourcesG581Tests : IDisposable
 {
-    // G684 extends the shared orchestrator guidance; keep the snapshot
+    // G685 extends the shared orchestrator guidance; keep the snapshot
     // assertion explicit so a future wake-source change remains intentional.
     private const string G594AgmsgGuideSha256 =
-        "983CB61CBE6B7A1012A39B1B6725F90A09CD12A222786AFB2AA096AA41B1AE99";
+        "E8F935B3052DAB85B59A743AE44D75BEFDABB989E4FAAC4B1E29B88A2636C21D";
 
     private readonly string root = Directory.CreateTempSubdirectory("herdr-wake-g581-").FullName;
 

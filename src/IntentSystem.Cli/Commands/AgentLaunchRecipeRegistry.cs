@@ -64,6 +64,26 @@ internal sealed record AgentPromptClassObservation
 }
 
 /// <summary>
+/// G685: stable, measured command-line grammar for operator-selected model
+/// wishes. It deliberately contains placeholders only; provider model ids are
+/// host/account facts and belong in the local measurement ledger.
+/// </summary>
+internal sealed record AgentModelFlagGrammar
+{
+    [JsonPropertyName("kind")]
+    public required string Kind { get; init; }
+
+    [JsonPropertyName("model")]
+    public required string Model { get; init; }
+
+    [JsonPropertyName("effort")]
+    public required string Effort { get; init; }
+
+    [JsonPropertyName("provenance")]
+    public required string Provenance { get; init; }
+}
+
+/// <summary>
 /// The operator-facing recipe for one agent kind. This is evidence, not a
 /// launcher: intent-cli never starts an agent. G683 consumes only the exact
 /// prompt classes and bounded answers reviewed in this same recipe.
@@ -132,6 +152,9 @@ internal sealed record AgentLaunchRecipeResolution
 
     [JsonPropertyName("recipe")]
     public AgentLaunchRecipe? Recipe { get; init; }
+
+    [JsonPropertyName("model_flag_grammar")]
+    public AgentModelFlagGrammar? ModelFlagGrammar { get; init; }
 }
 
 /// <summary>
@@ -146,6 +169,27 @@ internal static class AgentLaunchRecipeRegistry
     private const string MeasuredDate = "2026-08-07";
     private const string MeasuredPlatform = "macOS";
 
+    private static readonly IReadOnlyDictionary<string, AgentModelFlagGrammar> ModelFlagGrammars =
+        new Dictionary<string, AgentModelFlagGrammar>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["codex"] = new AgentModelFlagGrammar
+            {
+                Kind = "codex",
+                Model = "--model <id>",
+                Effort = "-c model_reasoning_effort=<level>",
+                Provenance =
+                    "Measured on 2026-08-12 during host-local recovery; this records flag shape only and ships no model id.",
+            },
+            ["claude"] = new AgentModelFlagGrammar
+            {
+                Kind = "claude",
+                Model = "--model <id>",
+                Effort = "--effort <level>",
+                Provenance =
+                    "Measured operator launch grammar; this records flag shape only and ships no model id.",
+            },
+        };
+
     private static readonly IReadOnlyDictionary<string, AgentLaunchRecipe> Recipes =
         new Dictionary<string, AgentLaunchRecipe>(StringComparer.OrdinalIgnoreCase)
         {
@@ -153,8 +197,8 @@ internal static class AgentLaunchRecipeRegistry
             {
                 Kind = "copilot",
                 Invocation =
-                    "herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model claude-opus-5 "
-                    + "--mode autopilot --allow-all-tools --add-dir <role-work-root> "
+                    "herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --mode autopilot "
+                    + "--allow-all-tools --add-dir <role-work-root> "
                     + "[--add-dir <host-routing-root>] --max-autopilot-continues 10",
                 RoleDerivedRoots =
                     "Use one bounded `--add-dir <role-work-root>` for the role's checkout/worktree. A review "
@@ -349,8 +393,14 @@ internal static class AgentLaunchRecipeRegistry
 
     public static IReadOnlyCollection<string> RecordedKinds => Recipes.Keys.ToArray();
 
+    public static IReadOnlyCollection<AgentModelFlagGrammar> RecordedModelFlagGrammars =>
+        ModelFlagGrammars.Values.ToArray();
+
     public static AgentLaunchRecipe? Find(string kind) =>
         Recipes.TryGetValue(kind, out var recipe) ? recipe : null;
+
+    public static AgentModelFlagGrammar? FindModelFlagGrammar(string kind) =>
+        ModelFlagGrammars.TryGetValue(kind, out var grammar) ? grammar : null;
 
     public static IReadOnlyList<string> KnownPairs => Recipes.Values
         .SelectMany(recipe => recipe.PromptClasses.Select(prompt => $"{recipe.Kind}:{prompt.PromptClass}"))
@@ -477,6 +527,7 @@ internal static class AgentLaunchRecipeRegistry
     public static AgentLaunchRecipeResolution Describe(string kind)
     {
         var recipe = Find(kind);
+        var modelFlagGrammar = FindModelFlagGrammar(kind);
         if (recipe is not null)
         {
             return new AgentLaunchRecipeResolution
@@ -486,6 +537,7 @@ internal static class AgentLaunchRecipeRegistry
                 Status = "recorded",
                 Summary = $"A measured launch recipe for agent kind '{kind}' is recorded and surfaced with the change.",
                 Recipe = recipe,
+                ModelFlagGrammar = modelFlagGrammar,
             };
         }
 
@@ -498,6 +550,7 @@ internal static class AgentLaunchRecipeRegistry
                 $"No launch recipe is recorded for agent kind '{kind}'. This registry gap is explicit; do not "
                 + "invent launch flags. Measure and record a recipe before unattended launch or ask the operator "
                 + "to choose a kind with a recorded recipe.",
+            ModelFlagGrammar = modelFlagGrammar,
         };
     }
 }

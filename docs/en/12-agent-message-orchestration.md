@@ -50,6 +50,39 @@ application-side integration. It composes the existing recipes, deployment
 rule, four-judgment-thread-plus-one-supervision-process formula, and
 preview-through-1.x boundaries without changing them.
 
+### Host-local model resolution (G685 — preview-through-1.x)
+
+For bootstrap, seat recovery, and a kind switch, resolve an operator's informal
+model/effort name in exactly this order:
+
+1. query the host-local measured ledger with `intent-cli session-layer
+   model-resolution query`;
+2. if it misses, read a currently-running seat's argv for the same kind and
+   reuse that measured full invocation;
+3. if neither source resolves it, ask the human.
+
+Never guess a bare model id and never consult a shipped list. intent-cli ships
+only the measured stable flag grammar: Codex uses `--model <id> -c
+model_reasoning_effort=<level>`, and Claude uses `--model <id> --effort
+<level>`. No grammar is invented for another kind.
+
+After a verified launch, append the informal name, kind, full invocation,
+evidence, and timestamp with `model-resolution record --outcome verified`.
+After a refusal, append the refused invocation and error text with `--outcome
+refused`; a later query names that negative evidence and prevents retry of the
+same invocation. The JSONL ledger is machine-local at
+`.intent-cli/model-resolution/ledger.jsonl`, is measurement rather than
+configuration, and has no sharing or catalogue mechanism.
+
+Measured on 2026-08-12 during btx-mvc setup: `--model sol` received an
+account-shaped HTTP 400. Reading another workspace's running Codex argv supplied
+the working full invocation. That provider id remains host-local evidence and
+is deliberately absent from intent-cli and these guides.
+
+These commands launch no provider and validate no id against a provider API.
+G647 envelope fields and G684's model/effort-as-wish drift semantics are
+unchanged.
+
 ## Design-thread operating contract (G654 — preview-through-1.x)
 
 Render the agent-kind-neutral contract with `intent-cli guide design-thread`.
@@ -881,7 +914,7 @@ invented flags.
 #### Copilot — measured first recipe
 
 ```text
-herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --model claude-opus-5 --mode autopilot --allow-all-tools --add-dir <role-work-root> [--add-dir <host-routing-root>] --max-autopilot-continues 10
+herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --mode autopilot --allow-all-tools --add-dir <role-work-root> [--add-dir <host-routing-root>] --max-autopilot-continues 10
 ```
 
 - **Role-derived roots.** Give every role one bounded `--add-dir <role-work-root>`

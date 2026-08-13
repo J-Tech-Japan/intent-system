@@ -84,14 +84,23 @@ internal static class GuideBootstrapCommand
                 Catalog = "intent-cli guide commands list --format json",
                 Advisor = $"intent-cli guide next --domain {domainArg} --team {teamArg} --target-repo {repoArg} --format json",
             },
+            ModelResolution = new BootstrapModelResolution
+            {
+                PreviewStatus = AgentModelResolutionGuidance.PreviewStatus,
+                ResolutionOrder = AgentModelResolutionGuidance.ResolutionOrder,
+                NeverGuessRule = AgentModelResolutionGuidance.NeverGuessRule,
+                QueryCommand = AgentModelResolutionGuidance.QueryCommand,
+                RecordCommand = AgentModelResolutionGuidance.RecordCommand,
+                Incident = AgentModelResolutionGuidance.Incident,
+            },
             Steps =
             [
                 new BootstrapStep
                 {
                     Number = 1,
                     Id = "ask-seat-cli-and-model",
-                    Instruction = "Ask the human which CLI and model each design, orchestration, implementation, and review seat should run. Record each answer; a missing answer is a named gap, never a default.",
-                    EmittedCommands = [],
+                    Instruction = "Ask the human which CLI and informal model/effort each design, orchestration, implementation, and review seat should run. Resolve each answer in exactly this order: host-local ledger hit, currently-running same-kind seat argv, then ask the human for the full invocation. Never guess a bare id or consult a shipped list.",
+                    EmittedCommands = [AgentModelResolutionGuidance.QueryCommand],
                 },
                 new BootstrapStep
                 {
@@ -250,6 +259,14 @@ internal static class GuideBootstrapCommand
         writer.WriteLine($"- half-done advisor: `{result.Reachability.Advisor}`");
         writer.WriteLine();
         writer.WriteLine("## Guided pass — perform in this order");
+        writer.WriteLine("### Model/effort resolution (G685)");
+        writer.WriteLine($"- status: **{result.ModelResolution.PreviewStatus}**");
+        foreach (var item in result.ModelResolution.ResolutionOrder) writer.WriteLine($"- {item}");
+        writer.WriteLine($"- {result.ModelResolution.NeverGuessRule}");
+        writer.WriteLine($"- query: `{result.ModelResolution.QueryCommand}`");
+        writer.WriteLine($"- record every verified/refused attempt: `{result.ModelResolution.RecordCommand}`");
+        writer.WriteLine($"- incident: {result.ModelResolution.Incident}");
+        writer.WriteLine();
         foreach (var step in result.Steps)
         {
             writer.WriteLine($"### {step.Number}. {step.Id}");
@@ -319,10 +336,21 @@ internal sealed record BootstrapGuideResult
     public required BootstrapGuideState State { get; init; }
     public required string Flow { get; init; }
     public required BootstrapReachability Reachability { get; init; }
+    public required BootstrapModelResolution ModelResolution { get; init; }
     public required IReadOnlyList<BootstrapStep> Steps { get; init; }
     public required string PartialStateRule { get; init; }
     public required IReadOnlyList<string> NoExecutionBoundary { get; init; }
     public required string FinalHandoffStatement { get; init; }
+}
+
+internal sealed record BootstrapModelResolution
+{
+    public required string PreviewStatus { get; init; }
+    public required IReadOnlyList<string> ResolutionOrder { get; init; }
+    public required string NeverGuessRule { get; init; }
+    public required string QueryCommand { get; init; }
+    public required string RecordCommand { get; init; }
+    public required string Incident { get; init; }
 }
 
 internal sealed record BootstrapGuideState
