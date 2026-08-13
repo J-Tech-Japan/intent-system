@@ -853,6 +853,10 @@ internal static class NotifyCommand
         foreach (var finding in pass.Findings)
         {
             writer.WriteLine($"- finding {finding.Key}: {finding.Kind} — {finding.Summary} (wake delivered={finding.WakeDelivered.ToString().ToLowerInvariant()})");
+            if (finding.Prompt is { } prompt)
+            {
+                writer.WriteLine($"  - observed prompt: agent_kind={prompt.AgentKind}; pane={prompt.Pane}; prompt_class={prompt.PromptClass}; decision={prompt.Decision}; rule={prompt.Rule}; exact_answer_scope={prompt.ExactAnswerScope ?? "<none>"}; observed_text={JsonSerializer.Serialize(prompt.ObservedText)}");
+            }
         }
     }
 
@@ -1894,6 +1898,10 @@ internal static class NotifyCommand
                         error = "--pre-approve requires <agent-kind>:<prompt-class> using safe identifiers.";
                         return false;
                     }
+                    if (!NotifyPreApprovalPolicyStore.TryValidateRule(acceptRule!, out error))
+                    {
+                        return false;
+                    }
                     preApprovalAcceptRules.Add(acceptRule!);
                     break;
                 case "--pre-escalate":
@@ -1901,6 +1909,10 @@ internal static class NotifyCommand
                         || !NotifyPreApprovalPolicyStore.TryParseRule(escalateRuleValue!, out var escalateRule))
                     {
                         error = "--pre-escalate requires <agent-kind>:<prompt-class> using safe identifiers.";
+                        return false;
+                    }
+                    if (!NotifyPreApprovalPolicyStore.TryValidateRule(escalateRule!, out error))
+                    {
                         return false;
                     }
                     preApprovalEscalateRules.Add(escalateRule!);
@@ -2076,6 +2088,13 @@ internal static class NotifyCommand
             if ((options.PreApprovalAcceptRules.Count == 0) != (options.PreApprovalEscalateRules.Count == 0))
             {
                 error = "A recorded pre-approval policy requires at least one --pre-approve and one --pre-escalate rule; without both, omit them and remain escalate-only.";
+                return false;
+            }
+            if (!NotifyPreApprovalPolicyStore.TryValidateNoOverlap(
+                options.PreApprovalAcceptRules,
+                options.PreApprovalEscalateRules,
+                out error))
+            {
                 return false;
             }
         }

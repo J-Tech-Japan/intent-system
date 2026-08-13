@@ -7,8 +7,8 @@ namespace IntentSystem.Cli.Commands;
 
 /// <summary>
 /// Durable state for the measured supervision loop.  The loop is intentionally
-/// append-only: a cycle, a newly observed stall, and a cleared stall are facts
-/// that should remain inspectable after the process that observed them exits.
+/// append-only: a cycle, prompt audit, newly observed stall, and cleared stall
+/// are facts that remain inspectable after the observing process exits.
 /// </summary>
 internal static class NotifySupervisionStore
 {
@@ -59,7 +59,9 @@ internal static class NotifySupervisionStore
             try
             {
                 var bound = ReadBound(Path.Combine(directory, BoundFileName));
-                var cycles = ReadCycles(Path.Combine(directory, CycleFileName));
+                var cyclePath = Path.Combine(directory, CycleFileName);
+                var cycles = ReadCycles(cyclePath);
+                var promptAudits = ReadPromptAudits(cyclePath);
                 var stalls = ReadStalls(Path.Combine(directory, StallFileName));
                 return new NotifySupervisionReadResult
                 {
@@ -73,6 +75,7 @@ internal static class NotifySupervisionStore
                     ActiveStalls = stalls.Where(item => item.ClearedAt is null)
                         .ToDictionary(item => item.Key, StringComparer.Ordinal),
                     StallHistory = stalls,
+                    PromptAudits = promptAudits,
                 };
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
@@ -137,6 +140,23 @@ internal static class NotifySupervisionStore
         {
             Kind = "cycle",
             Cycle = cycle,
+        });
+    }
+
+    public static NotifySupervisionWriteResult RecordPromptAudit(
+        string path,
+        NotifyPromptAudit audit,
+        bool write)
+    {
+        if (!write)
+        {
+            return new NotifySupervisionWriteResult(false, false, path, null);
+        }
+
+        return Append(path, new NotifySupervisionEvent
+        {
+            Kind = "prompt-audit",
+            PromptAudit = audit,
         });
     }
 
@@ -238,6 +258,32 @@ internal static class NotifySupervisionStore
         return cycles.OrderBy(item => item.CompletedAt).ToArray();
     }
 
+    private static IReadOnlyList<NotifyPromptAudit> ReadPromptAudits(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return [];
+        }
+
+        var audits = new List<NotifyPromptAudit>();
+        foreach (var line in File.ReadLines(path))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            var entry = JsonSerializer.Deserialize<NotifySupervisionEvent>(line, JsonOptions)
+                ?? throw new InvalidDataException("A supervision prompt-audit event was empty.");
+            if (string.Equals(entry.Kind, "prompt-audit", StringComparison.Ordinal)
+                && entry.PromptAudit is not null)
+            {
+                audits.Add(entry.PromptAudit);
+            }
+        }
+        return audits.OrderBy(item => item.Timestamp).ToArray();
+    }
+
     private static IReadOnlyList<NotifySupervisionStallRecord> ReadStalls(string path)
     {
         if (!File.Exists(path))
@@ -291,6 +337,7 @@ internal static class NotifySupervisionStore
         Error = error,
         ActiveStalls = new Dictionary<string, NotifySupervisionStallRecord>(StringComparer.Ordinal),
         StallHistory = [],
+        PromptAudits = [],
     };
 
     private static void ValidateSegment(string value, string name)
@@ -429,6 +476,21 @@ internal sealed record NotifySupervisionWaitEvent
     [JsonPropertyName("rearm_attempted")] public bool RearmAttempted { get; init; }
 }
 
+internal sealed record NotifyPromptAudit
+{
+    [JsonPropertyName("attempt_id")] public string? AttemptId { get; init; }
+    [JsonPropertyName("prompt_key")] public required string PromptKey { get; init; }
+    [JsonPropertyName("seat")] public required string Seat { get; init; }
+    [JsonPropertyName("pane")] public required string Pane { get; init; }
+    [JsonPropertyName("agent_kind")] public required string AgentKind { get; init; }
+    [JsonPropertyName("prompt_class")] public required string PromptClass { get; init; }
+    [JsonPropertyName("rule")] public required string Rule { get; init; }
+    [JsonPropertyName("actor")] public required string Actor { get; init; }
+    [JsonPropertyName("timestamp")] public required DateTimeOffset Timestamp { get; init; }
+    [JsonPropertyName("outcome")] public required string Outcome { get; init; }
+    [JsonPropertyName("exact_answer_scope")] public string? ExactAnswerScope { get; init; }
+}
+
 internal sealed record NotifySupervisionStallRecord
 {
     [JsonPropertyName("key")] public required string Key { get; init; }
@@ -449,6 +511,7 @@ internal sealed record NotifySupervisionStallRecord
     [JsonPropertyName("resend_permitted")] public bool? ResendPermitted { get; init; }
     [JsonPropertyName("wake_cause")] public string? WakeCause { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
+    [JsonPropertyName("observed_prompt")] public NotifyObservedPrompt? Prompt { get; init; }
 }
 
 internal sealed record NotifySupervisionReadResult
@@ -460,6 +523,7 @@ internal sealed record NotifySupervisionReadResult
     public NotifySupervisionCycle? LastIntervalCycle { get; init; }
     public required IReadOnlyDictionary<string, NotifySupervisionStallRecord> ActiveStalls { get; init; }
     public required IReadOnlyList<NotifySupervisionStallRecord> StallHistory { get; init; }
+    public required IReadOnlyList<NotifyPromptAudit> PromptAudits { get; init; }
     public string? Error { get; init; }
 }
 
@@ -474,6 +538,7 @@ internal sealed record NotifySupervisionEvent
     [JsonPropertyName("kind")] public required string Kind { get; init; }
     [JsonPropertyName("cycle")] public NotifySupervisionCycle? Cycle { get; init; }
     [JsonPropertyName("stall")] public NotifySupervisionStallRecord? Stall { get; init; }
+    [JsonPropertyName("prompt_audit")] public NotifyPromptAudit? PromptAudit { get; init; }
     [JsonPropertyName("key")] public string? Key { get; init; }
     [JsonPropertyName("cleared_at")] public DateTimeOffset? ClearedAt { get; init; }
 }

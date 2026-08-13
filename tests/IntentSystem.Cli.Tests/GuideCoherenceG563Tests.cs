@@ -249,12 +249,11 @@ public sealed class GuideCoherenceG563Tests
     }
 
     [Fact]
-    public void ProvisioningAuthorityBoundary_PreservesClassesWhileProducerIsAbsent_G563_G666_G682()
+    public void ProvisioningAuthorityBoundary_PreservesClassesUnderExactProducerPolicy_G563_G666_G683()
     {
         var output = Render(["guide", "orchestrator-thread", "--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
 
-        // The four historical classes remain visible, but G682 makes every
-        // residual prompt escalate-only until G683 supplies a real producer.
+        // The four historical classes remain visible under G683's exact registry/policy boundary.
         foreach (var mayAnswerClass in new[]
                  {
                      SupervisionMayAnswerClasses.RequestedConfirmations,
@@ -265,9 +264,9 @@ public sealed class GuideCoherenceG563Tests
         {
             Assert.Contains(mayAnswerClass, output, StringComparison.Ordinal);
         }
-        Assert.Contains("Residual prompts are escalate-only by construction until G683", output, StringComparison.Ordinal);
-        Assert.Contains("no prompt-class producer exists until G683", output, StringComparison.Ordinal);
-        Assert.Contains("every recorded rule is loudly inapplicable", output, StringComparison.Ordinal);
+        Assert.Contains("Residual prompts: exact matched pre-approve or escalate-only (G683)", output, StringComparison.Ordinal);
+        Assert.Contains("exact recipe-registry classes plus observed text", output, StringComparison.Ordinal);
+        Assert.Contains("validated matched pre-approve", output, StringComparison.Ordinal);
         Assert.Contains("Design never answers", output, StringComparison.Ordinal);
         Assert.Contains("credential, security, permission, destructive, and product choices remain in the existing escalation set", output, StringComparison.Ordinal);
     }

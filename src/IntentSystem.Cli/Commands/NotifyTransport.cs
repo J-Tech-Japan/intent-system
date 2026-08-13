@@ -789,7 +789,7 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                     && !explicitlyNotReady
                     && !string.Equals(status, "unknown", StringComparison.Ordinal);
 
-                parsed.Add(new HerdrAgentState(name, agentWorkspaceId, paneId, running, status, cwd, stateChangeSequence, lastStateChangeAt));
+                parsed.Add(new HerdrAgentState(name, agentWorkspaceId, paneId, running, status, cwd, stateChangeSequence, lastStateChangeAt, agentKind));
             }
 
             return parsed;
@@ -942,7 +942,8 @@ internal sealed record HerdrAgentState(
     string? AgentStatus,
     string? Cwd = null,
     long? StateChangeSequence = null,
-    DateTimeOffset? LastStateChangeAt = null);
+    DateTimeOffset? LastStateChangeAt = null,
+    string? AgentKind = null);
 
 internal static class NotifyTransportPaths
 {

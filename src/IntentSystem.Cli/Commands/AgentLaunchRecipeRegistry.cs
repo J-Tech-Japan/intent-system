@@ -32,9 +32,41 @@ internal sealed record AgentLaunchRecipeMeasurement
 }
 
 /// <summary>
-/// The operator-facing recipe for one agent kind. This is guidance and
-/// evidence, not a launcher: intent-cli never starts an agent or evaluates a
-/// permission prompt on the operator's behalf.
+/// G683: one exact, reviewable dialog class attached to the agent kind recipe
+/// that produced it. Matching is literal-only; the answer is a bounded herdr
+/// key sequence and is never inferred from terminal text.
+/// </summary>
+internal sealed record AgentPromptClassRecipe
+{
+    [JsonPropertyName("prompt_class")]
+    public required string PromptClass { get; init; }
+
+    [JsonPropertyName("literal_text_fragments")]
+    public required IReadOnlyList<string> LiteralTextFragments { get; init; }
+
+    [JsonPropertyName("exact_answer_scope")]
+    public required string ExactAnswerScope { get; init; }
+
+    [JsonPropertyName("answer_keys")]
+    public required IReadOnlyList<string> AnswerKeys { get; init; }
+
+    [JsonPropertyName("provenance")]
+    public required string Provenance { get; init; }
+}
+
+internal sealed record AgentPromptClassObservation
+{
+    public required string AgentKind { get; init; }
+    public required string PromptClass { get; init; }
+    public required string ObservedText { get; init; }
+    public AgentPromptClassRecipe? Recipe { get; init; }
+    public bool Known => Recipe is not null;
+}
+
+/// <summary>
+/// The operator-facing recipe for one agent kind. This is evidence, not a
+/// launcher: intent-cli never starts an agent. G683 consumes only the exact
+/// prompt classes and bounded answers reviewed in this same recipe.
 /// </summary>
 internal sealed record AgentLaunchRecipe
 {
@@ -58,6 +90,9 @@ internal sealed record AgentLaunchRecipe
 
     [JsonPropertyName("post_start_interaction")]
     public required OrchestratorPostStartInteraction PostStartInteraction { get; init; }
+
+    [JsonPropertyName("prompt_classes")]
+    public required IReadOnlyList<AgentPromptClassRecipe> PromptClasses { get; init; }
 
     [JsonPropertyName("startup_gates")]
     public required string StartupGates { get; init; }
@@ -155,6 +190,24 @@ internal static class AgentLaunchRecipeRegistry
                     DefaultIsSafe = false,
                     AbsenceReason = null,
                 },
+                PromptClasses =
+                [
+                    new AgentPromptClassRecipe
+                    {
+                        PromptClass = "launch-limited-permissions",
+                        LiteralTextFragments =
+                        [
+                            "Enable all permissions (recommended)",
+                            "Continue with limited permissions",
+                            "Cancel",
+                        ],
+                        ExactAnswerScope =
+                            "Select only 'Continue with limited permissions' in the measured Copilot first-task permission dialog.",
+                        AnswerKeys = ["2", "enter"],
+                        Provenance =
+                            "G636 measured Copilot 1.0.78 on MyIntentHost/macOS on 2026-08-07; this registry entry consumes that recorded post-start interaction.",
+                    },
+                ],
                 StartupGates =
                     "Folder trust and autopilot-enable are operator provisioning gates; neither is bypassed by "
                     + "launch flags. The autopilot-enable dialog appears at the FIRST TASK even when `--mode autopilot` "
@@ -215,6 +268,29 @@ internal static class AgentLaunchRecipeRegistry
                         "No Codex post-start interaction was observed on MyIntentHost on 2026-08-07; "
                         + "do not infer a prompt, answer, or default safety from the measured launch facts.",
                 },
+                PromptClasses =
+                [
+                    new AgentPromptClassRecipe
+                    {
+                        PromptClass = "github-comment-post",
+                        LiteralTextFragments = ["Allow GitHub to add a comment to a pull request?"],
+                        ExactAnswerScope =
+                            "Select the recorded always-allow choice only for GitHub pull-request comment posting.",
+                        AnswerKeys = ["2", "enter"],
+                        Provenance =
+                            "Operator-filed #1469 measured this exact Codex approval text wedging the review seat three times on 2026-08-11; the operator had explicitly authorized its always-allow choice.",
+                    },
+                    new AgentPromptClassRecipe
+                    {
+                        PromptClass = "launch-hook-trust",
+                        LiteralTextFragments = ["Do you trust the authors of the files in this folder?"],
+                        ExactAnswerScope =
+                            "Accept only the already-recorded next-launch hook trust dialog for a hook installed by this team.",
+                        AnswerKeys = ["enter"],
+                        Provenance =
+                            "G582/G636 recorded the next-launch hook-trust screen as a launch gate; this literal class makes that existing recipe fact reviewable rather than guessed.",
+                    },
+                ],
                 StartupGates =
                     "The operator supplies the mapped pane and role roots. --sandbox workspace-write and "
                     + "--ask-for-approval never are part of the measured bounded invocation; do not broaden them by "
@@ -275,6 +351,128 @@ internal static class AgentLaunchRecipeRegistry
 
     public static AgentLaunchRecipe? Find(string kind) =>
         Recipes.TryGetValue(kind, out var recipe) ? recipe : null;
+
+    public static IReadOnlyList<string> KnownPairs => Recipes.Values
+        .SelectMany(recipe => recipe.PromptClasses.Select(prompt => $"{recipe.Kind}:{prompt.PromptClass}"))
+        .OrderBy(value => value, StringComparer.Ordinal)
+        .ToArray();
+
+    public static bool HasPromptClassProducer(string kind) =>
+        Find(kind)?.PromptClasses.Count > 0;
+
+    public static bool TryFindPromptClass(
+        string kind,
+        string promptClass,
+        out AgentPromptClassRecipe? prompt)
+    {
+        prompt = Find(kind)?.PromptClasses.FirstOrDefault(candidate =>
+            string.Equals(candidate.PromptClass, promptClass, StringComparison.OrdinalIgnoreCase));
+        return prompt is not null;
+    }
+
+    public static AgentPromptClassObservation Classify(string kind, string observedText)
+    {
+        var matches = Find(kind)?.PromptClasses
+            .Where(candidate => MatchesActivePrompt(candidate, observedText))
+            .ToArray() ?? [];
+        var match = matches.Length == 1 ? matches[0] : null;
+        return new AgentPromptClassObservation
+        {
+            AgentKind = kind,
+            PromptClass = match?.PromptClass ?? "unknown",
+            ObservedText = observedText,
+            Recipe = match,
+        };
+    }
+
+    /// <summary>
+    /// A blocked pane read is still a screen snapshot, not a prompt object.
+    /// Match the recipe fragments in order and require everything after the
+    /// final fragment to be terminal choice chrome. Any later prose is a
+    /// newer, unclassified prompt and therefore fails closed as unknown.
+    /// </summary>
+    private static bool MatchesActivePrompt(AgentPromptClassRecipe recipe, string observedText)
+    {
+        if (recipe.LiteralTextFragments.Count == 0)
+        {
+            return false;
+        }
+
+        var lines = observedText.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var matchedLine = -1;
+        foreach (var fragment in recipe.LiteralTextFragments)
+        {
+            matchedLine = Array.FindIndex(
+                lines,
+                matchedLine + 1,
+                line => string.Equals(
+                    NormalizeDialogLine(line, removeChoicePrefix: true),
+                    fragment,
+                    StringComparison.Ordinal));
+            if (matchedLine < 0)
+            {
+                return false;
+            }
+        }
+
+        return lines.Skip(matchedLine + 1).All(IsDialogChoiceChrome);
+    }
+
+    private static bool IsDialogChoiceChrome(string line)
+    {
+        var trimmed = line.Trim().Trim('│', '┃', '║').Trim();
+        if (trimmed.Length == 0)
+        {
+            return true;
+        }
+
+        if (trimmed.All(character => character is '┌' or '└' or '├' or '┤' or '─'
+            or '╭' or '╰' or '╯' or '╮' or '┬' or '┴' or '┼'))
+        {
+            return true;
+        }
+
+        if (trimmed[0] is '›' or '❯' or '○' or '●')
+        {
+            return true;
+        }
+
+        var digitCount = 0;
+        while (digitCount < trimmed.Length && char.IsAsciiDigit(trimmed[digitCount]))
+        {
+            digitCount++;
+        }
+        return digitCount > 0
+            && digitCount < trimmed.Length
+            && trimmed[digitCount] is '.' or ')';
+    }
+
+    private static string NormalizeDialogLine(string line, bool removeChoicePrefix)
+    {
+        var normalized = line.Trim().Trim('│', '┃', '║').Trim();
+        if (!removeChoicePrefix || normalized.Length == 0)
+        {
+            return normalized;
+        }
+
+        if (normalized[0] is '›' or '❯' or '○' or '●' or '>')
+        {
+            return normalized[1..].TrimStart();
+        }
+
+        var digitCount = 0;
+        while (digitCount < normalized.Length && char.IsAsciiDigit(normalized[digitCount]))
+        {
+            digitCount++;
+        }
+        if (digitCount > 0
+            && digitCount < normalized.Length
+            && normalized[digitCount] is '.' or ')')
+        {
+            return normalized[(digitCount + 1)..].TrimStart();
+        }
+        return normalized;
+    }
 
     public static AgentLaunchRecipeResolution Describe(string kind)
     {

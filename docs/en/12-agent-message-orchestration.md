@@ -374,33 +374,48 @@ does not block merge or closeout, and an explicit no-surface declaration is
 silent. This is a preview surface outside the 1.0 promise; see the
 compatibility ledger.
 
-### Three-layer residual approval honesty and recipe drift (G666/G682 — preview-through-1.x)
+### Live three-layer residual approval path and recipe drift (G666/G682/G683 — preview-through-1.x)
 
 The unattended approval model has exactly three layers. First, eliminate each
 known dialog through agent-side allow configuration recorded in the agent
-kind's G636 recipe fields; never eliminate it by answering the dialog. Second,
-until G683 supplies a real prompt-class producer, every residual policy rule is
-loudly inapplicable and every residual prompt is escalate-only by construction.
-Orchestration does not fabricate or adjudicate a class. Third, design receives
-only the escalation-class event and never answers the prompt or relays
-keystrokes. A recorded policy never means accept while its producer is absent.
+kind's G636 recipe fields. Second, G683 supervision reads the bottom detection
+snapshot of a dialog-blocked pane and emits the agent kind, pane, observed text,
+and a stable class only when the ordered literal fragments in that kind's recipe
+entry form the current trailing dialog. A stale known dialog followed by newer
+unclassified text is class `unknown`: it is never fuzzy-classified and remains
+escalate-only.
+Third, only a validated recorded pre-approve match wakes orchestration with the
+rule, observed dialog, and exact recipe answer scope. Orchestration durably
+audits authorization and an execution-pending transition before executing only
+that recorded key sequence, then records the terminal outcome. An unresolved
+pending transition suppresses answer retry and becomes reconciliation-required.
+Design reads the audit and never answers the prompt or relays keystrokes.
 
 Record the policy on the standing supervisor with repeatable
 `--pre-approve <agent-kind>:<prompt-class>` and
 `--pre-escalate <agent-kind>:<prompt-class>` flags plus `--write`. The two lists
-must be declared together. At record time, in the stored policy, and in every
-supervision cycle, each rule returns `applicable: false`,
-`applicability_status: inapplicable-no-prompt-class-producer`, its named agent
-kind, and the reason. This state is recomputed from the producer registry and
-clears automatically when a real producer for that kind exists. Recording does
-not emit, simulate, match, validate, or adjudicate a prompt class, and
-intent-cli does not answer a dialog or send keys.
+must be declared together. Every pair is validated against the reviewable
+recipe vocabulary; an unknown pair is refused and the error names all known
+`kind:class` values. The same pair cannot appear in both lists; recording is
+refused, and escalation has fail-closed precedence for a legacy conflicting
+record. Producer-covered kinds clear G682's inapplicability
+automatically, while uncovered kinds retain
+`inapplicable-no-prompt-class-producer`. Matched pre-escalate, unmatched, and
+`unknown` observations are all audited as escalate-only and execute no answer.
+The initial vocabulary includes `codex:github-comment-post`, the separately
+recorded codex launch-hook trust dialog, and
+`copilot:launch-limited-permissions` from the G636 launch recipe.
 
 Each supervision cycle also compares the structured argv of every running
 recorded seat with its kind's recorded recipe. Argument order and whitespace
 are equivalent. A mismatch emits one `recipe-drift` finding per seat per cycle
 and names both the observed and recorded shapes; a conforming seat is silent.
-The watcher never restarts or corrects a seat, answers a dialog, or sends keys.
+The watcher never restarts or corrects a seat. Its only input operation is the
+registry's exact bounded `agent send-keys` sequence after a matching policy,
+durable pre-execution audit, and orchestration-only wake; there is no generic
+keystroke relay or design answer path. Prompt audits share the existing
+`cycles.jsonl` stream and record seat, pane, class, rule, actor, timestamp,
+exact scope, and outcome.
 
 This preserves **four judgment-bearing threads plus one supervision process**;
 there is no fifth approval seat. On 2026-08-11 in workspace wK, Claude app
