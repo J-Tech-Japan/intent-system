@@ -87,7 +87,9 @@ internal static class HerdrOnlyOperatingGuide
         - Codex grammar: `--model <id> -c model_reasoning_effort=<level>`.
         - Claude grammar: `--model <id> --effort <level>`.
         - Resolution order for initial launch, recovery, and kind switch: ledger hit → currently-running same-kind seat argv → ask the human.
-        - Query with `{{AgentModelResolutionGuidance.QueryCommand}}`; append every verified/refused attempt with `{{AgentModelResolutionGuidance.RecordCommand}}`.
+        - Query with `{{AgentModelResolutionGuidance.QueryCommand}}`.
+        - On a ledger miss, run the read-only `{{AgentModelResolutionGuidance.LiveArgvFallback.ListCommand}}`, select with `{{AgentModelResolutionGuidance.LiveArgvFallback.Selection}}`, then run `{{AgentModelResolutionGuidance.LiveArgvFallback.InspectCommand}}` and read `{{AgentModelResolutionGuidance.LiveArgvFallback.ArgvPath}}`. {{AgentModelResolutionGuidance.LiveArgvFallback.AgreementRule}} {{AgentModelResolutionGuidance.LiveArgvFallback.HumanFallback}}
+        - Every rendered launch has one mandatory evidence step before retry or continuation: after READY run `{{AgentModelResolutionGuidance.LaunchEvidenceWorkflow.Verified.Command}}`; after refusal run `{{AgentModelResolutionGuidance.LaunchEvidenceWorkflow.Refused.Command}}`.
         - {{AgentModelResolutionGuidance.NeverGuessRule}}
         - {{AgentModelResolutionGuidance.Incident}}
         - intent-cli launches no provider, validates no id, fetches no catalogue, and shares no ledger across hosts. G647 envelope fields and G684 envelope/wish drift semantics are unchanged.
@@ -230,6 +232,8 @@ internal static class HerdrOnlyOperatingGuide
                 ["never_guess_rule"] = AgentModelResolutionGuidance.NeverGuessRule,
                 ["query_command"] = AgentModelResolutionGuidance.QueryCommand,
                 ["record_command"] = AgentModelResolutionGuidance.RecordCommand,
+                ["live_argv_fallback"] = JsonSerializer.SerializeToNode(AgentModelResolutionGuidance.LiveArgvFallback),
+                ["launch_evidence_workflow"] = JsonSerializer.SerializeToNode(AgentModelResolutionGuidance.LaunchEvidenceWorkflow),
                 ["incident"] = AgentModelResolutionGuidance.Incident,
                 ["boundary"] = "No provider launch/validation, catalogue, or cross-host sharing; G647 envelope fields and G684 envelope/wish drift semantics are unchanged.",
             },

@@ -2318,6 +2318,8 @@ internal static class GuideOrchestratorThreadCommand
                     QueryCommand = AgentModelResolutionGuidance.QueryCommand,
                     RecordCommand = AgentModelResolutionGuidance.RecordCommand,
                     Incident = AgentModelResolutionGuidance.Incident,
+                    LiveArgvFallback = AgentModelResolutionGuidance.LiveArgvFallback,
+                    LaunchEvidenceWorkflow = AgentModelResolutionGuidance.LaunchEvidenceWorkflow,
                     Boundary =
                         "Use this order for initial seat creation, recovery, and kind switch. intent-cli records and emits text only: it launches no provider, validates no model id, fetches no catalogue, and shares no ledger across hosts. G647 envelope fields and G684 envelope/wish drift semantics are unchanged.",
                 },
@@ -3697,7 +3699,15 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine($"- {unattended.ModelResolution.NeverGuessRule}");
         writer.WriteLine($"- query before initial launch, recovery, or kind switch: `{unattended.ModelResolution.QueryCommand}`");
-        writer.WriteLine($"- append verified/refused launch evidence: `{unattended.ModelResolution.RecordCommand}`");
+        writer.WriteLine($"- live same-kind selection: {unattended.ModelResolution.LiveArgvFallback.Selection}");
+        writer.WriteLine($"- live list (read-only): `{unattended.ModelResolution.LiveArgvFallback.ListCommand}`");
+        writer.WriteLine($"- argv inspection (read-only): `{unattended.ModelResolution.LiveArgvFallback.InspectCommand}`");
+        writer.WriteLine($"- argv field: `{unattended.ModelResolution.LiveArgvFallback.ArgvPath}`");
+        writer.WriteLine($"- agreement: {unattended.ModelResolution.LiveArgvFallback.AgreementRule}");
+        writer.WriteLine($"- human fallback: {unattended.ModelResolution.LiveArgvFallback.HumanFallback}");
+        writer.WriteLine($"- **mandatory launch evidence:** {unattended.ModelResolution.LaunchEvidenceWorkflow.Rule}");
+        writer.WriteLine($"- verified READY record: `{unattended.ModelResolution.LaunchEvidenceWorkflow.Verified.Command}`");
+        writer.WriteLine($"- refusal record: `{unattended.ModelResolution.LaunchEvidenceWorkflow.Refused.Command}`");
         writer.WriteLine($"- measured incident: {unattended.ModelResolution.Incident}");
         writer.WriteLine($"- boundary: {unattended.ModelResolution.Boundary}");
         writer.WriteLine();
@@ -5810,6 +5820,12 @@ internal sealed record OrchestratorModelResolution
 
     [JsonPropertyName("incident")]
     public required string Incident { get; init; }
+
+    [JsonPropertyName("live_argv_fallback")]
+    public required AgentLiveArgvFallback LiveArgvFallback { get; init; }
+
+    [JsonPropertyName("launch_evidence_workflow")]
+    public required AgentLaunchEvidenceWorkflow LaunchEvidenceWorkflow { get; init; }
 
     [JsonPropertyName("boundary")]
     public required string Boundary { get; init; }

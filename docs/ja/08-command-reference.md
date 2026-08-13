@@ -50,6 +50,15 @@ intent-cli session-layer model-resolution record --kind <codex|claude> \
 ```
 
 ledger hit、currently-running same-kind seat argv、human への質問の順で解決します。
+miss の場合は `herdr agent list` を実行し、`result.agents[].agent` が resolved kind と
+完全一致する running entry を選択します。各 entry に
+`herdr pane process-info --pane <selected-pane-id>` を実行し、
+`result.process_info.foreground_processes[].argv` を読みます。選択した同一 kind の seat
+すべてで full invocation が一致するときだけ再利用し、不一致なら human に質問します。
+
+表示された launch attempt ごとに、retry または続行の前に対応する記録 step が必須です。
+READY の後は取得した exact invocation と banner / running argv evidence を `verified` として、
+refusal の後は取得した exact invocation と error text を `refused` として記録します。
 bare id を推測せず、shipped list を参照しません。追記専用 ledger は host-local です。
 これらの command は provider を起動せず provider 側の検証もしません。
 

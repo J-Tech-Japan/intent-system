@@ -53,18 +53,23 @@ bootstrap、seat recovery、kind switch では、operator の informal な model
 必ず次の順序で解決します。
 
 1. `intent-cli session-layer model-resolution query` で host-local measured ledger を検索する。
-2. miss の場合は、同じ kind の currently-running seat の argv を読み、その measured な full
-   invocation を再利用する。
-3. どちらでも解決しない場合は human に質問する。
+2. miss の場合は `herdr agent list` を実行し、`result.agents[].agent` が resolved kind と
+   完全一致する running entry を残し、workspace と pane の順に並べる。選択した pane ごとに
+   `herdr pane process-info --pane <selected-pane-id>` を実行する。
+3. `result.process_info.foreground_processes[].argv` を読み、選択した同一 kind の seat
+   すべてで full invocation が一致するときだけ再利用する。
+4. 読み取り可能な一致 argv が無い場合は human に質問する。
 
 bare model id を推測せず、shipped list を参照しません。intent-cli が出荷するのは実測済みの
 stable flag grammar だけです。Codex は `--model <id> -c
 model_reasoning_effort=<level>`、Claude は `--model <id> --effort <level>` を使います。
 他 kind の grammar は発明しません。
 
-verified launch の後は `model-resolution record --outcome verified` で informal name、kind、
-full invocation、evidence、timestamp を追記します。refusal の後は `--outcome refused` で
-refused invocation と error text を追記します。次回 query は negative evidence を明示し、
+表示された launch attempt ごとに、retry または続行の前に対応する記録 step が必須です。
+READY の後は、取得した informal name、kind、exact launched invocation、banner / running argv
+evidence を含む、表示済みの `model-resolution record --outcome verified` command を実行します。
+refusal の後は、取得した exact invocation と error text を含む、表示済みの
+`--outcome refused` command を実行します。次回 query は negative evidence を明示し、
 同一 invocation の retry を許可しません。JSONL ledger は machine-local な
 `.intent-cli/model-resolution/ledger.jsonl` にあり、configuration ではなく measurement です。
 sharing mechanism も catalogue もありません。

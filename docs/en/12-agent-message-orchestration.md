@@ -57,20 +57,26 @@ model/effort name in exactly this order:
 
 1. query the host-local measured ledger with `intent-cli session-layer
    model-resolution query`;
-2. if it misses, read a currently-running seat's argv for the same kind and
-   reuse that measured full invocation;
-3. if neither source resolves it, ask the human.
+2. if it misses, run `herdr agent list`; retain running entries whose
+   `result.agents[].agent` exactly equals the resolved kind, sort by workspace
+   and pane, and inspect every selected pane with
+   `herdr pane process-info --pane <selected-pane-id>`;
+3. read `result.process_info.foreground_processes[].argv` and reuse the full
+   invocation only when every selected same-kind seat agrees;
+4. if there is no readable agreed argv, ask the human.
 
 Never guess a bare model id and never consult a shipped list. intent-cli ships
 only the measured stable flag grammar: Codex uses `--model <id> -c
 model_reasoning_effort=<level>`, and Claude uses `--model <id> --effort
 <level>`. No grammar is invented for another kind.
 
-After a verified launch, append the informal name, kind, full invocation,
-evidence, and timestamp with `model-resolution record --outcome verified`.
-After a refusal, append the refused invocation and error text with `--outcome
-refused`; a later query names that negative evidence and prevents retry of the
-same invocation. The JSONL ledger is machine-local at
+Every rendered launch attempt has one mandatory matching record step before
+retry or continuation. After READY, run the rendered `model-resolution record
+--outcome verified` command with the captured informal name, kind, exact
+launched invocation, and banner/running-argv evidence. After refusal, run the
+rendered `--outcome refused` command with the captured exact invocation and
+error text. A later query names that negative evidence and prevents retry of
+the same invocation. The JSONL ledger is machine-local at
 `.intent-cli/model-resolution/ledger.jsonl`, is measurement rather than
 configuration, and has no sharing or catalogue mechanism.
 

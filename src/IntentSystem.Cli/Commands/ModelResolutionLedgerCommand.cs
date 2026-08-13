@@ -148,12 +148,7 @@ internal static class ModelResolutionLedgerStore
             {
                 var directory = Path.GetDirectoryName(path)!;
                 Directory.CreateDirectory(directory);
-                var ignorePath = Path.Combine(directory, IgnoreFileName);
-                if (!File.Exists(ignorePath))
-                {
-                    File.WriteAllText(ignorePath, "ledger.jsonl" + Environment.NewLine,
-                        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-                }
+                EnsureIgnoreRule(directory);
                 File.AppendAllText(path, line, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
                 return new ModelResolutionLedgerWriteResult(true, path, null);
             }
@@ -162,6 +157,36 @@ internal static class ModelResolutionLedgerStore
                 return new ModelResolutionLedgerWriteResult(false, path, exception.Message);
             }
         }
+    }
+
+    private static void EnsureIgnoreRule(string directory)
+    {
+        var ignorePath = Path.Combine(directory, IgnoreFileName);
+        const string requiredRule = "ledger.jsonl";
+        if (!File.Exists(ignorePath))
+        {
+            File.WriteAllText(ignorePath, requiredRule + Environment.NewLine,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            return;
+        }
+
+        var content = File.ReadAllText(ignorePath);
+        var alreadyPresent = content
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n')
+            .Any(line => string.Equals(line.Trim(), requiredRule, StringComparison.Ordinal));
+        if (alreadyPresent)
+        {
+            return;
+        }
+
+        var separator = content.Length == 0 || content.EndsWith('\n')
+            ? string.Empty
+            : Environment.NewLine;
+        File.AppendAllText(
+            ignorePath,
+            separator + requiredRule + Environment.NewLine,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
     private static void ValidateEntry(ModelResolutionLedgerEntry entry, int? lineNumber)
@@ -204,6 +229,66 @@ internal static class ModelResolutionLedgerStore
     }
 }
 
+internal sealed record AgentLiveArgvFallback
+{
+    [JsonPropertyName("mode")]
+    public required string Mode { get; init; }
+
+    [JsonPropertyName("list_command")]
+    public required string ListCommand { get; init; }
+
+    [JsonPropertyName("selection")]
+    public required string Selection { get; init; }
+
+    [JsonPropertyName("inspect_command")]
+    public required string InspectCommand { get; init; }
+
+    [JsonPropertyName("argv_path")]
+    public required string ArgvPath { get; init; }
+
+    [JsonPropertyName("agreement_rule")]
+    public required string AgreementRule { get; init; }
+
+    [JsonPropertyName("human_fallback")]
+    public required string HumanFallback { get; init; }
+}
+
+internal sealed record AgentLaunchEvidenceRecordStep
+{
+    [JsonPropertyName("outcome")]
+    public required string Outcome { get; init; }
+
+    [JsonPropertyName("when")]
+    public required string When { get; init; }
+
+    [JsonPropertyName("command")]
+    public required string Command { get; init; }
+
+    [JsonPropertyName("command_arguments")]
+    public required IReadOnlyList<string> CommandArguments { get; init; }
+
+    [JsonPropertyName("captured_fields")]
+    public required IReadOnlyList<string> CapturedFields { get; init; }
+}
+
+internal sealed record AgentLaunchEvidenceWorkflow
+{
+    [JsonPropertyName("mandatory")]
+    public required bool Mandatory { get; init; }
+
+    [JsonPropertyName("rule")]
+    public required string Rule { get; init; }
+
+    [JsonPropertyName("verified")]
+    public required AgentLaunchEvidenceRecordStep Verified { get; init; }
+
+    [JsonPropertyName("refused")]
+    public required AgentLaunchEvidenceRecordStep Refused { get; init; }
+
+    [JsonPropertyName("provider_operation")]
+    public required string ProviderOperation { get; init; }
+}
+
 internal static class AgentModelResolutionGuidance
 {
     public const string PreviewStatus = "preview-through-1.x";
@@ -223,6 +308,69 @@ internal static class AgentModelResolutionGuidance
         "intent-cli session-layer model-resolution record --kind <codex|claude> --informal-name <name> --outcome verified|refused --invocation <full-invocation> --evidence <verified-evidence>|--error <refusal-error> --write --format json";
     public const string QueryCommand =
         "intent-cli session-layer model-resolution query --kind <codex|claude> --informal-name <name> [--candidate-invocation <full-invocation>] --format json";
+
+    public static readonly AgentLiveArgvFallback LiveArgvFallback = new()
+    {
+        Mode = "read-only",
+        ListCommand = "herdr agent list",
+        Selection =
+            "Read result.agents[]; retain entries whose agent equals <resolved-kind>, agent_session is an object, interactive_ready is not false, agent_status is not unknown, and pane_id is non-empty. Sort by workspace_id then pane_id. Zero candidates proceeds to the human fallback; one candidate proceeds to argv inspection; multiple candidates must all be inspected.",
+        InspectCommand = "herdr pane process-info --pane <selected-pane-id>",
+        ArgvPath = "result.process_info.foreground_processes[].argv",
+        AgreementRule =
+            "From each selected pane, retain the foreground process whose argv executable matches <resolved-kind>. Use the full argv only when every inspected same-kind candidate reports the same model/effort invocation; disagreement is unresolved and proceeds to the human fallback.",
+        HumanFallback =
+            "Ask the human for the full invocation only after the ledger miss and this live same-kind argv procedure returns zero candidates, no readable argv, or disagreement.",
+    };
+
+    public static readonly AgentLaunchEvidenceWorkflow LaunchEvidenceWorkflow = new()
+    {
+        Mandatory = true,
+        Rule =
+            "After every rendered launch attempt, run exactly one matching record step before retrying or continuing: verified only after the READY proof captures the launched invocation plus banner/running-argv evidence; refused immediately after the captured error returns the seat to a shell. This is a required workflow step, not an operator-maintained ledger task.",
+        Verified = CreateRecordStep(
+            ModelResolutionLedgerCommand.VerifiedOutcome,
+            "After the launched seat passes READY with captured banner/running-argv evidence.",
+            "--evidence",
+            "<captured-ready-banner-and-running-argv-evidence>"),
+        Refused = CreateRecordStep(
+            ModelResolutionLedgerCommand.RefusedOutcome,
+            "Immediately after the exact launched invocation is refused and its captured error is visible.",
+            "--error",
+            "<captured-refusal-error-text>"),
+        ProviderOperation = "none",
+    };
+
+    private static AgentLaunchEvidenceRecordStep CreateRecordStep(
+        string outcome,
+        string when,
+        string evidenceOption,
+        string evidencePlaceholder)
+    {
+        var arguments = new[]
+        {
+            "session-layer", "model-resolution", "record",
+            "--kind", "<resolved-kind>",
+            "--informal-name", "<captured-informal-name-and-effort>",
+            "--outcome", outcome,
+            "--invocation", "<captured-exact-launched-invocation>",
+            evidenceOption, evidencePlaceholder,
+            "--write", "--format", "json",
+        };
+        return new AgentLaunchEvidenceRecordStep
+        {
+            Outcome = outcome,
+            When = when,
+            Command = "intent-cli " + string.Join(' ', arguments.Select(RenderArgument)),
+            CommandArguments = arguments,
+            CapturedFields = outcome == ModelResolutionLedgerCommand.VerifiedOutcome
+                ? ["kind", "informal name and effort", "exact launched invocation", "READY banner and running argv evidence"]
+                : ["kind", "informal name and effort", "exact refused invocation", "refusal error text"],
+        };
+    }
+
+    private static string RenderArgument(string value) =>
+        value.StartsWith('<') && value.EndsWith('>') ? $"'{value}'" : value;
 }
 
 internal sealed record ModelResolutionRecordResult
@@ -252,6 +400,8 @@ internal sealed record ModelResolutionQueryResult
     public ModelResolutionLedgerEntry? NegativeEntry { get; init; }
     public bool? CandidateRetryPermitted { get; init; }
     public required IReadOnlyList<string> ResolutionOrder { get; init; }
+    public AgentLiveArgvFallback? LiveArgvFallback { get; init; }
+    public required string NextStep { get; init; }
     public required string NeverGuessRule { get; init; }
     public required string ProviderOperation { get; init; }
     public string? Error { get; init; }
@@ -378,6 +528,7 @@ internal static class ModelResolutionLedgerCommand
                 InformalName = parsed.InformalName!,
                 Grammar = grammar,
                 ResolutionOrder = AgentModelResolutionGuidance.ResolutionOrder,
+                NextStep = "repair-ledger-read",
                 NeverGuessRule = AgentModelResolutionGuidance.NeverGuessRule,
                 ProviderOperation = "none",
                 Error = read.Error,
@@ -435,6 +586,12 @@ internal static class ModelResolutionLedgerCommand
             NegativeEntry = negative,
             CandidateRetryPermitted = retryPermitted,
             ResolutionOrder = AgentModelResolutionGuidance.ResolutionOrder,
+            LiveArgvFallback = positive is null || retryPermitted == false
+                ? AgentModelResolutionGuidance.LiveArgvFallback
+                : null,
+            NextStep = positive is not null && retryPermitted != false
+                ? "use-ledger-full-invocation"
+                : "inspect-live-same-kind-argv",
             NeverGuessRule = AgentModelResolutionGuidance.NeverGuessRule,
             ProviderOperation = "none",
         };
@@ -572,6 +729,15 @@ internal static class ModelResolutionLedgerCommand
         writer.WriteLine();
         writer.WriteLine($"- status: **{AgentModelResolutionGuidance.PreviewStatus}**");
         writer.WriteLine($"- {summary}");
+        if (result is ModelResolutionQueryResult { LiveArgvFallback: { } fallback } query)
+        {
+            writer.WriteLine($"- next step: **{query.NextStep}**");
+            writer.WriteLine($"- list same-kind seats: `{fallback.ListCommand}`");
+            writer.WriteLine($"- selection: {fallback.Selection}");
+            writer.WriteLine($"- inspect selected argv: `{fallback.InspectCommand}` → `{fallback.ArgvPath}`");
+            writer.WriteLine($"- agreement: {fallback.AgreementRule}");
+            writer.WriteLine($"- human fallback: {fallback.HumanFallback}");
+        }
         writer.WriteLine($"- {AgentModelResolutionGuidance.NeverGuessRule}");
         writer.WriteLine("- provider operation: **none**");
     }

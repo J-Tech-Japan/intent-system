@@ -73,6 +73,75 @@ public sealed class ModelResolutionLedgerG685Tests : IDisposable
     }
 
     [Fact]
+    public void Record_PreservesPreExistingIgnoreRules_AndAddsLedgerRuleExactlyOnce()
+    {
+        var directory = Path.Combine(root, ".intent-cli", "model-resolution");
+        Directory.CreateDirectory(directory);
+        var ignorePath = Path.Combine(directory, ".gitignore");
+        File.WriteAllText(ignorePath, "operator-local.tmp\n# keep this rule\n");
+
+        var args = new[]
+        {
+            "record", "--kind", "codex", "--informal-name", "fixture medium",
+            "--outcome", "verified", "--invocation", "codex --model fixture-id",
+            "--evidence", "captured READY banner", "--write", "--format", "json",
+        };
+        Assert.Equal(0, ModelResolutionLedgerCommand.Execute(CreateContext(), args, TextWriter.Null));
+        Assert.Equal(0, ModelResolutionLedgerCommand.Execute(CreateContext(), args, TextWriter.Null));
+
+        var lines = File.ReadAllLines(ignorePath);
+        Assert.Contains("operator-local.tmp", lines);
+        Assert.Contains("# keep this rule", lines);
+        Assert.Single(lines, line => line.Trim() == "ledger.jsonl");
+    }
+
+    [Theory]
+    [InlineData("verified")]
+    [InlineData("refused")]
+    public void RenderedLaunchWorkflow_RequiresAndAppendsCapturedEvidenceThroughRealCommandRouter(string outcome)
+    {
+        var context = CreateContext();
+        var guide = GuideBootstrapCommand.BuildResult(context, root, "intent-cli", "dev", "owner/repo");
+        var workflow = guide.ModelResolution.LaunchEvidenceWorkflow;
+        var renderedStep = outcome == "verified" ? workflow.Verified : workflow.Refused;
+        var launchStep = Assert.Single(guide.Steps,
+            step => step.Id == "emit-workspace-pane-and-seat-commands");
+
+        Assert.True(workflow.Mandatory);
+        Assert.Equal("none", workflow.ProviderOperation);
+        Assert.Contains(renderedStep.Command, launchStep.EmittedCommands);
+        Assert.Contains("<captured-exact-launched-invocation>", renderedStep.Command, StringComparison.Ordinal);
+        Assert.Contains(outcome == "verified"
+            ? "<captured-ready-banner-and-running-argv-evidence>"
+            : "<captured-refusal-error-text>", renderedStep.Command, StringComparison.Ordinal);
+
+        var invocation = "codex --model fixture-id -c model_reasoning_effort=medium";
+        var arguments = renderedStep.CommandArguments.Select(value => value switch
+        {
+            "<resolved-kind>" => "codex",
+            "<captured-informal-name-and-effort>" => "fixture medium",
+            "<captured-exact-launched-invocation>" => invocation,
+            "<captured-ready-banner-and-running-argv-evidence>" => "READY banner plus running argv",
+            "<captured-refusal-error-text>" => "captured provider refusal",
+            _ => value,
+        }).ToArray();
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, CommandRouter.Execute(arguments, context, writer));
+        using var result = JsonDocument.Parse(writer.ToString());
+        Assert.True(result.RootElement.GetProperty("applied").GetBoolean());
+        Assert.Equal("none", result.RootElement.GetProperty("provider_operation").GetString());
+
+        var entry = Assert.Single(ModelResolutionLedgerStore.Read(root).Entries);
+        Assert.Equal(outcome, entry.Outcome);
+        Assert.Equal(invocation, entry.Invocation);
+        if (outcome == "verified")
+            Assert.Equal("READY banner plus running argv", entry.Evidence);
+        else
+            Assert.Equal("captured provider refusal", entry.ErrorText);
+    }
+
+    [Fact]
     public void RefusedRecord_AppendsError_AndExactCandidateCannotBeRetried()
     {
         var context = CreateContext();
@@ -147,6 +216,32 @@ public sealed class ModelResolutionLedgerG685Tests : IDisposable
         Assert.False(File.Exists(ModelResolutionLedgerStore.ResolvePath(root)));
     }
 
+    [Fact]
+    public void LedgerMiss_ExposesStructuredReadOnlyLiveArgvFallbackBeforeHuman()
+    {
+        using var writer = new StringWriter();
+        Assert.Equal(0, CommandRouter.Execute(
+            ["session-layer", "model-resolution", "query", "--kind", "codex",
+                "--informal-name", "fixture medium", "--format", "json"],
+            CreateContext(), writer));
+
+        using var result = JsonDocument.Parse(writer.ToString());
+        var rootElement = result.RootElement;
+        Assert.Equal("ledger-miss", rootElement.GetProperty("status").GetString());
+        Assert.Equal("inspect-live-same-kind-argv", rootElement.GetProperty("next_step").GetString());
+        var fallback = rootElement.GetProperty("live_argv_fallback");
+        Assert.Equal("read-only", fallback.GetProperty("mode").GetString());
+        Assert.Equal("herdr agent list", fallback.GetProperty("list_command").GetString());
+        Assert.Equal("herdr pane process-info --pane <selected-pane-id>",
+            fallback.GetProperty("inspect_command").GetString());
+        Assert.Equal("result.process_info.foreground_processes[].argv",
+            fallback.GetProperty("argv_path").GetString());
+        Assert.Contains("agent equals <resolved-kind>", fallback.GetProperty("selection").GetString(),
+            StringComparison.Ordinal);
+        Assert.Contains("only after the ledger miss", fallback.GetProperty("human_fallback").GetString(),
+            StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("bootstrap")]
     [InlineData("orchestrator-agmsg")]
@@ -161,12 +256,22 @@ public sealed class ModelResolutionLedgerG685Tests : IDisposable
             _ => throw new InvalidOperationException(),
         };
 
-        var ledger = output.IndexOf("host-local", StringComparison.OrdinalIgnoreCase);
-        var live = output.IndexOf("currently-running same-kind", ledger + 1, StringComparison.OrdinalIgnoreCase);
-        var human = output.IndexOf("ask the human", live + 1, StringComparison.OrdinalIgnoreCase);
+        var ledger = output.IndexOf(AgentModelResolutionGuidance.QueryCommand, StringComparison.Ordinal);
+        var live = output.IndexOf(AgentModelResolutionGuidance.LiveArgvFallback.ListCommand, ledger + 1,
+            StringComparison.Ordinal);
+        var inspect = output.IndexOf(AgentModelResolutionGuidance.LiveArgvFallback.InspectCommand, live + 1,
+            StringComparison.Ordinal);
+        var human = output.IndexOf("ask the human", inspect + 1, StringComparison.OrdinalIgnoreCase);
         Assert.True(ledger >= 0, output);
         Assert.True(live > ledger, output);
-        Assert.True(human > live, output);
+        Assert.True(inspect > live, output);
+        Assert.True(human > inspect, output);
+        Assert.Contains("result.process_info.foreground_processes[].argv", output, StringComparison.Ordinal);
+        Assert.Contains(AgentModelResolutionGuidance.LaunchEvidenceWorkflow.Verified.Command, output,
+            StringComparison.Ordinal);
+        Assert.Contains(AgentModelResolutionGuidance.LaunchEvidenceWorkflow.Refused.Command, output,
+            StringComparison.Ordinal);
+        Assert.Contains("mandatory", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Never guess a bare model id", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("ships no model identifiers", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("--model sol", output, StringComparison.Ordinal);

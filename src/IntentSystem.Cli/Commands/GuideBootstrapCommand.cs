@@ -92,6 +92,8 @@ internal static class GuideBootstrapCommand
                 QueryCommand = AgentModelResolutionGuidance.QueryCommand,
                 RecordCommand = AgentModelResolutionGuidance.RecordCommand,
                 Incident = AgentModelResolutionGuidance.Incident,
+                LiveArgvFallback = AgentModelResolutionGuidance.LiveArgvFallback,
+                LaunchEvidenceWorkflow = AgentModelResolutionGuidance.LaunchEvidenceWorkflow,
             },
             Steps =
             [
@@ -100,7 +102,12 @@ internal static class GuideBootstrapCommand
                     Number = 1,
                     Id = "ask-seat-cli-and-model",
                     Instruction = "Ask the human which CLI and informal model/effort each design, orchestration, implementation, and review seat should run. Resolve each answer in exactly this order: host-local ledger hit, currently-running same-kind seat argv, then ask the human for the full invocation. Never guess a bare id or consult a shipped list.",
-                    EmittedCommands = [AgentModelResolutionGuidance.QueryCommand],
+                    EmittedCommands =
+                    [
+                        AgentModelResolutionGuidance.QueryCommand,
+                        AgentModelResolutionGuidance.LiveArgvFallback.ListCommand,
+                        AgentModelResolutionGuidance.LiveArgvFallback.InspectCommand,
+                    ],
                 },
                 new BootstrapStep
                 {
@@ -114,6 +121,8 @@ internal static class GuideBootstrapCommand
                         "herdr workspace create --cwd <host-repo> --label <team> --no-focus",
                         "herdr pane split --pane <pane-id> --direction right|down --cwd <role-cwd> --no-focus",
                         "herdr agent start <logical-role> --kind <human-chosen-cli-kind> --pane <pane-id> -- <human-approved-recipe-flags-and-model>",
+                        AgentModelResolutionGuidance.LaunchEvidenceWorkflow.Verified.Command,
+                        AgentModelResolutionGuidance.LaunchEvidenceWorkflow.Refused.Command,
                         "intent-cli guide workspace-layout --workspace-id <workspace-id> --tab-id <tab-id> --shape <observed-shape> --format markdown",
                     ],
                 },
@@ -264,7 +273,15 @@ internal static class GuideBootstrapCommand
         foreach (var item in result.ModelResolution.ResolutionOrder) writer.WriteLine($"- {item}");
         writer.WriteLine($"- {result.ModelResolution.NeverGuessRule}");
         writer.WriteLine($"- query: `{result.ModelResolution.QueryCommand}`");
-        writer.WriteLine($"- record every verified/refused attempt: `{result.ModelResolution.RecordCommand}`");
+        writer.WriteLine($"- live selection: {result.ModelResolution.LiveArgvFallback.Selection}");
+        writer.WriteLine($"- live list (read-only): `{result.ModelResolution.LiveArgvFallback.ListCommand}`");
+        writer.WriteLine($"- argv inspection (read-only): `{result.ModelResolution.LiveArgvFallback.InspectCommand}`");
+        writer.WriteLine($"- argv field: `{result.ModelResolution.LiveArgvFallback.ArgvPath}`");
+        writer.WriteLine($"- agreement: {result.ModelResolution.LiveArgvFallback.AgreementRule}");
+        writer.WriteLine($"- human fallback: {result.ModelResolution.LiveArgvFallback.HumanFallback}");
+        writer.WriteLine($"- **mandatory launch evidence:** {result.ModelResolution.LaunchEvidenceWorkflow.Rule}");
+        writer.WriteLine($"- verified READY record: `{result.ModelResolution.LaunchEvidenceWorkflow.Verified.Command}`");
+        writer.WriteLine($"- refusal record: `{result.ModelResolution.LaunchEvidenceWorkflow.Refused.Command}`");
         writer.WriteLine($"- incident: {result.ModelResolution.Incident}");
         writer.WriteLine();
         foreach (var step in result.Steps)
@@ -351,6 +368,8 @@ internal sealed record BootstrapModelResolution
     public required string QueryCommand { get; init; }
     public required string RecordCommand { get; init; }
     public required string Incident { get; init; }
+    public required AgentLiveArgvFallback LiveArgvFallback { get; init; }
+    public required AgentLaunchEvidenceWorkflow LaunchEvidenceWorkflow { get; init; }
 }
 
 internal sealed record BootstrapGuideState
