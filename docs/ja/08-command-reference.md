@@ -62,6 +62,29 @@ refusal の後は取得した exact invocation と error text を `refused` と�
 bare id を推測せず、shipped list を参照しません。追記専用 ledger は host-local です。
 これらの command は provider を起動せず provider 側の検証もしません。
 
+### Operator-recorded envelope profile（G686 — preview-through-1.x）
+
+current-digest CAS を使って named typed comparator baseline を記録します。profile の write surface は
+この専用 command だけであり、`update-kind`、`update-field`、generic JSON editing は profile を記録しません。
+
+```bash
+intent-cli session-layer topology record-profile \
+  --domain <domain> --team <team> --profile-name <name> --kind <kind> \
+  --sandbox-mode <mode> --approval-mode <mode> --roots-policy <policy> \
+  [--writable-root <path>]... --network-access <value> \
+  --transport-mode <mode> --evidence <text> \
+  [--permission-option <flag>]... [--network-url <url>]... \
+  [--role <role> [--role-override]] --current-digest <digest|absent> \
+  --confirm-record-profile --write --format json
+```
+
+profile は operator が記録する fact で、observed argv から学習しません。role の `envelope_profile`
+reference または typed override は、その role の G684 kind registry より優先されます。profile がない場合は
+registry comparator を byte-for-byte で維持します。dangling reference または kind mismatch は machine-readable
+な `profile-invalid` finding になり、registry に暗黙 fallback しません。command は confirmation、kind、digest
+で guard され、seat を launch/recover せず、seat の topology 以外を変更しません。profile comparison は
+detection-only で、G684 の security field、cadence、model/reasoning exclusion と preview-through-1.x status を維持します。
+
 ## デザイン / intent
 
 ```bash

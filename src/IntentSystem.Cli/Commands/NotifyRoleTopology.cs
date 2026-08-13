@@ -12,7 +12,9 @@ internal sealed record NotifyRecordedRole(
     string? Kind,
     string? DeliveryMethod,
     string? Frontend,
-    IReadOnlyList<string>? LaunchArguments = null)
+    IReadOnlyList<string>? LaunchArguments = null,
+    string? EnvelopeProfileReference = null,
+    AgentLaunchEnvelopeProfile? EnvelopeProfileOverride = null)
 {
     public const string HerdrResident = "herdr";
     public const string ExternalResident = "external";
@@ -23,7 +25,8 @@ internal sealed record NotifyTeamTopology(
     string? Domain,
     string Team,
     string WorkspaceId,
-    IReadOnlyDictionary<string, NotifyRecordedRole> Roles);
+    IReadOnlyDictionary<string, NotifyRecordedRole> Roles,
+    IReadOnlyDictionary<string, AgentLaunchEnvelopeProfile> EnvelopeProfiles);
 
 internal sealed record NotifyTopologyResolution
 {
@@ -200,6 +203,11 @@ internal static class NotifyRoleTopologyStore
                     + $"team roster before retrying notify. {TopologyRemedy(team)}");
             }
 
+            if (!TryReadEnvelopeProfiles(root, teamElement, out var envelopeProfiles, out var profileError))
+            {
+                return Failure("profile-invalid", profileError);
+            }
+
             var roles = new Dictionary<string, NotifyRecordedRole>(StringComparer.Ordinal);
             foreach (var property in rolesElement.EnumerateObject())
             {
@@ -225,6 +233,65 @@ internal static class NotifyRoleTopologyStore
                         + $"'{resident ?? "missing"}'. Use 'herdr' or 'external' and retry. {TopologyRemedy(team)}");
                 }
 
+                var profileReference = ReadProfileReference(property.Value, out var profileReferenceError);
+                if (profileReferenceError is not null)
+                {
+                    return Failure(
+                        "profile-invalid",
+                        $"Role '{property.Name}' has an invalid envelope profile reference: {profileReferenceError}");
+                }
+
+                AgentLaunchEnvelopeProfile? profileOverride = null;
+                if (property.Value.TryGetProperty("envelope_profile_override", out var overrideElement)
+                    || property.Value.TryGetProperty("profile_override", out overrideElement))
+                {
+                    if (!AgentLaunchEnvelopeProfileCodec.TryRead(
+                            overrideElement,
+                            ReadString(overrideElement, "name") ?? $"{property.Name}:override",
+                            out profileOverride,
+                            out var overrideError))
+                    {
+                        return Failure(
+                            "profile-invalid",
+                            $"Role '{property.Name}' has an invalid envelope profile override: {overrideError}");
+                    }
+                }
+
+                if (profileReference is not null && profileOverride is not null)
+                {
+                    return Failure(
+                        "profile-invalid",
+                        $"Role '{property.Name}' records both an envelope profile reference and an override; refusing ambiguous baseline selection.");
+                }
+
+                var roleKind = ReadString(property.Value, "kind");
+                if (profileReference is not null)
+                {
+                    if (!envelopeProfiles.TryGetValue(profileReference, out var referencedProfile))
+                    {
+                        return Failure(
+                            "profile-invalid",
+                            $"Role '{property.Name}' references missing envelope profile '{profileReference}'. No registry fallback is permitted.");
+                    }
+
+                    if (string.IsNullOrWhiteSpace(roleKind)
+                        || !string.Equals(referencedProfile.Kind, roleKind, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return Failure(
+                            "profile-invalid",
+                            $"Role '{property.Name}' kind '{roleKind ?? "missing"}' does not match referenced envelope profile '{profileReference}' kind '{referencedProfile.Kind}'. No registry fallback is permitted.");
+                    }
+                }
+
+                if (profileOverride is not null
+                    && (string.IsNullOrWhiteSpace(roleKind)
+                        || !string.Equals(profileOverride.Kind, roleKind, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return Failure(
+                        "profile-invalid",
+                        $"Role '{property.Name}' kind '{roleKind ?? "missing"}' does not match its envelope profile override kind '{profileOverride.Kind}'. No registry fallback is permitted.");
+                }
+
                 roles.Add(property.Name, new NotifyRecordedRole(
                     resident,
                     ReadString(property.Value, "workspace_id"),
@@ -234,7 +301,9 @@ internal static class NotifyRoleTopologyStore
                     ReadString(property.Value, "kind"),
                     ReadString(property.Value, "delivery_method"),
                     ReadString(property.Value, "frontend"),
-                    ReadStringArray(property.Value, "launch_args")));
+                    ReadStringArray(property.Value, "launch_args"),
+                    profileReference,
+                    profileOverride));
             }
 
             if (roles.Count == 0)
@@ -273,7 +342,7 @@ internal static class NotifyRoleTopologyStore
             return new NotifyTopologyResolution
             {
                 Resolved = true,
-                Topology = new NotifyTeamTopology(path, expectedDomain, team, workspaceId, roles),
+                Topology = new NotifyTeamTopology(path, expectedDomain, team, workspaceId, roles, envelopeProfiles),
                 Summary = $"Resolved recorded role topology for team '{team}' from '{path}'.",
             };
         }
@@ -523,6 +592,13 @@ internal static class NotifyRoleTopologyStore
                         $"Team '{team}' has no unambiguous field 'workspace_id'."));
                 }
             }
+
+            var profileResolution = Resolve(routingRoot, domain, team);
+            if (!profileResolution.Resolved
+                && string.Equals(profileResolution.Cause, "profile-invalid", StringComparison.Ordinal))
+            {
+                findings.Add(Finding("<topology>", "envelope_profile", "profile-invalid", profileResolution.Summary));
+            }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -623,6 +699,125 @@ internal static class NotifyRoleTopologyStore
         return false;
     }
 
+    private static string? ReadProfileReference(JsonElement element, out string? error)
+    {
+        var direct = ReadString(element, "envelope_profile");
+        var explicitReference = ReadString(element, "envelope_profile_ref");
+        if (direct is not null
+            && explicitReference is not null
+            && !string.Equals(direct, explicitReference, StringComparison.Ordinal))
+        {
+            error = $"envelope_profile '{direct}' conflicts with envelope_profile_ref '{explicitReference}'.";
+            return null;
+        }
+
+        error = null;
+        return direct ?? explicitReference;
+    }
+
+    private static bool TryReadEnvelopeProfiles(
+        JsonElement root,
+        JsonElement teamElement,
+        out IReadOnlyDictionary<string, AgentLaunchEnvelopeProfile> profiles,
+        out string error)
+    {
+        var result = new Dictionary<string, AgentLaunchEnvelopeProfile>(StringComparer.Ordinal);
+        error = string.Empty;
+        var profileErrorText = string.Empty;
+
+        bool AddSource(JsonElement source)
+        {
+            foreach (var propertyName in new[] { "envelope_profiles", "profiles" })
+            {
+                if (!source.TryGetProperty(propertyName, out var profileNode))
+                {
+                    continue;
+                }
+
+                if (profileNode.ValueKind == JsonValueKind.Object
+                    && profileNode.TryGetProperty("kind", out _))
+                {
+                    var profileName = ReadString(profileNode, "name");
+                    if (string.IsNullOrWhiteSpace(profileName))
+                    {
+                        profileErrorText = $"Topology field '{propertyName}' is a profile object but has no name.";
+                        return false;
+                    }
+
+                    if (!AddProfile(profileName!, profileNode)) return false;
+                    continue;
+                }
+
+                if (profileNode.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in profileNode.EnumerateArray())
+                    {
+                        var profileName = ReadString(item, "name");
+                        if (string.IsNullOrWhiteSpace(profileName))
+                        {
+                            profileErrorText = $"Topology field '{propertyName}' contains a profile without a name.";
+                            return false;
+                        }
+
+                        if (!AddProfile(profileName!, item)) return false;
+                    }
+                    continue;
+                }
+
+                if (profileNode.ValueKind != JsonValueKind.Object)
+                {
+                    profileErrorText = $"Topology field '{propertyName}' must be an object or array.";
+                    return false;
+                }
+
+                foreach (var profileProperty in profileNode.EnumerateObject())
+                {
+                    if (!AddProfile(profileProperty.Name, profileProperty.Value)) return false;
+                }
+            }
+
+            return true;
+        }
+
+        bool AddProfile(string name, JsonElement element)
+        {
+            var declaredName = ReadString(element, "name");
+            if (declaredName is not null && !string.Equals(declaredName, name, StringComparison.Ordinal))
+            {
+                profileErrorText = $"Envelope profile map key '{name}' conflicts with embedded profile name '{declaredName}'.";
+                return false;
+            }
+
+            if (!AgentLaunchEnvelopeProfileCodec.TryRead(element, name, out var profile, out var profileError))
+            {
+                profileErrorText = profileError;
+                return false;
+            }
+
+            if (result.TryGetValue(name, out var existing)
+                && !string.Equals(existing.Digest, profile!.Digest, StringComparison.OrdinalIgnoreCase))
+            {
+                profileErrorText = $"Envelope profile '{name}' is declared more than once with different content.";
+                return false;
+            }
+
+            result[name] = profile!;
+            return true;
+        }
+
+        var hasTeams = root.TryGetProperty("teams", out _);
+        if (!AddSource(hasTeams ? root : teamElement)
+            || (hasTeams && !AddSource(teamElement)))
+        {
+            error = profileErrorText;
+            profiles = new Dictionary<string, AgentLaunchEnvelopeProfile>(StringComparer.Ordinal);
+            return false;
+        }
+
+        profiles = result;
+        return true;
+    }
+
     private static string? ConsistentWorkspaceFromRoles(IEnumerable<NotifyRecordedRole> roles)
     {
         var workspaceIds = roles
@@ -658,7 +853,8 @@ internal static class NotifyRoleTopologyStore
     }
 
     private static bool IsTopologyEnvelopeProperty(string property) => property is
-        "schema_version" or "team" or "workspace" or "workspace_id" or "tab_id" or "updated_at" or "roles";
+        "schema_version" or "team" or "workspace" or "workspace_id" or "tab_id" or "updated_at" or "roles"
+        or "envelope_profiles" or "profiles";
 
     private static string? InferConsistentWorkspace(JsonElement rolesElement)
     {
@@ -728,6 +924,9 @@ internal static class NotifyRoleTopologyStore
         string.Equals(left.WorkspaceId, right.WorkspaceId, StringComparison.Ordinal)
         && left.Roles.Count == right.Roles.Count
         && left.Roles.All(entry => right.Roles.TryGetValue(entry.Key, out var other)
+            && Equals(entry.Value, other))
+        && left.EnvelopeProfiles.Count == right.EnvelopeProfiles.Count
+        && left.EnvelopeProfiles.All(entry => right.EnvelopeProfiles.TryGetValue(entry.Key, out var other)
             && Equals(entry.Value, other));
 
     private static IEnumerable<string> FindNewTopologyPaths(string routingRoot, string team)

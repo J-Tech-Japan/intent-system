@@ -384,6 +384,20 @@ watcher は seat の restart/correction を行いません。input 操作は
 ありません。prompt の監査記録は既存の `cycles.jsonl` stream を共有し、seat、pane、class、rule、actor、
 timestamp、exact scope、outcome を記録します。
 
+G686 は G684 の比較 algorithm を変えず、operator-owned な第 2 の truth layer を追加します。
+confirmation と digest の検査がある専用 command
+`intent-cli session-layer topology record-profile` で、team topology に named typed envelope profile を
+記録します。profile は kind、sandbox mode、approval mode、roots policy と concrete writable roots、
+network access、transport mode、evidence、`recorded_at`（optional digest、Copilot permission options、
+network URLs を含められます）を持ちます。この command は `update-kind` / `update-field` とは別であり、
+generic な topology JSON 編集は profile 記録経路ではありません。role は named profile を reference するか、
+typed override を持てます。profile がある role ではそれを comparator baseline とし、profile がない場合の
+G684 registry behavior は byte-identical です。missing profile、dangling reference、kind mismatch の
+reference/override は distinct な `profile-invalid` finding とし、registry へ暗黙に戻りません。
+profile は記録済み fact だけであり、supervision は observed argv から学習せず、seat の launch/repair も
+行いません。G684 の cadence、wish field 除外、no-action boundary は不変です。profile command と finding は
+G628 の preview-through-1.x です。
+
 これにより **judgment を担う 4 thread と 1 supervision process** を維持し、第 5 の
 approval seat を追加しません。2026-08-11 の workspace wK では Claude app safety が
 design-thread keystroke relay を正しく拒み、存在しない `/approvals` surface の助言でも

@@ -462,6 +462,24 @@ keystroke relay or design answer path. Prompt audits share the existing
 `cycles.jsonl` stream and record seat, pane, class, rule, actor, timestamp,
 exact scope, and outcome.
 
+G686 adds a second, operator-owned truth layer without changing that G684
+algorithm. Use the dedicated, confirmation- and digest-guarded command
+`intent-cli session-layer topology record-profile` to record a named typed
+envelope profile in the team topology: kind, sandbox mode, approval mode,
+roots policy and concrete writable roots, network access, transport mode,
+evidence, and `recorded_at` (with an optional digest, Copilot permission
+options, and network URLs). This command is intentionally separate from
+`update-kind` and `update-field`; generic topology JSON editing is not a
+profile-recording path. A role may reference a named profile or carry a typed
+override. The role's profile is the comparator baseline; when no profile is
+recorded, G684 registry behavior is byte-identical. A missing profile or a
+kind-mismatched reference/override is a distinct `profile-invalid` finding and
+never silently falls back to the registry. Profiles are recorded facts only:
+supervision never learns them from observed argv, never launches or repairs a
+seat, and the existing G684 cadence, wish-field exclusion, and no-action
+boundary remain unchanged. The profile command and finding are
+preview-through-1.x under G628.
+
 This preserves **four judgment-bearing threads plus one supervision process**;
 there is no fifth approval seat. On 2026-08-11 in workspace wK, Claude app
 safety correctly blocked a design-thread keystroke relay, while advice to use a
