@@ -1977,8 +1977,9 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("exec's the canonical `codex` executable directly BYPASSES the shim", output, StringComparison.Ordinal);
         // Operator-chosen permission mode for claude; attended first-run screens.
         Assert.Contains("permission mode the OPERATOR chose", output, StringComparison.Ordinal);
-        Assert.Contains("ELIMINATE routine first-run prompts", output, StringComparison.Ordinal);
-        Assert.Contains("orchestration alone adjudicates", output, StringComparison.Ordinal);
+        Assert.Contains("ELIMINATE known dialogs", output, StringComparison.Ordinal);
+        Assert.Contains("agent-side allow configuration", output, StringComparison.Ordinal);
+        Assert.Contains("escalate-only by construction", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2030,10 +2031,11 @@ public sealed class GuideOrchestratorThreadCommandTests
     {
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
 
-        // G666: attending a pane does not move residual adjudication to design.
+        // G682: attending a pane does not invent a producer or move answers to design.
         Assert.Contains("> **Authority boundary:**", output, StringComparison.Ordinal);
-        Assert.Contains("Residual adjudication belongs only to orchestration", output, StringComparison.Ordinal);
-        Assert.Contains("Unmatched prompts and an absent policy are escalate-only", output, StringComparison.Ordinal);
+        Assert.Contains("no prompt-class producer exists", output, StringComparison.Ordinal);
+        Assert.Contains("residual prompts are escalate-only by construction", output, StringComparison.Ordinal);
+        Assert.Contains("does not fabricate or adjudicate a class", output, StringComparison.Ordinal);
         Assert.Contains("Design never answers a dialog or relays keystrokes", output, StringComparison.Ordinal);
         Assert.DoesNotContain("ONLY to read-pane TRUST/ALLOWLIST", output, StringComparison.Ordinal);
         Assert.Contains("existing escalation set", output, StringComparison.Ordinal);
@@ -2192,11 +2194,12 @@ public sealed class GuideOrchestratorThreadCommandTests
         var launchRules = provisioning.GetProperty("launch_rules");
         Assert.Contains("shim", launchRules.GetProperty("codex_shim_rule").GetString(), StringComparison.Ordinal);
 
-        // G666: the authority boundary is a first-class orchestration-owned policy.
+        // G682: the authority boundary states the producer gap rather than an operative policy.
         var authorityBoundary = launchRules.GetProperty("authority_boundary").GetString()!;
         Assert.Contains("orchestration", authorityBoundary, StringComparison.Ordinal);
-        Assert.Contains("durable per-team", authorityBoundary, StringComparison.Ordinal);
-        Assert.Contains("Unmatched prompts", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("no prompt-class producer", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("escalate-only by construction", authorityBoundary, StringComparison.Ordinal);
+        Assert.Contains("Recorded policy rules state their inapplicability", authorityBoundary, StringComparison.Ordinal);
         Assert.DoesNotContain("read-pane TRUST/ALLOWLIST", authorityBoundary, StringComparison.Ordinal);
         Assert.Contains("Design never answers", authorityBoundary, StringComparison.Ordinal);
         Assert.Contains("existing escalation set", authorityBoundary, StringComparison.Ordinal);
@@ -2346,13 +2349,14 @@ public sealed class GuideOrchestratorThreadCommandTests
     {
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
 
-        // G666: detection routes to orchestration; design never relays keys.
-        Assert.Contains("> **Detection and adjudication boundary:**", output, StringComparison.Ordinal);
+        // G682: detection routes residual prompts to escalation; design never relays keys.
+        Assert.Contains("> **Detection and escalation boundary (G682):**", output, StringComparison.Ordinal);
         Assert.Contains("the design thread never answers a dialog", output, StringComparison.Ordinal);
-        Assert.Contains("orchestration alone adjudicates", output, StringComparison.Ordinal);
+        Assert.Contains("no prompt-class producer exists until G683", output, StringComparison.Ordinal);
+        Assert.Contains("escalate-only by construction", output, StringComparison.Ordinal);
 
-        // The same four classes remain explicit, now as policy classes owned by orchestration.
-        Assert.Contains("#### Orchestration may adjudicate only with an exact recorded policy rule", output, StringComparison.Ordinal);
+        // The same four classes remain explicit, but all residual prompts escalate until G683.
+        Assert.Contains("#### Residual prompts are escalate-only by construction until G683", output, StringComparison.Ordinal);
         Assert.Contains("**confirmations of work the design thread itself requested** — verify:", output, StringComparison.Ordinal);
         Assert.Contains("**command approvals verified read-only** — verify:", output, StringComparison.Ordinal);
         Assert.Contains("**trust screens for hooks the design thread itself installed** — verify:", output, StringComparison.Ordinal);
@@ -2436,7 +2440,8 @@ public sealed class GuideOrchestratorThreadCommandTests
 
         Assert.Contains("5.5 HOURS", supervision.GetProperty("rearm_rule").GetString(), StringComparison.Ordinal);
         Assert.Contains("never answers a dialog", supervision.GetProperty("verified_read_rule").GetString(), StringComparison.Ordinal);
-        Assert.Contains("orchestration alone adjudicates", supervision.GetProperty("verified_read_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("no prompt-class producer exists until G683", supervision.GetProperty("verified_read_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("escalate-only by construction", supervision.GetProperty("verified_read_rule").GetString(), StringComparison.Ordinal);
 
         // Both dialog lists are closed four-item sets; every MAY entry carries
         // its verification condition.

@@ -374,21 +374,27 @@ does not block merge or closeout, and an explicit no-surface declaration is
 silent. This is a preview surface outside the 1.0 promise; see the
 compatibility ledger.
 
-### Three-layer residual approval and recipe drift (G666 — preview-through-1.x)
+### Three-layer residual approval honesty and recipe drift (G666/G682 — preview-through-1.x)
 
-The unattended approval model has exactly three layers. First, eliminate
-routine launch prompts with the agent kind's recorded recipe. Second,
-orchestration alone may adjudicate a residual prompt when a durable per-team
-policy names the exact agent-kind and prompt-class pair. Third, design receives
-only the resulting escalation-class event and never answers the prompt or
-relays keystrokes. No policy or no matching rule means escalate-only; it never
-means accept by default.
+The unattended approval model has exactly three layers. First, eliminate each
+known dialog through agent-side allow configuration recorded in the agent
+kind's G636 recipe fields; never eliminate it by answering the dialog. Second,
+until G683 supplies a real prompt-class producer, every residual policy rule is
+loudly inapplicable and every residual prompt is escalate-only by construction.
+Orchestration does not fabricate or adjudicate a class. Third, design receives
+only the escalation-class event and never answers the prompt or relays
+keystrokes. A recorded policy never means accept while its producer is absent.
 
 Record the policy on the standing supervisor with repeatable
 `--pre-approve <agent-kind>:<prompt-class>` and
 `--pre-escalate <agent-kind>:<prompt-class>` flags plus `--write`. The two lists
-must be declared together. This records adjudication policy; intent-cli does
-not answer a dialog or send keys.
+must be declared together. At record time, in the stored policy, and in every
+supervision cycle, each rule returns `applicable: false`,
+`applicability_status: inapplicable-no-prompt-class-producer`, its named agent
+kind, and the reason. This state is recomputed from the producer registry and
+clears automatically when a real producer for that kind exists. Recording does
+not emit, simulate, match, validate, or adjudicate a prompt class, and
+intent-cli does not answer a dialog or send keys.
 
 Each supervision cycle also compares the structured argv of every running
 recorded seat with its kind's recorded recipe. Argument order and whitespace
@@ -399,8 +405,13 @@ The watcher never restarts or corrects a seat, answers a dialog, or sends keys.
 This preserves **four judgment-bearing threads plus one supervision process**;
 there is no fifth approval seat. On 2026-08-11 in workspace wK, Claude app
 safety correctly blocked a design-thread keystroke relay, while advice to use a
-nonexistent `/approvals` surface could not recover the seat. The durable remedy
-is recipe-first launch plus orchestration-owned policy. Render the same
+nonexistent `/approvals` surface could not recover the seat. Separately,
+operator-filed #1469 measured a 0.19.0 cycle with 47 keys and no
+prompt/dialog/class/adjudication producer key, a review seat wedged three times
+in one day, and orchestration correctly refusing to fabricate a class. It
+shares #1465's configured-looking-but-inert failure shape. The interim
+in-contract remedy is the recipe-layer agent-side allow configuration above,
+recorded in G636 fields, not an answer path. Render the same
 contract through both `intent-cli guide orchestrator-thread` and
 `intent-cli guide design-thread`, in Markdown or JSON, with or without a team.
 
