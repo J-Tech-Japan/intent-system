@@ -23,6 +23,7 @@ internal sealed record NotifyPreApprovalPolicy
     [JsonPropertyName("recorded_at")] public required DateTimeOffset RecordedAt { get; init; }
     [JsonPropertyName("accept")] public required IReadOnlyList<NotifyPreApprovalRule> Accept { get; init; }
     [JsonPropertyName("escalate")] public required IReadOnlyList<NotifyPreApprovalRule> Escalate { get; init; }
+    [JsonPropertyName("scoped_policies")] public IReadOnlyList<NotifyScopedPromptPolicy> ScopedPolicies { get; init; } = [];
     [JsonPropertyName("applicable")] public bool Applicable { get; init; }
     [JsonPropertyName("applicability_status")] public string ApplicabilityStatus { get; init; } =
         NotifyPromptClassProducerRegistry.InapplicableStatus;
@@ -38,6 +39,7 @@ internal sealed record NotifyPreApprovalPolicyStatus
     [JsonPropertyName("path")] public required string Path { get; init; }
     [JsonPropertyName("accept")] public required IReadOnlyList<NotifyPreApprovalRule> Accept { get; init; }
     [JsonPropertyName("escalate")] public required IReadOnlyList<NotifyPreApprovalRule> Escalate { get; init; }
+    [JsonPropertyName("scoped_policies")] public required IReadOnlyList<NotifyScopedPromptPolicy> ScopedPolicies { get; init; }
     [JsonPropertyName("applicable")] public required bool Applicable { get; init; }
     [JsonPropertyName("applicability_status")] public required string ApplicabilityStatus { get; init; }
     [JsonPropertyName("inapplicable_agent_kinds")] public required IReadOnlyList<string> InapplicableAgentKinds { get; init; }
@@ -63,6 +65,7 @@ internal static class NotifyPromptClassProducerRegistry
 {
     public const string ApplicableStatus = "applicable";
     public const string InapplicableStatus = "inapplicable-no-prompt-class-producer";
+    public const string ScopedPolicyRequiredStatus = "inapplicable-scoped-policy-required";
 
     internal static Func<string, bool>? AvailabilityOverride { get; set; }
 
@@ -139,6 +142,10 @@ internal static class NotifyPreApprovalPolicyStore
         {
             return new NotifySupervisionWriteResult(false, false, path, overlapError);
         }
+        if (!TryValidateScopedPolicies(policy.ScopedPolicies, out var scopedPolicyError))
+        {
+            return new NotifySupervisionWriteResult(false, false, path, scopedPolicyError);
+        }
         var current = WithCurrentApplicability(policy);
         var content = JsonSerializer.Serialize(current, JsonOptions) + Environment.NewLine;
         if (!write)
@@ -194,8 +201,14 @@ internal static class NotifyPreApprovalPolicyStore
 
     public static bool TryValidateRule(NotifyPreApprovalRule rule, out string error)
     {
-        if (AgentLaunchRecipeRegistry.TryFindPromptClass(rule.AgentKind, rule.PromptClass, out _))
+        if (AgentLaunchRecipeRegistry.TryFindPromptClass(rule.AgentKind, rule.PromptClass, out var prompt))
         {
+            if (prompt?.ScopedPolicyRequired == true)
+            {
+                error = $"Bare prompt policy pair '{rule}' is structurally refused; record a scoped shell policy instance instead. Known scopes: {string.Join(", ", ShellCommandPolicyRegistry.Scopes.Select(scope => scope.Name))}.";
+                return false;
+            }
+
             error = string.Empty;
             return true;
         }
@@ -204,6 +217,50 @@ internal static class NotifyPreApprovalPolicyStore
         error = $"Unknown prompt policy pair '{rule}'. Known values: "
             + (known.Count == 0 ? "none" : string.Join(", ", known)) + ".";
         return false;
+    }
+
+    public static bool TryValidateScopedPolicy(
+        NotifyScopedPromptPolicy policy,
+        out string error,
+        bool requireScratchLedgerCycleId = true)
+    {
+        if (!AgentLaunchRecipeRegistry.TryFindPromptClass(policy.AgentKind, policy.PromptClass, out var prompt)
+            || prompt?.ScopedPolicyRequired != true)
+        {
+            error = $"Scoped policy '{policy}' does not target a registered scoped-policy prompt class.";
+            return false;
+        }
+
+        return ShellCommandPolicyRegistry.TryValidate(
+            policy,
+            out error,
+            requireScratchLedgerCycleId);
+    }
+
+    public static bool TryValidateScopedPolicies(
+        IReadOnlyList<NotifyScopedPromptPolicy> policies,
+        out string error,
+        bool requireScratchLedgerCycleId = true)
+    {
+        foreach (var policy in policies)
+        {
+            if (!TryValidateScopedPolicy(policy, out error, requireScratchLedgerCycleId))
+            {
+                return false;
+            }
+        }
+
+        var duplicate = policies
+            .GroupBy(policy => $"{policy.AgentKind}:{policy.PromptClass}:{policy.Scope}", StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicate is not null)
+        {
+            error = $"A scoped shell policy may define only one decision for '{duplicate.Key}'; overlapping scoped instances are refused.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
     }
 
     public static bool TryValidateNoOverlap(
@@ -231,18 +288,22 @@ internal static class NotifyPreApprovalPolicyStore
     {
         var accept = policy.Accept.Select(WithCurrentApplicability).ToArray();
         var escalate = policy.Escalate.Select(WithCurrentApplicability).ToArray();
+        var scopedPolicies = policy.ScopedPolicies.Select(WithCurrentApplicability).ToArray();
         var rules = accept.Concat(escalate).ToArray();
         var unavailableKinds = rules
             .Where(rule => !rule.Applicable)
             .Select(rule => rule.AgentKind)
+            .Concat(scopedPolicies.Where(scoped => !scoped.Applicable).Select(scoped => scoped.AgentKind))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(kind => kind, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var applicable = unavailableKinds.Length == 0;
+        var hasDeclarations = rules.Length > 0 || scopedPolicies.Length > 0;
+        var applicable = hasDeclarations && unavailableKinds.Length == 0;
         return policy with
         {
             Accept = accept,
             Escalate = escalate,
+            ScopedPolicies = scopedPolicies,
             Applicable = applicable,
             ApplicabilityStatus = applicable
                 ? NotifyPromptClassProducerRegistry.ApplicableStatus
@@ -250,23 +311,52 @@ internal static class NotifyPreApprovalPolicyStore
             InapplicableAgentKinds = unavailableKinds,
             InapplicabilityReason = applicable
                 ? null
-                : "One or more recorded rules name an agent kind with no prompt-class producer. "
-                    + "Those rules cannot currently apply; residual prompts are escalate-only by construction.",
+                : "One or more recorded rules or scoped policies are unavailable or invalid. "
+                    + "Those entries cannot currently apply; residual prompts are escalate-only by construction.",
         };
     }
 
     private static NotifyPreApprovalRule WithCurrentApplicability(NotifyPreApprovalRule rule)
     {
-        var applicable = NotifyPromptClassProducerRegistry.HasProducer(rule.AgentKind);
+        var hasProducer = NotifyPromptClassProducerRegistry.HasProducer(rule.AgentKind);
+        var scopedPolicyRequired = AgentLaunchRecipeRegistry.TryFindPromptClass(
+            rule.AgentKind,
+            rule.PromptClass,
+            out var prompt)
+            && prompt?.ScopedPolicyRequired == true;
+        var applicable = hasProducer && !scopedPolicyRequired;
         return rule with
         {
             Applicable = applicable,
-            ApplicabilityStatus = applicable
-                ? NotifyPromptClassProducerRegistry.ApplicableStatus
-                : NotifyPromptClassProducerRegistry.InapplicableStatus,
-            InapplicabilityReason = applicable
-                ? null
-                : NotifyPromptClassProducerRegistry.MissingReason(rule.AgentKind),
+            ApplicabilityStatus = !hasProducer
+                ? NotifyPromptClassProducerRegistry.InapplicableStatus
+                : scopedPolicyRequired
+                    ? NotifyPromptClassProducerRegistry.ScopedPolicyRequiredStatus
+                    : NotifyPromptClassProducerRegistry.ApplicableStatus,
+            InapplicabilityReason = !hasProducer
+                ? NotifyPromptClassProducerRegistry.MissingReason(rule.AgentKind)
+                : scopedPolicyRequired
+                    ? $"Prompt class '{rule}' requires a scoped policy instance; a bare legacy rule cannot apply."
+                    : null,
+        };
+    }
+
+    private static NotifyScopedPromptPolicy WithCurrentApplicability(NotifyScopedPromptPolicy policy)
+    {
+        var hasProducer = NotifyPromptClassProducerRegistry.HasProducer(policy.AgentKind);
+        var validationError = string.Empty;
+        var valid = hasProducer && TryValidateScopedPolicy(policy, out validationError);
+        return policy with
+        {
+            Applicable = valid,
+            ApplicabilityStatus = !hasProducer
+                ? NotifyPromptClassProducerRegistry.InapplicableStatus
+                : valid
+                    ? NotifyPromptClassProducerRegistry.ApplicableStatus
+                    : "inapplicable-invalid-scoped-policy",
+            InapplicabilityReason = !hasProducer
+                ? NotifyPromptClassProducerRegistry.MissingReason(policy.AgentKind)
+                : valid ? null : validationError,
         };
     }
 
@@ -276,11 +366,21 @@ internal static class NotifyPreApprovalPolicyStore
         && left.InapplicableAgentKinds.SequenceEqual(right.InapplicableAgentKinds, StringComparer.OrdinalIgnoreCase)
         && string.Equals(left.InapplicabilityReason, right.InapplicabilityReason, StringComparison.Ordinal)
         && RulesApplicabilityEquals(left.Accept, right.Accept)
-        && RulesApplicabilityEquals(left.Escalate, right.Escalate);
+        && RulesApplicabilityEquals(left.Escalate, right.Escalate)
+        && ScopedApplicabilityEquals(left.ScopedPolicies, right.ScopedPolicies);
 
     private static bool RulesApplicabilityEquals(
         IReadOnlyList<NotifyPreApprovalRule> left,
         IReadOnlyList<NotifyPreApprovalRule> right) =>
+        left.Count == right.Count
+        && left.Zip(right).All(pair =>
+            pair.First.Applicable == pair.Second.Applicable
+            && string.Equals(pair.First.ApplicabilityStatus, pair.Second.ApplicabilityStatus, StringComparison.Ordinal)
+            && string.Equals(pair.First.InapplicabilityReason, pair.Second.InapplicabilityReason, StringComparison.Ordinal));
+
+    private static bool ScopedApplicabilityEquals(
+        IReadOnlyList<NotifyScopedPromptPolicy> left,
+        IReadOnlyList<NotifyScopedPromptPolicy> right) =>
         left.Count == right.Count
         && left.Zip(right).All(pair =>
             pair.First.Applicable == pair.Second.Applicable

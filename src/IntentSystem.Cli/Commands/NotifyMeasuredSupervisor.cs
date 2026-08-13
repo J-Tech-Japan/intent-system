@@ -41,6 +41,7 @@ internal sealed class NotifyMeasuredSupervisor
     private readonly bool eventMode;
     private readonly IReadOnlyList<NotifyPreApprovalRule> preApprovalAccept;
     private readonly IReadOnlyList<NotifyPreApprovalRule> preApprovalEscalate;
+    private readonly IReadOnlyList<NotifyScopedPromptPolicy> scopedPolicies;
     private readonly NotifySupervisionWriterIdentity writerIdentity;
     private readonly Func<NotifySupervisionWriterIdentity, bool> writerIsLive;
     private readonly Func<AutomationStalledWorkResult>? stalledWorkAnalyzer;
@@ -72,7 +73,8 @@ internal sealed class NotifyMeasuredSupervisor
         string? bashExecutable = null,
         NotifySupervisionWriterIdentity? writerIdentity = null,
         Func<NotifySupervisionWriterIdentity, bool>? writerIsLive = null,
-        Func<AutomationStalledWorkResult>? stalledWorkAnalyzer = null)
+        Func<AutomationStalledWorkResult>? stalledWorkAnalyzer = null,
+        IReadOnlyList<NotifyScopedPromptPolicy>? scopedPolicies = null)
     {
         this.context = context;
         this.routingRoot = routingRoot;
@@ -96,6 +98,7 @@ internal sealed class NotifyMeasuredSupervisor
         this.eventMode = eventMode;
         this.preApprovalAccept = preApprovalAccept ?? [];
         this.preApprovalEscalate = preApprovalEscalate ?? [];
+        this.scopedPolicies = scopedPolicies ?? [];
         this.writerIdentity = writerIdentity ?? NotifySupervisionWriterIdentity.Current();
         this.writerIsLive = writerIsLive ?? (other => other.IsLiveOn(this.writerIdentity));
         this.stalledWorkAnalyzer = stalledWorkAnalyzer;
@@ -114,6 +117,7 @@ internal sealed class NotifyMeasuredSupervisor
     private NotifySupervisorPass RunOnceCore(string trigger)
     {
         var now = (NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        var cycleId = Guid.NewGuid().ToString("N");
         var state = NotifySupervisionStore.Read(
             context.ResolveSupervisionArtifactRootPath(),
             domain,
@@ -128,7 +132,7 @@ internal sealed class NotifyMeasuredSupervisor
         }
 
         var bound = ResolveBound(state, now);
-        var preApprovalPolicy = ResolvePreApprovalPolicy(now, out var policyError);
+        var preApprovalPolicy = ResolvePreApprovalPolicy(now, cycleId, out var policyError);
         if (policyError is not null)
         {
             return new NotifySupervisorPass
@@ -438,7 +442,7 @@ internal sealed class NotifyMeasuredSupervisor
         if (!transportUnavailable)
         {
             observations.AddRange(ReadRecipeDriftObservations());
-            observations.AddRange(ReadObservedPrompts(state.PromptAudits));
+            observations.AddRange(ReadObservedPrompts(state.PromptAudits, cycleId));
             observations.AddRange(ReadAbsentSeats(now));
         }
 
@@ -616,7 +620,7 @@ internal sealed class NotifyMeasuredSupervisor
         var completedAt = (NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var cycle = new NotifySupervisionCycle
         {
-            CycleId = Guid.NewGuid().ToString("N"),
+            CycleId = cycleId,
             StartedAt = now,
             CompletedAt = completedAt,
             Writer = writerIdentity,
@@ -801,6 +805,7 @@ internal sealed class NotifyMeasuredSupervisor
 
     private NotifyPreApprovalPolicyStatus ResolvePreApprovalPolicy(
         DateTimeOffset now,
+        string cycleId,
         out string? error)
     {
         error = null;
@@ -812,9 +817,18 @@ internal sealed class NotifyMeasuredSupervisor
             return MissingPolicyStatus(read.Path, "unreadable");
         }
 
-        var declarationSupplied = preApprovalAccept.Count > 0 || preApprovalEscalate.Count > 0;
+        var declarationSupplied = preApprovalAccept.Count > 0
+            || preApprovalEscalate.Count > 0
+            || scopedPolicies.Count > 0;
         if (declarationSupplied)
         {
+            var boundScopedPolicies = BindScopedPoliciesToCycle(scopedPolicies, cycleId, out var bindingError);
+            if (bindingError is not null)
+            {
+                error = $"pre-approval-policy-cycle-binding-failed: {bindingError}";
+                return MissingPolicyStatus(read.Path, "invalid-cycle-binding");
+            }
+
             var policy = NotifyPreApprovalPolicyStore.WithCurrentApplicability(new NotifyPreApprovalPolicy
             {
                 Domain = domain,
@@ -822,6 +836,7 @@ internal sealed class NotifyMeasuredSupervisor
                 RecordedAt = now,
                 Accept = preApprovalAccept,
                 Escalate = preApprovalEscalate,
+                ScopedPolicies = boundScopedPolicies,
             });
             var recorded = NotifyPreApprovalPolicyStore.Record(artifactRoot, policy, write);
             if (recorded.Error is not null)
@@ -838,6 +853,7 @@ internal sealed class NotifyMeasuredSupervisor
                 Path = recorded.Path,
                 Accept = policy.Accept,
                 Escalate = policy.Escalate,
+                ScopedPolicies = policy.ScopedPolicies,
                 Applicable = policy.Applicable,
                 ApplicabilityStatus = policy.ApplicabilityStatus,
                 InapplicableAgentKinds = policy.InapplicableAgentKinds,
@@ -864,6 +880,7 @@ internal sealed class NotifyMeasuredSupervisor
                 Path = read.Path,
                 Accept = existing.Accept,
                 Escalate = existing.Escalate,
+                ScopedPolicies = existing.ScopedPolicies,
                 Applicable = existing.Applicable,
                 ApplicabilityStatus = existing.ApplicabilityStatus,
                 InapplicableAgentKinds = existing.InapplicableAgentKinds,
@@ -875,6 +892,39 @@ internal sealed class NotifyMeasuredSupervisor
         return MissingPolicyStatus(read.Path, "escalate-only");
     }
 
+    private static IReadOnlyList<NotifyScopedPromptPolicy> BindScopedPoliciesToCycle(
+        IReadOnlyList<NotifyScopedPromptPolicy> policies,
+        string cycleId,
+        out string? error)
+    {
+        error = null;
+        var bound = new List<NotifyScopedPromptPolicy>(policies.Count);
+        foreach (var policy in policies)
+        {
+            if (!string.Equals(policy.Scope, ShellCommandPolicyRegistry.OwnedScratchDeleteScope, StringComparison.Ordinal))
+            {
+                bound.Add(policy);
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(policy.ScratchLedgerCycleId))
+            {
+                bound.Add(policy with { ScratchLedgerCycleId = cycleId });
+                continue;
+            }
+
+            if (!string.Equals(policy.ScratchLedgerCycleId, cycleId, StringComparison.Ordinal))
+            {
+                error = $"owned-scratch-delete policy '{policy.PolicyId}' carries scratch_ledger_cycle_id '{policy.ScratchLedgerCycleId}', which is not the current wake/cycle identity '{cycleId}'; stale identities are refused.";
+                return [];
+            }
+
+            bound.Add(policy);
+        }
+
+        return bound;
+    }
+
     private static NotifyPreApprovalPolicyStatus MissingPolicyStatus(string path, string status) => new()
     {
         Recorded = false,
@@ -883,6 +933,7 @@ internal sealed class NotifyMeasuredSupervisor
         Path = path,
         Accept = [],
         Escalate = [],
+        ScopedPolicies = [],
         Applicable = false,
         ApplicabilityStatus = "not-recorded",
         InapplicableAgentKinds = [],
@@ -900,13 +951,16 @@ internal sealed class NotifyMeasuredSupervisor
                 : write
                     ? "The per-team pre-approval policy could not be recorded and is inapplicable"
                     : "Dry-run: the proposed per-team pre-approval policy is inapplicable";
-            return $"{prefix}: no prompt-class producer is registered for agent kind(s) {kinds}. "
-                + "The affected rules cannot currently apply; residual prompts for uncovered kinds are escalate-only by construction.";
+            return $"{prefix}: one or more recorded rules or scoped policies are unavailable for agent kind(s) {kinds}. "
+                + "The affected entries cannot currently apply; residual prompts for uncovered or invalid scopes are escalate-only by construction.";
         }
 
+        var shellSummary = policy.ScopedPolicies.Count == 0
+            ? string.Empty
+            : $" {policy.ScopedPolicies.Count} scoped shell policy instance(s) are recorded; shell answers require a matching AST scope and remain orchestration-only.";
         return recorded
-            ? "A durable per-team pre-approval policy is recorded and every named agent kind has a prompt-class producer; every unmatched prompt shape escalates."
-            : "Dry-run: every named agent kind has a prompt-class producer, but the per-team pre-approval policy was not recorded. Until a write succeeds, adjudication remains escalate-only.";
+            ? "A durable per-team pre-approval policy is recorded and every named agent kind has a prompt-class producer; every unmatched prompt shape escalates." + shellSummary
+            : "Dry-run: every named agent kind has a prompt-class producer, but the per-team pre-approval policy was not recorded. Until a write succeeds, adjudication remains escalate-only." + shellSummary;
     }
 
     private static int FallbackAbsenceThresholdSeconds(int cadenceSeconds) =>
@@ -1528,7 +1582,8 @@ internal sealed class NotifyMeasuredSupervisor
     }
 
     private IReadOnlyList<NotifySupervisionObservation> ReadObservedPrompts(
-        IReadOnlyList<NotifyPromptAudit> promptAudits)
+        IReadOnlyList<NotifyPromptAudit> promptAudits,
+        string cycleId)
     {
         var topology = NotifyRoleTopologyStore.Resolve(routingRoot, domain, team);
         if (!topology.Resolved || topology.Topology is null)
@@ -1607,16 +1662,30 @@ internal sealed class NotifyMeasuredSupervisor
             }
 
             var classified = AgentLaunchRecipeRegistry.Classify(agentKind, observedText);
+            var shellAuthorization = classified.ShellCommand is { } shellPayload
+                ? ShellCommandPolicyRegistry.Evaluate(
+                    shellPayload,
+                    policy?.ScopedPolicies ?? [],
+                    recorded.Cwd,
+                    promptAudits,
+                    currentCycleId: cycleId)
+                : null;
             var escalateRule = policy?.Escalate.FirstOrDefault(rule =>
                 rule.Applicable && RuleMatches(rule, agentKind, classified.PromptClass));
             var acceptRule = escalateRule is null && classified.Known && policy?.Applicable == true
                 ? policy.Accept.FirstOrDefault(rule => RuleMatches(rule, agentKind, classified.PromptClass))
                 : null;
-            var decision = acceptRule is not null
-                && string.Equals(ownerRole, OrchestrationRole, StringComparison.Ordinal)
-                    ? "accept"
-                    : "escalate";
-            var rule = escalateRule?.ToString()
+            var decision = shellAuthorization is not null
+                ? shellAuthorization.Decision == "accept"
+                    && string.Equals(ownerRole, OrchestrationRole, StringComparison.Ordinal)
+                        ? "accept"
+                        : "escalate"
+                : acceptRule is not null
+                    && string.Equals(ownerRole, OrchestrationRole, StringComparison.Ordinal)
+                        ? "accept"
+                        : "escalate";
+            var rule = shellAuthorization?.Rule
+                ?? escalateRule?.ToString()
                 ?? acceptRule?.ToString()
                 ?? (policy?.Applicable == false ? "policy-inapplicable" : "unmatched");
             var textHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(observedText)))[..16].ToLowerInvariant();
@@ -1632,6 +1701,7 @@ internal sealed class NotifyMeasuredSupervisor
             }
             var prompt = new NotifyObservedPrompt
             {
+                CycleId = cycleId,
                 AgentKind = agentKind,
                 Pane = recorded.PaneId,
                 ObservedText = observedText,
@@ -1639,8 +1709,16 @@ internal sealed class NotifyMeasuredSupervisor
                 Decision = decision,
                 Rule = rule,
                 ReconciliationAttemptId = pendingExecution?.AttemptId,
-                ExactAnswerScope = decision == "accept" ? classified.Recipe?.ExactAnswerScope : null,
-                AnswerKeys = decision == "accept" ? classified.Recipe?.AnswerKeys ?? [] : [],
+                ExactAnswerScope = decision == "accept"
+                    ? shellAuthorization?.ExactAnswerScope ?? classified.Recipe?.ExactAnswerScope
+                    : null,
+                AnswerKeys = decision == "accept"
+                    ? shellAuthorization?.AnswerKeys ?? classified.Recipe?.AnswerKeys ?? []
+                    : [],
+                MatchedScopes = shellAuthorization?.MatchedScopes ?? [],
+                CommandDigest = shellAuthorization?.CommandDigest,
+                DialogHash = shellAuthorization?.DialogHash,
+                PolicySummary = shellAuthorization?.Summary,
             };
             observations.Add(new NotifySupervisionObservation
             {
@@ -1652,6 +1730,8 @@ internal sealed class NotifyMeasuredSupervisor
                 Summary = $"Dialog-blocked seat '{role}' kind '{agentKind}' pane '{recorded.PaneId}' emitted prompt-class '{classified.PromptClass}' with decision '{decision}'. "
                     + (pendingExecution is not null
                         ? "A durable execution-pending audit has no terminal outcome; reconciliation is required and no answer may be retried."
+                        : shellAuthorization is not null
+                        ? shellAuthorization.Summary
                         : classified.Known
                         ? "The class is an exact literal registry match; no fuzzy classification was used."
                         : "The observed text matched no recorded literal class, so class 'unknown' is escalate-only and no answer is available."),
@@ -1677,6 +1757,7 @@ internal sealed class NotifyMeasuredSupervisor
             : prompt.Decision == "accept" ? "authorized-before-execution" : "escalate-only";
         var audit = new NotifyPromptAudit
         {
+            CycleId = prompt.CycleId,
             AttemptId = attemptId,
             PromptKey = observation.Key,
             Seat = observation.SubjectRole ?? "unknown",
@@ -1688,6 +1769,9 @@ internal sealed class NotifyMeasuredSupervisor
             Timestamp = now,
             Outcome = initialOutcome,
             ExactAnswerScope = prompt.ExactAnswerScope,
+            MatchedScopes = prompt.MatchedScopes,
+            CommandDigest = prompt.CommandDigest,
+            DialogHash = prompt.DialogHash,
         };
         var auditWrite = NotifySupervisionStore.RecordPromptAudit(auditPath, audit, write: true);
         if (!auditWrite.Applied)
@@ -1720,6 +1804,11 @@ internal sealed class NotifyMeasuredSupervisor
                 decision = prompt.Decision,
                 rule = prompt.Rule,
                 exact_answer_scope = prompt.ExactAnswerScope,
+                matched_scopes = prompt.MatchedScopes,
+                command_digest = prompt.CommandDigest,
+                dialog_hash = prompt.DialogHash,
+                cycle_id = prompt.CycleId,
+                policy_summary = prompt.PolicySummary,
                 answer_keys = prompt.Decision == "accept" ? prompt.AnswerKeys : null,
                 must_transition = false,
             }),
@@ -1978,6 +2067,9 @@ internal sealed record NotifySupervisionObservation
 
 internal sealed record NotifyObservedPrompt
 {
+    [System.Text.Json.Serialization.JsonPropertyName("cycle_id")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? CycleId { get; init; }
     [System.Text.Json.Serialization.JsonPropertyName("agent_kind")]
     public required string AgentKind { get; init; }
     [System.Text.Json.Serialization.JsonPropertyName("pane")]
@@ -1995,6 +2087,17 @@ internal sealed record NotifyObservedPrompt
     [System.Text.Json.Serialization.JsonPropertyName("exact_answer_scope")]
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? ExactAnswerScope { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("matched_scopes")]
+    public IReadOnlyList<string> MatchedScopes { get; init; } = [];
+    [System.Text.Json.Serialization.JsonPropertyName("command_digest")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? CommandDigest { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("dialog_hash")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? DialogHash { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("policy_summary")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? PolicySummary { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public IReadOnlyList<string> AnswerKeys { get; init; } = [];
 }

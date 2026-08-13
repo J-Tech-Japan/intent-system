@@ -2282,11 +2282,17 @@ internal static class GuideOrchestratorThreadCommand
                 AttendedFirstRunRule =
                     "ELIMINATE known dialogs through agent-side allow configuration recorded in the kind's G636 "
                     + "recipe fields. G683 classifies remaining blocked dialogs only by exact recipe-registry literals; "
+                    + "G689 adds the Codex shell-command class, which extracts a bounded command payload but never grants "
+                    + "a bare answer. Every compound shell AST segment must match a recorded scoped policy; project-test "
+                    + "is test execution rather than read-only, owned-scratch-delete names exact wake-ledger paths, and "
+                    + "exact-command-once binds one normalized AST digest to the current dialog hash. "
                     + "unknown text is escalate-only. Only a validated matched pre-approve lets orchestration execute "
                     + "the registry's exact bounded answer after durable audit. Design never relays keys.",
                 AuthorityBoundary =
                     "attending a pane is not authority to decide for the operator. G683 never fabricates a class: unknown, "
-                    + "unmatched, and matched pre-escalate prompts execute no answer. A matched pre-approve carries its rule, "
+                    + "unmatched, and matched pre-escalate prompts execute no answer. G689 never treats class recognition "
+                    + "or a scope name as authority: unknown syntax, command substitution, redirects, out-of-root paths, "
+                    + "and uncovered AST segments escalate. A matched pre-approve carries its rule, "
                     + "observed text, and exact scope to orchestration and is audited before execution. Design never answers a dialog "
                     + "or relays keystrokes; credential, security, permission, destructive, and product choices remain "
                     + "in the existing escalation set.",
@@ -2360,21 +2366,21 @@ internal static class GuideOrchestratorThreadCommand
                     PreviewStatus = "preview-through-1.x (G666/G682/G683/G684/G686)",
                     Layers = new[]
                     {
-                        "recipe — eliminate known dialogs through agent-side allow configuration recorded in the G636 kind recipe fields; never answer dialogs",
-                        "producer/policy — exact recipe-registry classes validate rules; unknown pairs are refused with the known vocabulary",
-                        "execution/audit — matched pre-approve wakes orchestration for only the recorded answer scope; everything else is escalate-only and design never answers",
+                        "recipe/class — eliminate known dialogs through agent-side allow configuration recorded in the G636 kind recipe fields; G689's shell-command producer recognizes and extracts a command payload without answering dialogs",
+                        "producer/policy — exact recipe-registry classes validate rules; G689 scoped policy instances cover every shell AST segment with project-test, owned-scratch-delete, or exact-command-once; unknown pairs and bare shell classes are refused",
+                        "execution/audit — matched pre-approve wakes orchestration for only the recorded answer scope, AST digest, and current dialog hash; persistent options stay operator-only, everything else is escalate-only, and design never answers",
                     },
-                    PolicyRecordCommand = Fill("intent-cli notify supervise --domain <domain> --team <team> --repo <owner/repo> --owner-role orchestration --pre-approve <agent-kind>:<prompt-class> --pre-escalate <agent-kind>:<prompt-class> --write"),
-                    NoPolicyRule = "Without an exact validated pre-approve match, residual prompts are escalate-only; accept nothing and fabricate no class.",
+                    PolicyRecordCommand = Fill("intent-cli notify supervise --domain <domain> --team <team> --repo <owner/repo> --owner-role orchestration --pre-approve <agent-kind>:<prompt-class> --pre-escalate <agent-kind>:<prompt-class> [--shell-policy <json>] --write"),
+                    NoPolicyRule = "Without an exact validated pre-approve match or a matching scoped shell policy instance, residual prompts are escalate-only; accept nothing and fabricate no class. A bare `--pre-approve codex:shell-command` is structurally refused.",
                     ProducerStatus = "recipe-backed-G683-live",
-                    InapplicabilityRule = "Every recorded rule whose named agent kind has no prompt-class producer returns applicable=false, status=inapplicable-no-prompt-class-producer, and a concrete reason at record time, in the stored policy, and in every supervision cycle. Producer registration clears it automatically.",
+                    InapplicabilityRule = "Every recorded rule or scoped policy whose named agent kind has no prompt-class producer, or whose scope metadata is invalid, returns applicable=false with a concrete reason at record time, in the stored policy, and in every supervision cycle. Producer registration or a corrected scoped record clears it automatically.",
                     InterimRecipePath = "Eliminate known dialogs through agent-side allow configuration recorded in the G636 kind recipe fields; this is recipe-layer configuration, never dialog answering.",
                     Incident = "Operator-filed #1469 measured 47 supervision-cycle keys with no prompt/dialog/class/adjudication producer key, a review seat wedged three times in one day, and orchestration correctly refusing to fabricate a class. It shares #1465's configured-looking-but-inert shape. The earlier G666 workspace wK relay refusal remains attributed separately.",
                     RecipeDrift = "Each supervision cycle compares a running seat's observed argv envelope with the role's operator-recorded typed envelope profile when one is referenced or overridden, otherwise the kind registry recipe: sandbox mode, approval mode, writable roots/add-dirs, and network access only. Missing bounds, extra roots, and broader envelopes are alarming; narrower envelopes are informational. Model and reasoning effort are operator-choice wish fields excluded by design. A mismatch emits once per seat per cycle, names both shapes, wakes nobody, and acts on nothing; a conforming or wish-only-different seat is silent.",
                     EnvelopeProfileRecordCommand = Fill("intent-cli session-layer topology record-profile --domain <domain> --team <team> --profile-name <name> --kind <kind> --sandbox-mode <mode> --approval-mode <mode> --roots-policy <policy> --network-access <value> --transport-mode <mode> --evidence <text> --current-digest <digest|absent> --confirm-record-profile --write --format json"),
                     EnvelopeProfilePrecedence = "An operator-recorded profile is the baseline only for the role that references it or carries the typed override. No profile is byte-identical G684 registry behavior; a dangling reference or kind mismatch emits distinct profile-invalid and never falls back silently.",
                     ProfileInvalidFinding = "profile-invalid names the role, profile reference or override, and the kind mismatch/dangling cause; it is detection-only, wakes nobody, and does not repair topology.",
-                    WatcherBoundary = "The watcher classifies literal registry entries only. The sole answer path is an audited orchestration-owned exact key sequence for a matched pre-approve; no generic key relay exists.",
+                    WatcherBoundary = "The watcher classifies literal registry entries only and uses the read-only `intent-cli prompt-class list|describe` inventory for inspection. For G689 it verifies the extracted shell AST and every segment against scoped policy instances. The sole answer path is an audited orchestration-owned bounded key sequence for a matched pre-approve; no generic key relay exists.",
                     Formula = "four judgment-bearing threads plus one supervision process; no fifth approval seat",
                 },
             },
@@ -2604,7 +2610,7 @@ internal static class GuideOrchestratorThreadCommand
         return new OrchestratorDesignWorkspaceSupervision
         {
             Summary = Fill(
-                "G666 preview-through-1.x applies the three-layer approval model. Under authority the OPERATOR granted it, the design thread drives the team's SESSION LAYER through "
+                "G666/G689 preview-through-1.x applies the three-layer approval model. G689's shell-command class extracts command payloads but keeps all shell answer authority orchestration-only. Under authority the OPERATOR granted it, the design thread drives the team's SESSION LAYER through "
                 + "the workspace manager: it provisions the team (see `Terminal-workspace provisioning`), keeps the "
                 + "sessions alive and correctly held, and supervises for stalls. It records blocking waits and routes "
                 + "them to orchestration; it never answers a dialog or relays keystrokes. This adds a session-layer role — it moves NO workflow "
@@ -2750,7 +2756,7 @@ internal static class GuideOrchestratorThreadCommand
                 + "follow-up. Field cost of forgetting: a claim-now lost inside a session-restart window left a "
                 + "published issue stalled for 5.5 HOURS because no supervision layer happened to be running.",
             VerifiedReadRule =
-                "the design thread never answers a dialog. G683 supervision emits exact recipe-registry classes plus observed text; unknown text stays escalate-only. Only a validated matched pre-approve permits orchestration's audited exact-scope answer.",
+                "the design thread never answers a dialog. G683 supervision emits exact recipe-registry classes plus observed text; G689 additionally verifies the extracted shell AST and every segment against a scoped policy; unknown text stays escalate-only; unknown syntax and uncovered shell segments stay escalate-only. Only a validated matched pre-approve permits orchestration's audited exact-scope answer.",
             MayAnswer = new[]
             {
                 new OrchestratorSupervisionMayAnswer
@@ -2763,7 +2769,7 @@ internal static class GuideOrchestratorThreadCommand
                 {
                     Dialog = SupervisionMayAnswerClasses.VerifiedReadOnlyCommandApprovals,
                     Verification =
-                        "answer only through the same exact registry + validated pre-approve + durable-audit path; otherwise escalate, and design never answers it.",
+                        "for non-shell attended cases only, answer through the same exact registry + validated pre-approve + durable-audit path; G689 shell-command is not read-only authority even for project-test, so it requires orchestration-only scoped policy for every AST segment; otherwise escalate.",
                 },
                 new OrchestratorSupervisionMayAnswer
                 {

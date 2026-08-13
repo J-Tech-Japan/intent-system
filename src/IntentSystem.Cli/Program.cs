@@ -49,6 +49,7 @@ internal static class Program
                 || IsWorkerCommand(args)
                 || IsSkillCommand(args)
                 || IsNotifyCommand(args)
+                || IsPromptClassCommand(args)
                 || IsClaimCommand(args)
                 || IsHelpCommand(args))
             {
@@ -148,6 +149,12 @@ internal static class Program
     private static bool IsNotifyCommand(string[] args)
     {
         return args.Length >= 1 && string.Equals(args[0], "notify", StringComparison.Ordinal);
+    }
+
+    /// <summary>G689: prompt-class list/describe are read-only registry inspection and need no host state.</summary>
+    private static bool IsPromptClassCommand(string[] args)
+    {
+        return args.Length >= 1 && string.Equals(args[0], "prompt-class", StringComparison.Ordinal);
     }
 
     /// <summary>G679: claims operate from an ordinary Git checkout and do not require host config.</summary>

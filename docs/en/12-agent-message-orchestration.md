@@ -445,6 +445,23 @@ The initial vocabulary includes `codex:github-comment-post`, the separately
 recorded codex launch-hook trust dialog, and
 `copilot:launch-limited-permissions` from the G636 launch recipe.
 
+G689 extends that vocabulary with the measured `codex:shell-command` class.
+The class producer recognizes the dialog and extracts a command payload; it
+does not make the payload answerable. Record shell policy instances through
+`--shell-policy <json>` and inspect the shipped inventory with
+`intent-cli prompt-class list` or
+`intent-cli prompt-class describe codex:shell-command`. A shell answer is
+valid only when every compound shell-AST segment is covered by scoped policy
+and the audit names the matched scopes. `project-test` binds the recorded
+`dotnet test` argv prefix to the recorded cwd/root/path constraints and is
+test execution, not read-only. `owned-scratch-delete` requires exact paths
+from the same wake's scratch ledger and never authorizes bare `/tmp`.
+`exact-command-once` binds one normalized AST digest to the current dialog
+hash and is consumed after one bounded answer. Unknown syntax, command
+substitution, redirects, and uncovered or out-of-root segments escalate.
+Persistent allowances remain operator-only; the shell answer path remains
+orchestration-only and design never answers it.
+
 Each supervision cycle also compares the structured argv of every running
 recorded seat with its kind's recorded recipe. The comparison covers exactly
 the security envelope: sandbox mode, approval mode, writable roots/add-dirs,
@@ -1749,9 +1766,13 @@ It **may answer** exactly four kinds, each only after that read:
 
 1. **Confirmations of work it itself requested** — the prompt must match an
    action this design thread just initiated (same target, same operation).
-2. **Command approvals verified read-only** — the exact command shown must be
-   read and verified read-only; anything that writes, deletes, installs,
-   publishes, or mutates escalates ("probably read-only" is not verified).
+2. **Command approvals verified read-only** (non-shell attended cases only) —
+   the exact command shown must be read and verified read-only; anything that
+   writes, deletes, installs, publishes, or mutates escalates ("probably
+   read-only" is not verified). The G689 `codex:shell-command` class is
+   excluded from this design-thread authority: even `project-test` is not
+   read-only and all shell answers are orchestration-only through scoped
+   policy and audit.
 3. **Trust screens for hooks it itself installed** — its own hook-trust case;
    a trust screen for anything it did not install is not its to accept.
 4. **Operator-preauthorized mode changes** — preauthorization must be specific

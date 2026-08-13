@@ -478,6 +478,7 @@ internal sealed record NotifySupervisionWaitEvent
 
 internal sealed record NotifyPromptAudit
 {
+    [JsonPropertyName("cycle_id")] public string? CycleId { get; init; }
     [JsonPropertyName("attempt_id")] public string? AttemptId { get; init; }
     [JsonPropertyName("prompt_key")] public required string PromptKey { get; init; }
     [JsonPropertyName("seat")] public required string Seat { get; init; }
@@ -489,6 +490,9 @@ internal sealed record NotifyPromptAudit
     [JsonPropertyName("timestamp")] public required DateTimeOffset Timestamp { get; init; }
     [JsonPropertyName("outcome")] public required string Outcome { get; init; }
     [JsonPropertyName("exact_answer_scope")] public string? ExactAnswerScope { get; init; }
+    [JsonPropertyName("matched_scopes")] public IReadOnlyList<string> MatchedScopes { get; init; } = [];
+    [JsonPropertyName("command_digest")] public string? CommandDigest { get; init; }
+    [JsonPropertyName("dialog_hash")] public string? DialogHash { get; init; }
 }
 
 internal sealed record NotifySupervisionStallRecord
