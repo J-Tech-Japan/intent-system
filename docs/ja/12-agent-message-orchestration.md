@@ -308,31 +308,37 @@ intent-cli automation guide-reachability-record --execution-unit <unit> --commit
 guide-reachability-pending を出します。この debt は merge/closeout を阻害せず、explicit no-surface は
 silent です。これは 1.0 promise の対象外の preview surface です。compatibility ledger を参照してください。
 
-### 3 層の residual approval honesty と recipe drift（G666/G682 — preview-through-1.x）
+### live な 3 層 residual approval path と recipe drift（G666/G682/G683 — preview-through-1.x）
 
 unattended approval model は正確に 3 層です。第 1 に agent kind ごとの recorded
 recipe の G636 fields に agent-side allow configuration を記録し、既知 dialog を除去します。
-dialog への応答による除去は禁止です。第 2 に、G683 が real prompt-class producer を提供する
-まで residual policy rule はすべて明示的に inapplicable で、residual prompt は構造上
-escalate-only です。orchestration は class を捏造せず adjudication もしません。第 3 に design
-は escalation-class event だけを受け取り、prompt への応答も keystroke relay も行いません。
-producer absent 中の recorded policy は accept を意味しません。
+第 2 に G683 supervision は dialog-blocked pane を読み、kind ごとの recipe entry にある literal
+fragment がすべて一致した場合だけ agent kind、pane、observed text、stable class を出力します。
+registry 外の text は class `unknown` で、曖昧な分類を行わず escalate-only です。
+第 3 に検証済みの recorded pre-approve が正確に一致した場合だけ、orchestration に rule、
+observed dialog、recipe の exact answer scope を通知します。orchestration は authorization
+を実行前に永続記録し、その recorded key sequence だけを実行します。design は監査記録を
+読みますが、prompt への応答も keystroke relay も行いません。
 
 standing supervisor に repeatable な
 `--pre-approve <agent-kind>:<prompt-class>` と
 `--pre-escalate <agent-kind>:<prompt-class>` を `--write` とともに指定して policy を
-記録します。2 つの list は同時に宣言します。record-time output、stored policy、EVERY
-supervision cycle は rule ごとに `applicable: false`、
-`applicability_status: inapplicable-no-prompt-class-producer`、agent kind、理由を返します。
-状態は producer registry から毎回再計算され、kind に real producer が存在すれば自動的に
-解消します。この記録は prompt class の emission、simulation、matching、validation、
-adjudication を行わず、intent-cli は dialog に応答せず key も送りません。
+記録します。2 つの list は同時に宣言します。各 pair は reviewable recipe vocabulary に対して
+検証され、unknown pair は拒否されて既知の `kind:class` 値がすべて表示されます。
+producer-covered kind は G682 の inapplicability を自動的に解消し、uncovered kind は
+`inapplicable-no-prompt-class-producer` を維持します。matched pre-escalate、unmatched、
+`unknown` はすべて escalate-only として監査記録され、answer を実行しません。最初の vocabulary は
+`codex:github-comment-post`、別途記録済みの codex launch-hook trust dialog、G636 launch recipe の
+`copilot:launch-limited-permissions` です。
 
 各 supervision cycle は running recorded seat の structured argv と kind ごとの recorded
 recipe も比較します。argument order と whitespace は同値です。mismatch は observed shape
 と recorded shape の両方を示す `recipe-drift` finding を seat ごと、cycle ごとに 1 回出し、
-conforming seat では無出力です。watcher は seat の restart/correction、dialog 応答、key
-send を一切行いません。
+conforming seat では無出力です。watcher は seat の restart/correction を行いません。input 操作は
+一致する policy、永続的な実行前監査、orchestration-only 通知の後に registry の exact bounded
+`agent send-keys` sequence を実行する場合だけです。generic keystroke relay と design answer path は
+ありません。prompt の監査記録は既存の `cycles.jsonl` stream を共有し、seat、pane、class、rule、actor、
+timestamp、exact scope、outcome を記録します。
 
 これにより **judgment を担う 4 thread と 1 supervision process** を維持し、第 5 の
 approval seat を追加しません。2026-08-11 の workspace wK では Claude app safety が

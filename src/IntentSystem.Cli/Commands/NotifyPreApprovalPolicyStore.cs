@@ -55,25 +55,23 @@ internal sealed record NotifyPreApprovalPolicyReadResult
 }
 
 /// <summary>
-/// G682 records only whether a real prompt-class producer exists for an agent
-/// kind. It does not emit, parse, match, validate, adjudicate, or answer a
-/// prompt. G683 owns adding the first production registration.
+/// G682's applicability projection now delegates to G683's recipe-backed
+/// producer registry. Tests may still force availability to exercise legacy
+/// no-producer policy records.
 /// </summary>
 internal static class NotifyPromptClassProducerRegistry
 {
     public const string ApplicableStatus = "applicable";
     public const string InapplicableStatus = "inapplicable-no-prompt-class-producer";
 
-    private static readonly IReadOnlySet<string> ProducerKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
     internal static Func<string, bool>? AvailabilityOverride { get; set; }
 
     public static bool HasProducer(string agentKind) =>
-        AvailabilityOverride?.Invoke(agentKind) ?? ProducerKinds.Contains(agentKind);
+        AvailabilityOverride?.Invoke(agentKind) ?? AgentLaunchRecipeRegistry.HasPromptClassProducer(agentKind);
 
     public static string MissingReason(string agentKind) =>
         $"No prompt-class producer is registered for agent kind '{agentKind}'. This rule cannot currently apply; "
-        + "residual prompts are escalate-only by construction until G683 provides a real producer.";
+        + "residual prompts are escalate-only by construction until a recipe-backed producer is registered.";
 }
 
 /// <summary>
@@ -186,6 +184,20 @@ internal static class NotifyPreApprovalPolicyStore
         return true;
     }
 
+    public static bool TryValidateRule(NotifyPreApprovalRule rule, out string error)
+    {
+        if (AgentLaunchRecipeRegistry.TryFindPromptClass(rule.AgentKind, rule.PromptClass, out _))
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        var known = AgentLaunchRecipeRegistry.KnownPairs;
+        error = $"Unknown prompt policy pair '{rule}'. Known values: "
+            + (known.Count == 0 ? "none" : string.Join(", ", known)) + ".";
+        return false;
+    }
+
     public static NotifyPreApprovalPolicy WithCurrentApplicability(NotifyPreApprovalPolicy policy)
     {
         var accept = policy.Accept.Select(WithCurrentApplicability).ToArray();
@@ -210,7 +222,7 @@ internal static class NotifyPreApprovalPolicyStore
             InapplicabilityReason = applicable
                 ? null
                 : "One or more recorded rules name an agent kind with no prompt-class producer. "
-                    + "Those rules cannot currently apply; residual prompts are escalate-only by construction until G683.",
+                    + "Those rules cannot currently apply; residual prompts are escalate-only by construction.",
         };
     }
 

@@ -23,8 +23,8 @@ public sealed class PreApprovalApplicabilityG682Tests : IDisposable
     public void RecordStoredShapeAndEveryCycle_LoudlyStateInapplicability_ThenClearWithProducer_G682()
     {
         var recorded = RunSupervise(
-            "--pre-approve", "codex:github-comment",
-            "--pre-escalate", "codex:credential");
+            "--pre-approve", "codex:github-comment-post",
+            "--pre-escalate", "codex:launch-hook-trust");
 
         Assert.Equal(0, recorded.ExitCode);
         Assert.False(recorded.Output.GetProperty("silent").GetBoolean());
@@ -44,7 +44,7 @@ public sealed class PreApprovalApplicabilityG682Tests : IDisposable
         Assert.False(Assert.Single(reloaded.Policy.Accept).Applicable);
         Assert.Equal(
             "escalate",
-            NotifyPreApprovalPolicyStore.Adjudicate(reloaded.Policy, "codex", "github-comment"));
+            NotifyPreApprovalPolicyStore.Adjudicate(reloaded.Policy, "codex", "github-comment-post"));
 
         var nextCycle = RunSupervise();
         Assert.Equal(0, nextCycle.ExitCode);
@@ -97,7 +97,7 @@ public sealed class PreApprovalApplicabilityG682Tests : IDisposable
         var applicableRule = new NotifyPreApprovalRule
         {
             AgentKind = "codex",
-            PromptClass = "github-comment",
+            PromptClass = "github-comment-post",
             Applicable = true,
             ApplicabilityStatus = NotifyPromptClassProducerRegistry.ApplicableStatus,
         };
@@ -114,7 +114,7 @@ public sealed class PreApprovalApplicabilityG682Tests : IDisposable
 
         Assert.Equal(
             "escalate",
-            NotifyPreApprovalPolicyStore.Adjudicate(policy, "codex", "github-comment"));
+            NotifyPreApprovalPolicyStore.Adjudicate(policy, "codex", "github-comment-post"));
         Assert.Equal(
             "escalate",
             NotifyPreApprovalPolicyStore.Adjudicate(
@@ -132,7 +132,7 @@ public sealed class PreApprovalApplicabilityG682Tests : IDisposable
                     ],
                 },
                 "codex",
-                "github-comment"));
+                "github-comment-post"));
     }
 
     private (int ExitCode, JsonElement Output) RunSupervise(params string[] policyArguments)
@@ -195,9 +195,8 @@ public sealed class PreApprovalApplicabilityG682Tests : IDisposable
         var normalized = string.Join(' ', output.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         Assert.Contains("G683", output, StringComparison.Ordinal);
         Assert.True(
-            normalized.Contains("escalate-only by construction", StringComparison.Ordinal)
-            || normalized.Contains("構造上 escalate-only", StringComparison.Ordinal),
-            "The escalate-only-by-construction rule was absent.");
+            normalized.Contains("escalate-only", StringComparison.Ordinal),
+            "The escalate-only rule was absent.");
         Assert.Contains("agent-side allow configuration", normalized, StringComparison.Ordinal);
         Assert.Contains("G636", output, StringComparison.Ordinal);
         Assert.Contains("#1469", output, StringComparison.Ordinal);

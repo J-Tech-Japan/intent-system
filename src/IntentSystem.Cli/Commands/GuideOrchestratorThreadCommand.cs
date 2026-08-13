@@ -2281,13 +2281,13 @@ internal static class GuideOrchestratorThreadCommand
                     + "the session inherits the folder as cwd.",
                 AttendedFirstRunRule =
                     "ELIMINATE known dialogs through agent-side allow configuration recorded in the kind's G636 "
-                    + "recipe fields, never by answering a dialog. Until G683 supplies a real prompt-class producer, "
-                    + "every residual prompt is escalate-only by construction and every recorded policy rule is loudly "
-                    + "inapplicable. Design observes the escalation and never relays keys.",
+                    + "recipe fields. G683 classifies remaining blocked dialogs only by exact recipe-registry literals; "
+                    + "unknown text is escalate-only. Only a validated matched pre-approve lets orchestration execute "
+                    + "the registry's exact bounded answer after durable audit. Design never relays keys.",
                 AuthorityBoundary =
-                    "attending a pane is not authority to decide for the operator. Until G683, no prompt-class producer "
-                    + "exists, so residual prompts are escalate-only by construction and orchestration does not fabricate "
-                    + "or adjudicate a class. Recorded policy rules state their inapplicability every cycle. Design never answers a dialog "
+                    "attending a pane is not authority to decide for the operator. G683 never fabricates a class: unknown, "
+                    + "unmatched, and matched pre-escalate prompts execute no answer. A matched pre-approve carries its rule, "
+                    + "observed text, and exact scope to orchestration and is audited before execution. Design never answers a dialog "
                     + "or relays keystrokes; credential, security, permission, destructive, and product choices remain "
                     + "in the existing escalation set.",
             },
@@ -2341,21 +2341,21 @@ internal static class GuideOrchestratorThreadCommand
                     + "supervision failure, not a shortcut.",
                 ApprovalModel = new OrchestratorApprovalModel
                 {
-                    PreviewStatus = "preview-through-1.x (G666/G682)",
+                    PreviewStatus = "preview-through-1.x (G666/G682/G683)",
                     Layers = new[]
                     {
                         "recipe — eliminate known dialogs through agent-side allow configuration recorded in the G636 kind recipe fields; never answer dialogs",
-                        "policy — until G683, recorded agent-kind/prompt-class rules are loudly inapplicable because no prompt-class producer exists",
-                        "escalation — design receives only the agreed escalation-class event and never relays keystrokes",
+                        "producer/policy — exact recipe-registry classes validate rules; unknown pairs are refused with the known vocabulary",
+                        "execution/audit — matched pre-approve wakes orchestration for only the recorded answer scope; everything else is escalate-only and design never answers",
                     },
                     PolicyRecordCommand = Fill("intent-cli notify supervise --domain <domain> --team <team> --repo <owner/repo> --owner-role orchestration --pre-approve <agent-kind>:<prompt-class> --pre-escalate <agent-kind>:<prompt-class> --write"),
-                    NoPolicyRule = "With or without a recorded policy, residual prompts are escalate-only by construction until G683 provides a real producer; accept nothing and fabricate no class.",
-                    ProducerStatus = "absent-until-G683",
+                    NoPolicyRule = "Without an exact validated pre-approve match, residual prompts are escalate-only; accept nothing and fabricate no class.",
+                    ProducerStatus = "recipe-backed-G683-live",
                     InapplicabilityRule = "Every recorded rule whose named agent kind has no prompt-class producer returns applicable=false, status=inapplicable-no-prompt-class-producer, and a concrete reason at record time, in the stored policy, and in every supervision cycle. Producer registration clears it automatically.",
                     InterimRecipePath = "Eliminate known dialogs through agent-side allow configuration recorded in the G636 kind recipe fields; this is recipe-layer configuration, never dialog answering.",
                     Incident = "Operator-filed #1469 measured 47 supervision-cycle keys with no prompt/dialog/class/adjudication producer key, a review seat wedged three times in one day, and orchestration correctly refusing to fabricate a class. It shares #1465's configured-looking-but-inert shape. The earlier G666 workspace wK relay refusal remains attributed separately.",
                     RecipeDrift = "Each supervision cycle structurally compares a running seat's observed argv with its kind's recorded recipe, ignoring argument order and whitespace. A mismatch emits once per seat per cycle and names both shapes; a conforming seat is silent.",
-                    WatcherBoundary = "The watcher detects and records only. It never restarts or corrects a seat, answers a dialog, or sends keys.",
+                    WatcherBoundary = "The watcher classifies literal registry entries only. The sole answer path is an audited orchestration-owned exact key sequence for a matched pre-approve; no generic key relay exists.",
                     Formula = "four judgment-bearing threads plus one supervision process; no fifth approval seat",
                 },
             },
@@ -2731,38 +2731,33 @@ internal static class GuideOrchestratorThreadCommand
                 + "follow-up. Field cost of forgetting: a claim-now lost inside a session-restart window left a "
                 + "published issue stalled for 5.5 HOURS because no supervision layer happened to be running.",
             VerifiedReadRule =
-                "the design thread never answers a dialog. Structured supervision may record launch-shape evidence, "
-                + "but no prompt-class producer exists until G683; every residual prompt is escalate-only by "
-                + "construction and every recorded rule is loudly inapplicable.",
+                "the design thread never answers a dialog. G683 supervision emits exact recipe-registry classes plus observed text; unknown text stays escalate-only. Only a validated matched pre-approve permits orchestration's audited exact-scope answer.",
             MayAnswer = new[]
             {
                 new OrchestratorSupervisionMayAnswer
                 {
                     Dialog = SupervisionMayAnswerClasses.RequestedConfirmations,
                     Verification =
-                        "until G683, escalate the residual prompt; a recorded rule cannot apply without a producer, "
-                        + "and design never answers it.",
+                        "answer only when an exact registry class matches a validated pre-approve rule; orchestration audits and executes only its recorded scope, and design never answers it.",
                 },
                 new OrchestratorSupervisionMayAnswer
                 {
                     Dialog = SupervisionMayAnswerClasses.VerifiedReadOnlyCommandApprovals,
                     Verification =
-                        "until G683, every residual prompt escalates because no producer can supply a class; design "
-                        + "never answers it.",
+                        "answer only through the same exact registry + validated pre-approve + durable-audit path; otherwise escalate, and design never answers it.",
                 },
                 new OrchestratorSupervisionMayAnswer
                 {
                     Dialog = SupervisionMayAnswerClasses.OwnHookTrustScreens,
                     Verification =
                         "eliminate it through agent-side allow configuration recorded in the G636 kind recipe fields. "
-                        + "If it remains, escalate it and never answer it.",
+                        + "If it remains, only the exact validated/audited orchestration path may answer it; otherwise escalate.",
                 },
                 new OrchestratorSupervisionMayAnswer
                 {
                     Dialog = SupervisionMayAnswerClasses.PreauthorizedModeChanges,
                     Verification =
-                        "preauthorization does not make an inert rule operative. Until G683, residual prompts still "
-                        + "escalate; neither orchestration nor design fabricates a class or relays an answer.",
+                        "preauthorization alone is insufficient: require exact registry class, validated rule, durable audit, and registry-bounded orchestration execution. Unknown text escalates; design never answers.",
                 },
             },
             MustEscalate = new[]
@@ -3840,9 +3835,9 @@ internal static class GuideOrchestratorThreadCommand
 
         writer.WriteLine("### Blocking dialogs — the boundary");
         writer.WriteLine();
-        writer.WriteLine($"> **Detection and escalation boundary (G682):** {supervision.VerifiedReadRule}");
+        writer.WriteLine($"> **Detection, adjudication, and escalation boundary (G682/G683):** {supervision.VerifiedReadRule}");
         writer.WriteLine();
-        writer.WriteLine("#### Residual prompts are escalate-only by construction until G683");
+        writer.WriteLine("#### Residual prompts: exact matched pre-approve or escalate-only (G683)");
         writer.WriteLine();
         foreach (var entry in supervision.MayAnswer)
         {

@@ -32,6 +32,7 @@ public sealed class ApprovalRecipeDriftG666Tests : IDisposable
     [Fact]
     public void Policy_IsDurableAndEscalateOnlyWhileItsProducerIsAbsent()
     {
+        NotifyPromptClassProducerRegistry.AvailabilityOverride = _ => false;
         var policy = new NotifyPreApprovalPolicy
         {
             Domain = Domain,
@@ -253,6 +254,7 @@ public sealed class ApprovalRecipeDriftG666Tests : IDisposable
 
     public void Dispose()
     {
+        NotifyPromptClassProducerRegistry.AvailabilityOverride = null;
         NotifyCommand.UtcNowFactory = null;
         if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
     }
