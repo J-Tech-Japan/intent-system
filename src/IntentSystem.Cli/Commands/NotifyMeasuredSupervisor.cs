@@ -1455,7 +1455,13 @@ internal sealed class NotifyMeasuredSupervisor
                 continue;
             }
 
-            var comparison = AgentLaunchShapeComparer.Compare(recorded.Kind!, recipe, processInfo.Processes);
+            var comparison = AgentLaunchShapeComparer.Compare(
+                recorded.Kind!,
+                recipe,
+                processInfo.Processes,
+                recorded.LaunchArguments,
+                recorded.Cwd,
+                requireConcreteSeatRoots: true);
             if (!comparison.Resolved || comparison.Conforming)
             {
                 continue;
