@@ -2341,7 +2341,7 @@ internal static class GuideOrchestratorThreadCommand
                     + "supervision failure, not a shortcut.",
                 ApprovalModel = new OrchestratorApprovalModel
                 {
-                    PreviewStatus = "preview-through-1.x (G666/G682/G683)",
+                    PreviewStatus = "preview-through-1.x (G666/G682/G683/G684)",
                     Layers = new[]
                     {
                         "recipe — eliminate known dialogs through agent-side allow configuration recorded in the G636 kind recipe fields; never answer dialogs",
@@ -2354,7 +2354,7 @@ internal static class GuideOrchestratorThreadCommand
                     InapplicabilityRule = "Every recorded rule whose named agent kind has no prompt-class producer returns applicable=false, status=inapplicable-no-prompt-class-producer, and a concrete reason at record time, in the stored policy, and in every supervision cycle. Producer registration clears it automatically.",
                     InterimRecipePath = "Eliminate known dialogs through agent-side allow configuration recorded in the G636 kind recipe fields; this is recipe-layer configuration, never dialog answering.",
                     Incident = "Operator-filed #1469 measured 47 supervision-cycle keys with no prompt/dialog/class/adjudication producer key, a review seat wedged three times in one day, and orchestration correctly refusing to fabricate a class. It shares #1465's configured-looking-but-inert shape. The earlier G666 workspace wK relay refusal remains attributed separately.",
-                    RecipeDrift = "Each supervision cycle structurally compares a running seat's observed argv with its kind's recorded recipe, ignoring argument order and whitespace. A mismatch emits once per seat per cycle and names both shapes; a conforming seat is silent.",
+                    RecipeDrift = "Each supervision cycle compares a running seat's observed argv envelope with its kind's recorded recipe: sandbox mode, approval mode, writable roots/add-dirs, and network access only. Missing bounds, extra roots, and broader envelopes are alarming; narrower envelopes are informational. Model and reasoning effort are operator-choice wish fields excluded by design. A mismatch emits once per seat per cycle, names both shapes, wakes nobody, and acts on nothing; a conforming or wish-only-different seat is silent.",
                     WatcherBoundary = "The watcher classifies literal registry entries only. The sole answer path is an audited orchestration-owned exact key sequence for a matched pre-approve; no generic key relay exists.",
                     Formula = "four judgment-bearing threads plus one supervision process; no fifth approval seat",
                 },

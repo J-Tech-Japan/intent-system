@@ -479,7 +479,7 @@ internal sealed class NotifyMeasuredSupervisor
                     Cause = observation.Cause ?? existing.Cause,
                 };
                 records.Add(retained);
-                if (observation.Kind is "supervision-degraded" or "duplicate-supervisor")
+                if (observation.Kind is "supervision-degraded" or "duplicate-supervisor" or "recipe-drift")
                 {
                     // Cycle-level facts are not once-only activity findings:
                     // surface one finding for each cycle, still once for the
@@ -1455,7 +1455,13 @@ internal sealed class NotifyMeasuredSupervisor
                 continue;
             }
 
-            var comparison = AgentLaunchShapeComparer.Compare(recorded.Kind!, recipe, processInfo.Processes);
+            var comparison = AgentLaunchShapeComparer.Compare(
+                recorded.Kind!,
+                recipe,
+                processInfo.Processes,
+                recorded.LaunchArguments,
+                recorded.Cwd,
+                requireConcreteSeatRoots: true);
             if (!comparison.Resolved || comparison.Conforming)
             {
                 continue;
@@ -1470,11 +1476,18 @@ internal sealed class NotifyMeasuredSupervisor
                 Source = "recorded-topology+agent-launch-recipe+pane.process-info",
                 Summary = $"Running seat '{role}' at workspace '{workspaceId}' pane '{recorded.PaneId}' has recipe drift: "
                     + $"observed launch shape `{comparison.ObservedShape}`; recorded '{recorded.Kind}' recipe "
-                    + $"`{comparison.RecordedShape}`. This finding restarts or corrects nothing, answers no dialog, "
-                    + "and sends no keys.",
+                    + $"`{comparison.RecordedShape}`. Classification: "
+                    + (comparison.Drift == AgentLaunchEnvelopeDrift.Alarming ? "alarming" : "informational-narrower")
+                    + $"; {comparison.Summary}. Model and reasoning effort are operator-choice wish fields excluded "
+                    + "from this envelope comparison by design. This finding restarts or corrects nothing, answers "
+                    + "no dialog, sends no keys, and wakes no role.",
                 DetectableAt = null,
                 WakeAlreadyAttempted = false,
                 WakeAlreadyDelivered = false,
+                WakeSuppressed = true,
+                Cause = comparison.Drift == AgentLaunchEnvelopeDrift.Alarming
+                    ? "recipe-envelope-alarming"
+                    : "recipe-envelope-narrower",
             });
         }
 
