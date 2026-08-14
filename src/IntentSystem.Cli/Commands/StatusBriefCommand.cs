@@ -17,13 +17,22 @@ internal static class StatusBriefCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (!TryParseArguments(args, out var domainOverride, out var format, out var error))
+        if (!TryParseArguments(args, out var domainOverride, out var team, out var format, out var error))
         {
             writer.WriteLine(error);
             return 1;
         }
 
-        var summary = StatusBriefAnalyzer.Analyze(context, domainOverride);
+        StatusBriefSummary summary;
+        try
+        {
+            summary = StatusBriefAnalyzer.Analyze(context, domainOverride, team);
+        }
+        catch (TeamModeResolutionException exception)
+        {
+            writer.WriteLine(exception.Message);
+            return 1;
+        }
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -40,10 +49,12 @@ internal static class StatusBriefCommand
     private static bool TryParseArguments(
         string[] args,
         out string? domainOverride,
+        out string? team,
         out string format,
         out string error)
     {
         domainOverride = null;
+        team = null;
         format = FormatText;
         error = string.Empty;
 
@@ -60,6 +71,17 @@ internal static class StatusBriefCommand
                     }
 
                     domainOverride = args[index + 1];
+                    index++;
+                    break;
+
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a value.";
+                        return false;
+                    }
+
+                    team = args[index + 1];
                     index++;
                     break;
 
@@ -83,7 +105,7 @@ internal static class StatusBriefCommand
                     break;
 
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: --domain <name> --format text|json.";
+                    error = $"Unknown argument '{argument}'. Supported: --domain <name> --team <name> --format text|json.";
                     return false;
             }
         }

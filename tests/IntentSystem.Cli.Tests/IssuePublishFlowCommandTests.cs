@@ -229,6 +229,86 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_AuthoringOnlyRequiresAcceptanceAndRecordsExternalHandoff()
+    {
+        using var workspace = new IssuePublishFlowWorkspace();
+        var body = BuildCompleteContractBody("G692 Authoring-only publish audit");
+        workspace.WriteGithubBody("G692", body);
+        workspace.SeedQueueState("G692", "G692 Authoring-only publish audit");
+        var bodyBefore = File.ReadAllBytes(Path.Combine(
+            workspace.Context.RepoRoot,
+            ".intent-cli", "issues", "G692", "github-body.md"));
+
+        using (var modeWriter = new StringWriter())
+        {
+            Assert.Equal(0, TeamModeCommand.ExecuteSet(
+                workspace.Context,
+                ["--domain", "intent-cli", "--team", "intent-cli-dev", "--mode", TeamMode.AuthoringOnly, "--write", "--format", "json"],
+                modeWriter));
+        }
+
+        var stub = new StubIssueCreator("https://github.com/J-Tech-Japan/intent-system/issues/1497");
+        IssuePublishFlowCommand.CreatorFactory = () => stub;
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            [
+                "G692", "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli",
+                "--actor-role", "design", "--operator-acceptance", "operator accepted issue publication",
+                "--handoff-destination", "J-Tech-Japan/intent-system", "--write", "--format", "json",
+            ],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal(TeamMode.AuthoringOnly, root.GetProperty("team_mode").GetString());
+        Assert.Equal("design", root.GetProperty("actor_role").GetString());
+        Assert.Equal("operator accepted issue publication", root.GetProperty("operator_acceptance_evidence").GetString());
+        Assert.True(root.GetProperty("external_handoff_recorded").GetBoolean());
+        Assert.True(File.Exists(Path.Combine(
+            workspace.Context.RepoRoot,
+            PublishedExternalHandoffStore.ResolveRelativePath("G692").Replace('/', Path.DirectorySeparatorChar))));
+        var handoff = PublishedExternalHandoffStore.Read(workspace.Context.RepoRoot, "G692").Record;
+        Assert.NotNull(handoff);
+        Assert.Equal("intent-cli-dev", handoff!.Team);
+        Assert.Equal(bodyBefore, File.ReadAllBytes(Path.Combine(
+            workspace.Context.RepoRoot,
+            ".intent-cli", "issues", "G692", "github-body.md")));
+        var artifact = File.ReadAllText(workspace.PublishYamlPath("G692"));
+        Assert.Contains("team_mode: \"authoring-only\"", artifact, StringComparison.Ordinal);
+        Assert.Contains("external_handoff_ref:", artifact, StringComparison.Ordinal);
+        Assert.Contains("team_mode", File.ReadAllText(workspace.RunsLogPath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_AmbiguousNoTeam_EmitsMachineReadableCause()
+    {
+        using var workspace = new IssuePublishFlowWorkspace();
+        foreach (var team in new[] { "intent-cli-dev", "other-team" })
+        {
+            using var modeWriter = new StringWriter();
+            Assert.Equal(0, TeamModeCommand.ExecuteSet(
+                workspace.Context,
+                ["--domain", "intent-cli", "--team", team, "--mode", TeamMode.AuthoringOnly, "--write", "--format", "json"],
+                modeWriter));
+        }
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G692", "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var result = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(
+            TeamModeResolutionException.AmbiguousTeamScopeCode,
+            result.RootElement.GetProperty("cause").GetString());
+        Assert.Contains("refusing to guess", result.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenCreatorFailure_ReportsErrorAndExitsNonZero()
     {
         using var workspace = new IssuePublishFlowWorkspace();

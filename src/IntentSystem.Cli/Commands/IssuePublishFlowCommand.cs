@@ -8,6 +8,17 @@ using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Commands;
 
+internal sealed record IssuePublishAuthorization
+{
+    public required string Mode { get; init; }
+    public required string? Team { get; init; }
+    public string? ActorRole { get; init; }
+    public string? OperatorAcceptanceEvidence { get; init; }
+    public string? DestinationOwnership { get; init; }
+
+    public bool IsAuthoringOnly => TeamMode.IsAuthoringOnly(Mode);
+}
+
 /// <summary>
 /// G245: <c>intent-cli issue publish-flow</c> command. Performs the
 /// deterministic issue create / durable-publish-boundary handoff for an
@@ -45,7 +56,7 @@ internal static class IssuePublishFlowCommand
         RegexOptions.Compiled);
 
     private const string UsageLine =
-        "Usage: intent-cli issue publish-flow <execution-unit> --repo <owner/repo> [--domain <name>] [--team <team>] [--write] [--format json|markdown]";
+        "Usage: intent-cli issue publish-flow <execution-unit> --repo <owner/repo> [--domain <name>] [--team <team>] [--actor-role <role>] [--operator-acceptance <evidence>] [--handoff-destination <owner>] [--write] [--format json|markdown]";
 
     private static readonly Regex ExecutionUnitPattern = new(
         @"^[A-Za-z][A-Za-z0-9-]*$",
@@ -78,7 +89,18 @@ internal static class IssuePublishFlowCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var executionUnit, out var repo, out var domainOverride, out var team, out var write, out var format, out var error))
+        if (!TryParseArguments(
+                args,
+                out var executionUnit,
+                out var repo,
+                out var domainOverride,
+                out var team,
+                out var actorRole,
+                out var operatorAcceptance,
+                out var handoffDestination,
+                out var write,
+                out var format,
+                out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -92,21 +114,69 @@ internal static class IssuePublishFlowCommand
             return 1;
         }
 
+        var domain = string.IsNullOrWhiteSpace(domainOverride)
+            ? context.Config.Project.Domain
+            : domainOverride!;
+        var packetDirectory = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit!);
+        var githubBodyPath = Path.Combine(packetDirectory, "github-body.md");
+        var publishYamlPath = Path.Combine(context.RepoRoot, IssuePublishArtifactPathResolver.Resolve(executionUnit!));
+
+        TeamModeResolution teamMode;
+        try
+        {
+            teamMode = TeamModeStore.Resolve(context.RepoRoot, domain, team);
+        }
+        catch (TeamModeResolutionException exception)
+        {
+            var ambiguousResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                packetExists: false,
+                githubBodyPresent: false,
+                missingSections: PacketDraftCommand.RequiredContractSections,
+                title: null,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: exception.Message,
+                cause: TeamModeResolutionException.AmbiguousTeamScopeCode);
+            EmitResult(writer, ambiguousResult, format);
+            return 1;
+        }
+        catch (InvalidOperationException exception)
+        {
+            writer.WriteLine($"team-mode-unreadable: {exception.Message}");
+            return 1;
+        }
+
+        // Resolve the effective team before the ownership gate so a unique
+        // team-scoped mode record is used consistently by both the mode-
+        // sanctioned authorization and the unchanged claim verification.
+        var effectiveTeam = team ?? teamMode.ResolvedTeam;
         var claimVerification = ClaimOwnershipVerifier.Verify(
-            context.RepoRoot, $"execution-unit:{executionUnit}", team);
+            context.RepoRoot, $"execution-unit:{executionUnit}", effectiveTeam);
         if (!claimVerification.Passed)
         {
             ClaimVerificationCommand.Write(writer, format, claimVerification);
             return 1;
         }
 
-        var domain = string.IsNullOrWhiteSpace(domainOverride)
-            ? context.Config.Project.Domain
-            : domainOverride!;
-
-        var packetDirectory = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit!);
-        var githubBodyPath = Path.Combine(packetDirectory, "github-body.md");
-        var publishYamlPath = Path.Combine(context.RepoRoot, IssuePublishArtifactPathResolver.Resolve(executionUnit!));
+        if (!TryBuildAuthorization(
+                teamMode,
+                effectiveTeam,
+                actorRole,
+                operatorAcceptance,
+                handoffDestination,
+                out var authorization,
+                out var authorizationError))
+        {
+            writer.WriteLine(authorizationError);
+            writer.WriteLine(UsageLine);
+            return 1;
+        }
 
         if (!Directory.Exists(packetDirectory))
         {
@@ -187,7 +257,7 @@ internal static class IssuePublishFlowCommand
         // independent design proposal and orchestration confirmation are both
         // recorded in the CLI-owned decision store. Legacy packets have no
         // lane declaration and deliberately pass this gate unchanged.
-        var laneDecisionGate = BranchLaneDecisionGate.Evaluate(context.RepoRoot, executionUnit!);
+        var laneDecisionGate = BranchLaneDecisionGate.Evaluate(context.RepoRoot, executionUnit!, teamMode.Mode);
         if (!laneDecisionGate.Passed)
         {
             var laneGateResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
@@ -281,7 +351,14 @@ internal static class IssuePublishFlowCommand
                 error: null,
                 titleSource: titleSource,
                 wouldRestore: analysis.HasExistingIssue ? analysis.Gaps : null,
-                extraWarnings: analysis.Warnings);
+                extraWarnings: analysis.Warnings,
+                authorization: authorization,
+                externalHandoffRecorded: authorization.IsAuthoringOnly
+                    ? PublishedExternalHandoffStore.Read(context.RepoRoot, executionUnit!).Record is not null
+                    : null,
+                externalHandoffPath: authorization.IsAuthoringOnly
+                    ? PublishedExternalHandoffStore.ResolveRelativePath(executionUnit!)
+                    : null);
             EmitResult(writer, dryRunResult, format);
             return 0;
         }
@@ -302,7 +379,8 @@ internal static class IssuePublishFlowCommand
                 title,
                 titleSource,
                 analysis,
-                context);
+                context,
+                authorization);
         }
 
         // G536 review repair: the analyzer found NO existing-issue identity
@@ -421,7 +499,8 @@ internal static class IssuePublishFlowCommand
                 title,
                 titleSource,
                 githubSourcedAnalysis,
-                context);
+                context,
+                authorization);
         }
 
         // G363 (PR #830 review repair): atomic-seed gate. The
@@ -517,6 +596,8 @@ internal static class IssuePublishFlowCommand
         bool queueStatePatched;
         bool publishYamlPatched;
         bool runsAppended;
+        PublishedExternalHandoffWriteResult? handoffWrite = null;
+        string? externalHandoffRef = null;
         try
         {
             queueStatePatched = TryPatchQueueStateLinkedIssue(
@@ -527,13 +608,43 @@ internal static class IssuePublishFlowCommand
                 outcome.IssueUrl,
                 publishedAt);
 
+            if (authorization.IsAuthoringOnly)
+            {
+                var handoff = new PublishedExternalHandoff
+                {
+                    RecordKind = PublishedExternalHandoffStore.RecordKind,
+                    ExecutionUnit = executionUnit!,
+                    Domain = domain,
+                    Team = authorization.Team,
+                    TeamMode = TeamMode.AuthoringOnly,
+                    ActorRole = authorization.ActorRole!,
+                    DestinationOwnership = authorization.DestinationOwnership!,
+                    TargetRepo = repo!,
+                    IssueNumber = issueNumber,
+                    IssueUrl = outcome.IssueUrl,
+                    OperatorAcceptanceEvidence = authorization.OperatorAcceptanceEvidence!,
+                    RecordedAt = publishedAt,
+                };
+                handoffWrite = PublishedExternalHandoffStore.Write(context.RepoRoot, handoff);
+                if (!handoffWrite.Succeeded)
+                {
+                    throw new InvalidOperationException(handoffWrite.Error
+                        ?? "published-external-handoff could not be recorded.");
+                }
+
+                externalHandoffRef = Path.GetRelativePath(context.RepoRoot, handoffWrite.Path).Replace('\\', '/');
+            }
+
             publishYamlPatched = WritePublishArtifact(
                 publishYamlPath,
                 packetDirectory,
                 githubBodyPath,
                 executionUnit!,
                 issueNumber,
-                outcome.IssueUrl);
+                outcome.IssueUrl,
+                authorization,
+                externalHandoffRef,
+                publishedAt);
 
             runsAppended = AppendIssueCreatedRunEvent(
                 runLogPath,
@@ -541,7 +652,9 @@ internal static class IssuePublishFlowCommand
                 repo!,
                 issueNumber,
                 outcome.IssueUrl,
-                publishedAt);
+                publishedAt,
+                authorization,
+                externalHandoffRef);
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
@@ -560,7 +673,10 @@ internal static class IssuePublishFlowCommand
                 publishYamlPatched: false,
                 runsAppended: false,
                 error: $"GitHub issue {outcome.IssueUrl} was created but parent durable state could not be updated: {exception.Message}. Reconcile via 'intent-cli automation reconcile' before re-running.",
-                titleSource: titleSource);
+                titleSource: titleSource,
+                authorization: authorization,
+                externalHandoffRecorded: handoffWrite?.Succeeded,
+                externalHandoffPath: externalHandoffRef);
             EmitResult(writer, partialResult, format);
             return 1;
         }
@@ -607,6 +723,30 @@ internal static class IssuePublishFlowCommand
             return 1;
         }
 
+        if (authorization.IsAuthoringOnly && handoffWrite?.Succeeded != true)
+        {
+            var handoffResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: outcome.IssueUrl,
+                issueNumber: issueNumber,
+                queueStatePatched: queueStatePatched,
+                publishYamlPatched: publishYamlPatched,
+                runsAppended: runsAppended,
+                error: "authoring-only publish created the GitHub issue but could not record published-external-handoff; refusing to report a complete publish.",
+                titleSource: titleSource,
+                authorization: authorization,
+                externalHandoffRecorded: false,
+                externalHandoffPath: externalHandoffRef);
+            EmitResult(writer, handoffResult, format);
+            return 1;
+        }
+
         var successResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
             packetExists: true,
             githubBodyPresent: true,
@@ -622,7 +762,10 @@ internal static class IssuePublishFlowCommand
             runsAppended: runsAppended,
             error: null,
             titleSource: titleSource,
-            extraWarnings: analysis.Warnings);
+            extraWarnings: analysis.Warnings,
+            authorization: authorization,
+            externalHandoffRecorded: handoffWrite?.Succeeded,
+            externalHandoffPath: externalHandoffRef);
         EmitResult(writer, successResult, format);
         return 0;
     }
@@ -655,13 +798,66 @@ internal static class IssuePublishFlowCommand
         string? title,
         string? titleSource,
         PublishDurableArtifactAnalysis analysis,
-        CliContext context)
+        CliContext context,
+        IssuePublishAuthorization authorization)
     {
         var canonicalIssueNumber = analysis.CanonicalIssueNumber;
         var canonicalIssueUrl = analysis.CanonicalIssueUrl!;
         var restoredAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var restoredArtifacts = new HashSet<string>(StringComparer.Ordinal);
         var writeProblems = new List<string>();
+        string? externalHandoffRef = null;
+        var externalHandoffRecorded = !authorization.IsAuthoringOnly;
+
+        if (authorization.IsAuthoringOnly)
+        {
+            var existingHandoff = PublishedExternalHandoffStore.Read(context.RepoRoot, executionUnit);
+            if (canonicalIssueNumber is { } existingIssueNumber
+                && existingHandoff.Record is { } existingRecord
+                && PublishedExternalHandoffStore.MatchesIssue(
+                    existingRecord,
+                    executionUnit,
+                    repo,
+                    existingIssueNumber,
+                    canonicalIssueUrl))
+            {
+                externalHandoffRecorded = true;
+                externalHandoffRef = Path.GetRelativePath(context.RepoRoot, existingHandoff.Path).Replace('\\', '/');
+            }
+            else if (existingHandoff.Error is not null)
+            {
+                writeProblems.Add($"published-external-handoff could not be trusted: {existingHandoff.Error}");
+            }
+            else
+            {
+                var handoff = new PublishedExternalHandoff
+                {
+                    RecordKind = PublishedExternalHandoffStore.RecordKind,
+                    ExecutionUnit = executionUnit,
+                    Domain = domain,
+                    Team = authorization.Team,
+                    TeamMode = TeamMode.AuthoringOnly,
+                    ActorRole = authorization.ActorRole!,
+                    DestinationOwnership = authorization.DestinationOwnership!,
+                    TargetRepo = repo,
+                    IssueNumber = canonicalIssueNumber,
+                    IssueUrl = canonicalIssueUrl,
+                    OperatorAcceptanceEvidence = authorization.OperatorAcceptanceEvidence!,
+                    RecordedAt = restoredAt,
+                };
+                var handoffWrite = PublishedExternalHandoffStore.Write(context.RepoRoot, handoff);
+                if (handoffWrite.Succeeded)
+                {
+                    externalHandoffRecorded = true;
+                    externalHandoffRef = Path.GetRelativePath(context.RepoRoot, handoffWrite.Path).Replace('\\', '/');
+                }
+                else
+                {
+                    writeProblems.Add(handoffWrite.Error
+                        ?? "published-external-handoff could not be recorded.");
+                }
+            }
+        }
 
         foreach (var gap in analysis.Gaps)
         {
@@ -693,7 +889,15 @@ internal static class IssuePublishFlowCommand
                     try
                     {
                         if (WritePublishArtifact(
-                                publishYamlPath, packetDirectory, githubBodyPath, executionUnit, canonicalIssueNumber, canonicalIssueUrl))
+                                publishYamlPath,
+                                packetDirectory,
+                                githubBodyPath,
+                                executionUnit,
+                                canonicalIssueNumber,
+                                canonicalIssueUrl,
+                                authorization,
+                                externalHandoffRef,
+                                restoredAt))
                         {
                             restoredArtifacts.Add("publish_yaml");
                         }
@@ -712,7 +916,14 @@ internal static class IssuePublishFlowCommand
                     try
                     {
                         if (AppendIssueCreatedRunEvent(
-                                runLogPath, executionUnit, repo, canonicalIssueNumber, canonicalIssueUrl, restoredAt))
+                                runLogPath,
+                                executionUnit,
+                                repo,
+                                canonicalIssueNumber,
+                                canonicalIssueUrl,
+                                restoredAt,
+                                authorization,
+                                externalHandoffRef))
                         {
                             restoredArtifacts.Add("runs");
                         }
@@ -736,7 +947,10 @@ internal static class IssuePublishFlowCommand
         // caught here rather than masked.
         var reAnalysis = PublishDurableArtifactAnalyzer.Analyze(
             executionUnit, repo, queueStatePath, publishYamlPath, runLogPath, context, domain);
-        var fullySynced = reAnalysis.HasExistingIssue && !reAnalysis.IsInvalid && reAnalysis.Gaps.Count == 0;
+        var fullySynced = reAnalysis.HasExistingIssue
+            && !reAnalysis.IsInvalid
+            && reAnalysis.Gaps.Count == 0
+            && externalHandoffRecorded;
 
         string? error = null;
         if (!fullySynced)
@@ -753,6 +967,10 @@ internal static class IssuePublishFlowCommand
             if (writeProblems.Count > 0)
             {
                 remaining.Add(string.Join("; ", writeProblems));
+            }
+            if (authorization.IsAuthoringOnly && !externalHandoffRecorded)
+            {
+                remaining.Add("published-external-handoff is missing or invalid");
             }
 
             error = $"GitHub issue {canonicalIssueUrl} already exists but parent durable state could not be fully "
@@ -777,7 +995,10 @@ internal static class IssuePublishFlowCommand
             runsAppended: restoredArtifacts.Contains("runs"),
             error: error,
             titleSource: titleSource,
-            extraWarnings: analysis.Warnings.Concat(reAnalysis.Warnings).Distinct(StringComparer.Ordinal).ToArray());
+            extraWarnings: analysis.Warnings.Concat(reAnalysis.Warnings).Distinct(StringComparer.Ordinal).ToArray(),
+            authorization: authorization,
+            externalHandoffRecorded: externalHandoffRecorded,
+            externalHandoffPath: externalHandoffRef);
         EmitResult(writer, result, format);
         return fullySynced ? 0 : 1;
     }
@@ -914,7 +1135,10 @@ internal static class IssuePublishFlowCommand
         string githubBodyPath,
         string executionUnit,
         int? issueNumber,
-        string issueUrl)
+        string issueUrl,
+        IssuePublishAuthorization authorization,
+        string? externalHandoffRef,
+        DateTimeOffset recordedAt)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(publishYamlPath)!);
 
@@ -927,6 +1151,11 @@ internal static class IssuePublishFlowCommand
             CreatedIssueNumber = issueNumber,
             CreatedIssueUrl = issueUrl,
             PublishedLabelName = null,
+            TeamMode = authorization.IsAuthoringOnly ? TeamMode.AuthoringOnly : null,
+            ActorRole = authorization.ActorRole,
+            OperatorAcceptanceEvidence = authorization.OperatorAcceptanceEvidence,
+            OperatorAcceptanceRecordedAt = authorization.IsAuthoringOnly ? recordedAt.ToString("O") : null,
+            ExternalHandoffRef = externalHandoffRef,
         };
 
         File.WriteAllText(publishYamlPath, IssuePublishArtifactYaml.Serialize(artifact));
@@ -939,7 +1168,9 @@ internal static class IssuePublishFlowCommand
         string repo,
         int? issueNumber,
         string issueUrl,
-        DateTimeOffset publishedAt)
+        DateTimeOffset publishedAt,
+        IssuePublishAuthorization authorization,
+        string? externalHandoffRef)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(runLogPath)!);
 
@@ -955,6 +1186,10 @@ internal static class IssuePublishFlowCommand
             By = IssueCreatedEventBy,
             LinkedIssue = linkedIssueDescriptor,
             Reason = issueUrl,
+            TeamMode = authorization.IsAuthoringOnly ? TeamMode.AuthoringOnly : null,
+            ActorRole = authorization.ActorRole,
+            OperatorAcceptanceEvidence = authorization.OperatorAcceptanceEvidence,
+            ExternalHandoffRef = externalHandoffRef,
         };
 
         var line = RunLogSerializer.SerializeLine(runEvent);
@@ -995,7 +1230,11 @@ internal static class IssuePublishFlowCommand
         string? error,
         string? titleSource = null,
         IReadOnlyList<string>? wouldRestore = null,
-        IReadOnlyList<string>? extraWarnings = null)
+        IReadOnlyList<string>? extraWarnings = null,
+        IssuePublishAuthorization? authorization = null,
+        bool? externalHandoffRecorded = null,
+        string? externalHandoffPath = null,
+        string? cause = null)
     {
         var nextSteps = new List<string>();
         if (created)
@@ -1024,6 +1263,11 @@ internal static class IssuePublishFlowCommand
             GithubBodyPresent = githubBodyPresent,
             MissingContractSections = missingSections,
             Mode = write ? ModeWrite : ModeDryRun,
+            TeamMode = authorization?.IsAuthoringOnly == true ? TeamMode.AuthoringOnly : null,
+            ActorRole = authorization?.IsAuthoringOnly == true ? authorization.ActorRole : null,
+            OperatorAcceptanceEvidence = authorization?.IsAuthoringOnly == true ? authorization.OperatorAcceptanceEvidence : null,
+            ExternalHandoffRecorded = authorization?.IsAuthoringOnly == true ? externalHandoffRecorded : null,
+            ExternalHandoffPath = authorization?.IsAuthoringOnly == true ? externalHandoffPath : null,
             Title = title,
             Created = created,
             Idempotent = idempotent,
@@ -1050,7 +1294,8 @@ internal static class IssuePublishFlowCommand
                 .Concat(extraWarnings ?? Array.Empty<string>())
                 .ToArray(),
             WouldRestore = wouldRestore,
-            Error = error
+            Error = error,
+            Cause = cause
         };
     }
 
@@ -1078,6 +1323,17 @@ internal static class IssuePublishFlowCommand
         writer.WriteLine($"- packet exists: {(result.PacketExists ? "yes" : "no")}");
         writer.WriteLine($"- github-body.md present: {(result.GithubBodyPresent ? "yes" : "no")}");
         writer.WriteLine($"- mode: {result.Mode}");
+        if (result.TeamMode is not null)
+        {
+            writer.WriteLine($"- team_mode: {result.TeamMode}");
+            writer.WriteLine($"- actor_role: {result.ActorRole}");
+            writer.WriteLine($"- operator_acceptance_evidence: {result.OperatorAcceptanceEvidence}");
+            writer.WriteLine($"- external_handoff_recorded: {(result.ExternalHandoffRecorded == true ? "yes" : "no")}");
+            if (result.ExternalHandoffPath is not null)
+            {
+                writer.WriteLine($"- external_handoff_path: {result.ExternalHandoffPath}");
+            }
+        }
         if (!string.IsNullOrWhiteSpace(result.Title))
         {
             writer.WriteLine($"- title: {result.Title}");
@@ -1133,6 +1389,10 @@ internal static class IssuePublishFlowCommand
         if (!string.IsNullOrWhiteSpace(result.Error))
         {
             writer.WriteLine($"- error: {result.Error}");
+        }
+        if (!string.IsNullOrWhiteSpace(result.Cause))
+        {
+            writer.WriteLine($"- cause: {result.Cause}");
         }
         writer.WriteLine();
 
@@ -1292,6 +1552,9 @@ internal static class IssuePublishFlowCommand
         out string? repo,
         out string? domainOverride,
         out string? team,
+        out string? actorRole,
+        out string? operatorAcceptance,
+        out string? handoffDestination,
         out bool write,
         out string format,
         out string error)
@@ -1300,6 +1563,9 @@ internal static class IssuePublishFlowCommand
         repo = null;
         domainOverride = null;
         team = null;
+        actorRole = null;
+        operatorAcceptance = null;
+        handoffDestination = null;
         write = false;
         format = FormatMarkdown;
         error = string.Empty;
@@ -1339,6 +1605,42 @@ internal static class IssuePublishFlowCommand
                     }
 
                     team = args[index + 1];
+                    index++;
+                    break;
+
+                case "--actor-role":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--actor-role requires a value.";
+                        return false;
+                    }
+
+                    actorRole = args[index + 1];
+                    index++;
+                    break;
+
+                case "--operator-acceptance":
+                case "--acceptance-evidence":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = $"{argument} requires a value.";
+                        return false;
+                    }
+
+                    operatorAcceptance = args[index + 1];
+                    index++;
+                    break;
+
+                case "--handoff-destination":
+                case "--external-handoff-destination":
+                case "--destination-ownership":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = $"{argument} requires a value.";
+                        return false;
+                    }
+
+                    handoffDestination = args[index + 1];
                     index++;
                     break;
 
@@ -1395,6 +1697,59 @@ internal static class IssuePublishFlowCommand
             return false;
         }
 
+        return true;
+    }
+
+    private static bool TryBuildAuthorization(
+        TeamModeResolution resolution,
+        string? team,
+        string? actorRole,
+        string? operatorAcceptance,
+        string? handoffDestination,
+        out IssuePublishAuthorization authorization,
+        out string error)
+    {
+        error = string.Empty;
+        if (!resolution.IsAuthoringOnly)
+        {
+            authorization = new IssuePublishAuthorization
+            {
+                Mode = TeamMode.Delivery,
+                Team = team ?? resolution.Entry?.Team,
+            };
+            return true;
+        }
+
+        var effectiveActorRole = string.IsNullOrWhiteSpace(actorRole) ? "design" : actorRole.Trim();
+        if (!string.Equals(effectiveActorRole, "design", StringComparison.Ordinal))
+        {
+            authorization = default!;
+            error = "not-applicable-team-mode: authoring-only publish-flow accepts only actor_role 'design'; delivery/orchestration impersonation is refused.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(operatorAcceptance))
+        {
+            authorization = default!;
+            error = "authoring-only publish-flow requires --operator-acceptance evidence from the operator.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(handoffDestination))
+        {
+            authorization = default!;
+            error = "authoring-only publish-flow requires --handoff-destination ownership for the published issue.";
+            return false;
+        }
+
+        authorization = new IssuePublishAuthorization
+        {
+            Mode = TeamMode.AuthoringOnly,
+            Team = team ?? resolution.Entry?.Team,
+            ActorRole = effectiveActorRole,
+            OperatorAcceptanceEvidence = operatorAcceptance.Trim(),
+            DestinationOwnership = handoffDestination.Trim(),
+        };
         return true;
     }
 
@@ -1830,6 +2185,26 @@ internal sealed record IssuePublishFlowResult
     [JsonPropertyName("mode")]
     public required string Mode { get; init; }
 
+    [JsonPropertyName("team_mode")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TeamMode { get; init; }
+
+    [JsonPropertyName("actor_role")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ActorRole { get; init; }
+
+    [JsonPropertyName("operator_acceptance_evidence")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OperatorAcceptanceEvidence { get; init; }
+
+    [JsonPropertyName("external_handoff_recorded")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ExternalHandoffRecorded { get; init; }
+
+    [JsonPropertyName("external_handoff_path")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExternalHandoffPath { get; init; }
+
     [JsonPropertyName("title")]
     public string? Title { get; init; }
 
@@ -1901,4 +2276,7 @@ internal sealed record IssuePublishFlowResult
 
     [JsonPropertyName("error")]
     public string? Error { get; init; }
+
+    [JsonPropertyName("cause")]
+    public string? Cause { get; init; }
 }

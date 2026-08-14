@@ -37,7 +37,43 @@ internal sealed record TeamModeResolution
     public required TeamModeSource Source { get; init; }
     public TeamModeEntry? Entry { get; init; }
 
+    /// <summary>
+    /// The team scope that supplied the resolution. This is populated for a
+    /// unique team-scoped fallback even when the caller omitted <c>--team</c>.
+    /// </summary>
+    public string? ResolvedTeam => Entry?.Team;
+
+    /// <summary>
+    /// True when the caller omitted <c>--team</c> and the domain had exactly
+    /// one team-scoped record, so that record supplied the mode judgment.
+    /// </summary>
+    public bool UsedUniqueTeamFallback { get; init; }
+
     public bool IsAuthoringOnly => TeamMode.IsAuthoringOnly(Mode);
+}
+
+/// <summary>
+/// Named fail-closed outcome for a mode lookup that cannot identify one team.
+/// A team-scoped authoring-only record must never disappear into the delivery
+/// default merely because a caller omitted the optional <c>--team</c> flag.
+/// </summary>
+internal sealed class TeamModeResolutionException : InvalidOperationException
+{
+    public const string AmbiguousTeamScopeCode = "team-mode-ambiguous";
+
+    public TeamModeResolutionException(string domain, IReadOnlyList<string> teams)
+        : base(
+            $"{AmbiguousTeamScopeCode}: --team was omitted for domain '{domain}', but multiple team-scoped "
+            + $"team-mode records match ({string.Join(", ", teams.Select(team => $"'{team}'"))}); "
+            + "refusing to guess. Supply --team explicitly.")
+    {
+        Domain = domain;
+        Teams = teams;
+    }
+
+    public string Domain { get; }
+
+    public IReadOnlyList<string> Teams { get; }
 }
 
 internal sealed record TeamModeTransition
@@ -169,18 +205,52 @@ internal static class TeamModeStore
             return new TeamModeResolution { Mode = TeamMode.Default, Source = TeamModeSource.Default };
         }
 
-        var entry = team is null
-            ? state.Entries.FirstOrDefault(candidate =>
-                string.Equals(candidate.Domain, domain, StringComparison.Ordinal) && candidate.Team is null)
-            : state.Entries.FirstOrDefault(candidate =>
+        var requestedTeam = string.IsNullOrWhiteSpace(team) ? null : team;
+        var domainEntry = state.Entries.FirstOrDefault(candidate =>
+            string.Equals(candidate.Domain, domain, StringComparison.Ordinal) && candidate.Team is null);
+
+        TeamModeEntry? entry;
+        var usedUniqueTeamFallback = false;
+        if (requestedTeam is null)
+        {
+            entry = domainEntry;
+            if (entry is null)
+            {
+                var teamScopedEntries = state.Entries
+                    .Where(candidate =>
+                        string.Equals(candidate.Domain, domain, StringComparison.Ordinal)
+                        && candidate.Team is not null)
+                    .OrderBy(candidate => candidate.Team, StringComparer.Ordinal)
+                    .ToArray();
+
+                if (teamScopedEntries.Length > 1)
+                {
+                    throw new TeamModeResolutionException(
+                        domain,
+                        teamScopedEntries.Select(candidate => candidate.Team!).ToArray());
+                }
+
+                entry = teamScopedEntries.SingleOrDefault();
+                usedUniqueTeamFallback = entry is not null;
+            }
+        }
+        else
+        {
+            entry = state.Entries.FirstOrDefault(candidate =>
                 string.Equals(candidate.Domain, domain, StringComparison.Ordinal)
-                && string.Equals(candidate.Team, team, StringComparison.Ordinal))
-                ?? state.Entries.FirstOrDefault(candidate =>
-                    string.Equals(candidate.Domain, domain, StringComparison.Ordinal) && candidate.Team is null);
+                && string.Equals(candidate.Team, requestedTeam, StringComparison.Ordinal))
+                ?? domainEntry;
+        }
 
         return entry is null
             ? new TeamModeResolution { Mode = TeamMode.Default, Source = TeamModeSource.Default }
-            : new TeamModeResolution { Mode = entry.Mode, Source = TeamModeSource.Recorded, Entry = entry };
+            : new TeamModeResolution
+            {
+                Mode = entry.Mode,
+                Source = TeamModeSource.Recorded,
+                Entry = entry,
+                UsedUniqueTeamFallback = usedUniqueTeamFallback,
+            };
     }
 
     public static string Serialize(TeamModeState state)

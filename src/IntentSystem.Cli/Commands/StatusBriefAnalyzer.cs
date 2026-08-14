@@ -13,13 +13,14 @@ internal static class StatusBriefAnalyzer
 {
     private const int RecentEventLimit = 3;
 
-    public static StatusBriefSummary Analyze(CliContext context, string? domainOverride)
+    public static StatusBriefSummary Analyze(CliContext context, string? domainOverride, string? team = null)
     {
         ArgumentNullException.ThrowIfNull(context);
 
         var domain = string.IsNullOrWhiteSpace(domainOverride)
             ? context.Config.Project.Domain
             : domainOverride;
+        var capabilityMatrix = TeamModeCapabilityMatrix.Resolve(context.RepoRoot, domain, team);
 
         var notes = new List<string>();
         var queueStatePath = context.GetQueueStatePath();
@@ -61,6 +62,14 @@ internal static class StatusBriefAnalyzer
                 StringComparer.Ordinal);
 
             CollectWipUnits(queueState, inFlight, reviewUnits);
+            if (capabilityMatrix.IsAuthoringOnly)
+            {
+                // Worker/review WIP has no seat in authoring-only mode. Keep
+                // queued/readiness evidence and the shared matrix, while
+                // avoiding a false worker-lane recommendation.
+                inFlight.Clear();
+                reviewUnits.Clear();
+            }
 
             // Deterministic next candidate: first Queued item whose dependencies
             // are all satisfied within the local queue. We keep queue-state's
@@ -94,6 +103,7 @@ internal static class StatusBriefAnalyzer
         return new StatusBriefSummary
         {
             Domain = domain,
+            CapabilityMatrix = capabilityMatrix.IsAuthoringOnly ? capabilityMatrix : null,
             QueueStatePath = queueStatePath,
             QueueStatePresent = queueStatePresent,
             QueueStateReadable = queueStateReadable,

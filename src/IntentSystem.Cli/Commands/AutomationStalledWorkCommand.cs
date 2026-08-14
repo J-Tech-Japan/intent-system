@@ -495,7 +495,7 @@ internal static class AutomationStalledWorkCommand
     };
 
     private const string UsageLine =
-        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--knowledge-writeback-since <iso-8601>] [--guide-reachability-since <iso-8601>] [--format json|markdown]";
+        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--team <name>] [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--knowledge-writeback-since <iso-8601>] [--guide-reachability-since <iso-8601>] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -509,7 +509,7 @@ internal static class AutomationStalledWorkCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var domain, out var repo, out var staleMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var repairSilentMinutes, out var knowledgeWriteBackSince, out var guideReachabilitySince, out var format, out var error))
+        if (!TryParseArguments(args, out var domain, out var repo, out var team, out var staleMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var repairSilentMinutes, out var knowledgeWriteBackSince, out var guideReachabilitySince, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -519,7 +519,12 @@ internal static class AutomationStalledWorkCommand
         AutomationStalledWorkResult result;
         try
         {
-            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes, repairSilentMinutes, knowledgeWriteBackSince, guideReachabilitySince);
+            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes, repairSilentMinutes, knowledgeWriteBackSince, guideReachabilitySince, team);
+        }
+        catch (TeamModeResolutionException exception)
+        {
+            writer.WriteLine(exception.Message);
+            return 1;
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
@@ -564,12 +569,14 @@ internal static class AutomationStalledWorkCommand
         int backlogIdleMinutes = DefaultBacklogIdleMinutes,
         int repairSilentMinutes = DefaultRepairSilentMinutes,
         DateTimeOffset? knowledgeWriteBackSince = null,
-        DateTimeOffset? guideReachabilitySince = null)
+        DateTimeOffset? guideReachabilitySince = null,
+        string? team = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
 
+        var capabilityMatrix = TeamModeCapabilityMatrix.Resolve(context.RepoRoot, domain, team);
         var now = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var warnings = new List<string>();
         GitHubApiRequestException? githubApiFailure = null;
@@ -617,12 +624,24 @@ internal static class AutomationStalledWorkCommand
         var items = new List<StalledWorkItem>();
         var excluded = new List<StalledWorkExcluded>();
 
-        var openPendingDelegations = NotifyPendingDelegationStore.ReadOpen(
-            context.RepoRoot,
-            domain,
-            team: null,
-            out var pendingDelegationError)
-            .ToArray();
+        IReadOnlyList<NotifyPendingDelegation> openPendingDelegations;
+        string? pendingDelegationError;
+        if (capabilityMatrix.IsApplicable(TeamModeCapabilityClasses.Delegation))
+        {
+            openPendingDelegations = NotifyPendingDelegationStore.ReadOpen(
+                context.RepoRoot,
+                domain,
+                team,
+                out pendingDelegationError).ToArray();
+        }
+        else
+        {
+            // Authoring-only has no worker delegation lane, so do not even
+            // consult that store. The publish/handoff collector below remains
+            // active because it is an authoring front-door obligation.
+            openPendingDelegations = Array.Empty<NotifyPendingDelegation>();
+            pendingDelegationError = null;
+        }
         if (pendingDelegationError is not null)
         {
             warnings.Add($"pending delegation store could not be read: {pendingDelegationError}");
@@ -633,7 +652,7 @@ internal static class AutomationStalledWorkCommand
         // result-level partial marker is applied below without losing them.
         CollectStaleClaims(context, now, staleMinutes, items, warnings);
 
-        CollectPublishedNotDelegated(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
+        CollectPublishedNotDelegated(context, domain, candidateDomains, openIssues, openPrs, repo, now, capabilityMatrix, items, excluded);
         var branchLaneQueueState = TryLoadQueueStateForBranchLaneRouting(context, domain, repo, warnings);
         var closedPrs = branchLaneQueueState?.Items.Any(item => item.RoutingSnapshot is not null) == true
             ? ReadGitHub(() => lister.ListClosedPullRequests(
@@ -696,7 +715,7 @@ internal static class AutomationStalledWorkCommand
             items,
             excluded,
             warnings);
-        CollectPendingDelegations(openPendingDelegations, now, items);
+        CollectPendingDelegations(openPendingDelegations, now, capabilityMatrix, items);
 
         var operatorAttention = CollectOperatorAttention(context, domain, now, items);
 
@@ -715,6 +734,7 @@ internal static class AutomationStalledWorkCommand
                 or KindCiPending or KindCiAllGreenNotTransitioned or KindCiFailedNotTransitioned or KindCiHeadMoved
                 or KindBranchRoutingConflict or KindAwaitingOperatorMerge or KindOperatorMergeDetected
                 || item.AgeMinutes >= staleMinutes)
+            .Where(item => capabilityMatrix.IsStalledKindApplicable(item.Kind))
             .OrderByDescending(item => item.AgeMinutes)
             .ToArray();
 
@@ -728,10 +748,11 @@ internal static class AutomationStalledWorkCommand
         return new AutomationStalledWorkResult
         {
             Domain = domain,
+            CapabilityMatrix = capabilityMatrix.IsAuthoringOnly ? capabilityMatrix : null,
             Repo = repo,
             StaleMinutesThreshold = staleMinutes,
             BacklogIdleMinutesThreshold = backlogIdleMinutes,
-            OpenPendingDelegations = openPendingDelegations.Length,
+            OpenPendingDelegations = openPendingDelegations.Count,
             // G589: a still-pending CI item remains visible, but it must not
             // by itself trip a heartbeat/watcher wake. The kind changes when
             // the exact head becomes terminal, and that terminal item is the
@@ -846,8 +867,14 @@ internal static class AutomationStalledWorkCommand
     private static void CollectPendingDelegations(
         IReadOnlyList<NotifyPendingDelegation> openDelegations,
         DateTimeOffset now,
+        TeamModeCapabilityMatrix capabilityMatrix,
         List<StalledWorkItem> items)
     {
+        if (!capabilityMatrix.IsApplicable(TeamModeCapabilityClasses.Delegation))
+        {
+            return;
+        }
+
         foreach (var delegation in openDelegations)
         {
             var ageMinutes = Math.Max(0, (int)Math.Floor((now - delegation.DispatchedAt).TotalMinutes));
@@ -1499,6 +1526,7 @@ internal static class AutomationStalledWorkCommand
         IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
         string repo,
         DateTimeOffset now,
+        TeamModeCapabilityMatrix capabilityMatrix,
         List<StalledWorkItem> items,
         List<StalledWorkExcluded> excluded)
     {
@@ -1548,6 +1576,30 @@ internal static class AutomationStalledWorkCommand
                     Detail = detail,
                 });
                 continue;
+            }
+
+            if (capabilityMatrix.IsAuthoringOnly)
+            {
+                var handoff = PublishedExternalHandoffStore.Read(context.RepoRoot, resolution.ExecutionUnit);
+                if (handoff.Record is { } record
+                    && PublishedExternalHandoffStore.MatchesIssue(
+                        record,
+                        resolution.ExecutionUnit,
+                        repo,
+                        issue.Number,
+                        issue.Url))
+                {
+                    excluded.Add(new StalledWorkExcluded
+                    {
+                        Kind = KindPublishedNotDelegated,
+                        ExecutionUnit = resolution.ExecutionUnit,
+                        Issue = new StalledWorkRef { Number = issue.Number, Url = issue.Url },
+                        Pr = null,
+                        Reason = "published-external-handoff-recorded",
+                        Detail = $"authoring-only publish has recorded external handoff ownership at '{handoff.Path}'; no worker delegation is expected.",
+                    });
+                    continue;
+                }
             }
 
             items.Add(new StalledWorkItem
@@ -4154,6 +4206,7 @@ internal static class AutomationStalledWorkCommand
         string[] args,
         out string? domain,
         out string? repo,
+        out string? team,
         out int staleMinutes,
         out int claimedSilentMinutes,
         out int backlogIdleMinutes,
@@ -4165,6 +4218,7 @@ internal static class AutomationStalledWorkCommand
     {
         domain = null;
         repo = null;
+        team = null;
         staleMinutes = 0;
         claimedSilentMinutes = DefaultClaimedSilentMinutes;
         backlogIdleMinutes = DefaultBacklogIdleMinutes;
@@ -4193,6 +4247,14 @@ internal static class AutomationStalledWorkCommand
                         return false;
                     }
                     repo = args[++index].Trim();
+                    break;
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a value.";
+                        return false;
+                    }
+                    team = args[++index].Trim();
                     break;
                 case "--stale-minutes":
                     if (index + 1 >= args.Length
@@ -4506,6 +4568,14 @@ internal sealed record AutomationStalledWorkResult
 {
     [JsonPropertyName("domain")]
     public required string Domain { get; init; }
+
+    /// <summary>
+    /// G692: emitted only for an explicitly selected authoring-only team. The
+    /// default delivery result keeps its established JSON shape.
+    /// </summary>
+    [JsonPropertyName("capability_matrix")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TeamModeCapabilityMatrix? CapabilityMatrix { get; init; }
 
     [JsonPropertyName("repo")]
     public required string Repo { get; init; }

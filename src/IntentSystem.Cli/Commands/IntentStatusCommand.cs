@@ -20,7 +20,7 @@ internal static class IntentStatusCommand
     private const int LatestCompletedLimit = 5;
 
     private const string UsageLine =
-        "Usage: intent-cli intent status [--domain <name>] [--format markdown|json]";
+        "Usage: intent-cli intent status [--domain <name>] [--team <name>] [--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -34,14 +34,23 @@ internal static class IntentStatusCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var domainOverride, out var format, out var error))
+        if (!TryParseArguments(args, out var domainOverride, out var team, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
             return 1;
         }
 
-        var result = Analyze(context, domainOverride);
+        IntentStatusResult result;
+        try
+        {
+            result = Analyze(context, domainOverride, team);
+        }
+        catch (TeamModeResolutionException exception)
+        {
+            writer.WriteLine(exception.Message);
+            return 1;
+        }
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -56,11 +65,12 @@ internal static class IntentStatusCommand
         return 0;
     }
 
-    internal static IntentStatusResult Analyze(CliContext context, string? domainOverride)
+    internal static IntentStatusResult Analyze(CliContext context, string? domainOverride, string? team = null)
     {
         var domain = string.IsNullOrWhiteSpace(domainOverride)
             ? context.Config.Project.Domain
             : domainOverride!;
+        var capabilityMatrix = TeamModeCapabilityMatrix.Resolve(context.RepoRoot, domain, team);
 
         var notes = new List<string>();
         var queueStatePath = context.GetQueueStatePath();
@@ -109,7 +119,10 @@ internal static class IntentStatusCommand
                     case QueueItemState.Active:
                     case QueueItemState.Review:
                     case QueueItemState.Fixing:
-                        wip.Add(IntentStatusItem.From(item));
+                        if (capabilityMatrix.IsApplicable(capabilityMatrix.ClassForQueueState(item.State)))
+                        {
+                            wip.Add(IntentStatusItem.From(item));
+                        }
                         break;
 
                     case QueueItemState.Queued:
@@ -148,6 +161,7 @@ internal static class IntentStatusCommand
         return new IntentStatusResult
         {
             Domain = domain,
+            CapabilityMatrix = capabilityMatrix.IsAuthoringOnly ? capabilityMatrix : null,
             QueueStatePath = queueStatePath,
             QueueStatePresent = queueState is not null,
             LatestCompleted = latestCompleted,
@@ -176,6 +190,11 @@ internal static class IntentStatusCommand
         writer.WriteLine();
         writer.WriteLine($"- queue-state path: {result.QueueStatePath}");
         writer.WriteLine($"- queue-state present: {(result.QueueStatePresent ? "yes" : "no")}");
+        if (result.CapabilityMatrix is { } capabilityMatrix)
+        {
+            writer.WriteLine($"- team mode: {capabilityMatrix.TeamMode} ({capabilityMatrix.ModeSource})");
+            writer.WriteLine($"- not applicable: {string.Join(", ", capabilityMatrix.NotApplicableClasses)}");
+        }
         writer.WriteLine();
 
         writer.WriteLine($"## Latest completed (up to {LatestCompletedLimit})");
@@ -239,10 +258,12 @@ internal static class IntentStatusCommand
     private static bool TryParseArguments(
         string[] args,
         out string? domainOverride,
+        out string? team,
         out string format,
         out string error)
     {
         domainOverride = null;
+        team = null;
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -259,6 +280,17 @@ internal static class IntentStatusCommand
                     }
 
                     domainOverride = args[index + 1];
+                    index++;
+                    break;
+
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a value.";
+                        return false;
+                    }
+
+                    team = args[index + 1];
                     index++;
                     break;
 
@@ -309,6 +341,10 @@ internal sealed record IntentStatusResult
 {
     [JsonPropertyName("domain")]
     public required string Domain { get; init; }
+
+    [JsonPropertyName("capability_matrix")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TeamModeCapabilityMatrix? CapabilityMatrix { get; init; }
 
     [JsonPropertyName("queue_state_path")]
     public required string QueueStatePath { get; init; }

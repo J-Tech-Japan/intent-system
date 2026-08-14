@@ -15,6 +15,8 @@ namespace IntentSystem.Cli.Tests;
 [Collection("WorkerNextActionSharedState")]
 public sealed class AutomationStateDoctorTests : IDisposable
 {
+    private const string Domain = "intent-cli";
+    private const string Team = "intent-cli-dev";
     private const string Repo = "J-Tech-Japan/intent-system";
 
     public AutomationStateDoctorTests()
@@ -263,6 +265,55 @@ public sealed class AutomationStateDoctorTests : IDisposable
         using var doc = JsonDocument.Parse(writer.ToString());
         Assert.Equal(0, doc.RootElement.GetProperty("findings").GetArrayLength());
         Assert.Equal(0, doc.RootElement.GetProperty("unsafe_findings").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_NoTeam_UsesUniqueTeamScopedModeForCapabilityMatrix()
+    {
+        using var workspace = new DoctorWorkspace();
+        using var modeWriter = new StringWriter();
+        Assert.Equal(0, TeamModeCommand.ExecuteSet(
+            workspace.Context,
+            ["--domain", Domain, "--team", Team, "--mode", TeamMode.AuthoringOnly, "--write", "--format", "json"],
+            modeWriter));
+        AutomationStateDoctorCommand.CandidateListerFactory = () => new FakeLister(open: Array.Empty<StateDoctorPr>());
+
+        using var writer = new StringWriter();
+        var exit = AutomationStateDoctorCommand.Execute(
+            workspace.Context,
+            ["--repo", Repo, "--domain", Domain, "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var matrix = doc.RootElement.GetProperty("capability_matrix");
+        Assert.Equal(TeamMode.AuthoringOnly, matrix.GetProperty("team_mode").GetString());
+        Assert.Contains(
+            TeamModeCapabilityClasses.Worker,
+            matrix.GetProperty("not_applicable_classes").EnumerateArray().Select(value => value.GetString()));
+    }
+
+    [Fact]
+    public void Execute_NoTeamWithAmbiguousTeamModes_FailsClosedByName()
+    {
+        using var workspace = new DoctorWorkspace();
+        foreach (var team in new[] { Team, "other-team" })
+        {
+            using var modeWriter = new StringWriter();
+            Assert.Equal(0, TeamModeCommand.ExecuteSet(
+                workspace.Context,
+                ["--domain", Domain, "--team", team, "--mode", TeamMode.AuthoringOnly, "--write", "--format", "json"],
+                modeWriter));
+        }
+
+        using var writer = new StringWriter();
+        var exit = AutomationStateDoctorCommand.Execute(
+            workspace.Context,
+            ["--repo", Repo, "--domain", Domain, "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exit);
+        Assert.Contains(TeamModeResolutionException.AmbiguousTeamScopeCode, writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

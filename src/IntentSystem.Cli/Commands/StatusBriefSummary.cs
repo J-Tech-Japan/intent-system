@@ -11,6 +11,10 @@ internal sealed record StatusBriefSummary
     [JsonPropertyName("domain")]
     public required string Domain { get; init; }
 
+    [JsonPropertyName("capability_matrix")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TeamModeCapabilityMatrix? CapabilityMatrix { get; init; }
+
     [JsonPropertyName("queue_state_path")]
     public required string QueueStatePath { get; init; }
 

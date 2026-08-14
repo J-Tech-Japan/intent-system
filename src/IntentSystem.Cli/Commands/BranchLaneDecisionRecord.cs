@@ -31,6 +31,13 @@ internal abstract record BranchLaneDecisionRecord
     public required string Evidence { get; init; }
     [JsonPropertyName("fingerprint")]
     public required string Fingerprint { get; init; }
+
+    /// <summary>
+    /// G692: recorded only when an authoring-only operator confirmation is
+    /// used. Null preserves the G669 delivery record shape.
+    /// </summary>
+    [JsonPropertyName("team_mode")]
+    public string? TeamMode { get; init; }
 }
 
 internal sealed record BranchLaneProposeRecord : BranchLaneDecisionRecord
@@ -62,7 +69,7 @@ internal static class BranchLaneDecisionStore
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
     public static string ResolveRelativePath(string executionUnit, bool confirmation)
@@ -153,6 +160,15 @@ internal static class BranchLaneDecisionStore
         BranchLaneConfirmRecord confirm,
         BranchRoutingSnapshot snapshot,
         out string error)
+        => ValidatePair(propose, confirm, snapshot, "orchestration", expectedTeamMode: null, out error);
+
+    public static bool ValidatePair(
+        BranchLaneProposeRecord propose,
+        BranchLaneConfirmRecord confirm,
+        BranchRoutingSnapshot snapshot,
+        string expectedConfirmRole,
+        string? expectedTeamMode,
+        out string error)
     {
         var problems = new List<string>();
         if (!ValidateRecordMatches(propose, snapshot, out var proposeError))
@@ -171,9 +187,24 @@ internal static class BranchLaneDecisionStore
         {
             problems.Add($"propose actor_role is '{propose.ActorRole}', expected 'design'");
         }
-        if (!string.Equals(confirm.ActorRole, "orchestration", StringComparison.Ordinal))
+        if (!string.Equals(confirm.ActorRole, expectedConfirmRole, StringComparison.Ordinal))
         {
-            problems.Add($"confirm actor_role is '{confirm.ActorRole}', expected 'orchestration'");
+            problems.Add($"confirm actor_role is '{confirm.ActorRole}', expected '{expectedConfirmRole}'");
+        }
+        if (expectedTeamMode is not null)
+        {
+            if (!string.Equals(propose.TeamMode, expectedTeamMode, StringComparison.Ordinal)
+                || !string.Equals(confirm.TeamMode, expectedTeamMode, StringComparison.Ordinal))
+            {
+                problems.Add(
+                    $"authoring lane records must both record team_mode '{expectedTeamMode}'");
+            }
+        }
+        else if (propose.TeamMode is not null
+            && !TeamMode.IsKnown(propose.TeamMode)
+            || confirm.TeamMode is not null && !TeamMode.IsKnown(confirm.TeamMode))
+        {
+            problems.Add("lane decision records contain an unknown team_mode");
         }
         if (confirm.RecordedAt < propose.RecordedAt)
         {
@@ -263,6 +294,10 @@ internal static class BranchLaneDecisionStore
         {
             problems.Add("recorded_at is missing");
         }
+        if (record.TeamMode is not null && !TeamMode.IsKnown(record.TeamMode))
+        {
+            problems.Add($"team_mode is '{record.TeamMode}', expected delivery or authoring-only");
+        }
         if (record is BranchLaneProposeRecord propose && string.IsNullOrWhiteSpace(propose.Rationale))
         {
             problems.Add("rationale is empty");
@@ -305,6 +340,12 @@ internal sealed record BranchLaneDecisionGateResult
 internal static class BranchLaneDecisionGate
 {
     public static BranchLaneDecisionGateResult Evaluate(string repoRoot, string executionUnit)
+        => Evaluate(repoRoot, executionUnit, teamMode: null);
+
+    public static BranchLaneDecisionGateResult Evaluate(
+        string repoRoot,
+        string executionUnit,
+        string? teamMode)
     {
         if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out var executionUnitError))
         {
@@ -352,7 +393,16 @@ internal static class BranchLaneDecisionGate
         {
             return Failure($"lane '{snapshot.LaneId}' requires separate propose and confirm records: {string.Join("; ", missing)}");
         }
-        if (!BranchLaneDecisionStore.ValidatePair(propose.Record!, confirm.Record!, snapshot, out var pairError))
+        var authoringOnly = TeamMode.IsAuthoringOnly(teamMode);
+        var expectedConfirmRole = authoringOnly ? "operator" : "orchestration";
+        var expectedTeamMode = authoringOnly ? TeamMode.AuthoringOnly : null;
+        if (!BranchLaneDecisionStore.ValidatePair(
+                propose.Record!,
+                confirm.Record!,
+                snapshot,
+                expectedConfirmRole,
+                expectedTeamMode,
+                out var pairError))
         {
             return Failure($"lane decision records are invalid: {pairError}");
         }
