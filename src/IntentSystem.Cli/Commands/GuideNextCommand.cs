@@ -236,6 +236,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             InvokingRole = normalizedRole,
             RoleContractFirst = roleContractFirst,
             GuideReachability = SeatCommandGuidanceRegistry.ReachabilityForRole(normalizedRole),
+            TopologyWorkspaceMove = TopologyWorkspaceMoveGuidance.Create(domain, team),
             DesignRoleGuide = GuideDesignThreadCommand.CommandName,
             ShortPrompt = ShortPrompt,
             ReadOnly = true,
@@ -340,6 +341,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             InvokingRole = GuideRoleContractGuidance.Normalize(invokingRole),
             RoleContractFirst = null,
             GuideReachability = SeatCommandGuidanceRegistry.ReachabilityForRole(invokingRole),
+            TopologyWorkspaceMove = TopologyWorkspaceMoveGuidance.Create(domain, team),
             Domain = domain,
             Team = team,
             TargetRepo = string.IsNullOrWhiteSpace(targetRepo) ? null : targetRepo.Trim(),
@@ -438,6 +440,13 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                     $"- role `{route.Role}` reaches `{route.GuideSurface}` for {route.TargetSurface}.");
             }
         }
+        writer.WriteLine();
+        writer.WriteLine("## Topology workspace move reachability (G697)");
+        writer.WriteLine($"- installed recipe: `{result.TopologyWorkspaceMove.GuideSurface}`");
+        writer.WriteLine($"- preview: `{result.TopologyWorkspaceMove.Commands.Preview}`");
+        writer.WriteLine($"- apply: `{result.TopologyWorkspaceMove.Commands.Apply}`");
+        writer.WriteLine($"- validate: `{result.TopologyWorkspaceMove.Commands.Validate}`");
+        writer.WriteLine("- route is read-only guidance; the operator supplies the workspace and pane mapping and explicitly chooses --write.");
         writer.WriteLine();
         writer.WriteLine("## Measured incident record (G672 — preview-through-1.x)");
         writer.WriteLine();
@@ -880,6 +889,13 @@ internal sealed record GuideNextResult
     /// </summary>
     [JsonPropertyName("guide_reachability")]
     public required GuideReachabilityDeclaration GuideReachability { get; init; }
+
+    /// <summary>
+    /// G697: every role-aware next response carries the structured pointer to
+    /// the installed topology move recipe; no role invents workspace ids.
+    /// </summary>
+    [JsonPropertyName("topology_workspace_move")]
+    public required TopologyWorkspaceMoveGuide TopologyWorkspaceMove { get; init; }
 
     [JsonPropertyName("domain")]
     public string? Domain { get; init; }

@@ -229,6 +229,13 @@ internal static class GuideHelpCommand
             Purpose = "G696 versioned per-kind seat command-form registry: sanctioned forms, prefix-matching breakers, and sanctioned alternatives for Claude and Codex. Read-only; it never edits settings or approves commands.",
             Example = "intent-cli guide seat-commands --kind claude|codex --format markdown"
         },
+        // G697: installed, read-only topology workspace-move recipe.
+        new GuideSubcommandEntry
+        {
+            Name = "topology-workspace-move",
+            Purpose = "G697 dry-run-first, CAS-guarded recipe for an operator-supplied topology workspace rebuild: inspect, preview full before/after, explicitly write, validate, and run notify preflight without querying herdr or editing topology JSON by hand.",
+            Example = "intent-cli guide topology-workspace-move --domain <domain> --team <team> --format markdown"
+        },
         new GuideSubcommandEntry
         {
             Name = "closeout",

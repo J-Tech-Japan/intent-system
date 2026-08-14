@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -15,7 +17,7 @@ internal static class SessionLayerTopologyCommand
     private const string FormatMarkdown = "markdown";
 
     private const string Usage =
-        "Usage: intent-cli session-layer topology record|record-profile|show|validate|update-kind|update-field|retire-legacy [options]";
+        "Usage: intent-cli session-layer topology record|record-profile|show|validate|move|update-kind|update-field|retire-legacy [options]";
     private const string RecordUsage =
         "Usage: intent-cli session-layer topology record --domain <name> --team <name> --role <name> --resident herdr "
         + "--workspace-id <id> --pane-id <id> --cwd <path> [--kind <kind>] [--delivery-method inline|file-backed] [--dry-run|--write] "
@@ -27,6 +29,9 @@ internal static class SessionLayerTopologyCommand
         "Usage: intent-cli session-layer topology show --domain <name> --team <name> [--format markdown|json]";
     private const string ValidateUsage =
         "Usage: intent-cli session-layer topology validate --domain <name> --team <name> [--format markdown|json]";
+    private const string MoveUsage =
+        "Usage: intent-cli session-layer topology move --domain <name> --team <name> --workspace-id <new-id> "
+        + "[--pane-map <old-pane>=<new-pane>]... [--current-digest <digest>] [--dry-run|--write] [--format json]";
     private const string UpdateKindUsage =
         "Usage: intent-cli session-layer topology update-kind --domain <name> --team <name> --role <name> "
         + "--current-kind <kind> --new-kind <kind> --confirm-update-kind [--dry-run|--write] [--format json]";
@@ -64,6 +69,7 @@ internal static class SessionLayerTopologyCommand
             writer.WriteLine(RecordUsage);
             writer.WriteLine(ShowUsage);
             writer.WriteLine(ValidateUsage);
+            writer.WriteLine(MoveUsage);
             writer.WriteLine(UpdateKindUsage);
             writer.WriteLine(UpdateFieldUsage);
             writer.WriteLine(RetireLegacyUsage);
@@ -97,6 +103,7 @@ internal static class SessionLayerTopologyCommand
             "record-profile" => ExecuteRecordProfile(context, args[1..], writer),
             "show" => ExecuteShow(context, args[1..], writer),
             "validate" => ExecuteValidate(context, args[1..], writer),
+            "move" => ExecuteMove(context, args[1..], writer),
             "update-kind" => ExecuteUpdateKind(context, args[1..], writer),
             "update-field" => ExecuteUpdateField(context, args[1..], writer),
             "retire-legacy" => ExecuteRetireLegacy(context, args[1..], writer),
@@ -270,6 +277,26 @@ internal static class SessionLayerTopologyCommand
         };
         EmitShow(writer, format, result);
         return 0;
+    }
+
+    internal static int ExecuteMove(CliContext context, string[] args, TextWriter writer)
+    {
+        if (IsHelp(args))
+        {
+            writer.WriteLine(MoveUsage);
+            return 0;
+        }
+
+        if (!TryParseMoveArguments(args, out var request, out var error))
+        {
+            writer.WriteLine(error);
+            writer.WriteLine(MoveUsage);
+            return 1;
+        }
+
+        var result = SessionLayerTopologyWriter.Move(context.RepoRoot, request!);
+        WriteJson(writer, result);
+        return result.Conflict ? 1 : 0;
     }
 
     internal static int ExecuteRecord(CliContext context, string[] args, TextWriter writer)
@@ -783,6 +810,104 @@ internal static class SessionLayerTopologyCommand
         return true;
     }
 
+    private static bool TryParseMoveArguments(
+        string[] args,
+        out SessionLayerTopologyMoveRequest? request,
+        out string error)
+    {
+        request = null;
+        error = string.Empty;
+        string? domain = null;
+        string? team = null;
+        string? workspaceId = null;
+        string? currentDigest = null;
+        var paneMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var requestedWrite = false;
+        var requestedDryRun = false;
+        var format = FormatJson;
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            switch (args[index])
+            {
+                case "--domain":
+                    if (!TryReadValue(args, ref index, "--domain", out domain, out error)) return false;
+                    break;
+                case "--team":
+                    if (!TryReadValue(args, ref index, "--team", out team, out error)) return false;
+                    break;
+                case "--workspace-id":
+                    if (!TryReadValue(args, ref index, "--workspace-id", out workspaceId, out error)) return false;
+                    break;
+                case "--current-digest":
+                    if (!TryReadValue(args, ref index, "--current-digest", out currentDigest, out error)) return false;
+                    break;
+                case "--pane-map":
+                    if (!TryReadValue(args, ref index, "--pane-map", out var mapping, out error)) return false;
+                    var separator = mapping!.IndexOf('=', StringComparison.Ordinal);
+                    if (separator <= 0 || separator == mapping.Length - 1
+                        || mapping.IndexOf('=', separator + 1) >= 0)
+                    {
+                        error = "--pane-map must be an old-pane=new-pane pair.";
+                        return false;
+                    }
+
+                    var oldPane = mapping[..separator].Trim();
+                    var newPane = mapping[(separator + 1)..].Trim();
+                    if (oldPane.Length == 0 || newPane.Length == 0)
+                    {
+                        error = "--pane-map must name non-empty old and new pane ids.";
+                        return false;
+                    }
+
+                    if (!paneMap.TryAdd(oldPane, newPane))
+                    {
+                        error = $"--pane-map names old pane '{oldPane}' more than once.";
+                        return false;
+                    }
+                    break;
+                case "--write":
+                    requestedWrite = true;
+                    break;
+                case "--dry-run":
+                    requestedDryRun = true;
+                    break;
+                case "--format":
+                    if (!TryReadValue(args, ref index, "--format", out var requestedFormat, out error)) return false;
+                    if (!string.Equals(requestedFormat, FormatJson, StringComparison.Ordinal))
+                    {
+                        error = "move supports only '--format json'.";
+                        return false;
+                    }
+                    format = requestedFormat!;
+                    break;
+                default:
+                    error = $"Unknown argument '{args[index]}'.";
+                    return false;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(domain)
+            || string.IsNullOrWhiteSpace(team)
+            || string.IsNullOrWhiteSpace(workspaceId))
+        {
+            error = "--domain, --team, and --workspace-id are required.";
+            return false;
+        }
+
+        request = new SessionLayerTopologyMoveRequest
+        {
+            Domain = domain!,
+            Team = team!,
+            WorkspaceId = workspaceId!,
+            PaneMap = paneMap,
+            CurrentDigest = currentDigest,
+            Write = requestedWrite && !requestedDryRun,
+            Format = format,
+        };
+        return true;
+    }
+
     private static bool TryReadValue(
         string[] args,
         ref int index,
@@ -1024,7 +1149,10 @@ internal static class SessionLayerTopologyWriter
                     request,
                     path,
                     $"Team '{request.Team}' already records workspace_id '{recordedWorkspace}', but role "
-                    + $"'{request.Role}' requested '{request.WorkspaceId}'. Refusing to repair the conflict.");
+                    + $"'{request.Role}' requested '{request.WorkspaceId}'. Refusing to repair the conflict. "
+                    + "For an operator-approved whole-team rebuild, use `intent-cli session-layer topology move "
+                    + "--domain <domain> --team <team> --workspace-id <new-workspace-id> --pane-map "
+                    + "<old-pane>=<new-pane> --write`.");
             }
 
             if (string.IsNullOrWhiteSpace(recordedWorkspace))
@@ -1099,6 +1227,232 @@ internal static class SessionLayerTopologyWriter
                 ? $"Recorded operator-supplied role '{request.Role}' for team '{request.Team}'."
                 : $"Dry-run: would record operator-supplied role '{request.Role}' for team '{request.Team}'.",
         };
+    }
+
+    public static SessionLayerTopologyMoveResult Move(
+        string routingRoot,
+        SessionLayerTopologyMoveRequest request)
+    {
+        var path = NotifyRoleTopologyStore.ResolvePath(routingRoot, request.Domain, request.Team);
+        FileStream? casLock = null;
+        try
+        {
+            if (request.Write)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                casLock = AcquireCasLock(path);
+                EnsureLocalIgnore(routingRoot);
+            }
+
+            if (!File.Exists(path))
+            {
+                return MoveConflict(
+                    request,
+                    path,
+                    currentDigest: null,
+                    $"Topology record '{path}' is absent; refusing to move an unrecorded team.");
+            }
+
+            var originalBytes = File.ReadAllBytes(path);
+            var currentDigest = ComputeTopologyDigest(originalBytes);
+            if (request.CurrentDigest is not null
+                && !string.Equals(request.CurrentDigest, currentDigest, StringComparison.OrdinalIgnoreCase))
+            {
+                return MoveConflict(
+                    request,
+                    path,
+                    currentDigest,
+                    $"Topology move lost its CAS: current digest is '{currentDigest}', not supplied digest "
+                    + $"'{request.CurrentDigest}'. Refusing to overwrite a concurrently changed record.");
+            }
+
+            var validation = NotifyRoleTopologyStore.Validate(routingRoot, request.Domain, request.Team);
+            if (!validation.Valid)
+            {
+                return MoveConflict(
+                    request,
+                    path,
+                    currentDigest,
+                    "Topology record is invalid; refusing move. "
+                    + string.Join(" ", validation.Findings.Select(finding => finding.Message)));
+            }
+
+            var root = JsonNode.Parse(originalBytes) as JsonObject
+                ?? throw new JsonException("the root is not an object");
+            var before = root.DeepClone();
+            var teamError = string.Empty;
+            var rolesError = string.Empty;
+            if (!TrySelectTeamForWrite(root, request.Team, out var team, out teamError)
+                || !TrySelectRolesForWrite(team!, out var roles, out rolesError))
+            {
+                return MoveConflict(
+                    request,
+                    path,
+                    currentDigest,
+                    teamError.Length == 0 ? rolesError : teamError);
+            }
+
+            var recordedWorkspace = ReadTeamWorkspace(team!);
+            if (string.IsNullOrWhiteSpace(recordedWorkspace))
+            {
+                return MoveConflict(
+                    request,
+                    path,
+                    currentDigest,
+                    $"Topology team '{request.Team}' has no unambiguous workspace_id; refusing move.");
+            }
+
+            var recordedPanes = new HashSet<string>(StringComparer.Ordinal);
+            var mappedPanes = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var (roleName, roleNode) in roles!.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+            {
+                if (roleNode is not JsonObject role)
+                {
+                    return MoveConflict(
+                        request,
+                        path,
+                        currentDigest,
+                        $"Role '{roleName}' is not an object; refusing move.");
+                }
+
+                if (!string.Equals(ReadString(role, "resident"), NotifyRecordedRole.HerdrResident, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var oldPane = ReadString(role, "pane_id");
+                if (string.IsNullOrWhiteSpace(oldPane))
+                {
+                    return MoveConflict(
+                        request,
+                        path,
+                        currentDigest,
+                        $"Herdr role '{roleName}' has no pane_id; refusing move.");
+                }
+
+                recordedPanes.Add(oldPane);
+                if (!request.PaneMap.TryGetValue(oldPane, out var newPane))
+                {
+                    return MoveConflict(
+                        request,
+                        path,
+                        currentDigest,
+                        $"No --pane-map was supplied for recorded herdr pane '{oldPane}' (role '{roleName}'); "
+                        + "refusing a partial workspace move.");
+                }
+
+                if (!mappedPanes.Add(newPane))
+                {
+                    return MoveConflict(
+                        request,
+                        path,
+                        currentDigest,
+                        $"--pane-map maps more than one recorded role to new pane '{newPane}'; refusing an "
+                        + "ambiguous workspace move.");
+                }
+
+                var paneWorkspace = WorkspaceFromPane(newPane);
+                if (paneWorkspace is not null
+                    && !string.Equals(paneWorkspace, request.WorkspaceId, StringComparison.Ordinal))
+                {
+                    return MoveConflict(
+                        request,
+                        path,
+                        currentDigest,
+                        $"New pane '{newPane}' belongs to workspace '{paneWorkspace}', not requested workspace "
+                        + $"'{request.WorkspaceId}'; refusing a cross-workspace mapping.");
+                }
+
+                role["workspace_id"] = request.WorkspaceId;
+                role["pane_id"] = newPane;
+            }
+
+            var unknownPanes = request.PaneMap.Keys
+                .Where(oldPane => !recordedPanes.Contains(oldPane))
+                .OrderBy(oldPane => oldPane, StringComparer.Ordinal)
+                .ToArray();
+            if (unknownPanes.Length > 0)
+            {
+                return MoveConflict(
+                    request,
+                    path,
+                    currentDigest,
+                    $"--pane-map names unrecorded old pane(s): {string.Join(", ", unknownPanes)}; refusing a "
+                    + "partial or ambiguous workspace move.");
+            }
+
+            SetTeamWorkspace(team!, request.WorkspaceId);
+            var after = root.DeepClone();
+            var changed = !JsonNode.DeepEquals(before, after);
+
+            if (request.Write && changed)
+            {
+                // The lock serializes canonical writers. The second digest
+                // read is the compare step for writers that do not use this
+                // lock, so a concurrent edit cannot be silently replaced.
+                var beforeWriteDigest = ComputeTopologyDigest(File.ReadAllBytes(path));
+                if (!string.Equals(beforeWriteDigest, currentDigest, StringComparison.OrdinalIgnoreCase))
+                {
+                    return MoveConflict(
+                        request,
+                        path,
+                        beforeWriteDigest,
+                        $"Topology move lost its CAS: current digest is '{beforeWriteDigest}', not the "
+                        + $"snapshot digest '{currentDigest}'. Refusing to overwrite a concurrently changed record.");
+                }
+
+                WriteAtomically(path, root.ToJsonString(FileJsonOptions) + Environment.NewLine);
+            }
+
+            var resultDigest = changed && request.Write
+                ? ComputeTopologyDigest(File.ReadAllBytes(path))
+                : ComputeTopologyDigest(Encoding.UTF8.GetBytes(root.ToJsonString(FileJsonOptions) + Environment.NewLine));
+            return new SessionLayerTopologyMoveResult
+            {
+                Team = request.Team,
+                Mode = request.Write ? "write" : "dry-run",
+                RecordPath = NotifyRoleTopologyStore.RelativePathFor(request.Domain, request.Team),
+                PreviousWorkspaceId = recordedWorkspace,
+                WorkspaceId = request.WorkspaceId,
+                CurrentDigest = currentDigest,
+                ResultDigest = resultDigest,
+                Before = before,
+                After = after,
+                Applied = request.Write && changed,
+                Changed = changed,
+                AlreadyRecorded = !changed,
+                Conflict = false,
+                Summary = request.Write
+                    ? changed
+                        ? $"Moved recorded topology for team '{request.Team}' from workspace '{recordedWorkspace}' "
+                            + $"to '{request.WorkspaceId}' with {recordedPanes.Count} pane mapping(s)."
+                        : $"Topology for team '{request.Team}' already records the requested workspace and panes; idempotent no-op."
+                    : changed
+                        ? $"Dry-run: would move recorded topology for team '{request.Team}' from workspace '{recordedWorkspace}' "
+                            + $"to '{request.WorkspaceId}' with {recordedPanes.Count} pane mapping(s)."
+                        : $"Dry-run: topology for team '{request.Team}' already records the requested workspace and panes; idempotent no-op.",
+            };
+        }
+        catch (IOException exception)
+        {
+            return MoveConflict(
+                request,
+                path,
+                currentDigest: null,
+                $"Topology move could not acquire its CAS lock or read/write the record: {exception.Message}");
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or JsonException)
+        {
+            return MoveConflict(
+                request,
+                path,
+                currentDigest: null,
+                $"Topology move could not read the record: {exception.Message}");
+        }
+        finally
+        {
+            casLock?.Dispose();
+        }
     }
 
     public static SessionLayerTopologyProfileRecordResult RecordProfile(
@@ -1587,7 +1941,7 @@ internal static class SessionLayerTopologyWriter
     private static string? ReadTeamWorkspace(JsonObject team)
     {
         var direct = ReadString(team, "workspace_id");
-        if (direct is not null)
+        if (!string.IsNullOrWhiteSpace(direct))
         {
             return direct;
         }
@@ -1597,14 +1951,75 @@ internal static class SessionLayerTopologyWriter
             return null;
         }
 
-        return workspace switch
+        if (workspace is JsonValue value && value.TryGetValue<string>(out var workspaceId))
         {
-            JsonValue value when value.TryGetValue<string>(out var workspaceId) => workspaceId,
-            JsonObject workspaceObject => ReadString(workspaceObject, "workspace_id")
-                ?? ReadString(workspaceObject, "id"),
-            _ => null,
-        };
+            return workspaceId;
+        }
+
+        if (workspace is JsonObject workspaceObject)
+        {
+            var nestedWorkspaceId = ReadString(workspaceObject, "workspace_id");
+            return !string.IsNullOrWhiteSpace(nestedWorkspaceId)
+                ? nestedWorkspaceId
+                : ReadString(workspaceObject, "id");
+        }
+
+        return null;
     }
+
+    private static void SetTeamWorkspace(JsonObject team, string workspaceId)
+    {
+        if (team.ContainsKey("workspace_id"))
+        {
+            team["workspace_id"] = workspaceId;
+        }
+
+        if (team.TryGetPropertyValue("workspace", out var workspace))
+        {
+            switch (workspace)
+            {
+                case JsonValue:
+                    team["workspace"] = workspaceId;
+                    break;
+                case JsonObject workspaceObject:
+                    if (workspaceObject.ContainsKey("workspace_id"))
+                    {
+                        workspaceObject["workspace_id"] = workspaceId;
+                    }
+                    else if (workspaceObject.ContainsKey("id"))
+                    {
+                        workspaceObject["id"] = workspaceId;
+                    }
+                    else
+                    {
+                        workspaceObject["workspace_id"] = workspaceId;
+                    }
+                    break;
+                default:
+                    team["workspace_id"] = workspaceId;
+                    break;
+            }
+        }
+        else if (!team.ContainsKey("workspace_id"))
+        {
+            team["workspace_id"] = workspaceId;
+        }
+    }
+
+    private static string? WorkspaceFromPane(string paneId)
+    {
+        var separator = paneId.IndexOf(':', StringComparison.Ordinal);
+        return separator > 0 ? paneId[..separator] : null;
+    }
+
+    private static FileStream AcquireCasLock(string path) => new(
+        path + ".lock",
+        FileMode.OpenOrCreate,
+        FileAccess.ReadWrite,
+        FileShare.None);
+
+    private static string ComputeTopologyDigest(byte[] bytes) =>
+        "sha256:" + Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
     private static string? ReadString(JsonObject value, string property) =>
         value.TryGetPropertyValue(property, out var node)
@@ -1655,6 +2070,28 @@ internal static class SessionLayerTopologyWriter
 
         WriteAtomically(path, content);
     }
+
+    private static SessionLayerTopologyMoveResult MoveConflict(
+        SessionLayerTopologyMoveRequest request,
+        string path,
+        string? currentDigest,
+        string summary) => new()
+        {
+            Team = request.Team,
+            Mode = request.Write ? "write" : "dry-run",
+            RecordPath = NotifyRoleTopologyStore.RelativePathFor(request.Domain, request.Team),
+            PreviousWorkspaceId = null,
+            WorkspaceId = request.WorkspaceId,
+            CurrentDigest = currentDigest,
+            ResultDigest = null,
+            Before = null,
+            After = null,
+            Applied = false,
+            Changed = false,
+            AlreadyRecorded = false,
+            Conflict = true,
+            Summary = summary,
+        };
 
     private static SessionLayerTopologyRecordResult Conflict(
         SessionLayerTopologyRecordRequest request,
@@ -1730,6 +2167,35 @@ internal sealed record SessionLayerTopologyRecordResult
     public required string Resident { get; init; }
     public required string Mode { get; init; }
     public required string RecordPath { get; init; }
+    public required bool Applied { get; init; }
+    public required bool Changed { get; init; }
+    public required bool AlreadyRecorded { get; init; }
+    public required bool Conflict { get; init; }
+    public required string Summary { get; init; }
+}
+
+internal sealed record SessionLayerTopologyMoveRequest
+{
+    public required string Domain { get; init; }
+    public required string Team { get; init; }
+    public required string WorkspaceId { get; init; }
+    public required IReadOnlyDictionary<string, string> PaneMap { get; init; }
+    public string? CurrentDigest { get; init; }
+    public required bool Write { get; init; }
+    public required string Format { get; init; }
+}
+
+internal sealed record SessionLayerTopologyMoveResult
+{
+    public required string Team { get; init; }
+    public required string Mode { get; init; }
+    public required string RecordPath { get; init; }
+    public string? PreviousWorkspaceId { get; init; }
+    public required string WorkspaceId { get; init; }
+    public string? CurrentDigest { get; init; }
+    public string? ResultDigest { get; init; }
+    public JsonNode? Before { get; init; }
+    public JsonNode? After { get; init; }
     public required bool Applied { get; init; }
     public required bool Changed { get; init; }
     public required bool AlreadyRecorded { get; init; }

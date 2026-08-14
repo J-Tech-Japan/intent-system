@@ -1439,7 +1439,21 @@ intent-cli session-layer topology update-field --domain <domain> --team <team> -
 intent-cli session-layer topology retire-legacy --domain <domain> --team <team> --evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write
 intent-cli session-layer topology validate --domain <domain> --team <team> --format json
 intent-cli session-layer topology show --domain <domain> --team <team> --format json
+intent-cli guide topology-workspace-move --domain <domain> --team <team> --format markdown
+intent-cli session-layer topology move --domain <domain> --team <team> --workspace-id <new-workspace-id> --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... --dry-run --format json
+intent-cli session-layer topology move --domain <domain> --team <team> --workspace-id <new-workspace-id> --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... [--current-digest <digest>] --write --format json
 ```
+
+G697 adds the intentional workspace rebuild path. The installed
+`guide topology-workspace-move` recipe is reachable from `guide review`,
+`guide next --role review`, and `guide orchestrator-thread`; it renders the
+complete inspect → dry-run preview → explicit write → validate → notify
+preflight sequence. The move requires a complete operator-supplied old-pane to
+new-pane map for herdr roles, holds a CAS lock, compares the topology digest,
+and atomically updates the team and role workspace/pane ids while preserving
+all other role fields. It never queries herdr, creates panes, changes
+membership, or repairs a per-role conflict; that refusal names this move
+command as its sanctioned whole-team transition.
 
 Agent kind is whatever herdr can start: Claude, Codex, Copilot, Cursor, OpenCode,
 and others are examples, not a supported-set restriction. Logical role defaults

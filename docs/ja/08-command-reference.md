@@ -55,6 +55,39 @@ canonical な `intent-cli notify report` command を実行します。workflow v
 
 role-facing route も構造化され、テストされています。`guide review`、`guide next --role review`、
 `guide orchestrator-thread` は、それぞれ review seat 向けに `guide seat-commands` を明示します。
+さらに、意図的な topology rebuild 用のインストール済み `guide topology-workspace-move` recipe も
+これらの surface から到達できます。
+
+## topology workspace move (G697)
+
+記録済み team を新しい herdr workspace へ意図的に rebuild するときは、最初にインストール済み
+recipe を render します。これは read-only で、inspect → preview → apply → validate →
+notify-preflight の正確な順序を示します。
+
+```bash
+intent-cli guide topology-workspace-move --domain <domain> --team <team> --format markdown
+intent-cli session-layer topology show --domain <domain> --team <team> --format json
+intent-cli session-layer topology move --domain <domain> --team <team> \
+  --workspace-id <new-workspace-id> \
+  --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... \
+  --dry-run --format json
+intent-cli session-layer topology move --domain <domain> --team <team> \
+  --workspace-id <new-workspace-id> \
+  --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... \
+  [--current-digest <digest>] --write --format json
+intent-cli session-layer topology validate --domain <domain> --team <team> --format json
+intent-cli notify delegate --domain <domain> --team <team> --from <sender-role> \
+  --to <recipient-role> --report-to <orchestrator-role> --task-id <task-id> \
+  --objective <bounded-outcome> --input <reference> --expected-artifact <artifact> \
+  --result-nonce <nonce> --dry-run --format json
+```
+
+move は、記録済み herdr role ごとに完全な old-to-new pane map を明示的に必要とし、team と role の
+workspace/pane id を一つの atomic operation で更新します。role membership、cwd、kind、delivery method、
+reader、profile、その他すべての field は維持します。herdr query、workspace の discover、pane の作成、
+per-role refusal の repair は行いません。writer は CAS lock を保持し、置換前に topology digest を比較します。
+stale な `--current-digest` は拒否されます。既存の per-role mismatch message は sanctioned な whole-team
+transition としてこの command を示します。
 
 ---
 

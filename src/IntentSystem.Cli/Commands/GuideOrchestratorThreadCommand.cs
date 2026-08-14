@@ -783,6 +783,7 @@ internal static class GuideOrchestratorThreadCommand
             // route to the structured seat-command guide so the route is
             // reachable from the role-facing thread contract.
             GuideReachability = SeatCommandGuidanceRegistry.ReviewReachability(),
+            TopologyWorkspaceMove = TopologyWorkspaceMoveGuidance.Create(values["<domain>"], values["<team>"]),
             // G570 third repair: the summary is CANON about authority, and it
             // must survive in both modes — but its agmsg phrasing is an
             // instruction in the practiced mode and a description in the other.
@@ -4136,6 +4137,14 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
 
+        writer.WriteLine("## Topology workspace move reachability (G697)");
+        writer.WriteLine($"- installed recipe: `{guide.TopologyWorkspaceMove.GuideSurface}`");
+        writer.WriteLine($"- preview: `{guide.TopologyWorkspaceMove.Commands.Preview}`");
+        writer.WriteLine($"- apply: `{guide.TopologyWorkspaceMove.Commands.Apply}`");
+        writer.WriteLine($"- validate: `{guide.TopologyWorkspaceMove.Commands.Validate}`");
+        writer.WriteLine("- route is read-only guidance; the operator supplies the workspace and pane mapping and explicitly chooses --write.");
+        writer.WriteLine();
+
         SessionLayerSwitchChecklist.WriteMarkdown(writer, guide.SessionLayerSwitchChecklist);
 
         writer.WriteLine("## Mode separation");
@@ -4999,6 +5008,13 @@ internal sealed record OrchestratorThreadGuide
     /// </summary>
     [JsonPropertyName("guide_reachability")]
     public required GuideReachabilityDeclaration GuideReachability { get; init; }
+
+    /// <summary>
+    /// G697: the orchestrator role-facing route to the installed topology
+    /// workspace move recipe.
+    /// </summary>
+    [JsonPropertyName("topology_workspace_move")]
+    public required TopologyWorkspaceMoveGuide TopologyWorkspaceMove { get; init; }
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }

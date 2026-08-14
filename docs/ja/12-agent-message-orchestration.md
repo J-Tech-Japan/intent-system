@@ -1234,7 +1234,19 @@ intent-cli session-layer topology update-field --domain <domain> --team <team> -
 intent-cli session-layer topology retire-legacy --domain <domain> --team <team> --evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write
 intent-cli session-layer topology validate --domain <domain> --team <team> --format json
 intent-cli session-layer topology show --domain <domain> --team <team> --format json
+intent-cli guide topology-workspace-move --domain <domain> --team <team> --format markdown
+intent-cli session-layer topology move --domain <domain> --team <team> --workspace-id <new-workspace-id> --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... --dry-run --format json
+intent-cli session-layer topology move --domain <domain> --team <team> --workspace-id <new-workspace-id> --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... [--current-digest <digest>] --write --format json
 ```
+
+G697 は意図的な workspace rebuild の path を追加します。インストール済みの
+`guide topology-workspace-move` recipe は `guide review`、`guide next --role review`、
+`guide orchestrator-thread` から到達でき、inspect → dry-run preview → explicit write →
+validate → notify preflight の完全な順序を表示します。move は herdr role ごとの operator-supplied
+old-pane から new-pane への完全な map を必要とし、CAS lock を保持して topology digest を比較します。
+team と role の workspace/pane id だけを atomic に更新し、他の role field は維持します。herdr query、
+pane 作成、membership 変更、per-role conflict の repair は行いません。既存の refusal は sanctioned な
+whole-team transition としてこの move command を示します。
 
 agent kind は herdr が起動できる任意の kind です。Claude、Codex、Copilot、Cursor、OpenCode などは
 例であり、supported-set の制約ではありません。logical role の既定値は `implementation`、`review`、
