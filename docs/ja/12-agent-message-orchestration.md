@@ -1697,6 +1697,34 @@ permission の待ち** — 事前承認の有無にかかわらず回答不可�
 適用されます: 委譲の重複禁止、permission プロンプトの自動クリア禁止、進行中作業の cancel/reset
 禁止、issue/PR の force-close 禁止、durable state（永続状態）の投機的な手編集禁止。
 
+### Repeated-observation emission hygiene (G699)
+
+measured supervisor は detection と wake の権限を変更せず、同じ observation の繰り返しを
+読み取り可能かつ bounded にします。built CLI から、明示して記録する policy を使って起動します:
+
+```text
+intent-cli notify supervise --domain <domain> --team <team> --repo <owner/repo> --interval 300 --repeat-backoff-seconds 1800 --debounce-consecutive-observations 3 --once --write --format json
+intent-cli notify supervise --domain <domain> --team <team> --repo <owner/repo> --once --format markdown
+```
+
+`--interval <seconds>` は full observation cadence です。repeated finding には
+`--repeat-backoff-seconds <seconds>`（alias `--backoff-seconds`、default `1800` seconds）を使い、
+pane status の classification には `--debounce-consecutive-observations <count>`（alias
+`--status-debounce-consecutive`、default `3`）を使います。write mode は解決済みの値を
+`.intent-cli/supervision/<domain>/<team>/emission-policy.json` に記録し、各 cycle にも繰り返し
+出力します。これらは隠れた constant ではなく configuration の値です。
+
+変更されない same-key observation は active な named `parked` record として残り、
+`first_seen`、`last_seen`、`repeat_count`、`emission_cadence_seconds` を表示します。resolution
+では active record を解消し、condition fingerprint の変更では counter を初期化します。
+別の新しい key は、他の key が parked でも即時に出力されます。blocked/idle の一 poll flap は
+settled transition に分類せず、記録された consecutive threshold に達したときだけ分類します。
+parked key を黙って削除したり resolution を推測したりしません。detection predicate と G695 の
+continuation-chain record は不変で、parking は duplicate finding だけを抑制し workflow transition
+は実行しません。これは observation-only policy です: intent-cli/GitHub が正本のままで、
+supervisor は record、wake、evidence の表示だけを行い、work の clear、merge、closeout、label 変更は
+行いません。
+
 ## 共有マシン上での cross-project isolation
 
 **このマシン上にいるのは自分だけではない、と前提してください。** 複数の

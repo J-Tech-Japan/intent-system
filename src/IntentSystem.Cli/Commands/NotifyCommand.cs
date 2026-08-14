@@ -60,6 +60,7 @@ internal static class NotifyCommand
     private const string SuperviseUsage =
         "Usage: intent-cli notify supervise --domain <d> --team <t> [--interval <seconds>] "
         + "[--repo <owner/repo>] [--owner-role <role>] [--bound <seconds>] "
+        + "[--repeat-backoff-seconds <seconds>] [--debounce-consecutive-observations <count>] "
         + "[--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] "
         + "[--repair-silent-minutes <m>] [--auto-redispatch] [--event-mode] [--once] [--routing-root <host-root>] [--dry-run|--write] "
         + "[--herdr-executable <absolute-path>] [--bash-executable <absolute-path>] "
@@ -815,7 +816,9 @@ internal static class NotifyCommand
             options.PreApprovalAcceptRules,
             options.PreApprovalEscalateRules,
             options.BashExecutable ?? BashExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveBashExecutable(),
-            scopedPolicies: options.ScopedPolicies);
+            scopedPolicies: options.ScopedPolicies,
+            repeatBackoffSeconds: options.RepeatBackoffSeconds,
+            debounceConsecutiveObservations: options.DebounceConsecutiveObservations);
         using var cancellation = new CancellationTokenSource();
         ConsoleCancelEventHandler? cancelHandler = null;
         if (!Console.IsOutputRedirected)
@@ -887,6 +890,7 @@ internal static class NotifyCommand
                 error = pass.Error,
                 warnings = pass.Warnings,
                 bound = pass.Bound,
+                emission_policy = pass.EmissionPolicy,
                 pre_approval_policy = pass.PreApprovalPolicy,
                 liveness = pass.Liveness,
                 actions = pass.Actions,
@@ -906,6 +910,10 @@ internal static class NotifyCommand
         }
         writer.WriteLine($"- command mode: {(write ? "write" : "dry-run")}");
         writer.WriteLine($"- auto-redispatch: {autoRedispatch.ToString().ToLowerInvariant()}");
+        if (pass.EmissionPolicy is { } emissionPolicy)
+        {
+            writer.WriteLine($"- emission policy: full cadence={emissionPolicy.FullCadenceSeconds}s; repeat backoff={emissionPolicy.RepeatBackoffSeconds}s; status debounce={emissionPolicy.DebounceConsecutiveObservations} consecutive observations; recorded at {emissionPolicy.RecordedAt:O}");
+        }
         if (pass.Bound is { } bound)
         {
             writer.WriteLine($"- detection bound: {bound.BoundSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unrecorded>"}s ({bound.Status}); actual interval: {bound.ActualIntervalSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unknown>"}s; met: {bound.BoundMet?.ToString().ToLowerInvariant() ?? "<unknown>"}");
@@ -946,6 +954,10 @@ internal static class NotifyCommand
             {
                 writer.WriteLine($"  - observed prompt: agent_kind={prompt.AgentKind}; pane={prompt.Pane}; prompt_class={prompt.PromptClass}; decision={prompt.Decision}; rule={prompt.Rule}; exact_answer_scope={prompt.ExactAnswerScope ?? "<none>"}; observed_text={JsonSerializer.Serialize(prompt.ObservedText)}");
             }
+        }
+        foreach (var record in pass.RecoveryRecords.Where(record => record.ClearedAt is null && record.Parked))
+        {
+            writer.WriteLine($"- parked {record.Key}: first_seen={record.FirstSeenAt?.ToString("O") ?? "<unknown>"}; last_seen={record.LastSeenAt?.ToString("O") ?? "<unknown>"}; repeat_count={record.RepeatCount}; next emission cadence={record.EmissionCadenceSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unknown>"}s");
         }
     }
 
@@ -1939,6 +1951,8 @@ internal static class NotifyCommand
         string? bashExecutable = null;
         int? intervalSeconds = null;
         int? detectionBoundSeconds = null;
+        int? repeatBackoffSeconds = null;
+        int? debounceConsecutiveObservations = null;
         int? staleMinutes = null;
         int? claimedSilentMinutes = null;
         int? backlogIdleMinutes = null;
@@ -2001,6 +2015,26 @@ internal static class NotifyCommand
                         return false;
                     }
                     detectionBoundSeconds = parsedBound;
+                    break;
+                case "--repeat-backoff-seconds":
+                case "--backoff-seconds":
+                    if (!ReadValue(args, ref index, argument, out var backoffValue, out error)
+                        || !int.TryParse(backoffValue, out var parsedBackoff))
+                    {
+                        error = $"{argument} requires a whole-number seconds value.";
+                        return false;
+                    }
+                    repeatBackoffSeconds = parsedBackoff;
+                    break;
+                case "--debounce-consecutive-observations":
+                case "--status-debounce-consecutive":
+                    if (!ReadValue(args, ref index, argument, out var debounceValue, out error)
+                        || !int.TryParse(debounceValue, out var parsedDebounce))
+                    {
+                        error = $"{argument} requires a whole-number count value.";
+                        return false;
+                    }
+                    debounceConsecutiveObservations = parsedDebounce;
                     break;
                 case "--stale-minutes":
                     if (!ReadValue(args, ref index, argument, out var staleValue, out error)
@@ -2148,6 +2182,8 @@ internal static class NotifyCommand
             BashExecutable = bashExecutable,
             IntervalSeconds = intervalSeconds,
             DetectionBoundSeconds = detectionBoundSeconds,
+            RepeatBackoffSeconds = repeatBackoffSeconds,
+            DebounceConsecutiveObservations = debounceConsecutiveObservations,
             StaleMinutes = staleMinutes,
             ClaimedSilentMinutes = claimedSilentMinutes,
             BacklogIdleMinutes = backlogIdleMinutes,
@@ -2228,6 +2264,21 @@ internal static class NotifyCommand
                 && (options.DetectionBoundSeconds < 1 || options.DetectionBoundSeconds > 86_400))
             {
                 error = "supervise --bound must be between 1 and 86400 seconds.";
+                return false;
+            }
+
+            if (options.RepeatBackoffSeconds is not null
+                && (options.RepeatBackoffSeconds < 1 || options.RepeatBackoffSeconds > 86_400))
+            {
+                error = "supervise --repeat-backoff-seconds must be between 1 and 86400 seconds.";
+                return false;
+            }
+
+            if (options.DebounceConsecutiveObservations is not null
+                && (options.DebounceConsecutiveObservations < 1
+                    || options.DebounceConsecutiveObservations > NotifySupervisionEmissionPolicy.MaximumDebounceConsecutiveObservations))
+            {
+                error = $"supervise --debounce-consecutive-observations must be between 1 and {NotifySupervisionEmissionPolicy.MaximumDebounceConsecutiveObservations}.";
                 return false;
             }
 
@@ -2435,6 +2486,8 @@ internal sealed record NotifyOptions
     public string? BashExecutable { get; init; }
     public int? IntervalSeconds { get; init; }
     public int? DetectionBoundSeconds { get; init; }
+    public int? RepeatBackoffSeconds { get; init; }
+    public int? DebounceConsecutiveObservations { get; init; }
     public int? StaleMinutes { get; init; }
     public int? ClaimedSilentMinutes { get; init; }
     public int? BacklogIdleMinutes { get; init; }

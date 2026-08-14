@@ -1674,7 +1674,7 @@ internal static class GuideOrchestratorThreadCommand
                 },
             },
             TerminalWorkspaceProvisioning = BuildTerminalWorkspaceProvisioning(repo, values["<team>"]),
-            DesignWorkspaceSupervision = BuildDesignWorkspaceSupervision(domain, repo, herdrOnly),
+            DesignWorkspaceSupervision = BuildDesignWorkspaceSupervision(domain, repo, values["<team>"], herdrOnly),
             DesignDecisionHolds = BuildDesignDecisionHolds(domain, repo),
             CrossProjectIsolation = BuildCrossProjectIsolation(),
             DesignTrafficController = new OrchestratorDesignTrafficController
@@ -2613,6 +2613,7 @@ internal static class GuideOrchestratorThreadCommand
     private static OrchestratorDesignWorkspaceSupervision BuildDesignWorkspaceSupervision(
         string domain,
         string targetRepo,
+        string team,
         bool herdrOnly)
     {
         string Fill(string template) => template
@@ -2731,8 +2732,44 @@ internal static class GuideOrchestratorThreadCommand
                 ? "Measured `intent-cli notify supervise` keeps the interval cycle as the safety floor. The optional "
                     + "SECOND wake source is enabled only by the concrete `--event-mode` flag: it holds blocking "
                     + "herdr waits for `pane.agent_status_changed` and re-arms after wait death/error. It does not add "
-                    + "a second supervisor or change finding, recovery, or wake-target semantics."
+                + "a second supervisor or change finding, recovery, or wake-target semantics."
                 : null,
+            EmissionHygiene = new OrchestratorEmissionHygiene
+            {
+                Summary =
+                    "G699: measured supervision keeps the detector authoritative while making repeated observations readable and bounded. "
+                    + "The first finding is emitted at the full configured cadence; an unchanged same-key observation remains a named active "
+                    + "parked record and later findings are emitted no more often than the recorded repeat backoff cadence.",
+                Commands = new[]
+                {
+                    $"intent-cli notify supervise --domain {domain} --team {team} --repo {targetRepo} --interval 300 --repeat-backoff-seconds {NotifySupervisionEmissionPolicy.DefaultRepeatBackoffSeconds} --debounce-consecutive-observations {NotifySupervisionEmissionPolicy.DefaultDebounceConsecutiveObservations} --once --write --format json",
+                    $"intent-cli notify supervise --domain {domain} --team {team} --repo {targetRepo} --once --format markdown",
+                },
+                RecordedConfiguration = new[]
+                {
+                    $"full cadence: `--interval <seconds>`; default when omitted: {NotifySupervisor.DefaultIntervalSeconds}s",
+                    $"repeat emission backoff: `--repeat-backoff-seconds <seconds>` (alias `--backoff-seconds`); default: {NotifySupervisionEmissionPolicy.DefaultRepeatBackoffSeconds}s",
+                    $"pane status debounce: `--debounce-consecutive-observations <count>` (alias `--status-debounce-consecutive`); default: {NotifySupervisionEmissionPolicy.DefaultDebounceConsecutiveObservations} consecutive observations",
+                    "write mode records the resolved values at `.intent-cli/supervision/<domain>/<team>/emission-policy.json` and repeats them on every cycle",
+                },
+                OperatingSemantics = new[]
+                {
+                    "same-key observations never disappear: the active record names `parked` and exposes `first_seen`, `last_seen`, `repeat_count`, and `emission_cadence_seconds`",
+                    "resolution clears the active record; a later reappearance starts a fresh first_seen/repeat_count sequence",
+                    "a changed condition fingerprint resets first_seen, last_seen, repeat_count, and emission eligibility immediately",
+                    "a genuinely new observation key is emitted immediately even while another key is parked",
+                    "a pane status flap below the recorded consecutive threshold is not classified; the threshold-consecutive settled state is classified once with the existing observation-only boundary",
+                    "detection predicates and G695 continuation-chain recording remain unchanged; parking suppresses duplicate findings only and never performs a lifecycle transition",
+                },
+                NegativeChecks = new[]
+                {
+                    "do not treat one blocked/idle poll as a settled transition",
+                    "do not silently remove a parked key or infer auto-resolution",
+                    "do not use a repeated same-key finding to authorize a merge, closeout, label change, or other workflow mutation",
+                },
+                AuthorityBoundary =
+                    "This is an observation and wake-hygiene policy only. `intent-cli`/GitHub remain authoritative for workflow state; the supervisor may record, wake the owning role, and surface evidence, but never clears work or changes lifecycle state.",
+            },
             PaneScanStuckStates = new[]
             {
                 new OrchestratorPaneStuckState
@@ -3888,6 +3925,40 @@ internal static class GuideOrchestratorThreadCommand
             writer.WriteLine($"- {supervision.WakeSources}");
             writer.WriteLine();
         }
+        writer.WriteLine("### Repeated-observation emission hygiene (G699)");
+        writer.WriteLine();
+        writer.WriteLine(supervision.EmissionHygiene.Summary);
+        writer.WriteLine();
+        writer.WriteLine("#### Commands");
+        writer.WriteLine();
+        foreach (var command in supervision.EmissionHygiene.Commands)
+        {
+            writer.WriteLine($"- `{command}`");
+        }
+        writer.WriteLine();
+        writer.WriteLine("#### Recorded configuration");
+        writer.WriteLine();
+        foreach (var item in supervision.EmissionHygiene.RecordedConfiguration)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("#### Operating semantics");
+        writer.WriteLine();
+        foreach (var item in supervision.EmissionHygiene.OperatingSemantics)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("#### Negative checks");
+        writer.WriteLine();
+        foreach (var item in supervision.EmissionHygiene.NegativeChecks)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"> **Authority boundary:** {supervision.EmissionHygiene.AuthorityBoundary}");
+        writer.WriteLine();
         writer.WriteLine("#### What the pane scan is looking for");
         writer.WriteLine();
         foreach (var stuck in supervision.PaneScanStuckStates)
@@ -5499,6 +5570,9 @@ internal sealed record OrchestratorDesignWorkspaceSupervision
     [JsonPropertyName("wake_sources")]
     public string? WakeSources { get; init; }
 
+    [JsonPropertyName("emission_hygiene")]
+    public required OrchestratorEmissionHygiene EmissionHygiene { get; init; }
+
     /// <summary>G556: what the blocking-UI pane scan is looking FOR — including a pane showing a shell prompt where an agent should be.</summary>
     [JsonPropertyName("pane_scan_stuck_states")]
     public required IReadOnlyList<OrchestratorPaneStuckState> PaneScanStuckStates { get; init; }
@@ -5524,6 +5598,27 @@ internal sealed record OrchestratorDesignWorkspaceSupervision
 
     [JsonPropertyName("watchdog_safety_rules_reference")]
     public required string WatchdogSafetyRulesReference { get; init; }
+}
+
+internal sealed record OrchestratorEmissionHygiene
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("commands")]
+    public required IReadOnlyList<string> Commands { get; init; }
+
+    [JsonPropertyName("recorded_configuration")]
+    public required IReadOnlyList<string> RecordedConfiguration { get; init; }
+
+    [JsonPropertyName("operating_semantics")]
+    public required IReadOnlyList<string> OperatingSemantics { get; init; }
+
+    [JsonPropertyName("negative_checks")]
+    public required IReadOnlyList<string> NegativeChecks { get; init; }
+
+    [JsonPropertyName("authority_boundary")]
+    public required string AuthorityBoundary { get; init; }
 }
 
 /// <summary>

@@ -44,6 +44,9 @@ internal sealed class NotifyMeasuredSupervisor
     private readonly NotifySupervisionWriterIdentity writerIdentity;
     private readonly Func<NotifySupervisionWriterIdentity, bool> writerIsLive;
     private readonly Func<AutomationStalledWorkResult>? stalledWorkAnalyzer;
+    private readonly int? configuredRepeatBackoffSeconds;
+    private readonly int? configuredDebounceConsecutiveObservations;
+    private readonly Func<DateTimeOffset, IReadOnlyList<NotifySupervisionObservation>>? observationProvider;
     private readonly object supervisionSync = new();
     private readonly object writerSync = new();
 
@@ -73,7 +76,10 @@ internal sealed class NotifyMeasuredSupervisor
         NotifySupervisionWriterIdentity? writerIdentity = null,
         Func<NotifySupervisionWriterIdentity, bool>? writerIsLive = null,
         Func<AutomationStalledWorkResult>? stalledWorkAnalyzer = null,
-        IReadOnlyList<NotifyScopedPromptPolicy>? scopedPolicies = null)
+        IReadOnlyList<NotifyScopedPromptPolicy>? scopedPolicies = null,
+        int? repeatBackoffSeconds = null,
+        int? debounceConsecutiveObservations = null,
+        Func<DateTimeOffset, IReadOnlyList<NotifySupervisionObservation>>? observationProvider = null)
     {
         this.context = context;
         this.routingRoot = routingRoot;
@@ -101,6 +107,9 @@ internal sealed class NotifyMeasuredSupervisor
         this.writerIdentity = writerIdentity ?? NotifySupervisionWriterIdentity.Current();
         this.writerIsLive = writerIsLive ?? (other => other.IsLiveOn(this.writerIdentity));
         this.stalledWorkAnalyzer = stalledWorkAnalyzer;
+        this.configuredRepeatBackoffSeconds = repeatBackoffSeconds;
+        this.configuredDebounceConsecutiveObservations = debounceConsecutiveObservations;
+        this.observationProvider = observationProvider;
     }
 
     public NotifySupervisorPass RunOnce() => RunOnce("interval");
@@ -151,6 +160,11 @@ internal sealed class NotifyMeasuredSupervisor
         }
 
         var bound = ResolveBound(state, now);
+        var emissionPolicy = ResolveEmissionPolicy(state, now);
+        var emissionPolicyWrite = NotifySupervisionStore.RecordEmissionPolicy(
+            context.ResolveSupervisionArtifactRootPath(),
+            emissionPolicy,
+            write);
         var preApprovalPolicy = ResolvePreApprovalPolicy(now, cycleId, out var policyError);
         if (policyError is not null)
         {
@@ -158,6 +172,7 @@ internal sealed class NotifyMeasuredSupervisor
             {
                 Actions = [],
                 Bound = bound.Status,
+                EmissionPolicy = emissionPolicy,
                 PreApprovalPolicy = preApprovalPolicy,
                 Error = policyError,
             };
@@ -222,6 +237,10 @@ internal sealed class NotifyMeasuredSupervisor
         var observations = new List<NotifySupervisionObservation>();
         var actions = new List<NotifySupervisorAction>();
         var warnings = new List<string>();
+        if (emissionPolicyWrite.Error is not null)
+        {
+            warnings.Add($"supervision-emission-policy-write-failed: {emissionPolicyWrite.Error}");
+        }
         if (duplicateSupervisor is not null)
         {
             observations.Add(duplicateSupervisor);
@@ -240,6 +259,7 @@ internal sealed class NotifyMeasuredSupervisor
                 Actions = [],
                 Error = $"pending-store-unreadable: {pendingError}",
                 Bound = bound.Status,
+                EmissionPolicy = emissionPolicy,
                 Liveness = liveness,
             };
         }
@@ -299,6 +319,8 @@ internal sealed class NotifyMeasuredSupervisor
         var observedSequences = new Dictionary<string, long>(StringComparer.Ordinal);
         var observedTimes = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var observedStatuses = new Dictionary<string, string>(StringComparer.Ordinal);
+        var observedStatusConsecutiveCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var observedStatusRunFrom = new Dictionary<string, string>(StringComparer.Ordinal);
         if (!transportUnavailable)
         {
             foreach (var pending in openBefore)
@@ -361,7 +383,10 @@ internal sealed class NotifyMeasuredSupervisor
                 previousCycle,
                 observedSequences,
                 observedTimes,
-                observedStatuses));
+                observedStatuses,
+                observedStatusConsecutiveCounts,
+                observedStatusRunFrom,
+                emissionPolicy.DebounceConsecutiveObservations));
             foreach (var action in legacy.Actions)
             {
                 var record = openByTask.GetValueOrDefault(action.TaskId);
@@ -485,6 +510,11 @@ internal sealed class NotifyMeasuredSupervisor
             });
         }
 
+        if (observationProvider is not null)
+        {
+            observations.AddRange(observationProvider(now));
+        }
+
         var currentKeys = observations.Select(item => item.Key).ToHashSet(StringComparer.Ordinal);
         var records = new List<NotifySupervisionStallRecord>();
         var findings = new List<NotifySupervisionFinding>();
@@ -499,37 +529,34 @@ internal sealed class NotifyMeasuredSupervisor
                 // finding. Keep its durable record active, but do not emit a
                 // duplicate result on unchanged cycles and never wake or enter
                 // the G630 recovery path for it.
-                var retained = existing with
-                {
-                    Kind = observation.Kind,
-                    Summary = observation.Summary,
-                    Cause = observation.Cause ?? existing.Cause,
-                    Evidence = observation.Evidence ?? existing.Evidence,
-                    OwedTransition = observation.OwedTransition ?? existing.OwedTransition,
-                };
-                records.Add(retained);
+                var retained = RefreshEmissionState(
+                    existing,
+                    observation,
+                    wake: null,
+                    now,
+                    emissionPolicy);
+                PersistStallUpdate(retained.Record, warnings, "supervision-stall-update-write-failed");
+                records.Add(retained.Record);
                 if (observation.Kind is "supervision-degraded" or "duplicate-supervisor" or "recipe-drift" or "profile-invalid")
                 {
                     // Cycle-level facts are not once-only activity findings:
                     // surface one finding for each cycle, still once for the
                     // cycle rather than once per delegation or observation.
-                    findings.Add(ToFinding(retained));
+                    findings.Add(ToFinding(retained.Record));
                 }
                 continue;
             }
 
             if (existing is not null && existing.WakeDelivered)
             {
-                records.Add(existing with
-                {
-                    Kind = observation.Kind,
-                    Summary = observation.Summary,
-                    SubjectRole = observation.SubjectRole ?? existing.SubjectRole,
-                    WakeTargetRole = ResolveWakeTarget(observation),
-                    WakeClass = ResolveWakeClass(observation),
-                    Evidence = observation.Evidence ?? existing.Evidence,
-                    OwedTransition = observation.OwedTransition ?? existing.OwedTransition,
-                });
+                var retained = RefreshEmissionState(
+                    existing,
+                    observation,
+                    wake: null,
+                    now,
+                    emissionPolicy);
+                records.Add(retained.Record);
+                PersistStallUpdate(retained.Record, warnings, "supervision-stall-update-write-failed");
                 if (string.Equals(
                     observation.Kind,
                     AutomationStalledWorkCommand.KindAwaitingOperatorMerge,
@@ -541,7 +568,10 @@ internal sealed class NotifyMeasuredSupervisor
                     // wake. Human wait duration is never escalation evidence.
                     continue;
                 }
-                findings.Add(ToFinding(records[^1]));
+                if (retained.ShouldEmit)
+                {
+                    findings.Add(ToFinding(retained.Record));
+                }
                 continue;
             }
 
@@ -559,7 +589,7 @@ internal sealed class NotifyMeasuredSupervisor
                 }
                 : WakeOwner(observation, now);
             RecordSettledTransitionChain(observation, wake, now, warnings);
-            var record = existing ?? new NotifySupervisionStallRecord
+            var baseRecord = existing ?? new NotifySupervisionStallRecord
             {
                 Key = observation.Key,
                 Kind = observation.Kind,
@@ -578,53 +608,25 @@ internal sealed class NotifyMeasuredSupervisor
                 DetectableAtUnknown = previousCycle is null || observation.DetectableAt is null,
                 SurfacedAt = now,
             };
-            record = record with
+            var updated = RefreshEmissionState(
+                baseRecord,
+                observation,
+                wake,
+                now,
+                emissionPolicy);
+            records.Add(updated.Record);
+            if (updated.ShouldEmit)
             {
-                Kind = observation.Kind,
-                Summary = observation.Summary,
-                SubjectRole = observation.SubjectRole ?? record.SubjectRole,
-                WakeTargetRole = ResolveWakeTarget(observation),
-                WakeClass = ResolveWakeClass(observation),
-                WakeAttempted = wake.Attempted,
-                WakeDelivered = wake.Delivered,
-                WakeCause = wake.Cause,
-                Prompt = observation.Prompt ?? record.Prompt,
-                Evidence = observation.Evidence ?? record.Evidence,
-                OwedTransition = observation.OwedTransition ?? record.OwedTransition,
-            };
-            records.Add(record);
-            findings.Add(ToFinding(record));
-            if (existing is null)
-            {
-                var open = NotifySupervisionStore.OpenStall(
-                    NotifySupervisionStore.ResolveStallPath(
-                        context.ResolveSupervisionArtifactRootPath(),
-                        domain,
-                        team),
-                    record,
-                    write);
-                if (open.Error is not null)
-                {
-                    warnings.Add($"supervision-stall-write-failed: {open.Error}");
-                }
+                findings.Add(ToFinding(updated.Record));
             }
-            else if (existing.WakeAttempted && !existing.WakeDelivered && wake.Attempted)
-            {
-                // A failed wake is retried on the next bounded cycle.  The
-                // second open event preserves that retry evidence without
-                // rewriting the original detectable/surfaced timestamps.
-                var retry = NotifySupervisionStore.OpenStall(
-                    NotifySupervisionStore.ResolveStallPath(
-                        context.ResolveSupervisionArtifactRootPath(),
-                        domain,
-                        team),
-                    record,
-                    write);
-                if (retry.Error is not null)
-                {
-                    warnings.Add($"supervision-stall-retry-write-failed: {retry.Error}");
-                }
-            }
+            PersistStallUpdate(
+                updated.Record,
+                warnings,
+                existing is null
+                    ? "supervision-stall-write-failed"
+                    : existing.WakeAttempted && !existing.WakeDelivered && wake.Attempted
+                        ? "supervision-stall-retry-write-failed"
+                        : "supervision-stall-update-write-failed");
         }
 
         foreach (var stale in state.ActiveStalls.Values.Where(item => !currentKeys.Contains(item.Key)))
@@ -660,6 +662,8 @@ internal sealed class NotifyMeasuredSupervisor
             Writer = writerIdentity,
             Trigger = trigger,
             IntervalSeconds = intervalSeconds,
+            RepeatBackoffSeconds = emissionPolicy.RepeatBackoffSeconds,
+            DebounceConsecutiveObservations = emissionPolicy.DebounceConsecutiveObservations,
             CadenceIntervalSeconds = cadenceIntervalSeconds,
             BoundSeconds = bound.BoundSeconds,
             ActualIntervalSeconds = actualIntervalSeconds,
@@ -672,6 +676,8 @@ internal sealed class NotifyMeasuredSupervisor
             LastObservedStateChangeSequences = observedSequences,
             LastObservedStateChangeTimes = observedTimes,
             LastObservedAgentStatuses = observedStatuses,
+            LastObservedAgentStatusConsecutiveCounts = observedStatusConsecutiveCounts,
+            LastObservedAgentStatusRunFrom = observedStatusRunFrom,
             Transitions = observations
                 .Where(observation => string.Equals(observation.Kind, "seat-state-transition", StringComparison.Ordinal))
                 .Select(observation =>
@@ -722,6 +728,7 @@ internal sealed class NotifyMeasuredSupervisor
             Findings = findings,
             RecoveryRecords = recoveryRecords,
             Bound = bound.Status,
+            EmissionPolicy = emissionPolicy,
             PreApprovalPolicy = preApprovalPolicy,
             Liveness = liveness,
             Warnings = warnings,
@@ -835,6 +842,27 @@ internal sealed class NotifyMeasuredSupervisor
                 domain,
                 team),
         });
+    }
+
+    private NotifySupervisionEmissionPolicy ResolveEmissionPolicy(
+        NotifySupervisionReadResult state,
+        DateTimeOffset now)
+    {
+        var repeatBackoffSeconds = configuredRepeatBackoffSeconds
+            ?? state.EmissionPolicy?.RepeatBackoffSeconds
+            ?? NotifySupervisionEmissionPolicy.DefaultRepeatBackoffSeconds;
+        var debounceConsecutiveObservations = configuredDebounceConsecutiveObservations
+            ?? state.EmissionPolicy?.DebounceConsecutiveObservations
+            ?? NotifySupervisionEmissionPolicy.DefaultDebounceConsecutiveObservations;
+        return new NotifySupervisionEmissionPolicy
+        {
+            Domain = domain,
+            Team = team,
+            FullCadenceSeconds = intervalSeconds,
+            RepeatBackoffSeconds = repeatBackoffSeconds,
+            DebounceConsecutiveObservations = debounceConsecutiveObservations,
+            RecordedAt = now,
+        };
     }
 
     private NotifyPreApprovalPolicyStatus ResolvePreApprovalPolicy(
@@ -1328,7 +1356,10 @@ internal sealed class NotifyMeasuredSupervisor
         NotifySupervisionCycle? previousCycle,
         IDictionary<string, long> observedSequences,
         IDictionary<string, DateTimeOffset> observedTimes,
-        IDictionary<string, string> observedStatuses)
+        IDictionary<string, string> observedStatuses,
+        IDictionary<string, int> observedStatusConsecutiveCounts,
+        IDictionary<string, string> observedStatusRunFrom,
+        int debounceConsecutiveObservations)
     {
         SessionLayerModeResolution mode;
         try
@@ -1401,10 +1432,21 @@ internal sealed class NotifyMeasuredSupervisor
 
             var priorStatus = previousCycle?.LastObservedAgentStatuses.GetValueOrDefault(seatKey);
             var priorSequence = previousCycle?.LastObservedStateChangeSequences.GetValueOrDefault(seatKey);
+            var priorCount = previousCycle?.LastObservedAgentStatusConsecutiveCounts.GetValueOrDefault(seatKey) ?? 0;
+            var priorRunFrom = previousCycle?.LastObservedAgentStatusRunFrom.GetValueOrDefault(seatKey);
+            var consecutiveCount = string.Equals(priorStatus, agent.AgentStatus, StringComparison.Ordinal)
+                ? Math.Max(1, priorCount) + 1
+                : 1;
+            var runFrom = string.Equals(priorStatus, agent.AgentStatus, StringComparison.Ordinal)
+                ? priorRunFrom ?? priorStatus ?? agent.AgentStatus
+                : priorStatus ?? agent.AgentStatus;
+            observedStatusConsecutiveCounts[seatKey] = consecutiveCount;
+            observedStatusRunFrom[seatKey] = runFrom;
             var settled = agent.AgentStatus is "done" or "blocked" or "idle";
             if (role is not ("implementation" or "review")
-                || !string.Equals(priorStatus, "working", StringComparison.Ordinal)
+                || !string.Equals(runFrom, "working", StringComparison.Ordinal)
                 || !settled
+                || consecutiveCount < debounceConsecutiveObservations
                 || priorSequence is null
                 || sequence <= priorSequence.Value)
             {
@@ -2251,6 +2293,99 @@ internal sealed class NotifyMeasuredSupervisor
         return observations;
     }
 
+    private void PersistStallUpdate(
+        NotifySupervisionStallRecord record,
+        ICollection<string> warnings,
+        string warningPrefix)
+    {
+        var writeResult = NotifySupervisionStore.OpenStall(
+            NotifySupervisionStore.ResolveStallPath(
+                context.ResolveSupervisionArtifactRootPath(),
+                domain,
+                team),
+            record,
+            write);
+        if (writeResult.Error is not null)
+        {
+            warnings.Add($"{warningPrefix}: {writeResult.Error}");
+        }
+    }
+
+    private (NotifySupervisionStallRecord Record, bool ShouldEmit, bool StateChanged) RefreshEmissionState(
+        NotifySupervisionStallRecord baseline,
+        NotifySupervisionObservation observation,
+        NotifySupervisionWakeResult? wake,
+        DateTimeOffset now,
+        NotifySupervisionEmissionPolicy policy)
+    {
+        var fingerprint = BuildStateFingerprint(observation);
+        var stateChanged = baseline.StateFingerprint is not null
+            && !string.Equals(baseline.StateFingerprint, fingerprint, StringComparison.Ordinal);
+        var firstSeen = stateChanged
+            ? now
+            : baseline.FirstSeenAt ?? baseline.SurfacedAt;
+        var repeatCount = stateChanged
+            ? 1
+            : baseline.FirstSeenAt is null && baseline.RepeatCount == 0
+                ? 1
+                : Math.Max(1, baseline.RepeatCount) + 1;
+        var shouldEmit = stateChanged
+            || baseline.FirstSeenAt is null && baseline.RepeatCount == 0
+            || baseline.LastEmittedAt is null
+            || now - baseline.LastEmittedAt.Value >= TimeSpan.FromSeconds(policy.RepeatBackoffSeconds);
+        var parked = !stateChanged && repeatCount > 1;
+        var record = baseline with
+        {
+            Kind = observation.Kind,
+            OwnerRole = observation.OwnerRole,
+            SubjectRole = observation.SubjectRole ?? baseline.SubjectRole,
+            WakeTargetRole = ResolveWakeTarget(observation),
+            WakeClass = ResolveWakeClass(observation) ?? baseline.WakeClass,
+            Source = observation.Source,
+            Summary = observation.Summary,
+            DetectableAt = stateChanged ? observation.DetectableAt : baseline.DetectableAt ?? observation.DetectableAt,
+            DetectableAtUnknown = stateChanged
+                ? observation.DetectableAt is null
+                : baseline.DetectableAtUnknown || observation.DetectableAt is null,
+            SurfacedAt = stateChanged ? now : baseline.SurfacedAt,
+            WakeAttempted = wake?.Attempted ?? baseline.WakeAttempted,
+            WakeDelivered = wake?.Delivered ?? baseline.WakeDelivered,
+            WakeCause = wake?.Cause ?? baseline.WakeCause,
+            ResendPermitted = observation.ResendPermitted ?? baseline.ResendPermitted,
+            Cause = observation.Cause ?? baseline.Cause,
+            Prompt = observation.Prompt ?? baseline.Prompt,
+            Evidence = observation.Evidence ?? baseline.Evidence,
+            OwedTransition = observation.OwedTransition ?? baseline.OwedTransition,
+            FirstSeenAt = firstSeen,
+            LastSeenAt = now,
+            RepeatCount = repeatCount,
+            LastEmittedAt = shouldEmit ? now : baseline.LastEmittedAt,
+            Parked = parked,
+            ParkReason = parked
+                ? $"same-key observation repeated; next finding emission is no more frequent than the recorded {policy.RepeatBackoffSeconds}s backoff cadence"
+                : null,
+            EmissionCadenceSeconds = policy.RepeatBackoffSeconds,
+            StateFingerprint = fingerprint,
+        };
+        return (record, shouldEmit, stateChanged);
+    }
+
+    private static string BuildStateFingerprint(NotifySupervisionObservation observation)
+    {
+        var canonical = string.Join(
+            "\u001f",
+            observation.Kind,
+            observation.Source,
+            observation.OwnerRole,
+            observation.SubjectRole ?? string.Empty,
+            observation.Summary,
+            observation.Cause ?? string.Empty,
+            observation.OwedTransition ?? string.Empty,
+            string.Join("\u001e", observation.Evidence ?? []),
+            observation.ToStatus ?? string.Empty);
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+    }
+
     private static NotifySupervisionFinding ToFinding(NotifySupervisionStallRecord record) => new()
     {
         Key = record.Key,
@@ -2270,6 +2405,11 @@ internal sealed class NotifyMeasuredSupervisor
         Prompt = record.Prompt,
         Evidence = record.Evidence,
         OwedTransition = record.OwedTransition,
+        FirstSeenAt = record.FirstSeenAt,
+        LastSeenAt = record.LastSeenAt,
+        RepeatCount = record.RepeatCount,
+        Parked = record.Parked,
+        EmissionCadenceSeconds = record.EmissionCadenceSeconds,
     };
 
     /// <summary>
@@ -2566,4 +2706,19 @@ internal sealed record NotifySupervisionFinding
     [System.Text.Json.Serialization.JsonPropertyName("owed_transition")]
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? OwedTransition { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("first_seen")]
+    public DateTimeOffset? FirstSeenAt { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("last_seen")]
+    public DateTimeOffset? LastSeenAt { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("repeat_count")]
+    public int RepeatCount { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("parked")]
+    public bool Parked { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("emission_cadence_seconds")]
+    public int? EmissionCadenceSeconds { get; init; }
 }
