@@ -282,6 +282,33 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_AmbiguousNoTeam_EmitsMachineReadableCause()
+    {
+        using var workspace = new IssuePublishFlowWorkspace();
+        foreach (var team in new[] { "intent-cli-dev", "other-team" })
+        {
+            using var modeWriter = new StringWriter();
+            Assert.Equal(0, TeamModeCommand.ExecuteSet(
+                workspace.Context,
+                ["--domain", "intent-cli", "--team", team, "--mode", TeamMode.AuthoringOnly, "--write", "--format", "json"],
+                modeWriter));
+        }
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G692", "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var result = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(
+            TeamModeResolutionException.AmbiguousTeamScopeCode,
+            result.RootElement.GetProperty("cause").GetString());
+        Assert.Contains("refusing to guess", result.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenCreatorFailure_ReportsErrorAndExitsNonZero()
     {
         using var workspace = new IssuePublishFlowWorkspace();

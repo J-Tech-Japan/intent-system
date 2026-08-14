@@ -174,6 +174,22 @@ public sealed class TeamModeG692Tests : IDisposable
             ["--domain", Domain, "--repo", Repo, "--format", "json"],
             stalledWriter));
         Assert.Contains(TeamModeResolutionException.AmbiguousTeamScopeCode, stalledWriter.ToString(), StringComparison.Ordinal);
+
+        using var notifyWriter = new StringWriter();
+        Assert.Equal(1, CommandRouter.Execute(
+            [
+                "notify", "delegate", "--domain", Domain,
+                "--from", "design", "--to", "implementation", "--report-to", "orchestration",
+                "--task-id", "G692-ambiguous-team", "--objective", "ambiguous team must fail closed",
+                "--expected-artifact", "none", "--result-nonce", "g692-ambiguous", "--routing-root", root,
+                "--dry-run", "--format", "json",
+            ],
+            Context,
+            notifyWriter));
+        using var notify = JsonDocument.Parse(notifyWriter.ToString());
+        Assert.Equal(
+            TeamModeResolutionException.AmbiguousTeamScopeCode,
+            notify.RootElement.GetProperty("cause").GetString());
     }
 
     [Fact]

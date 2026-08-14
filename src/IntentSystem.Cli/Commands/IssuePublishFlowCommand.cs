@@ -117,11 +117,34 @@ internal static class IssuePublishFlowCommand
         var domain = string.IsNullOrWhiteSpace(domainOverride)
             ? context.Config.Project.Domain
             : domainOverride!;
+        var packetDirectory = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit!);
+        var githubBodyPath = Path.Combine(packetDirectory, "github-body.md");
+        var publishYamlPath = Path.Combine(context.RepoRoot, IssuePublishArtifactPathResolver.Resolve(executionUnit!));
 
         TeamModeResolution teamMode;
         try
         {
             teamMode = TeamModeStore.Resolve(context.RepoRoot, domain, team);
+        }
+        catch (TeamModeResolutionException exception)
+        {
+            var ambiguousResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                packetExists: false,
+                githubBodyPresent: false,
+                missingSections: PacketDraftCommand.RequiredContractSections,
+                title: null,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: exception.Message,
+                cause: TeamModeResolutionException.AmbiguousTeamScopeCode);
+            EmitResult(writer, ambiguousResult, format);
+            return 1;
         }
         catch (InvalidOperationException exception)
         {
@@ -154,10 +177,6 @@ internal static class IssuePublishFlowCommand
             writer.WriteLine(UsageLine);
             return 1;
         }
-
-        var packetDirectory = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit!);
-        var githubBodyPath = Path.Combine(packetDirectory, "github-body.md");
-        var publishYamlPath = Path.Combine(context.RepoRoot, IssuePublishArtifactPathResolver.Resolve(executionUnit!));
 
         if (!Directory.Exists(packetDirectory))
         {
@@ -1214,7 +1233,8 @@ internal static class IssuePublishFlowCommand
         IReadOnlyList<string>? extraWarnings = null,
         IssuePublishAuthorization? authorization = null,
         bool? externalHandoffRecorded = null,
-        string? externalHandoffPath = null)
+        string? externalHandoffPath = null,
+        string? cause = null)
     {
         var nextSteps = new List<string>();
         if (created)
@@ -1274,7 +1294,8 @@ internal static class IssuePublishFlowCommand
                 .Concat(extraWarnings ?? Array.Empty<string>())
                 .ToArray(),
             WouldRestore = wouldRestore,
-            Error = error
+            Error = error,
+            Cause = cause
         };
     }
 
@@ -1368,6 +1389,10 @@ internal static class IssuePublishFlowCommand
         if (!string.IsNullOrWhiteSpace(result.Error))
         {
             writer.WriteLine($"- error: {result.Error}");
+        }
+        if (!string.IsNullOrWhiteSpace(result.Cause))
+        {
+            writer.WriteLine($"- cause: {result.Cause}");
         }
         writer.WriteLine();
 
@@ -2251,4 +2276,7 @@ internal sealed record IssuePublishFlowResult
 
     [JsonPropertyName("error")]
     public string? Error { get; init; }
+
+    [JsonPropertyName("cause")]
+    public string? Cause { get; init; }
 }

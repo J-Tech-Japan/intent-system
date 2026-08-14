@@ -398,6 +398,40 @@ public sealed class BranchLaneDecisionG669Tests : IDisposable
         Assert.Equal("operator", confirmation.RootElement.GetProperty("record").GetProperty("actor_role").GetString());
     }
 
+    [Fact]
+    public void AmbiguousNoTeam_EmitsMachineReadableCause()
+    {
+        using var workspace = new LaneWorkspace();
+        workspace.WriteLanePacket();
+        foreach (var team in new[] { "intent-cli-dev", "other-team" })
+        {
+            using var modeWriter = new StringWriter();
+            Assert.Equal(0, TeamModeCommand.ExecuteSet(
+                workspace.Context,
+                ["--domain", "intent-cli", "--team", team, "--mode", TeamMode.AuthoringOnly, "--write", "--format", "json"],
+                modeWriter));
+        }
+
+        using var writer = new StringWriter();
+        var exitCode = CommandRouter.Execute(
+            [
+                "automation", "branch-lane-propose-record",
+                "--execution-unit", "G669", "--actor", "design",
+                "--rationale", "ambiguous team must fail closed",
+                "--evidence", "packet snapshot", "--domain", "intent-cli",
+                "--format", "json",
+            ],
+            workspace.Context,
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var result = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(
+            TeamModeResolutionException.AmbiguousTeamScopeCode,
+            result.RootElement.GetProperty("cause").GetString());
+        Assert.Contains("refusing to guess", result.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+    }
+
     private static int RunRecordCommand(
         LaneWorkspace workspace,
         bool confirmation,

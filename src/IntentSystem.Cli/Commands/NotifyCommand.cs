@@ -159,6 +159,16 @@ internal static class NotifyCommand
         {
             teamMode = TeamModeStore.Resolve(routingRoot, options.Domain!, options.Team);
         }
+        catch (TeamModeResolutionException exception)
+        {
+            Emit(writer, options.Format, FailureResult(
+                operation,
+                options,
+                SessionLayerMode.Default,
+                TeamModeResolutionException.AmbiguousTeamScopeCode,
+                exception.Message));
+            return 1;
+        }
         catch (InvalidOperationException exception)
         {
             Emit(writer, options.Format, FailureResult(

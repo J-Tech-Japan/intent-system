@@ -80,6 +80,16 @@ internal static class BranchLaneDecisionCommand
         {
             teamMode = TeamModeStore.Resolve(context.RepoRoot, domain!, team);
         }
+        catch (TeamModeResolutionException exception)
+        {
+            return Emit(writer, format, new BranchLaneDecisionCommandResult
+            {
+                Operation = confirmation ? "confirm" : "propose",
+                ExecutionUnit = executionUnit,
+                Error = exception.Message,
+                Cause = TeamModeResolutionException.AmbiguousTeamScopeCode,
+            });
+        }
         catch (InvalidOperationException exception)
         {
             return Emit(writer, format, new BranchLaneDecisionCommandResult
@@ -586,4 +596,5 @@ internal sealed class BranchLaneDecisionCommandResult
     // System.Text.Json to serialize the abstract base type.
     public object? Record { get; init; }
     public string? Error { get; init; }
+    public string? Cause { get; init; }
 }
