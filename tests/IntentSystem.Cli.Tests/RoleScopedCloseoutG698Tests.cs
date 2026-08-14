@@ -162,9 +162,7 @@ public sealed class RoleScopedCloseoutG698Tests : IDisposable
     [Fact]
     public void OrchestrationGuides_AreExecutableFromBareDirectory_AndNameRoleSyntax_G698()
     {
-        var repoRoot = FindRepoRoot();
-        var cliDll = Path.Combine(repoRoot, "src", "IntentSystem.Cli", "bin", "Debug", "net10.0", "IntentSystem.Cli.dll");
-        Assert.True(File.Exists(cliDll), $"built CLI not found at {cliDll}");
+        var cliDll = ResolveBuiltCliFromActiveTestOutput();
 
         var bareDirectory = Path.Combine(Path.GetTempPath(), $"g698-bare-guide-{Guid.NewGuid():N}");
         Directory.CreateDirectory(bareDirectory);
@@ -185,6 +183,19 @@ public sealed class RoleScopedCloseoutG698Tests : IDisposable
         Assert.Equal(0, orchestrator.ExitCode);
         Assert.Contains("--role design", orchestrator.Output, StringComparison.Ordinal);
         Assert.Contains("--role orchestration", orchestrator.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ActiveTestOutput_ContainsRunnableCliAndRuntimeFiles_G698()
+    {
+        var cliDll = ResolveBuiltCliFromActiveTestOutput();
+        Assert.True(File.Exists(cliDll), $"built CLI not found in active test output: {cliDll}");
+        Assert.True(
+            File.Exists(Path.ChangeExtension(cliDll, ".runtimeconfig.json")),
+            $"CLI runtimeconfig not found beside active test output: {cliDll}");
+        Assert.True(
+            File.Exists(Path.ChangeExtension(cliDll, ".deps.json")),
+            $"CLI deps file not found beside active test output: {cliDll}");
     }
 
     [Fact]
@@ -222,6 +233,20 @@ public sealed class RoleScopedCloseoutG698Tests : IDisposable
 
         Assert.NotNull(dir);
         return dir!;
+    }
+
+    private static string ResolveBuiltCliFromActiveTestOutput()
+    {
+        // The test assembly is copied into the active configuration/output
+        // directory by the project reference. Resolving beside that assembly
+        // keeps Release CI, Debug runs, and custom output layouts on the same
+        // path without guessing a configuration or target framework.
+        var outputDirectory = Path.GetFullPath(AppContext.BaseDirectory);
+        var cliDll = Path.Combine(outputDirectory, "IntentSystem.Cli.dll");
+        Assert.True(
+            File.Exists(cliDll),
+            $"built CLI not found in active test output '{outputDirectory}'; expected {cliDll}");
+        return cliDll;
     }
 
     private static ProcessResult RunBuiltCli(string cliDll, string workingDirectory, params string[] arguments)
