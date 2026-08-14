@@ -17,9 +17,11 @@ public sealed class ContinuationChainG695Tests : IDisposable
     private const string Team = "intent-cli-dev";
     private const string Repo = "J-Tech-Japan/intent-system";
     private readonly string root = Directory.CreateTempSubdirectory("continuation-chain-g695-").FullName;
+    private readonly DateTimeOffset now = new(2026, 8, 14, 12, 0, 0, TimeSpan.Zero);
 
     public ContinuationChainG695Tests()
     {
+        NotifyCommand.UtcNowFactory = () => now;
         AutomationHostLoopWakeCommand.NextActionDelegate = null;
         AutomationInstalledCliSurfaceProbe.ProbeRunner = null;
         AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = null;
@@ -27,6 +29,7 @@ public sealed class ContinuationChainG695Tests : IDisposable
 
     public void Dispose()
     {
+        NotifyCommand.UtcNowFactory = null;
         AutomationHostLoopWakeCommand.NextActionDelegate = null;
         AutomationInstalledCliSurfaceProbe.ProbeRunner = null;
         AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = null;
@@ -140,6 +143,44 @@ public sealed class ContinuationChainG695Tests : IDisposable
     }
 
     [Fact]
+    public void ClassifiedThenStop_NamesAndEmitsTheOwedTerminalLink_G695()
+    {
+        var report = ContinuationChainStore.RecordReportReceived(
+            root,
+            Domain,
+            Team,
+            "G695-classified-stop",
+            "nonce-classified-stop",
+            "completed",
+            "approved-pr",
+            "classification reached without a terminal continuation");
+        Assert.NotNull(report.Record);
+
+        var signal = report.Record!.CompletionSignalId;
+        var chain = report.Record.ChainId;
+        ContinuationChainStore.RecordLink(root, Domain, Team, signal, "G695-classified-stop", chain,
+            ContinuationChainStore.OrchestrationWakeAttempted, "test", ["attempted"]);
+        ContinuationChainStore.RecordLink(root, Domain, Team, signal, "G695-classified-stop", chain,
+            ContinuationChainStore.WakeDeliveredOrObserved, "test", ["observed"]);
+        var classified = ContinuationChainStore.RecordLink(root, Domain, Team, signal, "G695-classified-stop", chain,
+            ContinuationChainStore.CanonicalStateClassified, "test", ["classification:approved"]);
+
+        Assert.Equal(ContinuationChainStore.TerminalContinuationLink, classified.Record!.NextMissingLink);
+        Assert.False(classified.Record.Complete);
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, AutomationContinuationChainCommand.Execute(
+            CreateContext(),
+            ["--domain", Domain, "--team", Team, "--completion-signal-id", signal, "--format", "json"],
+            writer));
+        using var document = JsonDocument.Parse(writer.ToString());
+        var queried = Assert.Single(document.RootElement.GetProperty("records").EnumerateArray());
+        Assert.Equal(
+            ContinuationChainStore.TerminalContinuationLink,
+            queried.GetProperty("next_missing_link").GetString());
+    }
+
+    [Fact]
     public void QuerySurface_NamesAnEmptyDurableStoreWithoutMutatingIt()
     {
         using var writer = new StringWriter();
@@ -241,6 +282,90 @@ public sealed class ContinuationChainG695Tests : IDisposable
     }
 
     [Fact]
+    public void PreExistingDeliveredStall_RefreshesTheProjectedFindingKind_G695()
+    {
+        var item = new StalledWorkItem
+        {
+            Kind = AutomationStalledWorkCommand.KindApprovedNotMerged,
+            ExecutionUnit = "G695-migration",
+            Pr = new StalledWorkRef { Number = 1503, Url = "https://github.com/example/pull/1503" },
+            AgeMinutes = 10,
+            IsInformational = false,
+            RecommendedAction = "merge then closeout",
+            ContinuationEvidence = ["lane:direct", "exact-head:abc123", "checks:all-green"],
+        };
+        var key = "stalled:approved-not-merged:G695-migration:1503";
+        SeedStall(new NotifySupervisionStallRecord
+        {
+            Key = key,
+            Kind = AutomationStalledWorkCommand.KindApprovedNotMerged,
+            OwnerRole = "orchestration",
+            Source = "legacy-supervision",
+            Summary = "legacy unprojected finding",
+            SurfacedAt = now.AddMinutes(-10),
+            WakeAttempted = true,
+            WakeDelivered = true,
+        });
+
+        var supervisor = CreateSupervisor(
+            Repo,
+            write: false,
+            stalledWorkAnalyzer: () => Result(item));
+
+        var pass = supervisor.RunOnce();
+
+        var finding = Assert.Single(pass.Findings, candidate => candidate.Key == key);
+        Assert.Equal("approved-direct-lane-merge-closeout-owed", finding.Kind);
+        Assert.Equal("merge-then-closeout", finding.OwedTransition);
+    }
+
+    [Fact]
+    public void PreExistingWakeSuppressedStall_RefreshesTheRetainedKind_G695()
+    {
+        var writer = new NotifySupervisionWriterIdentity
+        {
+            Pid = Environment.ProcessId,
+            ProcessStartTime = now.AddMinutes(-1),
+            Host = Environment.MachineName,
+        };
+        var cyclePath = NotifySupervisionStore.ResolveCyclePath(
+            CreateContext().ResolveSupervisionArtifactRootPath(), Domain, Team);
+        Assert.True(NotifySupervisionStore.RecordCycle(cyclePath, new NotifySupervisionCycle
+        {
+            CycleId = "legacy-duplicate-cycle",
+            StartedAt = now.AddSeconds(-2),
+            CompletedAt = now.AddSeconds(-1),
+            IntervalSeconds = 300,
+            Writer = writer,
+        }, write: true).Applied);
+        SeedStall(new NotifySupervisionStallRecord
+        {
+            Key = "supervisor:duplicate",
+            Kind = "legacy-duplicate-supervisor",
+            OwnerRole = "orchestration",
+            Source = "legacy-supervision",
+            Summary = "legacy duplicate finding",
+            SurfacedAt = now.AddMinutes(-10),
+        });
+
+        var supervisor = CreateSupervisor(
+            repo: null,
+            write: false,
+            writerIdentity: new NotifySupervisionWriterIdentity
+            {
+                Pid = Environment.ProcessId,
+                ProcessStartTime = now,
+                Host = Environment.MachineName,
+            },
+            writerIsLive: _ => true);
+
+        var pass = supervisor.RunOnce();
+
+        var finding = Assert.Single(pass.Findings, candidate => candidate.Key == "supervisor:duplicate");
+        Assert.Equal("duplicate-supervisor", finding.Kind);
+    }
+
+    [Fact]
     public void ApprovedDirectWake_DoesNotStopAfterClassification_G695()
     {
         var report = ContinuationChainStore.RecordReportReceived(
@@ -304,6 +429,56 @@ public sealed class ContinuationChainG695Tests : IDisposable
                 string.Empty);
     }
 
+    private NotifyMeasuredSupervisor CreateSupervisor(
+        string? repo,
+        bool write,
+        Func<AutomationStalledWorkResult>? stalledWorkAnalyzer = null,
+        NotifySupervisionWriterIdentity? writerIdentity = null,
+        Func<NotifySupervisionWriterIdentity, bool>? writerIsLive = null) => new(
+        CreateContext(),
+        root,
+        Domain,
+        Team,
+        repo,
+        ownerRole: "orchestration",
+        intervalSeconds: 300,
+        declaredBoundSeconds: null,
+        staleMinutes: 45,
+        claimedSilentMinutes: 720,
+        backlogIdleMinutes: 45,
+        repairSilentMinutes: 180,
+        autoRedispatch: false,
+        write,
+        format: "json",
+        new NoopRunner(),
+        herdrExecutable: "fake-herdr",
+        agmsgScriptsDirectory: "unused",
+        writerIdentity: writerIdentity,
+        writerIsLive: writerIsLive,
+        stalledWorkAnalyzer: stalledWorkAnalyzer);
+
+    private AutomationStalledWorkResult Result(StalledWorkItem item) => new()
+    {
+        Domain = Domain,
+        Repo = Repo,
+        StaleMinutesThreshold = 45,
+        BacklogIdleMinutesThreshold = 45,
+        OpenPendingDelegations = 0,
+        Stalled = true,
+        Items = [item],
+        Excluded = [],
+        Warnings = [],
+        OperatorAttentionStatus = null,
+        OperatorAttentionError = null,
+    };
+
+    private void SeedStall(NotifySupervisionStallRecord record)
+    {
+        var path = NotifySupervisionStore.ResolveStallPath(
+            CreateContext().ResolveSupervisionArtifactRootPath(), Domain, Team);
+        Assert.True(NotifySupervisionStore.OpenStall(path, record, write: true).Applied);
+    }
+
     private CliContext CreateContext() => new()
     {
         RepoRoot = root,
@@ -313,6 +488,10 @@ public sealed class ContinuationChainG695Tests : IDisposable
             {
                 Domain = Domain,
                 ArtifactRoot = ".intent-cli",
+            },
+            Supervision = new SupervisionConfig
+            {
+                ArtifactRoot = ".intent-cli/supervision",
             },
         },
     };

@@ -501,6 +501,7 @@ internal sealed class NotifyMeasuredSupervisor
                 // the G630 recovery path for it.
                 var retained = existing with
                 {
+                    Kind = observation.Kind,
                     Summary = observation.Summary,
                     Cause = observation.Cause ?? existing.Cause,
                     Evidence = observation.Evidence ?? existing.Evidence,
@@ -521,6 +522,7 @@ internal sealed class NotifyMeasuredSupervisor
             {
                 records.Add(existing with
                 {
+                    Kind = observation.Kind,
                     Summary = observation.Summary,
                     SubjectRole = observation.SubjectRole ?? existing.SubjectRole,
                     WakeTargetRole = ResolveWakeTarget(observation),
@@ -578,6 +580,7 @@ internal sealed class NotifyMeasuredSupervisor
             };
             record = record with
             {
+                Kind = observation.Kind,
                 Summary = observation.Summary,
                 SubjectRole = observation.SubjectRole ?? record.SubjectRole,
                 WakeTargetRole = ResolveWakeTarget(observation),

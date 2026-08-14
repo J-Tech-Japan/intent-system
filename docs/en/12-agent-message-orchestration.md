@@ -114,6 +114,10 @@ report-received
 ```
 
 Every link is timestamped and the record exposes the exact next missing link.
+When `canonical-state-classified` is present without either terminal link,
+`next_missing_link` is emitted as
+`required-continuation-started|named-blocker-recorded` so a classified-then-stop
+chain cannot appear complete or say that nothing is owed.
 Inspect all chains, or filter one completion signal, with the read-only
 surface:
 

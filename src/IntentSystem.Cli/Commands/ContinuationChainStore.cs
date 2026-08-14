@@ -19,6 +19,7 @@ internal static class ContinuationChainStore
     public const string CanonicalStateClassified = "canonical-state-classified";
     public const string RequiredContinuationStarted = "required-continuation-started";
     public const string NamedBlockerRecorded = "named-blocker-recorded";
+    public const string TerminalContinuationLink = "required-continuation-started|named-blocker-recorded";
 
     public const string RelativeDirectory = ".intent-cli/continuation-chains";
     public const string FileName = "chains.jsonl";
@@ -344,7 +345,8 @@ internal static class ContinuationChainStore
         }
 
         return RequiredLinks.FirstOrDefault(required =>
-            !links.Any(link => string.Equals(link.Name, required, StringComparison.Ordinal)));
+                   !links.Any(link => string.Equals(link.Name, required, StringComparison.Ordinal)))
+            ?? TerminalContinuationLink;
     }
 
     private static bool IsComplete(IReadOnlyList<ContinuationChainLink> links) =>

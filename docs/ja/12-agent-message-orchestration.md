@@ -104,6 +104,10 @@ report-received
 各 link は timestamp 付きで、record は正確な次の missing link を返します。全 chain を読むか、1 つの completion
 signal で絞り込む read-only surface は次です:
 
+`canonical-state-classified` があるのに terminal link がどちらもない場合、`next_missing_link` には
+`required-continuation-started|named-blocker-recorded` が出力されます。したがって classified-then-stop の chain が
+complete に見えたり、何も owed でないと表示されたりしません。
+
 ```text
 intent-cli automation continuation-chain --domain <domain> --team <team> \
   [--task-id <task-id>|--completion-signal-id <signal-id>|--chain-id <chain-id>] \
