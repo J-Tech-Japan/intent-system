@@ -21,17 +21,24 @@ internal static class GuideReachabilityDuty
         + "that explicit no-surface decision. A blank declaration is not a decision, and reachability is never "
         + "inferred from filenames, keywords, or guide wording.";
 
+    /// <summary>G698: guide route recording follows the same role split.</summary>
+    public const string RoleSplit =
+        "G698 role split — orchestration owns the mechanical closeout; design owns confirming and updating the "
+        + "role-facing guide route. Each recorder role has its own durable evidence, so one role cannot silently "
+        + "clear the other role's closeout debt.";
+
     /// <summary>The closeout cadence and recording rule.</summary>
     public const string CloseoutCheck =
-        "Same-cadence guide-reachability check: after the slice lands, confirm each packet-declared guide route "
-        + "is recorded in the host with `intent-cli automation guide-reachability-record --execution-unit <unit> "
-        + "--commit <host-sha> --write`. Until it is recorded, `automation stalled-work` reports a "
+        RoleSplit + " Same-cadence guide-reachability check: after the slice lands, confirm each packet-declared "
+        + "guide route is recorded in the host with `intent-cli automation guide-reachability-record --execution-unit <unit> "
+        + "--commit <host-sha> --role design --write` (or `--role orchestration` for orchestration's own evidence). "
+        + "Until the selected role is recorded, `automation stalled-work` reports a "
         + "`guide-reachability-pending` debt naming the execution unit and declared guide; an explicit no-surface "
         + "declaration produces no debt. This is not a merge gate and the CLI never judges guide quality or writes "
         + "guide content on design's behalf.";
 
     /// <summary>The canonical recording command for a unit.</summary>
-    public static string RecordCommand(string executionUnit) =>
+    public static string RecordCommand(string executionUnit, string role = CloseoutRecordRole.Design) =>
         $"intent-cli automation guide-reachability-record --execution-unit {executionUnit} "
-        + "--commit <host-commit-sha> --write";
+        + $"--commit <host-commit-sha> --role {role} --write";
 }

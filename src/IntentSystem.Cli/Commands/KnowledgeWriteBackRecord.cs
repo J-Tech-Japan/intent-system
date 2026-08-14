@@ -13,11 +13,13 @@ namespace IntentSystem.Cli.Commands;
 /// cannot see, so nothing could say "not done" and the tree fell weeks behind
 /// development with no structural signal.
 ///
-/// One record per execution unit at
-/// <c>.intent-cli/knowledge-writebacks/&lt;unit&gt;/record.json</c>, written
-/// only by <see cref="AutomationKnowledgeWriteBackRecordCommand"/> — hand
-/// editing is not the path, and a record whose evidence conflicts with an
-/// existing one is refused rather than overwritten.
+/// The compatibility record remains at
+/// <c>.intent-cli/knowledge-writebacks/&lt;unit&gt;/record.json</c>. Explicit
+/// G698 recorder roles use
+/// <c>.intent-cli/knowledge-writebacks/&lt;unit&gt;/records/&lt;role&gt;.json</c>,
+/// written only by <see cref="AutomationKnowledgeWriteBackRecordCommand"/>.
+/// Legacy single records remain readable and unattributed; they are never
+/// rewritten merely to add a role.
 /// </summary>
 internal sealed record KnowledgeWriteBackRecord
 {
@@ -34,6 +36,15 @@ internal sealed record KnowledgeWriteBackRecord
 
     [JsonPropertyName("execution_unit")]
     public required string ExecutionUnit { get; init; }
+
+    /// <summary>
+    /// G698 recorder attribution. Missing is intentional for a pre-G698
+    /// legacy artifact and means unattributed; newly written records carry
+    /// <c>design</c> or <c>orchestration</c>.
+    /// </summary>
+    [JsonPropertyName("role")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Role { get; init; }
 
     /// <summary>The host commit the write-back landed in — the evidence.</summary>
     [JsonPropertyName("host_commit")]
@@ -273,10 +284,23 @@ internal sealed record KnowledgeWriteBackRecord
                 + "hexadecimal SHA. Evidence a reader cannot follow to a commit is not evidence.");
         }
 
+        if (record.Role is not null
+            && !CloseoutRecordRole.TryNormalize(record.Role, out _, out var roleError))
+        {
+            throw new InvalidOperationException(
+                $"Knowledge write-back record for '{expectedExecutionUnit}' has an invalid role: {roleError}");
+        }
+
         // `targets: null` satisfies the required-member check but would hand
         // callers a null list; an unnamed target set is empty, not absent.
-        return record.Targets is null
-            ? record with { Targets = Array.Empty<string>() }
-            : record;
+        return record with
+        {
+            Role = record.Role is null
+                ? null
+                : CloseoutRecordRole.TryNormalize(record.Role, out var normalizedRole, out _)
+                    ? normalizedRole
+                    : record.Role,
+            Targets = record.Targets ?? Array.Empty<string>(),
+        };
     }
 }

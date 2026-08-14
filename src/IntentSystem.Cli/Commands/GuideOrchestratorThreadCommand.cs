@@ -2121,11 +2121,13 @@ internal static class GuideOrchestratorThreadCommand
                     + "`knowledge_updates.*.required: true` facet and `closeout_learning.write_back_required: true`, "
                     + "the report to the design thread lists the facet, its declared target paths, and whether it is "
                     + "`recorded` (with the host commit) or `pending`. A closed-out unit whose declared write-back has "
-                    + "no record is an aging `knowledge-writeback-pending` item in `automation stalled-work` / "
-                    + "`automation heartbeat`, cleared only by `intent-cli automation knowledge-writeback-record "
-                    + "--execution-unit <unit> --commit <host-sha> --write`. This is read-only propagation of packet "
-                    + "metadata: the orchestrator reports the obligation, design performs the write-back, and no thread "
-                    + "here mutates host intent content.",
+                        + "no record is an aging `knowledge-writeback-pending` item in `automation stalled-work` / "
+                        + "`automation heartbeat`, cleared for the selected recorder only by `intent-cli automation "
+                        + "knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --role design --write` "
+                        + "or `--role orchestration`. G698 keeps role records side by side and supports "
+                        + "`automation stalled-work --role <design|orchestration>` for role-specific debt clearance. "
+                        + "This is read-only propagation of packet metadata: orchestration coordinates the mechanical "
+                        + "closeout, design performs the write-back, and no thread here mutates host intent content.",
                 GuideReachabilityRule = GuideReachabilityDuty.Standard + " " + GuideReachabilityDuty.CloseoutCheck
                     + " The closeout report names each declared guide and role, whether it is recorded or pending; "
                     + "this remains a debt check and never a merge gate.",

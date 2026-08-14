@@ -1014,6 +1014,27 @@ recorder は evidence-only です。guide content を書かず、intent tree を
 同一 commit には冪等で、競合または unreadable な証跡は拒否し、packet declaration がないまたは malformed の
 場合は fail closed します。
 
+### role-scoped closeout record (G698)
+
+orchestration は mechanical closeout を担当し、design は intent-tree / ADR / diagram / docs の lesson と guide
+update を担当します。運用で使う exact command syntax は次の通りです。
+
+```text
+intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --role design [--target <path>]... --write
+intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --role orchestration [--target <path>]... --write
+intent-cli automation guide-reachability-record --execution-unit <unit> --commit <host-sha> --role design --write
+intent-cli automation guide-reachability-record --execution-unit <unit> --commit <host-sha> --role orchestration --write
+intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --role <design|orchestration> --format json
+```
+
+knowledge record は `.intent-cli/knowledge-writebacks/<unit>/records/<role>.json`、guide record は
+`.intent-cli/guide-reachability/<unit>/records/<role>.json` に異なる role ごとに併存し、read/result surface は
+全 role を列挙します。同じ role の duplicate や conflicting commit は拒否します。既存の legacy `record.json` は
+unattributed として readable のまま保持し、自動 migration / rewrite は行いません。role 無指定の scan は
+compatibility のため valid な record を受け入れますが、`stalled-work --role` は指定 role だけを clear します。
+`guide closeout run` と `guide orchestrator-thread` はこの分担と exact command を表示し、metadata-free の bare
+directory から実行できます。
+
 ### 行き詰まった published issue を retire する (G525)
 
 `intent-cli automation issue-retire --repo <r> --issue <n> --reason <superseded|decomposed|obsolete> [--note <text>] [--domain <name>] [--write]`

@@ -527,6 +527,22 @@ request.
 > 1.x, and are formalised only by a later MAJOR release. See the
 > [compatibility ledger](1.0-compatibility-ledger.md) preview rows.
 
+### Role-scoped closeout evidence (G698)
+
+Orchestration records mechanical evidence with `--role orchestration`; design
+records the intent-tree lesson and guide update with `--role design`:
+
+```text
+intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --role design --write
+intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --role orchestration --write
+intent-cli automation guide-reachability-record --execution-unit <unit> --commit <host-sha> --role design --write
+intent-cli automation guide-reachability-record --execution-unit <unit> --commit <host-sha> --role orchestration --write
+```
+
+Use `automation stalled-work --role design|orchestration` to verify one role's
+debt. Different roles coexist under `records/<role>.json`; legacy `record.json`
+remains readable and unattributed, with no automatic migration.
+
 ### Guide reachability (G645 — preview-through-1.x)
 
 The keyword-to-guide standard is part of the workflow: handing a thread a

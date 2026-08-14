@@ -444,6 +444,22 @@ pending state の mutation に置きます。認識されない identifier を�
 > 1.x の間に変更・撤回できます。後続 MAJOR release でのみ正式化します。[compatibility ledger]
 > (1.0-compatibility-ledger.md) の preview row を参照してください。
 
+### role-scoped closeout evidence (G698)
+
+orchestration は mechanical closeout の evidence を `--role orchestration` で記録し、design は intent-tree の
+lesson と guide update を `--role design` で記録します。
+
+```text
+intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --role design --write
+intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --role orchestration --write
+intent-cli automation guide-reachability-record --execution-unit <unit> --commit <host-sha> --role design --write
+intent-cli automation guide-reachability-record --execution-unit <unit> --commit <host-sha> --role orchestration --write
+```
+
+`automation stalled-work --role design|orchestration` は一つの role の debt だけを検証します。different role は
+`records/<role>.json` の下で併存し、既存の legacy `record.json` は unattributed として readable のままです。
+自動 migration はありません。
+
 ### guide reachability (G645 — preview-through-1.x)
 
 keyword-to-guide standard は workflow の一部です。thread に keyword を渡せば、その thread は named guide に

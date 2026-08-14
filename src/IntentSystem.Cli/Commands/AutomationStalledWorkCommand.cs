@@ -495,7 +495,7 @@ internal static class AutomationStalledWorkCommand
     };
 
     private const string UsageLine =
-        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--team <name>] [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--knowledge-writeback-since <iso-8601>] [--guide-reachability-since <iso-8601>] [--format json|markdown]";
+        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--team <name>] [--role <design|orchestration>] [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--knowledge-writeback-since <iso-8601>] [--guide-reachability-since <iso-8601>] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -509,7 +509,7 @@ internal static class AutomationStalledWorkCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var domain, out var repo, out var team, out var staleMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var repairSilentMinutes, out var knowledgeWriteBackSince, out var guideReachabilitySince, out var format, out var error))
+        if (!TryParseArguments(args, out var domain, out var repo, out var team, out var recordingRole, out var staleMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var repairSilentMinutes, out var knowledgeWriteBackSince, out var guideReachabilitySince, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -519,7 +519,7 @@ internal static class AutomationStalledWorkCommand
         AutomationStalledWorkResult result;
         try
         {
-            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes, repairSilentMinutes, knowledgeWriteBackSince, guideReachabilitySince, team);
+            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes, repairSilentMinutes, knowledgeWriteBackSince, guideReachabilitySince, team, recordingRole);
         }
         catch (TeamModeResolutionException exception)
         {
@@ -570,7 +570,8 @@ internal static class AutomationStalledWorkCommand
         int repairSilentMinutes = DefaultRepairSilentMinutes,
         DateTimeOffset? knowledgeWriteBackSince = null,
         DateTimeOffset? guideReachabilitySince = null,
-        string? team = null)
+        string? team = null,
+        string? recordingRole = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
@@ -704,7 +705,8 @@ internal static class AutomationStalledWorkCommand
             now,
             knowledgeWriteBackSince ?? KnowledgeWriteBackActivationUtc,
             items,
-            excluded);
+            excluded,
+            recordingRole);
         CollectGuideReachabilityPending(
             context,
             domain,
@@ -714,7 +716,8 @@ internal static class AutomationStalledWorkCommand
             guideReachabilitySince ?? GuideReachabilityActivationUtc,
             items,
             excluded,
-            warnings);
+            warnings,
+            recordingRole);
         CollectPendingDelegations(openPendingDelegations, now, capabilityMatrix, items);
 
         var operatorAttention = CollectOperatorAttention(context, domain, now, items);
@@ -750,6 +753,7 @@ internal static class AutomationStalledWorkCommand
             Domain = domain,
             CapabilityMatrix = capabilityMatrix.IsAuthoringOnly ? capabilityMatrix : null,
             Repo = repo,
+            RecordingRole = recordingRole,
             StaleMinutesThreshold = staleMinutes,
             BacklogIdleMinutesThreshold = backlogIdleMinutes,
             OpenPendingDelegations = openPendingDelegations.Count,
@@ -3263,7 +3267,8 @@ internal static class AutomationStalledWorkCommand
         DateTimeOffset now,
         DateTimeOffset since,
         List<StalledWorkItem> items,
-        List<StalledWorkExcluded> excluded)
+        List<StalledWorkExcluded> excluded,
+        string? recordingRole = null)
     {
         var runLogPath = context.GetRunLogPath();
         if (!File.Exists(runLogPath))
@@ -3388,41 +3393,21 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            var recordPath = KnowledgeWriteBackRecord.ResolveFullPath(context.RepoRoot, executionUnit);
-            if (File.Exists(recordPath))
+            var recordEntries = new List<(string Path, KnowledgeWriteBackRecord Record)>();
+            var recordReadFailed = false;
+            foreach (var recordPath in RoleScopedCloseoutRecordStore.EnumerateExistingPaths(
+                         context.RepoRoot,
+                         KnowledgeWriteBackRecord.RecordRootRelativePath,
+                         executionUnit))
             {
                 try
                 {
-                    // G564 review repair: the record must NAME this unit and
-                    // carry SHA-shaped evidence. Clearing on any deserializable
-                    // file let a record carrying a different unit's id — or a
-                    // host_commit that is not a commit — discharge this unit's
-                    // obligation.
-                    _ = KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(recordPath), executionUnit);
-                    var relativeRecordPath = KnowledgeWriteBackRecord.ResolveRelativePath(executionUnit);
-                    if (IsGitPathUncommitted(context.RepoRoot, relativeRecordPath))
-                    {
-                        items.Add(new StalledWorkItem
-                        {
-                            Kind = KindKnowledgeWritebackRecordedUncommitted,
-                            ExecutionUnit = executionUnit,
-                            Issue = null,
-                            Pr = null,
-                            AgeMinutes = ComputeAgeMinutesFromInstant(ClampToNow(closedAt, now), now),
-                            IsInformational = false,
-                            DeclaredWriteBackTargets = declaration.DeclaredTargets,
-                            RecordPath = relativeRecordPath,
-                            RecommendedAction =
-                                $"commit and push `{relativeRecordPath}` in the host repo, then re-run stalled-work. "
-                                + "The record exists only in this checkout until both steps complete; intent-cli never auto-commits.",
-                        });
-                    }
-
-                    // A committed record discharges the obligation. If git
-                    // status cannot be established (legacy/non-git fixture),
-                    // preserve the pre-G661 clearing behavior rather than
-                    // manufacturing a dirty finding without evidence.
-                    continue;
+                    // G698: validate every compatibility or role sidecar
+                    // record. A malformed sidecar is never silently omitted
+                    // from a multi-role read.
+                    recordEntries.Add((
+                        recordPath,
+                        KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(recordPath), executionUnit)));
                 }
                 catch (Exception exception) when (exception is IOException or InvalidOperationException)
                 {
@@ -3438,9 +3423,63 @@ internal static class AutomationStalledWorkCommand
                             + $"{exception.Message}. Excluded with its path rather than counted as cleared — an "
                             + "unreadable record is not evidence that the write-back happened.",
                     });
-                    continue;
+                    recordEntries.Clear();
+                    recordReadFailed = true;
+                    break;
                 }
             }
+
+            if (recordReadFailed)
+            {
+                continue;
+            }
+
+            var consideredEntries = recordingRole is null
+                ? recordEntries
+                : recordEntries
+                    .Where(entry => string.Equals(entry.Record.Role, recordingRole, StringComparison.Ordinal))
+                    .ToList();
+            if (recordEntries.Count > 0 && consideredEntries.Count > 0)
+            {
+                foreach (var (recordPath, record) in consideredEntries)
+                {
+                    var relativeRecordPath = Path.GetRelativePath(context.RepoRoot, recordPath)
+                        .Replace(Path.DirectorySeparatorChar, '/');
+                    if (IsGitPathUncommitted(context.RepoRoot, relativeRecordPath))
+                    {
+                        items.Add(new StalledWorkItem
+                        {
+                            Kind = KindKnowledgeWritebackRecordedUncommitted,
+                            ExecutionUnit = executionUnit,
+                            Issue = null,
+                            Pr = null,
+                            AgeMinutes = ComputeAgeMinutesFromInstant(ClampToNow(closedAt, now), now),
+                            IsInformational = false,
+                            DeclaredWriteBackTargets = declaration.DeclaredTargets,
+                            RecordPath = relativeRecordPath,
+                            RecordingRole = recordingRole,
+                            RecordedRoles = recordEntries
+                                .Select(entry => CloseoutRecordRole.Display(entry.Record.Role))
+                                .Distinct(StringComparer.Ordinal)
+                                .OrderBy(role => role, StringComparer.Ordinal)
+                                .ToArray(),
+                            RecommendedAction =
+                                $"commit and push `{relativeRecordPath}` in the host repo, then re-run stalled-work. "
+                                + "The record exists only in this checkout until both steps complete; intent-cli never auto-commits.",
+                        });
+                    }
+                }
+
+                // A committed record discharges the obligation. A role-scoped
+                // scan considers only the requested recorder role.
+                continue;
+            }
+
+            var recordedRoles = recordEntries
+                .Select(entry => CloseoutRecordRole.Display(entry.Record.Role))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(role => role, StringComparer.Ordinal)
+                .ToArray();
 
             items.Add(new StalledWorkItem
             {
@@ -3457,7 +3496,9 @@ internal static class AutomationStalledWorkCommand
                     "closeout-recorded",
                     $"declared-targets:{string.Join(",", declaration.DeclaredTargets)}",
                 ],
-                RecommendedAction = BuildKnowledgeWritebackPendingAction(executionUnit, declaration),
+                RecordingRole = recordingRole,
+                RecordedRoles = recordedRoles.Length == 0 ? null : recordedRoles,
+                RecommendedAction = BuildKnowledgeWritebackPendingAction(executionUnit, declaration, recordingRole),
             });
         }
     }
@@ -3514,17 +3555,20 @@ internal static class AutomationStalledWorkCommand
     /// </summary>
     private static string BuildKnowledgeWritebackPendingAction(
         string executionUnit,
-        KnowledgeWriteBackDeclaration declaration)
+        KnowledgeWriteBackDeclaration declaration,
+        string? recordingRole = null)
     {
         var facets = string.Join(", ", declaration.RequiredFacets);
         var targets = declaration.DeclaredTargets.Count > 0
             ? string.Join(", ", declaration.DeclaredTargets)
             : "(no target paths named in the packet)";
 
+        var role = recordingRole ?? CloseoutRecordRole.Design;
+
         return
             $"perform and record the declared knowledge write-back for `{executionUnit}` "
             + $"(declared: {facets}; targets: {targets}) — design writes the tree/ADR/diagram/docs in the host repo, "
-            + $"then: `{IntentTreeCoEvolutionDuty.RecordCommand(executionUnit)}`. "
+            + $"then: `{IntentTreeCoEvolutionDuty.RecordCommand(executionUnit, role)}`. "
             + "This item stays visible until a record exists; closing the PR does not clear it, and nothing here "
             + "writes intent content on design's behalf.";
     }
@@ -3546,7 +3590,8 @@ internal static class AutomationStalledWorkCommand
         DateTimeOffset since,
         List<StalledWorkItem> items,
         List<StalledWorkExcluded> excluded,
-        List<string> warnings)
+        List<string> warnings,
+        string? recordingRole = null)
     {
         var runLogPath = context.GetRunLogPath();
         if (!File.Exists(runLogPath))
@@ -3701,12 +3746,18 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            if (File.Exists(recordPath))
+            var recordEntries = new List<(string Path, GuideReachabilityRecord Record)>();
+            var recordReadFailed = false;
+            foreach (var existingPath in RoleScopedCloseoutRecordStore.EnumerateExistingPaths(
+                         context.RepoRoot,
+                         GuideReachabilityRecord.RecordRootRelativePath,
+                         executionUnit))
             {
                 try
                 {
-                    _ = GuideReachabilityRecord.Deserialize(File.ReadAllText(recordPath), executionUnit);
-                    continue;
+                    recordEntries.Add((
+                        existingPath,
+                        GuideReachabilityRecord.Deserialize(File.ReadAllText(existingPath), executionUnit)));
                 }
                 catch (Exception exception) when (exception is IOException or InvalidOperationException)
                 {
@@ -3718,12 +3769,37 @@ internal static class AutomationStalledWorkCommand
                         Pr = null,
                         Reason = ReasonGuideReachabilityMetadataUnreadable,
                         Detail =
-                            $"'{executionUnit}': guide-reachability record '{recordPath}' could not be read: "
+                            $"'{executionUnit}': guide-reachability record '{existingPath}' could not be read: "
                             + $"{exception.Message}. An unreadable record is not evidence of clearance.",
                     });
-                    continue;
+                    recordReadFailed = true;
+                    break;
                 }
             }
+
+            if (recordReadFailed)
+            {
+                continue;
+            }
+
+            var consideredEntries = recordingRole is null
+                ? recordEntries
+                : recordEntries
+                    .Where(entry => string.Equals(entry.Record.Role, recordingRole, StringComparison.Ordinal))
+                    .ToList();
+            if (recordEntries.Count > 0 && consideredEntries.Count > 0)
+            {
+                // A committed record for the selected role clears this unit.
+                // The detector remains observation-only; it never writes or
+                // repairs a record.
+                continue;
+            }
+
+            var recordedRoles = recordEntries
+                .Select(entry => CloseoutRecordRole.Display(entry.Record.Role))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(role => role, StringComparer.Ordinal)
+                .ToArray();
 
             items.Add(new StalledWorkItem
             {
@@ -3735,22 +3811,27 @@ internal static class AutomationStalledWorkCommand
                 IsInformational = false,
                 DeclaredGuideSurfaces = declaration.Routes.Select(route => route.GuideSurface).Distinct(StringComparer.Ordinal).ToArray(),
                 DeclaredGuideRoles = declaration.Routes.Select(route => route.Role).Distinct(StringComparer.Ordinal).ToArray(),
-                RecommendedAction = BuildGuideReachabilityPendingAction(executionUnit, declaration),
+                RecordingRole = recordingRole,
+                RecordedRoles = recordedRoles.Length == 0 ? null : recordedRoles,
+                RecommendedAction = BuildGuideReachabilityPendingAction(executionUnit, declaration, recordingRole),
             });
         }
     }
 
     private static string BuildGuideReachabilityPendingAction(
         string executionUnit,
-        GuideReachabilityDeclaration declaration)
+        GuideReachabilityDeclaration declaration,
+        string? recordingRole = null)
     {
         var routes = string.Join(
             "; ",
             declaration.Routes.Select(route => $"{route.GuideSurface} -> {route.Role} -> {route.TargetSurface}"));
 
+        var role = recordingRole ?? CloseoutRecordRole.Design;
+
         return
             $"confirm and record the declared guide route(s) for '{executionUnit}' ({routes}) — design updates the "
-            + $"named guide in the host, then: '{GuideReachabilityDuty.RecordCommand(executionUnit)}'. "
+            + $"named guide in the host, then: '{GuideReachabilityDuty.RecordCommand(executionUnit, role)}'. "
             + "This is closeout debt, not a merge gate; reachability is never inferred and guide wording is never judged here.";
     }
 
@@ -4230,6 +4311,7 @@ internal static class AutomationStalledWorkCommand
         out string? domain,
         out string? repo,
         out string? team,
+        out string? recordingRole,
         out int staleMinutes,
         out int claimedSilentMinutes,
         out int backlogIdleMinutes,
@@ -4242,6 +4324,7 @@ internal static class AutomationStalledWorkCommand
         domain = null;
         repo = null;
         team = null;
+        recordingRole = null;
         staleMinutes = 0;
         claimedSilentMinutes = DefaultClaimedSilentMinutes;
         backlogIdleMinutes = DefaultBacklogIdleMinutes;
@@ -4278,6 +4361,19 @@ internal static class AutomationStalledWorkCommand
                         return false;
                     }
                     team = args[++index].Trim();
+                    break;
+                case "--role":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--role requires 'design' or 'orchestration'.";
+                        return false;
+                    }
+                    recordingRole = args[++index].Trim();
+                    if (!CloseoutRecordRole.TryNormalize(recordingRole, out recordingRole, out var recordingRoleError))
+                    {
+                        error = $"--role is invalid: {recordingRoleError}";
+                        return false;
+                    }
                     break;
                 case "--stale-minutes":
                     if (index + 1 >= args.Length
@@ -4395,6 +4491,10 @@ internal static class AutomationStalledWorkCommand
         writer.WriteLine();
         writer.WriteLine($"- stale_minutes_threshold: {result.StaleMinutesThreshold}");
         writer.WriteLine($"- backlog_idle_minutes_threshold: {result.BacklogIdleMinutesThreshold}");
+        if (result.RecordingRole is not null)
+        {
+            writer.WriteLine($"- recording_role: {result.RecordingRole}");
+        }
         writer.WriteLine($"- open_pending_delegations: {result.OpenPendingDelegations}");
         writer.WriteLine($"- stalled: {(result.Stalled ? "true" : "false")}");
         writer.WriteLine($"- items: {result.Items.Count}");
@@ -4603,6 +4703,11 @@ internal sealed record AutomationStalledWorkResult
     [JsonPropertyName("repo")]
     public required string Repo { get; init; }
 
+    /// <summary>G698: optional role filter used for role-specific debt clearance.</summary>
+    [JsonPropertyName("recording_role")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RecordingRole { get; init; }
+
     [JsonPropertyName("stale_minutes_threshold")]
     public required int StaleMinutesThreshold { get; init; }
 
@@ -4794,6 +4899,21 @@ internal sealed record StalledWorkItem
     [JsonPropertyName("record_path")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RecordPath { get; init; }
+
+    /// <summary>
+    /// G698: when a closeout scan is role-scoped, this is the recorder role
+    /// whose debt is being tested. Null preserves the unscoped compatibility
+    /// scan, which clears on any valid record (including an unattributed
+    /// legacy record).
+    /// </summary>
+    [JsonPropertyName("recording_role")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RecordingRole { get; init; }
+
+    /// <summary>G698: roles already recorded for this execution unit.</summary>
+    [JsonPropertyName("recorded_roles")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? RecordedRoles { get; init; }
 
     /// <summary>G679: attributed holder for a stale Git-backed claim.</summary>
     [JsonPropertyName("claim_actor")]

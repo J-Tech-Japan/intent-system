@@ -8,6 +8,13 @@ internal sealed record CliContext
 
     public required CliConfig Config { get; init; }
 
+    /// <summary>
+    /// Optional role supplied by a role-facing caller. Metadata-free child
+    /// checkouts leave this unset; closeout recorders then use their explicit
+    /// <c>--role</c> or the documented compatibility default.
+    /// </summary>
+    public string? InvokingRole { get; init; }
+
     public string GetIntentCliDirectoryPath()
     {
         return CliRuntimeContracts.GetIntentCliDirectoryPath(RepoRoot);

@@ -4,9 +4,10 @@ using System.Text.Json.Serialization;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G564: <c>intent-cli automation knowledge-writeback-record --execution-unit
-/// &lt;u&gt; --commit &lt;sha&gt; [--target &lt;path&gt;]... [--note &lt;text&gt;]
-/// [--dry-run|--write] [--format json|markdown]</c> — records that the
+/// G698: <c>intent-cli automation knowledge-writeback-record --execution-unit
+/// &lt;u&gt; --commit &lt;sha&gt; --role &lt;design|orchestration&gt;
+/// [--target &lt;path&gt;]... [--note &lt;text&gt;] [--dry-run|--write]
+/// [--format json|markdown]</c> — records that the
 /// write-backs a packet DECLARED were performed, with the host commit as
 /// evidence.
 ///
@@ -43,7 +44,7 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
 
     private const string UsageLine =
         "Usage: intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-commit-sha> "
-        + "[--target <path>]... [--note <text>] [--dry-run|--write] [--format json|markdown]";
+        + "[--role <design|orchestration>] [--target <path>]... [--note <text>] [--dry-run|--write] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -57,11 +58,28 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var executionUnit, out var commit, out var targets, out var note, out var write, out var format, out var parseError))
+        if (!TryParseArguments(args, out var executionUnit, out var commit, out var requestedRole, out var targets, out var note, out var write, out var format, out var parseError))
         {
             writer.WriteLine(parseError);
             writer.WriteLine(UsageLine);
             return 1;
+        }
+
+        if (!CloseoutRecordRole.TryResolve(
+                requestedRole,
+                context.InvokingRole,
+                out var recordingRole,
+                out var roleSource,
+                out var roleError))
+        {
+            return Fail(
+                writer,
+                format,
+                executionUnit!,
+                roleError,
+                recordingRole: null,
+                roleSource: "invalid",
+                records: Array.Empty<CloseoutRecordSummary>());
         }
 
         // G564 review repair: both paths are resolved through the containment
@@ -76,9 +94,14 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
         }
         catch (InvalidOperationException exception)
         {
-            writer.WriteLine($"--execution-unit '{executionUnit}' is not usable: {exception.Message}");
-            writer.WriteLine(UsageLine);
-            return 1;
+            return Fail(
+                writer,
+                format,
+                executionUnit!,
+                $"--execution-unit '{executionUnit}' is not usable: {exception.Message}",
+                recordingRole,
+                roleSource,
+                Array.Empty<CloseoutRecordSummary>());
         }
 
         if (!File.Exists(packetPath))
@@ -89,7 +112,10 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
                 executionUnit!,
                 $"unknown execution unit '{executionUnit}': no packet at `{packetPath}`. A write-back record is "
                 + "evidence for a DECLARED obligation, so it is never recorded against a unit this host cannot "
-                + "resolve. Check the unit id, or run this from the host repo root that owns `.intent-cli/`.");
+                + "resolve. Check the unit id, or run this from the host repo root that owns `.intent-cli/`.",
+                recordingRole,
+                roleSource,
+                Array.Empty<CloseoutRecordSummary>());
         }
 
         KnowledgeWriteBackDeclaration declaration;
@@ -103,11 +129,17 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
                 writer,
                 format,
                 executionUnit!,
-                $"packet `{packetPath}` could not be read for its knowledge write-back declaration: {exception.Message}");
+                $"packet `{packetPath}` could not be read for its knowledge write-back declaration: {exception.Message}",
+                recordingRole,
+                roleSource,
+                Array.Empty<CloseoutRecordSummary>());
         }
 
-        KnowledgeWriteBackRecord? existing = null;
-        if (File.Exists(recordPath))
+        var existingRecords = new List<(string Path, KnowledgeWriteBackRecord Record)>();
+        foreach (var existingPath in RoleScopedCloseoutRecordStore.EnumerateExistingPaths(
+                     context.RepoRoot,
+                     KnowledgeWriteBackRecord.RecordRootRelativePath,
+                     executionUnit!))
         {
             try
             {
@@ -115,7 +147,9 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
                 // THIS unit and against SHA-shaped evidence before it is allowed
                 // to short-circuit anything — an unreadable or mis-attributed
                 // record must never be silently accepted as prior evidence.
-                existing = KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(recordPath), executionUnit!);
+                existingRecords.Add((
+                    existingPath,
+                    KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(existingPath), executionUnit!)));
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException)
             {
@@ -123,10 +157,38 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
                     writer,
                     format,
                     executionUnit!,
-                    $"an existing record at `{recordPath}` could not be read: {exception.Message}. Refusing to "
-                    + "overwrite unreadable evidence — repair or remove the artifact deliberately, then re-run.");
+                    $"an existing record at `{existingPath}` could not be read: {exception.Message}. Refusing to "
+                    + "overwrite unreadable evidence — repair or remove the artifact deliberately, then re-run.",
+                    recordingRole,
+                    roleSource,
+                    Array.Empty<CloseoutRecordSummary>());
             }
         }
+
+        var duplicateRoleRecords = existingRecords
+            .Where(entry => string.Equals(entry.Record.Role, recordingRole, StringComparison.Ordinal))
+            .ToArray();
+        if (duplicateRoleRecords.Length > 1)
+        {
+            return Fail(
+                writer,
+                format,
+                executionUnit!,
+                $"`{executionUnit}` has more than one write-back record for role `{recordingRole}` "
+                + $"({string.Join(", ", duplicateRoleRecords.Select(entry => Path.GetRelativePath(context.RepoRoot, entry.Path).Replace(Path.DirectorySeparatorChar, '/')))}). "
+                + "Refusing to choose between duplicate role evidence.",
+                recordingRole,
+                roleSource,
+                BuildSummaries(context.RepoRoot, existingRecords));
+        }
+
+        var compatibilityExisting = requestedRole is null && context.InvokingRole is null
+            ? existingRecords.FirstOrDefault(entry => entry.Record.Role is null).Record
+            : null;
+        var existing = duplicateRoleRecords.FirstOrDefault().Record ?? compatibilityExisting;
+        var existingEntry = existing is null
+            ? ((string Path, KnowledgeWriteBackRecord Record)?)null
+            : existingRecords.FirstOrDefault(entry => ReferenceEquals(entry.Record, existing));
 
         if (existing is not null
             && !string.Equals(existing.HostCommit, commit, StringComparison.OrdinalIgnoreCase))
@@ -136,9 +198,12 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
                 format,
                 executionUnit!,
                 $"`{executionUnit}` already carries a write-back record for commit `{existing.HostCommit}` "
-                + $"(recorded {existing.RecordedAt:O}); refusing to replace it with `{commit}`. Evidence is "
-                + "append-only in spirit: record a LATER write-back as its own unit's record, or remove the "
-                + "existing artifact deliberately if it was wrong.");
+                + $"(recorded {existing.RecordedAt:O}, role `{CloseoutRecordRole.Display(existing.Role)}`); refusing to replace it with `{commit}`. Evidence is "
+                + "append-only in spirit: record a LATER write-back as its own role's record, or remove the "
+                + "existing artifact deliberately if it was wrong.",
+                recordingRole,
+                roleSource,
+                BuildSummaries(context.RepoRoot, existingRecords));
         }
 
         var warnings = new List<string>();
@@ -161,16 +226,40 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
             RecordedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
             Targets = targets,
             Note = note,
+            Role = recordingRole,
         };
+
+        var writePath = existingEntry?.Path
+            ?? (CloseoutRecordRole.IsRoleScoped(requestedRole, context.InvokingRole)
+                ? RoleScopedCloseoutRecordStore.ResolveRoleFullPath(
+                    context.RepoRoot,
+                    KnowledgeWriteBackRecord.RecordRootRelativePath,
+                    executionUnit!,
+                    recordingRole!)
+                : recordPath);
 
         var applied = false;
         if (write && !alreadyRecorded)
         {
-            var directory = Path.GetDirectoryName(recordPath)
+            var directory = Path.GetDirectoryName(writePath)
                 ?? throw new InvalidOperationException("Knowledge write-back record path did not contain a directory.");
             Directory.CreateDirectory(directory);
-            File.WriteAllText(recordPath, KnowledgeWriteBackRecord.Serialize(record));
+            File.WriteAllText(writePath, KnowledgeWriteBackRecord.Serialize(record));
             applied = true;
+        }
+
+        var summaries = BuildSummaries(context.RepoRoot, existingRecords);
+        if (applied)
+        {
+            summaries = summaries
+                .Append(RoleScopedCloseoutRecordStore.Summary(
+                    writePath,
+                    context.RepoRoot,
+                    record.Role,
+                    record.HostCommit,
+                    record.RecordedAt))
+                .OrderBy(summary => summary.RecordPath, StringComparer.Ordinal)
+                .ToArray();
         }
 
         var result = new KnowledgeWriteBackRecordResult
@@ -181,14 +270,18 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
             AlreadyRecorded = alreadyRecorded,
             HostCommit = record.HostCommit,
             RecordedAt = record.RecordedAt,
-            RecordPath = KnowledgeWriteBackRecord.ResolveRelativePath(executionUnit!),
+            RecordPath = Path.GetRelativePath(context.RepoRoot, writePath).Replace(Path.DirectorySeparatorChar, '/'),
+            RecordingRole = recordingRole,
+            RoleSource = roleSource,
+            RecordedRoles = summaries.Select(summary => CloseoutRecordRole.Display(summary.Role)).Distinct(StringComparer.Ordinal).ToArray(),
+            Records = summaries,
             Targets = record.Targets,
             DeclaredTargets = declaration.DeclaredTargets,
             DeclaredFacets = declaration.RequiredFacets,
             DeclarationRequired = declaration.IsRequired,
             Note = record.Note,
             CommitPushRequiredForOtherCheckouts = true,
-            DurabilityGuidance = BuildDurabilityGuidance(KnowledgeWriteBackRecord.ResolveRelativePath(executionUnit!)),
+            DurabilityGuidance = BuildDurabilityGuidance(Path.GetRelativePath(context.RepoRoot, writePath).Replace(Path.DirectorySeparatorChar, '/')),
             Warnings = warnings,
             Error = null,
         };
@@ -197,7 +290,14 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
         return 0;
     }
 
-    private static int Fail(TextWriter writer, string format, string executionUnit, string error)
+    private static int Fail(
+        TextWriter writer,
+        string format,
+        string executionUnit,
+        string error,
+        string? recordingRole = null,
+        string roleSource = "unknown",
+        IReadOnlyList<CloseoutRecordSummary>? records = null)
     {
         var result = new KnowledgeWriteBackRecordResult
         {
@@ -208,6 +308,11 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
             HostCommit = null,
             RecordedAt = null,
             RecordPath = KnowledgeWriteBackRecord.ResolveRelativePath(executionUnit),
+            RecordingRole = recordingRole,
+            RoleSource = roleSource,
+            RecordedRoles = records?.Select(summary => CloseoutRecordRole.Display(summary.Role)).Distinct(StringComparer.Ordinal).ToArray()
+                ?? Array.Empty<string>(),
+            Records = records ?? Array.Empty<CloseoutRecordSummary>(),
             Targets = Array.Empty<string>(),
             DeclaredTargets = Array.Empty<string>(),
             DeclaredFacets = Array.Empty<string>(),
@@ -222,6 +327,19 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
         Emit(writer, format, result);
         return 1;
     }
+
+    private static IReadOnlyList<CloseoutRecordSummary> BuildSummaries(
+        string repoRoot,
+        IEnumerable<(string Path, KnowledgeWriteBackRecord Record)> records) =>
+        records
+            .Select(entry => RoleScopedCloseoutRecordStore.Summary(
+                entry.Path,
+                repoRoot,
+                entry.Record.Role,
+                entry.Record.HostCommit,
+                entry.Record.RecordedAt))
+            .OrderBy(summary => summary.RecordPath, StringComparer.Ordinal)
+            .ToArray();
 
     private static void Emit(TextWriter writer, string format, KnowledgeWriteBackRecordResult result)
     {
@@ -238,6 +356,12 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
         writer.WriteLine($"- applied: {(result.Applied ? "true" : "false")}");
         writer.WriteLine($"- already_recorded: {(result.AlreadyRecorded ? "true" : "false")}");
         writer.WriteLine($"- record_path: `{result.RecordPath}`");
+        writer.WriteLine($"- recording_role: `{result.RecordingRole ?? "unattributed"}`");
+        writer.WriteLine($"- role_source: `{result.RoleSource}`");
+        if (result.RecordedRoles.Count > 0)
+        {
+            writer.WriteLine($"- recorded_roles: {string.Join(", ", result.RecordedRoles)}");
+        }
         if (!string.IsNullOrWhiteSpace(result.HostCommit))
         {
             writer.WriteLine($"- host_commit: `{result.HostCommit}`");
@@ -283,6 +407,7 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
         string[] args,
         out string? executionUnit,
         out string? commit,
+        out string? requestedRole,
         out IReadOnlyList<string> targets,
         out string? note,
         out bool write,
@@ -291,6 +416,7 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
     {
         executionUnit = null;
         commit = null;
+        requestedRole = null;
         note = null;
         write = false;
         format = FormatMarkdown;
@@ -321,6 +447,15 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
                         return false;
                     }
                     commit = args[++index];
+                    break;
+
+                case "--role":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--role requires 'design' or 'orchestration'.";
+                        return false;
+                    }
+                    requestedRole = args[++index];
                     break;
 
                 case "--target":
@@ -399,6 +534,12 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
             return false;
         }
 
+        if (!CloseoutRecordRole.TryNormalize(requestedRole ?? CloseoutRecordRole.Design, out _, out var roleError))
+        {
+            error = $"--role is invalid: {roleError}";
+            return false;
+        }
+
         // Normalize so `--commit ABC123…` and `--commit abc123…` are the same
         // evidence for the idempotency check as well as on disk.
         commit = commit!.ToLowerInvariant();
@@ -414,7 +555,8 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
         writer.WriteLine(IntentTreeCoEvolutionDuty.CloseoutCheck);
         writer.WriteLine();
         writer.WriteLine("Records that a packet-declared knowledge write-back was performed, with the host commit as evidence.");
-        writer.WriteLine("  --dry-run (default) plans only; --write persists `.intent-cli/knowledge-writebacks/<unit>/record.json`.");
+        writer.WriteLine("  --role design|orchestration attributes the recorder; omit it only for the compatibility default (design).");
+        writer.WriteLine("  --dry-run (default) plans only; --write persists the legacy record.json or explicit role sidecar under records/<role>.json.");
         writer.WriteLine("  Idempotent: re-recording the SAME commit is a no-op success; a DIFFERENT commit is refused, never overwritten.");
         writer.WriteLine("  Fail-closed: an unknown execution unit (no packet) and non-SHA evidence are both refused.");
         writer.WriteLine("  Never writes intent content — the tree is written by design; this command only records that it was.");
@@ -443,6 +585,18 @@ internal sealed record KnowledgeWriteBackRecordResult
 
     [JsonPropertyName("record_path")]
     public required string RecordPath { get; init; }
+
+    [JsonPropertyName("recording_role")]
+    public required string? RecordingRole { get; init; }
+
+    [JsonPropertyName("role_source")]
+    public required string RoleSource { get; init; }
+
+    [JsonPropertyName("recorded_roles")]
+    public required IReadOnlyList<string> RecordedRoles { get; init; }
+
+    [JsonPropertyName("records")]
+    public required IReadOnlyList<CloseoutRecordSummary> Records { get; init; }
 
     [JsonPropertyName("targets")]
     public required IReadOnlyList<string> Targets { get; init; }

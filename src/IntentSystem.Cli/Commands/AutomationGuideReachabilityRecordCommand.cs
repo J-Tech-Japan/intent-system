@@ -4,7 +4,8 @@ using System.Text.Json.Serialization;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G645: records that the guide routes a packet declared were updated. This
+/// G698: records that the guide routes a packet declared were updated, with
+/// the recorder role attributed. This
 /// command records evidence only; it never edits guide prose or the intent
 /// tree. It is shaped like the G564 write-back recorder so a closeout wake can
 /// perform both checks at the same cadence.
@@ -22,7 +23,7 @@ internal static class AutomationGuideReachabilityRecordCommand
 
     private const string UsageLine =
         "Usage: intent-cli automation guide-reachability-record --execution-unit <unit> --commit <host-commit-sha> "
-        + "[--note <text>] [--dry-run|--write] [--format json|markdown]";
+        + "[--role <design|orchestration>] [--note <text>] [--dry-run|--write] [--format json|markdown]";
 
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
 
@@ -38,11 +39,28 @@ internal static class AutomationGuideReachabilityRecordCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var executionUnit, out var commit, out var note, out var write, out var format, out var error))
+        if (!TryParseArguments(args, out var executionUnit, out var commit, out var requestedRole, out var note, out var write, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
             return 1;
+        }
+
+        if (!CloseoutRecordRole.TryResolve(
+                requestedRole,
+                context.InvokingRole,
+                out var recordingRole,
+                out var roleSource,
+                out var roleError))
+        {
+            return Fail(
+                writer,
+                format,
+                executionUnit ?? string.Empty,
+                roleError,
+                recordingRole: null,
+                roleSource: "invalid",
+                records: Array.Empty<CloseoutRecordSummary>());
         }
 
         string packetPath;
@@ -54,7 +72,7 @@ internal static class AutomationGuideReachabilityRecordCommand
         }
         catch (InvalidOperationException exception)
         {
-            return Fail(writer, format, executionUnit ?? string.Empty, exception.Message);
+            return Fail(writer, format, executionUnit ?? string.Empty, exception.Message, recordingRole, roleSource, Array.Empty<CloseoutRecordSummary>());
         }
 
         if (!File.Exists(packetPath))
@@ -64,7 +82,10 @@ internal static class AutomationGuideReachabilityRecordCommand
                 format,
                 executionUnit!,
                 $"unknown execution unit '{executionUnit}': no packet at '{packetPath}'. A reachability record is "
-                + "evidence for a declared guide route, so it is never recorded for a unit this host cannot resolve.");
+                + "evidence for a declared guide route, so it is never recorded for a unit this host cannot resolve.",
+                recordingRole,
+                roleSource,
+                Array.Empty<CloseoutRecordSummary>());
         }
 
         GuideReachabilityDeclaration declaration;
@@ -78,7 +99,10 @@ internal static class AutomationGuideReachabilityRecordCommand
                 writer,
                 format,
                 executionUnit!,
-                $"packet '{packetPath}' could not be read for its guide-reachability declaration: {exception.Message}");
+                $"packet '{packetPath}' could not be read for its guide-reachability declaration: {exception.Message}",
+                recordingRole,
+                roleSource,
+                Array.Empty<CloseoutRecordSummary>());
         }
 
         if (!declaration.IsDeclared)
@@ -110,18 +134,27 @@ internal static class AutomationGuideReachabilityRecordCommand
                 DeclarationPresent = true,
                 NoRoleFacingSurface = true,
                 Warning = "explicit no_role_facing_surface declaration: no reachability debt exists and no record is required.",
+                RecordingRole = recordingRole,
+                RoleSource = roleSource,
+                RecordedRoles = Array.Empty<string>(),
+                Records = Array.Empty<CloseoutRecordSummary>(),
                 Error = null,
             };
             Emit(writer, format, noSurface);
             return 0;
         }
 
-        GuideReachabilityRecord? existing = null;
-        if (File.Exists(recordPath))
+        var existingRecords = new List<(string Path, GuideReachabilityRecord Record)>();
+        foreach (var existingPath in RoleScopedCloseoutRecordStore.EnumerateExistingPaths(
+                     context.RepoRoot,
+                     GuideReachabilityRecord.RecordRootRelativePath,
+                     executionUnit!))
         {
             try
             {
-                existing = GuideReachabilityRecord.Deserialize(File.ReadAllText(recordPath), executionUnit!);
+                existingRecords.Add((
+                    existingPath,
+                    GuideReachabilityRecord.Deserialize(File.ReadAllText(existingPath), executionUnit!)));
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException)
             {
@@ -129,9 +162,35 @@ internal static class AutomationGuideReachabilityRecordCommand
                     writer,
                     format,
                     executionUnit!,
-                    $"an existing record at '{recordPath}' could not be read: {exception.Message}. Refusing to overwrite unreadable evidence.");
+                    $"an existing record at '{existingPath}' could not be read: {exception.Message}. Refusing to overwrite unreadable evidence.",
+                    recordingRole,
+                    roleSource,
+                    Array.Empty<CloseoutRecordSummary>());
             }
         }
+
+        var duplicateRoleRecords = existingRecords
+            .Where(entry => string.Equals(entry.Record.Role, recordingRole, StringComparison.Ordinal))
+            .ToArray();
+        if (duplicateRoleRecords.Length > 1)
+        {
+            return Fail(
+                writer,
+                format,
+                executionUnit!,
+                $"'{executionUnit}' has more than one guide-reachability record for role '{recordingRole}'; refusing to choose between duplicate role evidence.",
+                recordingRole,
+                roleSource,
+                BuildSummaries(context.RepoRoot, existingRecords));
+        }
+
+        var compatibilityExisting = requestedRole is null && context.InvokingRole is null
+            ? existingRecords.FirstOrDefault(entry => entry.Record.Role is null).Record
+            : null;
+        var existing = duplicateRoleRecords.FirstOrDefault().Record ?? compatibilityExisting;
+        var existingEntry = existing is null
+            ? ((string Path, GuideReachabilityRecord Record)?)null
+            : existingRecords.FirstOrDefault(entry => ReferenceEquals(entry.Record, existing));
 
         if (existing is not null
             && !string.Equals(existing.HostCommit, commit, StringComparison.OrdinalIgnoreCase))
@@ -141,7 +200,10 @@ internal static class AutomationGuideReachabilityRecordCommand
                 format,
                 executionUnit!,
                 $"'{executionUnit}' already carries a reachability record for commit '{existing.HostCommit}' "
-                + $"(recorded {existing.RecordedAt:O}); refusing to replace it with '{commit}'.");
+                + $"(recorded {existing.RecordedAt:O}, role '{CloseoutRecordRole.Display(existing.Role)}'); refusing to replace it with '{commit}'.",
+                recordingRole,
+                roleSource,
+                BuildSummaries(context.RepoRoot, existingRecords));
         }
 
         var alreadyRecorded = existing is not null;
@@ -154,16 +216,40 @@ internal static class AutomationGuideReachabilityRecordCommand
             GuideSurfaces = guideSurfaces,
             Roles = roles,
             Note = note,
+            Role = recordingRole,
         };
+
+        var writePath = existingEntry?.Path
+            ?? (CloseoutRecordRole.IsRoleScoped(requestedRole, context.InvokingRole)
+                ? RoleScopedCloseoutRecordStore.ResolveRoleFullPath(
+                    context.RepoRoot,
+                    GuideReachabilityRecord.RecordRootRelativePath,
+                    executionUnit!,
+                    recordingRole!)
+                : recordPath);
 
         var applied = false;
         if (write && !alreadyRecorded)
         {
-            var directory = Path.GetDirectoryName(recordPath)
+            var directory = Path.GetDirectoryName(writePath)
                 ?? throw new InvalidOperationException("Guide reachability record path did not contain a directory.");
             Directory.CreateDirectory(directory);
-            File.WriteAllText(recordPath, GuideReachabilityRecord.Serialize(record));
+            File.WriteAllText(writePath, GuideReachabilityRecord.Serialize(record));
             applied = true;
+        }
+
+        var summaries = BuildSummaries(context.RepoRoot, existingRecords);
+        if (applied)
+        {
+            summaries = summaries
+                .Append(RoleScopedCloseoutRecordStore.Summary(
+                    writePath,
+                    context.RepoRoot,
+                    record.Role,
+                    record.HostCommit,
+                    record.RecordedAt))
+                .OrderBy(summary => summary.RecordPath, StringComparer.Ordinal)
+                .ToArray();
         }
 
         Emit(writer, format, new GuideReachabilityRecordResult
@@ -174,7 +260,11 @@ internal static class AutomationGuideReachabilityRecordCommand
             AlreadyRecorded = alreadyRecorded,
             HostCommit = record.HostCommit,
             RecordedAt = record.RecordedAt,
-            RecordPath = GuideReachabilityRecord.ResolveRelativePath(executionUnit!),
+            RecordPath = Path.GetRelativePath(context.RepoRoot, writePath).Replace(Path.DirectorySeparatorChar, '/'),
+            RecordingRole = recordingRole,
+            RoleSource = roleSource,
+            RecordedRoles = summaries.Select(summary => CloseoutRecordRole.Display(summary.Role)).Distinct(StringComparer.Ordinal).ToArray(),
+            Records = summaries,
             GuideSurfaces = guideSurfaces,
             Roles = roles,
             DeclarationPresent = true,
@@ -185,7 +275,14 @@ internal static class AutomationGuideReachabilityRecordCommand
         return 0;
     }
 
-    private static int Fail(TextWriter writer, string format, string executionUnit, string error)
+    private static int Fail(
+        TextWriter writer,
+        string format,
+        string executionUnit,
+        string error,
+        string? recordingRole = null,
+        string roleSource = "unknown",
+        IReadOnlyList<CloseoutRecordSummary>? records = null)
     {
         Emit(writer, format, new GuideReachabilityRecordResult
         {
@@ -198,6 +295,11 @@ internal static class AutomationGuideReachabilityRecordCommand
             RecordPath = string.IsNullOrWhiteSpace(executionUnit)
                 ? $"{GuideReachabilityRecord.RecordRootRelativePath}/<unit>/record.json"
                 : GuideReachabilityRecord.ResolveRelativePath(executionUnit),
+            RecordingRole = recordingRole,
+            RoleSource = roleSource,
+            RecordedRoles = records?.Select(summary => CloseoutRecordRole.Display(summary.Role)).Distinct(StringComparer.Ordinal).ToArray()
+                ?? Array.Empty<string>(),
+            Records = records ?? Array.Empty<CloseoutRecordSummary>(),
             GuideSurfaces = Array.Empty<string>(),
             Roles = Array.Empty<string>(),
             DeclarationPresent = false,
@@ -207,6 +309,19 @@ internal static class AutomationGuideReachabilityRecordCommand
         });
         return 1;
     }
+
+    private static IReadOnlyList<CloseoutRecordSummary> BuildSummaries(
+        string repoRoot,
+        IEnumerable<(string Path, GuideReachabilityRecord Record)> records) =>
+        records
+            .Select(entry => RoleScopedCloseoutRecordStore.Summary(
+                entry.Path,
+                repoRoot,
+                entry.Record.Role,
+                entry.Record.HostCommit,
+                entry.Record.RecordedAt))
+            .OrderBy(summary => summary.RecordPath, StringComparer.Ordinal)
+            .ToArray();
 
     private static void Emit(TextWriter writer, string format, GuideReachabilityRecordResult result)
     {
@@ -225,6 +340,12 @@ internal static class AutomationGuideReachabilityRecordCommand
         writer.WriteLine($"- declaration_present: {(result.DeclarationPresent ? "true" : "false")}");
         writer.WriteLine($"- no_role_facing_surface: {(result.NoRoleFacingSurface ? "true" : "false")}");
         writer.WriteLine($"- record_path: '{result.RecordPath}'");
+        writer.WriteLine($"- recording_role: '{result.RecordingRole ?? "unattributed"}'");
+        writer.WriteLine($"- role_source: '{result.RoleSource}'");
+        if (result.RecordedRoles.Count > 0)
+        {
+            writer.WriteLine($"- recorded_roles: {string.Join(", ", result.RecordedRoles)}");
+        }
         if (!string.IsNullOrWhiteSpace(result.HostCommit))
         {
             writer.WriteLine($"- host_commit: '{result.HostCommit}'");
@@ -255,6 +376,7 @@ internal static class AutomationGuideReachabilityRecordCommand
         string[] args,
         out string? executionUnit,
         out string? commit,
+        out string? requestedRole,
         out string? note,
         out bool write,
         out string format,
@@ -262,6 +384,7 @@ internal static class AutomationGuideReachabilityRecordCommand
     {
         executionUnit = null;
         commit = null;
+        requestedRole = null;
         note = null;
         write = false;
         format = FormatMarkdown;
@@ -287,6 +410,14 @@ internal static class AutomationGuideReachabilityRecordCommand
                         return false;
                     }
                     commit = args[++index];
+                    break;
+                case "--role":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--role requires 'design' or 'orchestration'.";
+                        return false;
+                    }
+                    requestedRole = args[++index];
                     break;
                 case "--note":
                     if (index + 1 >= args.Length)
@@ -341,6 +472,12 @@ internal static class AutomationGuideReachabilityRecordCommand
             return false;
         }
 
+        if (!CloseoutRecordRole.TryNormalize(requestedRole ?? CloseoutRecordRole.Design, out _, out var roleError))
+        {
+            error = $"--role is invalid: {roleError}";
+            return false;
+        }
+
         commit = commit!.ToLowerInvariant();
         return true;
     }
@@ -355,7 +492,8 @@ internal static class AutomationGuideReachabilityRecordCommand
         writer.WriteLine(GuideReachabilityDuty.CloseoutCheck);
         writer.WriteLine();
         writer.WriteLine("Records route evidence only; it never writes guide content and never blocks merge or closeout.");
-        writer.WriteLine("  --dry-run (default) plans only; --write persists '.intent-cli/guide-reachability/<unit>/record.json'.");
+        writer.WriteLine("  --role design|orchestration attributes the recorder; omit it only for the compatibility default (design).");
+        writer.WriteLine("  --dry-run (default) plans only; --write persists the legacy record.json or explicit role sidecar under records/<role>.json.");
         writer.WriteLine("  An explicit no_role_facing_surface declaration is a successful no-op; an absent declaration is refused.");
     }
 }
@@ -382,6 +520,18 @@ internal sealed record GuideReachabilityRecordResult
 
     [JsonPropertyName("record_path")]
     public required string RecordPath { get; init; }
+
+    [JsonPropertyName("recording_role")]
+    public required string? RecordingRole { get; init; }
+
+    [JsonPropertyName("role_source")]
+    public required string RoleSource { get; init; }
+
+    [JsonPropertyName("recorded_roles")]
+    public required IReadOnlyList<string> RecordedRoles { get; init; }
+
+    [JsonPropertyName("records")]
+    public required IReadOnlyList<CloseoutRecordSummary> Records { get; init; }
 
     [JsonPropertyName("guide_surfaces")]
     public required IReadOnlyList<string> GuideSurfaces { get; init; }
