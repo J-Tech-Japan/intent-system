@@ -1,18 +1,25 @@
 # Release Notes — intent-cli v0.21.0
 
-> **prepare-only / UNRELEASED.** This preparation changes version state,
-> release notes, readiness documentation, and release guards only. It creates
-> no GitHub Release or tag, publishes no package, runs no release automation,
-> and performs no post-release roll. It contains no code or runtime behaviour
-> change.
+> **Released / stable.** intent-cli v0.21.0 was published after the operator-
+> approved release transaction. The evidence below is frozen with this note;
+> this file is no longer a preparation stub.
 
 Install verification: `JTechJapan.IntentSystem.Cli --version 0.21.0`.
-After a separate operator approval and release action, the Release will be
-published at
+The clean install output is `intent-cli 0.21.0-c77c92f-G691`.
+The published Release is at
 https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.21.0.
 The preceding shipped scope remains in the
 [v0.20.0 notes](release-notes-v0.20.0.md); earlier release notes are linked
 rather than restated.
+
+## Publication evidence (frozen)
+
+- The `v0.21.0` tag and GitHub Release target commit
+  `c77c92fe8e5c9e62fc15b1ba96754b2acb35691c` (`c77c92fe`).
+- Release workflow run [31766364883](https://github.com/J-Tech-Japan/intent-system/actions/runs/31766364883) completed successfully with the `NuGet package`, `Self-contained linux-x64`, `Self-contained osx-arm64`, and `Self-contained win-x64` jobs.
+- All eight release assets are present: the linux-x64, osx-arm64, and win-x64 archives with their `.sha256` files, plus the NuGet package and its `.sha256` file. Four checksum verifications passed.
+- NuGet.org indexes `JTechJapan.IntentSystem.Cli` version `0.21.0`.
+- A clean install reports exactly `intent-cli 0.21.0-c77c92f-G691`.
 
 ## Preview lane — read before the feature description
 
@@ -61,20 +68,20 @@ v0.20.0. These are additive preview surfaces, not a patch-only correction.
 
 ## Deliberate boundaries
 
-- This preparation changes version policy, release notes, readiness
-  documentation, and release guards only. It makes no code or runtime
-  behaviour change.
+- This release records the version, notes, and release-readiness evidence. It
+  makes no code or runtime behaviour change.
 - The feature list is bounded exactly to G689–G692. It does not silently
   include G693 or restate earlier release notes.
-- Prepare-only remains in force: this child creates no GitHub Release or tag,
-  publishes no package, and performs no post-roll. Release creation is the
-  operator's separate action after readiness is green.
+- The operator release transaction recorded above is complete. This post-
+  release documentation roll creates no additional GitHub Release or tag,
+  republishes no package, and performs no second post-release transaction.
 
-## Release-readiness gate
+## Release evidence and compatibility boundary
 
-Before the separate operator release action:
+The published release satisfies the boundary that was checked before the
+operator release action:
 
-- `eng/version.json` records stable `0.20.0` and next `0.21.0`.
+- The release-to-be-cut was the additive v0.21.0 line after stable v0.20.0.
 - The four PRs and full merge commits above resolve on `main`, and every commit
   in `git log v0.20.0..main --first-parent` is accounted for by the range table.
 - The preview statement precedes the feature description and links the 1.0
@@ -82,13 +89,11 @@ Before the separate operator release action:
 - EN/JA notes remain in parity under the G613 terminology policy; the
   release-notes guard, bilingual count guard, version/readiness guards, full
   Release suite, and `git diff --check` are green.
-- Prepare-only remains in force. Release creation, tagging, package
-  publication, and post-release rolling are separate operator actions.
+- The release, tag, package index evidence, and four checksum results are
+  recorded in the frozen publication evidence above.
 
-## Publishing v0.21.0
+## Released v0.21.0
 
-After this preparation is merged and readiness evidence is green, the operator
-must explicitly approve Release creation. Only then may an authorized
-maintainer create and publish the GitHub Release for `v0.21.0`; its downstream
-release automation is outside this child PR. Any post-release version roll is
-a separate operator action and is not performed here.
+The operator-approved publication is complete and remains linked above. The
+post-release roll advances the development line to v0.21.1; it does not alter
+this released note or repeat the release transaction.

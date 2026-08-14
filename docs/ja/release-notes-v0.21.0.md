@@ -1,15 +1,23 @@
 # リリースノート — intent-cli v0.21.0
 
-> **prepare-only / 未リリース。** この準備が変更するのは version state、release
-> notes、readiness documentation、release guard だけです。GitHub Release や tag を
-> 作成せず、package を publish せず、release automation と post-release roll を実行しません。
-> code や runtime behaviour の変更もありません。
+> **Released / stable（公開済み）。** operator が承認した release transaction により
+> intent-cli v0.21.0 は公開済みです。下の evidence はこの notes とともに freeze され、
+> このファイルは preparation stub ではありません。
 
 Install verification: `JTechJapan.IntentSystem.Cli --version 0.21.0`。
-operator が別途承認して release action を実行した後の Release は
-https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.21.0 に公開されます。
+clean install の出力は `intent-cli 0.21.0-c77c92f-G691` です。公開済み Release は
+https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.21.0 です。
 直前の出荷範囲は [v0.20.0 notes](release-notes-v0.20.0.md) を参照し、earlier release notes は
 link して、ここでは重複記載しません。
+
+## Publication evidence (frozen)
+
+- `v0.21.0` tag と GitHub Release は commit
+  `c77c92fe8e5c9e62fc15b1ba96754b2acb35691c`（`c77c92fe`）を target にします。
+- [31766364883](https://github.com/J-Tech-Japan/intent-system/actions/runs/31766364883) の release workflow は success で完了し、`NuGet package`、`Self-contained linux-x64`、`Self-contained osx-arm64`、`Self-contained win-x64` の4 job が成功しました。
+- 八つの release asset（linux-x64、osx-arm64、win-x64 の各 archive と `.sha256`、NuGet package とその `.sha256`）が存在し、四つの checksum verification が pass しました。
+- NuGet.org は `JTechJapan.IntentSystem.Cli` version `0.21.0` を index 済みです。
+- clean install は正確に `intent-cli 0.21.0-c77c92f-G691` を出力します。
 
 ## feature description より先に読む preview lane
 
@@ -58,29 +66,29 @@ registry と `prompt-class list/describe`、`answerable_by` と hard risk floor 
 
 ## 意図的な boundary
 
-- この準備が変更するのは version policy、release notes、readiness documentation、release guard
-  だけです。code と runtime behaviour は変更しません。
+- この release が記録するのは version、notes、release-readiness evidence です。code と runtime
+  behaviour は変更しません。
 - feature list は G689–G692 に正確に限定し、G693 を暗黙に含めず、earlier release notes を再掲しません。
-- prepare-only を保ち、この child は GitHub Release / tag を作成せず、package publish と post-roll を
-  行いません。readiness が green になった後の Release 作成は operator の別 action です。
+- 上に記録した operator release transaction は完了済みです。この post-release documentation roll
+  は追加の GitHub Release / tag を作成せず、package を再 publish せず、二度目の release transaction
+  を実行しません。
 
-## リリース準備ゲート (Release-readiness gate)
+## Publication evidence と compatibility boundary
 
-operator が別の Release 手順を実行する前に確認します。
+operator の Release action 前に確認した boundary は次のとおりです。
 
-- `eng/version.json` が stable `0.20.0` / next `0.21.0` を記録していること。
+- stable v0.20.0 の後の additive な v0.21.0 line を release-to-be-cut としました。
 - 上記四 PR と full merge commit が `main` に解決し、`git log v0.20.0..main --first-parent` の全
   commit が range table で説明されていること。
 - preview statement が feature description より前にあり、1.0 compatibility promise を link
   していること。
 - EN/JA notes が G613 terminology policy の parity を保ち、release-notes guard、bilingual count
   guard、version/readiness guard、full Release suite、`git diff --check` が green であること。
-- prepare-only を保つこと。Release creation、tagging、package publication、post-release rolling
-  は operator の別 action です。
+- Release、tag、package index evidence、四つの checksum result は上の frozen publication evidence
+  に記録されています。
 
-## v0.21.0 の publish
+## 公開済み v0.21.0
 
-この準備が merge され readiness evidence が green になった後、operator は Release 作成を明示的に
-承認しなければなりません。その後に限り authorized maintainer が `v0.21.0` の GitHub Release を
-作成・公開できます。downstream の release automation はこの child PR の範囲外で、post-release
-version roll もここでは実行しません。
+operator が承認した publication は完了しており、上の evidence から参照できます。post-release roll
+は development line を v0.21.1 に進めますが、この released note を変更せず、release transaction を
+繰り返しません。
