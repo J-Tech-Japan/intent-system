@@ -62,6 +62,15 @@ internal static class GuideBootstrapCommand
         var domainArg = string.IsNullOrWhiteSpace(domain) ? "<domain>" : domain.Trim();
         var teamArg = string.IsNullOrWhiteSpace(team) ? "<team>" : team.Trim();
         var repoArg = string.IsNullOrWhiteSpace(targetRepo) ? "<owner/repo>" : targetRepo.Trim();
+        if (!string.IsNullOrWhiteSpace(domain) && !string.IsNullOrWhiteSpace(team))
+        {
+            var teamMode = TeamModeStore.Resolve(routingRoot, domain.Trim(), team.Trim());
+            if (teamMode.IsAuthoringOnly)
+            {
+                return BuildAuthoringOnlyResult(routingRoot, domain.Trim(), team.Trim(), targetRepo, teamMode);
+            }
+        }
+
         var state = InspectState(context, routingRoot, domain, team);
 
         return new BootstrapGuideResult
@@ -182,6 +191,120 @@ internal static class GuideBootstrapCommand
         };
     }
 
+    private static BootstrapGuideResult BuildAuthoringOnlyResult(
+        string routingRoot,
+        string domain,
+        string team,
+        string? targetRepo,
+        TeamModeResolution teamMode)
+    {
+        var domainArg = domain;
+        var teamArg = team;
+        var repoArg = string.IsNullOrWhiteSpace(targetRepo) ? "<owner/repo>" : targetRepo.Trim();
+        return new BootstrapGuideResult
+        {
+            Process = "authoring-only-team-bootstrap",
+            PreviewStatus = "preview-through-1.x",
+            Domain = domain,
+            Team = team,
+            TargetRepo = string.IsNullOrWhiteSpace(targetRepo) ? null : targetRepo.Trim(),
+            RoutingRoot = routingRoot,
+            TeamMode = TeamMode.AuthoringOnly,
+            TriggerPhrases = new BootstrapTriggerPhrases
+            {
+                English = "Start this work in an authoring-only team.",
+                Japanese = "authoring-only チームとして進めて。",
+            },
+            SessionLayerCoverage = ["transport-independent"],
+            TargetSessionLayer = "not-applicable-team-mode",
+            TeamFormula = "authoring front door plus repository, claim, and publish prerequisites; no delivery seats",
+            State = BuildAuthoringOnlyState(teamMode),
+            Flow = "authoring-only",
+            Reachability = new BootstrapReachability
+            {
+                Command = CommandName,
+                Catalog = "intent-cli guide commands list --format json",
+                Advisor = $"intent-cli guide next --domain {domainArg} --team {teamArg} --target-repo {repoArg} --format json",
+            },
+            // Null is intentional for authoring-only and is omitted by the
+            // command's WhenWritingNull serializer policy. Keep the public
+            // property non-nullable so existing delivery callers retain the
+            // original G685 API shape.
+            ModelResolution = null!,
+            Steps =
+            [
+                new BootstrapStep
+                {
+                    Number = 1,
+                    Id = "accept-authoring-front-door",
+                    Instruction = "Ask the operator to accept the authoring-only front door as the place where intent shape, packet authorship, and issue publication decisions are made.",
+                    EmittedCommands = [],
+                },
+                new BootstrapStep
+                {
+                    Number = 2,
+                    Id = "verify-repository-prerequisite",
+                    Instruction = "Verify access to the target repository and the ordinary issue-authoring boundary. Do not create delivery seats or a delivery topology.",
+                    EmittedCommands =
+                    [
+                        $"gh repo view {repoArg} --json nameWithOwner,defaultBranchRef",
+                        $"intent-cli claim verify --scope release-prep:{repoArg}:authoring --team {teamArg} --format json",
+                    ],
+                },
+                new BootstrapStep
+                {
+                    Number = 3,
+                    Id = "author-packet",
+                    Instruction = "Shape or interview the intent, then author a standalone packet whose issue body carries the complete contract. Keep the packet boundary explicit before publication.",
+                    EmittedCommands =
+                    [
+                        $"intent-cli grill --domain {domainArg} --format markdown",
+                        $"intent-cli packet draft --target-repo {repoArg} --format markdown",
+                    ],
+                },
+                new BootstrapStep
+                {
+                    Number = 4,
+                    Id = "publish-issue",
+                    Instruction = "After operator acceptance and the repository/claim prerequisites pass, publish the reviewed issue through the canonical issue boundary. The resulting issue is the handoff artifact.",
+                    EmittedCommands =
+                    [
+                        $"intent-cli issue publish-flow <packet-id> --repo {repoArg} --write --format json",
+                    ],
+                },
+            ],
+            PartialStateRule = "Authoring-only completion is measured from the recorded team mode and front-door shape; repository, claim, and publish commands are rendered operator prerequisites, not missing delivery facts. Never add delivery topology or a delivery lifecycle to this bootstrap.",
+            NoExecutionBoundary =
+            [
+                "This guide renders authoring questions and command text only; it does not create delivery seats, start a delivery lifecycle, or execute an external process.",
+                "The target repository and issue boundary remain explicit operator prerequisites; no transport selection is inferred from team mode.",
+                "Issue publication remains the only emitted handoff artifact for this team shape.",
+            ],
+            FinalHandoffStatement = "HANDOFF: The authoring-only front door owns the accepted packet until the canonical issue is published; no delivery lifecycle is part of this bootstrap.",
+        };
+    }
+
+    private static BootstrapGuideState BuildAuthoringOnlyState(TeamModeResolution teamMode)
+    {
+        var measured = teamMode.IsAuthoringOnly && teamMode.Source == TeamModeSource.Recorded;
+        return new BootstrapGuideState
+        {
+            Name = measured ? "authoring-only-complete" : "authoring-only-unreadable",
+            Inspected = measured,
+            TopologyRecorded = false,
+            TopologyResolved = false,
+            SupervisionCycleRecorded = false,
+            Complete = measured,
+            CompletionBasis = measured
+                ? "recorded team_mode=authoring-only is the durable acceptance of the front-door team shape; repository, claim, and publish checks remain explicit operator actions."
+                : "authoring-only completion requires a recorded, readable team_mode entry.",
+            ExistingFacts = measured
+                ? ["recorded team_mode=authoring-only", "authoring front door is the operator entry point", "authoring-only bootstrap shape is complete without delivery topology"]
+                : [],
+            MissingFacts = measured ? [] : ["recorded readable team_mode=authoring-only"],
+        };
+    }
+
     internal static BootstrapGuideState InspectState(CliContext context, string routingRoot, string? domain, string? team)
     {
         if (string.IsNullOrWhiteSpace(domain) || string.IsNullOrWhiteSpace(team))
@@ -200,6 +323,12 @@ internal static class GuideBootstrapCommand
 
         var domainValue = domain.Trim();
         var teamValue = team.Trim();
+        var teamMode = TeamModeStore.Resolve(routingRoot, domainValue, teamValue);
+        if (teamMode.IsAuthoringOnly)
+        {
+            return BuildAuthoringOnlyState(teamMode);
+        }
+
         var topologyPath = NotifyRoleTopologyStore.ResolvePath(routingRoot, domainValue, teamValue);
         var topologyRecorded = File.Exists(topologyPath);
         var resolution = NotifyRoleTopologyStore.Resolve(routingRoot, domainValue, teamValue);
@@ -259,6 +388,7 @@ internal static class GuideBootstrapCommand
         writer.WriteLine("## Recorded and missing facts");
         foreach (var fact in result.State.ExistingFacts) writer.WriteLine($"- exists: {fact}");
         foreach (var fact in result.State.MissingFacts) writer.WriteLine($"- missing: {fact}");
+        if (result.State.CompletionBasis is not null) writer.WriteLine($"- completion basis: {result.State.CompletionBasis}");
         if (result.State.ReadError is not null) writer.WriteLine($"- state-read warning: {result.State.ReadError}");
         writer.WriteLine($"- {result.PartialStateRule}");
         writer.WriteLine();
@@ -268,22 +398,30 @@ internal static class GuideBootstrapCommand
         writer.WriteLine($"- half-done advisor: `{result.Reachability.Advisor}`");
         writer.WriteLine();
         writer.WriteLine("## Guided pass — perform in this order");
-        writer.WriteLine("### Model/effort resolution (G685)");
-        writer.WriteLine($"- status: **{result.ModelResolution.PreviewStatus}**");
-        foreach (var item in result.ModelResolution.ResolutionOrder) writer.WriteLine($"- {item}");
-        writer.WriteLine($"- {result.ModelResolution.NeverGuessRule}");
-        writer.WriteLine($"- query: `{result.ModelResolution.QueryCommand}`");
-        writer.WriteLine($"- live selection: {result.ModelResolution.LiveArgvFallback.Selection}");
-        writer.WriteLine($"- live list (read-only): `{result.ModelResolution.LiveArgvFallback.ListCommand}`");
-        writer.WriteLine($"- argv inspection (read-only): `{result.ModelResolution.LiveArgvFallback.InspectCommand}`");
-        writer.WriteLine($"- argv field: `{result.ModelResolution.LiveArgvFallback.ArgvPath}`");
-        writer.WriteLine($"- agreement: {result.ModelResolution.LiveArgvFallback.AgreementRule}");
-        writer.WriteLine($"- human fallback: {result.ModelResolution.LiveArgvFallback.HumanFallback}");
-        writer.WriteLine($"- **mandatory launch evidence:** {result.ModelResolution.LaunchEvidenceWorkflow.Rule}");
-        writer.WriteLine($"- verified READY record: `{result.ModelResolution.LaunchEvidenceWorkflow.Verified.Command}`");
-        writer.WriteLine($"- refusal record: `{result.ModelResolution.LaunchEvidenceWorkflow.Refused.Command}`");
-        writer.WriteLine($"- incident: {result.ModelResolution.Incident}");
-        writer.WriteLine();
+        if (result.ModelResolution is { } modelResolution)
+        {
+            writer.WriteLine("### Model/effort resolution (G685)");
+            writer.WriteLine($"- status: **{modelResolution.PreviewStatus}**");
+            foreach (var item in modelResolution.ResolutionOrder) writer.WriteLine($"- {item}");
+            writer.WriteLine($"- {modelResolution.NeverGuessRule}");
+            writer.WriteLine($"- query: `{modelResolution.QueryCommand}`");
+            writer.WriteLine($"- live selection: {modelResolution.LiveArgvFallback.Selection}");
+            writer.WriteLine($"- live list (read-only): `{modelResolution.LiveArgvFallback.ListCommand}`");
+            writer.WriteLine($"- argv inspection (read-only): `{modelResolution.LiveArgvFallback.InspectCommand}`");
+            writer.WriteLine($"- argv field: `{modelResolution.LiveArgvFallback.ArgvPath}`");
+            writer.WriteLine($"- agreement: {modelResolution.LiveArgvFallback.AgreementRule}");
+            writer.WriteLine($"- human fallback: {modelResolution.LiveArgvFallback.HumanFallback}");
+            writer.WriteLine($"- **mandatory launch evidence:** {modelResolution.LaunchEvidenceWorkflow.Rule}");
+            writer.WriteLine($"- verified READY record: `{modelResolution.LaunchEvidenceWorkflow.Verified.Command}`");
+            writer.WriteLine($"- refusal record: `{modelResolution.LaunchEvidenceWorkflow.Refused.Command}`");
+            writer.WriteLine($"- incident: {modelResolution.Incident}");
+            writer.WriteLine();
+        }
+        else
+        {
+            writer.WriteLine("Authoring-only mode: perform only front-door acceptance, repository/claim checks, packet authoring, and issue publication.");
+            writer.WriteLine();
+        }
         foreach (var step in result.Steps)
         {
             writer.WriteLine($"### {step.Number}. {step.Id}");
@@ -345,6 +483,8 @@ internal sealed record BootstrapGuideResult
     public string? Domain { get; init; }
     public string? Team { get; init; }
     public string? TargetRepo { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TeamMode { get; init; }
     public required string RoutingRoot { get; init; }
     public required BootstrapTriggerPhrases TriggerPhrases { get; init; }
     public required IReadOnlyList<string> SessionLayerCoverage { get; init; }
@@ -380,6 +520,7 @@ internal sealed record BootstrapGuideState
     public bool TopologyResolved { get; init; }
     public required bool SupervisionCycleRecorded { get; init; }
     public required bool Complete { get; init; }
+    public string? CompletionBasis { get; init; }
     public string? TopologyPath { get; init; }
     public required IReadOnlyList<string> ExistingFacts { get; init; }
     public required IReadOnlyList<string> MissingFacts { get; init; }

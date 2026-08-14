@@ -15,6 +15,39 @@ review）と、特に 1 つのホストリポジトリが **複数の intent ド
 intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --mode single-domain|multi-domain --format markdown
 ```
 
+## team shape: delivery と authoring-only（G691 — preview-through-1.x）
+
+team shape は session-layer transport とは独立です。永続 record は次の
+canonical command だけで書き込みます:
+
+```text
+intent-cli team-mode show --domain <domain> --team <team> --format json
+intent-cli team-mode set --domain <domain> --team <team> --mode delivery|authoring-only --write --format json
+intent-cli team-mode validate --domain <domain> --team <team> --format json
+```
+
+record がない場合は `delivery` で、既存の behavior を byte-for-byte で保ちます。
+`authoring-only` では operator-facing front door が intent を `shape/interview` し、standalone
+packet を `author` し、issue を `publish` します。bootstrap が確認するのは front door と
+repository/claim/publish prerequisite だけで、delivery topology や delivery seat の起動を
+要求しません。`guide next` が提示するのは shape/interview、packet authoring、publish、improve、
+inspect、idle だけです。
+
+測定された bootstrap state は、永続的な `team_mode=authoring-only` record と front-door shape
+を確認した時点で `authoring-only-complete` になります。repository、claim、publish command
+は明示的な operator prerequisite として表示されますが、delivery-topology の missing fact
+ではありません。
+
+`notify supervise`、`notify supervise install`、`notify adjudicate`、delivery-topology command は
+`not-applicable-team-mode` という名前付き outcome を返します。`notify adjudicate` は、
+authoring-only team に adjudicate 対象となる delivery seat または adjudication dialog が存在しないため、
+applicable ではありません。G691 の gate は `notify report`、`notify escalate`、`notify status`、
+`notify dispose` を無効化せず、これらの report / settlement surface は利用できます。この slice は
+publish、delegation、handoff の新しい behavior を追加しません。supervisor、worker lifecycle、transport
+migration は発生しません。`delivery` が default で、このページの 4-thread / supervision contract は
+変更されません。[ADR 0005](../adr/0005-team-mode-authoring-only.md) を参照してください。parent intent
+の ADR-014 は host-side successor link が書かれるまで変更しません。
+
 ## application front door からの bootstrap（G664 — preview-through-1.x）
 
 desktop app conversation から **`Start this work in a herdr-only team.`** または

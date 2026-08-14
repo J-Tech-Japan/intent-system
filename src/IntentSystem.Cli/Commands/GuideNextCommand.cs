@@ -39,6 +39,9 @@ internal static class GuideNextCommand
     public const string ActionReview = "review";
     public const string ActionRecovery = "recovery";
     public const string ActionIdle = "idle";
+    public const string ActionShapeInterview = "shape-interview";
+    public const string ActionPacketAuthoring = "packet-authoring";
+    public const string ActionPublish = "publish";
     public const string ActionSupervisionSetup = "supervision-setup";
     public const string ActionRealignment = "realignment";
     public const string ActionBootstrapResume = "bootstrap-resume";
@@ -91,6 +94,12 @@ internal static class GuideNextCommand
         var domainArg = string.IsNullOrWhiteSpace(domain) ? "<domain>" : domain!;
         var teamArg = string.IsNullOrWhiteSpace(team) ? "<team>" : team!;
         var repoArg = string.IsNullOrWhiteSpace(targetRepo) ? "<owner/repo>" : targetRepo!;
+        if (context is not null && !string.IsNullOrWhiteSpace(domain) && !string.IsNullOrWhiteSpace(team)
+            && TeamModeStore.Resolve(context.RepoRoot, domain.Trim(), team.Trim()).IsAuthoringOnly)
+        {
+            return BuildAuthoringOnlyResult(domain.Trim(), team.Trim(), targetRepo, invokingRole);
+        }
+
         var supervision = ReadSupervisionStatus(context, domain, team);
         var realignment = ReadRealignmentStatus(context, domain);
         var bootstrap = ReadBootstrapStatus(context, domain, team);
@@ -276,6 +285,129 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
         };
     }
 
+    private static GuideNextResult BuildAuthoringOnlyResult(
+        string domain,
+        string team,
+        string? targetRepo,
+        string? invokingRole)
+    {
+        var repoArg = string.IsNullOrWhiteSpace(targetRepo) ? "<owner/repo>" : targetRepo.Trim();
+        var teamArg = team;
+        var decisionSet = new GuideNextAction[]
+        {
+            new()
+            {
+                Action = ActionShapeInterview,
+                WhenToChoose = "The operator needs to shape or interview the intent at the authoring-only front door before packet work begins.",
+                SuggestedPrompt = $"intent-cli grill --domain {domain} --format markdown",
+            },
+            new()
+            {
+                Action = ActionPacketAuthoring,
+                WhenToChoose = "The accepted intent is ready for a standalone packet and issue contract to be authored.",
+                SuggestedPrompt = $"intent-cli packet draft --target-repo {repoArg} --format markdown",
+            },
+            new()
+            {
+                Action = ActionPublish,
+                WhenToChoose = "The packet has operator acceptance and repository/claim prerequisites are satisfied; publish the issue.",
+                SuggestedPrompt = $"intent-cli issue publish-flow <packet-id> --repo {repoArg} --write --format json",
+            },
+            new()
+            {
+                Action = ActionImprove,
+                WhenToChoose = "The authoring process needs retrospective improvement against its intent, packet, or publication evidence.",
+                SuggestedPrompt = $"intent-cli improve --domain {domain} --format markdown",
+            },
+            new()
+            {
+                Action = ActionInspect,
+                WhenToChoose = "You need evidence from the target product, CLI, UI, logs, or tests before choosing the next authoring action.",
+                SuggestedPrompt = $"intent-cli inspect --domain {domain} --target-repo {repoArg} --format markdown",
+            },
+            new()
+            {
+                Action = ActionIdle,
+                WhenToChoose = "No authoring question, packet, publication, improvement, or inspection is actionable; wait for the next operator input.",
+                SuggestedPrompt = "(no action — report idle and wait)",
+            },
+        };
+
+        return new GuideNextResult
+        {
+            Process = "authoring-only-action-next-advisor",
+            InvokingRole = GuideRoleContractGuidance.Normalize(invokingRole),
+            RoleContractFirst = null,
+            Domain = domain,
+            Team = team,
+            TargetRepo = string.IsNullOrWhiteSpace(targetRepo) ? null : targetRepo.Trim(),
+            TeamMode = TeamMode.AuthoringOnly,
+            Supervision = new GuideNextSupervisionStatus
+            {
+                Checked = true,
+                Domain = domain,
+                Team = team,
+                NotApplicable = true,
+                Error = "not-applicable-team-mode: authoring-only teams have no supervision process.",
+            },
+            Realignment = new GuideNextRealignmentStatus { Checked = false, Domain = domain },
+            Bootstrap = new GuideNextBootstrapStatus
+            {
+                Checked = true,
+                Domain = domain,
+                Team = team,
+                NotApplicable = true,
+                StateName = "authoring-only-prerequisites",
+                Error = "not-applicable-team-mode: authoring-only teams have no delivery topology or bootstrap-resume state.",
+            },
+            DesignRoleGuide = "authoring-only-front-door",
+            ShortPrompt = ShortPrompt,
+            ReadOnly = true,
+            Summary = "authoring-only team mode selects the front-door authoring process set: shape/interview, packet authoring, publish, improve, inspect, or idle. Supervision and delivery bootstrap are named not-applicable and are not recommendations.",
+            MeasuredIncident = "Authoring-only mode is the recorded team shape: the operator-facing front door authors and publishes issues without a delivery lifecycle.",
+            ClaimBeforeStart =
+            [
+                $"Before a named packet or publication action, verify the repository/claim prerequisite for `{teamArg}`.",
+                $"`intent-cli claim verify --scope release-prep:{repoArg}:authoring --team {teamArg} --format json` must pass before publication.",
+                "A local file or commit is not ownership; stop on a held or failed claim.",
+            ],
+            NotThis =
+            [
+                "next does not add a delivery topology or delivery lifecycle to an authoring-only team.",
+                "supervision and bootstrap-resume are not applicable team-mode outcomes, not health or setup recommendations.",
+                "next remains read-only and never publishes an issue automatically.",
+            ],
+            DoNotSubstitute =
+            [
+                "Keep the authoring-only action set explicit; do not substitute delivery bootstrap, supervision setup, or worker delegation.",
+                "Run the suggested canonical intent-cli command only after the operator chooses it.",
+            ],
+            EvidenceToCheck =
+            [
+                $"Authoring front-door acceptance for `{domain}` / `{team}`.",
+                $"Target repository access and claim state for `{repoArg}`.",
+                "Standalone packet completeness and operator publication acceptance.",
+                "Observed product/CLI/UI/log/test evidence when inspection is selected.",
+            ],
+            DecisionSet = decisionSet,
+            RecommendationOutputShape =
+            [
+                new GuideNextOutputField { Field = "recommended_action", Meaning = "Exactly one of shape-interview, packet-authoring, publish, improve, inspect, or idle." },
+                new GuideNextOutputField { Field = "reason", Meaning = "Why the authoring action follows from the checked front-door, repository, claim, packet, or evidence state." },
+                new GuideNextOutputField { Field = "evidence_checked", Meaning = "The authoring evidence inspected for this read-only wake." },
+                new GuideNextOutputField { Field = "suggested_prompt", Meaning = "The paste-ready canonical command for the selected authoring action." },
+                new GuideNextOutputField { Field = "safety_boundary", Meaning = "The user decides whether to run it; next does not publish or mutate." },
+            ],
+            SafetyBoundary =
+            [
+                "Read-only by default: next recommends and does not mutate packets, issues, labels, or repository state.",
+                "No delivery lifecycle: authoring-only mode never starts supervision, worker delegation, or delivery topology from next.",
+                "No auto-execute: the operator chooses whether to run the suggested authoring command.",
+            ],
+            Prompt = $"Advise the authoring-only front door for `{domain}` / `{team}`. Choose exactly one of shape-interview, packet-authoring, publish, improve, inspect, or idle from the checked authoring evidence. Supervision and bootstrap-resume are not-applicable-team-mode; do not recommend them.",
+        };
+    }
+
     private static void WriteMarkdown(TextWriter writer, GuideNextResult result)
     {
         writer.WriteLine("# Guide next — design-side action advisor");
@@ -307,6 +439,10 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
         {
             writer.WriteLine($"- team: {result.Team}");
         }
+        if (result.TeamMode is not null)
+        {
+            writer.WriteLine($"- team mode: {result.TeamMode}");
+        }
         writer.WriteLine($"- read-only: {(result.ReadOnly ? "yes" : "no")}");
         writer.WriteLine($"- design-role operating guide: `{result.DesignRoleGuide}`");
         writer.WriteLine();
@@ -315,7 +451,9 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
         {
             writer.WriteLine("## Supervision setup check");
             writer.WriteLine();
-            writer.WriteLine(result.Supervision.CycleRecorded
+            writer.WriteLine(result.Supervision.NotApplicable
+                ? "- supervision: **not-applicable-team-mode** (authoring-only has no supervision process)"
+                : result.Supervision.CycleRecorded
                 ? $"- recorded cycle: yes for `{result.Supervision.Team}`; supervision setup recommendation: silent"
                 : result.Supervision.Error is null
                     ? $"- recorded cycle: no for `{result.Supervision.Team}`; supervision setup recommendation: **supervision-setup**"
@@ -330,7 +468,11 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
         {
             writer.WriteLine("## Bootstrap completion check (G664 — preview-through-1.x)");
             writer.WriteLine();
-            if (result.Bootstrap.Error is not null)
+            if (result.Bootstrap.NotApplicable)
+            {
+                writer.WriteLine("- bootstrap: **not-applicable-team-mode** (authoring-only has no delivery topology or resume state)");
+            }
+            else if (result.Bootstrap.Error is not null)
             {
                 writer.WriteLine("- bootstrap state: unreadable; repair the recorded topology/state before deciding (fail closed)");
                 writer.WriteLine($"- read error: {result.Bootstrap.Error}");
@@ -725,6 +867,10 @@ internal sealed record GuideNextResult
     [JsonPropertyName("target_repo")]
     public string? TargetRepo { get; init; }
 
+    [JsonPropertyName("team_mode")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TeamMode { get; init; }
+
     [JsonPropertyName("supervision")]
     public required GuideNextSupervisionStatus Supervision { get; init; }
 
@@ -830,6 +976,10 @@ internal sealed record GuideNextSupervisionStatus
     [JsonPropertyName("setup_recommended")]
     public bool SetupRecommended { get; init; }
 
+    [JsonPropertyName("not_applicable")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool NotApplicable { get; init; }
+
     [JsonPropertyName("state_directory")]
     public string? StateDirectory { get; init; }
 
@@ -846,6 +996,8 @@ internal sealed record GuideNextBootstrapStatus
     [JsonPropertyName("cycle_recorded")] public bool CycleRecorded { get; init; }
     [JsonPropertyName("complete")] public bool Complete { get; init; }
     [JsonPropertyName("resume_recommended")] public bool ResumeRecommended { get; init; }
+    [JsonPropertyName("not_applicable")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool NotApplicable { get; init; }
     [JsonPropertyName("state_name")] public string? StateName { get; init; }
     [JsonPropertyName("topology_path")] public string? TopologyPath { get; init; }
     [JsonPropertyName("error")] public string? Error { get; init; }

@@ -153,6 +153,15 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "team-mode",
+            Role = RoleDesign,
+            Classification = ClassificationSupport,
+            Mutability = MutabilityMixed,
+            RecommendedCaller = CallerOperator,
+            Purpose = "G691 durable team shape, independent of session-layer transport: `intent-cli team-mode show|validate --domain <d> [--team <t>]` reads the command-produced record and `team-mode set --mode delivery|authoring-only --write` records explicit, reversible transitions. Delivery is the default and byte-identical; authoring-only is the zero-herdr front-door shape with authoring-only guide next/bootstrap and named not-applicable supervision."
+        },
+        new CommandGroupEntry
+        {
             Name = "notify",
             Role = RoleDesign,
             Classification = ClassificationPrimary,

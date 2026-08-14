@@ -71,6 +71,26 @@ internal static class SessionLayerTopologyCommand
             return args.Length == 0 ? 1 : 0;
         }
 
+        if (TryReadOption(args, "--domain", out var requestedDomain)
+            && !string.IsNullOrWhiteSpace(requestedDomain))
+        {
+            var requestedTeam = TryReadOption(args, "--team", out var parsedTeam) && !string.IsNullOrWhiteSpace(parsedTeam)
+                ? parsedTeam
+                : null;
+            try
+            {
+                if (TeamModeStore.Resolve(context.RepoRoot, requestedDomain!, requestedTeam).IsAuthoringOnly)
+                {
+                    return EmitNotApplicable(args[0], args, requestedDomain!, requestedTeam, writer);
+                }
+            }
+            catch (InvalidOperationException exception)
+            {
+                writer.WriteLine($"team-mode-unreadable: {exception.Message}");
+                return 1;
+            }
+        }
+
         return args[0] switch
         {
             "record" => ExecuteRecord(context, args[1..], writer),
@@ -798,6 +818,58 @@ internal static class SessionLayerTopologyCommand
 
     private static bool IsHelp(string[] args) =>
         args.Length == 1 && string.Equals(args[0], "--help", StringComparison.Ordinal);
+
+    private static bool TryReadOption(string[] args, string option, out string? value)
+    {
+        for (var index = 0; index + 1 < args.Length; index++)
+        {
+            if (string.Equals(args[index], option, StringComparison.Ordinal))
+            {
+                value = args[index + 1];
+                return true;
+            }
+        }
+
+        value = null;
+        return false;
+    }
+
+    private static int EmitNotApplicable(
+        string operation,
+        string[] args,
+        string domain,
+        string? team,
+        TextWriter writer)
+    {
+        var format = TryReadOption(args, "--format", out var requestedFormat)
+            && string.Equals(requestedFormat, FormatJson, StringComparison.Ordinal)
+            ? FormatJson
+            : FormatMarkdown;
+        const string cause = "not-applicable-team-mode";
+        var summary = "authoring-only team mode has no delivery topology; topology recording and resolution are not applicable.";
+        if (format == FormatJson)
+        {
+            writer.WriteLine(JsonSerializer.Serialize(new
+            {
+                operation = $"topology-{operation}",
+                domain,
+                team,
+                valid = false,
+                conflict = true,
+                cause,
+                summary,
+            }, JsonOptions));
+        }
+        else
+        {
+            writer.WriteLine($"# Session-layer topology — {team ?? domain}");
+            writer.WriteLine("valid: false");
+            writer.WriteLine($"cause: {cause}");
+            writer.WriteLine(summary);
+        }
+
+        return 1;
+    }
 
     private static int UnknownSubcommand(string subcommand, TextWriter writer)
     {

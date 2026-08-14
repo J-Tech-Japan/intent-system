@@ -154,6 +154,44 @@ internal static class NotifyCommand
             return 1;
         }
 
+        TeamModeResolution teamMode;
+        try
+        {
+            teamMode = TeamModeStore.Resolve(routingRoot, options.Domain!, options.Team!);
+        }
+        catch (InvalidOperationException exception)
+        {
+            Emit(writer, options.Format, FailureResult(
+                operation,
+                options,
+                SessionLayerMode.Default,
+                "team-mode-unreadable",
+                exception.Message));
+            return 1;
+        }
+
+        // G691's named not-applicable NotifyCommand surface is supervision.
+        // `supervise install` is routed to its own command above. Reporting,
+        // escalation, status, and disposition remain usable on an
+        // authoring-only team; their existing contracts are not delivery-seat
+        // bootstrap. Publish/delegation/handoff policy belongs to later slices.
+        if (teamMode.IsAuthoringOnly
+            && string.Equals(operation, OperationSupervise, StringComparison.Ordinal))
+        {
+            const string notApplicable =
+                "not-applicable-team-mode: authoring-only teams publish issues from the front door and have no notify worker lifecycle.";
+            EmitSupervision(
+                writer,
+                new NotifySupervisorPass { Actions = [], Error = notApplicable },
+                options.Domain!,
+                options.Team!,
+                options.IntervalSeconds ?? NotifySupervisor.DefaultIntervalSeconds,
+                options.AutoRedispatch,
+                options.Write,
+                options.Format);
+            return 1;
+        }
+
         if (string.Equals(operation, OperationDispose, StringComparison.Ordinal))
         {
             return ExecuteDispose(writer, options, routingRoot);

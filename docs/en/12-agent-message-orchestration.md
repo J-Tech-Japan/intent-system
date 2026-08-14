@@ -16,6 +16,42 @@ prompts from this page by hand. Generate the current prompts with:
 intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --mode single-domain|multi-domain --format markdown
 ```
 
+## Team shape: delivery and authoring-only (G691 — preview-through-1.x)
+
+Team shape is orthogonal to the session-layer transport. The durable record is
+written through the canonical command:
+
+```text
+intent-cli team-mode show --domain <domain> --team <team> --format json
+intent-cli team-mode set --domain <domain> --team <team> --mode delivery|authoring-only --write --format json
+intent-cli team-mode validate --domain <domain> --team <team> --format json
+```
+
+Absence means `delivery`, preserving the existing behavior byte-for-byte. In
+`authoring-only`, the operator-facing front door shapes/interviews intents,
+authors standalone packets, and publishes issues. Bootstrap checks only the
+front door plus repository/claim/publish prerequisites; it does not require a
+delivery topology or launch delivery seats. `guide next` offers only
+shape/interview, packet authoring, publish, improve, inspect, and idle.
+
+The measured bootstrap state is `authoring-only-complete` once the durable
+`team_mode=authoring-only` record and front-door shape have been inspected.
+Repository, claim, and publish commands remain explicit operator prerequisites;
+they are rendered actions, not missing delivery-topology facts.
+
+`notify supervise`, `notify supervise install`, `notify adjudicate`, and
+delivery-topology commands return the named `not-applicable-team-mode` outcome.
+`notify adjudicate` is not applicable because an authoring-only team has no
+delivery seat or adjudication dialog to adjudicate. The G691 gate does not
+disable `notify report`, `notify escalate`, `notify status`, or `notify
+dispose`; those reporting and settlement surfaces remain usable. No new
+publish, delegation, or handoff behavior is introduced by this slice. No
+supervisor, worker lifecycle, or transport migration is implied. Delivery
+remains the default and the four-thread/supervision contract in this page is
+unchanged. See [ADR 0005](../adr/0005-team-mode-authoring-only.md); the parent
+intent's ADR-014 remains unchanged until its host-side successor link is
+written.
+
 ## Application-front-door bootstrap (G664 — preview-through-1.x)
 
 From a desktop-app conversation, say **`Start this work in a herdr-only team.`**

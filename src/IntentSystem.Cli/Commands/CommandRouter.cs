@@ -32,6 +32,8 @@ internal static class CommandRouter
         "skill",
         // G570: session-layer transport selection (agmsg | herdr-only).
         "session-layer",
+        // G691: durable team shape (delivery | authoring-only), orthogonal to transport.
+        "team-mode",
         // G578: transport-neutral role notification surface.
         "notify",
         // G689: read-only prompt vocabulary and shell-scope inspection.
@@ -131,9 +133,18 @@ internal static class CommandRouter
             {
                 ["show"] = SessionLayerCommand.ExecuteShow,
                 ["set"] = SessionLayerCommand.ExecuteSet,
+                ["team-mode"] = TeamModeCommand.Execute,
                 ["topology"] = SessionLayerTopologyCommand.Execute,
                 ["marker"] = SessionLayerMarkerCommand.Execute,
                 ["model-resolution"] = ModelResolutionLedgerCommand.Execute,
+            },
+            // G691: durable team shape is exposed as a top-level operator
+            // surface as well as `session-layer team-mode` for discoverability.
+            ["team-mode"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["show"] = TeamModeCommand.ExecuteShow,
+                ["set"] = TeamModeCommand.ExecuteSet,
+                ["validate"] = TeamModeCommand.ExecuteValidate,
             },
             // G578: one workflow contract over agmsg and herdr-only transports.
             ["notify"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
@@ -647,6 +658,7 @@ internal static class CommandRouter
             ["issue"] = "`intent-cli issue publish-flow <id> --repo <r> --write --format json` then `intent-cli automation issue-publish --write`.",
             ["automation"] = "`intent-cli automation summary --domain <d> --format json` (capability JSON), `intent-cli automation doctor --format json` (CLI freshness).",
             ["session-layer"] = "`intent-cli session-layer show --domain <d> [--team <t>]` (which transport is in force), `session-layer set` to change it, `session-layer topology record|show|validate --domain <d> --team <t>` for the delivery mapping, and `session-layer model-resolution record|query` for the host-local measured launch ledger.",
+            ["team-mode"] = "`intent-cli team-mode show --domain <d> [--team <t>]`, `team-mode set --mode delivery|authoring-only --write`, and `team-mode validate` (G691 durable team shape; orthogonal to session-layer transport).",
             ["notify"] = "`intent-cli notify delegate|report|escalate|dispose|status|supervise|adjudicate --domain <d> --team <t> ...`; `notify adjudicate` is the canonical capability-checked design prompt surface and requires a live pane CAS; use `intent-cli notify supervise install ...` to emit an operator-managed scheduler artifact without registration or process execution.",
             ["prompt-class"] = "`intent-cli prompt-class list [--format json]` and `intent-cli prompt-class describe codex:shell-command --format json` (read-only registry and shipped shell-scope inspection; policy recording remains under `notify supervise`).",
             ["claim"] = "`intent-cli claim acquire --scope execution-unit:<EU> --actor <actor> --team <team> --write`, then `intent-cli claim verify --scope <scope> --team <team>` before a start surface; release/takeover are explicit attributed pushes and age never changes ownership.",
