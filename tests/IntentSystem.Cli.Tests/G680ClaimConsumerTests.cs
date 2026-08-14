@@ -370,6 +370,7 @@ public sealed class G680ClaimConsumerTests : IDisposable
         Assert.Contains("release-prep", orchestratorGuide, StringComparison.Ordinal);
 
         var root = RepoVersionPolicySource.RepoRoot();
+        var policy = RepoVersionPolicySource.Read();
         foreach (var language in new[] { "en", "ja" })
         {
             var packets = File.ReadAllText(Path.Combine(root, "docs", language, "04-packets-issues.md"));
@@ -378,7 +379,7 @@ public sealed class G680ClaimConsumerTests : IDisposable
             var ledger = File.ReadAllText(Path.Combine(root, "docs", language, "1.0-compatibility-ledger.md"));
             Assert.Contains("claim-then-draft", packets, StringComparison.Ordinal);
             Assert.Contains("claim verify", loop, StringComparison.Ordinal);
-            Assert.Contains("release-prep:<owner/repo>:0.20.1", release, StringComparison.Ordinal);
+            Assert.Contains($"release-prep:<owner/repo>:{policy.NextVersion}", release, StringComparison.Ordinal);
             Assert.Contains("G680", ledger, StringComparison.Ordinal);
             Assert.Contains("preview-through-1.x", ledger, StringComparison.Ordinal);
         }
