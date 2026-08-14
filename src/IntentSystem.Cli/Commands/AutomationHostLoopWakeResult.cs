@@ -95,6 +95,11 @@ internal sealed record AutomationHostLoopWakeResult
     [JsonPropertyName("warnings")]
     public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
 
+    /// <summary>G695: durable completion-signal evidence observed by this wake.</summary>
+    [JsonPropertyName("continuation_chain")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ContinuationChainRecord? ContinuationChain { get; init; }
+
     /// <summary>True when this command executed a safe mutation lane through an
     /// existing surface (the deterministic host-metadata repair lane under
     /// <c>--write</c>). Judgement-gated (review approval) and multi-step (publish

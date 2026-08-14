@@ -520,6 +520,8 @@ internal sealed record NotifySupervisionStallRecord
     [JsonPropertyName("resend_permitted")] public bool? ResendPermitted { get; init; }
     [JsonPropertyName("wake_cause")] public string? WakeCause { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
+    [JsonPropertyName("evidence")] public IReadOnlyList<string>? Evidence { get; init; }
+    [JsonPropertyName("owed_transition")] public string? OwedTransition { get; init; }
     [JsonPropertyName("observed_prompt")] public NotifyObservedPrompt? Prompt { get; init; }
 }
 

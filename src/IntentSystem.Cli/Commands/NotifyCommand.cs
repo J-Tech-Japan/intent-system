@@ -1029,6 +1029,7 @@ internal static class NotifyCommand
             }
         }
         NotifyReportOutboxEntry? reportOutbox = existingOutbox;
+        ContinuationChainRecord? continuationChain = null;
         string? outboxEntryPath = null;
         if (isReport)
         {
@@ -1290,6 +1291,57 @@ internal static class NotifyCommand
             }
         }
 
+        // G695: a delivered report is the first durable link in the
+        // completion-signal chain. Record it before the outbox is marked
+        // delivered so a chain-write failure remains visible to collection and
+        // cannot be mistaken for a fully settled signal.
+        if (isReport && options.Write)
+        {
+            var chainWrite = ContinuationChainStore.RecordReportReceived(
+                options.RoutingRoot!,
+                options.Domain!,
+                options.Team!,
+                options.TaskId!,
+                options.ResultNonce ?? reportOutbox?.ResultNonce,
+                options.Status!,
+                options.Artifact!,
+                NotifyEventWriter.NormalizeSummary(options.Summary!));
+            continuationChain = chainWrite.Record ?? chainWrite.Preview;
+            if (!chainWrite.Applied && !chainWrite.AlreadyConverged)
+            {
+                if (reportOutbox is not null)
+                {
+                    NotifyReportOutboxStore.MarkUndelivered(
+                        options.RoutingRoot!,
+                        reportOutbox,
+                        "continuation-chain-write-failed");
+                }
+                Emit(writer, options.Format, FailureResult(
+                    operation,
+                    options,
+                    resolution.Mode,
+                    "continuation-chain-write-failed",
+                    $"Report transport completed, but durable continuation-chain link '{ContinuationChainStore.ReportReceived}' could not be recorded: {chainWrite.Error}",
+                    payload,
+                    reportCommand,
+                    modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
+                    preflight: deliveryPreflight,
+                    receiverStateOutcome: delivery.ReceiverStateOutcome,
+                    workingTransition: delivery.WorkingTransition,
+                    settleOutcome: delivery.SettleOutcome,
+                    resendPermitted: delivery.ResendPermitted,
+                    inlinePayloadWarning: inlinePayloadWarning,
+                    recipientWarning: delivery.RecipientWarning,
+                    deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
+                    taskFile: envelopeDelivery.TaskFile,
+                    deliveryPointer: envelopeDelivery.ResultPointer,
+                    pendingRecordPath: pendingRecordPath,
+                    outboxEntryPath: outboxEntryPath,
+                    continuationChain: continuationChain));
+                return 1;
+            }
+        }
+
         if (reportOutbox is not null && options.Write)
         {
             var deliveredWrite = NotifyReportOutboxStore.MarkDelivered(options.RoutingRoot!, reportOutbox);
@@ -1329,7 +1381,8 @@ internal static class NotifyCommand
             deliveryPointer: envelopeDelivery.ResultPointer,
             pendingRecordPath: pendingRecordPath,
             advisory: reportAdvisory,
-            outboxEntryPath: outboxEntryPath));
+            outboxEntryPath: outboxEntryPath,
+            continuationChain: continuationChain));
         return 0;
     }
 
@@ -1614,7 +1667,8 @@ internal static class NotifyCommand
         string? pendingRecordPath = null,
         string? advisory = null,
         string? outboxEntryPath = null,
-        string? deliveryBasis = null) => new()
+        string? deliveryBasis = null,
+        ContinuationChainRecord? continuationChain = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot!,
@@ -1649,6 +1703,7 @@ internal static class NotifyCommand
             Cause = null,
             Payload = payload,
             ReportCommand = reportCommand,
+            ContinuationChain = continuationChain,
             Summary = summary,
         };
 
@@ -1674,7 +1729,8 @@ internal static class NotifyCommand
         string? pendingRecordPath = null,
         string? advisory = null,
         string? outboxEntryPath = null,
-        string? deliveryBasis = null) => new()
+        string? deliveryBasis = null,
+        ContinuationChainRecord? continuationChain = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot ?? string.Empty,
@@ -1709,6 +1765,7 @@ internal static class NotifyCommand
             Cause = cause,
             Payload = payload,
             ReportCommand = reportCommand,
+            ContinuationChain = continuationChain,
             Summary = summary,
         };
 
@@ -2427,6 +2484,13 @@ internal sealed record NotifyResult
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("payload")] public string? Payload { get; init; }
     [JsonPropertyName("report_command")] public string? ReportCommand { get; init; }
+    [JsonPropertyName("continuation_chain")] public ContinuationChainRecord? ContinuationChain { get; init; }
+    [JsonPropertyName("completion_signal_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CompletionSignalId => ContinuationChain?.CompletionSignalId;
+    [JsonPropertyName("continuation_chain_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ContinuationChainId => ContinuationChain?.ChainId;
     [JsonPropertyName("summary")] public required string Summary { get; init; }
 }
 

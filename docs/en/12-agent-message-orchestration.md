@@ -93,6 +93,56 @@ remain active. Delivery retains every class and its existing output. This is
 a diagnostic judgment only and never weakens publish, claim, or ownership
 gates.
 
+## Durable completion continuation chain (G695 — preview-through-1.x)
+
+G695 makes the completion-to-next-action boundary observable without changing
+who may act. A delivered `notify report` and an observed herdr
+`working→done|blocked|idle` transition each seed an append-only chain at:
+
+```text
+.intent-cli/continuation-chains/<domain>/<team>/chains.jsonl
+```
+
+The chain is ordered as:
+
+```text
+report-received
+  → orchestration-wake-attempted
+  → wake-delivered-or-observed
+  → canonical-state-classified
+  → required-continuation-started | named-blocker-recorded
+```
+
+Every link is timestamped and the record exposes the exact next missing link.
+Inspect all chains, or filter one completion signal, with the read-only
+surface:
+
+```text
+intent-cli automation continuation-chain --domain <domain> --team <team> \
+  [--task-id <task-id>|--completion-signal-id <signal-id>|--chain-id <chain-id>] \
+  [--routing-root <host-root>] --format json|markdown
+```
+
+The report and supervision writers only record observations. An orchestration
+wake can append the later links by supplying the signal to
+`automation host-loop-wake` with `--write`; a safe continuation records
+`required-continuation-started`, while a refused or judgment-gated path must
+record `named-blocker-recorded`. A classification with neither terminal link
+is therefore queryable as a silent stop rather than being treated as done.
+
+The measured supervisor also names the three canonical owed-transition shapes
+from #1491: `approved-direct-lane-merge-closeout-owed` with exact-head and
+all-green evidence, `merged-pr-knowledge-writeback-dispatch-owed` with the
+declared write-back targets, and `actionable-queue-next-slice-publication-owed`
+with the empty-WIP and issue-cut-ready evidence. Their `owed_transition` and
+`evidence` fields are diagnostic findings; neither the chain nor supervision
+merges, publishes, relays keys, or otherwise executes the transition.
+
+> **Preview through 1.x (G695).** The chain file, query surface, observed
+> transition seed, terminal-link evidence, and the three named findings are
+> additive observability. Authority boundaries, message transport, and the
+> existing G654/G657/G659/G685 wake contracts remain unchanged.
+
 ## Application-front-door bootstrap (G664 — preview-through-1.x)
 
 From a desktop-app conversation, say **`Start this work in a herdr-only team.`**

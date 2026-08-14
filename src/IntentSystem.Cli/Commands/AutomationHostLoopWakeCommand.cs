@@ -45,6 +45,9 @@ internal static class AutomationHostLoopWakeCommand
 
     private const string OptRepo = "--repo";
     private const string OptDomain = "--domain";
+    private const string OptTeam = "--team";
+    private const string OptCompletionSignalId = "--completion-signal-id";
+    private const string OptTaskId = "--task-id";
     private const string OptWrite = "--write";
     private const string OptFormat = "--format";
     private const string OptHelp = "--help";
@@ -95,7 +98,16 @@ internal static class AutomationHostLoopWakeCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var repo, out var domain, out var mode, out var format, out var error))
+        if (!TryParseArguments(
+                args,
+                out var repo,
+                out var domain,
+                out var team,
+                out var completionSignalId,
+                out var taskId,
+                out var mode,
+                out var format,
+                out var error))
         {
             writer.WriteLine(error);
             return 1;
@@ -106,6 +118,20 @@ internal static class AutomationHostLoopWakeCommand
             writer.WriteLine("automation host-loop-wake requires '--repo <owner/repo>'.");
             return 1;
         }
+
+        var chainTracker = new ContinuationChainTracker(
+            context.RepoRoot,
+            domain,
+            team,
+            completionSignalId,
+            taskId,
+            string.Equals(mode, AutomationHostLoopWakeModes.Write, StringComparison.Ordinal));
+        chainTracker.Record(
+            ContinuationChainStore.OrchestrationWakeAttempted,
+            "automation-host-loop-wake",
+            ["wake-command-invoked"],
+            classification: null,
+            blocker: null);
 
         // 1. Installed-CLI surface gate — never guess past a stale/missing surface.
         var surfaceReport = AutomationInstalledCliSurfaceProbe.Check(context);
@@ -132,7 +158,13 @@ internal static class AutomationHostLoopWakeCommand
                 Evidence = ["automation doctor surface probe reported the installed CLI is missing or stale."],
                 Summary = "blocker: stale-host-cli — refresh the installed CLI before the next host loop wake.",
             };
-            Emit(writer, blocked, format);
+            chainTracker.Record(
+                ContinuationChainStore.NamedBlockerRecorded,
+                "installed-cli-surface-probe",
+                ["installed-cli-surface:unavailable"],
+                classification: HostLoopNextActionAnalyzer.ClassificationStaleCli,
+                blocker: blocked.StopReason);
+            Emit(writer, chainTracker.Apply(blocked), format);
             return 1;
         }
 
@@ -150,21 +182,52 @@ internal static class AutomationHostLoopWakeCommand
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException)
         {
+            chainTracker.Record(
+                ContinuationChainStore.NamedBlockerRecorded,
+                "automation-host-loop-wake",
+                [$"next-action-evaluation-error:{exception.Message}"],
+                classification: null,
+                blocker: exception.Message);
             writer.WriteLine($"host-loop-wake failed to evaluate next action for {repo}: {exception.Message}");
             return 1;
         }
 
         if (innerExit != 0)
         {
+            chainTracker.Record(
+                ContinuationChainStore.NamedBlockerRecorded,
+                "automation-host-loop-wake",
+                [$"next-action-exit:{innerExit.ToString(System.Globalization.CultureInfo.InvariantCulture)}"],
+                classification: null,
+                blocker: "next-action evaluation failed");
             writer.WriteLine($"host-loop-wake: next-action evaluation failed (exit {innerExit.ToString(System.Globalization.CultureInfo.InvariantCulture)}).");
             return 1;
         }
 
         if (!TryParseNextAction(buffer.ToString(), out var inner, out var parseError))
         {
+            chainTracker.Record(
+                ContinuationChainStore.NamedBlockerRecorded,
+                "automation-host-loop-wake",
+                [$"next-action-parse-error:{parseError}"],
+                classification: null,
+                blocker: parseError);
             writer.WriteLine($"host-loop-wake: could not parse next-action result: {parseError}");
             return 1;
         }
+
+        chainTracker.Record(
+            ContinuationChainStore.WakeDeliveredOrObserved,
+            "automation-host-loop-wake",
+            ["next-action-result-observed"],
+            classification: null,
+            blocker: null);
+        chainTracker.Record(
+            ContinuationChainStore.CanonicalStateClassified,
+            "automation-host-loop-next-action",
+            inner.Evidence,
+            inner.Classification,
+            blocker: null);
 
         var result = BuildResult(repo!, domain, mode, inner, surfaceReport.InstalledCliPath);
 
@@ -193,7 +256,31 @@ internal static class AutomationHostLoopWakeCommand
             }
         }
 
-        Emit(writer, result, format);
+        if (result.WakeAction != AutomationHostLoopWakeActions.Blocker
+            && result.WriteExecuted)
+        {
+            chainTracker.Record(
+                ContinuationChainStore.RequiredContinuationStarted,
+                "automation-host-loop-wake",
+                result.RecommendedCommand is { Length: > 0 }
+                    ? [result.RecommendedCommand]
+                    : result.Mutations,
+                result.Classification,
+                blocker: null);
+        }
+        else
+        {
+            chainTracker.Record(
+                ContinuationChainStore.NamedBlockerRecorded,
+                "automation-host-loop-wake",
+                result.Evidence,
+                result.Classification,
+                result.WriteExecuted
+                    ? null
+                    : result.PendingCommand ?? result.StopReason);
+        }
+
+        Emit(writer, chainTracker.Apply(result), format);
         return 0;
     }
 
@@ -585,12 +672,18 @@ internal static class AutomationHostLoopWakeCommand
         string[] args,
         out string? repo,
         out string? domain,
+        out string? team,
+        out string? completionSignalId,
+        out string? taskId,
         out string mode,
         out string format,
         out string error)
     {
         repo = null;
         domain = null;
+        team = null;
+        completionSignalId = null;
+        taskId = null;
         mode = AutomationHostLoopWakeModes.ReadOnly;
         format = FormatJson;
         error = string.Empty;
@@ -615,6 +708,30 @@ internal static class AutomationHostLoopWakeCommand
                     }
                     domain = args[++index].Trim();
                     break;
+                case OptTeam:
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a value.";
+                        return false;
+                    }
+                    team = args[++index].Trim();
+                    break;
+                case OptCompletionSignalId:
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--completion-signal-id requires a value.";
+                        return false;
+                    }
+                    completionSignalId = args[++index].Trim();
+                    break;
+                case OptTaskId:
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--task-id requires a value.";
+                        return false;
+                    }
+                    taskId = args[++index].Trim();
+                    break;
                 case OptWrite:
                     mode = AutomationHostLoopWakeModes.Write;
                     break;
@@ -634,7 +751,7 @@ internal static class AutomationHostLoopWakeCommand
                     format = requested;
                     break;
                 default:
-                    error = $"Unknown argument '{args[index]}'. Supported: --repo <owner/repo> [--domain <d>] [--write] [--format json|markdown].";
+                    error = $"Unknown argument '{args[index]}'. Supported: --repo <owner/repo> [--domain <d>] [--team <t>] [--completion-signal-id <id>|--task-id <id>] [--write] [--format json|markdown].";
                     return false;
             }
         }
@@ -690,10 +807,129 @@ internal static class AutomationHostLoopWakeCommand
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("automation host-loop-wake");
-        writer.WriteLine("Usage: intent-cli automation host-loop-wake --repo <owner/repo> [--domain <d>] [--write] [--format json|markdown]");
+        writer.WriteLine("Usage: intent-cli automation host-loop-wake --repo <owner/repo> [--domain <d>] [--team <t>] [--completion-signal-id <id>|--task-id <id>] [--write] [--format json|markdown]");
         writer.WriteLine("One safe-wake orchestration: gates on installed-CLI surface, reuses host-loop-next-action, and reports one of true-idle / review / publish / blocker.");
+        writer.WriteLine("When a completion signal is supplied with --write, the command appends report -> wake -> classification -> continuation evidence to the durable continuation chain; it records observations only and never performs lifecycle transitions itself.");
         writer.WriteLine("Read-only by default. --write runs the safe no-judgement lanes (host-metadata repair; next-slice publish chain packet draft -> issue publish-flow --write -> automation issue-publish --write) via existing surfaces; review approval/request-update stay judgement-gated and surface pending_command.");
         writer.WriteLine("Processes at most one PR review/closeout and one issue publish per wake. Existing detailed commands remain available.");
+    }
+
+    private sealed class ContinuationChainTracker
+    {
+        private readonly string routingRoot;
+        private readonly string? domain;
+        private readonly string? team;
+        private readonly string? requestedSignalId;
+        private readonly string? taskId;
+        private readonly bool write;
+        private readonly List<string> warnings = [];
+        private string? resolvedSignalId;
+        private bool readOnlyWarningIssued;
+
+        public ContinuationChainTracker(
+            string routingRoot,
+            string? domain,
+            string? team,
+            string? completionSignalId,
+            string? taskId,
+            bool write)
+        {
+            this.routingRoot = routingRoot;
+            this.domain = domain;
+            this.team = team;
+            requestedSignalId = completionSignalId;
+            this.taskId = taskId;
+            this.write = write;
+        }
+
+        public void Record(
+            string link,
+            string source,
+            IReadOnlyList<string> evidence,
+            string? classification,
+            string? blocker)
+        {
+            if (requestedSignalId is null && taskId is null)
+            {
+                return;
+            }
+
+            if (!write)
+            {
+                if (!readOnlyWarningIssued)
+                {
+                    warnings.Add("continuation-chain-not-written: supply --write to persist completion-signal evidence.");
+                    readOnlyWarningIssued = true;
+                }
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(domain) || string.IsNullOrWhiteSpace(team))
+            {
+                warnings.Add("continuation-chain-not-written: --domain and --team are required when a completion signal is supplied.");
+                return;
+            }
+
+            resolvedSignalId ??= ResolveSignalId();
+            if (string.IsNullOrWhiteSpace(resolvedSignalId))
+            {
+                warnings.Add("continuation-chain-not-written: no completion signal record matched the supplied task id.");
+                return;
+            }
+
+            var writeResult = ContinuationChainStore.RecordLink(
+                routingRoot,
+                domain,
+                team,
+                resolvedSignalId,
+                taskId,
+                ContinuationChainStore.BuildChainId(resolvedSignalId),
+                link,
+                source,
+                evidence,
+                classification,
+                blocker,
+                write: true);
+            Current = writeResult.Record ?? Current;
+            if (writeResult.Error is not null)
+            {
+                warnings.Add($"continuation-chain-write-failed: {writeResult.Error}");
+            }
+        }
+
+        public ContinuationChainRecord? Current { get; private set; }
+
+        public AutomationHostLoopWakeResult Apply(AutomationHostLoopWakeResult result)
+        {
+            return result with
+            {
+                ContinuationChain = Current,
+                Warnings = [.. result.Warnings, .. warnings.Distinct(StringComparer.Ordinal)],
+            };
+        }
+
+        private string? ResolveSignalId()
+        {
+            if (!string.IsNullOrWhiteSpace(requestedSignalId))
+            {
+                return requestedSignalId;
+            }
+
+            if (string.IsNullOrWhiteSpace(taskId)
+                || string.IsNullOrWhiteSpace(domain)
+                || string.IsNullOrWhiteSpace(team))
+            {
+                return null;
+            }
+
+            var read = ContinuationChainStore.Read(routingRoot, domain, team, taskId);
+            var active = read.Records
+                .Where(record => !record.Complete)
+                .OrderByDescending(record => record.UpdatedAt)
+                .FirstOrDefault();
+            return active?.CompletionSignalId
+                ?? ContinuationChainStore.BuildCompletionSignalId(taskId, resultNonce: null);
+        }
     }
 
     private sealed record NextActionProjection

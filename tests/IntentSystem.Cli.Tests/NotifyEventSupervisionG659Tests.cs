@@ -64,6 +64,13 @@ public sealed class NotifyEventSupervisionG659Tests : IDisposable
         Assert.True(transition.WakeDelivered);
         Assert.Single(runner.Calls, call => call.Arguments.Take(2).SequenceEqual(["agent", "prompt"]));
 
+        var transitionChain = ContinuationChainStore.Read(root, Domain, Team);
+        var chain = Assert.Single(transitionChain.Records);
+        Assert.Contains(chain.Links, link => link.Name == ContinuationChainStore.ReportReceived
+            && link.Source == "herdr-state-transition");
+        Assert.Contains(chain.Links, link => link.Name == ContinuationChainStore.WakeDeliveredOrObserved);
+        Assert.Equal(ContinuationChainStore.CanonicalStateClassified, chain.NextMissingLink);
+
         now = now.AddSeconds(1);
         var deduplicatedInterval = supervisor.RunOnce();
         Assert.DoesNotContain(deduplicatedInterval.Findings, finding => finding.Kind == "seat-state-transition");

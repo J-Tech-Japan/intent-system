@@ -81,6 +81,51 @@ class を明示的に not applicable とし、authoring、contract/readiness、b
 publish の永続状態 drift、knowledge/guide-writeback は active のままです。delivery は全 class と既存の
 output を保持します。これは diagnostic judgment だけであり、publish、claim、ownership gate を弱めません。
 
+## completion continuation chain の永続記録（G695 — preview-through-1.x）
+
+G695 は、誰が実行権限を持つかを変更せずに completion から次の action までの境界を観測可能にします。
+delivery 済みの `notify report` と、herdr が観測した `working→done|blocked|idle` transition はそれぞれ
+次の append-only chain を開始します:
+
+```text
+.intent-cli/continuation-chains/<domain>/<team>/chains.jsonl
+```
+
+chain の順序は次です:
+
+```text
+report-received
+  → orchestration-wake-attempted
+  → wake-delivered-or-observed
+  → canonical-state-classified
+  → required-continuation-started | named-blocker-recorded
+```
+
+各 link は timestamp 付きで、record は正確な次の missing link を返します。全 chain を読むか、1 つの completion
+signal で絞り込む read-only surface は次です:
+
+```text
+intent-cli automation continuation-chain --domain <domain> --team <team> \
+  [--task-id <task-id>|--completion-signal-id <signal-id>|--chain-id <chain-id>] \
+  [--routing-root <host-root>] --format json|markdown
+```
+
+report と supervision の writer は observation だけを記録します。orchestration wake は signal を
+`automation host-loop-wake` の `--write` に渡すことで後続 link を追加できます。安全な continuation は
+`required-continuation-started` を記録し、refusal または judgment-gated path は
+`named-blocker-recorded` を記録しなければなりません。terminal link がない classification は done と扱わず、
+silent stop として query できます。
+
+measured supervisor は #1491 の 3 つの canonical owed-transition shape も命名します:
+exact-head と all-green evidence を持つ `approved-direct-lane-merge-closeout-owed`、declared write-back target
+を持つ `merged-pr-knowledge-writeback-dispatch-owed`、empty WIP と issue-cut-ready evidence を持つ
+`actionable-queue-next-slice-publication-owed` です。`owed_transition` と `evidence` は diagnostic finding であり、
+chain と supervision は merge、publish、key relay、その他の transition 実行を行いません。
+
+> **1.x を通じた preview (G695)。** chain file、query surface、observed transition seed、terminal-link evidence、
+> 3 つの named finding は additive observability です。権限境界、message transport、既存の
+> G654/G657/G659/G685 wake contract は変更しません。
+
 ## application front door からの bootstrap（G664 — preview-through-1.x）
 
 desktop app conversation から **`Start this work in a herdr-only team.`** または

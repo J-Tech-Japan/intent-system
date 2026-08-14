@@ -1458,6 +1458,7 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
+            var directCi = ProjectCiState(pr);
             items.Add(new StalledWorkItem
             {
                 Kind = KindApprovedNotMerged,
@@ -1474,6 +1475,14 @@ internal static class AutomationStalledWorkCommand
                     + "operation, verify merged == true, then run "
                     + $"intent-cli closeout pr --pr {pr.Number} --repo {repo} --domain {domain} "
                     + "--pr-merged true --write --format json",
+                ContinuationOwedTransition = "merge-then-closeout",
+                ContinuationEvidence =
+                [
+                    WorkerPrReviewPreflightConstants.Labels.IntentPrApproved,
+                    "lane:direct",
+                    $"exact-head:{pr.HeadRefOid}",
+                    $"checks:{directCi?.Outcome ?? "unavailable"}",
+                ],
             });
         }
     }
@@ -2915,6 +2924,14 @@ internal static class AutomationStalledWorkCommand
             Pr = null,
             AgeMinutes = idleMinutes,
             IsInformational = false,
+            ContinuationOwedTransition = "publish-next-slice",
+            ContinuationEvidence =
+            [
+                $"candidate:{executionUnit}",
+                "wip:empty",
+                "publish-gate:issue-cut-ready",
+                $"idle-minutes:{idleMinutes}",
+            ],
             RecommendedAction = $"intent-cli issue publish-flow {executionUnit} --repo {repo} --write --format json",
         });
     }
@@ -3430,10 +3447,16 @@ internal static class AutomationStalledWorkCommand
                 Kind = KindKnowledgeWritebackPending,
                 ExecutionUnit = executionUnit,
                 Issue = null,
-                Pr = null,
                 AgeMinutes = ComputeAgeMinutesFromInstant(ClampToNow(closedAt, now), now),
                 IsInformational = false,
                 DeclaredWriteBackTargets = declaration.DeclaredTargets,
+                ContinuationOwedTransition = "knowledge-writeback-dispatch",
+                ContinuationEvidence =
+                [
+                    $"execution-unit:{executionUnit}",
+                    "closeout-recorded",
+                    $"declared-targets:{string.Join(",", declaration.DeclaredTargets)}",
+                ],
                 RecommendedAction = BuildKnowledgeWritebackPendingAction(executionUnit, declaration),
             });
         }
@@ -4847,6 +4870,15 @@ internal sealed record StalledWorkItem
     [JsonPropertyName("approval_evidence")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? ApprovalEvidence { get; init; }
+
+    /// <summary>G695: supervisor-only continuation evidence; never changes the
+    /// byte-compatible stalled-work JSON surface.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string>? ContinuationEvidence { get; init; }
+
+    /// <summary>G695: supervisor-only owed transition projection.</summary>
+    [JsonIgnore]
+    public string? ContinuationOwedTransition { get; init; }
 }
 
 internal sealed record StalledWorkCiBreakdown
