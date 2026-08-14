@@ -422,12 +422,13 @@ internal sealed class NotifyMeasuredSupervisor
                     var reference = item.Pr?.Number.ToString(CultureInfo.InvariantCulture)
                         ?? item.Issue?.Number.ToString(CultureInfo.InvariantCulture)
                         ?? "none";
+                    var continuation = TryProjectContinuationFinding(item);
                     observations.Add(new NotifySupervisionObservation
                     {
                         Key = item.DedupeKey is { Length: > 0 }
                             ? $"stalled:{item.DedupeKey}"
                             : $"stalled:{item.Kind}:{item.ExecutionUnit}:{reference}",
-                        Kind = item.Kind,
+                        Kind = continuation?.Kind ?? item.Kind,
                         OwnerRole = string.Equals(
                             item.Kind,
                             AutomationStalledWorkCommand.KindAwaitingOperatorMerge,
@@ -435,7 +436,9 @@ internal sealed class NotifyMeasuredSupervisor
                             ? DesignRole
                             : ownerRole,
                         Source = "automation-stalled-work",
-                        Summary = item.RecommendedAction,
+                        Summary = continuation?.Summary ?? item.RecommendedAction,
+                        Evidence = continuation?.Evidence,
+                        OwedTransition = continuation?.OwedTransition ?? item.OwedTransition,
                         DetectableAt = previousCycle is null
                             ? null
                             : now.AddMinutes(-Math.Max(0, item.AgeMinutes)),
@@ -498,8 +501,11 @@ internal sealed class NotifyMeasuredSupervisor
                 // the G630 recovery path for it.
                 var retained = existing with
                 {
+                    Kind = observation.Kind,
                     Summary = observation.Summary,
                     Cause = observation.Cause ?? existing.Cause,
+                    Evidence = observation.Evidence ?? existing.Evidence,
+                    OwedTransition = observation.OwedTransition ?? existing.OwedTransition,
                 };
                 records.Add(retained);
                 if (observation.Kind is "supervision-degraded" or "duplicate-supervisor" or "recipe-drift" or "profile-invalid")
@@ -516,10 +522,13 @@ internal sealed class NotifyMeasuredSupervisor
             {
                 records.Add(existing with
                 {
+                    Kind = observation.Kind,
                     Summary = observation.Summary,
                     SubjectRole = observation.SubjectRole ?? existing.SubjectRole,
                     WakeTargetRole = ResolveWakeTarget(observation),
                     WakeClass = ResolveWakeClass(observation),
+                    Evidence = observation.Evidence ?? existing.Evidence,
+                    OwedTransition = observation.OwedTransition ?? existing.OwedTransition,
                 });
                 if (string.Equals(
                     observation.Kind,
@@ -549,6 +558,7 @@ internal sealed class NotifyMeasuredSupervisor
                         : "The existing recovery path did not deliver a wake.",
                 }
                 : WakeOwner(observation, now);
+            RecordSettledTransitionChain(observation, wake, now, warnings);
             var record = existing ?? new NotifySupervisionStallRecord
             {
                 Key = observation.Key,
@@ -562,12 +572,15 @@ internal sealed class NotifyMeasuredSupervisor
                 Cause = observation.Cause,
                 ResendPermitted = observation.ResendPermitted,
                 Prompt = observation.Prompt,
+                Evidence = observation.Evidence,
+                OwedTransition = observation.OwedTransition,
                 DetectableAt = previousCycle is null ? null : observation.DetectableAt,
                 DetectableAtUnknown = previousCycle is null || observation.DetectableAt is null,
                 SurfacedAt = now,
             };
             record = record with
             {
+                Kind = observation.Kind,
                 Summary = observation.Summary,
                 SubjectRole = observation.SubjectRole ?? record.SubjectRole,
                 WakeTargetRole = ResolveWakeTarget(observation),
@@ -576,6 +589,8 @@ internal sealed class NotifyMeasuredSupervisor
                 WakeDelivered = wake.Delivered,
                 WakeCause = wake.Cause,
                 Prompt = observation.Prompt ?? record.Prompt,
+                Evidence = observation.Evidence ?? record.Evidence,
+                OwedTransition = observation.OwedTransition ?? record.OwedTransition,
             };
             records.Add(record);
             findings.Add(ToFinding(record));
@@ -1413,10 +1428,114 @@ internal sealed class NotifyMeasuredSupervisor
                 ToStatus = agent.AgentStatus,
                 StateChangeSequence = sequence,
                 StateChangedAt = agent.LastStateChangeAt,
+                Evidence =
+                [
+                    $"completion-signal:{BuildSettledTransitionSignalId(workspaceId, recorded.PaneId, sequence)}",
+                    $"seat:{role}",
+                    "from:working",
+                    $"to:{agent.AgentStatus}",
+                    $"state-change-seq:{sequence.ToString(CultureInfo.InvariantCulture)}",
+                ],
+                OwedTransition = "canonical-state-classification",
             });
         }
         return observations;
     }
+
+    private void RecordSettledTransitionChain(
+        NotifySupervisionObservation observation,
+        NotifySupervisionWakeResult wake,
+        DateTimeOffset now,
+        ICollection<string> warnings)
+    {
+        if (!write
+            || !string.Equals(observation.Kind, "seat-state-transition", StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(observation.WorkspaceId)
+            || string.IsNullOrWhiteSpace(observation.PaneId)
+            || observation.StateChangeSequence is not { } sequence)
+        {
+            return;
+        }
+
+        var taskId = BuildSettledTransitionTaskId(observation.WorkspaceId, observation.PaneId, sequence);
+        var resultNonce = $"state-change-{sequence.ToString(CultureInfo.InvariantCulture)}";
+        var report = ContinuationChainStore.RecordReportReceived(
+            routingRoot,
+            domain,
+            team,
+            taskId,
+            resultNonce,
+            "settled",
+            $"seat:{observation.SubjectRole ?? "unknown"}:{observation.WorkspaceId}:{observation.PaneId}",
+            observation.Summary,
+            observation.StateChangedAt ?? now,
+            write: true,
+            source: "herdr-state-transition");
+        if (report.Error is not null || report.Record is null)
+        {
+            warnings.Add($"continuation-chain-write-failed: {report.Error ?? "settled transition report link was not recorded."}");
+            return;
+        }
+
+        var signalId = report.Record.CompletionSignalId;
+        var chainId = report.Record.ChainId;
+        var attempt = ContinuationChainStore.RecordLink(
+            routingRoot,
+            domain,
+            team,
+            signalId,
+            taskId,
+            chainId,
+            ContinuationChainStore.OrchestrationWakeAttempted,
+            "notify-supervise",
+            [
+                $"wake-target:{ResolveWakeTarget(observation)}",
+                $"wake-attempted:{wake.Attempted.ToString().ToLowerInvariant()}",
+            ],
+            blocker: wake.Attempted ? null : wake.Cause,
+            timestamp: now,
+            write: true);
+        if (attempt.Error is not null)
+        {
+            warnings.Add($"continuation-chain-write-failed: {attempt.Error}");
+            return;
+        }
+
+        if (!wake.Delivered)
+        {
+            return;
+        }
+
+        var delivered = ContinuationChainStore.RecordLink(
+            routingRoot,
+            domain,
+            team,
+            signalId,
+            taskId,
+            chainId,
+            ContinuationChainStore.WakeDeliveredOrObserved,
+            "notify-supervise",
+            ["delivery:observed", $"wake-summary:{wake.Summary}"],
+            timestamp: now,
+            write: true);
+        if (delivered.Error is not null)
+        {
+            warnings.Add($"continuation-chain-write-failed: {delivered.Error}");
+        }
+    }
+
+    private static string BuildSettledTransitionTaskId(
+        string workspaceId,
+        string paneId,
+        long sequence) =>
+        $"seat-transition:{workspaceId}:{paneId}:{sequence.ToString(CultureInfo.InvariantCulture)}";
+
+    private static string BuildSettledTransitionSignalId(
+        string workspaceId,
+        string paneId,
+        long sequence) => ContinuationChainStore.BuildCompletionSignalId(
+            BuildSettledTransitionTaskId(workspaceId, paneId, sequence),
+            $"state-change-{sequence.ToString(CultureInfo.InvariantCulture)}");
 
     internal void RecordWaitEvent(TextWriter writer, NotifySupervisionWaitEvent waitEvent)
     {
@@ -2149,7 +2268,106 @@ internal sealed class NotifyMeasuredSupervisor
         WakeDelivered = record.WakeDelivered,
         Cause = record.Cause ?? record.WakeCause,
         Prompt = record.Prompt,
+        Evidence = record.Evidence,
+        OwedTransition = record.OwedTransition,
     };
+
+    /// <summary>
+    /// G695: retain the detector's canonical evidence while naming the exact
+    /// continuation owed by the three incident shapes from #1491. The
+    /// detector kinds remain stable; this is an additive supervisor-facing
+    /// projection and never executes the named transition.
+    /// </summary>
+    private static ContinuationFindingProjection? TryProjectContinuationFinding(StalledWorkItem item)
+    {
+        var evidence = item.ContinuationEvidence ?? [];
+        var exactHead = item.PrHeadSha ?? EvidenceValue(evidence, "exact-head:");
+        var ciOutcome = item.CiOutcome ?? EvidenceValue(evidence, "checks:");
+        var landingMode = item.LandingMode ?? EvidenceValue(evidence, "lane:");
+        if (string.Equals(item.Kind, AutomationStalledWorkCommand.KindApprovedNotMerged, StringComparison.Ordinal)
+            && (string.IsNullOrWhiteSpace(landingMode)
+                || string.Equals(landingMode, BranchLaneLandingModes.Direct, StringComparison.Ordinal))
+            && string.Equals(ciOutcome, StalledWorkCiOutcomes.AllGreen, StringComparison.Ordinal)
+            && item.Pr is { Number: > 0 }
+            && !string.IsNullOrWhiteSpace(exactHead))
+        {
+            var directEvidence = evidence.Count > 0
+                ? evidence
+                : new[]
+            {
+                $"pr:#{item.Pr.Number.ToString(CultureInfo.InvariantCulture)}",
+                "lane:direct",
+                $"exact-head:{exactHead}",
+                $"checks:{StalledWorkCiOutcomes.AllGreen}",
+                "approval:intent-pr-approved",
+            };
+            return new ContinuationFindingProjection(
+                "approved-direct-lane-merge-closeout-owed",
+                "merge-then-closeout",
+                directEvidence,
+                "Continuation finding: approved direct-lane PR "
+                + $"#{item.Pr.Number.ToString(CultureInfo.InvariantCulture)} is exact-head green and owes merge then closeout. "
+                + $"Evidence: {string.Join(", ", directEvidence)}.");
+        }
+
+        if (string.Equals(item.Kind, AutomationStalledWorkCommand.KindKnowledgeWritebackPending, StringComparison.Ordinal)
+            && item.DeclaredWriteBackTargets is { Count: > 0 })
+        {
+            var writeBackEvidence = evidence.Count > 0
+                ? evidence.ToList()
+                :
+                [
+                    $"execution-unit:{item.ExecutionUnit}",
+                    "closeout-recorded",
+                    $"declared-targets:{string.Join(",", item.DeclaredWriteBackTargets)}",
+                ];
+            if (item.Pr is { Number: > 0 })
+            {
+                writeBackEvidence.Insert(1, $"merged-pr:#{item.Pr.Number.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            return new ContinuationFindingProjection(
+                "merged-pr-knowledge-writeback-dispatch-owed",
+                "knowledge-writeback-dispatch",
+                writeBackEvidence,
+                "Continuation finding: merged PR closeout has declared knowledge write-back debt for "
+                + $"'{item.ExecutionUnit}'; dispatch the named write-back obligation. "
+                + $"Evidence: {string.Join(", ", writeBackEvidence)}.");
+        }
+
+        if (string.Equals(item.Kind, AutomationStalledWorkCommand.KindBacklogReadyIdle, StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(item.ExecutionUnit))
+        {
+            var backlogEvidence = evidence.Count > 0
+                ? evidence
+                : new[]
+            {
+                $"candidate:{item.ExecutionUnit}",
+                "wip:empty",
+                "publish-gate:issue-cut-ready",
+                $"idle-minutes:{item.AgeMinutes.ToString(CultureInfo.InvariantCulture)}",
+            };
+            return new ContinuationFindingProjection(
+                "actionable-queue-next-slice-publication-owed",
+                "publish-next-slice",
+                backlogEvidence,
+                "Continuation finding: actionable queue is idle and owes publication of "
+                + $"next slice '{item.ExecutionUnit}'. Evidence: {string.Join(", ", backlogEvidence)}.");
+        }
+
+        return null;
+    }
+
+    private static string? EvidenceValue(IReadOnlyList<string> evidence, string prefix) =>
+        evidence.FirstOrDefault(item => item.StartsWith(prefix, StringComparison.Ordinal)) is { } match
+            ? match[prefix.Length..]
+            : null;
+
+    private sealed record ContinuationFindingProjection(
+        string Kind,
+        string OwedTransition,
+        IReadOnlyList<string> Evidence,
+        string Summary);
 }
 
 internal sealed record NotifySupervisionObservation
@@ -2167,6 +2385,8 @@ internal sealed record NotifySupervisionObservation
     public string? WakeCause { get; init; }
     public string? Cause { get; init; }
     public bool WakeSuppressed { get; init; }
+    public IReadOnlyList<string>? Evidence { get; init; }
+    public string? OwedTransition { get; init; }
     public string? WorkspaceId { get; init; }
     public string? PaneId { get; init; }
     public string? FromStatus { get; init; }
@@ -2340,4 +2560,10 @@ internal sealed record NotifySupervisionFinding
     [System.Text.Json.Serialization.JsonPropertyName("observed_prompt")]
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public NotifyObservedPrompt? Prompt { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("evidence")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? Evidence { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("owed_transition")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? OwedTransition { get; init; }
 }
