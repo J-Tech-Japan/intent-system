@@ -34,6 +34,24 @@ internal static class NotifyAdjudicateCommand
             return 1;
         }
 
+        try
+        {
+            if (TeamModeStore.Resolve(options.RoutingRoot!, options.Domain!, options.Team!).IsAuthoringOnly)
+            {
+                return Emit(
+                    writer,
+                    options,
+                    Refused(
+                        options.ActorRole,
+                        "not-applicable-team-mode",
+                        "authoring-only teams have no supervision or worker adjudication lifecycle."));
+            }
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Emit(writer, options, Refused(options.ActorRole, "team-mode-unreadable", exception.Message));
+        }
+
         var runner = NotifyCommand.ProcessRunnerFactory?.Invoke() ?? new NotifyProcessRunner();
         var executable = options.HerdrExecutable
             ?? NotifyCommand.HerdrExecutableFactory?.Invoke()

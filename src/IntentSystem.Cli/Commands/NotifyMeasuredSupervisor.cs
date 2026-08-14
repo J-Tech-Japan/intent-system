@@ -115,6 +115,26 @@ internal sealed class NotifyMeasuredSupervisor
 
     private NotifySupervisorPass RunOnceCore(string trigger)
     {
+        try
+        {
+            if (TeamModeStore.Resolve(routingRoot, domain, team).IsAuthoringOnly)
+            {
+                return new NotifySupervisorPass
+                {
+                    Actions = [],
+                    Error = "not-applicable-team-mode: authoring-only teams have no supervision process.",
+                };
+            }
+        }
+        catch (InvalidOperationException exception)
+        {
+            return new NotifySupervisorPass
+            {
+                Actions = [],
+                Error = $"team-mode-unreadable: {exception.Message}",
+            };
+        }
+
         var now = (NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var cycleId = Guid.NewGuid().ToString("N");
         var state = NotifySupervisionStore.Read(

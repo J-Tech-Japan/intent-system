@@ -64,6 +64,23 @@ internal static class NotifySuperviseInstallCommand
             return 1;
         }
 
+        try
+        {
+            if (TeamModeStore.Resolve(routingRoot, options.Domain, options.Team).IsAuthoringOnly)
+            {
+                EmitFailure(
+                    writer,
+                    options.Format,
+                    "not-applicable-team-mode: authoring-only teams have no supervision process or scheduler artifact.");
+                return 1;
+            }
+        }
+        catch (InvalidOperationException exception)
+        {
+            EmitFailure(writer, options.Format, $"team-mode-unreadable: {exception.Message}");
+            return 1;
+        }
+
         var label = $"intent-cli.supervise.{options.Domain}.{options.Team}";
         var runtime = ResolveRuntime(options, routingRoot);
         // Scheduler emission remains usable when the invoking process is a
