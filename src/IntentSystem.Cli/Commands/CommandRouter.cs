@@ -349,6 +349,8 @@ internal static class CommandRouter
                 ["oneshot"] = GuideOneshotCommand.Execute,
                 ["automation"] = GuideAutomationCommand.Execute,
                 ["review"] = GuideReviewCommand.Execute,
+                // G696: installed per-kind seat command-form guidance.
+                ["seat-commands"] = GuideSeatCommandsCommand.Execute,
                 ["collaborate"] = GuideCollaborateCommand.Execute,
                 ["rules"] = GuideRulesCommand.Execute,
                 ["workflow"] = GuideWorkflowCommand.Execute,

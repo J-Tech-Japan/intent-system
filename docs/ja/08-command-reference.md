@@ -26,6 +26,33 @@ host は **別の host リポジトリ** にも、**同じリポジトリの専�
 （例: `main-metadata`）にも置くことができます。
 詳しくは [プロジェクト開始 → リポジトリトポロジーの選択](02-project-start.md#リポジトリトポロジーの選択) を参照してください。
 
+## seat の command-form guidance (G696)
+
+インストール済み CLI から、seat kind ごとの実測済み command-form rule を参照できます。
+これは read-only registry です。form と代替手段を表示しますが、seat settings、allowlist の判断、
+command の approve は行いません。
+
+```text
+intent-cli guide seat-commands --kind claude --format markdown
+intent-cli guide seat-commands --kind codex --format json
+```
+
+各 action は、operator が認めた literal な prefix と引数順を保ちます。prefix matching は、quoted
+arguments、path より前に置いた flags、異なる prefix の command を `&&` で chain した形、`$VAR` の
+expansion、`for` loop による wrapping で壊れることがあります。合成した形で prefix が変わる場合は、
+sanctioned な各 step を分けて実行します。
+
+実測された denied surface の代替は次です。
+
+- `gh pr comment` → `gh pr review --body-file <review.md> --comment`。
+- `git checkout <branch>` → `git fetch origin <branch>` の後に `git diff --check <base>...HEAD`。
+- local `npm` または package-manager build → exact PR head SHA に紐づく CI evidence。
+
+review seat は same-account verdict convention も使います。reviewer と PR author が同じ account の場合、
+GitHub は `gh pr review --approve` を拒否します。body-file form で `COMMENTED` review を送信し、その後
+canonical な `intent-cli notify report` command を実行します。workflow verdict は report が担います。
+構造化された表示は `intent-cli guide review --format json` で確認できます。
+
 ---
 
 ## プロジェクトセットアップ

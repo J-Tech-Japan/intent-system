@@ -213,6 +213,19 @@ internal static class GuideReviewCommand
         "After tests pass, restate at least one packet contract clause AND one intent reference touched by the diff in your approval summary; if you cannot, treat the PR as request-update."
     };
 
+    // G696: GitHub rejects an approval from the same account that authored the
+    // PR. The review surface makes the valid verdict/report pair explicit so
+    // a review seat does not fall back to an unsanctioned comment command or
+    // silently treat the rejected approval as completion.
+    private static readonly GuideReviewSameAccountVerdictConvention SameAccountVerdict = new()
+    {
+        GithubApproveRejectedForSameAccount = true,
+        Verdict = "COMMENTED",
+        ReviewCommand = "gh pr review --body-file <review.md> --comment",
+        ReportCommand = "intent-cli notify report --domain <domain> --team <team> --from review --to orchestration --task-id <task-id> --status <completed|blocked|question> --artifact <artifact> --summary <one-line-summary> --routing-root <host-root> --write --format json",
+        Summary = "When the review author is the PR author's same GitHub account, `gh pr review --approve` is rejected by GitHub. Submit a COMMENTED review with the sanctioned body-file form, then emit the canonical intent-cli notify report; the report carries the workflow verdict.",
+    };
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -411,6 +424,7 @@ internal static class GuideReviewCommand
             ReviewBlockerRoutingExamples = BuildBlockerRoutingExamples(),
             ChatIsNotDurableWorkflowState = ReviewBlockerProtocol.ChatIsNotDurableWorkflowState,
             ValidationSuggestions = DefaultValidationSuggestions,
+            SameAccountReviewVerdict = SameAccountVerdict,
             TestsPassIsNecessaryNotSufficient = true,
             Gaps = gaps,
             Ready = gaps.Count == 0 && matchedItem is not null
@@ -637,6 +651,14 @@ internal static class GuideReviewCommand
         {
             writer.WriteLine($"- {item}");
         }
+        writer.WriteLine();
+
+        writer.WriteLine("## Same-account review verdict (G696)");
+        writer.WriteLine($"- GitHub approve rejected for same account: {(result.SameAccountReviewVerdict.GithubApproveRejectedForSameAccount ? "yes" : "no")}");
+        writer.WriteLine($"- verdict: `{result.SameAccountReviewVerdict.Verdict}`");
+        writer.WriteLine($"- review submission: `{result.SameAccountReviewVerdict.ReviewCommand}`");
+        writer.WriteLine($"- canonical report: `{result.SameAccountReviewVerdict.ReportCommand}`");
+        writer.WriteLine($"- {result.SameAccountReviewVerdict.Summary}");
         writer.WriteLine();
 
         writer.WriteLine("## Request-update requirements");
@@ -926,6 +948,13 @@ internal sealed record GuideReviewResult
     public required IReadOnlyList<string> ApprovalSummaryRequirements { get; init; }
 
     /// <summary>
+    /// G696: same-account GitHub review behavior and the sanctioned
+    /// COMMENTED-plus-report convention.
+    /// </summary>
+    [JsonPropertyName("same_account_review_verdict")]
+    public required GuideReviewSameAccountVerdictConvention SameAccountReviewVerdict { get; init; }
+
+    /// <summary>
     /// G316: requirements for request-update comments — distinguish
     /// implementation-finding from host-metadata-blocked from
     /// intent-ambiguity, and tie each finding to a packet/intent clause.
@@ -1013,6 +1042,25 @@ internal sealed record GuideReviewResult
 
     [JsonPropertyName("ready")]
     public required bool Ready { get; init; }
+}
+
+/// <summary>G696: the review verdict used when GitHub rejects same-account approval.</summary>
+internal sealed record GuideReviewSameAccountVerdictConvention
+{
+    [JsonPropertyName("github_approve_rejected_for_same_account")]
+    public required bool GithubApproveRejectedForSameAccount { get; init; }
+
+    [JsonPropertyName("verdict")]
+    public required string Verdict { get; init; }
+
+    [JsonPropertyName("review_command")]
+    public required string ReviewCommand { get; init; }
+
+    [JsonPropertyName("report_command")]
+    public required string ReportCommand { get; init; }
+
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
 }
 
 /// <summary>

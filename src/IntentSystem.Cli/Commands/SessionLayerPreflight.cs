@@ -48,7 +48,7 @@ internal static class SessionLayerPreflight
             modeReadError = exception.Message;
         }
 
-        var topology = DiscoverTopology(repoRoot);
+        var topology = DiscoverTopology(repoRoot, expectedDomain);
         var markers = DiscoverMarkers(repoRoot);
         var teamDeclared = !string.IsNullOrWhiteSpace(expectedTeam);
         var requestedResolution = expectedDomain is null
@@ -58,15 +58,36 @@ internal static class SessionLayerPreflight
                 Source = SessionLayerModeSource.Default,
             }
             : SessionLayerModeStore.Resolve(modeState, expectedDomain, expectedTeam);
-        var teams = teamDeclared
-            ? [expectedTeam!]
-            : modeState?.Entries
-                .Where(entry => entry.Team is not null)
-                .Select(entry => entry.Team!)
-                .Concat(topology.Teams)
+        // G696: a domain-scoped preflight must select teams from that domain
+        // before analyzing any scope. The old union used every team recorded
+        // in the repository and every topology file, so a request for one
+        // domain emitted findings for unrelated domains (and could even make
+        // the unrelated topology affect the aggregate verdict). Topology
+        // scopes retain their domain identity while the legacy path remains
+        // unscoped and therefore is only considered by an unscoped request.
+        var topologyTeams = expectedDomain is null
+            ? topology.Teams
+            : topology.Scopes
+                .Where(scope => string.Equals(scope.Domain, expectedDomain, StringComparison.Ordinal))
+                .Select(scope => scope.Team)
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(team => team, StringComparer.Ordinal)
-                .ToArray() ?? topology.Teams;
+                .ToArray();
+        var recordedTeams = modeState?.Entries
+            .Where(entry => entry.Team is not null
+                && (expectedDomain is null
+                    || string.Equals(entry.Domain, expectedDomain, StringComparison.Ordinal)))
+            .Select(entry => entry.Team!)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(team => team, StringComparer.Ordinal)
+            .ToArray() ?? [];
+        var teams = teamDeclared
+            ? [expectedTeam!]
+            : recordedTeams
+                .Concat(topologyTeams)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(team => team, StringComparer.Ordinal)
+                .ToArray();
 
         if (teams.Length == 0)
         {
@@ -174,7 +195,7 @@ internal static class SessionLayerPreflight
                 Cause = "session-layer-mode-unreadable",
                 Message = modeReadError,
                 RecordedMode = null,
-                TopologyMode = topology.Teams.Contains(team, StringComparer.Ordinal) ? TopologyMode : null,
+                TopologyMode = topology.HasTeam(expectedDomain, team) ? TopologyMode : null,
             });
         }
 
@@ -201,7 +222,7 @@ internal static class SessionLayerPreflight
                 Message = $"Named team '{team}' has session-layer records in more than one domain "
                     + $"({string.Join(", ", recordedDomains)}). Declare --domain so readiness is not guessed.",
                 RecordedMode = null,
-                TopologyMode = topology.Teams.Contains(team, StringComparer.Ordinal) ? TopologyMode : null,
+                TopologyMode = topology.HasTeam(expectedDomain, team) ? TopologyMode : null,
             });
         }
 
@@ -212,7 +233,7 @@ internal static class SessionLayerPreflight
                 Source = SessionLayerModeSource.Default,
             }
             : SessionLayerModeStore.Resolve(modeState, domain, team);
-        var topologyRecordedForTeam = topology.Teams.Contains(team, StringComparer.Ordinal);
+        var topologyRecordedForTeam = topology.HasTeam(expectedDomain, team);
         var findings = new List<SessionLayerPreflightFinding>();
 
         // G601 markers supplement—not replace—the canonical record. Include
@@ -602,26 +623,37 @@ internal static class SessionLayerPreflight
             + "a delivery surface must report its own bounded receiver outcome before claiming delivery.",
     };
 
-    private static TopologyDiscovery DiscoverTopology(string repoRoot)
+    private static TopologyDiscovery DiscoverTopology(string repoRoot, string? expectedDomain)
     {
         var legacyPath = NotifyRoleTopologyStore.ResolvePath(repoRoot);
         var topologyRoot = Path.Combine(
             repoRoot,
             NotifyRoleTopologyStore.TopologyDirectoryRelativePath.Replace('/', Path.DirectorySeparatorChar));
-        var paths = Directory.Exists(topologyRoot)
+        var discoveredPaths = Directory.Exists(topologyRoot)
             ? Directory.EnumerateFiles(topologyRoot, "*.json", SearchOption.AllDirectories).ToArray()
             : [];
         if (File.Exists(legacyPath))
         {
-            paths = [.. paths, legacyPath];
+            discoveredPaths = [.. discoveredPaths, legacyPath];
         }
+
+        // G696: an invalid or stale topology in another domain must not
+        // poison a domain-scoped observation. The legacy path has no encoded
+        // domain and remains visible for compatibility; new paths are
+        // filtered by their domain directory before parsing.
+        var paths = expectedDomain is null
+            ? discoveredPaths
+            : discoveredPaths
+                .Where(path => DomainFromTopologyPath(path, topologyRoot) is null
+                    || string.Equals(DomainFromTopologyPath(path, topologyRoot), expectedDomain, StringComparison.Ordinal))
+                .ToArray();
 
         if (paths.Length == 0)
         {
             return new TopologyDiscovery(false, [], null);
         }
 
-        var teams = new HashSet<string>(StringComparer.Ordinal);
+        var scopes = new List<TopologyTeamScope>();
         try
         {
             foreach (var path in paths)
@@ -633,33 +665,85 @@ internal static class SessionLayerPreflight
                     return new TopologyDiscovery(true, [], $"Topology file '{path}' is not a JSON object.");
                 }
 
+                var pathDomain = DomainFromTopologyPath(path, topologyRoot);
+                var recordedDomain = root.TryGetProperty("domain", out var domain)
+                    && domain.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(domain.GetString())
+                    ? domain.GetString()
+                    : null;
+                // The path is the canonical scope for new topology files. If
+                // a legacy/flat fixture carries an envelope domain, retain it
+                // so filtering can still be domain-aware.
+                var scopeDomain = pathDomain ?? recordedDomain;
+
+                void AddScope(string teamName)
+                {
+                    if (!string.IsNullOrWhiteSpace(teamName))
+                    {
+                        scopes.Add(new TopologyTeamScope(scopeDomain, teamName));
+                    }
+                }
+
                 if (root.TryGetProperty("teams", out var teamMap) && teamMap.ValueKind == JsonValueKind.Object)
                 {
-                    teams.UnionWith(teamMap.EnumerateObject()
+                    foreach (var team in teamMap.EnumerateObject()
                         .Where(team => team.Value.ValueKind == JsonValueKind.Object)
-                        .Select(team => team.Name));
+                        .Select(team => team.Name))
+                    {
+                        AddScope(team);
+                    }
                 }
                 else if (root.TryGetProperty("team", out var team)
                     && team.ValueKind == JsonValueKind.String
                     && !string.IsNullOrWhiteSpace(team.GetString()))
                 {
-                    teams.Add(team.GetString()!);
+                    AddScope(team.GetString()!);
                 }
                 else
                 {
-                    teams.UnionWith(root.EnumerateObject()
+                    foreach (var property in root.EnumerateObject()
                         .Where(property => property.Value.ValueKind == JsonValueKind.Object
-                            && property.Name is not ("workspace" or "roles"))
-                        .Select(property => property.Name));
+                            && property.Name is not ("domain" or "team" or "workspace" or "roles" or "teams"))
+                        .Select(property => property.Name))
+                    {
+                        AddScope(property);
+                    }
                 }
             }
 
-            return new TopologyDiscovery(true, teams.OrderBy(team => team, StringComparer.Ordinal).ToArray(), null);
+            var uniqueScopes = scopes
+                .Distinct()
+                .OrderBy(scope => scope.Domain, StringComparer.Ordinal)
+                .ThenBy(scope => scope.Team, StringComparer.Ordinal)
+                .ToArray();
+            return new TopologyDiscovery(true, uniqueScopes, null);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
         {
             return new TopologyDiscovery(true, [], $"Topology discovery is unreadable: {exception.Message}");
         }
+    }
+
+    private static string? DomainFromTopologyPath(string path, string topologyRoot)
+    {
+        var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(topologyRoot));
+        var fullPath = Path.GetFullPath(path);
+        var rootPrefix = fullRoot + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(rootPrefix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var relative = Path.GetRelativePath(fullRoot, fullPath);
+        var directory = Path.GetDirectoryName(relative);
+        if (string.IsNullOrWhiteSpace(directory) || directory == ".")
+        {
+            return null;
+        }
+
+        return directory
+            .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault(segment => !string.IsNullOrWhiteSpace(segment));
     }
 
     private static MarkerDiscovery DiscoverMarkers(string repoRoot)
@@ -697,7 +781,23 @@ internal static class SessionLayerPreflight
         return new MarkerDiscovery(blocks, errors);
     }
 
-    private sealed record TopologyDiscovery(bool FileExists, string[] Teams, string? Error);
+    private sealed record TopologyTeamScope(string? Domain, string Team);
+
+    private sealed record TopologyDiscovery(
+        bool FileExists,
+        IReadOnlyList<TopologyTeamScope> Scopes,
+        string? Error)
+    {
+        public IReadOnlyList<string> Teams => Scopes
+            .Select(scope => scope.Team)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(team => team, StringComparer.Ordinal)
+            .ToArray();
+
+        public bool HasTeam(string? domain, string team) => Scopes.Any(scope =>
+            string.Equals(scope.Team, team, StringComparison.Ordinal)
+            && (domain is null || string.Equals(scope.Domain, domain, StringComparison.Ordinal)));
+    }
     private sealed record MarkerDiscovery(IReadOnlyList<SessionLayerMarkerBlock> Blocks, IReadOnlyList<MarkerDiscoveryError> Errors);
     private sealed record MarkerDiscoveryError(string File, string Cause, string Message);
 }
