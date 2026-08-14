@@ -100,6 +100,83 @@ public sealed class TeamModeG692Tests : IDisposable
     }
 
     [Fact]
+    public void NoTeam_UsesTheUniqueTeamScopedAuthoringRecordAcrossSharedConsumers()
+    {
+        SetAuthoringOnly();
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new EmptyLister();
+
+        var resolved = TeamModeCapabilityMatrix.Resolve(Context.RepoRoot, Domain, team: null);
+        Assert.Equal(TeamMode.AuthoringOnly, resolved.TeamMode);
+        Assert.Equal("recorded", resolved.ModeSource);
+
+        var stalled = AutomationStalledWorkCommand.Analyze(
+            Context,
+            Domain,
+            Repo,
+            staleMinutes: 9999,
+            team: null);
+        Assert.Equal(TeamMode.AuthoringOnly, stalled.CapabilityMatrix!.TeamMode);
+
+        using var statusWriter = new StringWriter();
+        Assert.Equal(0, IntentStatusCommand.Execute(
+            Context,
+            ["--domain", Domain, "--format", "json"],
+            statusWriter));
+        using var status = JsonDocument.Parse(statusWriter.ToString());
+
+        using var briefWriter = new StringWriter();
+        Assert.Equal(0, StatusBriefCommand.Execute(
+            Context,
+            ["--domain", Domain, "--format", "json"],
+            briefWriter));
+        using var brief = JsonDocument.Parse(briefWriter.ToString());
+
+        Assert.Equal(TeamMode.AuthoringOnly, status.RootElement.GetProperty("capability_matrix").GetProperty("team_mode").GetString());
+        Assert.Equal(TeamMode.AuthoringOnly, brief.RootElement.GetProperty("capability_matrix").GetProperty("team_mode").GetString());
+
+        using var stalledWriter = new StringWriter();
+        Assert.Equal(0, AutomationStalledWorkCommand.Execute(
+            Context,
+            ["--domain", Domain, "--repo", Repo, "--format", "json"],
+            stalledWriter));
+        using var stalledJson = JsonDocument.Parse(stalledWriter.ToString());
+        Assert.Equal(TeamMode.AuthoringOnly, stalledJson.RootElement.GetProperty("capability_matrix").GetProperty("team_mode").GetString());
+    }
+
+    [Fact]
+    public void NoTeam_WithMultipleTeamScopedRecords_FailsClosedByNameAcrossMatrixConsumers()
+    {
+        SetAuthoringOnly();
+        using var secondModeWriter = new StringWriter();
+        Assert.Equal(0, TeamModeCommand.ExecuteSet(
+            Context,
+            ["--domain", Domain, "--team", "other-team", "--mode", TeamMode.Delivery, "--write", "--format", "json"],
+            secondModeWriter));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new EmptyLister();
+
+        using var statusWriter = new StringWriter();
+        Assert.Equal(1, IntentStatusCommand.Execute(
+            Context,
+            ["--domain", Domain, "--format", "json"],
+            statusWriter));
+        Assert.Contains(TeamModeResolutionException.AmbiguousTeamScopeCode, statusWriter.ToString(), StringComparison.Ordinal);
+
+        using var briefWriter = new StringWriter();
+        Assert.Equal(1, StatusBriefCommand.Execute(
+            Context,
+            ["--domain", Domain, "--format", "json"],
+            briefWriter));
+        Assert.Contains(TeamModeResolutionException.AmbiguousTeamScopeCode, briefWriter.ToString(), StringComparison.Ordinal);
+
+        using var stalledWriter = new StringWriter();
+        Assert.Equal(1, AutomationStalledWorkCommand.Execute(
+            Context,
+            ["--domain", Domain, "--repo", Repo, "--format", "json"],
+            stalledWriter));
+        Assert.Contains(TeamModeResolutionException.AmbiguousTeamScopeCode, stalledWriter.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AuthoringOnlyNamedWorkerDelegateRefusesBeforeOutboxOrTransport()
     {
         SetAuthoringOnly();
@@ -107,7 +184,7 @@ public sealed class TeamModeG692Tests : IDisposable
         using var writer = new StringWriter();
         var exitCode = CommandRouter.Execute(
             [
-                "notify", "delegate", "--domain", Domain, "--team", Team,
+                "notify", "delegate", "--domain", Domain,
                 "--from", "design", "--to", "implementation", "--report-to", "orchestration",
                 "--task-id", "G692-worker-refusal", "--objective", "worker lane must not be impersonated",
                 "--input", "issue #1497", "--expected-artifact", "draft PR URL",

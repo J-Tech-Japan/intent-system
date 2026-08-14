@@ -26,6 +26,14 @@ intent-cli team-mode set --domain <domain> --team <team> --mode delivery|authori
 intent-cli team-mode validate --domain <domain> --team <team> --format json
 ```
 
+`--team` が optional な read / consumer command では、domain-wide record を優先します。
+domain-wide record がなく、その domain に team-scoped record が 1 件だけある場合は、
+intent-cli がその team context を一意に解決し、authoring-only の audit / handoff record
+にも effective team を保持します。team-scoped record が複数ある場合は、名前付きの
+`team-mode-ambiguous` outcome で安全側に停止し、呼び出し側は `--team` を明示しなければ
+なりません。したがって `--team` の省略によって recorded authoring-only team が
+delivery に silently fallback することはありません。
+
 record がない場合は `delivery` で、既存の behavior を byte-for-byte で保ちます。
 `authoring-only` では operator-facing front door が intent を `shape/interview` し、standalone
 packet を `author` し、issue を `publish` します。bootstrap が確認するのは front door と
@@ -60,7 +68,10 @@ operator-acceptance evidence、destination ownership を記録し、作成した
 lane を宣言した packet では、authoring-only は design の proposal を記録し、異なる operator による
 confirmation を要求します。この operator lane は orchestration の impersonation ではありません。
 `orchestration` を名乗る confirmation は拒否され、named worker role への `notify delegate` は outbox や
-transport に触れず、nonzero の `not-applicable-team-mode` refusal を返します。`automation stalled-work` は
+transport に触れず、nonzero の `not-applicable-team-mode` refusal を返します。`notify delegate` は domain に一意な
+team-scoped record がある場合だけ `--team` を省略でき、intent-cli は
+その team を refusal / delivery judgment に引き継ぎます。一意な team context がなければ outbox より前に
+安全側で停止します。`automation stalled-work` は
 matching handoff record が現れるまで `published-not-delegated` を表示し、exact な destination/issue evidence
 がある場合だけこの observation を抑制します。
 

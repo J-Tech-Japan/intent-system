@@ -350,7 +350,7 @@ public sealed class BranchLaneDecisionG669Tests : IDisposable
                 "automation", "branch-lane-propose-record",
                 "--execution-unit", "G669", "--actor", "design",
                 "--rationale", "authoring lane proposal",
-                "--evidence", "packet snapshot", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                "--evidence", "packet snapshot", "--domain", "intent-cli",
                 "--write", "--format", "json",
             ],
             workspace.Context,
@@ -361,7 +361,7 @@ public sealed class BranchLaneDecisionG669Tests : IDisposable
             [
                 "automation", "branch-lane-confirm-record",
                 "--execution-unit", "G669", "--actor", "operator", "--actor-role", "orchestration",
-                "--evidence", "operator confirmation", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                "--evidence", "operator confirmation", "--domain", "intent-cli",
                 "--write", "--format", "json",
             ],
             workspace.Context,
@@ -373,7 +373,7 @@ public sealed class BranchLaneDecisionG669Tests : IDisposable
             [
                 "automation", "branch-lane-confirm-record",
                 "--execution-unit", "G669", "--actor", "orchestration", "--actor-role", "operator",
-                "--evidence", "operator confirmation", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                "--evidence", "operator confirmation", "--domain", "intent-cli",
                 "--write", "--format", "json",
             ],
             workspace.Context,
@@ -385,7 +385,7 @@ public sealed class BranchLaneDecisionG669Tests : IDisposable
             [
                 "automation", "branch-lane-confirm-record",
                 "--execution-unit", "G669", "--actor", "operator", "--actor-role", "operator",
-                "--evidence", "operator confirmation", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                "--evidence", "operator confirmation", "--domain", "intent-cli",
                 "--write", "--format", "json",
             ],
             workspace.Context,

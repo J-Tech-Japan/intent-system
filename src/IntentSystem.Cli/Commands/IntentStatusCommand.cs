@@ -41,7 +41,16 @@ internal static class IntentStatusCommand
             return 1;
         }
 
-        var result = Analyze(context, domainOverride, team);
+        IntentStatusResult result;
+        try
+        {
+            result = Analyze(context, domainOverride, team);
+        }
+        catch (TeamModeResolutionException exception)
+        {
+            writer.WriteLine(exception.Message);
+            return 1;
+        }
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {

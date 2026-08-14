@@ -253,7 +253,7 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
         var exitCode = IssuePublishFlowCommand.Execute(
             workspace.Context,
             [
-                "G692", "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                "G692", "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli",
                 "--actor-role", "design", "--operator-acceptance", "operator accepted issue publication",
                 "--handoff-destination", "J-Tech-Japan/intent-system", "--write", "--format", "json",
             ],
@@ -269,6 +269,9 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
         Assert.True(File.Exists(Path.Combine(
             workspace.Context.RepoRoot,
             PublishedExternalHandoffStore.ResolveRelativePath("G692").Replace('/', Path.DirectorySeparatorChar))));
+        var handoff = PublishedExternalHandoffStore.Read(workspace.Context.RepoRoot, "G692").Record;
+        Assert.NotNull(handoff);
+        Assert.Equal("intent-cli-dev", handoff!.Team);
         Assert.Equal(bodyBefore, File.ReadAllBytes(Path.Combine(
             workspace.Context.RepoRoot,
             ".intent-cli", "issues", "G692", "github-body.md")));

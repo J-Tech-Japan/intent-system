@@ -28,7 +28,7 @@ internal static class NotifyCommand
     private const string DispositionKindAppliedElsewhere = "applied-elsewhere";
 
     private const string DelegateUsage =
-        "Usage: intent-cli notify delegate --domain <d> --team <t> --from <role> --to <role> --report-to <role> "
+        "Usage: intent-cli notify delegate --domain <d> [--team <t>] --from <role> --to <role> --report-to <role> "
         + "--task-id <id> --objective <text> [--input <value>]... --expected-artifact <value> "
         + "[--expected-artifact <value>]... --result-nonce <nonce> [--routing-root <host-root>] "
         + "[--dry-run|--write] [--format markdown|json]";
@@ -157,7 +157,7 @@ internal static class NotifyCommand
         TeamModeResolution teamMode;
         try
         {
-            teamMode = TeamModeStore.Resolve(routingRoot, options.Domain!, options.Team!);
+            teamMode = TeamModeStore.Resolve(routingRoot, options.Domain!, options.Team);
         }
         catch (InvalidOperationException exception)
         {
@@ -168,6 +168,28 @@ internal static class NotifyCommand
                 "team-mode-unreadable",
                 exception.Message));
             return 1;
+        }
+
+        // G692 repair: a named worker delegation may omit --team when the
+        // domain has exactly one team-scoped mode record. Carry the resolved
+        // team into every subsequent store/transport call so a recorded
+        // authoring-only team cannot silently become delivery. With no
+        // recorded team context, fail before touching the outbox.
+        if (string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+            && options.Team is null)
+        {
+            if (teamMode.ResolvedTeam is null)
+            {
+                Emit(writer, options.Format, FailureResult(
+                    operation,
+                    options,
+                    SessionLayerMode.Default,
+                    "team-required",
+                    "notify delegate requires a team context; supply --team or record exactly one team-scoped mode for the domain."));
+                return 1;
+            }
+
+            options = options with { Team = teamMode.ResolvedTeam };
         }
 
         // G691's named not-applicable NotifyCommand surface is supervision.
@@ -2087,6 +2109,8 @@ internal static class NotifyCommand
                 ? new[] { ("--domain", options.Domain), ("--team", options.Team) }
             : string.Equals(operation, OperationDispose, StringComparison.Ordinal)
                 ? new[] { ("--domain", options.Domain), ("--team", options.Team), ("--task-id", options.TaskId) }
+            : string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+                ? new[] { ("--domain", options.Domain), ("--from", options.FromRole), ("--task-id", options.TaskId) }
             : new[]
             {
                 ("--domain", options.Domain),

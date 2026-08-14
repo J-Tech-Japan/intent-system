@@ -23,7 +23,16 @@ internal static class StatusBriefCommand
             return 1;
         }
 
-        var summary = StatusBriefAnalyzer.Analyze(context, domainOverride, team);
+        StatusBriefSummary summary;
+        try
+        {
+            summary = StatusBriefAnalyzer.Analyze(context, domainOverride, team);
+        }
+        catch (TeamModeResolutionException exception)
+        {
+            writer.WriteLine(exception.Message);
+            return 1;
+        }
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {

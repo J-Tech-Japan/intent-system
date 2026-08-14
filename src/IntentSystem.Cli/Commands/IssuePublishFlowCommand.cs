@@ -114,14 +114,6 @@ internal static class IssuePublishFlowCommand
             return 1;
         }
 
-        var claimVerification = ClaimOwnershipVerifier.Verify(
-            context.RepoRoot, $"execution-unit:{executionUnit}", team);
-        if (!claimVerification.Passed)
-        {
-            ClaimVerificationCommand.Write(writer, format, claimVerification);
-            return 1;
-        }
-
         var domain = string.IsNullOrWhiteSpace(domainOverride)
             ? context.Config.Project.Domain
             : domainOverride!;
@@ -137,9 +129,21 @@ internal static class IssuePublishFlowCommand
             return 1;
         }
 
+        // Resolve the effective team before the ownership gate so a unique
+        // team-scoped mode record is used consistently by both the mode-
+        // sanctioned authorization and the unchanged claim verification.
+        var effectiveTeam = team ?? teamMode.ResolvedTeam;
+        var claimVerification = ClaimOwnershipVerifier.Verify(
+            context.RepoRoot, $"execution-unit:{executionUnit}", effectiveTeam);
+        if (!claimVerification.Passed)
+        {
+            ClaimVerificationCommand.Write(writer, format, claimVerification);
+            return 1;
+        }
+
         if (!TryBuildAuthorization(
                 teamMode,
-                team,
+                effectiveTeam,
                 actorRole,
                 operatorAcceptance,
                 handoffDestination,
@@ -592,7 +596,7 @@ internal static class IssuePublishFlowCommand
                     RecordKind = PublishedExternalHandoffStore.RecordKind,
                     ExecutionUnit = executionUnit!,
                     Domain = domain,
-                    Team = team,
+                    Team = authorization.Team,
                     TeamMode = TeamMode.AuthoringOnly,
                     ActorRole = authorization.ActorRole!,
                     DestinationOwnership = authorization.DestinationOwnership!,

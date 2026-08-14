@@ -521,6 +521,11 @@ internal static class AutomationStalledWorkCommand
         {
             result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes, repairSilentMinutes, knowledgeWriteBackSince, guideReachabilitySince, team);
         }
+        catch (TeamModeResolutionException exception)
+        {
+            writer.WriteLine(exception.Message);
+            return 1;
+        }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
             writer.WriteLine($"failed to read GitHub state for {repo}: {exception.Message}");
