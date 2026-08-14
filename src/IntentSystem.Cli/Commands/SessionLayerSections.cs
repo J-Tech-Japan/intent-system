@@ -131,6 +131,7 @@ internal static class SessionLayerSections
         // mode-independent — unchanged in both.
         new("## Session layer", "session_layer", Applicability.ModeIndependent),
         new(SessionLayerSwitchChecklist.Heading, SessionLayerSwitchChecklist.JsonProperty, Applicability.ModeIndependent),
+        new("## Guide reachability (G645/G696)", "guide_reachability", Applicability.ModeIndependent),
         new("## Mode separation", "mode_separation", Applicability.ModeIndependent, Descriptive: true),
         new("## Role boundary (design authors; orchestrator coordinates)", "role_boundary", Applicability.ModeIndependent),
         new("## Git-backed claim verification and routing (G679 — preview-through-1.x)", "claim_routing", Applicability.ModeIndependent),

@@ -11,8 +11,37 @@ namespace IntentSystem.Cli.Commands;
 internal static class SeatCommandGuidanceRegistry
 {
     public const string RegistryVersion = "1";
+    public const string GuideSurface = "guide seat-commands";
+    public const string ReviewRouteRole = "review";
+    public const string ReviewRouteTarget = "per-kind sanctioned command forms and alternatives";
 
     public static readonly IReadOnlyList<string> SupportedKinds = ["claude", "codex"];
+
+    /// <summary>
+    /// G696/G645: keep the packet-declared role-facing route in the same
+    /// structured registry as the surface it names. A role that is not the
+    /// review seat receives an explicit absent declaration rather than an
+    /// invented pointer.
+    /// </summary>
+    public static GuideReachabilityDeclaration ReachabilityForRole(string? role) =>
+        string.Equals(GuideRoleContractGuidance.Normalize(role), ReviewRouteRole, StringComparison.Ordinal)
+            ? ReviewReachability()
+            : GuideReachabilityDeclaration.Absent;
+
+    public static GuideReachabilityDeclaration ReviewReachability() => new()
+    {
+        IsDeclared = true,
+        NoRoleFacingSurface = false,
+        Routes =
+        [
+            new GuideReachabilityRoute
+            {
+                GuideSurface = GuideSurface,
+                Role = ReviewRouteRole,
+                TargetSurface = ReviewRouteTarget,
+            },
+        ],
+    };
 
     public static SeatCommandGuidance ForKind(string kind) => kind switch
     {

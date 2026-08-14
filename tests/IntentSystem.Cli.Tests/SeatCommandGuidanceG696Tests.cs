@@ -8,8 +8,8 @@ namespace IntentSystem.Cli.Tests;
 /// <summary>
 /// G696: the installed seat-command registry is reachable for both supported
 /// kinds, review guidance carries the same-account verdict convention, and a
-/// domain-scoped orchestrator preflight does not surface another domain's
-/// teams.
+/// domain-scoped orchestrator preflight names another domain's teams without
+/// surfacing them as selected scopes.
 /// </summary>
 public sealed class SeatCommandGuidanceG696Tests
 {
@@ -97,6 +97,41 @@ public sealed class SeatCommandGuidanceG696Tests
     }
 
     [Fact]
+    public void RoleFacingGuides_NameTheSeatCommandRoute_G696()
+    {
+        using var workspace = new TemporaryWorkspace("seat-route-g696-");
+
+        using var reviewWriter = new StringWriter();
+        Assert.Equal(1, GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--pr", "1505", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            reviewWriter));
+        AssertSeatCommandRoute(JsonDocument.Parse(reviewWriter.ToString()).RootElement);
+
+        using var nextWriter = new StringWriter();
+        Assert.Equal(0, GuideNextCommand.Execute(
+            workspace.Context,
+            ["--role", "review", "--format", "json"],
+            nextWriter));
+        AssertSeatCommandRoute(JsonDocument.Parse(nextWriter.ToString()).RootElement);
+
+        using var orchestratorWriter = new StringWriter();
+        Assert.Equal(0, GuideOrchestratorThreadCommand.Execute(
+            workspace.Context,
+            ["--format", "json"],
+            orchestratorWriter));
+        AssertSeatCommandRoute(JsonDocument.Parse(orchestratorWriter.ToString()).RootElement);
+
+        using var markdownWriter = new StringWriter();
+        Assert.Equal(0, GuideNextCommand.Execute(
+            workspace.Context,
+            ["--role", "review", "--format", "markdown"],
+            markdownWriter));
+        Assert.Contains("## Guide reachability (G645/G696)", markdownWriter.ToString(), StringComparison.Ordinal);
+        Assert.Contains("guide seat-commands", markdownWriter.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DomainScopedPreflight_ExcludesUnrelatedRecordedAndTopologyTeams_G696()
     {
         using var workspace = new TemporaryWorkspace("seat-preflight-g696-");
@@ -120,6 +155,9 @@ public sealed class SeatCommandGuidanceG696Tests
         Assert.Single(direct.Scopes);
         Assert.Equal("idd-com", direct.Scopes[0].Domain);
         Assert.Equal("idd-workers", direct.Scopes[0].Team);
+        Assert.NotEmpty(direct.CrossDomainTeamsElided);
+        Assert.Contains("sekiban-domain/sekiban-workers", direct.CrossDomainTeamsElided);
+        Assert.Contains("sekiban-domain/sekiban-topology-only", direct.CrossDomainTeamsElided);
         Assert.DoesNotContain(direct.Scopes, scope => scope.Team is "sekiban-workers" or "sekiban-topology-only");
         Assert.DoesNotContain(direct.Scopes.SelectMany(scope => scope.Findings), finding => finding.Team is "sekiban-workers" or "sekiban-topology-only");
 
@@ -140,6 +178,35 @@ public sealed class SeatCommandGuidanceG696Tests
         Assert.Single(scopes);
         Assert.Equal("idd-com", scopes[0].GetProperty("domain").GetString());
         Assert.Equal("idd-workers", scopes[0].GetProperty("team").GetString());
+        var elided = document.RootElement
+            .GetProperty("session_layer")
+            .GetProperty("preflight")
+            .GetProperty("cross_domain_teams_elided")
+            .EnumerateArray()
+            .Select(item => item.GetString())
+            .ToArray();
+        Assert.NotEmpty(elided);
+        Assert.Contains("sekiban-domain/sekiban-workers", elided);
+        Assert.Contains("sekiban-domain/sekiban-topology-only", elided);
+
+        using var markdownWriter = new StringWriter();
+        Assert.Equal(0, GuideOrchestratorThreadCommand.Execute(
+            workspace.Context,
+            ["--domain", "idd-com", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "codex", "--format", "markdown"],
+            markdownWriter));
+        Assert.Contains("cross-domain teams elided", markdownWriter.ToString(), StringComparison.Ordinal);
+        Assert.Contains("sekiban-domain/sekiban-workers", markdownWriter.ToString(), StringComparison.Ordinal);
+    }
+
+    private static void AssertSeatCommandRoute(JsonElement root)
+    {
+        var reachability = root.GetProperty("guide_reachability");
+        Assert.True(reachability.GetProperty("is_declared").GetBoolean());
+        Assert.False(reachability.GetProperty("no_role_facing_surface").GetBoolean());
+        var route = Assert.Single(reachability.GetProperty("routes").EnumerateArray());
+        Assert.Equal("guide seat-commands", route.GetProperty("guide_surface").GetString());
+        Assert.Equal("review", route.GetProperty("role").GetString());
+        Assert.Equal("per-kind sanctioned command forms and alternatives", route.GetProperty("target_surface").GetString());
     }
 
     [Theory]
@@ -151,7 +218,7 @@ public sealed class SeatCommandGuidanceG696Tests
         var content = File.ReadAllText(Path.Combine(root, "docs", language, "08-command-reference.md"));
 
         Assert.Contains("guide seat-commands", content, StringComparison.Ordinal);
-        foreach (var marker in new[] { "flags", "&&", "$VAR", "for", "gh pr comment", "git checkout", "COMMENTED", "intent-cli notify report" })
+        foreach (var marker in new[] { "flags", "&&", "$VAR", "for", "gh pr comment", "git checkout", "COMMENTED", "intent-cli notify report", "guide next", "guide orchestrator-thread" })
         {
             Assert.Contains(marker, content, StringComparison.Ordinal);
         }

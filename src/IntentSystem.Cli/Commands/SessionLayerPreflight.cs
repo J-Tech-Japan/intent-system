@@ -81,6 +81,10 @@ internal static class SessionLayerPreflight
             .Distinct(StringComparer.Ordinal)
             .OrderBy(team => team, StringComparer.Ordinal)
             .ToArray() ?? [];
+        var crossDomainTeamsElided = DiscoverCrossDomainTeamsElided(
+            expectedDomain,
+            modeState,
+            topology);
         var teams = teamDeclared
             ? [expectedTeam!]
             : recordedTeams
@@ -107,10 +111,14 @@ internal static class SessionLayerPreflight
                     expectedTeamDeclared: false,
                     [CannotDetermineScope(expectedDomain, null, finding)],
                     "Session-layer readiness cannot be determined from the present unreadable record. "
-                    + "A cannot-determine result is never green.");
+                    + "A cannot-determine result is never green.",
+                    crossDomainTeamsElided);
             }
 
-            return AnonymousUnjudged(requestedResolution);
+            return AnonymousUnjudged(requestedResolution) with
+            {
+                CrossDomainTeamsElided = crossDomainTeamsElided,
+            };
         }
 
         var scopes = teams.Select(team => AnalyzeScope(
@@ -127,13 +135,15 @@ internal static class SessionLayerPreflight
             scopes,
             scopes.All(scope => scope.Ready)
                 ? $"Session-layer passive preflight passed for {scopes.Length} named team scope(s)."
-                : "Session-layer passive preflight did not pass. Follow every recorded finding before declaring READY or notifying.")
+                : "Session-layer passive preflight did not pass. Follow every recorded finding before declaring READY or notifying.",
+            crossDomainTeamsElided)
             with
         { Resolution = requestedResolution };
     }
 
     public static SessionLayerPreflightResult AnonymousUnjudged(
-        SessionLayerModeResolution? resolution = null) => new()
+        SessionLayerModeResolution? resolution = null,
+        IReadOnlyList<string>? crossDomainTeamsElided = null) => new()
         {
             Verdict = Unjudged,
             Ready = null,
@@ -149,6 +159,7 @@ internal static class SessionLayerPreflight
             },
             ActivePhase = SkippedActivePhase(),
             Summary = "Session-layer readiness is unjudged until an expected team is declared.",
+            CrossDomainTeamsElided = crossDomainTeamsElided ?? [],
             Resolution = resolution ?? new SessionLayerModeResolution
             {
                 Mode = SessionLayerMode.Default,
@@ -589,7 +600,8 @@ internal static class SessionLayerPreflight
     private static SessionLayerPreflightResult Aggregate(
         bool expectedTeamDeclared,
         IReadOnlyList<SessionLayerPreflightScopeResult> scopes,
-        string summary)
+        string summary,
+        IReadOnlyList<string>? crossDomainTeamsElided = null)
     {
         var verdict = scopes.Any(scope => string.Equals(scope.Verdict, CannotDetermine, StringComparison.Ordinal))
             ? CannotDetermine
@@ -611,6 +623,7 @@ internal static class SessionLayerPreflight
             },
             ActivePhase = SkippedActivePhase(),
             Summary = summary,
+            CrossDomainTeamsElided = crossDomainTeamsElided ?? [],
         };
     }
 
@@ -637,35 +650,39 @@ internal static class SessionLayerPreflight
             discoveredPaths = [.. discoveredPaths, legacyPath];
         }
 
-        // G696: an invalid or stale topology in another domain must not
-        // poison a domain-scoped observation. The legacy path has no encoded
-        // domain and remains visible for compatibility; new paths are
-        // filtered by their domain directory before parsing.
-        var paths = expectedDomain is null
-            ? discoveredPaths
-            : discoveredPaths
-                .Where(path => DomainFromTopologyPath(path, topologyRoot) is null
-                    || string.Equals(DomainFromTopologyPath(path, topologyRoot), expectedDomain, StringComparison.Ordinal))
-                .ToArray();
+        // G696: inspect enough of every topology path to name valid
+        // cross-domain scopes, but keep unrelated unreadable files outside
+        // the requested domain's observation. The legacy path has no encoded
+        // domain and remains visible for compatibility.
+        var paths = discoveredPaths;
 
         if (paths.Length == 0)
         {
-            return new TopologyDiscovery(false, [], null);
+            return new TopologyDiscovery(false, [], [], null);
         }
 
         var scopes = new List<TopologyTeamScope>();
-        try
+        var elidedScopes = new List<TopologyTeamScope>();
+        foreach (var path in paths)
         {
-            foreach (var path in paths)
+            var pathDomain = DomainFromTopologyPath(path, topologyRoot);
+            var pathIsCrossDomain = expectedDomain is not null
+                && pathDomain is not null
+                && !string.Equals(pathDomain, expectedDomain, StringComparison.Ordinal);
+            try
             {
                 using var document = JsonDocument.Parse(File.ReadAllText(path));
                 var root = document.RootElement;
                 if (root.ValueKind != JsonValueKind.Object)
                 {
-                    return new TopologyDiscovery(true, [], $"Topology file '{path}' is not a JSON object.");
+                    if (pathIsCrossDomain)
+                    {
+                        continue;
+                    }
+
+                    return new TopologyDiscovery(true, [], [], $"Topology file '{path}' is not a JSON object.");
                 }
 
-                var pathDomain = DomainFromTopologyPath(path, topologyRoot);
                 var recordedDomain = root.TryGetProperty("domain", out var domain)
                     && domain.ValueKind == JsonValueKind.String
                     && !string.IsNullOrWhiteSpace(domain.GetString())
@@ -680,7 +697,12 @@ internal static class SessionLayerPreflight
                 {
                     if (!string.IsNullOrWhiteSpace(teamName))
                     {
-                        scopes.Add(new TopologyTeamScope(scopeDomain, teamName));
+                        var destination = expectedDomain is not null
+                            && scopeDomain is not null
+                            && !string.Equals(scopeDomain, expectedDomain, StringComparison.Ordinal)
+                            ? elidedScopes
+                            : scopes;
+                        destination.Add(new TopologyTeamScope(scopeDomain, teamName));
                     }
                 }
 
@@ -710,18 +732,61 @@ internal static class SessionLayerPreflight
                     }
                 }
             }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+            {
+                // An unrelated domain is observation-only context for this
+                // request. Do not let its malformed file poison the selected
+                // domain, and do not invent a team name that was not readable.
+                if (pathIsCrossDomain)
+                {
+                    continue;
+                }
 
-            var uniqueScopes = scopes
-                .Distinct()
-                .OrderBy(scope => scope.Domain, StringComparer.Ordinal)
-                .ThenBy(scope => scope.Team, StringComparer.Ordinal)
-                .ToArray();
-            return new TopologyDiscovery(true, uniqueScopes, null);
+                return new TopologyDiscovery(true, [], [], $"Topology discovery is unreadable: {exception.Message}");
+            }
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+
+        var uniqueScopes = scopes
+            .Distinct()
+            .OrderBy(scope => scope.Domain, StringComparer.Ordinal)
+            .ThenBy(scope => scope.Team, StringComparer.Ordinal)
+            .ToArray();
+        var uniqueElidedScopes = elidedScopes
+            .Distinct()
+            .OrderBy(scope => scope.Domain, StringComparer.Ordinal)
+            .ThenBy(scope => scope.Team, StringComparer.Ordinal)
+            .ToArray();
+        return new TopologyDiscovery(true, uniqueScopes, uniqueElidedScopes, null);
+    }
+
+    private static IReadOnlyList<string> DiscoverCrossDomainTeamsElided(
+        string? expectedDomain,
+        SessionLayerModeState? modeState,
+        TopologyDiscovery topology)
+    {
+        if (expectedDomain is null)
         {
-            return new TopologyDiscovery(true, [], $"Topology discovery is unreadable: {exception.Message}");
+            return [];
         }
+
+        var names = new List<string>();
+        if (modeState is not null)
+        {
+            names.AddRange(modeState.Entries
+                .Where(entry => entry.Team is not null
+                    && !string.Equals(entry.Domain, expectedDomain, StringComparison.Ordinal))
+                .Select(entry => $"{entry.Domain}/{entry.Team}"));
+        }
+
+        names.AddRange(topology.ElidedScopes
+            .Where(scope => scope.Domain is not null)
+            .Select(scope => $"{scope.Domain}/{scope.Team}"));
+
+        return names
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static string? DomainFromTopologyPath(string path, string topologyRoot)
@@ -786,6 +851,7 @@ internal static class SessionLayerPreflight
     private sealed record TopologyDiscovery(
         bool FileExists,
         IReadOnlyList<TopologyTeamScope> Scopes,
+        IReadOnlyList<TopologyTeamScope> ElidedScopes,
         string? Error)
     {
         public IReadOnlyList<string> Teams => Scopes
@@ -812,6 +878,14 @@ internal sealed record SessionLayerPreflightResult
 
     [JsonPropertyName("expected_team_declared")]
     public required bool ExpectedTeamDeclared { get; init; }
+
+    /// <summary>
+    /// G696: a domain-scoped observation names valid team scopes that were
+    /// intentionally left outside the requested domain. Their absence from
+    /// <see cref="Scopes"/> is therefore not mistaken for host-wide absence.
+    /// </summary>
+    [JsonPropertyName("cross_domain_teams_elided")]
+    public required IReadOnlyList<string> CrossDomainTeamsElided { get; init; }
 
     [JsonPropertyName("scopes")]
     public required IReadOnlyList<SessionLayerPreflightScopeResult> Scopes { get; init; }

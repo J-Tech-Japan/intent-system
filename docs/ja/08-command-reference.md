@@ -53,6 +53,9 @@ GitHub は `gh pr review --approve` を拒否します。body-file form で `COM
 canonical な `intent-cli notify report` command を実行します。workflow verdict は report が担います。
 構造化された表示は `intent-cli guide review --format json` で確認できます。
 
+role-facing route も構造化され、テストされています。`guide review`、`guide next --role review`、
+`guide orchestrator-thread` は、それぞれ review seat 向けに `guide seat-commands` を明示します。
+
 ---
 
 ## プロジェクトセットアップ

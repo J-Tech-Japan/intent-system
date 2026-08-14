@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using YamlDotNet.RepresentationModel;
 
 namespace IntentSystem.Cli.Commands;
@@ -10,10 +11,13 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal sealed record GuideReachabilityRoute
 {
+    [JsonPropertyName("guide_surface")]
     public required string GuideSurface { get; init; }
 
+    [JsonPropertyName("role")]
     public required string Role { get; init; }
 
+    [JsonPropertyName("target_surface")]
     public required string TargetSurface { get; init; }
 }
 
@@ -39,10 +43,13 @@ internal sealed record GuideReachabilityDeclaration
           routes: []
         """;
 
+    [JsonPropertyName("is_declared")]
     public required bool IsDeclared { get; init; }
 
+    [JsonPropertyName("no_role_facing_surface")]
     public required bool NoRoleFacingSurface { get; init; }
 
+    [JsonPropertyName("routes")]
     public required IReadOnlyList<GuideReachabilityRoute> Routes { get; init; }
 
     public static readonly GuideReachabilityDeclaration Absent = new()

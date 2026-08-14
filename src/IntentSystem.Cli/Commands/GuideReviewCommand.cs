@@ -425,6 +425,7 @@ internal static class GuideReviewCommand
             ChatIsNotDurableWorkflowState = ReviewBlockerProtocol.ChatIsNotDurableWorkflowState,
             ValidationSuggestions = DefaultValidationSuggestions,
             SameAccountReviewVerdict = SameAccountVerdict,
+            GuideReachability = SeatCommandGuidanceRegistry.ReviewReachability(),
             TestsPassIsNecessaryNotSufficient = true,
             Gaps = gaps,
             Ready = gaps.Count == 0 && matchedItem is not null
@@ -659,6 +660,21 @@ internal static class GuideReviewCommand
         writer.WriteLine($"- review submission: `{result.SameAccountReviewVerdict.ReviewCommand}`");
         writer.WriteLine($"- canonical report: `{result.SameAccountReviewVerdict.ReportCommand}`");
         writer.WriteLine($"- {result.SameAccountReviewVerdict.Summary}");
+        writer.WriteLine();
+
+        writer.WriteLine("## Guide reachability (G645/G696)");
+        if (!result.GuideReachability.IsDeclared)
+        {
+            writer.WriteLine("- no role-facing seat-command route is declared for this surface.");
+        }
+        else
+        {
+            foreach (var route in result.GuideReachability.Routes)
+            {
+                writer.WriteLine(
+                    $"- role `{route.Role}` reaches `{route.GuideSurface}` for {route.TargetSurface}.");
+            }
+        }
         writer.WriteLine();
 
         writer.WriteLine("## Request-update requirements");
@@ -953,6 +969,14 @@ internal sealed record GuideReviewResult
     /// </summary>
     [JsonPropertyName("same_account_review_verdict")]
     public required GuideReviewSameAccountVerdictConvention SameAccountReviewVerdict { get; init; }
+
+    /// <summary>
+    /// G696/G645: the review seat's declared route to the structured
+    /// per-kind command-form guidance. This is a route, not a copy of the
+    /// guidance payload.
+    /// </summary>
+    [JsonPropertyName("guide_reachability")]
+    public required GuideReachabilityDeclaration GuideReachability { get; init; }
 
     /// <summary>
     /// G316: requirements for request-update comments — distinguish

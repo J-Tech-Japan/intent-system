@@ -58,6 +58,10 @@ submit a `COMMENTED` review with the body-file form, then run the canonical
 `intent-cli notify report` command. The report is the workflow verdict. See
 `intent-cli guide review --format json` for the structured form.
 
+The role-facing routes are structured and tested: `guide review`, `guide next
+--role review`, and `guide orchestrator-thread` each name `guide seat-commands`
+for the review seat.
+
 ---
 
 ## Project setup
