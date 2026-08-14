@@ -330,6 +330,74 @@ public sealed class BranchLaneDecisionG669Tests : IDisposable
         Assert.Equal("develop", conflict.RoutingValues["queue.pr_base_branch"]);
     }
 
+    [Fact]
+    public void AuthoringOnlyLaneUsesDistinctOperatorConfirmation_AndRefusesOrchestrationImpersonation()
+    {
+        using var workspace = new LaneWorkspace();
+        workspace.WriteLanePacket();
+
+        using (var modeWriter = new StringWriter())
+        {
+            Assert.Equal(0, TeamModeCommand.ExecuteSet(
+                workspace.Context,
+                ["--domain", "intent-cli", "--team", "intent-cli-dev", "--mode", TeamMode.AuthoringOnly, "--write", "--format", "json"],
+                modeWriter));
+        }
+
+        using var proposalWriter = new StringWriter();
+        Assert.Equal(0, CommandRouter.Execute(
+            [
+                "automation", "branch-lane-propose-record",
+                "--execution-unit", "G669", "--actor", "design",
+                "--rationale", "authoring lane proposal",
+                "--evidence", "packet snapshot", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                "--write", "--format", "json",
+            ],
+            workspace.Context,
+            proposalWriter));
+
+        using var refusedWriter = new StringWriter();
+        Assert.Equal(1, CommandRouter.Execute(
+            [
+                "automation", "branch-lane-confirm-record",
+                "--execution-unit", "G669", "--actor", "operator", "--actor-role", "orchestration",
+                "--evidence", "operator confirmation", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                "--write", "--format", "json",
+            ],
+            workspace.Context,
+            refusedWriter));
+        Assert.Contains("orchestration", refusedWriter.ToString(), StringComparison.OrdinalIgnoreCase);
+
+        using var forgedActorWriter = new StringWriter();
+        Assert.Equal(1, CommandRouter.Execute(
+            [
+                "automation", "branch-lane-confirm-record",
+                "--execution-unit", "G669", "--actor", "orchestration", "--actor-role", "operator",
+                "--evidence", "operator confirmation", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                "--write", "--format", "json",
+            ],
+            workspace.Context,
+            forgedActorWriter));
+        Assert.Contains("distinct operator identity", forgedActorWriter.ToString(), StringComparison.OrdinalIgnoreCase);
+
+        using var confirmationWriter = new StringWriter();
+        Assert.Equal(0, CommandRouter.Execute(
+            [
+                "automation", "branch-lane-confirm-record",
+                "--execution-unit", "G669", "--actor", "operator", "--actor-role", "operator",
+                "--evidence", "operator confirmation", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                "--write", "--format", "json",
+            ],
+            workspace.Context,
+            confirmationWriter));
+
+        var gate = BranchLaneDecisionGate.Evaluate(workspace.RootPath, "G669", TeamMode.AuthoringOnly);
+        Assert.True(gate.Passed, gate.Error);
+        using var confirmation = JsonDocument.Parse(confirmationWriter.ToString());
+        Assert.Equal(TeamMode.AuthoringOnly, confirmation.RootElement.GetProperty("record").GetProperty("team_mode").GetString());
+        Assert.Equal("operator", confirmation.RootElement.GetProperty("record").GetProperty("actor_role").GetString());
+    }
+
     private static int RunRecordCommand(
         LaneWorkspace workspace,
         bool confirmation,

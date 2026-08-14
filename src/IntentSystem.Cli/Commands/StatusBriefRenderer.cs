@@ -25,6 +25,11 @@ internal static class StatusBriefRenderer
         writer.WriteLine($"In-flight units: {FormatList(summary.InFlightUnits)}");
         writer.WriteLine($"Review units: {FormatList(summary.ReviewUnits)}");
         writer.WriteLine($"WIP present: {(summary.WipPresent ? "yes" : "no")}");
+        if (summary.CapabilityMatrix is { } capabilityMatrix)
+        {
+            writer.WriteLine($"Team mode: {capabilityMatrix.TeamMode} ({capabilityMatrix.ModeSource})");
+            writer.WriteLine($"Not applicable: {string.Join(", ", capabilityMatrix.NotApplicableClasses)}");
+        }
         writer.WriteLine($"Clarification open: {(summary.ClarificationOpen ? "yes" : "no")}"
             + (summary.ClarificationOpenPath is null ? string.Empty : $" ({summary.ClarificationOpenPath})"));
         writer.WriteLine($"Next candidate: {summary.NextCandidate ?? "-"}");

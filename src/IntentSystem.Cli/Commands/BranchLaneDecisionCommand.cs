@@ -19,8 +19,8 @@ internal static class BranchLaneDecisionCommand
         if (args.Length == 1 && string.Equals(args[0], "--help", StringComparison.Ordinal))
         {
             writer.WriteLine(confirmation
-                ? "Usage: intent-cli automation branch-lane-confirm-record --execution-unit <unit> --actor <actor> --evidence <text> [--recorded-at <iso>] [--write] [--format json|markdown]"
-                : "Usage: intent-cli automation branch-lane-propose-record --execution-unit <unit> --actor <actor> --rationale <text> --evidence <text> [--recorded-at <iso>] [--write] [--format json|markdown]");
+                ? "Usage: intent-cli automation branch-lane-confirm-record --execution-unit <unit> --actor <actor> --evidence <text> [--domain <name>] [--team <name>] [--actor-role operator|orchestration] [--recorded-at <iso>] [--write] [--format json|markdown]"
+                : "Usage: intent-cli automation branch-lane-propose-record --execution-unit <unit> --actor <actor> --rationale <text> --evidence <text> [--domain <name>] [--team <name>] [--recorded-at <iso>] [--write] [--format json|markdown]");
             return 0;
         }
 
@@ -29,6 +29,10 @@ internal static class BranchLaneDecisionCommand
         var evidence = ReadRequired(args, "--evidence");
         var rationale = ReadOptional(args, "--rationale");
         var recordedAtText = ReadOptional(args, "--recorded-at") ?? ReadOptional(args, "--timestamp");
+        var domain = ReadOptional(args, "--domain") ?? context.Config.Project.Domain;
+        var team = ReadOptional(args, "--team");
+        var requestedTeamMode = ReadOptional(args, "--team-mode") ?? ReadOptional(args, "--mode");
+        var requestedActorRole = ReadOptional(args, "--actor-role");
         var format = ReadOptional(args, "--format") ?? "markdown";
         var write = HasFlag(args, "--write");
 
@@ -68,6 +72,71 @@ internal static class BranchLaneDecisionCommand
                 Operation = confirmation ? "confirm" : "propose",
                 ExecutionUnit = executionUnit,
                 Error = recordedAtError,
+            });
+        }
+
+        TeamModeResolution teamMode;
+        try
+        {
+            teamMode = TeamModeStore.Resolve(context.RepoRoot, domain!, team);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Emit(writer, format, new BranchLaneDecisionCommandResult
+            {
+                Operation = confirmation ? "confirm" : "propose",
+                ExecutionUnit = executionUnit,
+                Error = $"team-mode-unreadable: {exception.Message}",
+            });
+        }
+
+        if (requestedTeamMode is not null
+            && !TeamMode.IsKnown(requestedTeamMode))
+        {
+            return Emit(writer, format, new BranchLaneDecisionCommandResult
+            {
+                Operation = confirmation ? "confirm" : "propose",
+                ExecutionUnit = executionUnit,
+                Error = $"unknown team mode '{requestedTeamMode}'.",
+            });
+        }
+
+        if (requestedTeamMode is not null
+            && !string.Equals(requestedTeamMode, teamMode.Mode, StringComparison.Ordinal))
+        {
+            return Emit(writer, format, new BranchLaneDecisionCommandResult
+            {
+                Operation = confirmation ? "confirm" : "propose",
+                ExecutionUnit = executionUnit,
+                Error = $"requested team mode '{requestedTeamMode}' does not match the recorded mode '{teamMode.Mode}'.",
+            });
+        }
+
+        var expectedActorRole = confirmation
+            ? teamMode.IsAuthoringOnly ? "operator" : "orchestration"
+            : "design";
+        var actorRole = requestedActorRole ?? expectedActorRole;
+        if (!string.Equals(actorRole, expectedActorRole, StringComparison.Ordinal))
+        {
+            return Emit(writer, format, new BranchLaneDecisionCommandResult
+            {
+                Operation = confirmation ? "confirm" : "propose",
+                ExecutionUnit = executionUnit,
+                Error = teamMode.IsAuthoringOnly
+                    ? "authoring-only lane confirmation requires actor_role 'operator'; orchestration impersonation is refused."
+                    : $"actor_role is '{actorRole}', expected '{expectedActorRole}'.",
+            });
+        }
+
+        if (confirmation
+            && teamMode.IsAuthoringOnly
+            && string.Equals(actor, "orchestration", StringComparison.OrdinalIgnoreCase))
+        {
+            return Emit(writer, format, new BranchLaneDecisionCommandResult
+            {
+                Operation = "confirm",
+                ExecutionUnit = executionUnit,
+                Error = "authoring-only lane confirmation actor cannot be 'orchestration'; use a distinct operator identity.",
             });
         }
 
@@ -140,7 +209,7 @@ internal static class BranchLaneDecisionCommand
                     actor,
                     evidence,
                     rationale: null,
-                    expectedRole: "orchestration",
+                    expectedRole: expectedActorRole,
                     out var existingError))
             {
                 return Emit(writer, format, new BranchLaneDecisionCommandResult
@@ -204,10 +273,11 @@ internal static class BranchLaneDecisionCommand
                 LandingMode = snapshot.LandingMode,
                 DefinitionRevision = snapshot.DefinitionRevision,
                 Actor = actor,
-                ActorRole = "orchestration",
+                ActorRole = actorRole,
                 RecordedAt = recordedAt,
                 Evidence = evidence,
                 Fingerprint = fingerprint,
+                TeamMode = teamMode.IsAuthoringOnly ? TeamMode.AuthoringOnly : null,
             }
             : new BranchLaneProposeRecord
             {
@@ -224,6 +294,7 @@ internal static class BranchLaneDecisionCommand
                 Evidence = evidence,
                 Fingerprint = fingerprint,
                 Rationale = rationale!,
+                TeamMode = teamMode.IsAuthoringOnly ? TeamMode.AuthoringOnly : null,
             };
 
         var path = BranchLaneDecisionStore.ResolveRelativePath(executionUnit, confirmation);

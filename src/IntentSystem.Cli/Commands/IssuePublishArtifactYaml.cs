@@ -37,6 +37,20 @@ internal sealed record IssuePublishArtifact
 
     /// <summary>G307: ISO-8601 UTC timestamp recorded when lifecycle reaches <c>closed-out</c>.</summary>
     public string? ClosedOutAt { get; init; }
+
+    /// <summary>
+    /// G692: optional authoring-only publish audit. Null keeps the historical
+    /// delivery artifact byte shape unchanged.
+    /// </summary>
+    public string? TeamMode { get; init; }
+
+    public string? ActorRole { get; init; }
+
+    public string? OperatorAcceptanceEvidence { get; init; }
+
+    public string? OperatorAcceptanceRecordedAt { get; init; }
+
+    public string? ExternalHandoffRef { get; init; }
 }
 
 /// <summary>G307: canonical lifecycle states for <see cref="IssuePublishArtifact.LifecycleState"/>.</summary>
@@ -110,6 +124,29 @@ internal static class IssuePublishArtifactYaml
             lines.Add($"closed_out_at: {Quote(artifact.ClosedOutAt!)}");
         }
 
+        // G692: these fields are emitted only for an audited authoring-only
+        // publish, preserving delivery-mode artifact bytes.
+        if (!string.IsNullOrEmpty(artifact.TeamMode))
+        {
+            lines.Add($"team_mode: {Quote(artifact.TeamMode!)}");
+        }
+        if (!string.IsNullOrEmpty(artifact.ActorRole))
+        {
+            lines.Add($"actor_role: {Quote(artifact.ActorRole!)}");
+        }
+        if (!string.IsNullOrEmpty(artifact.OperatorAcceptanceEvidence))
+        {
+            lines.Add($"operator_acceptance_evidence: {Quote(artifact.OperatorAcceptanceEvidence!)}");
+        }
+        if (!string.IsNullOrEmpty(artifact.OperatorAcceptanceRecordedAt))
+        {
+            lines.Add($"operator_acceptance_recorded_at: {Quote(artifact.OperatorAcceptanceRecordedAt!)}");
+        }
+        if (!string.IsNullOrEmpty(artifact.ExternalHandoffRef))
+        {
+            lines.Add($"external_handoff_ref: {Quote(artifact.ExternalHandoffRef!)}");
+        }
+
         return string.Join(Environment.NewLine, lines) + Environment.NewLine;
     }
 
@@ -134,7 +171,12 @@ internal static class IssuePublishArtifactYaml
             LifecycleState = GetOptionalScalar(values, "lifecycle_state"),
             LinkedPrNumber = GetOptionalInteger(values, "linked_pr_number"),
             LinkedPrUrl = GetOptionalScalar(values, "linked_pr_url"),
-            ClosedOutAt = GetOptionalScalar(values, "closed_out_at")
+            ClosedOutAt = GetOptionalScalar(values, "closed_out_at"),
+            TeamMode = GetOptionalScalar(values, "team_mode"),
+            ActorRole = GetOptionalScalar(values, "actor_role"),
+            OperatorAcceptanceEvidence = GetOptionalScalar(values, "operator_acceptance_evidence"),
+            OperatorAcceptanceRecordedAt = GetOptionalScalar(values, "operator_acceptance_recorded_at"),
+            ExternalHandoffRef = GetOptionalScalar(values, "external_handoff_ref")
         };
     }
 

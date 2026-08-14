@@ -52,6 +52,35 @@ unchanged. See [ADR 0005](../adr/0005-team-mode-authoring-only.md); the parent
 intent's ADR-014 remains unchanged until its host-side successor link is
 written.
 
+## Authoring-only publish audit and shared diagnostics (G692 — preview-through-1.x)
+
+An authoring-only front door may publish an issue only after the existing
+readiness, claim, repository, content, duplicate, and branch-lane gates pass.
+The publish command records the design actor, explicit operator-acceptance
+evidence, and destination ownership, then writes a durable
+`published-external-handoff` record for the created issue. These records make
+the handoff observable; they do not authorize a worker or bypass any publish
+gate. Delivery-mode issue content, issue creation, and run-event bytes remain
+unchanged.
+
+For a packet that declares a lane, authoring-only records the design proposal
+and requires a distinct operator confirmation. The operator lane is not an
+orchestration impersonation: a confirmation claiming `orchestration` is
+refused, and `notify delegate` to a named worker role returns a nonzero
+`not-applicable-team-mode` refusal without touching the outbox or transport.
+`automation stalled-work` keeps `published-not-delegated` visible until the
+matching handoff record exists; only that exact destination/issue evidence
+silences the observation.
+
+`automation stalled-work`, `automation state-doctor`, `intent status`, and
+`status brief` consume one shared team-mode capability matrix. In
+authoring-only, worker, review, CI, delegation, and supervisor classes are
+explicitly not applicable; authoring, contract/readiness, branch-lane,
+branch-routing, publish-durable-state-drift, and knowledge/guide-writeback
+remain active. Delivery retains every class and its existing output. This is
+a diagnostic judgment only and never weakens publish, claim, or ownership
+gates.
+
 ## Application-front-door bootstrap (G664 — preview-through-1.x)
 
 From a desktop-app conversation, say **`Start this work in a herdr-only team.`**

@@ -20,6 +20,10 @@ internal sealed record AutomationStateDoctorResult
     [JsonPropertyName("mode")]
     public required string Mode { get; init; }
 
+    [JsonPropertyName("capability_matrix")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TeamModeCapabilityMatrix? CapabilityMatrix { get; init; }
+
     [JsonPropertyName("host_only")]
     public required bool HostOnly { get; init; }
 

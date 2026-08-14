@@ -53,4 +53,16 @@ public sealed record RunEvent
     /// linked_pr URL.
     /// </summary>
     public int? Pr { get; init; }
+
+    /// <summary>
+    /// G692: authoring-only publish audit fields. They are optional so
+    /// delivery-mode and legacy run-event bytes remain unchanged.
+    /// </summary>
+    public string? TeamMode { get; init; }
+
+    public string? ActorRole { get; init; }
+
+    public string? OperatorAcceptanceEvidence { get; init; }
+
+    public string? ExternalHandoffRef { get; init; }
 }

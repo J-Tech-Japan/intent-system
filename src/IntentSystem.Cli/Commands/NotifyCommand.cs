@@ -192,6 +192,23 @@ internal static class NotifyCommand
             return 1;
         }
 
+        // G692: authoring-only has no worker seat to receive a delegation.
+        // Refuse named worker roles before any outbox or transport path is
+        // consulted; an authoring/design front door must not impersonate the
+        // orchestration lane.
+        if (teamMode.IsAuthoringOnly
+            && string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+            && TeamModeCapabilityMatrix.IsWorkerRole(options.ToRole))
+        {
+            Emit(writer, options.Format, FailureResult(
+                operation,
+                options,
+                SessionLayerMode.Default,
+                "not-applicable-team-mode",
+                $"not-applicable-team-mode: authoring-only teams have no worker delegation lane; refusing notify delegate to worker role '{options.ToRole}'."));
+            return 1;
+        }
+
         if (string.Equals(operation, OperationDispose, StringComparison.Ordinal))
         {
             return ExecuteDispose(writer, options, routingRoot);

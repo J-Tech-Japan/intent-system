@@ -28,6 +28,8 @@ internal static class AutomationStateDoctorCommand
     private const string FormatJson = "json";
 
     private const string OptRepo = "--repo";
+    private const string OptDomain = "--domain";
+    private const string OptTeam = "--team";
     private const string OptWorkdir = "--workdir";
     private const string OptReadOnly = "--read-only";
     private const string OptWrite = "--write";
@@ -57,7 +59,7 @@ internal static class AutomationStateDoctorCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var repo, out var workdir, out var mode, out var format, out var childLoopContext, out var error))
+        if (!TryParseArguments(args, out var repo, out var domain, out var team, out var workdir, out var mode, out var format, out var childLoopContext, out var error))
         {
             writer.WriteLine(error);
             return 1;
@@ -88,6 +90,20 @@ internal static class AutomationStateDoctorCommand
         var hostContext = string.Equals(resolvedWorkdir, context.RepoRoot, StringComparison.Ordinal)
             ? context
             : context with { RepoRoot = resolvedWorkdir };
+
+        var resolvedDomain = string.IsNullOrWhiteSpace(domain)
+            ? hostContext.Config.Project.Domain
+            : domain!;
+        TeamModeCapabilityMatrix capabilityMatrix;
+        try
+        {
+            capabilityMatrix = TeamModeCapabilityMatrix.Resolve(hostContext.RepoRoot, resolvedDomain, team);
+        }
+        catch (InvalidOperationException exception)
+        {
+            writer.WriteLine($"team mode could not be resolved: {exception.Message}");
+            return 1;
+        }
 
         if (string.IsNullOrWhiteSpace(repo)
             && !AutomationCheckCommand.TryInferGitHubRepo(resolvedWorkdir, out repo, out error))
@@ -151,6 +167,7 @@ internal static class AutomationStateDoctorCommand
             Repo = repo!,
             Mode = mode,
             HostOnly = true,
+            CapabilityMatrix = capabilityMatrix.IsAuthoringOnly ? capabilityMatrix : null,
             Findings = findings,
             UnsafeFindings = analysis.UnsafeFindings,
             Warnings = warnings,
@@ -487,6 +504,8 @@ internal static class AutomationStateDoctorCommand
     private static bool TryParseArguments(
         string[] args,
         out string? repo,
+        out string? domain,
+        out string? team,
         out string? workdir,
         out string mode,
         out string format,
@@ -494,6 +513,8 @@ internal static class AutomationStateDoctorCommand
         out string error)
     {
         repo = null;
+        domain = null;
+        team = null;
         workdir = null;
         mode = AutomationStateDoctorModes.ReadOnly;
         format = FormatText;
@@ -512,6 +533,26 @@ internal static class AutomationStateDoctorCommand
                         return false;
                     }
                     repo = args[index + 1].Trim();
+                    index++;
+                    break;
+
+                case OptDomain:
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--domain requires a value.";
+                        return false;
+                    }
+                    domain = args[index + 1].Trim();
+                    index++;
+                    break;
+
+                case OptTeam:
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a value.";
+                        return false;
+                    }
+                    team = args[index + 1].Trim();
                     index++;
                     break;
 
@@ -555,7 +596,7 @@ internal static class AutomationStateDoctorCommand
                     break;
 
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] [--read-only] [--write] [--child-loop-context] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--domain <name>] [--team <name>] [--workdir <path>] [--read-only] [--write] [--child-loop-context] [--format text|json].";
                     return false;
             }
         }
@@ -580,6 +621,11 @@ internal static class AutomationStateDoctorCommand
         writer.WriteLine($"# Automation state-doctor for {result.Repo}");
         writer.WriteLine($"- mode: {result.Mode}");
         writer.WriteLine($"- host_only: {result.HostOnly.ToString().ToLowerInvariant()}");
+        if (result.CapabilityMatrix is { } capabilityMatrix)
+        {
+            writer.WriteLine($"- team_mode: {capabilityMatrix.TeamMode} ({capabilityMatrix.ModeSource})");
+            writer.WriteLine($"- not_applicable: {string.Join(", ", capabilityMatrix.NotApplicableClasses)}");
+        }
         writer.WriteLine($"- {result.Summary}");
         writer.WriteLine();
         writer.WriteLine("## Findings");
@@ -626,7 +672,7 @@ internal static class AutomationStateDoctorCommand
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("automation state-doctor");
-        writer.WriteLine("Usage: intent-cli automation state-doctor [--repo <owner/repo>] [--workdir <path>] [--read-only] [--write] [--format text|json]");
+        writer.WriteLine("Usage: intent-cli automation state-doctor [--repo <owner/repo>] [--domain <name>] [--team <name>] [--workdir <path>] [--read-only] [--write] [--format text|json]");
         writer.WriteLine("Unified, OSS-safe diagnostic for host-metadata drift (queue-state / publish artifacts / GitHub PRs).");
         writer.WriteLine("Read-only by default. --write applies ONLY high-confidence, forward-only queue-state repairs and appends runs.jsonl events.");
         writer.WriteLine("Ambiguous drift is reported as unsafe findings and never mutated (fail-closed). Existing/old hosts are never migrated.");

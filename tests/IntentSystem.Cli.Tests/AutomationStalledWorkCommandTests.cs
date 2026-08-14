@@ -140,6 +140,52 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_AuthoringOnlyPublishedNotDelegated_IsSuppressedOnlyByMatchingExternalHandoff()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G692", "intent-cli");
+        var issue = BuildIssue(1497, "G692: authoring-only publish audit", FixedNow.AddHours(-26), "intent-target");
+
+        using var modeWriter = new StringWriter();
+        Assert.Equal(0, TeamModeCommand.ExecuteSet(
+            workspace.Context,
+            ["--domain", "intent-cli", "--team", "intent-cli-dev", "--mode", TeamMode.AuthoringOnly, "--write", "--format", "json"],
+            modeWriter));
+
+        var handoff = PublishedExternalHandoffStore.Write(workspace.RootPath, new PublishedExternalHandoff
+        {
+            RecordKind = PublishedExternalHandoffStore.RecordKind,
+            ExecutionUnit = "G692",
+            Domain = "intent-cli",
+            Team = "intent-cli-dev",
+            TeamMode = TeamMode.AuthoringOnly,
+            ActorRole = "design",
+            DestinationOwnership = "J-Tech-Japan/intent-system",
+            TargetRepo = "J-Tech-Japan/intent-system",
+            IssueNumber = issue.Number,
+            IssueUrl = issue.Url,
+            OperatorAcceptanceEvidence = "operator accepted external publication",
+            RecordedAt = FixedNow,
+        });
+        Assert.True(handoff.Succeeded, handoff.Error);
+
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+        using var writer = new StringWriter();
+        Assert.Equal(0, AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--team", "intent-cli-dev", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer));
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.DoesNotContain(
+            document.RootElement.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindPublishedNotDelegated);
+        var excluded = Assert.Single(document.RootElement.GetProperty("excluded").EnumerateArray(),
+            item => item.GetProperty("reason").GetString() == "published-external-handoff-recorded");
+        Assert.Equal(1497, excluded.GetProperty("issue").GetProperty("number").GetInt32());
+    }
+
+    [Fact]
     public void Execute_PublishedNotDelegated_ExcludesIssueAlreadyClaimed()
     {
         // G533: kept RECENT (well under the claimed-but-silent default

@@ -48,6 +48,28 @@ migration は発生しません。`delivery` が default で、このページ�
 変更されません。[ADR 0005](../adr/0005-team-mode-authoring-only.md) を参照してください。parent intent
 の ADR-014 は host-side successor link が書かれるまで変更しません。
 
+## authoring-only の publish audit と共有 diagnostics（G692 — preview-through-1.x）
+
+authoring-only の front door が issue を publish できるのは、既存の readiness、claim、repository、
+content、duplicate、branch-lane の全 gate を通過した後だけです。publish command は design actor、明示的な
+operator-acceptance evidence、destination ownership を記録し、作成した issue に対応する永続的な
+`published-external-handoff` record を書きます。この record は handoff を観測可能にしますが、worker を
+認可したり publish gate を迂回したりしません。delivery-mode の issue content、issue creation、run-event
+の byte は変更されません。
+
+lane を宣言した packet では、authoring-only は design の proposal を記録し、異なる operator による
+confirmation を要求します。この operator lane は orchestration の impersonation ではありません。
+`orchestration` を名乗る confirmation は拒否され、named worker role への `notify delegate` は outbox や
+transport に触れず、nonzero の `not-applicable-team-mode` refusal を返します。`automation stalled-work` は
+matching handoff record が現れるまで `published-not-delegated` を表示し、exact な destination/issue evidence
+がある場合だけこの observation を抑制します。
+
+`automation stalled-work`、`automation state-doctor`、`intent status`、`status brief` は 1 つの shared
+team-mode capability matrix を使います。authoring-only では worker、review、CI、delegation、supervisor
+class を明示的に not applicable とし、authoring、contract/readiness、branch-lane、branch-routing、
+publish の永続状態 drift、knowledge/guide-writeback は active のままです。delivery は全 class と既存の
+output を保持します。これは diagnostic judgment だけであり、publish、claim、ownership gate を弱めません。
+
 ## application front door からの bootstrap（G664 — preview-through-1.x）
 
 desktop app conversation から **`Start this work in a herdr-only team.`** または

@@ -73,6 +73,20 @@ internal static class IssuePublishCommand
                 $"Issue publish artifact for '{executionUnit}' must contain created issue metadata.");
         }
 
+        if (artifact.TeamMode is not null && !TeamMode.IsKnown(artifact.TeamMode))
+        {
+            throw new InvalidOperationException(
+                $"Issue publish artifact for '{executionUnit}' contains unknown team_mode '{artifact.TeamMode}'; refusing the publish boundary.");
+        }
+
+        if (string.Equals(artifact.TeamMode, TeamMode.AuthoringOnly, StringComparison.Ordinal)
+            && (!string.Equals(artifact.ActorRole, "design", StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(artifact.OperatorAcceptanceEvidence)))
+        {
+            throw new InvalidOperationException(
+                "authoring-only issue publish requires actor_role 'design' and operator acceptance evidence; the intent-target boundary was not applied.");
+        }
+
         var packetPath = ResolveRepoPath(context.RepoRoot, artifact.PacketPath);
         if (!File.Exists(packetPath))
         {
@@ -81,6 +95,24 @@ internal static class IssuePublishCommand
 
         var packet = ProjectionPacketRuntimeReader.Read(File.ReadAllText(packetPath));
         var targetRepo = GitHubRepositoryTargetResolver.Resolve(context.RepoRoot, packet.TargetRepo, GitCommandRunnerFactory());
+
+        if (string.Equals(artifact.TeamMode, TeamMode.AuthoringOnly, StringComparison.Ordinal))
+        {
+            var handoff = PublishedExternalHandoffStore.Read(context.RepoRoot, executionUnit);
+            if (handoff.Record is null
+                || !PublishedExternalHandoffStore.MatchesIssue(
+                    handoff.Record,
+                    executionUnit,
+                    targetRepo,
+                    artifact.CreatedIssueNumber.Value,
+                    artifact.CreatedIssueUrl!))
+            {
+                throw new InvalidOperationException(
+                    "authoring-only issue publish requires a matching published-external-handoff record; "
+                    + "the intent-target boundary was not applied.");
+            }
+        }
+
         PublisherFactory().AddLabel(targetRepo, artifact.CreatedIssueNumber.Value, PublishLabelName);
 
         var updatedArtifact = artifact with
@@ -100,7 +132,11 @@ internal static class IssuePublishCommand
                 By = TransitionActor,
                 LinkedIssue = artifact.CreatedIssueUrl,
                 PacketRef = artifact.PacketPath,
-                ResultRef = artifactPath
+                ResultRef = artifactPath,
+                TeamMode = artifact.TeamMode,
+                ActorRole = artifact.ActorRole,
+                OperatorAcceptanceEvidence = artifact.OperatorAcceptanceEvidence,
+                ExternalHandoffRef = artifact.ExternalHandoffRef,
             });
 
         return new IssuePublishCommandResult
