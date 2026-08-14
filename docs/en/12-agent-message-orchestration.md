@@ -39,8 +39,10 @@ The measured bootstrap state is `authoring-only-complete` once the durable
 Repository, claim, and publish commands remain explicit operator prerequisites;
 they are rendered actions, not missing delivery-topology facts.
 
-`notify supervise`, `notify supervise install`, and delivery-topology commands
-return the named `not-applicable-team-mode` outcome. The G691 gate does not
+`notify supervise`, `notify supervise install`, `notify adjudicate`, and
+delivery-topology commands return the named `not-applicable-team-mode` outcome.
+`notify adjudicate` is not applicable because an authoring-only team has no
+delivery seat or adjudication dialog to adjudicate. The G691 gate does not
 disable `notify report`, `notify escalate`, `notify status`, or `notify
 dispose`; those reporting and settlement surfaces remain usable. No new
 publish, delegation, or handoff behavior is introduced by this slice. No

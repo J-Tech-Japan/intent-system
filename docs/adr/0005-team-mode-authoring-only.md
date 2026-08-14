@@ -35,13 +35,16 @@ shape/interview, packet authoring, publish, improve, inspect, and idle.
 The measured bootstrap state is `authoring-only-complete` when the durable
 `team_mode=authoring-only` record and front-door shape have been inspected;
 repository/claim/publish commands remain explicit operator prerequisites, not
-missing delivery facts. `notify supervise`, `notify supervise install`, and
-delivery-topology surfaces return the named `not-applicable-team-mode` outcome.
-The G691 gate leaves `notify report`, `notify escalate`, `notify status`, and
-`notify dispose` usable as reporting and settlement surfaces. No new publish,
-delegation, or handoff behavior is introduced here; those pipeline decisions
-remain later-slice scope. Delivery output and behavior are byte-identical when
-the mode is absent or explicitly recorded as `delivery`.
+missing delivery facts. `notify supervise`, `notify supervise install`,
+`notify adjudicate`, and delivery-topology surfaces return the named
+`not-applicable-team-mode` outcome. `notify adjudicate` is not applicable
+because an authoring-only team has no delivery seat or adjudication dialog to
+adjudicate. The G691 gate leaves `notify report`, `notify escalate`,
+`notify status`, and `notify dispose` usable as reporting and settlement
+surfaces. No new publish, delegation, or handoff behavior is introduced here;
+those pipeline decisions remain later-slice scope. Delivery output and
+behavior are byte-identical when the mode is absent or explicitly recorded as
+`delivery`.
 
 ## Consequences
 
