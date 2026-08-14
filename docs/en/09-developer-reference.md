@@ -1042,6 +1042,29 @@ intent tree, or decide whether the guide is good. It is idempotent for the same
 commit, refuses conflicting or unreadable evidence, and fails closed when a
 packet declaration is absent or malformed.
 
+### Role-scoped closeout records (G698)
+
+Orchestration owns the mechanical closeout; design owns the intent-tree,
+ADR/diagram/docs lesson and guide update. Use these exact commands:
+
+```text
+intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --role design [--target <path>]... --write
+intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --role orchestration [--target <path>]... --write
+intent-cli automation guide-reachability-record --execution-unit <unit> --commit <host-sha> --role design --write
+intent-cli automation guide-reachability-record --execution-unit <unit> --commit <host-sha> --role orchestration --write
+intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --role <design|orchestration> --format json
+```
+
+Explicit knowledge records coexist under
+`.intent-cli/knowledge-writebacks/<unit>/records/<role>.json`; guide records
+use `.intent-cli/guide-reachability/<unit>/records/<role>.json`. Read/result
+surfaces enumerate every role. Same-role duplicates and
+conflicting commits remain refused. Existing legacy `record.json` files stay
+readable as unattributed evidence; there is no automatic migration or rewrite.
+An unscoped scan preserves compatibility, while `stalled-work --role` clears
+only the selected role. `guide closeout run` and `guide orchestrator-thread`
+show this split and remain executable from a metadata-free bare directory.
+
 ### Retiring a stuck published issue (G525)
 
 `intent-cli automation issue-retire --repo <r> --issue <n> --reason <superseded|decomposed|obsolete> [--note <text>] [--domain <name>] [--write]`

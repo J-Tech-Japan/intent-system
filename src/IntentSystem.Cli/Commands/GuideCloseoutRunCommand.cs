@@ -107,20 +107,22 @@ Stage 5 — apply queue/runs state (write):
 
 Stage 5b — knowledge writeback check (G461 / G564; SAME CADENCE as the closeout):
 {IntentTreeCoEvolutionDuty.Duty}
+{IntentTreeCoEvolutionDuty.RoleSplit}
 1. Read the packet's declarations: any `knowledge_updates.*.required: true` (intent_tree / adr / diagram / docs) or `closeout_learning.write_back_required: true`. If every one is false or absent, this stage is a no-op — declining is a legitimate answer, and legacy packets carry no such block.
 2. If anything was declared, DESIGN performs the write-back in the host repo now — in this same closeout wake, not ""later"". intent-cli never writes intent content; the tree is written by design.
-3. Then RECORD it, with the host commit as evidence: `intent-cli automation knowledge-writeback-record --execution-unit <execution-unit> --commit <host-commit-sha> [--target <path>]... --write`. The command is idempotent for the same commit and fails closed on an unknown unit or non-SHA evidence.
+3. Then RECORD it as design evidence, with the host commit: `intent-cli automation knowledge-writeback-record --execution-unit <execution-unit> --commit <host-commit-sha> --role design [--target <path>]... --write`. Orchestration records its own mechanical evidence with the same command and `--role orchestration`. The command is idempotent for the same role and commit, keeps the two role records side by side, and fails closed on an unknown unit, wrong role, or non-SHA evidence.
 4. Until a record exists, the unit stays visible as a `knowledge-writeback-pending` item in `intent-cli automation stalled-work` / `automation heartbeat`, with its age measured from closeout and its declared target paths named. Merging and closing the PR do NOT clear it.
 5. Do not block the closeout queue write on this — but do not report the closeout as complete while the declared write-back is unrecorded either; a still-pending item is part of the closeout report (below).
 6. {IntentTreeCoEvolutionDuty.AuthoringRule}
 
 Stage 5c — guide reachability check (G645; SAME CADENCE as the closeout):
 {GuideReachabilityDuty.Standard}
+{GuideReachabilityDuty.RoleSplit}
 1. Read the packet's `guide_reachability` declaration. For each role-facing surface, it must name the guide
    surface, routing role, and target surface. If the slice adds no role-facing surface, the packet must say
    `no_role_facing_surface: true`; an absent or blank declaration is not the same answer.
 2. If routes were declared, DESIGN confirms the named guide routes in the host and records the evidence with
-   `intent-cli automation guide-reachability-record --execution-unit <execution-unit> --commit <host-commit-sha> --write`.
+   `intent-cli automation guide-reachability-record --execution-unit <execution-unit> --commit <host-commit-sha> --role design --write`. Orchestration may record a separate mechanical observation with `--role orchestration`.
 3. Until that record exists, `intent-cli automation stalled-work` reports a `guide-reachability-pending` debt
    naming the execution unit, declared guide surface, and role. An explicit no-surface declaration produces no debt.
 4. This is closeout debt, not a merge gate; intent-cli never infers reachability, judges guide wording, or writes

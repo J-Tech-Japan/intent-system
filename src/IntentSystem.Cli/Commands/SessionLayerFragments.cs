@@ -807,13 +807,17 @@ internal static class SessionLayerFragments
             Descriptive("Leaving the tree unupdated while implementation advances is a serious fault in its own right, not a deferred chore: a tree that describes a design the code no longer has is worse than no tree, because every downstream packet, review, and audit is written against it."),
             Scaffold(" "),
             Operative("Reinforce the tree in the same wake that changes the surface it describes.")),
+        // G698: keep the shared role-attributed duty typed at sentence
+        // granularity; the renderer emits this as one numbered list item.
         Fragment(
             S8,
             Descriptive("7."),
             Scaffold(" "),
-            Operative("Same-cadence write-back check: perform the packet's declared write-backs and RECORD them in the same closeout wake, with `intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --write`."),
+            Operative(IntentTreeCoEvolutionDuty.RoleSplit),
             Scaffold(" "),
-            Operative("Until it is recorded, the unit stays visible as a `knowledge-writeback-pending` item in `automation stalled-work` / `automation heartbeat` — closing the PR does not clear it, and nothing here writes intent content on design's behalf.")),
+            Operative("Same-cadence write-back check: perform the packet's declared write-backs and RECORD them in the same closeout wake with `intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --role design --write` (or `--role orchestration` when orchestration is recording its own mechanical duty)."),
+            Scaffold(" "),
+            Operative("Until the selected role is recorded, the unit stays visible as a `knowledge-writeback-pending` item in `automation stalled-work` / `automation heartbeat` — closing the PR does not clear it, and nothing here writes intent content on design's behalf.")),
         Fragment(
             S8,
             Descriptive("8."),
@@ -1695,11 +1699,14 @@ internal static class SessionLayerFragments
             Descriptive("Leaving the tree unupdated while implementation advances is a serious fault in its own right, not a deferred chore: a tree that describes a design the code no longer has is worse than no tree, because every downstream packet, review, and audit is written against it."),
             Scaffold(" "),
             Operative("Reinforce the tree in the same wake that changes the surface it describes.")),
+        // G698 JSON counterpart of the role-attributed closeout item above.
         Fragment(
             "design_traffic_controller",
-            Operative("Same-cadence write-back check: perform the packet's declared write-backs and RECORD them in the same closeout wake, with `intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --write`."),
+            Operative(IntentTreeCoEvolutionDuty.RoleSplit),
             Scaffold(" "),
-            Operative("Until it is recorded, the unit stays visible as a `knowledge-writeback-pending` item in `automation stalled-work` / `automation heartbeat` — closing the PR does not clear it, and nothing here writes intent content on design's behalf.")),
+            Operative("Same-cadence write-back check: perform the packet's declared write-backs and RECORD them in the same closeout wake with `intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-sha> --role design --write` (or `--role orchestration` when orchestration is recording its own mechanical duty)."),
+            Scaffold(" "),
+            Operative("Until the selected role is recorded, the unit stays visible as a `knowledge-writeback-pending` item in `automation stalled-work` / `automation heartbeat` — closing the PR does not clear it, and nothing here writes intent content on design's behalf.")),
         Fragment(
             "design_traffic_controller",
             Operative("When progress blocks on a design judgment, record that wait before waiting: open judgment-wait with `--owner design`, query the existing record, and whoever supplies the judgment MUST resolve it with evidence."),

@@ -38,16 +38,22 @@ internal static class IntentTreeCoEvolutionDuty
         + "to keep the packet quiet is the failure mode this rule exists to stop — an undeclared obligation is "
         + "invisible to closeout, to review, and to `automation stalled-work`.";
 
+    /// <summary>G698: the closeout recorder boundary between the two duties.</summary>
+    public const string RoleSplit =
+        "G698 role split — orchestration owns the mechanical closeout, design owns the intent-tree/ADR/diagram/docs "
+        + "lesson, and each recorder role has independent evidence for the same execution unit.";
+
     /// <summary>The closeout-cadence check the duty implies (G524 same-cadence rule).</summary>
     public const string CloseoutCheck =
-        "Same-cadence write-back check: perform the packet's declared write-backs and RECORD them in the same "
-        + "closeout wake, with `intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit "
-        + "<host-sha> --write`. Until it is recorded, the unit stays visible as a `knowledge-writeback-pending` "
+        RoleSplit + " Same-cadence write-back check: perform the packet's declared write-backs and RECORD them in the same "
+        + "closeout wake with `intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit "
+        + "<host-sha> --role design --write` (or `--role orchestration` when orchestration is recording its own "
+        + "mechanical duty). Until the selected role is recorded, the unit stays visible as a `knowledge-writeback-pending` "
         + "item in `automation stalled-work` / `automation heartbeat` — closing the PR does not clear it, and "
         + "nothing here writes intent content on design's behalf.";
 
     /// <summary>The canonical recording command for <paramref name="executionUnit"/>.</summary>
-    public static string RecordCommand(string executionUnit) =>
+    public static string RecordCommand(string executionUnit, string role = CloseoutRecordRole.Design) =>
         $"intent-cli automation knowledge-writeback-record --execution-unit {executionUnit} "
-        + "--commit <host-commit-sha> [--target <path>]... --write";
+        + $"--commit <host-commit-sha> --role {role} [--target <path>]... --write";
 }

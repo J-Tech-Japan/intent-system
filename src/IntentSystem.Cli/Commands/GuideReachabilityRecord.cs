@@ -26,6 +26,11 @@ internal sealed record GuideReachabilityRecord
     [JsonPropertyName("execution_unit")]
     public required string ExecutionUnit { get; init; }
 
+    /// <summary>G698 recorder attribution; absent means a legacy record.</summary>
+    [JsonPropertyName("role")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Role { get; init; }
+
     [JsonPropertyName("host_commit")]
     public required string HostCommit { get; init; }
 
@@ -136,8 +141,20 @@ internal sealed record GuideReachabilityRecord
                 + "which is not hexadecimal commit evidence.");
         }
 
+        if (record.Role is not null
+            && !CloseoutRecordRole.TryNormalize(record.Role, out _, out var roleError))
+        {
+            throw new InvalidOperationException(
+                $"Guide reachability record for '{expectedExecutionUnit}' has an invalid role: {roleError}");
+        }
+
         return record with
         {
+            Role = record.Role is null
+                ? null
+                : CloseoutRecordRole.TryNormalize(record.Role, out var normalizedRole, out _)
+                    ? normalizedRole
+                    : record.Role,
             GuideSurfaces = record.GuideSurfaces ?? Array.Empty<string>(),
             Roles = record.Roles ?? Array.Empty<string>(),
         };
