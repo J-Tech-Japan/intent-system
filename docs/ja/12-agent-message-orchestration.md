@@ -33,11 +33,19 @@ repository/claim/publish prerequisite だけで、delivery topology や delivery
 要求しません。`guide next` が提示するのは shape/interview、packet authoring、publish、improve、
 inspect、idle だけです。
 
+測定された bootstrap state は、永続的な `team_mode=authoring-only` record と front-door shape
+を確認した時点で `authoring-only-complete` になります。repository、claim、publish command
+は明示的な operator prerequisite として表示されますが、delivery-topology の missing fact
+ではありません。
+
 `notify supervise`、`notify supervise install`、delivery-topology command は
-`not-applicable-team-mode` という名前付き outcome を返します。supervisor、worker lifecycle、
-transport migration は発生しません。`delivery` が default で、このページの
-4-thread / supervision contract は変更されません。[ADR 0005](../adr/0005-team-mode-authoring-only.md)
-を参照してください。parent intent の ADR-014 は host-side successor link が書かれるまで変更しません。
+`not-applicable-team-mode` という名前付き outcome を返します。G691 の gate は
+`notify report`、`notify escalate`、`notify status`、`notify dispose` を無効化せず、これらの
+report / settlement surface は利用できます。この slice は publish、delegation、handoff の新しい
+behavior を追加しません。supervisor、worker lifecycle、transport migration は発生しません。
+`delivery` が default で、このページの 4-thread / supervision contract は変更されません。
+[ADR 0005](../adr/0005-team-mode-authoring-only.md) を参照してください。parent intent の ADR-014
+は host-side successor link が書かれるまで変更しません。
 
 ## application front door からの bootstrap（G664 — preview-through-1.x）
 

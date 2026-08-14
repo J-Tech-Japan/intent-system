@@ -32,9 +32,16 @@ the session-layer transport.
 For `authoring-only`, bootstrap renders only front-door acceptance and
 repository/claim/publish prerequisites. `guide next` offers only
 shape/interview, packet authoring, publish, improve, inspect, and idle.
-Supervision and delivery-topology surfaces return the named
-`not-applicable-team-mode` outcome. Delivery output and behavior are
-byte-identical when the mode is absent or explicitly recorded as `delivery`.
+The measured bootstrap state is `authoring-only-complete` when the durable
+`team_mode=authoring-only` record and front-door shape have been inspected;
+repository/claim/publish commands remain explicit operator prerequisites, not
+missing delivery facts. `notify supervise`, `notify supervise install`, and
+delivery-topology surfaces return the named `not-applicable-team-mode` outcome.
+The G691 gate leaves `notify report`, `notify escalate`, `notify status`, and
+`notify dispose` usable as reporting and settlement surfaces. No new publish,
+delegation, or handoff behavior is introduced here; those pipeline decisions
+remain later-slice scope. Delivery output and behavior are byte-identical when
+the mode is absent or explicitly recorded as `delivery`.
 
 ## Consequences
 

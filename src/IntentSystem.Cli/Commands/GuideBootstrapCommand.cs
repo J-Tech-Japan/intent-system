@@ -67,7 +67,7 @@ internal static class GuideBootstrapCommand
             var teamMode = TeamModeStore.Resolve(routingRoot, domain.Trim(), team.Trim());
             if (teamMode.IsAuthoringOnly)
             {
-                return BuildAuthoringOnlyResult(routingRoot, domain.Trim(), team.Trim(), targetRepo);
+                return BuildAuthoringOnlyResult(routingRoot, domain.Trim(), team.Trim(), targetRepo, teamMode);
             }
         }
 
@@ -195,7 +195,8 @@ internal static class GuideBootstrapCommand
         string routingRoot,
         string domain,
         string team,
-        string? targetRepo)
+        string? targetRepo,
+        TeamModeResolution teamMode)
     {
         var domainArg = domain;
         var teamArg = team;
@@ -217,17 +218,7 @@ internal static class GuideBootstrapCommand
             SessionLayerCoverage = ["transport-independent"],
             TargetSessionLayer = "not-applicable-team-mode",
             TeamFormula = "authoring front door plus repository, claim, and publish prerequisites; no delivery seats",
-            State = new BootstrapGuideState
-            {
-                Name = "authoring-only-prerequisites",
-                Inspected = true,
-                TopologyRecorded = false,
-                TopologyResolved = false,
-                SupervisionCycleRecorded = false,
-                Complete = false,
-                ExistingFacts = ["recorded team_mode=authoring-only", "authoring front door is the operator entry point"],
-                MissingFacts = ["repository access", "claim prerequisite", "publish prerequisite"],
-            },
+            State = BuildAuthoringOnlyState(teamMode),
             Flow = "authoring-only",
             Reachability = new BootstrapReachability
             {
@@ -282,7 +273,7 @@ internal static class GuideBootstrapCommand
                     ],
                 },
             ],
-            PartialStateRule = "Name the front-door, repository, claim, and publish facts. Never add delivery topology or a delivery lifecycle to complete authoring-only bootstrap.",
+            PartialStateRule = "Authoring-only completion is measured from the recorded team mode and front-door shape; repository, claim, and publish commands are rendered operator prerequisites, not missing delivery facts. Never add delivery topology or a delivery lifecycle to this bootstrap.",
             NoExecutionBoundary =
             [
                 "This guide renders authoring questions and command text only; it does not create delivery seats, start a delivery lifecycle, or execute an external process.",
@@ -290,6 +281,27 @@ internal static class GuideBootstrapCommand
                 "Issue publication remains the only emitted handoff artifact for this team shape.",
             ],
             FinalHandoffStatement = "HANDOFF: The authoring-only front door owns the accepted packet until the canonical issue is published; no delivery lifecycle is part of this bootstrap.",
+        };
+    }
+
+    private static BootstrapGuideState BuildAuthoringOnlyState(TeamModeResolution teamMode)
+    {
+        var measured = teamMode.IsAuthoringOnly && teamMode.Source == TeamModeSource.Recorded;
+        return new BootstrapGuideState
+        {
+            Name = measured ? "authoring-only-complete" : "authoring-only-unreadable",
+            Inspected = measured,
+            TopologyRecorded = false,
+            TopologyResolved = false,
+            SupervisionCycleRecorded = false,
+            Complete = measured,
+            CompletionBasis = measured
+                ? "recorded team_mode=authoring-only is the durable acceptance of the front-door team shape; repository, claim, and publish checks remain explicit operator actions."
+                : "authoring-only completion requires a recorded, readable team_mode entry.",
+            ExistingFacts = measured
+                ? ["recorded team_mode=authoring-only", "authoring front door is the operator entry point", "authoring-only bootstrap shape is complete without delivery topology"]
+                : [],
+            MissingFacts = measured ? [] : ["recorded readable team_mode=authoring-only"],
         };
     }
 
@@ -311,19 +323,10 @@ internal static class GuideBootstrapCommand
 
         var domainValue = domain.Trim();
         var teamValue = team.Trim();
-        if (TeamModeStore.Resolve(routingRoot, domainValue, teamValue).IsAuthoringOnly)
+        var teamMode = TeamModeStore.Resolve(routingRoot, domainValue, teamValue);
+        if (teamMode.IsAuthoringOnly)
         {
-            return new BootstrapGuideState
-            {
-                Name = "authoring-only-prerequisites",
-                Inspected = true,
-                TopologyRecorded = false,
-                TopologyResolved = false,
-                SupervisionCycleRecorded = false,
-                Complete = false,
-                ExistingFacts = ["recorded team_mode=authoring-only", "authoring front door is the operator entry point"],
-                MissingFacts = ["repository access", "claim prerequisite", "publish prerequisite"],
-            };
+            return BuildAuthoringOnlyState(teamMode);
         }
 
         var topologyPath = NotifyRoleTopologyStore.ResolvePath(routingRoot, domainValue, teamValue);
@@ -385,6 +388,7 @@ internal static class GuideBootstrapCommand
         writer.WriteLine("## Recorded and missing facts");
         foreach (var fact in result.State.ExistingFacts) writer.WriteLine($"- exists: {fact}");
         foreach (var fact in result.State.MissingFacts) writer.WriteLine($"- missing: {fact}");
+        if (result.State.CompletionBasis is not null) writer.WriteLine($"- completion basis: {result.State.CompletionBasis}");
         if (result.State.ReadError is not null) writer.WriteLine($"- state-read warning: {result.State.ReadError}");
         writer.WriteLine($"- {result.PartialStateRule}");
         writer.WriteLine();
@@ -516,6 +520,7 @@ internal sealed record BootstrapGuideState
     public bool TopologyResolved { get; init; }
     public required bool SupervisionCycleRecorded { get; init; }
     public required bool Complete { get; init; }
+    public string? CompletionBasis { get; init; }
     public string? TopologyPath { get; init; }
     public required IReadOnlyList<string> ExistingFacts { get; init; }
     public required IReadOnlyList<string> MissingFacts { get; init; }

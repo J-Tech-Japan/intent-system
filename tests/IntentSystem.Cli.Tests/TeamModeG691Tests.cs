@@ -117,6 +117,19 @@ public sealed class TeamModeG691Tests : IDisposable
         Assert.Equal("not-applicable-team-mode", guide.GetProperty("target_session_layer").GetString());
         Assert.False(guide.TryGetProperty("model_resolution", out _));
 
+        var state = guide.GetProperty("state");
+        Assert.Equal("authoring-only-complete", state.GetProperty("name").GetString());
+        Assert.True(state.GetProperty("inspected").GetBoolean());
+        Assert.True(state.GetProperty("complete").GetBoolean());
+        Assert.Empty(state.GetProperty("missing_facts").EnumerateArray());
+        Assert.Contains(
+            "recorded team_mode=authoring-only",
+            state.GetProperty("completion_basis").GetString()!,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            state.GetProperty("existing_facts").EnumerateArray().Select(fact => fact.GetString()),
+            fact => string.Equals(fact, "authoring-only bootstrap shape is complete without delivery topology", StringComparison.Ordinal));
+
         var steps = guide.GetProperty("steps").EnumerateArray().ToArray();
         Assert.Equal(new[] { "accept-authoring-front-door", "verify-repository-prerequisite", "author-packet", "publish-issue" },
             steps.Select(step => step.GetProperty("id").GetString()).ToArray());
@@ -185,6 +198,39 @@ public sealed class TeamModeG691Tests : IDisposable
         Assert.Contains("not-applicable-team-mode", topologyWriter.ToString(), StringComparison.Ordinal);
         Assert.False(File.Exists(NotifyRoleTopologyStore.ResolvePath(root, Domain, Team)) &&
             File.ReadAllText(NotifyRoleTopologyStore.ResolvePath(root, Domain, Team)) != "not-json");
+    }
+
+    [Fact]
+    public void AuthoringOnlyReportingAndSettlementSurfaces_AreNotBlockedByTeamMode()
+    {
+        Assert.Equal(0, RunSet(TeamMode.AuthoringOnly, write: true).ExitCode);
+
+        var cases = new (Func<CliContext, string[], TextWriter, int> Execute, string[] Arguments)[]
+        {
+            (NotifyCommand.ExecuteReport,
+            ["--domain", Domain, "--team", Team, "--from", "implementation", "--to", "orchestration",
+                "--task-id", "report-task", "--status", "completed", "--artifact", "artifact", "--summary", "summary",
+                "--routing-root", root, "--dry-run", "--format", "json"]),
+            (NotifyCommand.ExecuteEscalate,
+            ["--domain", Domain, "--team", Team, "--from", "implementation", "--task-id", "escalate-task",
+                "--artifact", "artifact", "--summary", "summary", "--routing-root", root, "--dry-run", "--format", "json"]),
+            (NotifyCommand.ExecuteStatus,
+            ["--domain", Domain, "--team", Team, "--task-id", "status-task", "--routing-root", root, "--format", "json"]),
+            (NotifyCommand.ExecuteDispose,
+            ["--domain", Domain, "--team", Team, "--task-id", "dispose-task", "--kind", "applied-elsewhere",
+                "--actor", "implementation", "--reason", "settled elsewhere", "--applied-outcome-evidence", "evidence",
+                "--routing-root", root, "--dry-run", "--format", "json"]),
+        };
+
+        foreach (var testCase in cases)
+        {
+            using var writer = new StringWriter();
+            var exitCode = testCase.Execute(CreateContext(), testCase.Arguments, writer);
+
+            Assert.NotEqual(string.Empty, writer.ToString());
+            Assert.DoesNotContain("not-applicable-team-mode", writer.ToString(), StringComparison.Ordinal);
+            Assert.True(exitCode is 0 or 1, $"unexpected exit code {exitCode}");
+        }
     }
 
     [Fact]

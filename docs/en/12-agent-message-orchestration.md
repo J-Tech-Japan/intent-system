@@ -34,12 +34,21 @@ front door plus repository/claim/publish prerequisites; it does not require a
 delivery topology or launch delivery seats. `guide next` offers only
 shape/interview, packet authoring, publish, improve, inspect, and idle.
 
+The measured bootstrap state is `authoring-only-complete` once the durable
+`team_mode=authoring-only` record and front-door shape have been inspected.
+Repository, claim, and publish commands remain explicit operator prerequisites;
+they are rendered actions, not missing delivery-topology facts.
+
 `notify supervise`, `notify supervise install`, and delivery-topology commands
-return the named `not-applicable-team-mode` outcome. No supervisor, worker
-lifecycle, or transport migration is implied. Delivery remains the default and
-the four-thread/supervision contract in this page is unchanged. See [ADR
-0005](../adr/0005-team-mode-authoring-only.md); the parent intent's ADR-014
-remains unchanged until its host-side successor link is written.
+return the named `not-applicable-team-mode` outcome. The G691 gate does not
+disable `notify report`, `notify escalate`, `notify status`, or `notify
+dispose`; those reporting and settlement surfaces remain usable. No new
+publish, delegation, or handoff behavior is introduced by this slice. No
+supervisor, worker lifecycle, or transport migration is implied. Delivery
+remains the default and the four-thread/supervision contract in this page is
+unchanged. See [ADR 0005](../adr/0005-team-mode-authoring-only.md); the parent
+intent's ADR-014 remains unchanged until its host-side successor link is
+written.
 
 ## Application-front-door bootstrap (G664 — preview-through-1.x)
 
