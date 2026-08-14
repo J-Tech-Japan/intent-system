@@ -4,8 +4,8 @@ using IntentSystem.Cli.Infrastructure;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G693 keeps the v0.21.0 preparation bilingual, exactly bounded to G689-G692,
-/// and reconciled with the full v0.20.0..main first-parent range.
+/// G694 keeps the published v0.21.0 notes bilingual and frozen while the
+/// post-release readiness points at the v0.21.1 DRAFT stubs.
 /// </summary>
 public sealed class ReleaseNotesV0210DocsTests
 {
@@ -91,7 +91,7 @@ public sealed class ReleaseNotesV0210DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void NotesPreserveOriginsMinorRationaleAndPrepareOnlyBoundaries(string language)
+    public void NotesPreserveOriginsMinorRationaleAndPublishedBoundaries(string language)
     {
         var notes = Read(language);
         var compact = Regex.Replace(notes, @"\s+", " ");
@@ -106,23 +106,35 @@ public sealed class ReleaseNotesV0210DocsTests
             Assert.Contains(term, compact, StringComparison.OrdinalIgnoreCase);
         }
 
-        Assert.Contains("prepare-only", notes, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(language == "en" ? "UNRELEASED" : "未リリース", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("prepare-only", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(language == "en" ? "UNRELEASED" : "未リリース", notes, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
-            language == "en" ? "no code or runtime behaviour" : "code や runtime behaviour の変更もありません",
+            language == "en" ? "no code or runtime behaviour" : "code と runtime behaviour は変更しません",
             compact,
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
-            language == "en" ? "no GitHub Release or tag" : "GitHub Release や tag を",
+            language == "en" ? "Released / stable" : "公開済み",
+            notes,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("31766364883", notes, StringComparison.Ordinal);
+        Assert.Contains("c77c92fe", notes, StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "eight release assets" : "八つの release asset",
             compact,
             StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            language == "en" ? "Four checksum verifications passed" : "四つの checksum verification が pass",
+            compact,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("NuGet.org", notes, StringComparison.Ordinal);
+        Assert.Contains("intent-cli 0.21.0-c77c92f-G691", notes, StringComparison.Ordinal);
         Assert.DoesNotContain("G693 —", notes, StringComparison.Ordinal);
     }
 
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void CurrentPolicyAndReadinessFollowVersionPolicyAndSupersededStubsAreGone(string language)
+    public void CurrentPolicyAndReadinessFollowVersionPolicyAndNextStubsAreDraft(string language)
     {
         var root = RepoVersionPolicySource.RepoRoot();
         var policy = RepoVersionPolicySource.Read();
@@ -134,20 +146,28 @@ public sealed class ReleaseNotesV0210DocsTests
         RepoVersionPolicySource.AssertReleaseToBeCutIsAheadOfPublishedStable(policy);
         Assert.True(File.Exists(Path.Combine(root, "docs", language, currentNotes)));
         Assert.True(File.Exists(Path.Combine(root, "docs", language, shippedNotes)));
-        var supersededNotes = Path.Combine(root, "docs", language, "release-notes-v0.20." + "1.md");
-        Assert.False(File.Exists(supersededNotes));
         Assert.Contains(currentNotes, reference, StringComparison.Ordinal);
         Assert.Contains(shippedNotes, reference, StringComparison.Ordinal);
-        Assert.DoesNotContain("release-notes-v0.20." + "1.md", reference, StringComparison.Ordinal);
         Assert.Contains(
             language == "en"
                 ? $"Next release readiness (v{policy.NextVersion})"
                 : $"次リリース準備(v{policy.NextVersion})",
             reference,
             StringComparison.Ordinal);
-        Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.NextVersion}", notes, StringComparison.Ordinal);
-        Assert.Contains($"releases/tag/v{policy.NextVersion}", notes, StringComparison.Ordinal);
+        Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.StableVersion}", notes, StringComparison.Ordinal);
+        Assert.Contains($"releases/tag/v{policy.StableVersion}", notes, StringComparison.Ordinal);
+        var currentStub = File.ReadAllText(Path.Combine(root, "docs", language, currentNotes));
+        Assert.Contains("DRAFT /", currentStub, StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "UNRELEASED" : "未リリース",
+            currentStub,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.NextVersion}", currentStub, StringComparison.Ordinal);
+        Assert.Contains($"releases/tag/v{policy.NextVersion}", currentStub, StringComparison.Ordinal);
         Assert.DoesNotContain("DRAFT /", notes, StringComparison.Ordinal);
+        Assert.DoesNotContain("UNRELEASED", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("未リリース", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("prepare-only", notes, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
@@ -188,6 +208,17 @@ public sealed class ReleaseNotesV0210DocsTests
     {
         var bytes = File.ReadAllBytes(Path.Combine(
             RepoVersionPolicySource.RepoRoot(), "docs", language, "release-notes-v0.20.0.md"));
+
+        Assert.Equal(expectedSha256, Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)));
+    }
+
+    [Theory]
+    [InlineData("en", "95b9f17459860f14665170d17dea2e4afbfe4fe5a547a359cd79442d10b488f7")]
+    [InlineData("ja", "448c9f34a899712e39b1fcbcd0be15c6012d9ac6b3dac63d7ca5a5549011bb25")]
+    public void PublishedV0210NotesRemainByteForByteFrozen(string language, string expectedSha256)
+    {
+        var bytes = File.ReadAllBytes(Path.Combine(
+            RepoVersionPolicySource.RepoRoot(), "docs", language, "release-notes-v0.21.0.md"));
 
         Assert.Equal(expectedSha256, Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)));
     }
