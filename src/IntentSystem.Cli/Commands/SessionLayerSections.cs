@@ -132,6 +132,7 @@ internal static class SessionLayerSections
         new("## Session layer", "session_layer", Applicability.ModeIndependent),
         new(SessionLayerSwitchChecklist.Heading, SessionLayerSwitchChecklist.JsonProperty, Applicability.ModeIndependent),
         new("## Guide reachability (G645/G696)", "guide_reachability", Applicability.ModeIndependent),
+        new("## Topology workspace move reachability (G697)", "topology_workspace_move", Applicability.ModeIndependent),
         new("## Mode separation", "mode_separation", Applicability.ModeIndependent, Descriptive: true),
         new("## Role boundary (design authors; orchestrator coordinates)", "role_boundary", Applicability.ModeIndependent),
         new("## Git-backed claim verification and routing (G679 — preview-through-1.x)", "claim_routing", Applicability.ModeIndependent),

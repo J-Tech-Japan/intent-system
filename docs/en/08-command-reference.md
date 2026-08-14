@@ -60,7 +60,41 @@ submit a `COMMENTED` review with the body-file form, then run the canonical
 
 The role-facing routes are structured and tested: `guide review`, `guide next
 --role review`, and `guide orchestrator-thread` each name `guide seat-commands`
-for the review seat.
+for the review seat. They also expose the installed `guide
+topology-workspace-move` recipe for an intentional topology rebuild.
+
+## Topology workspace move (G697)
+
+When a recorded team is deliberately rebuilt in a new herdr workspace, render
+the installed recipe first. It is read-only and gives the operator the exact
+inspect → preview → apply → validate → notify-preflight sequence:
+
+```bash
+intent-cli guide topology-workspace-move --domain <domain> --team <team> --format markdown
+intent-cli session-layer topology show --domain <domain> --team <team> --format json
+intent-cli session-layer topology move --domain <domain> --team <team> \
+  --workspace-id <new-workspace-id> \
+  --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... \
+  --dry-run --format json
+intent-cli session-layer topology move --domain <domain> --team <team> \
+  --workspace-id <new-workspace-id> \
+  --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... \
+  [--current-digest <digest>] --write --format json
+intent-cli session-layer topology validate --domain <domain> --team <team> --format json
+intent-cli notify delegate --domain <domain> --team <team> --from <sender-role> \
+  --to <recipient-role> --report-to <orchestrator-role> --task-id <task-id> \
+  --objective <bounded-outcome> --input <reference> --expected-artifact <artifact> \
+  --result-nonce <nonce> --dry-run --format json
+```
+
+The move requires a complete explicit old-to-new pane map for recorded herdr
+roles, updates the team and role workspace/pane ids in one atomic operation,
+and preserves role membership, cwd, kind, delivery method, readers, profiles,
+and all other fields. It never queries herdr, discovers a workspace, creates
+panes, or repairs a per-role refusal. The writer holds a CAS lock and compares
+the topology digest before replacement; a stale `--current-digest` is refused.
+The existing per-role mismatch message points to this command as the
+sanctioned whole-team transition.
 
 ---
 

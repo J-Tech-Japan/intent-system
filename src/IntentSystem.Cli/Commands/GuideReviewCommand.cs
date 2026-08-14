@@ -426,6 +426,7 @@ internal static class GuideReviewCommand
             ValidationSuggestions = DefaultValidationSuggestions,
             SameAccountReviewVerdict = SameAccountVerdict,
             GuideReachability = SeatCommandGuidanceRegistry.ReviewReachability(),
+            TopologyWorkspaceMove = TopologyWorkspaceMoveGuidance.Create(domain),
             TestsPassIsNecessaryNotSufficient = true,
             Gaps = gaps,
             Ready = gaps.Count == 0 && matchedItem is not null
@@ -675,6 +676,14 @@ internal static class GuideReviewCommand
                     $"- role `{route.Role}` reaches `{route.GuideSurface}` for {route.TargetSurface}.");
             }
         }
+        writer.WriteLine();
+
+        writer.WriteLine("## Topology workspace move reachability (G697)");
+        writer.WriteLine($"- installed recipe: `{result.TopologyWorkspaceMove.GuideSurface}`");
+        writer.WriteLine($"- preview: `{result.TopologyWorkspaceMove.Commands.Preview}`");
+        writer.WriteLine($"- apply: `{result.TopologyWorkspaceMove.Commands.Apply}`");
+        writer.WriteLine($"- validate: `{result.TopologyWorkspaceMove.Commands.Validate}`");
+        writer.WriteLine("- route is read-only guidance; the operator supplies the workspace and pane mapping and explicitly chooses --write.");
         writer.WriteLine();
 
         writer.WriteLine("## Request-update requirements");
@@ -977,6 +986,14 @@ internal sealed record GuideReviewResult
     /// </summary>
     [JsonPropertyName("guide_reachability")]
     public required GuideReachabilityDeclaration GuideReachability { get; init; }
+
+    /// <summary>
+    /// G697: the review-facing pointer to the installed topology move recipe.
+    /// The recipe is structured and read-only; it does not duplicate mutation
+    /// logic or infer operator workspace/pane ids.
+    /// </summary>
+    [JsonPropertyName("topology_workspace_move")]
+    public required TopologyWorkspaceMoveGuide TopologyWorkspaceMove { get; init; }
 
     /// <summary>
     /// G316: requirements for request-update comments — distinguish

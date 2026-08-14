@@ -230,6 +230,10 @@ internal static class Program
                 || string.Equals(args[1], "bootstrap", StringComparison.Ordinal)
                 // G637: read-only workspace-layout guidance — no host state required.
                 || string.Equals(args[1], "workspace-layout", StringComparison.Ordinal)
+                // G697: the topology workspace-move recipe is an installed,
+                // read-only operator guide and must be reachable from a bare
+                // child cwd without host metadata.
+                || string.Equals(args[1], "topology-workspace-move", StringComparison.Ordinal)
                 // G488: thin agent skill pack bootstrap — read-only, no host state required.
                 || string.Equals(args[1], "skill-pack", StringComparison.Ordinal));
     }
