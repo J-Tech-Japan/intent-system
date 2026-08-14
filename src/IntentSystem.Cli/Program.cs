@@ -208,6 +208,9 @@ internal static class Program
                 || string.Equals(args[1], "interview-mode", StringComparison.Ordinal)
                 || string.Equals(args[1], "interview-readiness", StringComparison.Ordinal)
                 || string.Equals(args[1], "review-verification-policy", StringComparison.Ordinal)
+                // G696: per-kind seat command-form guidance is read-only and
+                // must be reachable from a metadata-free child checkout.
+                || string.Equals(args[1], "seat-commands", StringComparison.Ordinal)
                 || string.Equals(args[1], "review", StringComparison.Ordinal)
                 // G334: external-user self-discovery surface. Read-only,
                 // no host state required, so the bootstrap allow-list

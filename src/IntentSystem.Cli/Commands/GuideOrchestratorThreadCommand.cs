@@ -779,6 +779,10 @@ internal static class GuideOrchestratorThreadCommand
         {
             SessionLayerSwitchChecklist = SessionLayerSwitchChecklist.Create(),
             SetupIntake = BuildSetupIntake(values, herdrOnly),
+            // G696/G645: the orchestrator surface names the review seat's
+            // route to the structured seat-command guide so the route is
+            // reachable from the role-facing thread contract.
+            GuideReachability = SeatCommandGuidanceRegistry.ReviewReachability(),
             // G570 third repair: the summary is CANON about authority, and it
             // must survive in both modes — but its agmsg phrasing is an
             // instruction in the practiced mode and a description in the other.
@@ -4083,6 +4087,12 @@ internal static class GuideOrchestratorThreadCommand
                 writer.WriteLine($"- passive phase: `{preflight.PassivePhase.Status}` (contacts no receiver)");
                 writer.WriteLine($"- active phase: `{preflight.ActivePhase.Status}`");
                 writer.WriteLine($"- {preflight.Summary}");
+                if (preflight.CrossDomainTeamsElided.Count > 0)
+                {
+                    writer.WriteLine(
+                        $"  - cross-domain teams elided: {string.Join(", ", preflight.CrossDomainTeamsElided.Select(team => $"`{team}`"))} "
+                        + "(named context excluded from this domain-scoped observation).");
+                }
                 foreach (var scope in preflight.Scopes)
                 {
                     foreach (var finding in scope.Findings)
@@ -4115,8 +4125,15 @@ internal static class GuideOrchestratorThreadCommand
         // an operational outcome (missing-inputs / setup-ready / blocked) before
         // the long reference material below.
         WriteSetupIntake(writer, guide.SetupIntake);
-
         writer.WriteLine(guide.Summary);
+        writer.WriteLine();
+
+        writer.WriteLine("## Guide reachability (G645/G696)");
+        foreach (var route in guide.GuideReachability.Routes)
+        {
+            writer.WriteLine(
+                $"- role `{route.Role}` reaches `{route.GuideSurface}` for {route.TargetSurface}.");
+        }
         writer.WriteLine();
 
         SessionLayerSwitchChecklist.WriteMarkdown(writer, guide.SessionLayerSwitchChecklist);
@@ -4975,6 +4992,13 @@ internal sealed record OrchestratorThreadGuide
 
     [JsonPropertyName("setup_intake")]
     public required OrchestratorSetupIntake SetupIntake { get; init; }
+
+    /// <summary>
+    /// G696/G645: structured role-facing route from the orchestrator's
+    /// review delegation path to the seat-command guidance surface.
+    /// </summary>
+    [JsonPropertyName("guide_reachability")]
+    public required GuideReachabilityDeclaration GuideReachability { get; init; }
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }

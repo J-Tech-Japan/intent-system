@@ -235,6 +235,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             Bootstrap = bootstrap,
             InvokingRole = normalizedRole,
             RoleContractFirst = roleContractFirst,
+            GuideReachability = SeatCommandGuidanceRegistry.ReachabilityForRole(normalizedRole),
             DesignRoleGuide = GuideDesignThreadCommand.CommandName,
             ShortPrompt = ShortPrompt,
             ReadOnly = true,
@@ -338,6 +339,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             Process = "authoring-only-action-next-advisor",
             InvokingRole = GuideRoleContractGuidance.Normalize(invokingRole),
             RoleContractFirst = null,
+            GuideReachability = SeatCommandGuidanceRegistry.ReachabilityForRole(invokingRole),
             Domain = domain,
             Team = team,
             TargetRepo = string.IsNullOrWhiteSpace(targetRepo) ? null : targetRepo.Trim(),
@@ -423,6 +425,20 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             writer.WriteLine($"- {roleContract.Instruction}");
             writer.WriteLine();
         }
+        writer.WriteLine("## Guide reachability (G645/G696)");
+        if (!result.GuideReachability.IsDeclared)
+        {
+            writer.WriteLine("- no role-facing seat-command route is declared for this invoking role.");
+        }
+        else
+        {
+            foreach (var route in result.GuideReachability.Routes)
+            {
+                writer.WriteLine(
+                    $"- role `{route.Role}` reaches `{route.GuideSurface}` for {route.TargetSurface}.");
+            }
+        }
+        writer.WriteLine();
         writer.WriteLine("## Measured incident record (G672 — preview-through-1.x)");
         writer.WriteLine();
         writer.WriteLine(result.MeasuredIncident);
@@ -857,6 +873,13 @@ internal sealed record GuideNextResult
 
     [JsonPropertyName("role_contract_first")]
     public GuideRoleContractPointer? RoleContractFirst { get; init; }
+
+    /// <summary>
+    /// G696/G645: role-aware, structured pointers to the seat-command guide.
+    /// Non-review roles deliberately carry an absent declaration.
+    /// </summary>
+    [JsonPropertyName("guide_reachability")]
+    public required GuideReachabilityDeclaration GuideReachability { get; init; }
 
     [JsonPropertyName("domain")]
     public string? Domain { get; init; }

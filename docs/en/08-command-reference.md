@@ -27,6 +27,41 @@ The host can live in a **separate host repository** or in the **same repository
 on a dedicated metadata branch** (e.g. `main-metadata`). Both topologies are
 fully supported — see [Start a project](02-project-start.md#repository-topology-choices).
 
+## Seat command-form guidance (G696)
+
+The installed CLI exposes the measured command-form rules for each seat kind.
+This is a read-only registry: it describes forms and alternatives, but does not
+edit seat settings, decide an allowlist, or approve a command.
+
+```bash
+intent-cli guide seat-commands --kind claude --format markdown
+intent-cli guide seat-commands --kind codex --format json
+```
+
+Keep each action in the literal operator-sanctioned prefix and argument order.
+Prefix matching can break when a command uses quoted arguments, places flags
+before the path, chains differently-prefixed commands with `&&`, expands a
+`$VAR`, or wraps commands in a `for` loop. Run each sanctioned step separately
+when a composed form would change the prefix.
+
+Measured denied surfaces have these alternatives:
+
+- `gh pr comment` → `gh pr review --body-file <review.md> --comment`.
+- `git checkout <branch>` → `git fetch origin <branch>` followed by
+  `git diff --check <base>...HEAD`.
+- A local `npm` or package-manager build → CI evidence attached to the exact PR
+  head SHA.
+
+Review seats also follow the same-account verdict convention. GitHub rejects
+`gh pr review --approve` when the reviewer and PR author are the same account;
+submit a `COMMENTED` review with the body-file form, then run the canonical
+`intent-cli notify report` command. The report is the workflow verdict. See
+`intent-cli guide review --format json` for the structured form.
+
+The role-facing routes are structured and tested: `guide review`, `guide next
+--role review`, and `guide orchestrator-thread` each name `guide seat-commands`
+for the review seat.
+
 ---
 
 ## Project setup

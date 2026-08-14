@@ -221,6 +221,14 @@ internal static class GuideHelpCommand
             Purpose = "Review-side prompts. Subcommand: run (G316 packet/intent-aware review).",
             Example = "intent-cli guide review --pr <n> --repo <owner/repo> --domain <d> --format json"
         },
+        // G696: per-kind command-form guidance is an installed, read-only
+        // registry rather than a permission or settings editor.
+        new GuideSubcommandEntry
+        {
+            Name = "seat-commands",
+            Purpose = "G696 versioned per-kind seat command-form registry: sanctioned forms, prefix-matching breakers, and sanctioned alternatives for Claude and Codex. Read-only; it never edits settings or approves commands.",
+            Example = "intent-cli guide seat-commands --kind claude|codex --format markdown"
+        },
         new GuideSubcommandEntry
         {
             Name = "closeout",
