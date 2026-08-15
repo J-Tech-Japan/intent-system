@@ -1806,6 +1806,37 @@ backoff と park state を適用します。新しい seat key は即時のま�
 が変更するのは observation の classification と evidence だけであり、workflow の ownership、
 canonical な intent-cli/GitHub state、observation-only の権限境界は変更しません。
 
+### closeout の runs 書込み事実と明示的な修復 (G708)
+
+インストール済みの `guide orchestrator-thread` route は、metadata の無い bare directory
+からもこの contract に到達できます。`intent-cli closeout pr` は計画した event ではなく、
+その呼出しが実際に書いた内容だけを報告します:
+
+```text
+intent-cli closeout pr --repo <owner/repo> --pr <n> --pr-merged true --write --format json
+```
+
+- `runs.jsonl` に追記しなかった場合、`runs_events` は `[]`、`runs_appended` は `false`、
+  `runs_skip_reason` は `queue-already-completed` や `dry-run-no-write` のように理由を名前で示します。
+- 追記した場合、`runs_appended` は `true` で、`runs_events` はその呼出しが実際に追記した
+  行だけを正確に含みます。予定した行や既存の行は含めません。JSON と Markdown は同じ事実を示します。
+- queue が completed なのに対応する `pr-merged` または `closeout-recorded` event が欠落している
+  場合は、`queue-completed-missing-closeout-runs-events` という named finding を出します。通常の
+  closeout は自動修復しません。
+
+修復は明示的な runs-only command に限ります:
+
+```text
+intent-cli closeout pr --repo <owner/repo> --pr <n> --pr-merged true --repair-runs --write --format json
+```
+
+欠落している対応 event だけを追記します。queue item を再び completed にせず、queue-state を
+書かず、packet、lifecycle record その他の記録も修復しません。修復の前後で queue-state の bytes は
+同一でなければならず、追記された tail は `runs_events` と一致しなければなりません。二回目は
+何も追記せず、`runs_appended: false` と `runs_skip_reason: runs-events-already-present` を報告し、
+idempotent です。これは operator が選択する action であり、automatic repair や guide 側の mutation
+ではありません。
+
 ## 共有マシン上での cross-project isolation
 
 **このマシン上にいるのは自分だけではない、と前提してください。** 複数の

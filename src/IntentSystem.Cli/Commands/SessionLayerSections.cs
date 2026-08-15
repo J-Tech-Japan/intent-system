@@ -135,6 +135,7 @@ internal static class SessionLayerSections
         new(SessionLayerSwitchChecklist.Heading, SessionLayerSwitchChecklist.JsonProperty, Applicability.ModeIndependent),
         new("## Guide reachability (G645/G696)", "guide_reachability", Applicability.ModeIndependent),
         new("## Topology workspace move reachability (G697)", "topology_workspace_move", Applicability.ModeIndependent),
+        new("## Closeout runs write-truth and repair (G708)", "closeout_runs_contract", Applicability.ModeIndependent),
         new("(json) herdr standard layout registry", "herdr_standard_layout", Applicability.ModeIndependent),
         new("(json) dialog answering rule", "dialog_answering_rule", Applicability.ModeIndependent),
         new("## Mode separation", "mode_separation", Applicability.ModeIndependent, Descriptive: true),

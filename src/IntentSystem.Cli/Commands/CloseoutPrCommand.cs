@@ -28,8 +28,16 @@ internal static class CloseoutPrCommand
     private const string ContinuationNoActionableItem = "no-actionable-item";
     private const string ContinuationClarificationRequired = "clarification-required";
 
+    private const string RunsEventPrMerged = "pr-merged";
+    private const string RunsEventCloseoutRecorded = "closeout-recorded";
+    private const string RunsSkipDryRun = "dry-run-no-write";
+    private const string RunsSkipAlreadyCompleted = "queue-already-completed";
+    private const string RunsSkipEventsPresent = "runs-events-already-present";
+    private const string FindingMissingCloseoutRunsEvents = "queue-completed-missing-closeout-runs-events";
+    private const string FindingUnreadableCloseoutRunsLog = "queue-completed-runs-log-unreadable";
+
     private const string UsageLine =
-        "Usage: intent-cli closeout pr --pr <n> --repo <owner/repo> [--issue <n>] [--domain <name>] [--pr-merged true|false] [--dry-run|--write] [--format json|markdown]";
+        "Usage: intent-cli closeout pr --pr <n> --repo <owner/repo> [--issue <n>] [--domain <name>] [--pr-merged true|false] [--repair-runs] [--dry-run|--write] [--format json|markdown]";
 
     private const string RecoveryActionRecoverLinkedPr = "recover-linked-pr-from-github-closing-reference";
 
@@ -59,7 +67,7 @@ internal static class CloseoutPrCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var pr, out var repo, out var domainOverride, out var linkedIssueNumber, out var prMerged, out var write, out var format, out var error))
+        if (!TryParseArguments(args, out var pr, out var repo, out var domainOverride, out var linkedIssueNumber, out var prMerged, out var repairRuns, out var write, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -238,6 +246,20 @@ internal static class CloseoutPrCommand
         var executionUnit = matchedItem.ExecutionUnit;
         var nowTs = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
 
+        if (repairRuns && !alreadyCompleted)
+        {
+            EmitErrorResult(writer, format, NewFailureResult(
+                domain,
+                repo!,
+                pr.Value,
+                queueStatePath,
+                runsLogPath,
+                write,
+                "--repair-runs is only valid for a queue item that is already completed; it never replaces the normal closeout transition.",
+                stateLayout: stateLayout));
+            return 1;
+        }
+
         // G661 / RH-030A: shipped work does not erase contradictory packet
         // history. Report the still-retired sidecar and leave it byte-identical;
         // only an explicit, evidenced reactivation may change lifecycle.
@@ -260,11 +282,66 @@ internal static class CloseoutPrCommand
             });
         }
 
-        var runsEvents = new List<string>
+        CloseoutRunsInspection runsInspection;
+        try
         {
-            BuildRunsEvent(executionUnit, "pr-merged", repo!, pr.Value, nowTs),
-            BuildRunsEvent(executionUnit, "closeout-recorded", repo!, pr.Value, nowTs)
+            runsInspection = InspectCloseoutRuns(runsLogPath, executionUnit, repo!, pr.Value);
+        }
+        catch (IOException ioException)
+        {
+            EmitErrorResult(writer, format, NewFailureResult(
+                domain,
+                repo!,
+                pr.Value,
+                queueStatePath,
+                runsLogPath,
+                write,
+                $"runs.jsonl could not be read: {ioException.Message}",
+                stateLayout: stateLayout));
+            return 1;
+        }
+
+        var plannedRunsEvents = new[]
+        {
+            (Name: RunsEventPrMerged, Line: BuildRunsEvent(executionUnit, RunsEventPrMerged, repo!, pr.Value, nowTs)),
+            (Name: RunsEventCloseoutRecorded, Line: BuildRunsEvent(executionUnit, RunsEventCloseoutRecorded, repo!, pr.Value, nowTs)),
         };
+        var missingRunsEvents = plannedRunsEvents
+            .Where(candidate => !runsInspection.Contains(candidate.Name))
+            .Select(candidate => candidate.Line)
+            .ToArray();
+        var runsEvents = new List<string>();
+        var runsAppended = false;
+        string? runsSkipReason = null;
+
+        if (alreadyCompleted && runsInspection.HasMalformedNonEmptyLine)
+        {
+            closeoutFindings.Add(new CloseoutPrFinding
+            {
+                Kind = FindingUnreadableCloseoutRunsLog,
+                Path = runsLogPath,
+                Summary =
+                    $"Queue item '{executionUnit}' is already completed, but runs.jsonl contains a non-empty line that is not a valid current-schema run event. No runs repair was attempted.",
+                RecommendedAction =
+                    $"Inspect and repair the malformed line manually, then re-run `intent-cli closeout pr --repo {repo} --pr {pr.Value} --repair-runs --write --format json` only after the log is valid. Queue-state was not changed.",
+            });
+        }
+
+        if (alreadyCompleted && missingRunsEvents.Length > 0 && !runsInspection.HasMalformedNonEmptyLine)
+        {
+            var missingNames = plannedRunsEvents
+                .Where(candidate => !runsInspection.Contains(candidate.Name))
+                .Select(candidate => candidate.Name);
+            closeoutFindings.Add(new CloseoutPrFinding
+            {
+                Kind = FindingMissingCloseoutRunsEvents,
+                Path = runsLogPath,
+                Summary =
+                    $"Queue item '{executionUnit}' is queue-completed, but runs.jsonl is missing closeout events: {string.Join(", ", missingNames)}. No automatic runs repair was performed.",
+                RecommendedAction =
+                    $"Opt in to an idempotent runs-only repair with `intent-cli closeout pr --repo {repo} --pr {pr.Value} --repair-runs --write --format json`; it appends only the named missing events and never writes queue-state or other records.",
+            });
+        }
 
         // G477: when linkage was recovered from GitHub facts, repair the
         // host-owned `linked_pr` projection while completing the item so the
@@ -274,34 +351,85 @@ internal static class CloseoutPrCommand
             ? $"https://github.com/{repo}/pull/{pr.Value}"
             : null;
 
-        if (write && !alreadyCompleted)
+        if (!alreadyCompleted)
         {
-            var updatedItems = queueState.Items
-                .Select(item => item.ExecutionUnit == matchedItem.ExecutionUnit
-                    ? UpdateItemState(item, QueueItemState.Completed, recoveredLinkedPr)
-                    : item)
-                .ToArray();
-            var updatedState = new QueueState
+            if (write)
             {
-                SchemaVersion = queueState.SchemaVersion,
-                UpdatedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
-                Items = updatedItems
-            };
-            // G327: the scoped runtime tree may need its directory
-            // created on first write (legacy root path is always
-            // present because RepoRoot/.intent-cli/ exists by host
-            // contract). Idempotent.
-            Directory.CreateDirectory(Path.GetDirectoryName(queueStatePath)!);
-            // G548: guarded write (no-item-loss + stale-base re-application).
-            QueueStatePersistence.Persist(queueStatePath, queueState, updatedState);
+                runsEvents.AddRange(plannedRunsEvents.Select(candidate => candidate.Line));
+                var updatedItems = queueState.Items
+                    .Select(item => item.ExecutionUnit == matchedItem.ExecutionUnit
+                        ? UpdateItemState(item, QueueItemState.Completed, recoveredLinkedPr)
+                        : item)
+                    .ToArray();
+                var updatedState = new QueueState
+                {
+                    SchemaVersion = queueState.SchemaVersion,
+                    UpdatedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+                    Items = updatedItems
+                };
+                // G327: the scoped runtime tree may need its directory
+                // created on first write (legacy root path is always
+                // present because RepoRoot/.intent-cli/ exists by host
+                // contract). Idempotent.
+                Directory.CreateDirectory(Path.GetDirectoryName(queueStatePath)!);
+                // G548: guarded write (no-item-loss + stale-base re-application).
+                QueueStatePersistence.Persist(queueStatePath, queueState, updatedState);
 
-            Directory.CreateDirectory(Path.GetDirectoryName(runsLogPath)!);
-            using var stream = new FileStream(runsLogPath, FileMode.Append, FileAccess.Write);
-            using var streamWriter = new StreamWriter(stream);
-            foreach (var line in runsEvents)
-            {
-                streamWriter.WriteLine(line);
+                Directory.CreateDirectory(Path.GetDirectoryName(runsLogPath)!);
+                using var stream = new FileStream(runsLogPath, FileMode.Append, FileAccess.Write);
+                using var streamWriter = new StreamWriter(stream);
+                foreach (var line in runsEvents)
+                {
+                    streamWriter.WriteLine(line);
+                }
+
+                runsAppended = runsEvents.Count > 0;
             }
+            else
+            {
+                // Dry-run output reports only writes that actually happened.
+                // The planned event lines stay internal to the plan.
+                runsSkipReason = RunsSkipDryRun;
+            }
+        }
+        else if (!repairRuns)
+        {
+            runsSkipReason = RunsSkipAlreadyCompleted;
+        }
+        else if (runsInspection.HasMalformedNonEmptyLine)
+        {
+            EmitErrorResult(writer, format, NewFailureResult(
+                domain,
+                repo!,
+                pr.Value,
+                queueStatePath,
+                runsLogPath,
+                write,
+                "--repair-runs refuses to append while runs.jsonl contains a malformed non-empty line; repair the log format manually first. Queue-state was not changed.",
+                stateLayout: stateLayout));
+            return 1;
+        }
+        else if (missingRunsEvents.Length == 0)
+        {
+            runsSkipReason = write ? RunsSkipEventsPresent : RunsSkipDryRun;
+        }
+        else if (!write)
+        {
+            runsSkipReason = RunsSkipDryRun;
+        }
+        else
+        {
+            runsEvents.AddRange(missingRunsEvents);
+            Directory.CreateDirectory(Path.GetDirectoryName(runsLogPath)!);
+            using (var repairStream = new FileStream(runsLogPath, FileMode.Append, FileAccess.Write))
+            using (var repairWriter = new StreamWriter(repairStream))
+            {
+                foreach (var line in runsEvents)
+                {
+                    repairWriter.WriteLine(line);
+                }
+            }
+            runsAppended = runsEvents.Count > 0;
         }
 
         var continuation = ClassifyContinuation(queueState, matchedItem.ExecutionUnit);
@@ -352,6 +480,8 @@ internal static class CloseoutPrCommand
             QueueStateAfterState = "completed",
             QueueAlreadyCompleted = alreadyCompleted,
             RunsEvents = runsEvents,
+            RunsAppended = runsAppended,
+            RunsSkipReason = runsSkipReason,
             ContinuationHint = continuation,
             NextSteps = nextSteps,
             Error = null,
@@ -413,6 +543,59 @@ internal static class CloseoutPrCommand
             ReviewRole = item.ReviewRole,
             Priority = item.Priority
         };
+    }
+
+    private static CloseoutRunsInspection InspectCloseoutRuns(
+        string runsLogPath,
+        string executionUnit,
+        string repo,
+        int pr)
+    {
+        var presentEvents = new HashSet<string>(StringComparer.Ordinal);
+        var malformedNonEmptyLine = false;
+        if (!File.Exists(runsLogPath))
+        {
+            return new CloseoutRunsInspection(presentEvents, malformedNonEmptyLine);
+        }
+
+        foreach (var line in File.ReadLines(runsLogPath))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            RunEvent runEvent;
+            try
+            {
+                runEvent = RunLogSerializer.DeserializeLine(line);
+            }
+            catch (JsonException)
+            {
+                malformedNonEmptyLine = true;
+                continue;
+            }
+            catch (InvalidOperationException)
+            {
+                malformedNonEmptyLine = true;
+                continue;
+            }
+
+            if (!string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                || !string.Equals(runEvent.Repo, repo, StringComparison.Ordinal)
+                || runEvent.Pr != pr)
+            {
+                continue;
+            }
+
+            if (string.Equals(runEvent.Event, RunsEventPrMerged, StringComparison.Ordinal)
+                || string.Equals(runEvent.Event, RunsEventCloseoutRecorded, StringComparison.Ordinal))
+            {
+                presentEvents.Add(runEvent.Event);
+            }
+        }
+
+        return new CloseoutRunsInspection(presentEvents, malformedNonEmptyLine);
     }
 
     /// <summary>
@@ -479,6 +662,8 @@ internal static class CloseoutPrCommand
             QueueStateAfterState = null,
             QueueAlreadyCompleted = false,
             RunsEvents = Array.Empty<string>(),
+            RunsAppended = false,
+            RunsSkipReason = "operation-failed",
             ContinuationHint = null,
             NextSteps = Array.Empty<string>(),
             Error = error,
@@ -558,16 +743,22 @@ internal static class CloseoutPrCommand
             writer.WriteLine();
         }
 
-        writer.WriteLine("## Runs events");
+        writer.WriteLine("## Runs write");
+        writer.WriteLine($"- runs_appended: {(result.RunsAppended ? "yes" : "no")}");
+        if (!string.IsNullOrWhiteSpace(result.RunsSkipReason))
+        {
+            writer.WriteLine($"- runs_skip_reason: {result.RunsSkipReason}");
+        }
         if (result.RunsEvents.Count == 0)
         {
-            writer.WriteLine("- none");
+            writer.WriteLine("- runs_events: []");
         }
         else
         {
+            writer.WriteLine("- runs_events:");
             foreach (var line in result.RunsEvents)
             {
-                writer.WriteLine($"- {line}");
+                writer.WriteLine($"  - {line}");
             }
         }
         writer.WriteLine();
@@ -592,6 +783,7 @@ internal static class CloseoutPrCommand
         out string? domainOverride,
         out int? linkedIssueNumber,
         out bool? prMerged,
+        out bool repairRuns,
         out bool write,
         out string format,
         out string error)
@@ -601,6 +793,7 @@ internal static class CloseoutPrCommand
         domainOverride = null;
         linkedIssueNumber = null;
         prMerged = null;
+        repairRuns = false;
         write = false;
         var dryRun = false;
         format = FormatMarkdown;
@@ -729,6 +922,10 @@ internal static class CloseoutPrCommand
                     index++;
                     break;
 
+                case "--repair-runs":
+                    repairRuns = true;
+                    break;
+
                 default:
                     error = $"Unknown argument '{argument}'.";
                     return false;
@@ -755,6 +952,8 @@ internal static class CloseoutPrCommand
         writer.WriteLine("closeout pr");
         writer.WriteLine(UsageLine);
         writer.WriteLine("Records the queue/runs closeout for an accepted child PR. --dry-run plans only; --write applies queue + runs updates. Submodule sync remains a manual next step.");
+        writer.WriteLine("  Output reports only actual runs.jsonl appends: runs_events is empty when runs_appended is false, with a named runs_skip_reason.");
+        writer.WriteLine("  --repair-runs  Opt in only for an already-completed item; appends missing closeout events only, never queue-state or other records, and is idempotent.");
         writer.WriteLine("  Supported states: queued, active, review, fixing → completed.");
         writer.WriteLine("  --issue <n>      Optional: fallback linked-issue number for queue items where linked_pr is absent.");
         writer.WriteLine("  G477: when linked_pr is missing, closeout auto-recovers from GitHub closing-issue facts — a merged PR closing exactly one issue that maps to a single queue item completes without --issue. Ambiguous evidence fails closed (recovery_action / inferred_issue surfaced in the result).");
@@ -772,6 +971,13 @@ internal static class CloseoutPrCommand
     // closeout now emits canonical `RunEvent` lines via
     // `RunLogSerializer.SerializeLine` so durable-state preflight can
     // deserialize them.
+}
+
+internal sealed record CloseoutRunsInspection(
+    IReadOnlySet<string> PresentEvents,
+    bool HasMalformedNonEmptyLine)
+{
+    public bool Contains(string eventName) => PresentEvents.Contains(eventName);
 }
 
 internal sealed record CloseoutPrResult
@@ -808,6 +1014,20 @@ internal sealed record CloseoutPrResult
 
     [JsonPropertyName("runs_events")]
     public required IReadOnlyList<string> RunsEvents { get; init; }
+
+    /// <summary>
+    /// G708: true only when this invocation actually appended lines to
+    /// runs.jsonl. The event list is the exact set of lines appended.
+    /// </summary>
+    [JsonPropertyName("runs_appended")]
+    public required bool RunsAppended { get; init; }
+
+    /// <summary>
+    /// G708: a named reason why no runs lines were appended. This is present
+    /// whenever <see cref="RunsAppended"/> is false.
+    /// </summary>
+    [JsonPropertyName("runs_skip_reason")]
+    public string? RunsSkipReason { get; init; }
 
     [JsonPropertyName("continuation_hint")]
     public string? ContinuationHint { get; init; }

@@ -1035,6 +1035,24 @@ compatibility のため valid な record を受け入れますが、`stalled-wor
 `guide closeout run` と `guide orchestrator-thread` はこの分担と exact command を表示し、metadata-free の bare
 directory から実行できます。
 
+### closeout の runs 書込み事実と runs-only 修復 (G708)
+
+`intent-cli closeout pr --pr <n> --repo <owner/repo> --pr-merged true
+--write --format json` は、実際の `runs.jsonl` 書込みだけを報告します。skip の場合は
+`runs_events` が空の list、`runs_appended: false`、named な `runs_skip_reason` になり、append の場合は
+`runs_appended: true` とその呼出しが追加した行だけを示します。JSON と Markdown は同じ内容を示します。
+completed の queue item に対応する closeout event が無ければ
+`queue-completed-missing-closeout-runs-events` として報告し、自動修復は行いません。
+
+明示的な修復 command は次の通りです:
+
+```text
+intent-cli closeout pr --pr <n> --repo <owner/repo> --pr-merged true --repair-runs --write --format json
+```
+
+欠落した closeout event だけを追加し、queue item を再び completed にせず、queue-state や他の record を書きません。
+queue-state の bytes は同一に保たれ、二回目は `runs_skip_reason: runs-events-already-present` を示す no-op になります。
+
 ### 行き詰まった published issue を retire する (G525)
 
 `intent-cli automation issue-retire --repo <r> --issue <n> --reason <superseded|decomposed|obsolete> [--note <text>] [--domain <name>] [--write]`

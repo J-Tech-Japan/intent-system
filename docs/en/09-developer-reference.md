@@ -1065,6 +1065,28 @@ An unscoped scan preserves compatibility, while `stalled-work --role` clears
 only the selected role. `guide closeout run` and `guide orchestrator-thread`
 show this split and remain executable from a metadata-free bare directory.
 
+### Closeout runs write-truth and runs-only repair (G708)
+
+`intent-cli closeout pr --pr <n> --repo <owner/repo> --pr-merged true
+--write --format json` reports only actual `runs.jsonl` writes. A skip has an
+empty `runs_events` list, `runs_appended: false`, and a named
+`runs_skip_reason`; an append has `runs_appended: true` and exactly the lines
+appended by that call. The JSON and Markdown renderings agree. A completed
+queue item missing its matching closeout events is reported as
+`queue-completed-missing-closeout-runs-events` and is not automatically
+repaired.
+
+The deliberate repair command is:
+
+```text
+intent-cli closeout pr --pr <n> --repo <owner/repo> --pr-merged true --repair-runs --write --format json
+```
+
+It appends only missing closeout events. It never re-completes the queue item,
+writes queue-state, or repairs another record. Queue-state bytes remain
+identical, and the second invocation is a no-op with
+`runs_skip_reason: runs-events-already-present`.
+
 ### Retiring a stuck published issue (G525)
 
 `intent-cli automation issue-retire --repo <r> --issue <n> --reason <superseded|decomposed|obsolete> [--note <text>] [--domain <name>] [--write]`

@@ -786,6 +786,10 @@ internal static class GuideOrchestratorThreadCommand
             TopologyWorkspaceMove = TopologyWorkspaceMoveGuidance.Create(values["<domain>"], values["<team>"]),
             HerdrStandardLayout = HerdrStandardLayoutRegistry.Create(),
             DialogAnsweringRule = DialogAnsweringRuleGuidance.Create(),
+            // G708: the orchestrator route must expose the closeout write-truth
+            // contract and the opt-in, runs-only repair without requiring host
+            // metadata or source archaeology.
+            CloseoutRunsContract = CloseoutRunsContractGuidance.Create(),
             // G570 third repair: the summary is CANON about authority, and it
             // must survive in both modes — but its agmsg phrasing is an
             // instruction in the practiced mode and a description in the other.
@@ -4305,6 +4309,8 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine("- route is read-only guidance; the operator supplies the workspace and pane mapping and explicitly chooses --write.");
         writer.WriteLine();
 
+        WriteCloseoutRunsContract(writer, guide.CloseoutRunsContract);
+
         // G701: the registry and dialog rule are mode-independent guide
         // surfaces. Herdr-only rendering emits their detailed setup section
         // below through HerdrOnlyOperatingGuide; the default metadata-free
@@ -5062,6 +5068,45 @@ internal static class GuideOrchestratorThreadCommand
         }
     }
 
+    private static void WriteCloseoutRunsContract(TextWriter writer, CloseoutRunsContractGuide contract)
+    {
+        writer.WriteLine("## Closeout runs write-truth and repair (G708)");
+        writer.WriteLine();
+        writer.WriteLine(contract.Summary);
+        writer.WriteLine();
+        writer.WriteLine("### Closeout command");
+        writer.WriteLine();
+        writer.WriteLine($"- `{contract.CloseoutCommand}`");
+        writer.WriteLine();
+        writer.WriteLine("### Output contract");
+        writer.WriteLine();
+        foreach (var rule in contract.OutputContract)
+        {
+            writer.WriteLine($"- {rule}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Named inconsistency");
+        writer.WriteLine();
+        writer.WriteLine($"- kind: `{contract.FindingKind}`");
+        writer.WriteLine($"- {contract.FindingRule}");
+        writer.WriteLine();
+        writer.WriteLine("### Explicit runs-only repair");
+        writer.WriteLine();
+        writer.WriteLine($"- `{contract.RepairCommand}`");
+        foreach (var rule in contract.RepairRules)
+        {
+            writer.WriteLine($"- {rule}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Verification");
+        writer.WriteLine();
+        foreach (var check in contract.Verification)
+        {
+            writer.WriteLine($"- {check}");
+        }
+        writer.WriteLine();
+    }
+
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("guide orchestrator-thread");
@@ -5085,6 +5130,73 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine("yield status missing-inputs (only the missing fields are listed); a kept existing loop yields");
         writer.WriteLine("status blocked. The role agents default to --agent when not set individually.");
     }
+}
+
+/// <summary>
+/// G708: the orchestrator-facing closeout contract is structured data rather
+/// than prose copied into a separate manual. It is rendered in both JSON and
+/// Markdown by the installed guide route.
+/// </summary>
+internal sealed record CloseoutRunsContractGuide
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("closeout_command")]
+    public required string CloseoutCommand { get; init; }
+
+    [JsonPropertyName("output_contract")]
+    public required IReadOnlyList<string> OutputContract { get; init; }
+
+    [JsonPropertyName("finding_kind")]
+    public required string FindingKind { get; init; }
+
+    [JsonPropertyName("finding_rule")]
+    public required string FindingRule { get; init; }
+
+    [JsonPropertyName("repair_command")]
+    public required string RepairCommand { get; init; }
+
+    [JsonPropertyName("repair_rules")]
+    public required IReadOnlyList<string> RepairRules { get; init; }
+
+    [JsonPropertyName("verification")]
+    public required IReadOnlyList<string> Verification { get; init; }
+}
+
+internal static class CloseoutRunsContractGuidance
+{
+    public static CloseoutRunsContractGuide Create() => new()
+    {
+        Summary =
+            "G708 closeout is write-truthful: the result describes only the runs.jsonl lines this invocation actually wrote. "
+            + "The guide route is read-only and does not perform closeout or repair.",
+        CloseoutCommand =
+            "intent-cli closeout pr --repo <owner/repo> --pr <n> --pr-merged true --write --format json",
+        OutputContract = new[]
+        {
+            "When no runs append occurred, `runs_events` is an empty list, `runs_appended` is false, and `runs_skip_reason` is a named reason such as `queue-already-completed` or `dry-run-no-write`.",
+            "When an append occurred, `runs_appended` is true and `runs_events` contains exactly the lines appended by this invocation; it does not contain a plan or previously existing lines.",
+            "JSON and Markdown render the same actual-write facts, including the append flag, skip reason, and event lines.",
+        },
+        FindingKind = "queue-completed-missing-closeout-runs-events",
+        FindingRule =
+            "A queue-completed item with missing matching `pr-merged` or `closeout-recorded` events emits this named finding and does not repair automatically.",
+        RepairCommand =
+            "intent-cli closeout pr --repo <owner/repo> --pr <n> --pr-merged true --repair-runs --write --format json",
+        RepairRules = new[]
+        {
+            "Repair is explicit and runs-only: append only the missing matching closeout events; never re-completes the item, never writes queue-state, and never repairs packets, lifecycle records, or any other record.",
+            "A second repair invocation finds no missing events, appends nothing, reports `runs_appended: false` with `runs_skip_reason: runs-events-already-present`, and is idempotent.",
+            "Do not use the guide as authority to run a repair automatically; inspect the named finding and choose the opt-in command deliberately.",
+        },
+        Verification = new[]
+        {
+            "Compare queue-state bytes before and after `--repair-runs`; they must be identical.",
+            "Compare the runs log tail with `runs_events`; a repair tail must contain exactly the missing events and no duplicate existing event.",
+            "Run the closeout output in JSON and Markdown and confirm both expose the same write-truth fields and named finding.",
+        },
+    };
 }
 
 /// <summary>
@@ -5202,6 +5314,13 @@ internal sealed record OrchestratorThreadGuide
 
     [JsonPropertyName("dialog_answering_rule")]
     public required DialogAnsweringRuleGuide DialogAnsweringRule { get; init; }
+
+    /// <summary>
+    /// G708: production closeout output, the named queue/runs inconsistency,
+    /// and the explicit idempotent runs-only repair route.
+    /// </summary>
+    [JsonPropertyName("closeout_runs_contract")]
+    public required CloseoutRunsContractGuide CloseoutRunsContract { get; init; }
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
