@@ -138,7 +138,7 @@ public sealed class NotifySupervisionG699Tests : IDisposable
     }
 
     [Fact]
-    public void OnePollFlapIsNotClassified_ButThresholdConsecutiveSettledStatusIs_G699()
+    public void OnePollFlapIsNotClassified_ButConstantSequenceThresholdClassifiesAndSeedsG695Chain_G699()
     {
         var context = CreateContext();
         RecordHerdrOnlyMode(context);
@@ -174,9 +174,9 @@ public sealed class NotifySupervisionG699Tests : IDisposable
         status = "blocked";
         sequence++;
         now = firstNow.AddSeconds(10);
-        var onePoll = supervisor.RunOnce();
-        Assert.DoesNotContain(onePoll.Findings, finding => finding.Kind == "seat-state-transition");
-        Assert.DoesNotContain(onePoll.RecoveryRecords, record => record.Kind == "seat-state-transition");
+        var onePollFlap = supervisor.RunOnce();
+        Assert.DoesNotContain(onePollFlap.Findings, finding => finding.Kind == "seat-state-transition");
+        Assert.DoesNotContain(onePollFlap.RecoveryRecords, record => record.Kind == "seat-state-transition");
 
         status = "working";
         sequence++;
@@ -184,22 +184,48 @@ public sealed class NotifySupervisionG699Tests : IDisposable
         var flap = supervisor.RunOnce();
         Assert.DoesNotContain(flap.Findings, finding => finding.Kind == "seat-state-transition");
 
+        // state_change_sequence advances only for this real working→blocked
+        // transition. It remains constant for every later poll of the same
+        // blocked state.
         status = "blocked";
         sequence++;
         now = firstNow.AddSeconds(30);
-        Assert.DoesNotContain(supervisor.RunOnce().Findings, finding => finding.Kind == "seat-state-transition");
-        sequence++;
+        var sustainedPoll1 = supervisor.RunOnce();
+        Assert.DoesNotContain(sustainedPoll1.Findings, finding => finding.Kind == "seat-state-transition");
+        Assert.DoesNotContain(sustainedPoll1.RecoveryRecords, record => record.Kind == "seat-state-transition");
+
         now = firstNow.AddSeconds(40);
-        Assert.DoesNotContain(supervisor.RunOnce().Findings, finding => finding.Kind == "seat-state-transition");
-        sequence++;
+        var sustainedPoll2 = supervisor.RunOnce();
+        Assert.DoesNotContain(sustainedPoll2.Findings, finding => finding.Kind == "seat-state-transition");
+        Assert.DoesNotContain(sustainedPoll2.RecoveryRecords, record => record.Kind == "seat-state-transition");
+
         now = firstNow.AddSeconds(50);
-        var classified = supervisor.RunOnce();
+        var sustainedPoll3 = supervisor.RunOnce();
+        var classified = sustainedPoll3;
         var transition = Assert.Single(classified.Findings, finding => finding.Kind == "seat-state-transition");
         Assert.Equal("implementation", transition.SubjectRole);
         Assert.Contains("working→blocked", transition.Summary, StringComparison.Ordinal);
         Assert.Equal(3, classified.EmissionPolicy!.DebounceConsecutiveObservations);
         var cycle = NotifySupervisionStore.Read(context.ResolveSupervisionArtifactRootPath(), Domain, Team).LastCycle!;
         Assert.Equal(3, cycle.LastObservedAgentStatusConsecutiveCounts["seat-state:wG699:wG699:p2"]);
+        Assert.Equal(sequence, cycle.LastObservedStateChangeSequences["seat-state:wG699:wG699:p2"]);
+
+        var transitionChain = ContinuationChainStore.Read(root, Domain, Team);
+        var chain = Assert.Single(transitionChain.Records);
+        Assert.Contains(chain.Links, link => link.Name == ContinuationChainStore.ReportReceived
+            && link.Source == "herdr-state-transition");
+        Assert.Contains(chain.Links, link => link.Name == ContinuationChainStore.WakeDeliveredOrObserved);
+        Assert.Equal(ContinuationChainStore.CanonicalStateClassified, chain.NextMissingLink);
+    }
+
+    [Fact]
+    public void PreRepairSequenceOrderingConsumesConstantSequenceAndNeverClassifies_G699()
+    {
+        // Negative control for the shipped defect: writing the new sequence
+        // before the debounce gate makes the next cycle's prior sequence
+        // equal to the still-current sequence, so the pre-existing advance
+        // guard prevents classification forever.
+        Assert.Null(PreRepairClassificationPollForConstantSequence());
     }
 
     [Fact]
@@ -379,6 +405,45 @@ public sealed class NotifySupervisionG699Tests : IDisposable
                 },
             },
         });
+    }
+
+    private static int? PreRepairClassificationPollForConstantSequence()
+    {
+        long previousCycleSequence = 1;
+        var previousStatus = "working";
+        var previousCount = 1;
+        var previousRunFrom = "working";
+
+        for (var poll = 1; poll <= 3; poll++)
+        {
+            const long sequence = 2;
+            const string status = "blocked";
+            var priorSequence = (long?)previousCycleSequence;
+            var consecutiveCount = string.Equals(previousStatus, status, StringComparison.Ordinal)
+                ? Math.Max(1, previousCount) + 1
+                : 1;
+            var runFrom = string.Equals(previousStatus, status, StringComparison.Ordinal)
+                ? previousRunFrom
+                : previousStatus;
+
+            // This is the pre-repair ordering from ReadRecordedSeatTransitions.
+            var currentCycleSequence = sequence;
+            var classified = string.Equals(runFrom, "working", StringComparison.Ordinal)
+                && consecutiveCount >= 3
+                && priorSequence is not null
+                && sequence > priorSequence.Value;
+            if (classified)
+            {
+                return poll;
+            }
+
+            previousCycleSequence = currentCycleSequence;
+            previousStatus = status;
+            previousCount = consecutiveCount;
+            previousRunFrom = runFrom;
+        }
+
+        return null;
     }
 
     private static ProcessResult RunBuiltCli(string cliDll, string workingDirectory, params string[] arguments)

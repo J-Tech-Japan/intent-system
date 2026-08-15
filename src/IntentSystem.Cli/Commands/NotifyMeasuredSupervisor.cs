@@ -1423,7 +1423,6 @@ internal sealed class NotifyMeasuredSupervisor
             }
 
             var seatKey = $"seat-state:{workspaceId}:{recorded.PaneId}";
-            observedSequences[seatKey] = sequence;
             observedStatuses[seatKey] = agent.AgentStatus;
             if (agent.LastStateChangeAt is { } changedAt)
             {
@@ -1443,12 +1442,22 @@ internal sealed class NotifyMeasuredSupervisor
             observedStatusConsecutiveCounts[seatKey] = consecutiveCount;
             observedStatusRunFrom[seatKey] = runFrom;
             var settled = agent.AgentStatus is "done" or "blocked" or "idle";
-            if (role is not ("implementation" or "review")
-                || !string.Equals(runFrom, "working", StringComparison.Ordinal)
-                || !settled
-                || consecutiveCount < debounceConsecutiveObservations
-                || priorSequence is null
-                || sequence <= priorSequence.Value)
+            var pendingSettledTransition = role is ("implementation" or "review")
+                && string.Equals(runFrom, "working", StringComparison.Ordinal)
+                && settled
+                && priorSequence is not null
+                && sequence > priorSequence.Value;
+            if (!pendingSettledTransition || consecutiveCount >= debounceConsecutiveObservations)
+            {
+                // A debounce-suppressed settled transition must retain the
+                // prior sequence so the single state-change advance remains
+                // available when the consecutive-observation threshold is
+                // reached. Status, count, and run-from are still recorded on
+                // every poll above.
+                observedSequences[seatKey] = sequence;
+            }
+
+            if (!pendingSettledTransition || consecutiveCount < debounceConsecutiveObservations)
             {
                 continue;
             }
