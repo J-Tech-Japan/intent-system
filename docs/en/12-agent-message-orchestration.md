@@ -3330,3 +3330,33 @@ G690 is distinct: its hard risk floor bounds what design may decide alone; it
 does not block execution of a human decision already recorded in conversation.
 The guide remains observation-only and preserves the no-provider and
 no-terminal-mutation boundaries.
+
+## Terminal observation and keystroke boundary (G706)
+
+`guide design-thread` makes the terminal boundary explicit. Terminal pane
+reading is permitted only for **operational liveness diagnosis** — determining
+whether a seat is alive or responding after an explicit operator or authorized
+orchestration diagnostic request. Terminal content is never parsed, promoted,
+or cited as **canonical workflow evidence**; canonical evidence remains
+intent-cli/GitHub state, recorded activity, and real artifacts. A liveness
+observation never transfers detection, classification, or authorized recovery
+ownership from orchestration to design.
+
+If orchestration cannot read panes, use the existing recorded observation
+route:
+
+```text
+intent-cli notify status --task-id <task-id> --domain <domain> --team <team> --routing-root <host-root> --format json
+```
+
+Then use the configured non-destructive `status-request`/canonical report
+route as applicable. Treat the returned liveness as observation only and
+escalate unresolved silence; do not infer workflow state or recovery ownership
+from it.
+
+Keystrokes follow the G701 `dialog-answering/v1` three-tier boundary, not a
+generic design relay: the provisioner answers self-provisioned gates; design
+may mechanically answer only an exact dialog/action match already approved by
+the human through the session layer, with the human as decision actor and no
+per-action class generalization; every unapproved, unknown-origin, uncertain,
+or mismatching dialog goes through design to the human with grounds.

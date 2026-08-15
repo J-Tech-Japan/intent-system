@@ -5,8 +5,10 @@ namespace IntentSystem.Cli.Commands;
 
 /// <summary>
 /// G654: render-only, agent-kind-neutral design-thread operating contract.
-/// This guide does not inspect terminals, supervise work, mutate state, or
-/// launch a provider. It is deliberately identical across session layers.
+/// This guide does not use terminal content as workflow evidence, supervise
+/// work, mutate state, or launch a provider. Pane reads are scoped to
+/// operational liveness diagnosis and are deliberately identical across
+/// session layers.
 /// </summary>
 internal static class GuideDesignThreadCommand
 {
@@ -50,7 +52,7 @@ internal static class GuideDesignThreadCommand
         if (args.Length == 1 && string.Equals(args[0], "--help", StringComparison.Ordinal))
         {
             writer.WriteLine(UsageLine);
-            writer.WriteLine("Read-only G654 design-thread operating contract. Preview-through-1.x; no provider launch, supervision, terminal parsing, or mutation.");
+            writer.WriteLine("Read-only G654 design-thread operating contract. Preview-through-1.x; no provider launch, supervision, canonical terminal parsing, or mutation. Pane reads are for operational liveness diagnosis only.");
             return 0;
         }
 
@@ -114,7 +116,7 @@ internal static class GuideDesignThreadCommand
                 {
                     "Interim in-contract path: eliminate each known dialog through agent-side allow configuration recorded in that kind's G636 unattended-launch recipe fields; never answer the dialog.",
                     "G683 supervision reads dialog-blocked seats and emits only exact recipe-registry classes; unmatched text is class unknown and escalate-only, never fuzzy-classified.",
-                    "G689 adds the shell-command class and extracts a payload without granting a bare answer; every compound AST segment needs project-test, owned-scratch-delete, or exact-command-once scope, with digest/dialog audit. G690 routes any declared authority through canonical `intent-cli notify adjudicate`: exact class/scope `answerable_by`, the hard risk floor, durable audit, and live pane/state-sequence/text-hash CAS must all permit the bounded answer. Design has no unscoped relay or direct `send-keys` path and never relays keystrokes.",
+                    "G689 adds the shell-command class and extracts a payload without granting a bare answer; every compound AST segment needs project-test, owned-scratch-delete, or exact-command-once scope, with digest/dialog audit. G690 routes any declared authority through canonical `intent-cli notify adjudicate`: exact class/scope `answerable_by`, the hard risk floor, durable audit, and live pane/state-sequence/text-hash CAS must all permit the bounded answer. Design has no unscoped relay or direct `send-keys` path; design never relays keystrokes as a generic action. Any exact-match execution allowed by `dialog-answering/v1` remains a session-layer mechanical answer, never a design-owned relay.",
                 },
                 NoPolicyRule = "Without an exact validated pre-approve match or matching shell scoped policy, residual prompts are escalate-only; unknown, unmatched, bare shell classes, pre-escalate prompts, capability-denied prompts, and hard-risk-floor prompts execute no answer. A permitted answer still goes only through `notify adjudicate` with declared `answerable_by` and live CAS; no unscoped relay is valid.",
                 Incident = "G666 measured the 2026-08-11 workspace wK Claude app safety relay refusal. Operator-filed #1469 then measured a 0.19.0 supervision cycle with 47 keys and no prompt/dialog/class/adjudication producer key, a review seat wedged three times in one day, and orchestration correctly refusing to fabricate a class. This is the same configured-looking-but-inert failure shape as #1465; the interim correction is agent-side allow configuration recorded in the G636 kind recipe fields, while G690 keeps residual adjudication scoped, audited, and CAS-bound.",
@@ -130,6 +132,14 @@ internal static class GuideDesignThreadCommand
             {
                 Layers = new[] { "canonical workflow status", "recorded session-layer agent state and G652 activity sub-verdicts", "real artifacts such as files, commits, and pull requests" },
                 Rule = "Verify all three layers. `running=true` alone never proves progress; terminal content is never parsed as workflow evidence.",
+            },
+            ObservationBoundary = new DesignThreadObservationBoundary
+            {
+                PaneReadRule = "Terminal pane reading is permitted only for operational liveness diagnosis: determine whether a seat is alive or responding after an explicit operator or authorized orchestration diagnostic request.",
+                CanonicalEvidenceRule = "Terminal content is never parsed, promoted, or cited as canonical workflow evidence. Canonical workflow evidence remains intent-cli/GitHub state, recorded activity, and real artifacts.",
+                RecoveryOwnershipRule = "A liveness observation never transfers detection, classification, or authorized recovery ownership from orchestration to design; design remains observation-only outside its declared escalation and approval boundaries.",
+                FallbackRoute = "If orchestration cannot read panes, use `intent-cli notify status --task-id <task-id> --domain <domain> --team <team> --routing-root <host-root> --format json` and the configured non-destructive `status-request`/canonical report route. Treat the returned liveness as observation only and escalate unresolved silence; do not infer workflow state or recovery ownership from it.",
+                KeystrokeBoundary = "Keystrokes are never a generic design relay: apply G701 `dialog-answering/v1` exactly. The provisioner answers self-provisioned gates; design may mechanically answer only an exact dialog/action match already approved by the human through the session layer, with the human as decision actor and no per-action class generalization; every unapproved, unknown-origin, uncertain, or mismatching dialog goes through design to the human with grounds.",
             },
             TeamAndDutySplit = new DesignThreadTeamAndDutySplit
             {
@@ -155,8 +165,9 @@ internal static class GuideDesignThreadCommand
             NegativeInvariants = new[]
             {
                 "No behavior change outside guide rendering and reachability surfaces.",
-                "No terminal parsing, provider launch, hidden fifth role, or design-owned stall recovery.",
-                "No design-thread approval-keystroke relay and no watcher restart, correction, dialog answer, or key send.",
+                "No terminal content parsed or promoted as canonical workflow evidence, no canonical state inferred from a pane, and no transfer of detection, classification, or recovery ownership from orchestration to design.",
+                "No provider launch, hidden fifth role, or design-owned stall recovery.",
+                "No generic design keystroke relay, watcher restart, correction, dialog answer, or key send outside the G701 exact-match session-layer rule.",
                 "No fuzzy prompt classification, unvalidated rule, unaudited answer, unscoped key relay, or unscoped design answer path.",
                 "No canonical identity inferred from prose, transport state, or an unaccepted candidate.",
                 "No publication, contract, priority, release, destructive, permission, security, or credential decision is silently broadened.",
@@ -207,6 +218,13 @@ internal static class GuideDesignThreadCommand
         foreach (var fact in result.MergeAuthority.Facts) writer.WriteLine($"- compare: {fact}");
         WriteList(writer, "## 5. Three-layer delegation verification", result.DelegationVerification.Layers);
         writer.WriteLine(result.DelegationVerification.Rule);
+        writer.WriteLine();
+        writer.WriteLine("## 5a. Terminal observation and keystroke boundary (G706)");
+        writer.WriteLine($"- **pane read:** {result.ObservationBoundary.PaneReadRule}");
+        writer.WriteLine($"- **canonical evidence:** {result.ObservationBoundary.CanonicalEvidenceRule}");
+        writer.WriteLine($"- **recovery ownership:** {result.ObservationBoundary.RecoveryOwnershipRule}");
+        writer.WriteLine($"- **fallback observation route:** {result.ObservationBoundary.FallbackRoute}");
+        writer.WriteLine($"- **keystroke/dialog boundary:** {result.ObservationBoundary.KeystrokeBoundary}");
         writer.WriteLine();
         writer.WriteLine("## 6. Team formula, duty split, and monitoring separation");
         writer.WriteLine($"- formula: **{result.TeamAndDutySplit.Formula}**");
@@ -295,6 +313,7 @@ internal sealed record DesignThreadGuideResult
     public required DesignThreadResidualApproval ResidualApproval { get; init; }
     public required DesignThreadMergeAuthority MergeAuthority { get; init; }
     public required DesignThreadDelegationVerification DelegationVerification { get; init; }
+    public required DesignThreadObservationBoundary ObservationBoundary { get; init; }
     public required DesignThreadTeamAndDutySplit TeamAndDutySplit { get; init; }
     public required DesignThreadMonitoring Monitoring { get; init; }
     public required DesignThreadReporting Reporting { get; init; }
@@ -308,6 +327,14 @@ internal sealed record DesignThreadApproval { public required string ReadOnlyRul
 internal sealed record DesignThreadResidualApproval { public required string PreviewStatus { get; init; } public required IReadOnlyList<string> Layers { get; init; } public required string NoPolicyRule { get; init; } public required string Incident { get; init; } public required string WatcherBoundary { get; init; } public required string Formula { get; init; } }
 internal sealed record DesignThreadMergeAuthority { public required string Rule { get; init; } public required IReadOnlyList<string> Facts { get; init; } }
 internal sealed record DesignThreadDelegationVerification { public required IReadOnlyList<string> Layers { get; init; } public required string Rule { get; init; } }
+internal sealed record DesignThreadObservationBoundary
+{
+    public required string PaneReadRule { get; init; }
+    public required string CanonicalEvidenceRule { get; init; }
+    public required string RecoveryOwnershipRule { get; init; }
+    public required string FallbackRoute { get; init; }
+    public required string KeystrokeBoundary { get; init; }
+}
 internal sealed record DesignThreadTeamAndDutySplit { public required string Formula { get; init; } public required string MonitoringRule { get; init; } public required string OrchestrationOwnership { get; init; } public required string DesignMode { get; init; } public required IReadOnlyList<string> DesignEscalations { get; init; } }
 internal sealed record DesignThreadMonitoring { public required string Separation { get; init; } public required string ResidualDesignCheck { get; init; } public required string BoundRule { get; init; } public required string GuideRefreshRule { get; init; } public required string DeploymentRule { get; init; } }
 internal sealed record DesignThreadReporting { public required string Rule { get; init; } public required string HumanActionRule { get; init; } }
