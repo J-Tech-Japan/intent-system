@@ -43,6 +43,18 @@ dotnet tool install -g JTechJapan.IntentSystem.Cli
 If `intent-cli` is not found after install, add `~/.dotnet/tools` (macOS/Linux)
 or `%USERPROFILE%\.dotnet\tools` (Windows) to your `PATH`.
 
+No .NET SDK? The npm entry point provides the same self-contained release
+binary through the matching optional platform package:
+
+```bash
+npm install -g intent-system
+intent-cli --version
+npx intent-system guide onboarding
+```
+
+See the [npm distribution guide](docs/en/13-npm-distribution.md) for npx
+guidance, checksums, release gating, and coexistence with the .NET tool.
+
 > No .NET SDK? See **[Install without a .NET SDK](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/01-install.md#install-without-a-net-sdk)**
 > for self-contained binaries. Need the preview channel? See the
 > **[developer reference](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/09-developer-reference.md#preview-install)**.

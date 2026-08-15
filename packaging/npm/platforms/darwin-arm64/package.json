@@ -1,0 +1,23 @@
+{
+  "name": "@j-tech-japan/intent-cli-darwin-arm64",
+  "version": "0.0.0-dev",
+  "description": "Self-contained intent-cli binary for macOS Apple Silicon.",
+  "license": "Apache-2.0",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "intentCli": {
+    "platform": "osx-arm64",
+    "version": "0.0.0-dev",
+    "binary": "bin/intent-cli",
+    "binarySha256": "__BINARY_SHA256__",
+    "source": "self-contained GitHub Release asset"
+  }
+}

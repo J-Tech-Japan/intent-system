@@ -50,3 +50,83 @@ jobs:
           name: test-results
           path: .artifacts/test-results/
           retention-days: 7
+
+  npm-dry-run:
+    name: npm package dry-run (no publish)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          dotnet-quality: preview
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Resolve CI package version from repository policy
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          NEXT_VERSION="$(python3 -c "import json; print(json.load(open('eng/version.json'))['nextVersion'])")"
+          VERSION="${NEXT_VERSION}-ci.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          echo "version=${VERSION}" | tee -a "${GITHUB_OUTPUT}"
+
+      - name: Publish the Linux smoke binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          dotnet publish src/IntentSystem.Cli/IntentSystem.Cli.csproj \
+            --configuration Release --runtime linux-x64 --self-contained true \
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:Version="${VERSION}" -o .artifacts/npm-binaries/linux-x64
+          cp .artifacts/npm-binaries/linux-x64/IntentSystem.Cli .artifacts/npm-binaries/linux-x64/intent-cli
+          chmod +x .artifacts/npm-binaries/linux-x64/intent-cli
+          .artifacts/npm-binaries/linux-x64/intent-cli --version > .artifacts/npm-version.txt
+
+      - name: Prepare all npm packages for a dry run
+        shell: bash
+        run: |
+          set -euo pipefail
+          node packaging/npm/scripts/prepare-packages.js \
+            --version "${{ steps.ver.outputs.version }}" \
+            --binary-root .artifacts/npm-binaries \
+            --output .artifacts/npm-packages \
+            --allow-missing-binaries
+
+      - name: Pack, verify, and exercise the packed npm entry point
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          mkdir -p .artifacts/npm-tarballs
+          for package in .artifacts/npm-packages/*; do
+            npm pack "${package}" --ignore-scripts --pack-destination .artifacts/npm-tarballs
+          done
+          node packaging/npm/scripts/verify-packages.js \
+            --packages-dir .artifacts/npm-packages \
+            --expected-version "${VERSION}" \
+            --version-output .artifacts/npm-version.txt
+          MAIN_TGZ="$(find .artifacts/npm-tarballs -maxdepth 1 -name 'intent-system-*.tgz' -print -quit)"
+          LINUX_TGZ="$(find .artifacts/npm-tarballs -maxdepth 1 -name '*intent-cli-linux-x64-*.tgz' -print -quit)"
+          test -n "${MAIN_TGZ}" -a -n "${LINUX_TGZ}"
+          node packaging/npm/scripts/smoke-packed.js \
+            --main "${MAIN_TGZ}" --platform "${LINUX_TGZ}" --expected-version "${VERSION}" \
+            --work-dir ".artifacts/npm-packed-smoke"
+
+      - name: Upload npm dry-run artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: intent-cli-npm-dry-run-${{ steps.ver.outputs.version }}
+          path: .artifacts/npm-tarballs/
+          retention-days: 7
