@@ -36,6 +36,29 @@ public sealed class GuidePrimacyG701Tests
     }
 
     [Fact]
+    public void HerdrWorkspaceCreate_EmitsTheMultiWordLabelAsOneQuotedArgument_G701Repair()
+    {
+        var layout = HerdrStandardLayoutRegistry.Create();
+        var workspaceCommands = new[]
+        {
+            layout.Creation.Workspace,
+            layout.Panes.Single(pane => pane.Role == "orchestration").CreateCommand,
+        };
+
+        foreach (var command in workspaceCommands)
+        {
+            Assert.Contains("--label \"<team> · herdr-only\"", command, StringComparison.Ordinal);
+            Assert.DoesNotContain("--label <team> · herdr-only", command, StringComparison.Ordinal);
+
+            var tokens = ShellTokenize(command);
+            var labelIndex = Array.IndexOf(tokens, "--label");
+            Assert.True(labelIndex >= 0, $"workspace command has no --label option: {command}");
+            Assert.Equal("<team> · herdr-only", tokens[labelIndex + 1]);
+            Assert.Equal("--no-focus", tokens[labelIndex + 2]);
+        }
+    }
+
+    [Fact]
     public void LayoutCheck_IsNamedVisibleAndNeverReadyBlockingOrExecutable()
     {
         var check = HerdrStandardLayoutRegistry.Create().SetupCheck;
@@ -198,4 +221,41 @@ public sealed class GuidePrimacyG701Tests
             },
         },
     };
+
+    private static string[] ShellTokenize(string command)
+    {
+        var tokens = new List<string>();
+        var token = new System.Text.StringBuilder();
+        var quoted = false;
+
+        foreach (var character in command)
+        {
+            if (character == '\"')
+            {
+                quoted = !quoted;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(character) && !quoted)
+            {
+                if (token.Length > 0)
+                {
+                    tokens.Add(token.ToString());
+                    token.Clear();
+                }
+
+                continue;
+            }
+
+            token.Append(character);
+        }
+
+        Assert.False(quoted, "emitted command has an unterminated quote");
+        if (token.Length > 0)
+        {
+            tokens.Add(token.ToString());
+        }
+
+        return tokens.ToArray();
+    }
 }

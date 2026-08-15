@@ -21,7 +21,7 @@ internal static class HerdrStandardLayoutRegistry
             Position = "left",
             Label = "orchestration",
             Cwd = "<host-repo>",
-            CreateCommand = "herdr workspace create --cwd <host-repo> --label <team> · herdr-only --no-focus",
+            CreateCommand = "herdr workspace create --cwd <host-repo> --label \"<team> · herdr-only\" --no-focus",
             RenameCommand = "herdr pane rename <root-pane-id> orchestration",
         },
         new HerdrStandardLayoutPane
@@ -58,7 +58,7 @@ internal static class HerdrStandardLayoutRegistry
         OperatorVisibility = "This keeps all roles visible to the operator at once and keeps the G550 supervision pane scan from being hidden behind an inactive tab.",
         Creation = new HerdrStandardLayoutCreation
         {
-            Workspace = "herdr workspace create --cwd <host-repo> --label <team> · herdr-only --no-focus",
+            Workspace = "herdr workspace create --cwd <host-repo> --label \"<team> · herdr-only\" --no-focus",
             Tab = "Use the returned tab as the one team tab; if its label needs repair: herdr tab rename <tab-id> <team>",
             RootPane = "Assign the returned root_pane to orchestration, then run herdr pane rename <root-pane-id> orchestration",
             DefaultPaneSplit = "herdr pane split --pane <pane-id> --direction right|down --cwd <role-cwd> --no-focus",
