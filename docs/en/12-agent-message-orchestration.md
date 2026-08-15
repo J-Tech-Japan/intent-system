@@ -2007,6 +2007,29 @@ transition. This is an observation-only policy: intent-cli/GitHub remain
 authoritative, and the supervisor may record, wake, and surface evidence but
 does not clear work, merge, close out, or change labels.
 
+### Same-cycle observation corroboration (G707)
+
+Before emitting `registration-lost-process-present` or `live-idle-no-report`,
+the supervisor consults the non-terminal observations already collected for the
+same recorded workspace/pane. A same-cycle `agent_status=working` or `idle`, or
+`interactive_ready=true`, contradicts the corresponding registration/live-idle
+conclusion. The contradiction is emitted exactly once as the named
+`observation-conflict` finding for that seat; it is not silently discarded.
+
+Every finding in this contract is self-verifying and carries
+`registration_definition`, `registration_lookup`, `registration_result`, and
+`consulted_observations`. An inconclusive conflict starts with verification:
+compare the named producers and recorded workspace/pane before deciding any
+recovery. It authorizes no automatic action. When no same-cycle non-terminal
+seat observation exists, a genuinely absent recorded seat remains eligible for
+the verified `seat-absent` or `registration-lost-process-present` finding.
+
+`observation-conflict` is a normal same-key observation, so G699's recorded
+repeat backoff and park state apply; a new seat key remains immediate. This
+corroboration changes only the observation classification and evidence. It does
+not change workflow ownership, canonical intent-cli/GitHub state, or the
+observation-only authority boundary.
+
 ## Cross-project isolation on a shared machine
 
 **Assume you are not alone on this machine.** Several project teams run

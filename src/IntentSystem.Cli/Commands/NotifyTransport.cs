@@ -780,8 +780,11 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                 var stateChangeSequence = ReadInt64(agent, "state_change_seq");
                 var lastStateChangeAt = ReadDateTimeOffset(agent, "last_state_change_at");
                 var cwd = ReadString(agent, "cwd") ?? ReadString(agent, "foreground_cwd");
-                var explicitlyNotReady = agent.TryGetProperty("interactive_ready", out var ready)
-                    && ready.ValueKind == JsonValueKind.False;
+                bool? interactiveReady = agent.TryGetProperty("interactive_ready", out var ready)
+                    && ready.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    ? ready.GetBoolean()
+                    : null;
+                var explicitlyNotReady = interactiveReady == false;
                 var hasSession = agent.TryGetProperty("agent_session", out var session)
                     && session.ValueKind == JsonValueKind.Object;
                 var running = !string.IsNullOrWhiteSpace(agentKind)
@@ -789,7 +792,7 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                     && !explicitlyNotReady
                     && !string.Equals(status, "unknown", StringComparison.Ordinal);
 
-                parsed.Add(new HerdrAgentState(name, agentWorkspaceId, paneId, running, status, cwd, stateChangeSequence, lastStateChangeAt, agentKind));
+                parsed.Add(new HerdrAgentState(name, agentWorkspaceId, paneId, running, status, cwd, stateChangeSequence, lastStateChangeAt, agentKind, interactiveReady));
             }
 
             return parsed;
@@ -943,7 +946,8 @@ internal sealed record HerdrAgentState(
     string? Cwd = null,
     long? StateChangeSequence = null,
     DateTimeOffset? LastStateChangeAt = null,
-    string? AgentKind = null);
+    string? AgentKind = null,
+    bool? InteractiveReady = null);
 
 internal static class NotifyTransportPaths
 {

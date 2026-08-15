@@ -2774,6 +2774,35 @@ internal static class GuideOrchestratorThreadCommand
                 },
                 AuthorityBoundary =
                     "This is an observation and wake-hygiene policy only. `intent-cli`/GitHub remain authoritative for workflow state; the supervisor may record, wake the owning role, and surface evidence, but never clears work or changes lifecycle state.",
+                CorroborationContract = new OrchestratorObservationCorroboration
+                {
+                    Summary =
+                        "G707: before emitting a registration or live-idle finding, supervision corroborates it against contradictory non-terminal observations already collected in the same cycle.",
+                    SameCycleRule =
+                        "Consult the recorded seat-state agent_status and interactive_ready observations for the same-cycle workspace/pane before emission; idle or working is evidence that the registration/live-idle conclusion needs corroboration.",
+                    ContradictingObservations = new[]
+                    {
+                        "registration-lost-process-present versus same-cycle seat-state agent_status=working or idle",
+                        "live-idle-no-report versus same-cycle seat-state agent_status=working",
+                        "a same-cycle interactive_ready=true observation also contradicts either conclusion",
+                    },
+                    ConflictKind = "observation-conflict",
+                    SelfVerifyingFields = new[]
+                    {
+                        "registration_definition",
+                        "registration_lookup",
+                        "registration_result",
+                        "consulted_observations",
+                    },
+                    InconclusiveRule =
+                        "An inconclusive conflict begins with verification and names the consulted producers; it prescribes no automatic action and never authorizes destructive automation.",
+                    GenuineAbsenceRule =
+                        "When no same-cycle non-terminal seat observation exists, a verified absent seat remains eligible to emit seat-absent or registration-lost-process-present.",
+                    RecurrenceRule =
+                        "The single observation-conflict per recorded seat is a same-key observation: G699 repeat backoff and park state apply, while a new key remains immediate.",
+                    AuthorityBoundary =
+                        "Corroboration changes only the observation classification and evidence. It does not alter canonical workflow state, ownership, or the observation-only boundary.",
+                },
             },
             PaneScanStuckStates = new[]
             {
@@ -3963,6 +3992,26 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
         writer.WriteLine($"> **Authority boundary:** {supervision.EmissionHygiene.AuthorityBoundary}");
+        writer.WriteLine();
+        writer.WriteLine("#### Same-cycle corroboration (G707)");
+        writer.WriteLine();
+        writer.WriteLine(supervision.EmissionHygiene.CorroborationContract.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- **same-cycle rule** — {supervision.EmissionHygiene.CorroborationContract.SameCycleRule}");
+        writer.WriteLine();
+        writer.WriteLine("- **contradicting observations**");
+        foreach (var item in supervision.EmissionHygiene.CorroborationContract.ContradictingObservations)
+        {
+            writer.WriteLine($"  - {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **conflict kind** — `{supervision.EmissionHygiene.CorroborationContract.ConflictKind}`");
+        writer.WriteLine($"- **self-verifying fields** — `{string.Join("`, `", supervision.EmissionHygiene.CorroborationContract.SelfVerifyingFields)}`");
+        writer.WriteLine($"- **inconclusive rule** — {supervision.EmissionHygiene.CorroborationContract.InconclusiveRule}");
+        writer.WriteLine($"- **genuine absence rule** — {supervision.EmissionHygiene.CorroborationContract.GenuineAbsenceRule}");
+        writer.WriteLine($"- **recurrence rule** — {supervision.EmissionHygiene.CorroborationContract.RecurrenceRule}");
+        writer.WriteLine();
+        writer.WriteLine($"> **Corroboration authority boundary:** {supervision.EmissionHygiene.CorroborationContract.AuthorityBoundary}");
         writer.WriteLine();
         writer.WriteLine("#### What the pane scan is looking for");
         writer.WriteLine();
@@ -5651,6 +5700,39 @@ internal sealed record OrchestratorEmissionHygiene
 
     [JsonPropertyName("negative_checks")]
     public required IReadOnlyList<string> NegativeChecks { get; init; }
+
+    [JsonPropertyName("authority_boundary")]
+    public required string AuthorityBoundary { get; init; }
+
+    [JsonPropertyName("corroboration_contract")]
+    public required OrchestratorObservationCorroboration CorroborationContract { get; init; }
+}
+
+internal sealed record OrchestratorObservationCorroboration
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("same_cycle_rule")]
+    public required string SameCycleRule { get; init; }
+
+    [JsonPropertyName("contradicting_observations")]
+    public required IReadOnlyList<string> ContradictingObservations { get; init; }
+
+    [JsonPropertyName("conflict_kind")]
+    public required string ConflictKind { get; init; }
+
+    [JsonPropertyName("self_verifying_fields")]
+    public required IReadOnlyList<string> SelfVerifyingFields { get; init; }
+
+    [JsonPropertyName("inconclusive_rule")]
+    public required string InconclusiveRule { get; init; }
+
+    [JsonPropertyName("genuine_absence_rule")]
+    public required string GenuineAbsenceRule { get; init; }
+
+    [JsonPropertyName("recurrence_rule")]
+    public required string RecurrenceRule { get; init; }
 
     [JsonPropertyName("authority_boundary")]
     public required string AuthorityBoundary { get; init; }

@@ -261,21 +261,32 @@ public sealed class NotifySupervisionG641Tests : IDisposable
         now = firstNow.AddSeconds(1);
         var unchanged = supervisor.RunOnce();
 
-        var idle = Assert.Single(unchanged.Findings, finding => finding.Kind == "live-idle-no-report");
-        Assert.Equal("herdr.activity", idle.Source);
-        Assert.False(idle.WakeAttempted);
+        Assert.DoesNotContain(unchanged.Findings, finding => finding.Kind == "live-idle-no-report");
+        var conflict = Assert.Single(unchanged.Findings, finding => finding.Kind == "observation-conflict");
+        Assert.Equal("supervision-cycle.corroboration", conflict.Source);
+        Assert.False(conflict.WakeAttempted);
+        Assert.NotNull(conflict.RegistrationDefinition);
+        Assert.NotNull(conflict.RegistrationLookup);
+        Assert.NotNull(conflict.RegistrationResult);
+        Assert.NotNull(conflict.ConsultedObservations);
+        Assert.Contains("Verification first", conflict.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("re-register", conflict.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("restart", conflict.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("kill", conflict.Summary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("not corrected", Assert.Single(unchanged.Warnings), StringComparison.Ordinal);
 
         now = firstNow.AddSeconds(2);
         var unchangedAgain = supervisor.RunOnce();
 
         Assert.DoesNotContain(unchangedAgain.Findings, finding => finding.Kind == "live-idle-no-report");
+        Assert.DoesNotContain(unchangedAgain.Findings, finding => finding.Kind == "observation-conflict");
 
         now = firstNow.AddSeconds(3);
         runner.AgentsJson = HerdrAgentsJson(stateChangeSequence: 8);
         var advancing = supervisor.RunOnce();
 
         Assert.DoesNotContain(advancing.Findings, finding => finding.Kind == "live-idle-no-report");
+        Assert.DoesNotContain(advancing.Findings, finding => finding.Kind == "observation-conflict");
         var recordedAdvancing = NotifySupervisionStore.Read(context.ResolveSupervisionArtifactRootPath(), Domain, Team);
         Assert.Equal(8, recordedAdvancing.LastCycle!.LastObservedStateChangeSequences["activity:wG641:wG641:p2"]);
         Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("send-text"));
