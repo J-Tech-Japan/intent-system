@@ -2947,3 +2947,30 @@ setup と `guide design-thread` は `dialog-answering/v1` の exactly three tier
 G690 との違いも明示します。G690 の hard risk floor は design が **単独で決められること**
 だけを制限し、conversation に記録された human decision の実行を阻みません。guide は
 observation-only であり、provider launch と terminal mutation を追加しません。
+
+## terminal observation と keystroke の境界（G706）
+
+`guide design-thread` は terminal の境界を明示します。terminal pane の読み取りは、明示的な
+operator または authorized orchestration の diagnostic request の後に、seat が alive / responding
+かを確かめる **operational liveness diagnosis** に限って許可されます。terminal content は
+**canonical workflow evidence** として parse、promote、または引用してはいけません。canonical
+evidence は intent-cli/GitHub state、recorded activity、real artifacts のままです。liveness
+observation は detection、classification、authorized recovery の **recovery ownership** を
+orchestration から design に移しません。
+
+orchestration が pane を読めない場合は、既存の recorded observation route を使います:
+
+```text
+intent-cli notify status --task-id <task-id> --domain <domain> --team <team> --routing-root <host-root> --format json
+```
+
+必要に応じて configured な non-destructive `status-request` / canonical report route を続けます。
+返った liveness は observation としてだけ扱い、解決しない silence はエスカレーションします。そこから
+workflow state や recovery ownership を推論してはいけません。
+
+keystroke は generic な design relay ではなく、G701 `dialog-answering/v1` の three-tier boundary
+に従います。provisioner 自身が作った gate は provisioner が回答します。human が conversation で
+既に許可した action は、exact dialog/action match の場合だけ design が session layer を通じて
+mechanical に実行し、decision actor は human のままです。per-action approval を class に一般化
+しません。unapproved、unknown-origin、uncertain、または mismatch の dialog はすべて grounds を
+示して design 経由で human にエスカレーションします。
