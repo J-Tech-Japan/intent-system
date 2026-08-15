@@ -158,12 +158,12 @@ internal static class GuideOrchestratorThreadCommand
         if (sessionLayer.IsHerdrOnly)
         {
             using var buffer = new StringWriter();
-            WriteMarkdown(buffer, guide);
+            WriteMarkdown(buffer, guide, metadataFree: !Directory.Exists(Path.Combine(context.RepoRoot, ".intent-cli")));
             writer.Write(SelectMarkdownSections(buffer.ToString(), values));
             return 0;
         }
 
-        WriteMarkdown(writer, guide);
+        WriteMarkdown(writer, guide, metadataFree: !Directory.Exists(Path.Combine(context.RepoRoot, ".intent-cli")));
         return 0;
     }
 
@@ -784,6 +784,8 @@ internal static class GuideOrchestratorThreadCommand
             // reachable from the role-facing thread contract.
             GuideReachability = SeatCommandGuidanceRegistry.ReviewReachability(),
             TopologyWorkspaceMove = TopologyWorkspaceMoveGuidance.Create(values["<domain>"], values["<team>"]),
+            HerdrStandardLayout = HerdrStandardLayoutRegistry.Create(),
+            DialogAnsweringRule = DialogAnsweringRuleGuidance.Create(),
             // G570 third repair: the summary is CANON about authority, and it
             // must survive in both modes — but its agmsg phrasing is an
             // instruction in the practiced mode and a description in the other.
@@ -4142,7 +4144,7 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
     }
 
-    private static void WriteMarkdown(TextWriter writer, OrchestratorThreadGuide guide)
+    private static void WriteMarkdown(TextWriter writer, OrchestratorThreadGuide guide, bool metadataFree = false)
     {
         // One declared identity, rendered per mode. The renderer holds no copy
         // of either title, so the declaration and the document cannot disagree.
@@ -4220,6 +4222,18 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- validate: `{guide.TopologyWorkspaceMove.Commands.Validate}`");
         writer.WriteLine("- route is read-only guidance; the operator supplies the workspace and pane mapping and explicitly chooses --write.");
         writer.WriteLine();
+
+        // G701: the registry and dialog rule are mode-independent guide
+        // surfaces. Herdr-only rendering emits their detailed setup section
+        // below through HerdrOnlyOperatingGuide; the default metadata-free
+        // route must still make the same production surfaces discoverable.
+        if (metadataFree && guide.SessionLayer?.Mode != SessionLayerMode.HerdrOnly)
+        {
+            writer.WriteLine(HerdrStandardLayoutRegistry.RenderMarkdown());
+            writer.WriteLine();
+            writer.WriteLine(DialogAnsweringRuleGuidance.RenderMarkdown());
+            writer.WriteLine();
+        }
 
         SessionLayerSwitchChecklist.WriteMarkdown(writer, guide.SessionLayerSwitchChecklist);
 
@@ -5095,6 +5109,17 @@ internal sealed record OrchestratorThreadGuide
     /// </summary>
     [JsonPropertyName("topology_workspace_move")]
     public required TopologyWorkspaceMoveGuide TopologyWorkspaceMove { get; init; }
+
+    /// <summary>
+    /// G701: structured herdr setup is present even in a metadata-free guide
+    /// render; herdr-only mode additionally selects the concrete operating
+    /// section containing the same registry.
+    /// </summary>
+    [JsonPropertyName("herdr_standard_layout")]
+    public required HerdrStandardLayoutGuide HerdrStandardLayout { get; init; }
+
+    [JsonPropertyName("dialog_answering_rule")]
+    public required DialogAnsweringRuleGuide DialogAnsweringRule { get; init; }
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }

@@ -3291,3 +3291,42 @@ carries `design_alignment_checked` and the checked-source list:
 - End every wake with a stalled-work check (`automation stalled-work`, G523)
   and process any actionable item before sleeping; escalate explicitly
   rather than deferring silently.
+
+## Guide primacy, standard herdr layout, and dialog authority (G701)
+
+Guide surfaces are the primary interface for both human and AI executors. A
+missing, wrong, or stale guide route means the capability is operationally
+unshipped, even when the implementation and functional tests are green.
+Executing the declared guide route from the built CLI is acceptance substance
+equal to functional tests. G645 per-unit reachability records are the
+per-unit enforcement; this decision does not change their mechanics.
+
+The installed `guide orchestrator-thread` renders the structured registry
+`herdr-standard-layout/v1` for the standard herdr setup:
+
+- exactly one team-named tab;
+- `orchestration` on the left;
+- `implementation` above `review` in the right column; and
+- pane labels `orchestration`, `implementation`, and `review`.
+
+The registry renders the exact creation commands and the measured repair
+shape `herdr pane move --tab --split right|down --target-pane`, followed by
+`herdr pane rename`. Its named `layout-and-labels` check reports visible
+incompleteness, is read-only, never executes herdr, and never hard-blocks
+READY. The operator supplies and verifies explicit ids.
+
+Setup and `guide design-thread` render `dialog-answering/v1` with exactly
+three tiers:
+
+1. a gate over state the provisioner created is answered by the provisioner;
+2. an action already approved by the human in conversation is mechanically
+   answered by design through the session layer only after exact dialog/action
+   match, with the human as decision actor and the conversation approval as
+   recorded grounds; a per-action approval never generalizes to a class; and
+3. an unapproved, unknown-origin, uncertain, or mismatching dialog escalates
+   through design to the human with grounds.
+
+G690 is distinct: its hard risk floor bounds what design may decide alone; it
+does not block execution of a human decision already recorded in conversation.
+The guide remains observation-only and preserves the no-provider and
+no-terminal-mutation boundaries.

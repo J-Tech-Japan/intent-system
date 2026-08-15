@@ -106,6 +106,7 @@ internal static class GuideDesignThreadCommand
                 MergeTransaction = MergeTransaction,
                 ExplicitAcceptanceStillRequired = new[] { "publication", "contract change", "priority change", "release" },
             },
+            DialogAnsweringRule = DialogAnsweringRuleGuidance.Create(),
             ResidualApproval = new DesignThreadResidualApproval
             {
                 PreviewStatus = "preview-through-1.x (G666/G682/G683/G689/G690)",
@@ -199,6 +200,8 @@ internal static class GuideDesignThreadCommand
         writer.WriteLine($"- **watcher boundary:** {result.ResidualApproval.WatcherBoundary}");
         writer.WriteLine($"- **team formula:** {result.ResidualApproval.Formula}");
         writer.WriteLine();
+        writer.WriteLine(DialogAnsweringRuleGuidance.RenderMarkdown());
+        writer.WriteLine();
         writer.WriteLine("## 4. Merge-authority comparison");
         writer.WriteLine($"- {result.MergeAuthority.Rule}");
         foreach (var fact in result.MergeAuthority.Facts) writer.WriteLine($"- compare: {fact}");
@@ -287,6 +290,8 @@ internal sealed record DesignThreadGuideResult
     public required DesignThreadWakeRule WakeRule { get; init; }
     public required DesignThreadProvenance Provenance { get; init; }
     public required DesignThreadApproval Approval { get; init; }
+    [JsonPropertyName("dialog_answering_rule")]
+    public required DialogAnsweringRuleGuide DialogAnsweringRule { get; init; }
     public required DesignThreadResidualApproval ResidualApproval { get; init; }
     public required DesignThreadMergeAuthority MergeAuthority { get; init; }
     public required DesignThreadDelegationVerification DelegationVerification { get; init; }

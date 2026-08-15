@@ -306,12 +306,21 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "guide orchestrator-thread",
+            Role = RoleHostReview,
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "G701/G487/G540 primary orchestrator-thread guide: renders the versioned `herdr-standard-layout/v1` registry (one team tab, orchestration left, implementation above review, labels, exact creation and measured repair commands), the non-blocking `layout-and-labels` setup check, and the `dialog-answering/v1` authority rule. Metadata-free and read-only; never queries or executes herdr.",
+        },
+        new CommandGroupEntry
+        {
             Name = "guide design-thread",
             Role = RoleDesign,
             Classification = ClassificationPrimary,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerChatAgent,
-            Purpose = "G654 preview-through-1.x agent-kind-neutral design-thread operating contract: four outcome wakes, provenance, transaction-scoped approval, merge-authority comparison, three-layer verification, orchestration-owned recovery, supervision-liveness checking, and outcome-shaped reporting."
+            Purpose = "G701/G654 preview-through-1.x agent-kind-neutral design-thread operating contract: four outcome wakes, provenance, transaction-scoped approval, the structured `dialog-answering/v1` three-tier rule, merge-authority comparison, three-layer verification, orchestration-owned recovery, supervision-liveness checking, and outcome-shaped reporting."
         },
         new CommandGroupEntry
         {
