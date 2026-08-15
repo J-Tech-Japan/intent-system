@@ -36,11 +36,11 @@ merge commit です。記載した PR はすべて MERGED で、下記の full m
 - G700 — PR #1514; host-state git write に bounded で observable な `index.lock` retry が入り、merge commit `c2e7d6002a912b2b712a04f0bc4976d6ba76e47b` (main で確認)。
 - G701 — PR #1517; ADR-0006 が guide primacy を normative にし、registry-backed herdr layout と three-tier dialog rule を定義し、merge commit `b95a2d7634cdd72b2ef69fce983062aca6dcbab8` (main で確認)。
 - G702 — PR #1520; npm distribution channel が global install の `intent-cli` と self-install しない npx guidance を提供し、merge commit `1746a6d0c2133f7724c57f7a26caed55c93a3e8f` (main で確認)。
-- G703 — PR #1522; `intent-cli update` が executable path から channel を導出し、per-channel action を適用し、merge commit `abf6dc640eb3131564d146df9783d453d0e5c70a` (main で確認)。
-- G704 — PR #1526; supervise install が setup を validate し、log を明示し、first cycle を prove し、merge commit `2160c1ddef9c2bf0a8268b8ef3258ba4f965f3fd` (main で確認)。
-- G705 — PR #1529; feedback-channel guidance が render-only で GitHub issue を file せず、merge commit `0c49569129635be6a35a07a3e9cfdf3621b44c4c` (main で確認)。
-- G706 — PR #1524; design-thread terminal rule が pane reading を liveness evidence に限定し、fallback observation route を戻し、merge commit `be29c896b01df6a48502748e155e07b076c563c6` (main で確認)。
-- G707 — PR #1531; supervision finding が escalation 前に own cycle 内で corroborate され、merge commit `6163d9b3589d331c6a82bb72923a91a15aef029b` (main で確認)。
+- G703 — PR #1526; `intent-cli update` が executable path から channel を導出し、per-channel action を適用し、merge commit `2160c1ddef9c2bf0a8268b8ef3258ba4f965f3fd` (main で確認)。
+- G704 — PR #1529; supervise install が setup を validate し、log を明示し、first cycle を prove し、merge commit `0c49569129635be6a35a07a3e9cfdf3621b44c4c` (main で確認)。
+- G705 — PR #1531; feedback-channel guidance が render-only で GitHub issue を file せず、merge commit `6163d9b3589d331c6a82bb72923a91a15aef029b` (main で確認)。
+- G706 — PR #1522; design-thread terminal rule が pane reading を liveness evidence に限定し、fallback observation route を戻し、merge commit `abf6dc640eb3131564d146df9783d453d0e5c70a` (main で確認)。
+- G707 — PR #1524; supervision finding が escalation 前に own cycle 内で corroborate され、merge commit `be29c896b01df6a48502748e155e07b076c563c6` (main で確認)。
 - G708 — PR #1533; closeout output が実際に write した内容を報告し、runs gap を明示的に repair 可能にし、merge commit `55d54951b677e8aa6f2d2f0bd49d278ed4e63531` (main で確認)。
 
 ### Full first-parent range accounting
@@ -59,11 +59,11 @@ unit ではありません。それ以外の十四行が G695-G708 の unit で�
 | `c2e7d6002a912b2b712a04f0bc4976d6ba76e47b` | G700、PR #1514 |
 | `b95a2d7634cdd72b2ef69fce983062aca6dcbab8` | G701、PR #1517 |
 | `1746a6d0c2133f7724c57f7a26caed55c93a3e8f` | G702、PR #1520 |
-| `abf6dc640eb3131564d146df9783d453d0e5c70a` | G703、PR #1522 |
-| `2160c1ddef9c2bf0a8268b8ef3258ba4f965f3fd` | G704、PR #1526 |
-| `0c49569129635be6a35a07a3e9cfdf3621b44c4c` | G705、PR #1529 |
-| `be29c896b01df6a48502748e155e07b076c563c6` | G706、PR #1524 |
-| `6163d9b3589d331c6a82bb72923a91a15aef029b` | G707、PR #1531 |
+| `2160c1ddef9c2bf0a8268b8ef3258ba4f965f3fd` | G703、PR #1526 |
+| `0c49569129635be6a35a07a3e9cfdf3621b44c4c` | G704、PR #1529 |
+| `6163d9b3589d331c6a82bb72923a91a15aef029b` | G705、PR #1531 |
+| `abf6dc640eb3131564d146df9783d453d0e5c70a` | G706、PR #1522 |
+| `be29c896b01df6a48502748e155e07b076c563c6` | G707、PR #1524 |
 | `55d54951b677e8aa6f2d2f0bd49d278ed4e63531` | G708、PR #1533 |
 
 ### Origins and minor rationale

@@ -19,11 +19,11 @@ public sealed class ReleaseNotesV0220DocsTests
         ("G700", "#1514", "c2e7d6002a912b2b712a04f0bc4976d6ba76e47b"),
         ("G701", "#1517", "b95a2d7634cdd72b2ef69fce983062aca6dcbab8"),
         ("G702", "#1520", "1746a6d0c2133f7724c57f7a26caed55c93a3e8f"),
-        ("G703", "#1522", "abf6dc640eb3131564d146df9783d453d0e5c70a"),
-        ("G704", "#1526", "2160c1ddef9c2bf0a8268b8ef3258ba4f965f3fd"),
-        ("G705", "#1529", "0c49569129635be6a35a07a3e9cfdf3621b44c4c"),
-        ("G706", "#1524", "be29c896b01df6a48502748e155e07b076c563c6"),
-        ("G707", "#1531", "6163d9b3589d331c6a82bb72923a91a15aef029b"),
+        ("G703", "#1526", "2160c1ddef9c2bf0a8268b8ef3258ba4f965f3fd"),
+        ("G704", "#1529", "0c49569129635be6a35a07a3e9cfdf3621b44c4c"),
+        ("G705", "#1531", "6163d9b3589d331c6a82bb72923a91a15aef029b"),
+        ("G706", "#1522", "abf6dc640eb3131564d146df9783d453d0e5c70a"),
+        ("G707", "#1524", "be29c896b01df6a48502748e155e07b076c563c6"),
         ("G708", "#1533", "55d54951b677e8aa6f2d2f0bd49d278ed4e63531"),
     ];
 
@@ -47,9 +47,7 @@ public sealed class ReleaseNotesV0220DocsTests
         Assert.Equal(14, listed.Length);
         foreach (var unit in Units)
         {
-            Assert.Contains(unit.Pr, notes, StringComparison.Ordinal);
-            Assert.Contains($"merge commit `{unit.Merge}`", notes, StringComparison.Ordinal);
-            Assert.Contains(unit.Merge, notes, StringComparison.Ordinal);
+            AssertUnitCitationAssociations(notes, language, unit);
         }
 
         Assert.Contains("git log --first-parent v0.21.0..origin/main", notes, StringComparison.Ordinal);
@@ -160,6 +158,20 @@ public sealed class ReleaseNotesV0220DocsTests
         Assert.NotEmpty(CountMismatches(wrong, language));
     }
 
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void AssociationGuardRejectsAUnitCitationSwap(string language)
+    {
+        var notes = Read(language);
+        var swapped = SwapUnitCitations(notes, Units[0], Units[1]);
+
+        var failure = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => AssertUnitCitationAssociations(swapped, language, Units[0]));
+
+        Assert.Contains(Units[0].Unit, failure.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void EnglishAndJapaneseNotesHaveTheSameUnitAndMergeInventory()
     {
@@ -168,10 +180,8 @@ public sealed class ReleaseNotesV0220DocsTests
 
         foreach (var unit in Units)
         {
-            Assert.Contains($"{unit.Unit} —", english, StringComparison.Ordinal);
-            Assert.Contains($"{unit.Unit} —", japanese, StringComparison.Ordinal);
-            Assert.Contains(unit.Merge, english, StringComparison.Ordinal);
-            Assert.Contains(unit.Merge, japanese, StringComparison.Ordinal);
+            AssertUnitCitationAssociations(english, "en", unit);
+            AssertUnitCitationAssociations(japanese, "ja", unit);
         }
     }
 
@@ -196,6 +206,44 @@ public sealed class ReleaseNotesV0220DocsTests
         Assert.Contains("guide orchestrator-thread", section, StringComparison.Ordinal);
         Assert.Contains("ReleaseNotesV0220DocsTests", section, StringComparison.Ordinal);
         Assert.DoesNotContain("v0.21.1", section, StringComparison.Ordinal);
+    }
+
+    private static void AssertUnitCitationAssociations(
+        string notes,
+        string language,
+        params (string Unit, string Pr, string Merge)[] units)
+    {
+        foreach (var unit in units)
+        {
+            var bullet = Regex.Match(notes, $@"(?m)^- {Regex.Escape(unit.Unit)} —[^\r\n]*$");
+            Assert.True(bullet.Success, $"{language} notes are missing the bullet for {unit.Unit}.");
+            Assert.Contains($"PR {unit.Pr};", bullet.Value, StringComparison.Ordinal);
+            Assert.Contains($"merge commit `{unit.Merge}`", bullet.Value, StringComparison.Ordinal);
+
+            var table = Regex.Match(notes, $@"(?m)^\| `{Regex.Escape(unit.Merge)}` \| [^\r\n]*$");
+            Assert.True(table.Success, $"{language} notes are missing the accounting row for {unit.Unit}.");
+            Assert.Contains(unit.Unit, table.Value, StringComparison.Ordinal);
+            Assert.Contains(unit.Pr, table.Value, StringComparison.Ordinal);
+        }
+    }
+
+    private static string SwapUnitCitations(
+        string notes,
+        (string Unit, string Pr, string Merge) first,
+        (string Unit, string Pr, string Merge) second)
+    {
+        var lines = notes.Split('\n').ToArray();
+        for (var index = 0; index < lines.Length; index++)
+        {
+            if (lines[index].StartsWith($"- {first.Unit} —", StringComparison.Ordinal))
+            {
+                lines[index] = lines[index]
+                    .Replace($"PR {first.Pr}", $"PR {second.Pr}", StringComparison.Ordinal)
+                    .Replace($"merge commit `{first.Merge}`", $"merge commit `{second.Merge}`", StringComparison.Ordinal);
+            }
+        }
+
+        return string.Join('\n', lines);
     }
 
     private static IReadOnlyList<string> CountMismatches(string notes, string language)

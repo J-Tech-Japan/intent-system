@@ -35,11 +35,11 @@ merge commit below resolves on `main`.
 - G700 — PR #1514; host-state git writes get bounded, observable `index.lock` retry, with merge commit `c2e7d6002a912b2b712a04f0bc4976d6ba76e47b` (verified on `main`).
 - G701 — PR #1517; ADR-0006 makes guide primacy normative, adds the registry-backed herdr layout, and defines the three-tier dialog rule, with merge commit `b95a2d7634cdd72b2ef69fce983062aca6dcbab8` (verified on `main`).
 - G702 — PR #1520; the npm distribution channel provides `intent-cli` for global installs and npx guidance without self-installing, with merge commit `1746a6d0c2133f7724c57f7a26caed55c93a3e8f` (verified on `main`).
-- G703 — PR #1522; `intent-cli update` derives its channel from the executable path and applies a per-channel action, with merge commit `abf6dc640eb3131564d146df9783d453d0e5c70a` (verified on `main`).
-- G704 — PR #1526; supervise install validates its setup, names logs, and proves the first cycle, with merge commit `2160c1ddef9c2bf0a8268b8ef3258ba4f965f3fd` (verified on `main`).
-- G705 — PR #1529; feedback-channel guidance is render-only and never files a GitHub issue, with merge commit `0c49569129635be6a35a07a3e9cfdf3621b44c4c` (verified on `main`).
-- G706 — PR #1524; the design-thread terminal rule scopes pane reading to liveness evidence and restores its fallback observation route, with merge commit `be29c896b01df6a48502748e155e07b076c563c6` (verified on `main`).
-- G707 — PR #1531; supervision findings are corroborated within their own cycle before escalation, with merge commit `6163d9b3589d331c6a82bb72923a91a15aef029b` (verified on `main`).
+- G703 — PR #1526; `intent-cli update` derives its channel from the executable path and applies a per-channel action, with merge commit `2160c1ddef9c2bf0a8268b8ef3258ba4f965f3fd` (verified on `main`).
+- G704 — PR #1529; supervise install validates its setup, names logs, and proves the first cycle, with merge commit `0c49569129635be6a35a07a3e9cfdf3621b44c4c` (verified on `main`).
+- G705 — PR #1531; feedback-channel guidance is render-only and never files a GitHub issue, with merge commit `6163d9b3589d331c6a82bb72923a91a15aef029b` (verified on `main`).
+- G706 — PR #1522; the design-thread terminal rule scopes pane reading to liveness evidence and restores its fallback observation route, with merge commit `abf6dc640eb3131564d146df9783d453d0e5c70a` (verified on `main`).
+- G707 — PR #1524; supervision findings are corroborated within their own cycle before escalation, with merge commit `be29c896b01df6a48502748e155e07b076c563c6` (verified on `main`).
 - G708 — PR #1533; closeout output reports what it wrote and makes runs gaps explicitly repairable, with merge commit `55d54951b677e8aa6f2d2f0bd49d278ed4e63531` (verified on `main`).
 
 ### Full first-parent range accounting
@@ -58,11 +58,11 @@ not a release execution unit; the other fourteen rows are the G695-G708 units.
 | `c2e7d6002a912b2b712a04f0bc4976d6ba76e47b` | G700, PR #1514 |
 | `b95a2d7634cdd72b2ef69fce983062aca6dcbab8` | G701, PR #1517 |
 | `1746a6d0c2133f7724c57f7a26caed55c93a3e8f` | G702, PR #1520 |
-| `abf6dc640eb3131564d146df9783d453d0e5c70a` | G703, PR #1522 |
-| `2160c1ddef9c2bf0a8268b8ef3258ba4f965f3fd` | G704, PR #1526 |
-| `0c49569129635be6a35a07a3e9cfdf3621b44c4c` | G705, PR #1529 |
-| `be29c896b01df6a48502748e155e07b076c563c6` | G706, PR #1524 |
-| `6163d9b3589d331c6a82bb72923a91a15aef029b` | G707, PR #1531 |
+| `2160c1ddef9c2bf0a8268b8ef3258ba4f965f3fd` | G703, PR #1526 |
+| `0c49569129635be6a35a07a3e9cfdf3621b44c4c` | G704, PR #1529 |
+| `6163d9b3589d331c6a82bb72923a91a15aef029b` | G705, PR #1531 |
+| `abf6dc640eb3131564d146df9783d453d0e5c70a` | G706, PR #1522 |
+| `be29c896b01df6a48502748e155e07b076c563c6` | G707, PR #1524 |
 | `55d54951b677e8aa6f2d2f0bd49d278ed4e63531` | G708, PR #1533 |
 
 ### Origins and minor rationale
