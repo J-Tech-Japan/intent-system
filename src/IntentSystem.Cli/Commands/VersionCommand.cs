@@ -111,6 +111,30 @@ internal static class VersionCommand
     }
 
     /// <summary>
+    /// G703: returns the package-version portion of the running CLI identity
+    /// without consulting host state. The update command uses this as its
+    /// current-version field and tests can override the existing version seam.
+    /// </summary>
+    internal static string GetCurrentPackageVersion()
+    {
+        var version = OverrideVersionString
+            ?? BuildVersionString(typeof(VersionCommand).Assembly);
+        var firstLine = version
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault()
+            ?.Trim();
+        if (string.IsNullOrWhiteSpace(firstLine))
+        {
+            return "unknown";
+        }
+
+        const string prefix = "intent-cli ";
+        return firstLine.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? firstLine[prefix.Length..].Trim().Split(['+', '-'], 2, StringSplitOptions.None)[0]
+            : firstLine;
+    }
+
+    /// <summary>
     /// Test seam exposing the pure builder so tests can verify the
     /// shape independently of the executing assembly's actual
     /// InformationalVersion.

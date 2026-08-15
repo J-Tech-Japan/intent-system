@@ -23,6 +23,15 @@ internal static class Program
                 return VersionCommand.Execute(Console.Out);
             }
 
+            // G703: channel detection and self-update are installation-local
+            // operations. They must run before the host-state bootstrap gate
+            // (and before preview expiry) so `intent-cli update` works from a
+            // bare metadata-free directory and can repair an old install.
+            if (UpdateCommand.IsUpdateRequest(args))
+            {
+                return UpdateCommand.Execute(args[1..], Console.Out);
+            }
+
             // G368: CI-packed private-preview artifacts expire 14 days
             // after their build timestamp (G367 metadata). Once the
             // expiry passes, fail closed BEFORE any workflow command or

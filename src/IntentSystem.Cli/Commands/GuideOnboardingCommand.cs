@@ -145,6 +145,13 @@ internal static class GuideOnboardingCommand
                     NoMutation = "Pure read; the operator owns the runtime contract that this command surfaces."
                 }
             },
+            UpdateChannelGuidance = new GuideOnboardingUpdateChannelGuidance
+            {
+                JsonCommand = "intent-cli update --check --format json",
+                MarkdownCommand = "intent-cli update --check --format markdown",
+                Contract = "The channel is re-derived from the fully resolved executable real path on every run; no channel marker is persisted. Unknown or ambiguous paths fail closed with manual guidance for dotnet tool, npm global, npx, and standalone binary updates.",
+                CheckSafety = "--check reports current_version, latest_version, and would_be_action with process_spawned=false and writes_performed=false."
+            },
             HostDataBoundary = new GuideOnboardingHostDataBoundary
             {
                 CanonicalRoots = new[]
@@ -206,6 +213,14 @@ internal static class GuideOnboardingCommand
             writer.WriteLine($"- no-mutation: {step.NoMutation}");
             writer.WriteLine();
         }
+
+        writer.WriteLine("## Channel-aware update route (G703)");
+        writer.WriteLine();
+        writer.WriteLine($"- JSON: `{result.UpdateChannelGuidance.JsonCommand}`");
+        writer.WriteLine($"- Markdown: `{result.UpdateChannelGuidance.MarkdownCommand}`");
+        writer.WriteLine($"- contract: {result.UpdateChannelGuidance.Contract}");
+        writer.WriteLine($"- check safety: {result.UpdateChannelGuidance.CheckSafety}");
+        writer.WriteLine();
 
         writer.WriteLine("## Host git repository data boundary");
         writer.WriteLine();
@@ -311,11 +326,29 @@ internal sealed record GuideOnboardingResult
     [JsonPropertyName("first_call_sequence")]
     public required IReadOnlyList<GuideOnboardingStep> FirstCallSequence { get; init; }
 
+    [JsonPropertyName("update_channel_guidance")]
+    public required GuideOnboardingUpdateChannelGuidance UpdateChannelGuidance { get; init; }
+
     [JsonPropertyName("host_data_boundary")]
     public required GuideOnboardingHostDataBoundary HostDataBoundary { get; init; }
 
     [JsonPropertyName("hard_rules")]
     public required IReadOnlyList<string> HardRules { get; init; }
+}
+
+internal sealed record GuideOnboardingUpdateChannelGuidance
+{
+    [JsonPropertyName("json_command")]
+    public required string JsonCommand { get; init; }
+
+    [JsonPropertyName("markdown_command")]
+    public required string MarkdownCommand { get; init; }
+
+    [JsonPropertyName("contract")]
+    public required string Contract { get; init; }
+
+    [JsonPropertyName("check_safety")]
+    public required string CheckSafety { get; init; }
 }
 
 internal sealed record GuideOnboardingStep
