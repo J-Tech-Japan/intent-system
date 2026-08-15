@@ -4,8 +4,8 @@ using IntentSystem.Cli.Infrastructure;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G694 keeps the published v0.21.0 notes bilingual and frozen while the
-/// post-release readiness points at the v0.21.1 DRAFT stubs.
+/// G694 keeps the published v0.21.0 notes bilingual and frozen while G709
+/// points the post-release readiness at substantive v0.22.0 preparation notes.
 /// </summary>
 public sealed class ReleaseNotesV0210DocsTests
 {
@@ -134,7 +134,7 @@ public sealed class ReleaseNotesV0210DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void CurrentPolicyAndReadinessFollowVersionPolicyAndNextStubsAreDraft(string language)
+    public void CurrentPolicyAndReadinessFollowVersionPolicyAndNextNotesAreReal(string language)
     {
         var root = RepoVersionPolicySource.RepoRoot();
         var policy = RepoVersionPolicySource.Read();
@@ -156,14 +156,15 @@ public sealed class ReleaseNotesV0210DocsTests
             StringComparison.Ordinal);
         Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.StableVersion}", notes, StringComparison.Ordinal);
         Assert.Contains($"releases/tag/v{policy.StableVersion}", notes, StringComparison.Ordinal);
-        var currentStub = File.ReadAllText(Path.Combine(root, "docs", language, currentNotes));
-        Assert.Contains("DRAFT /", currentStub, StringComparison.Ordinal);
+        var currentNotesText = File.ReadAllText(Path.Combine(root, "docs", language, currentNotes));
+        Assert.Contains("prepare-only", currentNotesText, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
-            language == "en" ? "UNRELEASED" : "未リリース",
-            currentStub,
+            language == "en" ? "exactly fourteen merged feature units" : "正確に十四件の merged feature unit",
+            currentNotesText,
             StringComparison.OrdinalIgnoreCase);
-        Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.NextVersion}", currentStub, StringComparison.Ordinal);
-        Assert.Contains($"releases/tag/v{policy.NextVersion}", currentStub, StringComparison.Ordinal);
+        Assert.DoesNotContain("DRAFT /", currentNotesText, StringComparison.Ordinal);
+        Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.NextVersion}", currentNotesText, StringComparison.Ordinal);
+        Assert.Contains($"releases/tag/v{policy.NextVersion}", currentNotesText, StringComparison.Ordinal);
         Assert.DoesNotContain("DRAFT /", notes, StringComparison.Ordinal);
         Assert.DoesNotContain("UNRELEASED", notes, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("未リリース", notes, StringComparison.OrdinalIgnoreCase);

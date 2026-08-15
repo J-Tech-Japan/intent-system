@@ -2673,7 +2673,7 @@ literal:
 ```
 
 The shape is written with placeholders on purpose: **read the actual values from
-`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0211)
+`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0220)
 for the line currently being cut. A worked example here would be a second copy
 of the version pair that goes stale on the next roll — the defect G557/G560
 exist to remove.
@@ -2766,58 +2766,75 @@ For the same reason the version-flow example above uses placeholders rather than
 a worked version pair: a second copy of the current versions is a second thing
 to keep in sync, and it goes stale on exactly the roll nobody is watching.
 
-### Next release readiness (v0.21.1)
+### Next release readiness (v0.22.0)
 
 **`v0.21.0` shipped** (GitHub Release + NuGet), and the next prepared line is
-`0.21.1`. [The v0.21.1 notes stub](release-notes-v0.21.1.md) is the required
-prepare-only placeholder. See [release-notes-v0.21.0.md](release-notes-v0.21.0.md)
+`0.22.0`. [The v0.22.0 notes](release-notes-v0.22.0.md) are substantive
+prepare-only notes. See [release-notes-v0.21.0.md](release-notes-v0.21.0.md)
 for the preceding shipped scope; it is linked, not restated.
 
-**Release-readiness verification (run before merging the `v0.21.1`
+**Release-readiness verification (run before merging the `v0.22.0`
 release-preparation PR):**
 
 On a claims-enabled host, acquire and verify the release scope before editing
 release artifacts. The same shared verification gates all G680 start surfaces;
-no claims store preserves legacy single-team behavior.
+no claims store preserves legacy single-team behavior. This is a preparation
+record: it creates no tag or Release, publishes no package, and handles no
+credentials.
 
 ```bash
 # 0. Acquire and verify release-prep ownership (preview-through-1.x).
-intent-cli claim acquire --scope release-prep:<owner/repo>:0.21.1 --actor <actor> --team <team> --write --format json
-intent-cli claim verify --scope release-prep:<owner/repo>:0.21.1 --team <team> --format json
+intent-cli claim acquire --scope release-prep:<owner/repo>:0.22.0 --actor <actor> --team <team> --write --format json
+intent-cli claim verify --scope release-prep:<owner/repo>:0.22.0 --team <team> --format json
 
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.21.0 (published), nextVersion 0.21.1 (to release)
+cat eng/version.json   # stableVersion 0.21.0 (published), nextVersion 0.22.0 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
-dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.21.1-<sha>-G<unit>   (NOT a stale literal)
+dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
+#   expected shape: intent-cli 0.22.0-<sha>-G<unit>   (NOT a stale literal)
 
-# 3. Pack and confirm the NuGet package version matches the policy.
-dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.21.1.nupkg
+# 3. Package publication is intentionally not run in this preparation PR.
+# Package publication is intentionally skipped for v0.22.0.
+# If a separately approved operator run performs packing later, the expected
+# identity is JTechJapan.IntentSystem.Cli.0.22.0.nupkg; this PR does not create it.
 
-# 4. Confirm G475, the shipped release-note checks, and the release/version guards.
+# 4. From a metadata-free directory, execute the installed guide entry point.
+intent-cli guide orchestrator-thread --domain intent-cli --target-repo J-Tech-Japan/intent-system --agent <agent> --format json
+intent-cli guide orchestrator-thread --domain intent-cli --target-repo J-Tech-Japan/intent-system --agent <agent> --format markdown
+#   follow the route to this v0.22.0 readiness section; do not read host metadata.
+
+# 5. Confirm the G709 notes/count guards and release/version guards.
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
-  "FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+  "FullyQualifiedName~ReleaseNotesV0220DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 
-# 5. Run the complete Release suite.
+# 6. Confirm formatting and run the complete Release suite.
+git diff --check
 dotnet test IntentSystem.sln -c Release
 ```
+
+The npm publication step is intentionally skipped for v0.22.0: npm
+organisation (organization) access and package-name reservation are incomplete operator
+account actions. The G702 npm publish step does not run in this preparation
+cycle; this is a distribution gap, not a defect. No npm credentials are
+requested or handled. The existing npm entry-point guidance remains available
+for the later operator action.
 
 After the preparation merge lands on `main` and the readiness evidence holds,
 the operator must explicitly approve Release creation. Only then may a
 maintainer/operator (or authorized external release automation) create and
-publish the GitHub Release for `v0.21.1`; publishing it triggers `release.yml`
+publish the GitHub Release for `v0.22.0`; publishing it triggers `release.yml`
 (`on: release: published`) to build and publish the NuGet package and the
 per-platform binary artifacts. **Then roll `eng/version.json` immediately** —
-`stableVersion → 0.21.1`, `nextVersion → 0.21.2` — carrying, per **steps 4–6** of the
+`stableVersion → 0.22.0`, `nextVersion → 0.22.1` — carrying, per **steps 4–6** of the
 [post-release version roll](#post-release-version-roll-g554--required-immediate):
 the **DRAFT note stubs in the same commit** (step 4), the **"Next release
 readiness" section refreshed to the new line in both language mirrors** (step
 5), and a **post-roll green child-main CI check** before the roll counts as
-complete (step 6).
+complete (step 6). The v0.22.0 npm publication remains a separate operator
+account/reservation action rather than a defect in this release.
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 
