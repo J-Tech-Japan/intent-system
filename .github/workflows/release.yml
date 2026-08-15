@@ -15,8 +15,12 @@
 #      osx-arm64, win-x64, and linux-x64 on matching runners, smoke-tests
 #      `intent-cli --version`, and archives each with a SHA-256 sidecar.
 #
-#   3. Attaches the .nupkg and the per-platform binary archives (plus
-#      checksums) to the triggering GitHub Release.
+#   3. Prepares the npm entry package plus its per-platform optional packages,
+#      verifies checksums/version identity, and publishes them only on the same
+#      real-release event and guarded secret path as NuGet.
+#
+#   4. Attaches the .nupkg, npm packages, and per-platform binary archives
+#      (plus checksums) to the triggering GitHub Release.
 #
 # Non-SDK users install by downloading a release binary; SDK users run
 # `dotnet tool install -g JTechJapan.IntentSystem.Cli`. See README.md "Install".
@@ -225,7 +229,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "${{ steps.stage.outputs.bin }}" --version
+          VERSION="${{ steps.ver.outputs.version }}"
+          OUTPUT="$("${{ steps.stage.outputs.bin }}" --version)"
+          printf '%s\n' "${OUTPUT}"
+          FIRST_LINE="$(printf '%s\n' "${OUTPUT}" | sed -n '1p')"
+          case "${FIRST_LINE}" in
+            "intent-cli ${VERSION}"|"intent-cli ${VERSION}-"*|"intent-cli ${VERSION}+"*) ;;
+            *) echo "binary version '${FIRST_LINE}' does not match release version '${VERSION}'" >&2; exit 1 ;;
+          esac
 
       - name: Archive + checksum
         id: pack
@@ -272,3 +283,123 @@ jobs:
             "${{ steps.pack.outputs.asset }}" \
             "${{ steps.pack.outputs.asset }}.sha256" \
             --repo "${{ github.repository }}" --clobber
+
+  npm:
+    name: npm packages
+    needs: [nupkg, binaries]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js for release packaging
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Resolve the same tag-derived release version as NuGet and binaries
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "release" ]; then
+            RAW="${{ github.event.release.tag_name }}"
+          else
+            RAW="${{ github.event.inputs.version }}"
+          fi
+          VERSION="${RAW#v}"
+          if [ -z "${VERSION}" ]; then
+            NEXT_VERSION="$(python3 -c "import json; data=json.load(open('eng/version.json')); print(data['nextVersion'])" 2>/dev/null || echo "0.3.0")"
+            VERSION="${NEXT_VERSION}-dryrun.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          fi
+          echo "version=${VERSION}" | tee -a "${GITHUB_OUTPUT}"
+
+      - name: Download the exact binary artifacts produced by the release matrix
+        uses: actions/download-artifact@v4
+        with:
+          pattern: intent-cli-*
+          path: .artifacts/release-assets
+          merge-multiple: true
+
+      - name: Rebuild npm platform packages from release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          for RID in osx-arm64 linux-x64 win-x64; do
+            case "${RID}" in
+              osx-arm64) ARCHIVE="intent-cli-${VERSION}-osx-arm64.*"; BINARY="intent-cli" ;;
+              linux-x64) ARCHIVE="intent-cli-${VERSION}-linux-x64.*"; BINARY="intent-cli" ;;
+              win-x64) ARCHIVE="intent-cli-${VERSION}-win-x64.*"; BINARY="intent-cli.exe" ;;
+            esac
+            ASSET="$(find .artifacts/release-assets -type f -name "${ARCHIVE}" ! -name '*.sha256' -print -quit)"
+            test -n "${ASSET}"
+            EXTRACT=".artifacts/extract/${RID}"
+            mkdir -p "${EXTRACT}"
+            case "${ASSET}" in
+              *.tar.gz) tar -xzf "${ASSET}" -C "${EXTRACT}" ;;
+              *.zip) unzip -q "${ASSET}" -d "${EXTRACT}" ;;
+              *) echo "unsupported binary asset: ${ASSET}" >&2; exit 1 ;;
+            esac
+            mkdir -p ".artifacts/npm-binaries/${RID}"
+            cp "$(find "${EXTRACT}" -type f -name "${BINARY}" -print -quit)" ".artifacts/npm-binaries/${RID}/${BINARY}"
+            if [ "${BINARY}" != "intent-cli.exe" ]; then chmod +x ".artifacts/npm-binaries/${RID}/${BINARY}"; fi
+          done
+          .artifacts/npm-binaries/linux-x64/intent-cli --version > .artifacts/npm-version.txt
+          node packaging/npm/scripts/prepare-packages.js \
+            --version "${VERSION}" --binary-root .artifacts/npm-binaries --output .artifacts/npm-packages
+
+      - name: Pack and verify npm packages without publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          mkdir -p .artifacts/npm-tarballs
+          for package in .artifacts/npm-packages/*; do
+            npm pack "${package}" --ignore-scripts --pack-destination .artifacts/npm-tarballs
+          done
+          node packaging/npm/scripts/verify-packages.js \
+            --packages-dir .artifacts/npm-packages --expected-version "${VERSION}" \
+            --version-output .artifacts/npm-version.txt --require-real-binaries
+          for file in .artifacts/npm-tarballs/*.tgz; do
+            sha256sum "${file}" > "${file}.sha256"
+          done
+
+      - name: Upload npm workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: intent-cli-npm-${{ steps.ver.outputs.version }}
+          path: .artifacts/npm-tarballs/*
+
+      - name: Attach npm packages to GitHub Release
+        if: ${{ github.event_name == 'release' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            .artifacts/npm-tarballs/* \
+            --repo "${{ github.repository }}" --clobber
+
+      - name: Publish npm packages (guarded; same release gate as NuGet)
+        if: ${{ github.event_name == 'release' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN is not set (fork or missing secret); skipping npm publish."
+            echo "Packages were still packed, checksum-verified, and attached to the release."
+            exit 0
+          fi
+          for package in \
+            .artifacts/npm-tarballs/j-tech-japan-intent-cli-darwin-arm64-*.tgz \
+            .artifacts/npm-tarballs/j-tech-japan-intent-cli-linux-x64-*.tgz \
+            .artifacts/npm-tarballs/j-tech-japan-intent-cli-win32-x64-*.tgz \
+            .artifacts/npm-tarballs/intent-system-*.tgz; do
+            npm publish "${package}" --access public
+          done

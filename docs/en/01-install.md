@@ -38,6 +38,20 @@ intent-cli --version
 If `~/.dotnet/tools` (macOS/Linux) or `%USERPROFILE%\.dotnet\tools` (Windows) is
 not on your `PATH`, the install output prints the line to add.
 
+**npm entry point (no .NET SDK required):** install the self-contained
+platform package through npm, or run one command with npx:
+
+```bash
+npm install -g intent-system
+intent-cli --version
+npx intent-system guide onboarding
+```
+
+The npm shim never installs globally on your behalf. See the
+[npm distribution guide](13-npm-distribution.md) for the one-line npx guidance,
+checksums, release gating, and coexistence rules when the .NET tool is also on
+`PATH`.
+
 **No .NET SDK?** Download the self-contained binary for your platform from the
 [latest GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/latest);
 the runtime is bundled. Verify the `.sha256` sidecar before use. See the

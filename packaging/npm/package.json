@@ -1,0 +1,29 @@
+{
+  "name": "intent-system",
+  "version": "0.0.0-dev",
+  "description": "The intent-cli command, distributed with self-contained platform binaries.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/J-Tech-Japan/intent-system.git"
+  },
+  "homepage": "https://github.com/J-Tech-Japan/intent-system",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "intent-cli": "bin/intent-cli.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "optionalDependencies": {
+    "@j-tech-japan/intent-cli-darwin-arm64": "0.0.0-dev",
+    "@j-tech-japan/intent-cli-linux-x64": "0.0.0-dev",
+    "@j-tech-japan/intent-cli-win32-x64": "0.0.0-dev"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

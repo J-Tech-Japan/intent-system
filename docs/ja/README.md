@@ -39,6 +39,7 @@ agmsg 投資があるチームには、サポート対象で廃止されない `
 9. [開発者リファレンス](09-developer-reference.md) — パッケージ化された実行、preview チャンネル、バージョンフロー
 10. [1.0 互換性の約束](1.0-compatibility-promise.md) — 対象となる機械向けサーフェス、廃止規則、ledger
 11. [日本語ドキュメントの用語ポリシー](00-terminology-policy.md)
+13. [npm 配布](13-npm-distribution.md) — global/npx エントリーポイント、リリース整合性、.NET tool との共存
 
 ## Intent Storming とは
 

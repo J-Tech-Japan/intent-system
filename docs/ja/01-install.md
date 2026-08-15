@@ -37,6 +37,19 @@ intent-cli --version
 `~/.dotnet/tools`（macOS/Linux）または `%USERPROFILE%\.dotnet\tools`（Windows）が
 `PATH` に無い場合、インストール出力に追加すべき行が表示されます。
 
+**npm エントリーポイント（.NET SDK 不要）:** npm からランタイム同梱のプラットフォーム
+パッケージをインストールするか、npx で一回だけ実行できます。
+
+```bash
+npm install -g intent-system
+intent-cli --version
+npx intent-system guide onboarding
+```
+
+npm shim が代わりにグローバルインストールを実行することはありません。npx の 1 行 guidance、
+checksum、release gate、.NET tool と同じ `PATH` で共存するルールは
+[npm 配布ガイド](13-npm-distribution.md)を参照してください。
+
 **.NET SDK が無い場合**は、各プラットフォーム向けの `self-contained`（ランタイム同梱）バイナリを
 [最新 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/latest)
 から取得（ランタイム同梱）。使用前に `.sha256` を検証する。手順は
