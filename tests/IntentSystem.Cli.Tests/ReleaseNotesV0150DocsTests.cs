@@ -17,8 +17,6 @@ public sealed class ReleaseNotesV0150DocsTests
         var path = Path.Combine(RepoVersionPolicySource.RepoRoot(), "docs", language, "09-developer-reference.md");
         var reference = File.ReadAllText(path);
         var policy = RepoVersionPolicySource.Read();
-        var nextPatch = NextPatch(policy.NextVersion);
-        var nextMinor = NextMinor(policy.NextVersion);
 
         Assert.Contains(
             language == "en"
@@ -26,9 +24,10 @@ public sealed class ReleaseNotesV0150DocsTests
                 : $"### 次リリース準備(v{policy.NextVersion})",
             reference,
             StringComparison.Ordinal);
-        Assert.Contains($"stableVersion → {policy.NextVersion}", reference, StringComparison.Ordinal);
-        Assert.Contains($"nextVersion → {nextPatch}", reference, StringComparison.Ordinal);
-        Assert.DoesNotContain($"nextVersion → {nextMinor}", reference, StringComparison.Ordinal);
+        Assert.Contains($"stableVersion → {policy.StableVersion}", reference, StringComparison.Ordinal);
+        Assert.Contains($"nextVersion → {policy.NextVersion}", reference, StringComparison.Ordinal);
+        Assert.DoesNotContain($"nextVersion → {NextPatch(policy.NextVersion)}", reference, StringComparison.Ordinal);
+        Assert.DoesNotContain($"nextVersion → {NextMinor(policy.NextVersion)}", reference, StringComparison.Ordinal);
     }
 
     private static string NextPatch(string version)

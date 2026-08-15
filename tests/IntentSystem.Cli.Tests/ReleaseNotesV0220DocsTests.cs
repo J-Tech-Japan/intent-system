@@ -4,8 +4,8 @@ using IntentSystem.Cli.Infrastructure;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G709: the v0.22.0 preparation notes are a checkable, bilingual inventory
-/// of the exact first-parent range, not a second copy of an unverified changelog.
+/// G710: the v0.22.0 released notes are a checkable, bilingual inventory of the
+/// exact first-parent range and published distribution evidence.
 /// </summary>
 public sealed class ReleaseNotesV0220DocsTests
 {
@@ -31,6 +31,38 @@ public sealed class ReleaseNotesV0220DocsTests
     [
         "8ee71bc81697b91b9e155a52a25b64225ecc7427",
         .. Units.Select(unit => unit.Merge),
+    ];
+
+    private static readonly string[] ReleaseAssets =
+    [
+        "intent-cli-0.22.0-linux-x64.tar.gz",
+        "intent-cli-0.22.0-linux-x64.tar.gz.sha256",
+        "intent-cli-0.22.0-osx-arm64.tar.gz",
+        "intent-cli-0.22.0-osx-arm64.tar.gz.sha256",
+        "intent-cli-0.22.0-win-x64.zip",
+        "intent-cli-0.22.0-win-x64.zip.sha256",
+        "intent-system-0.22.0.tgz",
+        "intent-system-0.22.0.tgz.sha256",
+        "j-tech-japan-intent-cli-darwin-arm64-0.22.0.tgz",
+        "j-tech-japan-intent-cli-darwin-arm64-0.22.0.tgz.sha256",
+        "j-tech-japan-intent-cli-linux-x64-0.22.0.tgz",
+        "j-tech-japan-intent-cli-linux-x64-0.22.0.tgz.sha256",
+        "j-tech-japan-intent-cli-win32-x64-0.22.0.tgz",
+        "j-tech-japan-intent-cli-win32-x64-0.22.0.tgz.sha256",
+        "JTechJapan.IntentSystem.Cli.0.22.0.nupkg",
+        "JTechJapan.IntentSystem.Cli.0.22.0.nupkg.sha256",
+    ];
+
+    private static readonly string[] NpmAssets =
+    [
+        "intent-system-0.22.0.tgz",
+        "intent-system-0.22.0.tgz.sha256",
+        "j-tech-japan-intent-cli-darwin-arm64-0.22.0.tgz",
+        "j-tech-japan-intent-cli-darwin-arm64-0.22.0.tgz.sha256",
+        "j-tech-japan-intent-cli-linux-x64-0.22.0.tgz",
+        "j-tech-japan-intent-cli-linux-x64-0.22.0.tgz.sha256",
+        "j-tech-japan-intent-cli-win32-x64-0.22.0.tgz",
+        "j-tech-japan-intent-cli-win32-x64-0.22.0.tgz.sha256",
     ];
 
     [Theory]
@@ -99,32 +131,58 @@ public sealed class ReleaseNotesV0220DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void NotesMakePrepareOnlyAndNpmDistributionGapCheckable(string language)
+    public void NotesMakeReleasedEvidenceAndNpmDistributionGapCheckable(string language)
     {
         var notes = Read(language);
         var compact = Regex.Replace(notes, @"\s+", " ");
 
-        Assert.Contains("prepare-only", notes, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(language == "en" ? "UNRELEASED" : "未リリース", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(language == "en" ? "RELEASED" : "公開済み", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("prepare-only", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("UNRELEASED", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("未リリース", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("v0.22.0 is not released", compact, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("v0.22.0 は未リリース", compact, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.22.0", notes, StringComparison.Ordinal);
+        Assert.Contains("c06dc49e89446bf3b723612dd72004d628914734", notes, StringComparison.Ordinal);
+        Assert.Contains("31903789754", notes, StringComparison.Ordinal);
+        Assert.Contains(language == "en" ? "five jobs" : "五つの job", compact, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("intent-cli 0.22.0-c06dc49-G708", notes, StringComparison.Ordinal);
+        Assert.Contains("https://www.nuget.org/packages/JTechJapan.IntentSystem.Cli/0.22.0", notes, StringComparison.Ordinal);
+        Assert.Contains("https://api.nuget.org/v3/registration5-gz-semver2/jtechjapan.intentsystem.cli/index.json", notes, StringComparison.Ordinal);
+        Assert.Contains(language == "en" ? "all sixteen attached assets" : "十六個の asset", compact, StringComparison.OrdinalIgnoreCase);
+        foreach (var asset in ReleaseAssets)
+        {
+            Assert.Contains(asset, notes, StringComparison.Ordinal);
+        }
+
         Assert.Contains("G702 npm publish step", compact, StringComparison.Ordinal);
         Assert.Contains("v0.22.0", compact, StringComparison.Ordinal);
+        Assert.Contains("npm organisation", compact, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("package-name reservation", compact, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("NPM_TOKEN", compact, StringComparison.Ordinal);
         Assert.Contains(
-            language == "en" ? "npm organisation" : "npm organisation",
+            language == "en" ? "No npm package was published to a registry" : "registry に npm package は publish しておらず",
             compact,
             StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("package-name reservation", compact, StringComparison.OrdinalIgnoreCase);
+        foreach (var asset in NpmAssets)
+        {
+            Assert.Contains(asset, notes, StringComparison.Ordinal);
+        }
+
         Assert.Contains(
             language == "en" ? "distribution gap, not a defect" : "defect ではなく distribution gap",
             compact,
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
-            language == "en" ? "creates no GitHub Release or tag" : "GitHub Release または tag を作成せず",
+            language == "en" ? "does not execute that command and does not mutate GitHub Release state" : "command を実行せず、GitHub Release state を変更しません",
             compact,
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
-            language == "en" ? "Release-readiness gate" : "リリース準備ゲート",
+            language == "en"
+                ? "gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/en/release-notes-v0.22.0.md"
+                : "gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/ja/release-notes-v0.22.0.md",
             notes,
-            StringComparison.OrdinalIgnoreCase);
+            StringComparison.Ordinal);
     }
 
     [Theory]
@@ -188,24 +246,31 @@ public sealed class ReleaseNotesV0220DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void DeveloperReadinessMirrorsThePrepareOnlyContract(string language)
+    public void DeveloperReadinessMirrorsTheReleasedRollContract(string language)
     {
         var root = RepoVersionPolicySource.RepoRoot();
         var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
         var heading = language == "en"
-            ? "### Next release readiness (v0.22.0)"
-            : "### 次リリース準備(v0.22.0)";
+            ? "### Next release readiness (v0.22.1)"
+            : "### 次リリース準備(v0.22.1)";
         var start = reference.IndexOf(heading, StringComparison.Ordinal);
         Assert.True(start >= 0);
         var nextHeading = reference.IndexOf("\n### ", start + heading.Length, StringComparison.Ordinal);
         var section = reference[start..(nextHeading < 0 ? reference.Length : nextHeading)];
+        var compact = Regex.Replace(section, @"\s+", " ");
 
         Assert.Contains("release-notes-v0.22.0.md", section, StringComparison.Ordinal);
+        Assert.Contains("release-notes-v0.22.1.md", section, StringComparison.Ordinal);
         Assert.Contains("G702 npm publish step", section, StringComparison.Ordinal);
         Assert.Contains("distribution gap", section, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("guide orchestrator-thread", section, StringComparison.Ordinal);
         Assert.Contains("ReleaseNotesV0220DocsTests", section, StringComparison.Ordinal);
         Assert.DoesNotContain("v0.21.1", section, StringComparison.Ordinal);
+        Assert.Contains("gh release edit v0.22.0", section, StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "no guide reachability debt" : "reachability debt も作りません",
+            compact,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static void AssertUnitCitationAssociations(

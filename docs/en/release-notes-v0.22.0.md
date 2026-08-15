@@ -1,13 +1,15 @@
 # Release Notes — intent-cli v0.22.0
 
-> **prepare-only / UNRELEASED.** This document prepares the v0.22.0 release
-> body and readiness evidence. It creates no GitHub Release or tag, publishes
-> no package, and does not handle credentials. `v0.22.0` is not released by
-> this preparation PR.
+> **RELEASED.** v0.22.0 is the published release at
+> https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.22.0. Its
+> release target is `c06dc49e89446bf3b723612dd72004d628914734`, and workflow
+> run `31903789754` completed successfully with five jobs. The release body
+> and evidence below are the source that orchestration can apply after this
+> roll merges.
 
-Install verification after a separately approved release: `JTechJapan.IntentSystem.Cli --version 0.22.0`.
-The eventual Release location is
-https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.22.0.
+Clean-install verification observed exactly: `intent-cli 0.22.0-c06dc49-G708`.
+The verification command was `JTechJapan.IntentSystem.Cli --version 0.22.0`.
+NuGet public package index: https://www.nuget.org/packages/JTechJapan.IntentSystem.Cli/0.22.0.
 The preceding shipped scope remains in
 [release-notes-v0.21.0.md](release-notes-v0.21.0.md); it is linked, not restated.
 
@@ -76,31 +78,52 @@ operator decisions. The minor version is justified by these fourteen
 user-visible orchestration and distribution surfaces; the preview boundary and
 the 1.0 compatibility promise remain explicit.
 
+## Published release evidence
+
+- The existing Release has all sixteen attached assets and each checksum companion:
+  `intent-cli-0.22.0-linux-x64.tar.gz`,
+  `intent-cli-0.22.0-linux-x64.tar.gz.sha256`,
+  `intent-cli-0.22.0-osx-arm64.tar.gz`,
+  `intent-cli-0.22.0-osx-arm64.tar.gz.sha256`,
+  `intent-cli-0.22.0-win-x64.zip`,
+  `intent-cli-0.22.0-win-x64.zip.sha256`,
+  `intent-system-0.22.0.tgz`,
+  `intent-system-0.22.0.tgz.sha256`,
+  `j-tech-japan-intent-cli-darwin-arm64-0.22.0.tgz`,
+  `j-tech-japan-intent-cli-darwin-arm64-0.22.0.tgz.sha256`,
+  `j-tech-japan-intent-cli-linux-x64-0.22.0.tgz`,
+  `j-tech-japan-intent-cli-linux-x64-0.22.0.tgz.sha256`,
+  `j-tech-japan-intent-cli-win32-x64-0.22.0.tgz`,
+  `j-tech-japan-intent-cli-win32-x64-0.22.0.tgz.sha256`,
+  `JTechJapan.IntentSystem.Cli.0.22.0.nupkg`, and
+  `JTechJapan.IntentSystem.Cli.0.22.0.nupkg.sha256`.
+- NuGet is public at version `0.22.0`; the package page and public index are
+  https://www.nuget.org/packages/JTechJapan.IntentSystem.Cli/0.22.0 and
+  https://api.nuget.org/v3/registration5-gz-semver2/jtechjapan.intentsystem.cli/index.json.
+
 ## Distribution boundary — npm is skipped for v0.22.0
 
-npm publication is skipped for v0.22.0 because npm organisation (organization) access and
-package-name reservation are incomplete operator account actions. Therefore
-the G702 npm publish step does not run for v0.22.0. This is a distribution gap,
-not a defect. No credentials are requested or handled, and no package or
-registry state is changed by this prepare-only PR. The existing npm entry-point
-guidance remains documented; publication is a later operator action after the
-account and reservation prerequisites are complete.
+npm registry publication was skipped because npm organisation (organization)
+access, package-name reservation, and `NPM_TOKEN` are absent or incomplete
+operator account prerequisites. No npm package was published to a registry,
+and the G702 npm publish step does not run for v0.22.0. This is a distribution
+gap, not a defect. The existing Release nevertheless has all four npm tarballs
+and their checksum companions attached: `intent-system-0.22.0.tgz`,
+`intent-system-0.22.0.tgz.sha256`,
+`j-tech-japan-intent-cli-darwin-arm64-0.22.0.tgz`,
+`j-tech-japan-intent-cli-darwin-arm64-0.22.0.tgz.sha256`,
+`j-tech-japan-intent-cli-linux-x64-0.22.0.tgz`,
+`j-tech-japan-intent-cli-linux-x64-0.22.0.tgz.sha256`,
+`j-tech-japan-intent-cli-win32-x64-0.22.0.tgz`, and
+`j-tech-japan-intent-cli-win32-x64-0.22.0.tgz.sha256`. No credentials or
+operator account actions are performed by this roll.
 
-## Release-readiness gate (G709)
+## Release body source for orchestration
 
-- [ ] Keep `eng/version.json` at stable `0.21.0` and next `0.22.0` until an
-      operator separately approves a release.
-- [ ] Verify the fourteen-unit inventory and all fifteen first-parent commits
-      with the command above, then run the focused guards and full Release suite.
-- [ ] Build the CLI and execute the existing metadata-free
-      `intent-cli guide orchestrator-thread` route before following this
-      readiness section; the installed guide is the operator/agent entry point.
-- [ ] Confirm EN/JA notes and readiness have the same unit, merge, and npm-skip
-      contract.
-- [ ] Do not create a tag or GitHub Release, publish NuGet or npm, or handle
-      credentials in this prepare-only slice.
+After this PR merges, orchestration may apply this exact source to the existing
+Release with:
 
-Publishing v0.22.0 remains an explicitly operator-approved future action. The
-G702 npm publish step does not run in this release-preparation cycle; the
-incomplete npm organization and package-name reservation remain a distribution
-gap, not a defect.
+`gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/en/release-notes-v0.22.0.md`
+
+This implementation roll does not execute that command and does not mutate
+GitHub Release state.

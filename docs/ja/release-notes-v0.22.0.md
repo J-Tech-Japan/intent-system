@@ -1,14 +1,15 @@
 # リリースノート — intent-cli v0.22.0
 
-> **prepare-only / 未リリース。** この文書は v0.22.0 の Release 本文と
-> readiness evidence を準備します。この準備 PR は GitHub Release または tag を作成せず、
-> package を publish せず、credentials を扱いません。`v0.22.0` はこの準備 PR では
-> release されません。
+> **公開済み (RELEASED)。** v0.22.0 は
+> https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.22.0 で公開済みです。
+> release target は `c06dc49e89446bf3b723612dd72004d628914734`、workflow run
+> `31903789754` は五つの job すべてで成功しました。以下の Release 本文と evidence は、
+> この roll の merge 後に orchestration が適用できる source です。
 
-Release を別途承認した後の install verification:
-`JTechJapan.IntentSystem.Cli --version 0.22.0`。
-将来の Release の場所は
-https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.22.0 です。
+clean-install で観測した version string は正確に `intent-cli 0.22.0-c06dc49-G708` です。
+verification command は `JTechJapan.IntentSystem.Cli --version 0.22.0` です。
+NuGet public package index:
+https://www.nuget.org/packages/JTechJapan.IntentSystem.Cli/0.22.0。
 直前の出荷範囲は [release-notes-v0.21.0.md](release-notes-v0.21.0.md) にリンクし、
 ここでは重複記載しません。
 
@@ -75,20 +76,40 @@ distribution、update channel、feedback guidance は operator decision を記�
 minor version はこの十四件の user-visible な orchestration / distribution surface により妥当で、
 preview boundary と 1.0 compatibility promise は明示したままです。
 
+## 公開済み Release evidence
+
+- 既存の Release には十六個の asset と、それぞれの checksum companion が添付されています。
+  `intent-cli-0.22.0-linux-x64.tar.gz`、`intent-cli-0.22.0-linux-x64.tar.gz.sha256`、
+  `intent-cli-0.22.0-osx-arm64.tar.gz`、`intent-cli-0.22.0-osx-arm64.tar.gz.sha256`、
+  `intent-cli-0.22.0-win-x64.zip`、`intent-cli-0.22.0-win-x64.zip.sha256`、
+  `intent-system-0.22.0.tgz`、`intent-system-0.22.0.tgz.sha256`、
+  `j-tech-japan-intent-cli-darwin-arm64-0.22.0.tgz`、
+  `j-tech-japan-intent-cli-darwin-arm64-0.22.0.tgz.sha256`、
+  `j-tech-japan-intent-cli-linux-x64-0.22.0.tgz`、
+  `j-tech-japan-intent-cli-linux-x64-0.22.0.tgz.sha256`、
+  `j-tech-japan-intent-cli-win32-x64-0.22.0.tgz`、
+  `j-tech-japan-intent-cli-win32-x64-0.22.0.tgz.sha256`、
+  `JTechJapan.IntentSystem.Cli.0.22.0.nupkg`、
+  `JTechJapan.IntentSystem.Cli.0.22.0.nupkg.sha256` です。
+- NuGet は version `0.22.0` で public です。package page と public index は
+  https://www.nuget.org/packages/JTechJapan.IntentSystem.Cli/0.22.0 と
+  https://api.nuget.org/v3/registration5-gz-semver2/jtechjapan.intentsystem.cli/index.json です。
+
 ## Distribution boundary — v0.22.0 の npm skip
 
-v0.22.0 では npm publication を skip します。npm organisation (organization) access と package-name reservation
-は未完了の operator account action です。そのため G702 npm publish step は v0.22.0 では実行しません。
-これは defect ではなく distribution gap です。この prepare-only PR は credentials を要求・処理せず、
-package や registry state を変更しません。既存の npm entry-point guidance は記録したままにし、
-account と reservation の前提が完了した後の operator action として publication を扱います。
+v0.22.0 の npm registry publication は、npm organisation (organization) access、
+package-name reservation、`NPM_TOKEN` が absent または未完了の operator account prerequisite のため
+skip しました。registry に npm package は publish しておらず、G702 npm publish step は v0.22.0 では実行しません。
+これは defect ではなく distribution gap です。既存の Release には四つの npm tarball と checksum companion が添付されています:
+`intent-system-0.22.0.tgz`、`intent-system-0.22.0.tgz.sha256`、
+`j-tech-japan-intent-cli-darwin-arm64-0.22.0.tgz`、`j-tech-japan-intent-cli-darwin-arm64-0.22.0.tgz.sha256`、
+`j-tech-japan-intent-cli-linux-x64-0.22.0.tgz`、`j-tech-japan-intent-cli-linux-x64-0.22.0.tgz.sha256`、
+`j-tech-japan-intent-cli-win32-x64-0.22.0.tgz`、`j-tech-japan-intent-cli-win32-x64-0.22.0.tgz.sha256`。この roll は credentials や operator account action を行いません。
 
-## Release-readiness gate (G709) — リリース準備ゲート
+## Release body source for orchestration — リリース本文 source
 
-- [ ] operator が別途 Release を承認するまで `eng/version.json` を stable `0.21.0`、next `0.22.0` に保つ。
-- [ ] 上記 command で十四 unit と十五 first-parent commit を確認し、focused guard と full Release suite を実行する。
-- [ ] CLI を build し、metadata-free な `intent-cli guide orchestrator-thread` の既存 route を実行してから、この readiness section に進む。installed guide が operator/agent の入口です。
-- [ ] EN/JA notes と readiness が同じ unit、merge、npm-skip contract を持つことを確認する。
-- [ ] この prepare-only slice では tag、GitHub Release、NuGet または npm publish を行わず、credentials を扱わない。
+この PR の merge 後、orchestration は既存 Release に次の source を適用できます:
 
-v0.22.0 の publish は operator が明示的に承認する将来の action です。v0.22.0 の publish では G702 npm publish step を実行せず、未完了の npm organization と package-name reservation は defect ではなく distribution gap として残ります。
+`gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/ja/release-notes-v0.22.0.md`
+
+この implementation roll は command を実行せず、GitHub Release state を変更しません。
