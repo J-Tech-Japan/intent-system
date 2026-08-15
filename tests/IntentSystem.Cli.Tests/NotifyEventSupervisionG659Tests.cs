@@ -232,7 +232,12 @@ public sealed class NotifyEventSupervisionG659Tests : IDisposable
         intervalSeconds: 300, declaredBoundSeconds: 300,
         staleMinutes: 45, claimedSilentMinutes: 720, backlogIdleMinutes: 45, repairSilentMinutes: 180,
         autoRedispatch: false, write: true, format: "json", runner,
-        herdrExecutable: "fake-herdr", agmsgScriptsDirectory: "unused", eventMode: true);
+        herdrExecutable: "fake-herdr", agmsgScriptsDirectory: "unused", eventMode: true,
+        // G659 verifies the explicit event wake path and its one-observation
+        // state-change signal. G699's default pane-status policy is three
+        // consecutive observations; this fixture records the legacy event
+        // policy explicitly so the event contract remains covered.
+        debounceConsecutiveObservations: 1);
 
     private CliContext CreateContext() => new()
     {

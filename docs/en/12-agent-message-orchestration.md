@@ -1975,6 +1975,38 @@ apply to all supervision verbatim: no duplicate delegation, no clearing a
 permission prompt, no cancelling or resetting in-flight work, no force-closing an
 issue/PR, and no speculative durable-state surgery.
 
+### Repeated-observation emission hygiene (G699)
+
+The measured supervisor keeps detection and wake authority unchanged while
+making repeated observations readable and bounded. Start the route from the
+built CLI with an explicit, recorded policy:
+
+```text
+intent-cli notify supervise --domain <domain> --team <team> --repo <owner/repo> --interval 300 --repeat-backoff-seconds 1800 --debounce-consecutive-observations 3 --once --write --format json
+intent-cli notify supervise --domain <domain> --team <team> --repo <owner/repo> --once --format markdown
+```
+
+`--interval <seconds>` is the full observation cadence. Repeated findings use
+`--repeat-backoff-seconds <seconds>` (alias `--backoff-seconds`, default
+`1800` seconds), and pane status classification uses
+`--debounce-consecutive-observations <count>` (alias
+`--status-debounce-consecutive`, default `3`). Write mode records the resolved
+values at `.intent-cli/supervision/<domain>/<team>/emission-policy.json` and
+each cycle repeats them; these are configuration values, not hidden constants.
+
+An unchanged same-key observation remains an active named `parked` record with
+`first_seen`, `last_seen`, `repeat_count`, and
+`emission_cadence_seconds`. Resolution clears the active record; a changed
+condition fingerprint resets its counters; and a genuinely new key emits
+immediately even when another key is parked. A one-poll blocked/idle flap is
+not a settled transition; only the recorded consecutive threshold classifies
+it. The supervisor never silently removes a parked key or infers resolution.
+Detection predicates and the G695 continuation-chain record remain unchanged;
+parking suppresses duplicate findings only and never performs a workflow
+transition. This is an observation-only policy: intent-cli/GitHub remain
+authoritative, and the supervisor may record, wake, and surface evidence but
+does not clear work, merge, close out, or change labels.
+
 ## Cross-project isolation on a shared machine
 
 **Assume you are not alone on this machine.** Several project teams run

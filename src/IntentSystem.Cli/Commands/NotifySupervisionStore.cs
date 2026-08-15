@@ -13,6 +13,7 @@ namespace IntentSystem.Cli.Commands;
 internal static class NotifySupervisionStore
 {
     public const string BoundFileName = "bound.json";
+    public const string EmissionPolicyFileName = "emission-policy.json";
     public const string CycleFileName = "cycles.jsonl";
     public const string StallFileName = "stalls.jsonl";
 
@@ -35,6 +36,9 @@ internal static class NotifySupervisionStore
 
     public static string ResolveBoundPath(string artifactRoot, string domain, string team) =>
         Path.Combine(ResolveDirectory(artifactRoot, domain, team), BoundFileName);
+
+    public static string ResolveEmissionPolicyPath(string artifactRoot, string domain, string team) =>
+        Path.Combine(ResolveDirectory(artifactRoot, domain, team), EmissionPolicyFileName);
 
     public static string ResolveCyclePath(string artifactRoot, string domain, string team) =>
         Path.Combine(ResolveDirectory(artifactRoot, domain, team), CycleFileName);
@@ -59,6 +63,7 @@ internal static class NotifySupervisionStore
             try
             {
                 var bound = ReadBound(Path.Combine(directory, BoundFileName));
+                var emissionPolicy = ReadEmissionPolicy(Path.Combine(directory, EmissionPolicyFileName));
                 var cyclePath = Path.Combine(directory, CycleFileName);
                 var cycles = ReadCycles(cyclePath);
                 var promptAudits = ReadPromptAudits(cyclePath);
@@ -68,6 +73,7 @@ internal static class NotifySupervisionStore
                     Resolved = true,
                     Directory = directory,
                     Bound = bound,
+                    EmissionPolicy = emissionPolicy,
                     LastCycle = cycles.LastOrDefault(),
                     LastIntervalCycle = cycles.LastOrDefault(cycle =>
                         string.IsNullOrWhiteSpace(cycle.Trigger)
@@ -106,6 +112,47 @@ internal static class NotifySupervisionStore
         }
 
         var line = JsonSerializer.Serialize(bound, JsonOptions) + Environment.NewLine;
+        if (WriteOverride is { } writeOverride)
+        {
+            return writeOverride(path, line);
+        }
+
+        lock (Sync)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, line, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                return new NotifySupervisionWriteResult(true, false, path, null);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return new NotifySupervisionWriteResult(false, false, path, exception.Message);
+            }
+        }
+    }
+
+    public static NotifySupervisionWriteResult RecordEmissionPolicy(
+        string artifactRoot,
+        NotifySupervisionEmissionPolicy policy,
+        bool write)
+    {
+        string path;
+        try
+        {
+            path = ResolveEmissionPolicyPath(artifactRoot, policy.Domain, policy.Team);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            return new NotifySupervisionWriteResult(false, false, artifactRoot, exception.Message);
+        }
+
+        if (!write)
+        {
+            return new NotifySupervisionWriteResult(false, false, path, null);
+        }
+
+        var line = JsonSerializer.Serialize(policy, JsonOptions) + Environment.NewLine;
         if (WriteOverride is { } writeOverride)
         {
             return writeOverride(path, line);
@@ -228,6 +275,17 @@ internal static class NotifySupervisionStore
 
         return JsonSerializer.Deserialize<NotifySupervisionBound>(File.ReadAllText(path), JsonOptions)
             ?? throw new InvalidDataException("The supervision bound file was empty.");
+    }
+
+    private static NotifySupervisionEmissionPolicy? ReadEmissionPolicy(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        return JsonSerializer.Deserialize<NotifySupervisionEmissionPolicy>(File.ReadAllText(path), JsonOptions)
+            ?? throw new InvalidDataException("The supervision emission policy file was empty.");
     }
 
     private static IReadOnlyList<NotifySupervisionCycle> ReadCycles(string path)
@@ -359,6 +417,20 @@ internal sealed record NotifySupervisionBound
     [JsonPropertyName("recorded_at")] public required DateTimeOffset RecordedAt { get; init; }
 }
 
+internal sealed record NotifySupervisionEmissionPolicy
+{
+    public const int DefaultRepeatBackoffSeconds = 1_800;
+    public const int DefaultDebounceConsecutiveObservations = 3;
+    public const int MaximumDebounceConsecutiveObservations = 100;
+
+    [JsonPropertyName("domain")] public required string Domain { get; init; }
+    [JsonPropertyName("team")] public required string Team { get; init; }
+    [JsonPropertyName("full_cadence_seconds")] public required int FullCadenceSeconds { get; init; }
+    [JsonPropertyName("repeat_backoff_seconds")] public required int RepeatBackoffSeconds { get; init; }
+    [JsonPropertyName("debounce_consecutive_observations")] public required int DebounceConsecutiveObservations { get; init; }
+    [JsonPropertyName("recorded_at")] public required DateTimeOffset RecordedAt { get; init; }
+}
+
 internal sealed record NotifySupervisionCycle
 {
     [JsonPropertyName("cycle_id")] public required string CycleId { get; init; }
@@ -369,6 +441,8 @@ internal sealed record NotifySupervisionCycle
     [JsonPropertyName("writer")] public NotifySupervisionWriterIdentity? Writer { get; init; }
     [JsonPropertyName("trigger")] public string Trigger { get; init; } = "interval";
     [JsonPropertyName("interval_seconds")] public required int IntervalSeconds { get; init; }
+    [JsonPropertyName("repeat_backoff_seconds")] public int? RepeatBackoffSeconds { get; init; }
+    [JsonPropertyName("debounce_consecutive_observations")] public int? DebounceConsecutiveObservations { get; init; }
     [JsonPropertyName("cadence_interval_seconds")] public int? CadenceIntervalSeconds { get; init; }
     [JsonPropertyName("bound_seconds")] public int? BoundSeconds { get; init; }
     [JsonPropertyName("actual_interval_seconds")] public long? ActualIntervalSeconds { get; init; }
@@ -381,6 +455,8 @@ internal sealed record NotifySupervisionCycle
     [JsonPropertyName("last_observed_state_change_sequences")] public IReadOnlyDictionary<string, long> LastObservedStateChangeSequences { get; init; } = new Dictionary<string, long>(StringComparer.Ordinal);
     [JsonPropertyName("last_observed_state_change_times")] public IReadOnlyDictionary<string, DateTimeOffset> LastObservedStateChangeTimes { get; init; } = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
     [JsonPropertyName("last_observed_agent_statuses")] public IReadOnlyDictionary<string, string> LastObservedAgentStatuses { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+    [JsonPropertyName("last_observed_agent_status_consecutive_counts")] public IReadOnlyDictionary<string, int> LastObservedAgentStatusConsecutiveCounts { get; init; } = new Dictionary<string, int>(StringComparer.Ordinal);
+    [JsonPropertyName("last_observed_agent_status_run_from")] public IReadOnlyDictionary<string, string> LastObservedAgentStatusRunFrom { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
     [JsonPropertyName("transitions")] public IReadOnlyList<NotifySupervisionTransition> Transitions { get; init; } = [];
     [JsonPropertyName("wait_events")] public IReadOnlyList<NotifySupervisionWaitEvent> WaitEvents { get; init; } = [];
 }
@@ -523,6 +599,14 @@ internal sealed record NotifySupervisionStallRecord
     [JsonPropertyName("evidence")] public IReadOnlyList<string>? Evidence { get; init; }
     [JsonPropertyName("owed_transition")] public string? OwedTransition { get; init; }
     [JsonPropertyName("observed_prompt")] public NotifyObservedPrompt? Prompt { get; init; }
+    [JsonPropertyName("first_seen")] public DateTimeOffset? FirstSeenAt { get; init; }
+    [JsonPropertyName("last_seen")] public DateTimeOffset? LastSeenAt { get; init; }
+    [JsonPropertyName("repeat_count")] public int RepeatCount { get; init; }
+    [JsonPropertyName("last_emitted_at")] public DateTimeOffset? LastEmittedAt { get; init; }
+    [JsonPropertyName("parked")] public bool Parked { get; init; }
+    [JsonPropertyName("park_reason")] public string? ParkReason { get; init; }
+    [JsonPropertyName("emission_cadence_seconds")] public int? EmissionCadenceSeconds { get; init; }
+    [JsonPropertyName("state_fingerprint")] public string? StateFingerprint { get; init; }
 }
 
 internal sealed record NotifySupervisionReadResult
@@ -530,6 +614,7 @@ internal sealed record NotifySupervisionReadResult
     public required bool Resolved { get; init; }
     public required string Directory { get; init; }
     public NotifySupervisionBound? Bound { get; init; }
+    public NotifySupervisionEmissionPolicy? EmissionPolicy { get; init; }
     public NotifySupervisionCycle? LastCycle { get; init; }
     /// <summary>
     /// The only cycle identity a command-side adjudication may trust. It is
