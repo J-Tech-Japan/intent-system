@@ -259,6 +259,13 @@ public sealed class NotifySupervisionG699Tests : IDisposable
         {
             Assert.Contains(marker, semantics, StringComparison.OrdinalIgnoreCase);
         }
+        var corroboration = hygiene.GetProperty("corroboration_contract");
+        Assert.Equal("observation-conflict", corroboration.GetProperty("conflict_kind").GetString());
+        Assert.Equal(
+            ["registration_definition", "registration_lookup", "registration_result", "consulted_observations"],
+            corroboration.GetProperty("self_verifying_fields").EnumerateArray().Select(value => value.GetString()!).ToArray());
+        Assert.Contains("same-cycle", corroboration.GetProperty("same_cycle_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("no automatic action", corroboration.GetProperty("inconclusive_rule").GetString(), StringComparison.Ordinal);
         Assert.False(Directory.Exists(Path.Combine(bareDirectory, ".intent-cli")));
         Assert.DoesNotContain("config.toml", guide.Output, StringComparison.Ordinal);
 
@@ -291,6 +298,10 @@ public sealed class NotifySupervisionG699Tests : IDisposable
             "repeat_count",
             "parked",
             "G695",
+            "G707",
+            "observation-conflict",
+            "registration_definition",
+            "consulted_observations",
         })
         {
             Assert.Contains(marker, english, StringComparison.Ordinal);

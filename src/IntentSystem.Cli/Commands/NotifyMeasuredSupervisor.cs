@@ -17,6 +17,7 @@ internal sealed class NotifyMeasuredSupervisor
 {
     private const int FallbackAbsenceHeadroomSeconds = 60;
     private const string DesignRole = "design";
+    private const string ObservationConflictKind = "observation-conflict";
 
     private readonly CliContext context;
     private readonly string routingRoot;
@@ -319,6 +320,7 @@ internal sealed class NotifyMeasuredSupervisor
         var observedSequences = new Dictionary<string, long>(StringComparer.Ordinal);
         var observedTimes = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var observedStatuses = new Dictionary<string, string>(StringComparer.Ordinal);
+        var observedInteractiveReadiness = new Dictionary<string, bool?>(StringComparer.Ordinal);
         var observedStatusConsecutiveCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var observedStatusRunFrom = new Dictionary<string, string>(StringComparer.Ordinal);
         if (!transportUnavailable)
@@ -373,6 +375,22 @@ internal sealed class NotifyMeasuredSupervisor
                         Summary = $"Recipient '{pending.RecipientRole}' is live-idle with no report beyond the declared {declaredBoundSeconds!.Value}s threshold; inspect the recorded terminal pane. No recovery sequence was entered.",
                         DetectableAt = pending.DispatchedAt.AddSeconds(declaredBoundSeconds!.Value),
                         WakeSuppressed = !IsOwnerSubject(pending.RecipientRole),
+                        WorkspaceId = pending.WorkspaceId,
+                        PaneId = pending.PaneId,
+                        RegistrationDefinition = "a recorded herdr seat is registered only when the matching agent-list entry is running at the recorded workspace and pane",
+                        RegistrationLookup = $"notify pending liveness lookup source='{activity.Source}' for recipient='{pending.RecipientIdentity}' at workspace='{pending.WorkspaceId}' pane='{pending.PaneId}'",
+                        RegistrationResult = $"running={activity.Running}; agent_status='{activity.AgentStatus ?? "missing"}'; state_change_seq={activity.StateChangeSequence?.ToString(CultureInfo.InvariantCulture) ?? "missing"}",
+                        ConsultedObservations =
+                        [
+                            $"activity:{paneKey}: running={activity.Running}; agent_status={activity.AgentStatus ?? "missing"}; state_change_seq={activity.StateChangeSequence?.ToString(CultureInfo.InvariantCulture) ?? "missing"}",
+                        ],
+                        Evidence =
+                        [
+                            "registration_definition:a recorded herdr seat is registered only when the matching agent-list entry is running at the recorded workspace and pane",
+                            $"registration_lookup:notify pending liveness lookup source='{activity.Source}' for recipient='{pending.RecipientIdentity}' at workspace='{pending.WorkspaceId}' pane='{pending.PaneId}'",
+                            $"registration_result:running={activity.Running}; agent_status='{activity.AgentStatus ?? "missing"}'; state_change_seq={activity.StateChangeSequence?.ToString(CultureInfo.InvariantCulture) ?? "missing"}",
+                            $"consulted_observations:activity:{paneKey}",
+                        ],
                     });
                 }
             }
@@ -384,6 +402,7 @@ internal sealed class NotifyMeasuredSupervisor
                 observedSequences,
                 observedTimes,
                 observedStatuses,
+                observedInteractiveReadiness,
                 observedStatusConsecutiveCounts,
                 observedStatusRunFrom,
                 emissionPolicy.DebounceConsecutiveObservations));
@@ -412,6 +431,27 @@ internal sealed class NotifyMeasuredSupervisor
                     WakeAlreadyDelivered = registrationLoss ? false : action.Recovered && action.Cause is null,
                     ResendPermitted = registrationLoss ? true : null,
                     WakeCause = action.Cause,
+                    WorkspaceId = registrationLoss ? record?.WorkspaceId : null,
+                    PaneId = registrationLoss ? record?.PaneId : null,
+                    RegistrationDefinition = registrationLoss
+                        ? "a recorded herdr seat is registered only when the matching agent-list entry is running at the recorded workspace and pane"
+                        : null,
+                    RegistrationLookup = registrationLoss
+                        ? $"notify pending liveness lookup for recipient='{action.RecipientRole}' at workspace='{record?.WorkspaceId ?? "missing"}' pane='{record?.PaneId ?? "missing"}'"
+                        : null,
+                    RegistrationResult = registrationLoss ? action.Verdict : null,
+                    ConsultedObservations = registrationLoss
+                        ? [$"notify-pending-liveness: verdict={action.Verdict}; source={action.Cause ?? "recorded liveness"}"]
+                        : null,
+                    Evidence = registrationLoss
+                        ?
+                        [
+                            "registration_definition:a recorded herdr seat is registered only when the matching agent-list entry is running at the recorded workspace and pane",
+                            $"registration_lookup:notify pending liveness lookup for recipient='{action.RecipientRole}' at workspace='{record?.WorkspaceId ?? "missing"}' pane='{record?.PaneId ?? "missing"}'",
+                            $"registration_result:{action.Verdict}",
+                            $"consulted_observations:notify-pending-liveness verdict={action.Verdict}",
+                        ]
+                        : null,
                 });
             }
         }
@@ -515,6 +555,15 @@ internal sealed class NotifyMeasuredSupervisor
             observations.AddRange(observationProvider(now));
         }
 
+        // G707: make a finding earn its conclusion from the observations
+        // already collected in this cycle.  This is deliberately before the
+        // durable emission loop so the resulting conflict is itself subject
+        // to G699's same-key cadence and park state.
+        observations = CorroborateSameCycleObservations(
+            observations,
+            observedStatuses,
+            observedInteractiveReadiness);
+
         var currentKeys = observations.Select(item => item.Key).ToHashSet(StringComparer.Ordinal);
         var records = new List<NotifySupervisionStallRecord>();
         var findings = new List<NotifySupervisionFinding>();
@@ -523,7 +572,9 @@ internal sealed class NotifyMeasuredSupervisor
             .Select(group => group.First()))
         {
             var existing = state.ActiveStalls.GetValueOrDefault(observation.Key);
-            if (existing is not null && observation.WakeSuppressed)
+            if (existing is not null
+                && observation.WakeSuppressed
+                && !string.Equals(observation.Kind, ObservationConflictKind, StringComparison.Ordinal))
             {
                 // Activity-backed live-idle is an informational, once-only
                 // finding. Keep its durable record active, but do not emit a
@@ -604,6 +655,10 @@ internal sealed class NotifyMeasuredSupervisor
                 Prompt = observation.Prompt,
                 Evidence = observation.Evidence,
                 OwedTransition = observation.OwedTransition,
+                RegistrationDefinition = observation.RegistrationDefinition,
+                RegistrationLookup = observation.RegistrationLookup,
+                RegistrationResult = observation.RegistrationResult,
+                ConsultedObservations = observation.ConsultedObservations,
                 DetectableAt = previousCycle is null ? null : observation.DetectableAt,
                 DetectableAtUnknown = previousCycle is null || observation.DetectableAt is null,
                 SurfacedAt = now,
@@ -1350,6 +1405,136 @@ internal sealed class NotifyMeasuredSupervisor
         }).ToArray();
     }
 
+    /// <summary>
+    /// G707: findings that depend on a registration or activity conclusion
+    /// must consult the non-terminal seat observations collected by the same
+    /// supervision cycle.  A contradictory producer result becomes one
+    /// observation-conflict per recorded seat.  The conflict is intentionally
+    /// an ordinary observation so G699 owns its repeated-key backoff/park
+    /// behavior and no recovery path is entered for an inconclusive result.
+    /// </summary>
+    private static List<NotifySupervisionObservation> CorroborateSameCycleObservations(
+        IReadOnlyList<NotifySupervisionObservation> observations,
+        IReadOnlyDictionary<string, string> observedStatuses,
+        IReadOnlyDictionary<string, bool?> observedInteractiveReadiness)
+    {
+        var candidates = observations
+            .Where(IsCorroboratableFinding)
+            .Where(observation => IsContradictedBySameCycleObservation(
+                observation,
+                observedStatuses,
+                observedInteractiveReadiness))
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            return observations.ToList();
+        }
+
+        var conflicts = candidates
+            .GroupBy(ObservationSubjectKey, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+        var emitted = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<NotifySupervisionObservation>(observations.Count);
+        foreach (var observation in observations)
+        {
+            var subjectKey = ObservationSubjectKey(observation);
+            if (!conflicts.TryGetValue(subjectKey, out var contradictory)
+                || !IsCorroboratableFinding(observation))
+            {
+                result.Add(observation);
+                continue;
+            }
+
+            if (emitted.Add(subjectKey))
+            {
+                result.Add(BuildObservationConflict(
+                    contradictory,
+                    observedStatuses,
+                    observedInteractiveReadiness));
+            }
+        }
+
+        return result;
+    }
+
+    private static bool IsCorroboratableFinding(NotifySupervisionObservation observation) =>
+        observation.Kind is NotifyPendingLivenessResult.RegistrationLostProcessPresent or "live-idle-no-report"
+        && !string.IsNullOrWhiteSpace(observation.WorkspaceId)
+        && !string.IsNullOrWhiteSpace(observation.PaneId);
+
+    private static bool IsContradictedBySameCycleObservation(
+        NotifySupervisionObservation observation,
+        IReadOnlyDictionary<string, string> observedStatuses,
+        IReadOnlyDictionary<string, bool?> observedInteractiveReadiness)
+    {
+        var seatKey = $"seat-state:{observation.WorkspaceId}:{observation.PaneId}";
+        var hasStatus = observedStatuses.TryGetValue(seatKey, out var status);
+        var hasReady = observedInteractiveReadiness.TryGetValue(seatKey, out var interactiveReady);
+        if (!hasStatus && !hasReady)
+        {
+            return false;
+        }
+
+        return observation.Kind == NotifyPendingLivenessResult.RegistrationLostProcessPresent
+            ? status is "working" or "idle" || interactiveReady == true
+            : status == "working" || interactiveReady == true;
+    }
+
+    private static string ObservationSubjectKey(NotifySupervisionObservation observation) =>
+        $"{observation.WorkspaceId}:{observation.PaneId}";
+
+    private static NotifySupervisionObservation BuildObservationConflict(
+        IReadOnlyList<NotifySupervisionObservation> contradictory,
+        IReadOnlyDictionary<string, string> observedStatuses,
+        IReadOnlyDictionary<string, bool?> observedInteractiveReadiness)
+    {
+        var first = contradictory[0];
+        var seatKey = $"seat-state:{first.WorkspaceId}:{first.PaneId}";
+        var status = observedStatuses.TryGetValue(seatKey, out var observedStatus)
+            ? observedStatus
+            : "missing";
+        var readiness = observedInteractiveReadiness.TryGetValue(seatKey, out var observedReady)
+            ? observedReady?.ToString() ?? "missing"
+            : "missing";
+        var kinds = string.Join(", ", contradictory.Select(item => item.Kind).Distinct(StringComparer.Ordinal));
+        var role = first.SubjectRole ?? "unknown";
+        var definition = "a recorded herdr seat is registered only when the matching agent-list entry is running at the recorded workspace and pane";
+        var lookup = string.Join(
+            "; ",
+            contradictory.Select(item => item.RegistrationLookup ?? $"producer='{item.Source}' lookup was not named"));
+        var result = $"inconclusive; producer_findings=[{kinds}]; same-cycle seat-state agent_status='{status}', interactive_ready={readiness}";
+        var consulted = contradictory
+            .Select(item => $"producer:{item.Kind}; source={item.Source}; key={item.Key}")
+            .Append($"seat-state:{seatKey}; agent_status={status}; interactive_ready={readiness}")
+            .ToArray();
+
+        return new NotifySupervisionObservation
+        {
+            Key = $"{ObservationConflictKind}:{first.WorkspaceId}:{first.PaneId}",
+            Kind = ObservationConflictKind,
+            OwnerRole = first.OwnerRole,
+            SubjectRole = role,
+            Source = "supervision-cycle.corroboration",
+            Summary = $"Verification first: same-cycle observation-conflict for recorded seat '{role}' at workspace '{first.WorkspaceId}' pane '{first.PaneId}'. The {kinds} conclusion is inconclusive because seat-state observed agent_status='{status}' and interactive_ready={readiness}. Compare the registration lookup with these consulted observations before any recovery decision; no automatic action is authorized.",
+            DetectableAt = first.DetectableAt,
+            WakeSuppressed = true,
+            WorkspaceId = first.WorkspaceId,
+            PaneId = first.PaneId,
+            Evidence =
+            [
+                "same-cycle-corroboration: contradictory non-terminal observation retained",
+                $"registration_definition:{definition}",
+                $"registration_lookup:{lookup}",
+                $"registration_result:{result}",
+                $"consulted_observations:{string.Join(" | ", consulted)}",
+            ],
+            RegistrationDefinition = definition,
+            RegistrationLookup = lookup,
+            RegistrationResult = result,
+            ConsultedObservations = consulted,
+        };
+    }
+
     private IReadOnlyList<NotifySupervisionObservation> ReadRecordedSeatTransitions(
         DateTimeOffset now,
         string trigger,
@@ -1357,6 +1542,7 @@ internal sealed class NotifyMeasuredSupervisor
         IDictionary<string, long> observedSequences,
         IDictionary<string, DateTimeOffset> observedTimes,
         IDictionary<string, string> observedStatuses,
+        IDictionary<string, bool?> observedInteractiveReadiness,
         IDictionary<string, int> observedStatusConsecutiveCounts,
         IDictionary<string, string> observedStatusRunFrom,
         int debounceConsecutiveObservations)
@@ -1417,12 +1603,20 @@ internal sealed class NotifyMeasuredSupervisor
             var agent = agents.SingleOrDefault(candidate =>
                 string.Equals(candidate.WorkspaceId, workspaceId, StringComparison.Ordinal)
                 && string.Equals(candidate.PaneId, recorded.PaneId, StringComparison.Ordinal));
+            var seatKey = $"seat-state:{workspaceId}:{recorded.PaneId}";
+            if (agent is not null)
+            {
+                // Readiness is retained even when the agent status/sequence
+                // is incomplete.  A positive same-cycle readiness result is
+                // still a non-terminal observation that can contradict a
+                // missing-registration conclusion.
+                observedInteractiveReadiness[seatKey] = agent.InteractiveReady;
+            }
             if (agent?.AgentStatus is null || agent.StateChangeSequence is not { } sequence)
             {
                 continue;
             }
 
-            var seatKey = $"seat-state:{workspaceId}:{recorded.PaneId}";
             observedStatuses[seatKey] = agent.AgentStatus;
             if (agent.LastStateChangeAt is { } changedAt)
             {
@@ -2266,6 +2460,8 @@ internal sealed class NotifyMeasuredSupervisor
 
                 var workspaceId = recorded.WorkspaceId ?? topology.Topology.WorkspaceId;
                 var paneKey = $"registration:{workspaceId}:{recorded.PaneId}";
+                var registrationDefinition = "a recorded herdr seat is registered only when the matching agent-list entry is running at the recorded workspace and pane";
+                var registrationLookup = $"herdr agent list matched workspace='{workspaceId}' pane='{recorded.PaneId}' with running_agent=false; pane process-info returned foreground_processes={processInfo.Processes.Count.ToString(CultureInfo.InvariantCulture)}";
                 if (processInfo.Processes.Count > 0)
                 {
                     observations.Add(new NotifySupervisionObservation
@@ -2280,6 +2476,24 @@ internal sealed class NotifyMeasuredSupervisor
                         WakeAlreadyAttempted = false,
                         WakeAlreadyDelivered = false,
                         ResendPermitted = true,
+                        WorkspaceId = workspaceId,
+                        PaneId = recorded.PaneId,
+                        RegistrationDefinition = registrationDefinition,
+                        RegistrationLookup = registrationLookup,
+                        RegistrationResult = "registration-missing; foreground-processes-present",
+                        ConsultedObservations =
+                        [
+                            $"recorded-topology: role='{role}' workspace='{workspaceId}' pane='{recorded.PaneId}'",
+                            $"herdr.agent-list: running_agent=false",
+                            $"pane.process-info: foreground_processes={processInfo.Processes.Count.ToString(CultureInfo.InvariantCulture)}",
+                        ],
+                        Evidence =
+                        [
+                            $"registration_definition:{registrationDefinition}",
+                            $"registration_lookup:{registrationLookup}",
+                            "registration_result:registration-missing; foreground-processes-present",
+                            $"consulted_observations:role={role}; foreground_processes={processInfo.Processes.Count.ToString(CultureInfo.InvariantCulture)}",
+                        ],
                     });
                     continue;
                 }
@@ -2295,6 +2509,24 @@ internal sealed class NotifyMeasuredSupervisor
                     DetectableAt = null,
                     WakeAlreadyAttempted = false,
                     WakeAlreadyDelivered = false,
+                    WorkspaceId = workspaceId,
+                    PaneId = recorded.PaneId,
+                    RegistrationDefinition = registrationDefinition,
+                    RegistrationLookup = registrationLookup,
+                    RegistrationResult = "registration-missing; foreground-processes-absent",
+                    ConsultedObservations =
+                    [
+                        $"recorded-topology: role='{role}' workspace='{workspaceId}' pane='{recorded.PaneId}'",
+                        "herdr.agent-list: running_agent=false",
+                        "pane.process-info: foreground_processes=0",
+                    ],
+                    Evidence =
+                    [
+                        $"registration_definition:{registrationDefinition}",
+                        $"registration_lookup:{registrationLookup}",
+                        "registration_result:registration-missing; foreground-processes-absent",
+                        $"consulted_observations:role={role}; foreground_processes=0",
+                    ],
                 });
             }
         }
@@ -2365,6 +2597,10 @@ internal sealed class NotifyMeasuredSupervisor
             Prompt = observation.Prompt ?? baseline.Prompt,
             Evidence = observation.Evidence ?? baseline.Evidence,
             OwedTransition = observation.OwedTransition ?? baseline.OwedTransition,
+            RegistrationDefinition = observation.RegistrationDefinition ?? baseline.RegistrationDefinition,
+            RegistrationLookup = observation.RegistrationLookup ?? baseline.RegistrationLookup,
+            RegistrationResult = observation.RegistrationResult ?? baseline.RegistrationResult,
+            ConsultedObservations = observation.ConsultedObservations ?? baseline.ConsultedObservations,
             FirstSeenAt = firstSeen,
             LastSeenAt = now,
             RepeatCount = repeatCount,
@@ -2391,7 +2627,11 @@ internal sealed class NotifyMeasuredSupervisor
             observation.Cause ?? string.Empty,
             observation.OwedTransition ?? string.Empty,
             string.Join("\u001e", observation.Evidence ?? []),
-            observation.ToStatus ?? string.Empty);
+            observation.ToStatus ?? string.Empty,
+            observation.RegistrationDefinition ?? string.Empty,
+            observation.RegistrationLookup ?? string.Empty,
+            observation.RegistrationResult ?? string.Empty,
+            string.Join("\u001e", observation.ConsultedObservations ?? []));
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 
@@ -2414,6 +2654,10 @@ internal sealed class NotifyMeasuredSupervisor
         Prompt = record.Prompt,
         Evidence = record.Evidence,
         OwedTransition = record.OwedTransition,
+        RegistrationDefinition = record.RegistrationDefinition,
+        RegistrationLookup = record.RegistrationLookup,
+        RegistrationResult = record.RegistrationResult,
+        ConsultedObservations = record.ConsultedObservations,
         FirstSeenAt = record.FirstSeenAt,
         LastSeenAt = record.LastSeenAt,
         RepeatCount = record.RepeatCount,
@@ -2542,6 +2786,10 @@ internal sealed record NotifySupervisionObservation
     public string? ToStatus { get; init; }
     public long? StateChangeSequence { get; init; }
     public DateTimeOffset? StateChangedAt { get; init; }
+    public string? RegistrationDefinition { get; init; }
+    public string? RegistrationLookup { get; init; }
+    public string? RegistrationResult { get; init; }
+    public IReadOnlyList<string>? ConsultedObservations { get; init; }
     public NotifyObservedPrompt? Prompt { get; init; }
 }
 
@@ -2715,6 +2963,22 @@ internal sealed record NotifySupervisionFinding
     [System.Text.Json.Serialization.JsonPropertyName("owed_transition")]
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? OwedTransition { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("registration_definition")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? RegistrationDefinition { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("registration_lookup")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? RegistrationLookup { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("registration_result")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? RegistrationResult { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("consulted_observations")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? ConsultedObservations { get; init; }
 
     [System.Text.Json.Serialization.JsonPropertyName("first_seen")]
     public DateTimeOffset? FirstSeenAt { get; init; }

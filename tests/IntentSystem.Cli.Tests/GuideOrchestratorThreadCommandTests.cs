@@ -2859,6 +2859,47 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("--permission-mode", agentAbsent.Recovery, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_G707GuideRendersCorroborationContractInJsonAndMarkdown()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var contract = document.RootElement
+            .GetProperty("design_workspace_supervision")
+            .GetProperty("emission_hygiene")
+            .GetProperty("corroboration_contract");
+        Assert.Equal("observation-conflict", contract.GetProperty("conflict_kind").GetString());
+        Assert.Contains(
+            contract.GetProperty("contradicting_observations").EnumerateArray().Select(item => item.GetString()),
+            item => item!.Contains("registration-lost-process-present", StringComparison.Ordinal));
+        Assert.Contains(
+            contract.GetProperty("contradicting_observations").EnumerateArray().Select(item => item.GetString()),
+            item => item!.Contains("live-idle-no-report", StringComparison.Ordinal));
+        var fields = contract.GetProperty("self_verifying_fields").EnumerateArray()
+            .Select(item => item.GetString()!)
+            .ToArray();
+        Assert.Equal(
+            ["registration_definition", "registration_lookup", "registration_result", "consulted_observations"],
+            fields);
+        Assert.Contains("same-cycle", contract.GetProperty("same_cycle_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("no automatic action", contract.GetProperty("inconclusive_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("G699", contract.GetProperty("recurrence_rule").GetString(), StringComparison.Ordinal);
+
+        var markdown = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+        var section = SectionFrom(markdown, "### Same-cycle corroboration (G707)");
+        Assert.Contains("observation-conflict", section, StringComparison.Ordinal);
+        Assert.Contains("registration_definition", section, StringComparison.Ordinal);
+        Assert.Contains("consulted_observations", section, StringComparison.Ordinal);
+        Assert.Contains("G699", section, StringComparison.Ordinal);
+        Assert.Contains("no automatic action", section, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// G570: the text of one `##` section, so a section-scoped assertion cannot
     /// be satisfied — or broken — by unrelated prose elsewhere in the document.

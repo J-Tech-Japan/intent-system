@@ -598,6 +598,10 @@ internal sealed record NotifySupervisionStallRecord
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("evidence")] public IReadOnlyList<string>? Evidence { get; init; }
     [JsonPropertyName("owed_transition")] public string? OwedTransition { get; init; }
+    [JsonPropertyName("registration_definition")] public string? RegistrationDefinition { get; init; }
+    [JsonPropertyName("registration_lookup")] public string? RegistrationLookup { get; init; }
+    [JsonPropertyName("registration_result")] public string? RegistrationResult { get; init; }
+    [JsonPropertyName("consulted_observations")] public IReadOnlyList<string>? ConsultedObservations { get; init; }
     [JsonPropertyName("observed_prompt")] public NotifyObservedPrompt? Prompt { get; init; }
     [JsonPropertyName("first_seen")] public DateTimeOffset? FirstSeenAt { get; init; }
     [JsonPropertyName("last_seen")] public DateTimeOffset? LastSeenAt { get; init; }

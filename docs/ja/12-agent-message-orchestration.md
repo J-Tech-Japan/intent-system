@@ -1725,6 +1725,27 @@ continuation-chain record は不変で、parking は duplicate finding だけを
 supervisor は record、wake、evidence の表示だけを行い、work の clear、merge、closeout、label 変更は
 行いません。
 
+### 同一 cycle の observation corroboration (G707)
+
+`registration-lost-process-present` または `live-idle-no-report` を出力する前に、
+supervisor は同じ recorded workspace/pane について、その cycle ですでに取得した
+non-terminal observation を参照します。同じ cycle の `agent_status=working` または
+`idle`、あるいは `interactive_ready=true` は、対応する registration / live-idle の
+結論と矛盾します。この矛盾はその seat について named な
+`observation-conflict` finding として exactly once 出力し、黙って捨てません。
+
+この contract の各 finding は `registration_definition`、`registration_lookup`、
+`registration_result`、`consulted_observations` を持ち、自分で検証できます。
+inconclusive な conflict は verification first とし、recovery の判断前に named producer
+と recorded workspace/pane を比較します。automatic action は許可しません。同じ cycle に
+non-terminal な seat observation がない場合は、genuinely absent な recorded seat の
+verified `seat-absent` または `registration-lost-process-present` を引き続き出力できます。
+
+`observation-conflict` は通常の same-key observation なので、G699 の記録された repeat
+backoff と park state を適用します。新しい seat key は即時のままです。この corroboration
+が変更するのは observation の classification と evidence だけであり、workflow の ownership、
+canonical な intent-cli/GitHub state、observation-only の権限境界は変更しません。
+
 ## 共有マシン上での cross-project isolation
 
 **このマシン上にいるのは自分だけではない、と前提してください。** 複数の
