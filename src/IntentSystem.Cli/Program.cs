@@ -207,6 +207,9 @@ internal static class Program
                 || string.Equals(args[1], "inspect", StringComparison.Ordinal)
                 || string.Equals(args[1], "commands", StringComparison.Ordinal)
                 || string.Equals(args[1], "onboarding", StringComparison.Ordinal)
+                // G705: project-feedback guidance is static and must be
+                // reachable from a metadata-free child checkout.
+                || string.Equals(args[1], "feedback", StringComparison.Ordinal)
                 || string.Equals(args[1], "prompt-matrix", StringComparison.Ordinal)
                 || string.Equals(args[1], "host-ownership", StringComparison.Ordinal)
                 || string.Equals(args[1], "intent-work", StringComparison.Ordinal)

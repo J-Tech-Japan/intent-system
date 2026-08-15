@@ -367,6 +367,8 @@ internal static class CommandRouter
                 ["inspect"] = GuideInspectCommand.Execute,
                 ["commands"] = GuideCommandsCommand.Execute,
                 ["onboarding"] = GuideOnboardingCommand.Execute,
+                // G705: public project-feedback guidance is render-only.
+                ["feedback"] = GuideFeedbackCommand.Execute,
                 ["intent-work"] = GuideIntentWorkCommand.Execute,
                 ["worker"] = GuideWorkerCommand.Execute,
                 ["closeout"] = GuideCloseoutCommand.Execute,

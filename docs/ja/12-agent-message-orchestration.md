@@ -221,6 +221,39 @@ session-scoped nohup process の二度の unnoticed death を含む supervision 
 mis-filed になったと記録されています。これは incident の記録であり、substantive B-1 question の
 解決ではありません。
 
+### 公開 project feedback（G705 — preview-through-1.x）
+
+`intent-cli guide feedback --format markdown`（または `--format json`）は、project
+feedback のための installed な render-only onboarding route です。公開 GitHub issue
+channel `J-Tech-Japan/intent-system` を示し、human または design thread が deliberate
+に実行する reviewed command form を表示します。
+
+```bash
+gh issue create --repo J-Tech-Japan/intent-system --title "<short summary>" --body-file <reviewed-report.md>
+```
+
+guide はこの command を実行せず、send path を持ちません。intent-cli は issue creation、
+GitHub/API POST、network connection、subprocess、confirmation-based submission、telemetry
+write/queue、child-issue publishing のいずれも行いません。project feedback は
+execution-unit child issue publishing と区別されます。
+
+**PUBLIC / WORLD-READABLE PERMANENTLY:** `J-Tech-Japan/intent-system` の issue は public で、
+world-readable permanently です。credentials or tokens、private hostnames、private paths、
+customer or personal data、internal URLs を絶対に含めないでください。filing 前に pasted
+logs を確認してください。
+
+effective report shape は recommendations only; never required gates です。exact installed
+version string、timestamped observations、expected versus actual behavior、reproduction
+context、verified-versus-assumed separation を推奨します。recommendation が欠けても imperfect
+report は fileable であり、抑止・拒否されません。AI seat は draft のみ作成できます。deliberate
+filing は G701 に従う design thread または operator による per-action の行為であり、新しい
+恒常的な権限や confirmation-based shortcut は追加しません。これは project feedback
+であり、execution-unit child issue contract ではありません。
+
+EN/JA semantic parity のため、次の契約語も同じ意味で保持します: `Review pasted logs before filing`、
+`AI seat may draft`、`design thread or the operator`、`no API POST`、`no network connection`、
+`no subprocess`、`Recommendations only; never required gates`、`Expected versus actual`。
+
 ### GitHub quota を named な last-net blind spot として扱う（G673 — preview-through-1.x）
 
 periodic な `automation stalled-work` check は引き続き last net であり、wake / supervision

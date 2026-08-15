@@ -173,6 +173,13 @@ internal static class GuideHelpCommand
             Purpose = "First-call sequence for a fresh agent. With optional --role, a role that has an installed contract receives its pointer before the unchanged ordered list of guide / automation surfaces to read before any mutation.",
             Example = "intent-cli guide onboarding --role implementation --format json"
         },
+        // G705: render-only public project-feedback guidance.
+        new GuideSubcommandEntry
+        {
+            Name = "feedback",
+            Purpose = "Public project-feedback channel guidance: names J-Tech-Japan/intent-system, renders a `gh issue create` form for deliberate human/design use, warns that issues are world-readable permanently, and never sends, writes telemetry, or publishes a child issue.",
+            Example = "intent-cli guide feedback --format markdown"
+        },
         new GuideSubcommandEntry
         {
             Name = "commands",

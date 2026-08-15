@@ -143,7 +143,14 @@ internal static class GuideOnboardingCommand
                     Command = "intent-cli automation summary --format json",
                     Purpose = "Read the canonical label-driven automation contract and capability JSON for the host repo.",
                     NoMutation = "Pure read; the operator owns the runtime contract that this command surfaces."
-                }
+                },
+            },
+            FeedbackGuidance = new GuideOnboardingFeedbackGuidance
+            {
+                JsonCommand = "intent-cli guide feedback --format json",
+                MarkdownCommand = "intent-cli guide feedback --format markdown",
+                Pointer = "Project feedback is a public GitHub issue channel on J-Tech-Japan/intent-system. Read the warning and let the design thread or operator deliberately file a reviewed report; an AI seat drafts only.",
+                NoMutation = "The pointer and target guide are render-only: no gh issue create execution, API POST, network connection, subprocess, confirmation submission, or telemetry write/queue."
             },
             UpdateChannelGuidance = new GuideOnboardingUpdateChannelGuidance
             {
@@ -220,6 +227,14 @@ internal static class GuideOnboardingCommand
         writer.WriteLine($"- Markdown: `{result.UpdateChannelGuidance.MarkdownCommand}`");
         writer.WriteLine($"- contract: {result.UpdateChannelGuidance.Contract}");
         writer.WriteLine($"- check safety: {result.UpdateChannelGuidance.CheckSafety}");
+        writer.WriteLine();
+
+        writer.WriteLine("## Project feedback route (G705)");
+        writer.WriteLine();
+        writer.WriteLine($"- JSON: `{result.FeedbackGuidance.JsonCommand}`");
+        writer.WriteLine($"- Markdown: `{result.FeedbackGuidance.MarkdownCommand}`");
+        writer.WriteLine($"- pointer: {result.FeedbackGuidance.Pointer}");
+        writer.WriteLine($"- no-mutation: {result.FeedbackGuidance.NoMutation}");
         writer.WriteLine();
 
         writer.WriteLine("## Host git repository data boundary");
@@ -326,6 +341,9 @@ internal sealed record GuideOnboardingResult
     [JsonPropertyName("first_call_sequence")]
     public required IReadOnlyList<GuideOnboardingStep> FirstCallSequence { get; init; }
 
+    [JsonPropertyName("feedback_guidance")]
+    public required GuideOnboardingFeedbackGuidance FeedbackGuidance { get; init; }
+
     [JsonPropertyName("update_channel_guidance")]
     public required GuideOnboardingUpdateChannelGuidance UpdateChannelGuidance { get; init; }
 
@@ -334,6 +352,21 @@ internal sealed record GuideOnboardingResult
 
     [JsonPropertyName("hard_rules")]
     public required IReadOnlyList<string> HardRules { get; init; }
+}
+
+internal sealed record GuideOnboardingFeedbackGuidance
+{
+    [JsonPropertyName("json_command")]
+    public required string JsonCommand { get; init; }
+
+    [JsonPropertyName("markdown_command")]
+    public required string MarkdownCommand { get; init; }
+
+    [JsonPropertyName("pointer")]
+    public required string Pointer { get; init; }
+
+    [JsonPropertyName("no_mutation")]
+    public required string NoMutation { get; init; }
 }
 
 internal sealed record GuideOnboardingUpdateChannelGuidance
