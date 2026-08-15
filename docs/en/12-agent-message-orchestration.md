@@ -249,6 +249,36 @@ mode, and a session-scoped nohup process that died twice unnoticed; seven
 findings were mis-filed. This records the incident without settling the
 substantive B-1 question.
 
+### Public project feedback (G705 — preview-through-1.x)
+
+`intent-cli guide feedback --format markdown` (or `--format json`) is the
+installed, render-only onboarding route for project feedback. It names the
+public GitHub issue channel `J-Tech-Japan/intent-system` and prints this
+reviewed command form for a human or design thread to run deliberately:
+
+```bash
+gh issue create --repo J-Tech-Japan/intent-system --title "<short summary>" --body-file <reviewed-report.md>
+```
+
+The guide never executes that command and provides no send path: no issue
+creation, no API POST, no network connection, no subprocess, no
+confirmation-based submission, no telemetry write/queue, or child-issue
+publishing is performed by intent-cli. Project feedback remains distinct from
+execution-unit child issue publishing.
+
+**PUBLIC / WORLD-READABLE PERMANENTLY:** Issues in
+`J-Tech-Japan/intent-system` are public and remain world-readable permanently.
+Never include credentials or tokens, private hostnames or private paths,
+customer or personal data, or internal URLs. Review pasted logs before filing.
+
+The effective report shape is recommendations only; never required gates:
+exact installed version string, timestamped observations, expected versus actual
+behavior, reproduction context, and a verified-versus-assumed separation. An imperfect report is still fileable; missing a recommendation
+does not suppress it. An AI seat may draft only. Deliberate filing is a
+per-action act by the design thread or the operator under G701, with no new
+standing authority and no confirmation-based shortcut. This is project
+feedback, not the execution-unit child issue contract.
+
 ### GitHub quota as a named last-net blind spot (G673 — preview-through-1.x)
 
 The periodic `automation stalled-work` check remains the last net and its

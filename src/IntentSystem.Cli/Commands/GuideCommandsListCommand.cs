@@ -47,7 +47,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationPrimary,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerChatAgent,
-            Purpose = "Operator-facing guidance: collaboration model, rules-by-topic, workflow suggestion, prompt-template catalog, one-shot/automation/review prompts. The single entry point an unfamiliar AI agent reads first."
+            Purpose = "Operator-facing guidance: collaboration model, rules-by-topic, workflow suggestion, public project-feedback, prompt-template catalog, one-shot/automation/review prompts. The single entry point an unfamiliar AI agent reads first."
         },
         new CommandGroupEntry
         {
