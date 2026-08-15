@@ -2826,44 +2826,45 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 使っています: 現在のバージョンの 2 つ目のコピーは同期し続けるべき対象が 1 つ増えることを
 意味し、しかも誰も見ていない roll でこそ stale になります。
 
-### 次リリース準備(v0.22.0)
+### 次リリース準備(v0.22.1)
 
-**`v0.21.0` は出荷済み**(GitHub Release + NuGet)で、次に準備するラインは
-`0.22.0` です。[v0.22.0 notes](release-notes-v0.22.0.md) は substantive な
-prepare-only notes です。直前の出荷範囲は
-[release-notes-v0.21.0.md](release-notes-v0.21.0.md) を参照し、ここでは重複記載しません。
+**`v0.22.0` は出荷済み**(GitHub Release + NuGet)で、次に準備するラインは
+`0.22.1` です。[v0.22.0 notes](release-notes-v0.22.0.md) は凍結された
+released evidence で、[v0.22.1 DRAFT](release-notes-v0.22.1.md) は次のラインの stub です。
+古い出荷範囲は [release-notes-v0.21.0.md](release-notes-v0.21.0.md) を参照し、ここでは重複記載しません。
 
-**リリース準備検証(`v0.22.0` release-preparation PR のマージ前に実行):**
+Rolled policy: `stableVersion → 0.22.0`; `nextVersion → 0.22.1`。
+
+**`v0.22.1` のリリース準備検証:**
 
 claims-enabled host では release artifact を編集する前に release scope を acquire / verify します。
 同じ shared verification が G680 の全 start surface を gate し、claims store が無ければ legacy
-single-team behavior を維持します。
-この記録は preparation 用であり、tag または Release を作成せず、package を publish せず、
-credentials を扱いません。
+single-team behavior を維持します。この roll は release documentation と version policy だけを変更し、
+tag または Release を作成せず、package を publish せず、credentials を扱いません。
 
 ```bash
-# 0. release-prep ownership を acquire / verify (preview-through-1.x)。
-intent-cli claim acquire --scope release-prep:<owner/repo>:0.22.0 --actor <actor> --team <team> --write --format json
-intent-cli claim verify --scope release-prep:<owner/repo>:0.22.0 --team <team> --format json
+# 0. 次の patch line の release-prep ownership を acquire / verify。
+intent-cli claim acquire --scope release-prep:<owner/repo>:0.22.1 --actor <actor> --team <team> --write --format json
+intent-cli claim verify --scope release-prep:<owner/repo>:0.22.1 --team <team> --format json
 
-# 1. version policy が release-to-be-cut を記録していることを確認。
-cat eng/version.json   # stableVersion 0.21.0 (published), nextVersion 0.22.0 (to release)
+# 1. roll 済み version policy を確認。
+cat eng/version.json   # stableVersion 0.22.0 (published), nextVersion 0.22.1 (next line)
 
-# 2. build して表示バージョン識別(version + git SHA + G-unit)を確認。
+# 2. 次のラインの表示バージョン識別を build して確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-#   期待する形: intent-cli 0.22.0-<sha>-G<unit>   (古いリテラルではない)
+#   期待する形: intent-cli 0.22.1-<sha>-G<unit>
 
-# 3. v0.22.0 では package publication を意図的に実行しない。
-# 別途承認された operator run で後から pack する場合の expected identity は
-# JTechJapan.IntentSystem.Cli.0.22.0.nupkg。この PR はそれを作成しない。
+# 3. この roll では package を publish しない。v0.22.0 の npm gap は下記に記録し、
+#    四つの npm tarball と checksum companion は既存 Release に残る。
+#    次のラインの package identity は JTechJapan.IntentSystem.Cli.0.22.1.nupkg。
 
-# 4. metadata-free directory から installed guide の入口を実行。
+# 4. metadata-free directory から既存 installed guide route を実行。
 intent-cli guide orchestrator-thread --domain intent-cli --target-repo J-Tech-Japan/intent-system --agent <agent> --format json
 intent-cli guide orchestrator-thread --domain intent-cli --target-repo J-Tech-Japan/intent-system --agent <agent> --format markdown
-#   この route から v0.22.0 readiness section に進む。host metadata は読まない。
+#   この roll は新しい guide-facing surface を宣言しないため、reachability debt が無いことを確認。
 
-# 5. G709 notes/count guard と release/version guard を確認。
+# 5. 凍結した v0.22.0 evidence と v0.22.1 version guard を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
   "FullyQualifiedName~ReleaseNotesV0220DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
@@ -2873,23 +2874,23 @@ git diff --check
 dotnet test IntentSystem.sln -c Release
 ```
 
-v0.22.0 の npm publication は意図的に skip します。npm organisation (organization) access と package-name
-reservation は未完了の operator account action です。そのため G702 npm publish step は v0.22.0
-では実行しません。これは defect ではなく distribution gap です。npm credentials は要求・処理せず、
-既存の npm entry-point guidance は後の operator action のために利用可能なままにします。
-
-準備コミットが `main` に入り readiness の証跡が揃ったら、operator が Release 作成を
-明示的に承認しなければなりません。そのうえで初めて maintainer/operator(または承認済みの
-外部リリース自動化)が `v0.22.0` の GitHub Release を作成・公開できます。公開すると
-`release.yml`(`on: release: published`)が起動し、NuGet package とプラットフォーム別
-バイナリを build/publish します。**その後すぐに `eng/version.json` を roll します** —
-`stableVersion → 0.22.0`、`nextVersion → 0.22.1` —
-[リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
-**ステップ 4–6** に従い、**同一コミットに DRAFT note スタブ**(ステップ 4)、
+この roll は [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
+**ステップ 4–6** に従います。**同一コミットに DRAFT note スタブ**(ステップ 4)、
 **「次リリース準備」セクションを ja/en 両ミラーで新しいラインへ更新**(ステップ 5)、
-そして roll を完了とみなす前の **roll 後の child main CI green 確認**(ステップ 6)を
-伴います。v0.22.0 の npm publication は別途 operator account / reservation action であり、
-この release の defect ではありません。
+そして **roll 後の child main CI green 確認**(ステップ 6)が完了条件です。
+
+v0.22.0 の npm registry publication は、npm organisation (organization) access、
+package-name reservation が未完了の operator account action であり、`NPM_TOKEN` も absent のため skip した。
+G702 npm publish step は v0.22.0 では実行せず、四つの npm tarball と checksum companion は既存 Release に添付されている。
+これは defect ではなく distribution gap です。npm credentials は要求・処理しません。
+
+凍結した v0.22.0 の EN note が公開済み GitHub Release body の canonical source です。JA note は
+明示的な parity mirror であり、同じ Release を JA note で上書きしてはいけません。body resync が必要な場合も
+orchestration は EN source のみを使います:
+`gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/en/release-notes-v0.22.0.md`。
+公開済みの body はすでに存在し、この implementation roll は command を実行せず GitHub Release state を変更しません。
+この roll は新しい guide-facing surface を追加せず、reachability debt も作りません。既存の metadata-free
+guide entry point が operator/agent interface のままです。
 
 ### 削除済みリリースタグ（`v0.3.3`）の再作成
 
