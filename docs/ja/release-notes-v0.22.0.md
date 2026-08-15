@@ -3,11 +3,16 @@
 > **公開済み (RELEASED)。** v0.22.0 は
 > https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.22.0 で公開済みです。
 > release target は `c06dc49e89446bf3b723612dd72004d628914734`、workflow run
-> `31903789754` は五つの job すべてで成功しました。以下の Release 本文と evidence は、
-> この roll の merge 後に orchestration が適用できる source です。
+> `31903789754` は五つの job すべてで成功しました。この文書は公開済みの Release 本文と
+> evidence を記録します。GitHub Release 本文の canonical source は English note です。
 
 clean-install で観測した version string は正確に `intent-cli 0.22.0-c06dc49-G708` です。
-verification command は `JTechJapan.IntentSystem.Cli --version 0.22.0` です。
+実行した verification pair は次の通りです:
+
+`dotnet tool install JTechJapan.IntentSystem.Cli --version 0.22.0 --tool-path <clean-dir> --source https://api.nuget.org/v3/index.json`
+
+続いて `<clean-dir>/intent-cli --version` を実行し、正確に
+`intent-cli 0.22.0-c06dc49-G708` を得ました。
 NuGet public package index:
 https://www.nuget.org/packages/JTechJapan.IntentSystem.Cli/0.22.0。
 直前の出荷範囲は [release-notes-v0.21.0.md](release-notes-v0.21.0.md) にリンクし、
@@ -106,10 +111,12 @@ skip しました。registry に npm package は publish しておらず、G702 
 `j-tech-japan-intent-cli-linux-x64-0.22.0.tgz`、`j-tech-japan-intent-cli-linux-x64-0.22.0.tgz.sha256`、
 `j-tech-japan-intent-cli-win32-x64-0.22.0.tgz`、`j-tech-japan-intent-cli-win32-x64-0.22.0.tgz.sha256`。この roll は credentials や operator account action を行いません。
 
-## Release body source for orchestration — リリース本文 source
+## Release body mirror — リリース本文 mirror
 
-この PR の merge 後、orchestration は既存 Release に次の source を適用できます:
+この Japanese note は EN canonical GitHub Release body の明示的な parity mirror です。
+公開済みの同じ Release を JA note で上書きしてはいけません。body resync が必要な場合も、
+orchestration は canonical EN source のみを使います:
 
-`gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/ja/release-notes-v0.22.0.md`
+`gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/en/release-notes-v0.22.0.md`
 
-この implementation roll は command を実行せず、GitHub Release state を変更しません。
+公開済みの body はすでに存在し、この repair は command を実行せず、GitHub Release state を変更しません。

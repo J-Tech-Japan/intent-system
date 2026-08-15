@@ -3,12 +3,17 @@
 > **RELEASED.** v0.22.0 is the published release at
 > https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.22.0. Its
 > release target is `c06dc49e89446bf3b723612dd72004d628914734`, and workflow
-> run `31903789754` completed successfully with five jobs. The release body
-> and evidence below are the source that orchestration can apply after this
-> roll merges.
+> run `31903789754` completed successfully with five jobs. This document
+> records the published Release body and evidence; the canonical GitHub Release
+> body source is this English note.
 
 Clean-install verification observed exactly: `intent-cli 0.22.0-c06dc49-G708`.
-The verification command was `JTechJapan.IntentSystem.Cli --version 0.22.0`.
+The executable verification pair was:
+
+`dotnet tool install JTechJapan.IntentSystem.Cli --version 0.22.0 --tool-path <clean-dir> --source https://api.nuget.org/v3/index.json`
+
+followed by `<clean-dir>/intent-cli --version`, yielding exactly
+`intent-cli 0.22.0-c06dc49-G708`.
 NuGet public package index: https://www.nuget.org/packages/JTechJapan.IntentSystem.Cli/0.22.0.
 The preceding shipped scope remains in
 [release-notes-v0.21.0.md](release-notes-v0.21.0.md); it is linked, not restated.
@@ -118,12 +123,13 @@ and their checksum companions attached: `intent-system-0.22.0.tgz`,
 `j-tech-japan-intent-cli-win32-x64-0.22.0.tgz.sha256`. No credentials or
 operator account actions are performed by this roll.
 
-## Release body source for orchestration
+## Canonical GitHub Release body source
 
-After this PR merges, orchestration may apply this exact source to the existing
-Release with:
+This English note is the canonical source for the published GitHub Release
+body. Orchestration may re-apply this exact EN source when a body resync is
+needed with:
 
 `gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/en/release-notes-v0.22.0.md`
 
-This implementation roll does not execute that command and does not mutate
-GitHub Release state.
+The published body is already present; this repair does not execute that
+command and does not mutate GitHub Release state.

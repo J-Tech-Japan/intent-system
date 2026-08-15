@@ -23,6 +23,9 @@ public sealed class ReleaseNotesV0210DocsTests
         .. Units.Select(unit => unit.Merge),
     ];
 
+    private const string StableCleanInstallCommand =
+        "dotnet tool install JTechJapan.IntentSystem.Cli --version 0.22.0 --tool-path <clean-dir> --source https://api.nuget.org/v3/index.json";
+
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
@@ -155,7 +158,9 @@ public sealed class ReleaseNotesV0210DocsTests
                 : $"次リリース準備(v{policy.NextVersion})",
             reference,
             StringComparison.Ordinal);
-        Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.StableVersion}", stableNotes, StringComparison.Ordinal);
+        Assert.Contains(StableCleanInstallCommand, stableNotes, StringComparison.Ordinal);
+        Assert.Contains("<clean-dir>/intent-cli --version", stableNotes, StringComparison.Ordinal);
+        Assert.DoesNotContain("`JTechJapan.IntentSystem.Cli --version 0.22.0`", stableNotes, StringComparison.Ordinal);
         Assert.Contains($"releases/tag/v{policy.StableVersion}", stableNotes, StringComparison.Ordinal);
         var currentNotesText = File.ReadAllText(Path.Combine(root, "docs", language, currentNotes));
         var currentNotesCompact = Regex.Replace(currentNotesText, @"[>\s]+", " ");

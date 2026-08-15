@@ -65,6 +65,10 @@ public sealed class ReleaseNotesV0220DocsTests
         "j-tech-japan-intent-cli-win32-x64-0.22.0.tgz.sha256",
     ];
 
+    private const string CleanInstallCommand =
+        "dotnet tool install JTechJapan.IntentSystem.Cli --version 0.22.0 --tool-path <clean-dir> --source https://api.nuget.org/v3/index.json";
+    private const string CleanQueryCommand = "<clean-dir>/intent-cli --version";
+
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
@@ -146,7 +150,7 @@ public sealed class ReleaseNotesV0220DocsTests
         Assert.Contains("c06dc49e89446bf3b723612dd72004d628914734", notes, StringComparison.Ordinal);
         Assert.Contains("31903789754", notes, StringComparison.Ordinal);
         Assert.Contains(language == "en" ? "five jobs" : "五つの job", compact, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("intent-cli 0.22.0-c06dc49-G708", notes, StringComparison.Ordinal);
+        AssertCleanInstallEvidence(notes, language);
         Assert.Contains("https://www.nuget.org/packages/JTechJapan.IntentSystem.Cli/0.22.0", notes, StringComparison.Ordinal);
         Assert.Contains("https://api.nuget.org/v3/registration5-gz-semver2/jtechjapan.intentsystem.cli/index.json", notes, StringComparison.Ordinal);
         Assert.Contains(language == "en" ? "all sixteen attached assets" : "十六個の asset", compact, StringComparison.OrdinalIgnoreCase);
@@ -180,9 +184,36 @@ public sealed class ReleaseNotesV0220DocsTests
         Assert.Contains(
             language == "en"
                 ? "gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/en/release-notes-v0.22.0.md"
-                : "gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/ja/release-notes-v0.22.0.md",
+                : "gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/en/release-notes-v0.22.0.md",
             notes,
             StringComparison.Ordinal);
+        if (language == "en")
+        {
+            Assert.Contains("canonical source", compact, StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            Assert.Contains("parity mirror", compact, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("JA note で上書きしてはいけません", compact, StringComparison.Ordinal);
+            Assert.DoesNotContain("--notes-file docs/ja/release-notes-v0.22.0.md", notes, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void CleanInstallGuardRejectsPackageIdAsCommand(string language)
+    {
+        var notes = Read(language);
+        AssertCleanInstallEvidence(notes, language);
+
+        var invalid = notes.Replace(
+            CleanInstallCommand,
+            "JTechJapan.IntentSystem.Cli --version 0.22.0",
+            StringComparison.Ordinal);
+
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => AssertCleanInstallEvidence(invalid, language));
     }
 
     [Theory]
@@ -266,7 +297,15 @@ public sealed class ReleaseNotesV0220DocsTests
         Assert.Contains("guide orchestrator-thread", section, StringComparison.Ordinal);
         Assert.Contains("ReleaseNotesV0220DocsTests", section, StringComparison.Ordinal);
         Assert.DoesNotContain("v0.21.1", section, StringComparison.Ordinal);
-        Assert.Contains("gh release edit v0.22.0", section, StringComparison.Ordinal);
+        Assert.Contains(
+            "gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/en/release-notes-v0.22.0.md",
+            section,
+            StringComparison.Ordinal);
+        if (language == "ja")
+        {
+            Assert.Contains("parity mirror", compact, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("--notes-file docs/ja/release-notes-v0.22.0.md", section, StringComparison.Ordinal);
+        }
         Assert.Contains(
             language == "en" ? "no guide reachability debt" : "reachability debt も作りません",
             compact,
@@ -290,6 +329,18 @@ public sealed class ReleaseNotesV0220DocsTests
             Assert.Contains(unit.Unit, table.Value, StringComparison.Ordinal);
             Assert.Contains(unit.Pr, table.Value, StringComparison.Ordinal);
         }
+    }
+
+    private static void AssertCleanInstallEvidence(string notes, string language)
+    {
+        Assert.Contains(CleanInstallCommand, notes, StringComparison.Ordinal);
+        Assert.Contains(CleanQueryCommand, notes, StringComparison.Ordinal);
+        Assert.Contains("intent-cli 0.22.0-c06dc49-G708", notes, StringComparison.Ordinal);
+        Assert.DoesNotContain("`JTechJapan.IntentSystem.Cli --version 0.22.0`", notes, StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "yielding exactly" : "正確に",
+            notes,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static string SwapUnitCitations(

@@ -2829,12 +2829,13 @@ run for v0.22.0; four npm tarballs and their checksum companions are attached
 to the existing Release. This is a distribution gap, not a defect. No npm
 credentials are requested or handled.
 
-The frozen v0.22.0 notes are suitable for the post-merge orchestration action:
+The published v0.22.0 notes are the canonical EN source for the GitHub Release
+body. If a body resync is needed, orchestration uses only this source:
 `gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/en/release-notes-v0.22.0.md`.
-This implementation roll does not execute that command or mutate GitHub
-Release state. The roll adds no new guide-facing surface and creates no guide
-reachability debt; existing metadata-free guide entry points remain the
-operator/agent interface.
+The published body is already present; this implementation roll does not
+execute that command or mutate GitHub Release state. The roll adds no new
+guide-facing surface and creates no guide reachability debt; existing
+metadata-free guide entry points remain the operator/agent interface.
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 

@@ -2884,9 +2884,11 @@ package-name reservation が未完了の operator account action であり、`NP
 G702 npm publish step は v0.22.0 では実行せず、四つの npm tarball と checksum companion は既存 Release に添付されている。
 これは defect ではなく distribution gap です。npm credentials は要求・処理しません。
 
-凍結した v0.22.0 notes は merge 後の orchestration が次の command で既存 Release に適用できる source です:
-`gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/ja/release-notes-v0.22.0.md`。
-この implementation roll は command を実行せず、GitHub Release state を変更しません。
+凍結した v0.22.0 の EN note が公開済み GitHub Release body の canonical source です。JA note は
+明示的な parity mirror であり、同じ Release を JA note で上書きしてはいけません。body resync が必要な場合も
+orchestration は EN source のみを使います:
+`gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/en/release-notes-v0.22.0.md`。
+公開済みの body はすでに存在し、この implementation roll は command を実行せず GitHub Release state を変更しません。
 この roll は新しい guide-facing surface を追加せず、reachability debt も作りません。既存の metadata-free
 guide entry point が operator/agent interface のままです。
 
