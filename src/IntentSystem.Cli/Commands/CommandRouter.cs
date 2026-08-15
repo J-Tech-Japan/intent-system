@@ -30,6 +30,8 @@ internal static class CommandRouter
         "closeout",
         "migrate",
         "skill",
+        // G703: metadata-free channel-aware self-update.
+        "update",
         // G570: session-layer transport selection (agmsg | herdr-only).
         "session-layer",
         // G691: durable team shape (delivery | authoring-only), orthogonal to transport.
@@ -55,6 +57,7 @@ internal static class CommandRouter
     internal static readonly IReadOnlyList<string> PrimaryCommandGroups = new[]
     {
         "guide",
+        "update",
         "automation",
         "notify",
         "worker",
@@ -453,6 +456,15 @@ internal static class CommandRouter
             return 0;
         }
 
+        // G703: update is a metadata-free top-level command rather than a
+        // host-state command group. Keep this route available to direct
+        // CommandRouter callers as well as Program.Main's early bootstrap
+        // path.
+        if (args.Length > 0 && string.Equals(args[0], "update", StringComparison.Ordinal))
+        {
+            return UpdateCommand.Execute(args[1..], writer);
+        }
+
         if (args.Length == 0
             || (args.Length == 1 && string.Equals(args[0], "--help", StringComparison.Ordinal)))
         {
@@ -618,6 +630,17 @@ internal static class CommandRouter
     private static void WriteGroupHelp(string group, TextWriter writer)
     {
         writer.WriteLine($"intent-cli {group} — group help");
+
+        if (string.Equals(group, "update", StringComparison.Ordinal))
+        {
+            writer.WriteLine();
+            writer.WriteLine("Usage: intent-cli update [--check] [--format markdown|json]");
+            writer.WriteLine("Derives the install channel from the fully resolved executable path on every run.");
+            writer.WriteLine("`--check` reports current/latest/would-be action with no process spawn or writes.");
+            writer.WriteLine("See also: `intent-cli guide onboarding --format markdown` (metadata-free update route).");
+            return;
+        }
+
         writer.WriteLine($"Usage: intent-cli {group} <subcommand> [--help]");
         writer.WriteLine();
 
@@ -687,7 +710,8 @@ internal static class CommandRouter
             ["safety"] = "`intent-cli safety nested-provider-handoff` (artifact-only nested-provider handoffs).",
             ["projection"] = "`intent-cli projection generate` / `regenerate` (internal tooling).",
             ["project"] = "`intent-cli project status` (older surface; prefer `intent status`).",
-            ["skill"] = "`intent-cli skill list` / `install --target claude|codex|copilot|all [--scope user|repo] [--force]` / `diff` (installs the embedded SKILL.md into each platform's skill location)."
+            ["skill"] = "`intent-cli skill list` / `install --target claude|codex|copilot|all [--scope user|repo] [--force]` / `diff` (installs the embedded SKILL.md into each platform's skill location).",
+            ["update"] = "`intent-cli update [--check] [--format markdown|json]` (G703 path-derived channel detection and self-update; no marker is persisted)."
         };
 
     private static void WriteHelp(TextWriter writer) => WriteHelp(writer, includeAll: false);
@@ -741,6 +765,10 @@ internal static class CommandRouter
         writer.WriteLine("- `intent-cli <group> --help` (e.g. `intent-cli guide --help`, `intent-cli worker --help`) — list the group's subcommands.");
         writer.WriteLine("- `intent-cli guide help [--format markdown|json]` — external-user self-discovery surface with examples + workflow guide pointers.");
         writer.WriteLine("- `intent-cli guide commands list [--format markdown|json]` — classified catalog (primary / support).");
+        writer.WriteLine();
+        writer.WriteLine("Self-update:");
+        writer.WriteLine("- `intent-cli update [--format markdown|json]` — derive the install channel from the resolved executable path and update through that channel.");
+        writer.WriteLine("- `intent-cli update --check --format json` — report current/latest/would-be action with zero process spawn or writes.");
 
         writer.WriteLine();
         writer.WriteLine("Automation commands:");

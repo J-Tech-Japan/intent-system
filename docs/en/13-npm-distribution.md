@@ -29,6 +29,39 @@ prints exactly one concise line after the command suggesting
 It never performs that installation itself. There is no `postinstall` hook and
 no package-install network download.
 
+## Channel-aware update (G703)
+
+`intent-cli update` derives the channel from the fully resolved real path of the
+running executable on every invocation. It does not persist a channel marker.
+The detection line names both the channel and the path evidence before an
+update action starts:
+
+```bash
+intent-cli update
+```
+
+The supported actions are:
+
+- .NET global tool: `dotnet tool update -g JTechJapan.IntentSystem.Cli`.
+- npm global: `npm install -g intent-system@latest`.
+- npx cache: guidance only — rerun the command with `npx intent-system@latest`;
+  the CLI does not mutate the cache or install globally.
+- standalone binary: download the matching release archive, verify its
+  `.sha256` sidecar, then replace the binary through a same-volume temp+rename
+  swap. A checksum mismatch leaves the original binary byte-identical.
+
+Use the no-effect check from any metadata-free directory:
+
+```bash
+intent-cli update --check --format json
+intent-cli update --check --format markdown
+```
+
+The check reports the current version, latest release, and would-be action;
+`process_spawned=false` and `writes_performed=false` are part of the result.
+Unknown or ambiguous executable paths fail closed and print manual guidance for
+all four channels rather than guessing.
+
 ## Release integrity
 
 The release workflow derives one version from the published Git tag and uses

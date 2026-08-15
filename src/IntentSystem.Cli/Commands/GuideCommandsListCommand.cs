@@ -144,6 +144,15 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "update",
+            Role = RoleChildImplementation,
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityMixed,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "G703 channel-aware self-update: `intent-cli update` derives the installation channel from the fully resolved executable path on every run; `--check` reports current/latest/would-be action without process spawn or writes, and unknown paths fail closed."
+        },
+        new CommandGroupEntry
+        {
             Name = "session-layer",
             Role = RoleDesign,
             Classification = ClassificationSupport,

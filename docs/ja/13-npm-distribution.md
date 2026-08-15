@@ -28,6 +28,34 @@ shim は npm user agent から npx を検出し、`PATH` に `intent-cli` があ
 shim 自身がインストールを実行することはありません。`postinstall` hook もパッケージインストール時の
 ネットワークダウンロードもありません。
 
+## channel-aware update (G703)
+
+`intent-cli update` は、実行中 executable の symlink を解決した real path から毎回 channel を導出します。
+channel marker は保存しません。update action の前に channel と path evidence を表示します。
+
+```bash
+intent-cli update
+```
+
+対応する action は次のとおりです。
+
+- .NET global tool: `dotnet tool update -g JTechJapan.IntentSystem.Cli`。
+- npm global: `npm install -g intent-system@latest`。
+- npx cache: guidance のみ。`npx intent-system@latest` で再実行し、cache の変更や global install は行いません。
+- standalone binary: 対応する release archive を取得し、`.sha256` sidecar を検証してから、同一 volume の
+  temp+rename swap で binary を置き換えます。checksum mismatch の場合、元の binary は byte-identical のままです。
+
+metadata の無い directory から、書き込みのない check を実行できます。
+
+```bash
+intent-cli update --check --format json
+intent-cli update --check --format markdown
+```
+
+check は current version、latest release、would-be action を表示し、結果に
+`process_spawned=false` と `writes_performed=false` を含めます。unknown または ambiguous な executable path は推測せず
+fail closed し、4 channel すべての手動 guidance を表示します。
+
 ## リリースの整合性
 
 release workflow は公開された Git tag から 1 つのバージョンを導出し、NuGet パッケージ、すべての
