@@ -2370,6 +2370,8 @@ internal static class GuideOrchestratorThreadCommand
                     ?? throw new InvalidOperationException("The measured Copilot launch recipe is missing from the registry."),
                 CodexRecipe = AgentLaunchRecipeRegistry.Find("codex")
                     ?? throw new InvalidOperationException("The measured Codex launch recipe is missing from the registry."),
+                ClaudeRecipe = AgentLaunchRecipeRegistry.Find("claude")
+                    ?? throw new InvalidOperationException("The measured Claude launch grammar is missing from the registry."),
                 ReadyBranch =
                     "For an unattended seat, run the normal G556 liveness checks AND prove all three recipe-specific "
                     + "facts: an expected action inside the recorded roots succeeds, the role can reach its canonical "
@@ -2744,11 +2746,13 @@ internal static class GuideOrchestratorThreadCommand
                 Summary =
                     "G699: measured supervision keeps the detector authoritative while making repeated observations readable and bounded. "
                     + "The first finding is emitted at the full configured cadence; an unchanged same-key observation remains a named active "
-                    + "parked record and later findings are emitted no more often than the recorded repeat backoff cadence.",
+                    + "parked record and later findings are emitted no more often than the recorded repeat backoff cadence. G704 hardens "
+                    + "supervise install with structural bound validation, launchd log paths, bounded first-cycle proof, and duplicate-writer attribution.",
                 Commands = new[]
                 {
                     $"intent-cli notify supervise --domain {domain} --team {team} --repo {targetRepo} --interval 300 --repeat-backoff-seconds {NotifySupervisionEmissionPolicy.DefaultRepeatBackoffSeconds} --debounce-consecutive-observations {NotifySupervisionEmissionPolicy.DefaultDebounceConsecutiveObservations} --once --write --format json",
                     $"intent-cli notify supervise --domain {domain} --team {team} --repo {targetRepo} --once --format markdown",
+                    $"intent-cli notify supervise install --domain {domain} --team {team} --repo {targetRepo} --owner-role orchestration --bound 900 --interval 300 --startup-bound {NotifySuperviseInstallCommand.DefaultStartupBoundSeconds} --write --format json",
                 },
                 RecordedConfiguration = new[]
                 {
@@ -2756,6 +2760,9 @@ internal static class GuideOrchestratorThreadCommand
                     $"repeat emission backoff: `--repeat-backoff-seconds <seconds>` (alias `--backoff-seconds`); default: {NotifySupervisionEmissionPolicy.DefaultRepeatBackoffSeconds}s",
                     $"pane status debounce: `--debounce-consecutive-observations <count>` (alias `--status-debounce-consecutive`); default: {NotifySupervisionEmissionPolicy.DefaultDebounceConsecutiveObservations} consecutive observations",
                     "write mode records the resolved values at `.intent-cli/supervision/<domain>/<team>/emission-policy.json` and repeats them on every cycle",
+                    "G704 bound rule: `--bound` must be >= `--interval`; otherwise `bound-below-interval` names the structural `supervisor-not-running` consequence while the runtime warning remains",
+                    $"G704 startup proof: `--startup-bound <seconds>` (default {NotifySuperviseInstallCommand.DefaultStartupBoundSeconds}s) must observe a writer-bearing first cycle before a write reports success",
+                    "G704 macOS artifact: WorkingDirectory is the routing root; StandardOutPath and StandardErrorPath are under `.intent-cli/supervision/<domain>/<team>/runtime/`; installed writer identity is recorded beside bound/emission state",
                 },
                 OperatingSemantics = new[]
                 {
@@ -2765,12 +2772,16 @@ internal static class GuideOrchestratorThreadCommand
                     "a genuinely new observation key is emitted immediately even while another key is parked",
                     "a pane status flap below the recorded consecutive threshold is not classified; the threshold-consecutive settled state is classified once with the existing observation-only boundary",
                     "detection predicates and G695 continuation-chain recording remain unchanged; parking suppresses duplicate findings only and never performs a lifecycle transition",
+                    "G704 duplicate-supervisor compares G676 writer identities with the installed record and routes the same key through G699 backoff/park",
+                    "first-cycle proof failure is named `first-cycle-proof-failed` and names both log paths; a post-install cycle with writer identity is the only success evidence",
                 },
                 NegativeChecks = new[]
                 {
                     "do not treat one blocked/idle poll as a settled transition",
                     "do not silently remove a parked key or infer auto-resolution",
                     "do not use a repeated same-key finding to authorize a merge, closeout, label change, or other workflow mutation",
+                    "do not accept a bound below the interval, infer first-cycle liveness from a loaded service/PID, or hide startup failure in an unlabeled log",
+                    "do not use terminal content to prove duplicate supervision and do not auto-kill, stop, elect, or rank a writer",
                 },
                 AuthorityBoundary =
                     "This is an observation and wake-hygiene policy only. `intent-cli`/GitHub remain authoritative for workflow state; the supervisor may record, wake the owning role, and surface evidence, but never clears work or changes lifecycle state.",
@@ -3770,6 +3781,28 @@ internal static class GuideOrchestratorThreadCommand
                 + $"(measured on host: {measurement.Host}; date: {measurement.Date})");
         }
         writer.WriteLine();
+        writer.WriteLine("#### Claude (measured grammar, G704/G685)");
+        writer.WriteLine();
+        writer.WriteLine("```text");
+        writer.WriteLine(unattended.ClaudeRecipe.Invocation);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine($"- role-derived roots — {unattended.ClaudeRecipe.RoleDerivedRoots}");
+        writer.WriteLine($"- task-envelope delivery method — {unattended.ClaudeRecipe.DeliveryMethod}");
+        writer.WriteLine($"- post-start interaction — {unattended.ClaudeRecipe.PostStartInteraction.ToMarkdown()}");
+        writer.WriteLine($"- startup gates — {unattended.ClaudeRecipe.StartupGates}");
+        writer.WriteLine($"- prohibited blanket permissions — {unattended.ClaudeRecipe.ProhibitedBlanket}");
+        writer.WriteLine($"- denial semantics — {unattended.ClaudeRecipe.DenialSemantics}");
+        writer.WriteLine($"- recovery — {unattended.ClaudeRecipe.Recovery}");
+        writer.WriteLine("- measured facts —");
+        foreach (var measurement in unattended.ClaudeRecipe.Measurements)
+        {
+            writer.WriteLine(
+                $"  - [{measurement.Status}] {measurement.Fact}: {measurement.Observation} "
+                + $"(version: {measurement.Version}; platform: {measurement.Platform}) "
+                + $"(measured on host: {measurement.Host}; date: {measurement.Date})");
+        }
+        writer.WriteLine();
         writer.WriteLine(
             $"> **Registry boundary (G647):** recorded kinds are {string.Join(", ", unattended.RecordedKinds)}. "
             + "A target kind without a recorded recipe is named as absent at `topology update-kind`; do not "
@@ -3782,7 +3815,7 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine("- measured flag grammar (placeholders only):");
         foreach (var grammar in unattended.ModelFlagGrammars)
         {
-            writer.WriteLine($"  - **{grammar.Kind}** — model `{grammar.Model}`; effort `{grammar.Effort}`");
+            writer.WriteLine($"  - **{grammar.Kind}** — model {grammar.Model}; effort {grammar.Effort}; add-dir {grammar.AddDir ?? "<not recorded>"}");
         }
         foreach (var item in unattended.ModelResolution.ResolutionOrder)
         {
@@ -6063,6 +6096,9 @@ internal sealed record OrchestratorUnattendedLaunchRecipes
 
     [JsonPropertyName("codex_recipe")]
     public required AgentLaunchRecipe CodexRecipe { get; init; }
+
+    [JsonPropertyName("claude_recipe")]
+    public required AgentLaunchRecipe ClaudeRecipe { get; init; }
 
     [JsonPropertyName("ready_branch")]
     public required string ReadyBranch { get; init; }

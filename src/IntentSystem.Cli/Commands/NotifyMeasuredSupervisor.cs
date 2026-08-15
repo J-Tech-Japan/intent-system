@@ -210,6 +210,7 @@ internal sealed class NotifyMeasuredSupervisor
             : "declared-bound";
         var duplicateSupervisor = DetectDuplicateSupervisor(
             previousCycle,
+            state.InstalledSupervisor,
             now,
             absenceThresholdSeconds);
         var absentSinceLastCycle = string.Equals(trigger, "interval", StringComparison.Ordinal)
@@ -588,11 +589,19 @@ internal sealed class NotifyMeasuredSupervisor
                     emissionPolicy);
                 PersistStallUpdate(retained.Record, warnings, "supervision-stall-update-write-failed");
                 records.Add(retained.Record);
-                if (observation.Kind is "supervision-degraded" or "duplicate-supervisor" or "recipe-drift" or "profile-invalid")
+                if (observation.Kind is "supervision-degraded" or "recipe-drift" or "profile-invalid")
                 {
                     // Cycle-level facts are not once-only activity findings:
                     // surface one finding for each cycle, still once for the
                     // cycle rather than once per delegation or observation.
+                    findings.Add(ToFinding(retained.Record));
+                }
+                else if (string.Equals(observation.Kind, "duplicate-supervisor", StringComparison.Ordinal)
+                    && (!observation.UseEmissionBackoff || retained.ShouldEmit))
+                {
+                    // G704: duplicate writers are cycle observations too, but
+                    // they must use the same recorded backoff/park contract as
+                    // every other repeated key.
                     findings.Add(ToFinding(retained.Record));
                 }
                 continue;
@@ -1085,9 +1094,33 @@ internal sealed class NotifyMeasuredSupervisor
 
     private NotifySupervisionObservation? DetectDuplicateSupervisor(
         NotifySupervisionCycle? previousCycle,
+        NotifySupervisionInstalledSupervisor? installedSupervisor,
         DateTimeOffset now,
         int recentThresholdSeconds)
     {
+        var installedWriter = installedSupervisor?.Writer;
+        if (installedWriter is not null
+            && !writerIdentity.IsSameWriter(installedWriter)
+            && writerIsLive(installedWriter))
+        {
+            var installedAgeSeconds = previousCycle is null
+                ? 0
+                : Math.Max(0, (long)(now - previousCycle.CompletedAt).TotalSeconds);
+            var installedLabel = $"intent-cli.supervise.{domain}.{team}";
+            return new NotifySupervisionObservation
+            {
+                Key = "supervisor:duplicate",
+                Kind = "duplicate-supervisor",
+                OwnerRole = ownerRole,
+                Source = "supervision-cycle",
+                Summary = $"Duplicate supervisor detected: current writer pid={writerIdentity.Pid}, process_start_time={writerIdentity.ProcessStartTime:O}, host='{writerIdentity.Host}' differs from installed writer pid={installedWriter.Pid}, process_start_time={installedWriter.ProcessStartTime:O}, host='{installedWriter.Host}'; latest cycle age={installedAgeSeconds}s (recent threshold={recentThresholdSeconds}s). Duplicate-wake cost: both writers can wake the same stall, duplicating wakes for the same stall. Remedy: converge on the G658 per-team scheduler label '{installedLabel}'. Detection only; no terminal-content evidence was used, and no process was killed, stopped, ranked, elected, locked, or leased.",
+                Cause = $"duplicate-writer:current={writerIdentity.Pid}/{writerIdentity.ProcessStartTime:O}/{writerIdentity.Host};installed={installedWriter.Pid}/{installedWriter.ProcessStartTime:O}/{installedWriter.Host}",
+                DetectableAt = previousCycle?.CompletedAt ?? installedSupervisor!.RecordedAt,
+                WakeSuppressed = true,
+                UseEmissionBackoff = true,
+            };
+        }
+
         var otherWriter = previousCycle?.Writer;
         if (otherWriter is null
             || writerIdentity.IsSameWriter(otherWriter)
@@ -2617,14 +2650,20 @@ internal sealed class NotifyMeasuredSupervisor
 
     private static string BuildStateFingerprint(NotifySupervisionObservation observation)
     {
+        var stableSummary = string.Equals(observation.Kind, "duplicate-supervisor", StringComparison.Ordinal)
+            ? "duplicate-supervisor"
+            : observation.Summary;
+        var stableCause = string.Equals(observation.Kind, "duplicate-supervisor", StringComparison.Ordinal)
+            ? "duplicate-supervisor"
+            : observation.Cause ?? string.Empty;
         var canonical = string.Join(
             "\u001f",
             observation.Kind,
             observation.Source,
             observation.OwnerRole,
             observation.SubjectRole ?? string.Empty,
-            observation.Summary,
-            observation.Cause ?? string.Empty,
+            stableSummary,
+            stableCause,
             observation.OwedTransition ?? string.Empty,
             string.Join("\u001e", observation.Evidence ?? []),
             observation.ToStatus ?? string.Empty,
@@ -2778,6 +2817,7 @@ internal sealed record NotifySupervisionObservation
     public string? WakeCause { get; init; }
     public string? Cause { get; init; }
     public bool WakeSuppressed { get; init; }
+    public bool UseEmissionBackoff { get; init; }
     public IReadOnlyList<string>? Evidence { get; init; }
     public string? OwedTransition { get; init; }
     public string? WorkspaceId { get; init; }

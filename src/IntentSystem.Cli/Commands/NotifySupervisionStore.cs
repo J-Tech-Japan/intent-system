@@ -14,6 +14,7 @@ internal static class NotifySupervisionStore
 {
     public const string BoundFileName = "bound.json";
     public const string EmissionPolicyFileName = "emission-policy.json";
+    public const string InstalledSupervisorFileName = "installed-supervisor.json";
     public const string CycleFileName = "cycles.jsonl";
     public const string StallFileName = "stalls.jsonl";
 
@@ -40,6 +41,9 @@ internal static class NotifySupervisionStore
     public static string ResolveEmissionPolicyPath(string artifactRoot, string domain, string team) =>
         Path.Combine(ResolveDirectory(artifactRoot, domain, team), EmissionPolicyFileName);
 
+    public static string ResolveInstalledSupervisorPath(string artifactRoot, string domain, string team) =>
+        Path.Combine(ResolveDirectory(artifactRoot, domain, team), InstalledSupervisorFileName);
+
     public static string ResolveCyclePath(string artifactRoot, string domain, string team) =>
         Path.Combine(ResolveDirectory(artifactRoot, domain, team), CycleFileName);
 
@@ -64,6 +68,7 @@ internal static class NotifySupervisionStore
             {
                 var bound = ReadBound(Path.Combine(directory, BoundFileName));
                 var emissionPolicy = ReadEmissionPolicy(Path.Combine(directory, EmissionPolicyFileName));
+                var installedSupervisor = ReadInstalledSupervisor(Path.Combine(directory, InstalledSupervisorFileName));
                 var cyclePath = Path.Combine(directory, CycleFileName);
                 var cycles = ReadCycles(cyclePath);
                 var promptAudits = ReadPromptAudits(cyclePath);
@@ -74,6 +79,7 @@ internal static class NotifySupervisionStore
                     Directory = directory,
                     Bound = bound,
                     EmissionPolicy = emissionPolicy,
+                    InstalledSupervisor = installedSupervisor,
                     LastCycle = cycles.LastOrDefault(),
                     LastIntervalCycle = cycles.LastOrDefault(cycle =>
                         string.IsNullOrWhiteSpace(cycle.Trigger)
@@ -153,6 +159,50 @@ internal static class NotifySupervisionStore
         }
 
         var line = JsonSerializer.Serialize(policy, JsonOptions) + Environment.NewLine;
+        if (WriteOverride is { } writeOverride)
+        {
+            return writeOverride(path, line);
+        }
+
+        lock (Sync)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, line, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                return new NotifySupervisionWriteResult(true, false, path, null);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return new NotifySupervisionWriteResult(false, false, path, exception.Message);
+            }
+        }
+    }
+
+    public static NotifySupervisionWriteResult RecordInstalledSupervisor(
+        string artifactRoot,
+        NotifySupervisionInstalledSupervisor installedSupervisor,
+        bool write)
+    {
+        string path;
+        try
+        {
+            path = ResolveInstalledSupervisorPath(
+                artifactRoot,
+                installedSupervisor.Domain,
+                installedSupervisor.Team);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            return new NotifySupervisionWriteResult(false, false, artifactRoot, exception.Message);
+        }
+
+        if (!write)
+        {
+            return new NotifySupervisionWriteResult(false, false, path, null);
+        }
+
+        var line = JsonSerializer.Serialize(installedSupervisor, JsonOptions) + Environment.NewLine;
         if (WriteOverride is { } writeOverride)
         {
             return writeOverride(path, line);
@@ -286,6 +336,17 @@ internal static class NotifySupervisionStore
 
         return JsonSerializer.Deserialize<NotifySupervisionEmissionPolicy>(File.ReadAllText(path), JsonOptions)
             ?? throw new InvalidDataException("The supervision emission policy file was empty.");
+    }
+
+    private static NotifySupervisionInstalledSupervisor? ReadInstalledSupervisor(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        return JsonSerializer.Deserialize<NotifySupervisionInstalledSupervisor>(File.ReadAllText(path), JsonOptions)
+            ?? throw new InvalidDataException("The installed supervisor record was empty.");
     }
 
     private static IReadOnlyList<NotifySupervisionCycle> ReadCycles(string path)
@@ -428,6 +489,17 @@ internal sealed record NotifySupervisionEmissionPolicy
     [JsonPropertyName("full_cadence_seconds")] public required int FullCadenceSeconds { get; init; }
     [JsonPropertyName("repeat_backoff_seconds")] public required int RepeatBackoffSeconds { get; init; }
     [JsonPropertyName("debounce_consecutive_observations")] public required int DebounceConsecutiveObservations { get; init; }
+    [JsonPropertyName("recorded_at")] public required DateTimeOffset RecordedAt { get; init; }
+}
+
+internal sealed record NotifySupervisionInstalledSupervisor
+{
+    [JsonPropertyName("domain")] public required string Domain { get; init; }
+    [JsonPropertyName("team")] public required string Team { get; init; }
+    [JsonPropertyName("label")] public required string Label { get; init; }
+    [JsonPropertyName("artifact_path")] public required string ArtifactPath { get; init; }
+    [JsonPropertyName("writer")] public required NotifySupervisionWriterIdentity Writer { get; init; }
+    [JsonPropertyName("startup_bound_seconds")] public required int StartupBoundSeconds { get; init; }
     [JsonPropertyName("recorded_at")] public required DateTimeOffset RecordedAt { get; init; }
 }
 
@@ -619,6 +691,7 @@ internal sealed record NotifySupervisionReadResult
     public required string Directory { get; init; }
     public NotifySupervisionBound? Bound { get; init; }
     public NotifySupervisionEmissionPolicy? EmissionPolicy { get; init; }
+    public NotifySupervisionInstalledSupervisor? InstalledSupervisor { get; init; }
     public NotifySupervisionCycle? LastCycle { get; init; }
     /// <summary>
     /// The only cycle identity a command-side adjudication may trust. It is

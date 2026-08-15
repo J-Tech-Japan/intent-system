@@ -176,9 +176,10 @@ bootstrap、seat recovery、kind switch では、operator の informal な model
 4. 読み取り可能な一致 argv が無い場合は human に質問する。
 
 bare model id を推測せず、shipped list を参照しません。intent-cli が出荷するのは実測済みの
-stable flag grammar だけです。Codex は `--model <id> -c
-model_reasoning_effort=<level>`、Claude は `--model <id> --effort <level>` を使います。
-他 kind の grammar は発明しません。
+stable flag shape だけです。Codex は `--model <id> -c
+model_reasoning_effort=<level>`、Claude は正確に
+`claude --model <id> --add-dir <host-root>` を使います。Claude entry は grammar
+だけで、model id や catalogue は出荷しません。他 kind の grammar は発明しません。
 
 表示された launch attempt ごとに、retry または続行の前に対応する記録 step が必須です。
 READY の後は、取得した informal name、kind、exact launched invocation、banner / running argv
@@ -641,7 +642,7 @@ standing loop の setup は ad-hoc な background shell ではなく出力専用
 ```bash
 intent-cli notify supervise install --domain <domain> --team <team> \
   --repo <owner/repo> --owner-role <logical-role> --bound <seconds> \
-  --interval <seconds> [--platform macos|windows|linux] \
+  --interval <seconds> [--startup-bound <seconds>] [--platform macos|windows|linux] \
   [--output <path>] [--routing-root <host-root>] --write --format json
 ```
 
@@ -668,6 +669,32 @@ team を混同し、design team 自身の supervisor を強制終了し、別 te
 > **1.x を通じた preview (G658)。** scheduler artifact emission と output schema は post-freeze preview で、
 > 1.0 compatibility promise の対象外です。生成は registration や runtime verification ではなく、この surface は
 > release decision を行いません。
+
+### install-time artifact hardening (G704 — preview-through-1.x)
+
+`--bound` は `--interval` 以上でなければなりません。小さい値は
+`bound-below-interval` として拒否します。これは healthy supervisor を
+構造的に absent (`supervisor-not-running`) と判定する設定だからです。
+legacy record に対する runtime warning は defense in depth として残し、
+値を自動修正しません。
+
+macOS の launchd plist は `WorkingDirectory` を routing root に設定し、
+`StandardOutPath` と `StandardErrorPath` を
+`.intent-cli/supervision/<domain>/<team>/runtime/` 配下へ向けます。install
+result は runtime directory と両方の log path を明示します。write は、宣言した
+`--startup-bound`（既定 30 秒）内に managed process が writer identity 付きの
+最初の `cycles.jsonl` record を追記した後だけ成功します。そうでなければ
+`first-cycle-proof-failed` として失敗し、両 log path を示します。artifact は
+operator が確認できるよう残り、intent-cli 自身は scheduler の register、start、
+stop、unregister を実行しません。
+
+最初の cycle の writer は
+`.intent-cli/supervision/<domain>/<team>/installed-supervisor.json` に記録します。
+後続の G676 writer identity が installed identity と異なる場合は、
+G699 の記録済み repeat-backoff と parked state を通じて
+`duplicate-supervisor` を出します。finding は cycle writer identity だけを使い、
+terminal content を読みません。また supervisor の kill、stop、elect、rank は
+自動実行しません。
 
 ### event-driven supervision (G659 — preview-through-1.x)
 

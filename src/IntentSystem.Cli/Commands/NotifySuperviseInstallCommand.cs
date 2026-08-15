@@ -12,9 +12,15 @@ namespace IntentSystem.Cli.Commands;
 internal static class NotifySuperviseInstallCommand
 {
     public const string Operation = "install";
+    public const int DefaultStartupBoundSeconds = 30;
+    public const int MaximumStartupBoundSeconds = 3600;
+    internal static Func<NotifySuperviseFirstCycleRequest, NotifySuperviseFirstCycleResult>? FirstCycleProbeFactory { get; set; }
+    internal static Func<DateTimeOffset> UtcNowFactory { get; set; } = () => DateTimeOffset.UtcNow;
+    internal static Action<TimeSpan> Delay { get; set; } = Thread.Sleep;
     public const string Usage =
         "Usage: intent-cli notify supervise install --domain <d> --team <t> --repo <owner/repo> "
         + "--owner-role <role> --bound <seconds> --interval <seconds> "
+        + "[--startup-bound <seconds>; default 30] "
         + "[--event-mode] [--platform macos|windows|linux] [--output <path>] [--routing-root <host-root>] "
         + "[--dry-run|--write] [--format markdown|json]";
 
@@ -46,6 +52,15 @@ internal static class NotifySuperviseInstallCommand
         {
             writer.WriteLine($"invalid-supervision-install: {error}");
             writer.WriteLine(Usage);
+            return 1;
+        }
+
+        if (options.BoundSeconds < options.IntervalSeconds)
+        {
+            EmitFailure(
+                writer,
+                options.Format,
+                $"bound-below-interval: declared bound {options.BoundSeconds}s is smaller than interval {options.IntervalSeconds}s; a healthy supervisor is structurally judged absent (supervisor-not-running). Runtime warning remains enabled for legacy records.");
             return 1;
         }
 
@@ -82,6 +97,13 @@ internal static class NotifySuperviseInstallCommand
         }
 
         var label = $"intent-cli.supervise.{options.Domain}.{options.Team}";
+        var supervisionDirectory = Path.Combine(
+            context.ResolveSupervisionArtifactRootPath(),
+            options.Domain,
+            options.Team);
+        var runtimeDirectory = Path.Combine(supervisionDirectory, "runtime");
+        var standardOutPath = Path.Combine(runtimeDirectory, label + ".stdout.log");
+        var standardErrorPath = Path.Combine(runtimeDirectory, label + ".stderr.log");
         var runtime = ResolveRuntime(options, routingRoot);
         // Scheduler emission remains usable when the invoking process is a
         // dotnet/dnx tool host and intent-cli is not itself PATH-visible. The
@@ -90,16 +112,22 @@ internal static class NotifySuperviseInstallCommand
         var intentCliExecutable = runtime.IntentCli.Path ?? runtime.IntentCli.Name;
         var superviseArguments = BuildSuperviseArguments(options, routingRoot, runtime);
         var invocation = FormatShellInvocation(intentCliExecutable, superviseArguments);
-        var artifact = BuildArtifact(options.Platform, label, intentCliExecutable, superviseArguments, runtime.RecordedPath);
+        var artifact = BuildArtifact(
+            options.Platform,
+            label,
+            intentCliExecutable,
+            superviseArguments,
+            runtime.RecordedPath,
+            routingRoot,
+            standardOutPath,
+            standardErrorPath);
         var (registrationCommand, unregistrationCommand) = BuildOperatorCommands(options.Platform, label, artifactPath);
         var crossAuthored = !string.Equals(options.Platform, CurrentPlatform(), StringComparison.Ordinal);
         var unresolvedBinaries = runtime.Binaries
             .Where(binary => !binary.Resolved)
             .Select(binary => binary.Name)
             .ToArray();
-        var verificationStatus = options.Platform is Windows or Linux
-            ? "emitted-but-unverified"
-            : "emission-verified-on-macos";
+        NotifySuperviseFirstCycleResult? firstCycle = null;
 
         if (options.Write)
         {
@@ -113,6 +141,7 @@ internal static class NotifySuperviseInstallCommand
                 }
 
                 Directory.CreateDirectory(directory);
+                Directory.CreateDirectory(runtimeDirectory);
                 File.WriteAllText(artifactPath, artifact, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -120,7 +149,66 @@ internal static class NotifySuperviseInstallCommand
                 EmitFailure(writer, options.Format, $"Could not write the scheduler artifact: {exception.Message}");
                 return 1;
             }
+
+            firstCycle = (FirstCycleProbeFactory ?? NotifySuperviseFirstCycleProbe.Wait)(new NotifySuperviseFirstCycleRequest
+            {
+                ArtifactRoot = context.ResolveSupervisionArtifactRootPath(),
+                Domain = options.Domain,
+                Team = options.Team,
+                ArtifactPath = artifactPath,
+                CyclePath = NotifySupervisionStore.ResolveCyclePath(
+                    context.ResolveSupervisionArtifactRootPath(),
+                    options.Domain,
+                    options.Team),
+                StartupBoundSeconds = options.StartupBoundSeconds,
+                StartedAt = UtcNowFactory().ToUniversalTime(),
+            });
+            if (!firstCycle.Verified)
+            {
+                EmitFailure(
+                    writer,
+                    options.Format,
+                    $"first-cycle-proof-failed: managed supervisor did not write a first cycle within {options.StartupBoundSeconds}s; inspect stdout log '{standardOutPath}' and stderr log '{standardErrorPath}'. {firstCycle.FailureReason}");
+                return 1;
+            }
+
+            if (firstCycle.Writer is null)
+            {
+                EmitFailure(
+                    writer,
+                    options.Format,
+                    $"first-cycle-proof-failed: the first cycle had no writer identity; inspect stdout log '{standardOutPath}' and stderr log '{standardErrorPath}'.");
+                return 1;
+            }
+
+            var installedRecord = NotifySupervisionStore.RecordInstalledSupervisor(
+                context.ResolveSupervisionArtifactRootPath(),
+                new NotifySupervisionInstalledSupervisor
+                {
+                    Domain = options.Domain,
+                    Team = options.Team,
+                    Label = label,
+                    ArtifactPath = artifactPath,
+                    Writer = firstCycle.Writer,
+                    StartupBoundSeconds = options.StartupBoundSeconds,
+                    RecordedAt = firstCycle.ObservedAt ?? UtcNowFactory().ToUniversalTime(),
+                },
+                write: true);
+            if (installedRecord.Error is not null)
+            {
+                EmitFailure(
+                    writer,
+                    options.Format,
+                    $"first-cycle-proof-record-failed: first cycle was observed but the installed supervisor identity could not be recorded at '{installedRecord.Path}': {installedRecord.Error}. Inspect stdout log '{standardOutPath}' and stderr log '{standardErrorPath}'.");
+                return 1;
+            }
         }
+
+        var verificationStatus = !options.Write
+            ? "preview-unverified"
+            : firstCycle?.Verified == true
+                ? "first-cycle-verified"
+                : "not-applicable";
 
         var result = new InstallResult
         {
@@ -131,6 +219,15 @@ internal static class NotifySuperviseInstallCommand
             ArtifactPath = artifactPath,
             ArtifactWritten = options.Write,
             VerificationStatus = verificationStatus,
+            StartupBoundSeconds = options.StartupBoundSeconds,
+            RuntimeDirectory = runtimeDirectory,
+            StandardOutPath = standardOutPath,
+            StandardErrorPath = standardErrorPath,
+            FirstCycleStatus = firstCycle?.Status ?? "preview-unverified",
+            FirstCycleId = firstCycle?.CycleId,
+            FirstCycleWriter = firstCycle?.Writer,
+            InstalledSupervisorPath = NotifySupervisionStore.ResolveInstalledSupervisorPath(
+                context.ResolveSupervisionArtifactRootPath(), options.Domain, options.Team),
             EventMode = options.EventMode,
             SuperviseInvocation = invocation,
             RegistrationCommand = registrationCommand,
@@ -141,8 +238,8 @@ internal static class NotifySuperviseInstallCommand
             RuntimeBinaries = runtime.Binaries,
             UnresolvedBinaries = unresolvedBinaries,
             Summary = options.Write
-                ? $"Emitted the {options.Platform} supervisor artifact with event mode {(options.EventMode ? "enabled" : "disabled")}. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. intent-cli did not register, start, stop, or unregister it."
-                : $"Previewed the {options.Platform} supervisor artifact path and operator commands without writing or executing anything. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name.",
+                ? $"Emitted and first-cycle-verified the {options.Platform} supervisor artifact with event mode {(options.EventMode ? "enabled" : "disabled")}. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. First-cycle evidence is recorded at '{NotifySupervisionStore.ResolveInstalledSupervisorPath(context.ResolveSupervisionArtifactRootPath(), options.Domain, options.Team)}'. intent-cli did not register, start, stop, or unregister the scheduler."
+                : $"Previewed the {options.Platform} supervisor artifact path and operator commands without writing, probing, or executing anything. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. A write requires bounded first-cycle proof and records failure log paths.",
         };
         Emit(writer, options.Format, result);
         return 0;
@@ -245,9 +342,19 @@ internal static class NotifySuperviseInstallCommand
         string label,
         string intentCliExecutable,
         IReadOnlyList<string> arguments,
-        string recordedPath) => platform switch
+        string recordedPath,
+        string routingRoot,
+        string standardOutPath,
+        string standardErrorPath) => platform switch
     {
-        MacOs => BuildLaunchdArtifact(label, intentCliExecutable, arguments, recordedPath),
+        MacOs => BuildLaunchdArtifact(
+            label,
+            intentCliExecutable,
+            arguments,
+            recordedPath,
+            routingRoot,
+            standardOutPath,
+            standardErrorPath),
         Windows => BuildTaskSchedulerArtifact(label, intentCliExecutable, arguments, recordedPath),
         _ => BuildSystemdArtifact(label, intentCliExecutable, arguments, recordedPath),
     };
@@ -256,7 +363,10 @@ internal static class NotifySuperviseInstallCommand
         string label,
         string intentCliExecutable,
         IReadOnlyList<string> arguments,
-        string recordedPath)
+        string recordedPath,
+        string routingRoot,
+        string standardOutPath,
+        string standardErrorPath)
     {
         var programArguments = new StringBuilder()
             .Append("    <string>").Append(XmlEscape(intentCliExecutable)).AppendLine("</string>");
@@ -282,6 +392,12 @@ internal static class NotifySuperviseInstallCommand
   <true/>
   <key>ThrottleInterval</key>
   <integer>30</integer>
+  <key>WorkingDirectory</key>
+  <string>{XmlEscape(routingRoot)}</string>
+  <key>StandardOutPath</key>
+  <string>{XmlEscape(standardOutPath)}</string>
+  <key>StandardErrorPath</key>
+  <string>{XmlEscape(standardErrorPath)}</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
@@ -408,6 +524,7 @@ WantedBy=default.target
         string? platform = null;
         int? bound = null;
         int? interval = null;
+        int? startupBound = null;
         var write = false;
         var eventMode = false;
         var format = FormatMarkdown;
@@ -430,6 +547,9 @@ WantedBy=default.target
                     break;
                 case "--interval":
                     if (!ReadPositiveInt(args, ref index, argument, NotifySupervisor.MaximumIntervalSeconds, out interval, out error)) return Fail(out options);
+                    break;
+                case "--startup-bound":
+                    if (!ReadPositiveInt(args, ref index, argument, MaximumStartupBoundSeconds, out startupBound, out error)) return Fail(out options);
                     break;
                 case "--write": write = true; break;
                 case "--dry-run": write = false; break;
@@ -475,6 +595,7 @@ WantedBy=default.target
         {
             Domain = domain!, Team = team!, Repo = repo!, OwnerRole = ownerRole!,
             BoundSeconds = bound.Value, IntervalSeconds = interval.Value,
+            StartupBoundSeconds = startupBound ?? DefaultStartupBoundSeconds,
             RoutingRoot = routingRoot, Output = output, Platform = platform,
             Write = write, Format = format!,
             EventMode = eventMode,
@@ -564,9 +685,18 @@ WantedBy=default.target
         writer.WriteLine();
         writer.WriteLine($"- platform: {result.Platform} (current: {result.CurrentPlatform}; cross-authored: {result.CrossAuthored.ToString().ToLowerInvariant()})");
         writer.WriteLine($"- verification status: {result.VerificationStatus}");
+        writer.WriteLine($"- startup bound: {result.StartupBoundSeconds}s; first-cycle status: {result.FirstCycleStatus}");
         writer.WriteLine($"- command mode: {result.CommandMode}");
         writer.WriteLine($"- event mode: {result.EventMode.ToString().ToLowerInvariant()}");
         writer.WriteLine($"- artifact path: `{result.ArtifactPath}` (written: {result.ArtifactWritten.ToString().ToLowerInvariant()})");
+        writer.WriteLine($"- supervise runtime directory: `{result.RuntimeDirectory}`");
+        writer.WriteLine($"- stdout log path: `{result.StandardOutPath}`");
+        writer.WriteLine($"- stderr log path: `{result.StandardErrorPath}`");
+        writer.WriteLine($"- installed supervisor identity: `{result.InstalledSupervisorPath}`");
+        if (result.FirstCycleId is not null)
+        {
+            writer.WriteLine($"- first cycle id: `{result.FirstCycleId}`");
+        }
         writer.WriteLine($"- supervise invocation: `{result.SuperviseInvocation}`");
         writer.WriteLine($"- recorded PATH: `{result.RecordedPath}`");
         writer.WriteLine($"- runtime binaries: {string.Join(", ", result.RuntimeBinaries.Select(binary => $"{binary.Name}={(binary.Path ?? "unresolved")}"))}");
@@ -589,6 +719,7 @@ WantedBy=default.target
         public required string OwnerRole { get; init; }
         public required int BoundSeconds { get; init; }
         public required int IntervalSeconds { get; init; }
+        public required int StartupBoundSeconds { get; init; }
         public required string Platform { get; init; }
         public string? RoutingRoot { get; init; }
         public string? Output { get; init; }
@@ -621,6 +752,14 @@ WantedBy=default.target
         [JsonPropertyName("artifact_path")] public required string ArtifactPath { get; init; }
         [JsonPropertyName("artifact_written")] public required bool ArtifactWritten { get; init; }
         [JsonPropertyName("verification_status")] public required string VerificationStatus { get; init; }
+        [JsonPropertyName("startup_bound_seconds")] public required int StartupBoundSeconds { get; init; }
+        [JsonPropertyName("runtime_directory")] public required string RuntimeDirectory { get; init; }
+        [JsonPropertyName("stdout_log_path")] public required string StandardOutPath { get; init; }
+        [JsonPropertyName("stderr_log_path")] public required string StandardErrorPath { get; init; }
+        [JsonPropertyName("first_cycle_status")] public required string FirstCycleStatus { get; init; }
+        [JsonPropertyName("first_cycle_id")] public string? FirstCycleId { get; init; }
+        [JsonPropertyName("first_cycle_writer")] public NotifySupervisionWriterIdentity? FirstCycleWriter { get; init; }
+        [JsonPropertyName("installed_supervisor_path")] public required string InstalledSupervisorPath { get; init; }
         [JsonPropertyName("event_mode")] public required bool EventMode { get; init; }
         [JsonPropertyName("supervise_invocation")] public required string SuperviseInvocation { get; init; }
         [JsonPropertyName("registration_command")] public required string RegistrationCommand { get; init; }
@@ -631,5 +770,84 @@ WantedBy=default.target
         [JsonPropertyName("runtime_binaries")] public required IReadOnlyList<NotifySuperviseRuntimeBinary> RuntimeBinaries { get; init; }
         [JsonPropertyName("unresolved_binaries")] public required IReadOnlyList<string> UnresolvedBinaries { get; init; }
         [JsonPropertyName("summary")] public required string Summary { get; init; }
+    }
+}
+
+internal sealed record NotifySuperviseFirstCycleRequest
+{
+    public required string ArtifactRoot { get; init; }
+    public required string Domain { get; init; }
+    public required string Team { get; init; }
+    public required string ArtifactPath { get; init; }
+    public required string CyclePath { get; init; }
+    public required int StartupBoundSeconds { get; init; }
+    public required DateTimeOffset StartedAt { get; init; }
+}
+
+internal sealed record NotifySuperviseFirstCycleResult
+{
+    public required bool Verified { get; init; }
+    public required string Status { get; init; }
+    public string? CycleId { get; init; }
+    public NotifySupervisionWriterIdentity? Writer { get; init; }
+    public DateTimeOffset? ObservedAt { get; init; }
+    public int Attempts { get; init; }
+    public string? FailureReason { get; init; }
+}
+
+internal static class NotifySuperviseFirstCycleProbe
+{
+    public static NotifySuperviseFirstCycleResult Wait(NotifySuperviseFirstCycleRequest request)
+    {
+        var deadline = request.StartedAt.AddSeconds(request.StartupBoundSeconds);
+        var attempts = 0;
+        while (true)
+        {
+            attempts++;
+            var state = NotifySupervisionStore.Read(request.ArtifactRoot, request.Domain, request.Team);
+            if (!state.Resolved)
+            {
+                return new NotifySuperviseFirstCycleResult
+                {
+                    Verified = false,
+                    Status = "first-cycle-state-unreadable",
+                    Attempts = attempts,
+                    FailureReason = state.Error,
+                };
+            }
+
+            var cycle = state.LastCycle;
+            if (cycle is not null
+                && cycle.CompletedAt >= request.StartedAt
+                && cycle.Writer is not null)
+            {
+                return new NotifySuperviseFirstCycleResult
+                {
+                    Verified = true,
+                    Status = "first-cycle-verified",
+                    CycleId = cycle.CycleId,
+                    Writer = cycle.Writer,
+                    ObservedAt = cycle.CompletedAt,
+                    Attempts = attempts,
+                };
+            }
+
+            var now = NotifySuperviseInstallCommand.UtcNowFactory().ToUniversalTime();
+            if (now >= deadline)
+            {
+                return new NotifySuperviseFirstCycleResult
+                {
+                    Verified = false,
+                    Status = "first-cycle-timeout",
+                    Attempts = attempts,
+                    FailureReason = cycle is null
+                        ? $"No cycle was recorded at '{request.CyclePath}'."
+                        : $"The latest cycle '{cycle.CycleId}' completed at {cycle.CompletedAt:O} without a post-install writer identity.",
+                };
+            }
+
+            NotifySuperviseInstallCommand.Delay(
+                TimeSpan.FromMilliseconds(Math.Min(250, Math.Max(25, (deadline - now).TotalMilliseconds))));
+        }
     }
 }
