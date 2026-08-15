@@ -2085,6 +2085,41 @@ corroboration changes only the observation classification and evidence. It does
 not change workflow ownership, canonical intent-cli/GitHub state, or the
 observation-only authority boundary.
 
+### Closeout runs write-truth and explicit repair (G708)
+
+The installed `guide orchestrator-thread` route exposes this contract from a
+bare metadata-free directory. `intent-cli closeout pr` reports what it actually
+wrote, not the events it planned:
+
+```text
+intent-cli closeout pr --repo <owner/repo> --pr <n> --pr-merged true --write --format json
+```
+
+- When no `runs.jsonl` append occurred, `runs_events` is `[]`,
+  `runs_appended` is `false`, and `runs_skip_reason` names the reason (for
+  example `queue-already-completed` or `dry-run-no-write`).
+- When an append occurred, `runs_appended` is `true` and `runs_events` contains
+  exactly the lines appended by that invocation. It never contains a planned
+  line or an already-existing line. JSON and Markdown carry the same facts.
+- A queue-completed item whose matching `pr-merged` or `closeout-recorded`
+  event is absent emits the named finding
+  `queue-completed-missing-closeout-runs-events`. The normal closeout path does
+  not repair it automatically.
+
+The only repair is an explicit runs-only command:
+
+```text
+intent-cli closeout pr --repo <owner/repo> --pr <n> --pr-merged true --repair-runs --write --format json
+```
+
+It appends only the missing matching events. It never re-completes the queue
+item, writes queue-state, or repairs packets, lifecycle records, or any other
+record. The queue-state bytes must be identical before and after the repair;
+the appended tail must equal `runs_events`. A second invocation appends
+nothing, reports `runs_appended: false` with
+`runs_skip_reason: runs-events-already-present`, and is idempotent. This is an
+operator-selected action, not an automatic repair or a guide-side mutation.
+
 ## Cross-project isolation on a shared machine
 
 **Assume you are not alone on this machine.** Several project teams run
