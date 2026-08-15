@@ -21,18 +21,34 @@ public sealed class NotifySuperviseInstallG658Tests : IDisposable
     {
         NotifyCommand.ProcessRunnerFactory = () =>
             throw new InvalidOperationException("supervise install must not construct a process runner");
+        NotifySuperviseInstallCommand.FirstCycleProbeFactory = request => new NotifySuperviseFirstCycleResult
+        {
+            Verified = true,
+            Status = "first-cycle-verified",
+            CycleId = "g658-first-cycle",
+            Writer = new NotifySupervisionWriterIdentity
+            {
+                Pid = 6580,
+                ProcessStartTime = new DateTimeOffset(2026, 8, 15, 12, 0, 0, TimeSpan.Zero),
+                Host = "g658-fixture",
+            },
+            ObservedAt = new DateTimeOffset(2026, 8, 15, 12, 0, 1, TimeSpan.Zero),
+        };
     }
 
     public void Dispose()
     {
         NotifyCommand.ProcessRunnerFactory = null;
+        NotifySuperviseInstallCommand.FirstCycleProbeFactory = null;
+        NotifySuperviseInstallCommand.Delay = Thread.Sleep;
+        NotifySuperviseInstallCommand.UtcNowFactory = () => DateTimeOffset.UtcNow;
         if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
     }
 
     [Theory]
     [InlineData("macos", ".plist", "launchctl load", "launchctl unload", null, "<key>KeepAlive</key>")]
-    [InlineData("windows", ".xml", "schtasks /Create", "schtasks /Delete", "emitted-but-unverified", "<RestartOnFailure>")]
-    [InlineData("linux", ".service", "systemctl --user link", "systemctl --user disable", "emitted-but-unverified", "Restart=always")]
+    [InlineData("windows", ".xml", "schtasks /Create", "schtasks /Delete", null, "<RestartOnFailure>")]
+    [InlineData("linux", ".service", "systemctl --user link", "systemctl --user disable", null, "Restart=always")]
     public void ExplicitPlatform_EmitsPerTeamArtifactAndOperatorCommands_WithoutExecution(
         string platform,
         string extension,
@@ -59,6 +75,7 @@ public sealed class NotifySuperviseInstallG658Tests : IDisposable
         Assert.Equal(platform, result.GetProperty("platform").GetString());
         Assert.Equal(Label, result.GetProperty("label").GetString());
         Assert.True(result.GetProperty("artifact_written").GetBoolean());
+        Assert.Equal("first-cycle-verified", result.GetProperty("first_cycle_status").GetString());
         Assert.False(result.GetProperty("manages_process").GetBoolean());
         Assert.StartsWith(registrationPrefix, result.GetProperty("registration_command").GetString(), StringComparison.Ordinal);
         Assert.StartsWith(unregistrationPrefix, result.GetProperty("unregistration_command").GetString(), StringComparison.Ordinal);
@@ -134,7 +151,7 @@ public sealed class NotifySuperviseInstallG658Tests : IDisposable
         Assert.Equal(0, exitCode);
         var output = writer.ToString();
         Assert.Contains(Label, output, StringComparison.Ordinal);
-        Assert.Contains("emitted-but-unverified", output, StringComparison.Ordinal);
+        Assert.Contains("preview-unverified", output, StringComparison.Ordinal);
         Assert.Contains("registration command (operator action)", output, StringComparison.Ordinal);
         Assert.Contains("unregistration command (operator action)", output, StringComparison.Ordinal);
         Assert.Contains("process management executed by intent-cli: false", output, StringComparison.Ordinal);

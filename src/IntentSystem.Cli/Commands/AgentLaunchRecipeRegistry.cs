@@ -97,6 +97,10 @@ internal sealed record AgentModelFlagGrammar
     [JsonPropertyName("effort")]
     public required string Effort { get; init; }
 
+    [JsonPropertyName("add_dir")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AddDir { get; init; }
+
     [JsonPropertyName("provenance")]
     public required string Provenance { get; init; }
 }
@@ -203,6 +207,7 @@ internal static class AgentLaunchRecipeRegistry
                 Kind = "claude",
                 Model = "--model <id>",
                 Effort = "--effort <level>",
+                AddDir = "--add-dir <host-root>",
                 Provenance =
                     "Measured operator launch grammar; this records flag shape only and ships no model id.",
             },
@@ -416,6 +421,63 @@ internal static class AgentLaunchRecipeRegistry
                         Host = MeasuredHost,
                         Date = MeasuredDate,
                         Version = "Codex v0.144.1",
+                        Platform = MeasuredPlatform,
+                    },
+                ],
+            },
+            ["claude"] = new AgentLaunchRecipe
+            {
+                Kind = "claude",
+                Invocation = "claude --model <id> --add-dir <host-root>",
+                RoleDerivedRoots =
+                    "Use the operator-selected host routing root as the bounded --add-dir <host-root> value. "
+                    + "The placeholder is a flag shape, not a shipped model or path; the operator resolves the real "
+                    + "root for the role before launch.",
+                ContinuationBound =
+                    "No provider continuation bound is shipped here; keep any role-specific bound explicit in the "
+                    + "operator's measured launch record.",
+                InlinePayloadWarningProfile =
+                    "Claude inline-payload safety was not assigned a universal threshold; use the recorded "
+                    + "file-backed task-envelope guidance when the operator marks the seat paste-sensitive.",
+                DeliveryMethod =
+                    "Declare delivery_method: file-backed when the operator records paste-sensitive delivery; "
+                    + "otherwise preserve the existing inline delivery path.",
+                PostStartInteraction = new OrchestratorPostStartInteraction
+                {
+                    Status = "unmeasured",
+                    Observed = false,
+                    Prompt = null,
+                    Answer = null,
+                    DefaultIsSafe = null,
+                    AbsenceReason =
+                        "No universal post-start dialog is recorded by this grammar-only entry; unknown dialogs "
+                        + "remain escalate-only and must not be answered from the flag shape.",
+                },
+                PromptClasses = [],
+                StartupGates =
+                    "The operator supplies the exact provider permission choice and host-root. The recipe records "
+                    + "only the stable flag grammar and never answers a provider dialog.",
+                ProhibitedBlanket =
+                    "Do not replace the bounded --add-dir <host-root> shape with an unmeasured all-paths or "
+                    + "all-permissions flag.",
+                DenialSemantics =
+                    "An out-of-scope action is not evidence of liveness; record the denial and escalate any "
+                    + "unclassified provider prompt.",
+                Recovery =
+                    "If the bounded root or provider mode is wrong, stop and re-launch from the operator-recorded "
+                    + "recipe; do not widen the command through an invented flag.",
+                Measurements =
+                [
+                    new AgentLaunchRecipeMeasurement
+                    {
+                        Status = Measured,
+                        Fact = "launch grammar",
+                        Observation =
+                            "Three host observations agreed on claude --model <id> --add-dir <host-root>; "
+                            + "only flag shapes were retained.",
+                        Host = MeasuredHost,
+                        Date = MeasuredDate,
+                        Version = "operator-selected",
                         Platform = MeasuredPlatform,
                     },
                 ],

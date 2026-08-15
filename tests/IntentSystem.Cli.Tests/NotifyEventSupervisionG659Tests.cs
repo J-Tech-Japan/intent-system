@@ -20,6 +20,19 @@ public sealed class NotifyEventSupervisionG659Tests : IDisposable
     public NotifyEventSupervisionG659Tests()
     {
         NotifyCommand.UtcNowFactory = () => now;
+        NotifySuperviseInstallCommand.FirstCycleProbeFactory = _ => new NotifySuperviseFirstCycleResult
+        {
+            Verified = true,
+            Status = "first-cycle-verified",
+            CycleId = "g659-first-cycle",
+            Writer = new NotifySupervisionWriterIdentity
+            {
+                Pid = 6590,
+                ProcessStartTime = new DateTimeOffset(2026, 8, 15, 12, 0, 0, TimeSpan.Zero),
+                Host = "g659-fixture",
+            },
+            ObservedAt = new DateTimeOffset(2026, 8, 15, 12, 0, 1, TimeSpan.Zero),
+        };
         NotifySupervisionEventMonitor.Delay = (_, cancellationToken) =>
             cancellationToken.IsCancellationRequested
                 ? Task.FromCanceled(cancellationToken)
@@ -30,6 +43,9 @@ public sealed class NotifyEventSupervisionG659Tests : IDisposable
     {
         NotifyCommand.UtcNowFactory = null;
         NotifySupervisionEventMonitor.Delay = Task.Delay;
+        NotifySuperviseInstallCommand.FirstCycleProbeFactory = null;
+        NotifySuperviseInstallCommand.Delay = Thread.Sleep;
+        NotifySuperviseInstallCommand.UtcNowFactory = () => DateTimeOffset.UtcNow;
         if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
     }
 

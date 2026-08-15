@@ -197,9 +197,10 @@ model/effort name in exactly this order:
 4. if there is no readable agreed argv, ask the human.
 
 Never guess a bare model id and never consult a shipped list. intent-cli ships
-only the measured stable flag grammar: Codex uses `--model <id> -c
-model_reasoning_effort=<level>`, and Claude uses `--model <id> --effort
-<level>`. No grammar is invented for another kind.
+only measured stable flag shapes: Codex uses `--model <id> -c
+model_reasoning_effort=<level>`, and Claude uses exactly
+`claude --model <id> --add-dir <host-root>`. The Claude entry is grammar-only;
+it ships no model id or catalogue. No grammar is invented for another kind.
 
 Every rendered launch attempt has one mandatory matching record step before
 retry or continuation. After READY, run the rendered `model-resolution record
@@ -768,7 +769,7 @@ background shell:
 ```bash
 intent-cli notify supervise install --domain <domain> --team <team> \
   --repo <owner/repo> --owner-role <logical-role> --bound <seconds> \
-  --interval <seconds> [--platform macos|windows|linux] \
+  --interval <seconds> [--startup-bound <seconds>] [--platform macos|windows|linux] \
   [--output <path>] [--routing-root <host-root>] --write --format json
 ```
 
@@ -804,6 +805,30 @@ supervisor health.
 > promise. Emission is not registration or runtime verification, and this
 > surface makes no release decision.
 
+### Install-time artifact hardening (G704 — preview-through-1.x)
+
+`--bound` must be greater than or equal to `--interval`. A smaller value is
+rejected as `bound-below-interval` because a healthy supervisor would be
+structurally judged absent (`supervisor-not-running`). The running supervisor
+retains its warning for legacy records; the warning is defense in depth, not a
+correction of the invalid configuration.
+
+On macOS the generated launchd plist sets `WorkingDirectory` to the routing
+root and routes `StandardOutPath` and `StandardErrorPath` below
+`.intent-cli/supervision/<domain>/<team>/runtime/`. The install result names the
+runtime directory and both log paths. A write reports success only after the
+managed process appends a writer-bearing first cycle within the declared
+`--startup-bound` (default 30 seconds). Otherwise it fails as
+`first-cycle-proof-failed` and names both log paths. The artifact remains for
+operator inspection, while intent-cli still does not register, start, stop, or
+unregister the scheduler.
+
+The first-cycle writer is recorded in
+`.intent-cli/supervision/<domain>/<team>/installed-supervisor.json`. A later
+G676 writer identity that differs from the installed identity is emitted as
+`duplicate-supervisor` through G699's recorded repeat-backoff and parked state.
+The finding uses cycle writer identity only: it reads no terminal content and
+never kills, stops, elects, or ranks a supervisor.
 ### Event-driven supervision (G659 — preview-through-1.x)
 
 Add `--event-mode` to the one standing `notify supervise` invocation to opt in.

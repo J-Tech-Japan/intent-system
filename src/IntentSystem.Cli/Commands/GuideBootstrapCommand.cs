@@ -153,10 +153,10 @@ internal static class GuideBootstrapCommand
                     Id = "emit-supervision-install",
                     Instruction = state.SupervisionCycleRecorded
                         ? "Keep the existing per-team supervision installation; do not emit or register a duplicate."
-                        : "Emit the current-platform supervision artifact and exact registration/unregistration commands. The human registers it; intent-cli does not.",
+                        : $"Emit the current-platform supervision artifact and exact registration/unregistration commands. {SupervisionGuideText.InstallBoundRule} {SupervisionGuideText.InstallArtifactRule} {SupervisionGuideText.InstallEvidenceRule} The human registers it; intent-cli does not.",
                     EmittedCommands = state.SupervisionCycleRecorded
                         ? []
-                        : [$"intent-cli notify supervise install --domain {domainArg} --team {teamArg} --repo {repoArg} --owner-role orchestration --bound <seconds> --interval <seconds> --write --format json"],
+                        : [$"intent-cli notify supervise install --domain {domainArg} --team {teamArg} --repo {repoArg} --owner-role orchestration --bound <seconds> --interval <seconds> --startup-bound <seconds> --write --format json"],
                 },
                 new BootstrapStep
                 {

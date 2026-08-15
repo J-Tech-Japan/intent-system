@@ -12,12 +12,32 @@ public sealed class NotifySupervisionG675Tests : IDisposable
     private const string Team = "intent-cli-dev";
     private readonly string root = Directory.CreateTempSubdirectory("notify-g675-").FullName;
 
+    public NotifySupervisionG675Tests()
+    {
+        NotifySuperviseInstallCommand.FirstCycleProbeFactory = _ => new NotifySuperviseFirstCycleResult
+        {
+            Verified = true,
+            Status = "first-cycle-verified",
+            CycleId = "g675-first-cycle",
+            Writer = new NotifySupervisionWriterIdentity
+            {
+                Pid = 6750,
+                ProcessStartTime = new DateTimeOffset(2026, 8, 15, 12, 0, 0, TimeSpan.Zero),
+                Host = "g675-fixture",
+            },
+            ObservedAt = new DateTimeOffset(2026, 8, 15, 12, 0, 1, TimeSpan.Zero),
+        };
+    }
+
     public void Dispose()
     {
         NotifyTransportPaths.ExecutableResolverOverride = null;
         NotifyCommand.ProcessRunnerFactory = null;
         NotifyCommand.HerdrExecutableFactory = null;
         NotifyCommand.BashExecutableFactory = null;
+        NotifySuperviseInstallCommand.FirstCycleProbeFactory = null;
+        NotifySuperviseInstallCommand.Delay = Thread.Sleep;
+        NotifySuperviseInstallCommand.UtcNowFactory = () => DateTimeOffset.UtcNow;
         if (Directory.Exists(root))
         {
             Directory.Delete(root, recursive: true);
