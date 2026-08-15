@@ -61,6 +61,15 @@ internal static class ClaimCommand
         {
             result = RunTransaction(context.RepoRoot, request!);
         }
+        catch (HostStateGitFailureException exception)
+        {
+            result = new ClaimTransactionResult(
+                "error", request!.Scope, ClaimPath(request.Scope), false, 0,
+                null, null, null, exception.Message)
+            {
+                GitWriteRetry = exception.Evidence,
+            };
+        }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
             result = new ClaimTransactionResult(
@@ -93,7 +102,9 @@ internal static class ClaimCommand
                 "Dry-run only. Re-run with --write; ownership exists only after a successful plain push.");
         }
 
-        var hostPull = RunGit(repoRoot, ["pull", "--ff-only", "origin", branchName]);
+        HostStateGitRetryEvidence? lastGitWriteRetry = null;
+        var hostPull = RunGit(repoRoot, ["pull", "--ff-only", "origin", branchName], hostStateWrite: true);
+        CaptureRetry(ref lastGitWriteRetry, hostPull);
         EnsureSuccess(hostPull, "fast-forward host before claim transaction");
 
         ClaimRecord? lastObserved = null;
@@ -109,7 +120,8 @@ internal static class ClaimCommand
 
                 // The sequence is deliberately visible and invariant: ff-only
                 // pull, create/change, commit, then a non-forced push.
-                var pull = RunGit(transactionRoot, ["pull", "--ff-only", "origin", branchName]);
+                var pull = RunGit(transactionRoot, ["pull", "--ff-only", "origin", branchName], hostStateWrite: true);
+                CaptureRetry(ref lastGitWriteRetry, pull);
                 EnsureSuccess(pull, "fast-forward claim base");
 
                 var relativeClaimPath = ClaimPath(request.Scope);
@@ -120,26 +132,38 @@ internal static class ClaimCommand
 
                 if (request.Operation == ClaimOperation.Acquire && current is not null)
                 {
-                    return Held(request, relativeClaimPath, attempt, current);
+                    return Held(request, relativeClaimPath, attempt, current) with
+                    {
+                        GitWriteRetry = lastGitWriteRetry,
+                    };
                 }
                 if (request.Operation != ClaimOperation.Acquire && current is null)
                 {
                     return new ClaimTransactionResult(
                         "not-held", request.Scope, relativeClaimPath, false, attempt,
-                        null, null, null, "No active claim exists for this scope.");
+                        null, null, null, "No active claim exists for this scope.")
+                    {
+                        GitWriteRetry = lastGitWriteRetry,
+                    };
                 }
                 if (request.Operation == ClaimOperation.Release
                     && (!string.Equals(current!.Actor, request.Actor, StringComparison.Ordinal)
                         || !string.Equals(current.Team, request.Team, StringComparison.Ordinal)))
                 {
                     return Held(request, relativeClaimPath, attempt, current,
-                        "Only the complete attributed holder identity (actor and team) may release; use explicit takeover otherwise.");
+                        "Only the complete attributed holder identity (actor and team) may release; use explicit takeover otherwise.") with
+                    {
+                        GitWriteRetry = lastGitWriteRetry,
+                    };
                 }
                 if (request.Operation == ClaimOperation.Takeover
                     && !string.Equals(current!.Actor, request.DisplacedHolder, StringComparison.Ordinal))
                 {
                     return Held(request, relativeClaimPath, attempt, current,
-                        $"--displaced-holder must name the current holder '{current.Actor}'.");
+                        $"--displaced-holder must name the current holder '{current.Actor}'.") with
+                    {
+                        GitWriteRetry = lastGitWriteRetry,
+                    };
                 }
 
                 var now = DateTimeOffset.UtcNow;
@@ -172,7 +196,8 @@ internal static class ClaimCommand
                 var paths = historyPath is null
                     ? new[] { relativeClaimPath }
                     : new[] { relativeClaimPath, historyPath };
-                var add = RunGit(transactionRoot, ["add", "--", .. paths]);
+                var add = RunGit(transactionRoot, ["add", "--", .. paths], hostStateWrite: true);
+                CaptureRetry(ref lastGitWriteRetry, add);
                 EnsureSuccess(add, "stage claim transaction");
                 var verb = request.Operation switch
                 {
@@ -182,10 +207,17 @@ internal static class ClaimCommand
                 };
                 var commit = RunGit(transactionRoot,
                     ["-c", $"user.name={request.Actor}", "-c", $"user.email={SafeEmail(request)}",
-                     "commit", "--quiet", "-m", $"claim: {verb} {request.Scope}"]);
+                     "commit", "--quiet", "-m", $"claim: {verb} {request.Scope}"],
+                    hostStateWrite: true);
+                CaptureRetry(ref lastGitWriteRetry, commit);
                 EnsureSuccess(commit, "commit claim transaction");
 
-                var push = RunGit(transactionRoot, ["push", "origin", "HEAD"]);
+                var push = RunGit(transactionRoot, ["push", "origin", "HEAD"], hostStateWrite: true);
+                CaptureRetry(ref lastGitWriteRetry, push);
+                if (push.ExitCode != 0 && push.RetryEvidence is not null)
+                {
+                    throw new HostStateGitFailureException("push claim transaction", push.RetryEvidence);
+                }
                 if (push.ExitCode == 0)
                 {
                     var pushedHead = RunGit(transactionRoot, ["rev-parse", "HEAD"]);
@@ -200,7 +232,8 @@ internal static class ClaimCommand
                     // ownership result remains true even if this best-effort
                     // refresh is blocked by unrelated local workspace state;
                     // the successful origin push is still authoritative.
-                    var localRefresh = RunGit(repoRoot, ["pull", "--ff-only", "origin", branchName]);
+                    var localRefresh = RunGit(repoRoot, ["pull", "--ff-only", "origin", branchName], hostStateWrite: true);
+                    CaptureRetry(ref lastGitWriteRetry, localRefresh);
                     var detail = localRefresh.ExitCode == 0
                         ? "The plain push succeeded; this is the ownership transition fact."
                         : "The plain push succeeded and is the ownership transition fact, but the invoking clone could not fast-forward: "
@@ -211,7 +244,10 @@ internal static class ClaimCommand
                         request.Operation == ClaimOperation.Takeover ? current!.Actor : null,
                         pushedHead.StandardOutput.Trim(),
                         detail,
-                        historyPath);
+                        historyPath)
+                    {
+                        GitWriteRetry = lastGitWriteRetry,
+                    };
                 }
 
                 var fetch = RunGit(transactionRoot, ["fetch", "origin", branchName]);
@@ -227,7 +263,10 @@ internal static class ClaimCommand
                     if (request.Operation == ClaimOperation.Acquire || !samePreexistingClaim)
                     {
                         return Held(request, relativeClaimPath, attempt, holder,
-                            "The push was rejected and the same scope now exists on origin.");
+                            "The push was rejected and the same scope now exists on origin.") with
+                        {
+                            GitWriteRetry = lastGitWriteRetry,
+                        };
                     }
                 }
 
@@ -238,7 +277,10 @@ internal static class ClaimCommand
                     return new ClaimTransactionResult(
                         "retry-exhausted", request.Scope, relativeClaimPath, false, attempt,
                         lastObserved?.Actor, null, null,
-                        $"Push was rejected by unrelated remote advance after {attempt} bounded attempt(s).");
+                        $"Push was rejected by unrelated remote advance after {attempt} bounded attempt(s).")
+                    {
+                        GitWriteRetry = lastGitWriteRetry,
+                    };
                 }
             }
             finally
@@ -317,7 +359,23 @@ internal static class ClaimCommand
         return $"{(local.Length == 0 ? "intent-cli" : local)}@claims.invalid";
     }
 
-    private static ClaimProcessResult RunGit(string workdir, IReadOnlyList<string> arguments)
+    private static ClaimProcessResult RunGit(
+        string workdir,
+        IReadOnlyList<string> arguments,
+        bool hostStateWrite = false)
+    {
+        if (hostStateWrite)
+        {
+            return HostStateGitRetryRunner.Run(
+                workdir,
+                arguments,
+                () => RunGitProcess(workdir, arguments));
+        }
+
+        return RunGitProcess(workdir, arguments);
+    }
+
+    private static ClaimProcessResult RunGitProcess(string workdir, IReadOnlyList<string> arguments)
     {
         var startInfo = new ProcessStartInfo("git")
         {
@@ -342,8 +400,23 @@ internal static class ClaimCommand
     {
         if (result.ExitCode != 0)
         {
+            if (result.RetryEvidence is not null)
+            {
+                throw new HostStateGitFailureException(operation, result.RetryEvidence);
+            }
+
             throw new InvalidOperationException(
                 $"Could not {operation}: {result.StandardError.Trim()}");
+        }
+    }
+
+    private static void CaptureRetry(
+        ref HostStateGitRetryEvidence? target,
+        ClaimProcessResult result)
+    {
+        if (result.RetryEvidence is not null)
+        {
+            target = result.RetryEvidence;
         }
     }
 
@@ -491,6 +564,11 @@ internal static class ClaimCommand
         if (result.DisplacedHolder is not null) writer.WriteLine($"- displaced_holder: {result.DisplacedHolder}");
         if (result.Commit is not null) writer.WriteLine($"- commit: `{result.Commit}`");
         if (result.HistoryPath is not null) writer.WriteLine($"- history_path: `{result.HistoryPath}`");
+        if (result.GitWriteRetry is not null)
+        {
+            writer.WriteLine($"- git_write_retry: outcome={result.GitWriteRetry.Outcome}; attempts={result.GitWriteRetry.Attempts}; elapsed_milliseconds={result.GitWriteRetry.ElapsedMilliseconds}; lock_path=`{result.GitWriteRetry.LockPath}`");
+            writer.WriteLine($"- manual_remediation: {result.GitWriteRetry.ManualRemediation}");
+        }
         writer.WriteLine($"- detail: {result.Detail}");
     }
 }
@@ -547,6 +625,14 @@ internal sealed record ClaimTransactionResult(
     [JsonPropertyName("holder_team")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? HolderTeam { get; init; }
+
+    [JsonPropertyName("git_write_retry")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public HostStateGitRetryEvidence? GitWriteRetry { get; init; }
 }
 
-internal sealed record ClaimProcessResult(int ExitCode, string StandardOutput, string StandardError);
+internal sealed record ClaimProcessResult(
+    int ExitCode,
+    string StandardOutput,
+    string StandardError,
+    HostStateGitRetryEvidence? RetryEvidence = null);

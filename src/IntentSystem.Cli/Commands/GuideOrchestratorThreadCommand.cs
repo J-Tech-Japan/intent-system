@@ -893,22 +893,25 @@ internal static class GuideOrchestratorThreadCommand
             ClaimRouting = new OrchestratorClaimRouting
             {
                 Summary =
-                    "G679/G680 preview-through-1.x orchestration route: run the shared Git-backed claim verification before coordinating named execution-unit or release-prep work. G680 owns command-level consumer enforcement while leaving the G679 claim transaction primitive unchanged. Packet draft, queue seed/publish, worker next-action, next-slice, and this release-prep route all consult the same judgment.",
+                    "G679/G680/G700 preview-through-1.x orchestration route: run the shared Git-backed claim verification before coordinating named execution-unit or release-prep work. G680 owns command-level consumer enforcement while leaving the G679 claim transaction primitive unchanged. G700 makes index.lock contention bounded, observable, and operator-remediable for intent-cli-owned host-state writes. Packet draft, queue seed/publish, worker next-action, next-slice, and this release-prep route all consult the same judgment.",
                 Verification = new[]
                 {
                     "Require the design/claimant result to report `status=acquired`, `push_succeeded=true`, `scope`, `claim_path`, `holder`, and the pushed `commit`; a local claim file or local commit is never sufficient.",
                     "Fast-forward from origin and re-read the active record at the returned `claim_path`; require its scope, actor, and team to match the intended execution-unit or release-prep owner before publish/delegation coordination.",
                     "Use `execution-unit:<EU>` for one execution unit and `release-prep:<owner/repo>:<version>` for release preparation. Unknown scope kinds are invalid; do not substitute issue labels or queue state as ownership.",
                     "Run `intent-cli claim verify --scope <scope> --team <team> --format json` and continue only on `passed=true`; a configured store with no active scope is `unheld`, and another team's record names `holder` plus `holder_team`.",
+                    "For the sanctioned claim writes, read `host_state_write_safety` before starting: only `.git/index.lock` contention is retried, using the declared bounded/jittered policy; success exposes `git_write_retry.attempts`, and exhaustion names elapsed time, the original Git error, exact lock path, and manual remediation.",
                 },
                 RejectDisambiguation = new[]
                 {
                     "`held`: the rejected push was followed by a fetch and the same-scope origin record exists. Stop this lane and report the named `holder` and `holder_team`; do not publish, delegate, or retry as though the advance were unrelated.",
                     "Unrelated remote advance: no same-scope origin claim exists, so the claim command reapplies on a fresh fast-forwarded base with its bounded retry. Continue only if that later plain push returns `acquired`; `retry-exhausted` is an explicit stop, never `held`.",
                     "No claim path uses force push. Takeover and release remain explicit attributed commands; orchestration never infers either transition.",
+                    "An index.lock failure is not a claim-holder result: stop on the terminal retry evidence, preserve the lock byte-for-byte, and follow its manual remediation. Non-lock Git errors are never retried.",
                 },
                 ClaimStaleRoute =
-                    "When `automation stalled-work` emits detect-only `claim-stale`, retain actor, team, scope, age, and `last_evidence`; route those facts to operator judgment. Time alone never releases, expires, reassigns, or takes over the claim. After judgment, only an explicit attributed `claim release` or `claim takeover --displaced-holder ...` may change ownership.",
+                    "When `automation stalled-work` emits detect-only `claim-stale`, retain actor, team, scope, age, and `last_evidence`; route those facts to operator judgment. Time alone never releases, expires, reassigns, or takes over the claim. After judgment, only an explicit attributed `claim release` or `claim takeover --displaced-holder ...` may change ownership. If a sanctioned write reports G700 terminal lock evidence, inspect the named lock path and apply the manual remediation; intent-cli never mutates index.lock.",
+                HostStateWriteSafety = HostStateGitRetryPolicy.Default.GuideDescription(),
             },
             DomainRouting = new OrchestratorDomainRouting
             {
@@ -4274,6 +4277,10 @@ internal static class GuideOrchestratorThreadCommand
             writer.WriteLine($"- {item}");
         }
         writer.WriteLine();
+        writer.WriteLine("### Host-state Git write safety (G700)");
+        writer.WriteLine();
+        writer.WriteLine(guide.ClaimRouting.HostStateWriteSafety);
+        writer.WriteLine();
         writer.WriteLine($"### `claim-stale` route\n\n{guide.ClaimRouting.ClaimStaleRoute}");
         writer.WriteLine();
 
@@ -5245,6 +5252,9 @@ internal sealed record OrchestratorClaimRouting
 
     [JsonPropertyName("claim_stale_route")]
     public required string ClaimStaleRoute { get; init; }
+
+    [JsonPropertyName("host_state_write_safety")]
+    public required string HostStateWriteSafety { get; init; }
 }
 
 internal sealed record OrchestratorModeSeparation

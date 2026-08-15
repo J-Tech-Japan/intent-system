@@ -112,6 +112,25 @@ after losing N, fast-forward, recompute, and retry the next number exactly once.
 The GitHub lifecycle label remains visible defence in depth but is not the
 acquisition fact. Review/closeout gates and `worker complete` are unchanged.
 
+### Preview: bounded host-state Git lock retry (G700)
+
+The sanctioned `claim` transaction is the only surface covered by this retry
+policy. For its intent-cli-initiated host-state Git writes (`pull`, `add`,
+`commit`, `push`, and the invoking-clone refresh), intent-cli retries only the
+recognizable `.git/index.lock` contention failure. Read-only Git inspection and
+agents' free-form Git commands are outside the policy; there is no queue or
+daemon.
+
+The declared default configuration is
+`max_attempts=4, window=2000ms, initial_delay=25ms, max_delay=250ms,
+jitter=25ms`. A contention that later succeeds includes
+`git_write_retry.outcome=succeeded` and the actual `attempts`. Exhaustion is a
+terminal error containing `attempts`, `elapsed_milliseconds`, the exact
+`lock_path`, the original Git error, and `manual_remediation`. The lock is
+never deleted, renamed, moved, truncated, or repaired by intent-cli. Inspect
+the named path and confirm that no Git process owns it before an operator
+manually removes a stale lock. Non-lock Git errors are returned without retry.
+
 ## Command reference (for agents, maintainers, and troubleshooting)
 
 > **Note:** The commands below are run by the AI agent internally. The authoritative

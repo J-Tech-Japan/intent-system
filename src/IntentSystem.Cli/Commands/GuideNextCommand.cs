@@ -127,6 +127,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             $"Shared start check: `intent-cli claim verify --scope <scope> --team {teamArg} --format json`; packet draft, queue seed/publish, worker next-action, and release-prep guidance consult this same judgment.",
             "Numbering is claim-then-draft: compute N, acquire `execution-unit:<N>`, and only the push winner scaffolds. A `held` loser fast-forwards, recomputes the next number, and retries that new scope exactly once; a second loss stops instead of allocating again.",
             "Proceed only on `status=acquired` with `push_succeeded=true`. On `held`, stop and name `holder` plus `holder_team`; on `retry-exhausted`, stop and surface the unrelated-advance failure. Never force-push, infer ownership from age, or take over automatically.",
+            HostStateGitRetryPolicy.Default.GuideDescription(),
         };
 
         var evidenceToCheck = new[]
@@ -237,6 +238,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             RoleContractFirst = roleContractFirst,
             GuideReachability = SeatCommandGuidanceRegistry.ReachabilityForRole(normalizedRole),
             TopologyWorkspaceMove = TopologyWorkspaceMoveGuidance.Create(domain, team),
+            HostStateWriteSafety = HostStateGitRetryPolicy.Default.GuideDescription(),
             DesignRoleGuide = GuideDesignThreadCommand.CommandName,
             ShortPrompt = ShortPrompt,
             ReadOnly = true,
@@ -342,6 +344,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             RoleContractFirst = null,
             GuideReachability = SeatCommandGuidanceRegistry.ReachabilityForRole(invokingRole),
             TopologyWorkspaceMove = TopologyWorkspaceMoveGuidance.Create(domain, team),
+            HostStateWriteSafety = HostStateGitRetryPolicy.Default.GuideDescription(),
             Domain = domain,
             Team = team,
             TargetRepo = string.IsNullOrWhiteSpace(targetRepo) ? null : targetRepo.Trim(),
@@ -374,6 +377,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 $"Before a named packet or publication action, verify the repository/claim prerequisite for `{teamArg}`.",
                 $"`intent-cli claim verify --scope release-prep:{repoArg}:authoring --team {teamArg} --format json` must pass before publication.",
                 "A local file or commit is not ownership; stop on a held or failed claim.",
+                HostStateGitRetryPolicy.Default.GuideDescription(),
             ],
             NotThis =
             [
@@ -545,6 +549,11 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             writer.WriteLine();
         }
         writer.WriteLine(result.Summary);
+        writer.WriteLine();
+
+        writer.WriteLine("## Host-state Git write safety (G700)");
+        writer.WriteLine();
+        writer.WriteLine(result.HostStateWriteSafety);
         writer.WriteLine();
 
         writer.WriteLine("## Claim before starting named work (G679 — preview-through-1.x)");
@@ -896,6 +905,9 @@ internal sealed record GuideNextResult
     /// </summary>
     [JsonPropertyName("topology_workspace_move")]
     public required TopologyWorkspaceMoveGuide TopologyWorkspaceMove { get; init; }
+
+    [JsonPropertyName("host_state_write_safety")]
+    public required string HostStateWriteSafety { get; init; }
 
     [JsonPropertyName("domain")]
     public string? Domain { get; init; }
