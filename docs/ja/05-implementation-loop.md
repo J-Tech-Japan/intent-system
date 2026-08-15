@@ -108,6 +108,23 @@ fast-forward、次番号を再計算し、その番号を exactly once retry し
 は visible な defence in depth のままで acquisition fact ではありません。review/closeout gate と
 `worker complete` は変更しません。
 
+### Preview: host-state Git の bounded index.lock retry (G700)
+
+sanctioned な `claim` transaction だけがこの retry policy の対象です。
+その intent-cli-initiated host-state Git write（`pull`、`add`、`commit`、`push`、
+invoking clone の refresh）について、intent-cli は `.git/index.lock` の contention
+failure と判定できる場合だけ retry します。read-only Git inspection、agent の
+free-form Git command は対象外で、queue や daemon は追加しません。
+
+宣言済みの default configuration は
+`max_attempts=4, window=2000ms, initial_delay=25ms, max_delay=250ms,
+jitter=25ms` です。後続の retry で成功した contention は
+`git_write_retry.outcome=succeeded` と実際の `attempts` を出力します。exhaustion は
+`attempts`、`elapsed_milliseconds`、exact な `lock_path`、original Git error、
+`manual_remediation` を持つ terminal error です。intent-cli は lock を delete、rename、
+move、truncate、repair しません。named path を調べ、Git process が所有していないことを
+確認してから stale lock を operator が手動で処理します。non-lock Git error は retry せずに返します。
+
 ## コマンドリファレンス（agent・メンテナ・トラブルシューティング向け）
 
 > **注意:** 以下のコマンドは AI agent が内部で実行します。ループの詳細条件は
