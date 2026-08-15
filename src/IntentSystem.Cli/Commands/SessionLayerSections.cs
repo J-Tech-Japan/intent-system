@@ -125,6 +125,8 @@ internal static class SessionLayerSections
         new("(json) herdr-only replacement note", "herdr_only_replacement_note", Applicability.HerdrOnly),
         new("(json) herdr-only descriptive context", "herdr_only_descriptive_agmsg_context", Applicability.HerdrOnly),
         new("(json) herdr-only operations", HerdrOnlyOperatingGuide.JsonProperty, Applicability.HerdrOnly),
+        new("## Herdr standard layout registry (G701)", null, Applicability.HerdrOnly),
+        new("## Three-tier dialog-answering rule (G701)", null, Applicability.HerdrOnly),
         ..HerdrOnlyOperatingGuide.Headings.Select(heading =>
             new SectionDeclaration(heading, null, Applicability.HerdrOnly)),
 
@@ -133,6 +135,8 @@ internal static class SessionLayerSections
         new(SessionLayerSwitchChecklist.Heading, SessionLayerSwitchChecklist.JsonProperty, Applicability.ModeIndependent),
         new("## Guide reachability (G645/G696)", "guide_reachability", Applicability.ModeIndependent),
         new("## Topology workspace move reachability (G697)", "topology_workspace_move", Applicability.ModeIndependent),
+        new("(json) herdr standard layout registry", "herdr_standard_layout", Applicability.ModeIndependent),
+        new("(json) dialog answering rule", "dialog_answering_rule", Applicability.ModeIndependent),
         new("## Mode separation", "mode_separation", Applicability.ModeIndependent, Descriptive: true),
         new("## Role boundary (design authors; orchestrator coordinates)", "role_boundary", Applicability.ModeIndependent),
         new("## Git-backed claim verification and routing (G679 — preview-through-1.x)", "claim_routing", Applicability.ModeIndependent),

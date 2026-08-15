@@ -2909,3 +2909,41 @@ required-final-step のルールは review スレッドにも適用され、そ�
 - すべての wake を stalled-work チェック（`automation stalled-work`、G523）で終え、
   眠りにつく前に actionable な item を処理する。黙って先送りせず、明示的に
   エスカレーションする。
+
+## guide primacy、標準 herdr layout、dialog の権限（G701）
+
+guide surface は human executor と AI agent executor のための primary interface です。
+missing、wrong、または stale な guide route は、実装と functional test が green でも
+capability を operationally unshipped とします。built CLI から declared guide route を
+実行して確認することは functional test と同等の acceptance substance です。G645 の
+per-unit reachability record がこの decision の per-unit enforcement であり、その mechanics
+は変更しません。
+
+installed `guide orchestrator-thread` は structured registry `herdr-standard-layout/v1` を
+標準 herdr setup として表示します。
+
+- team 名の tab は exactly one;
+- 左は `orchestration`;
+- 右 column は上が `implementation`、下が `review`;
+- pane label は `orchestration`、`implementation`、`review`。
+
+registry は exact creation command と measured repair shape
+`herdr pane move --tab --split right|down --target-pane`、続く `herdr pane rename` を
+表示します。named `layout-and-labels` check は visible incompleteness を示しますが、
+read-only で herdr を実行せず、READY を強制停止しません。explicit id の投入と確認は
+operator が行います。
+
+setup と `guide design-thread` は `dialog-answering/v1` の exactly three tiers を表示
+します。
+
+1. provisioner 自身が作った state の gate は provisioner が回答します。
+2. human が conversation で既に許可した action は、dialog/action が正確に一致
+   した場合だけ design が session layer を通じて mechanical に実行します。human が
+   decision actor であり、conversation approval が recorded grounds です。per-action
+   approval を class に一般化しません。
+3. unapproved、unknown-origin、uncertain、または approval と mismatch の dialog は、
+   grounds を示して design 経由で human にエスカレーションします。
+
+G690 との違いも明示します。G690 の hard risk floor は design が **単独で決められること**
+だけを制限し、conversation に記録された human decision の実行を阻みません。guide は
+observation-only であり、provider launch と terminal mutation を追加しません。

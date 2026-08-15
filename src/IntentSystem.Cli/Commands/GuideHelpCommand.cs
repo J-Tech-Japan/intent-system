@@ -302,14 +302,14 @@ internal static class GuideHelpCommand
         new GuideSubcommandEntry
         {
             Name = "orchestrator-thread",
-            Purpose = "G487/G540 paste-ready prompts for the PRIMARY four-thread orchestrator model (design/orchestrator/implementation/review) over its selected session transport, plus the implementation/review threads it delegates to. agmsg is a message/progress/completion signal layer only; intent-cli and GitHub stay authoritative. Distinguishes the primary orchestrator-message model from the simpler timer-loop alternative (no mixed-mode timer races), pins the structured reply contract, the design-orchestrator double-check rule, an orchestrator first-wake, and safety boundaries. Timer-loop mode remains fully supported, not replaced.",
+            Purpose = "G701/G487/G540 paste-ready prompts for the PRIMARY four-thread orchestrator model (design/orchestrator/implementation/review) over its selected session transport, plus the implementation/review threads it delegates to. Renders `herdr-standard-layout/v1` (one team tab, labeled three-pane shape, exact creation and measured repair commands), the non-blocking layout-and-labels setup check, and `dialog-answering/v1`. agmsg is a message/progress/completion signal layer only; intent-cli and GitHub stay authoritative. Distinguishes the primary orchestrator-message model from the simpler timer-loop alternative (no mixed-mode timer races), pins the structured reply contract, the design-orchestrator double-check rule, an orchestrator first-wake, and safety boundaries. Timer-loop mode remains fully supported, not replaced.",
             Example = "intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --format markdown"
         },
         // G654: design-role operating contract, independent of agent kind.
         new GuideSubcommandEntry
         {
             Name = "design-thread",
-            Purpose = "G654 preview-through-1.x agent-kind-neutral design-thread operating contract: four valid wake outcomes, provenance and approval semantics, merge-authority comparison, three-layer delegation verification, orchestration-owned recovery, record-based supervision-liveness checking, and outcome-shaped reporting.",
+            Purpose = "G701/G654 preview-through-1.x agent-kind-neutral design-thread operating contract: four valid wake outcomes, provenance and approval semantics, the structured `dialog-answering/v1` three-tier rule with the G690 distinction, merge-authority comparison, three-layer delegation verification, orchestration-owned recovery, record-based supervision-liveness checking, and outcome-shaped reporting.",
             Example = "intent-cli guide design-thread --domain <name> --team <team> --routing-root <host-root> --format markdown"
         },
         // G664: application conversation to herdr-only team genesis.
