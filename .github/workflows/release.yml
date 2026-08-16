@@ -17,7 +17,7 @@
 #
 #   3. Prepares the npm entry package plus its per-platform optional packages,
 #      verifies checksums/version identity, and publishes them only on the same
-#      real-release event and guarded secret path as NuGet.
+#      real-release event through GitHub Actions OIDC trusted publishing.
 #
 #   4. Attaches the .nupkg, npm packages, and per-platform binary archives
 #      (plus checksums) to the triggering GitHub Release.
@@ -289,6 +289,9 @@ jobs:
     needs: [nupkg, binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -298,8 +301,16 @@ jobs:
       - name: Setup Node.js for release packaging
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.14.0
           registry-url: https://registry.npmjs.org
+
+      - name: Pin npm CLI for trusted publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.5.1
+          test "$(node --version)" = "v22.14.0"
+          test "$(npm --version)" = "11.5.1"
 
       - name: Resolve the same tag-derived release version as NuGet and binaries
         id: ver
@@ -384,22 +395,32 @@ jobs:
             .artifacts/npm-tarballs/* \
             --repo "${{ github.repository }}" --clobber
 
-      - name: Publish npm packages (guarded; same release gate as NuGet)
+      - name: Publish npm packages through OIDC trusted publishing
         if: ${{ github.event_name == 'release' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "NPM_TOKEN is not set (fork or missing secret); skipping npm publish."
-            echo "Packages were still packed, checksum-verified, and attached to the release."
-            exit 0
-          fi
-          for package in \
+          publish_package() {
+            local package_path="$1"
+            local package_name="$2"
+            local publish_output
+            if ! publish_output="$(npm publish "${package_path}" --access public 2>&1)"; then
+              printf '%s\n' "${publish_output}" >&2
+              echo "npm trusted publishing authentication failed for package ${package_name}: register this package's npmjs.com trusted publisher for repository ${GITHUB_REPOSITORY} and workflow .github/workflows/release.yml, and keep id-token: write on the npm job; no npm token fallback is supported." >&2
+              return 1
+            fi
+            printf '%s\n' "${publish_output}"
+          }
+
+          publish_package \
             .artifacts/npm-tarballs/j-tech-japan-intent-cli-darwin-arm64-*.tgz \
+            "@j-tech-japan/intent-cli-darwin-arm64"
+          publish_package \
             .artifacts/npm-tarballs/j-tech-japan-intent-cli-linux-x64-*.tgz \
+            "@j-tech-japan/intent-cli-linux-x64"
+          publish_package \
             .artifacts/npm-tarballs/j-tech-japan-intent-cli-win32-x64-*.tgz \
-            .artifacts/npm-tarballs/intent-system-*.tgz; do
-            npm publish "${package}" --access public
-          done
+            "@j-tech-japan/intent-cli-win32-x64"
+          publish_package \
+            .artifacts/npm-tarballs/intent-system-*.tgz \
+            "intent-system"

@@ -65,6 +65,34 @@ npm パッケージ、ランタイム同梱バイナリ、およびバイナリ�
 Pull request CI は package preparation、`npm pack`、checksum/version 検証、packed-install smoke test
 までを実行します。npm への公開は行わず、npm 組織の credential も必要としません。
 
+## リリースの Trusted publishing (G711)
+
+npm publish job は公開済み GitHub Release の場合だけ動き、他の配布 job と同じ
+tag-derived version、package の checksum 検証、Release asset attachment を先に完了してから実行します。
+認証には GitHub Actions OIDC trusted publishing を使います。job は Node `22.14.0` と npm
+`11.5.1` を明示的に固定し、job 単位の `id-token: write` permission だけを追加します。
+repository に npm token や registry credential は保存しません。
+
+最初の release の前に、operator は npmjs.com で次の各 package に対して一度だけ
+trusted-publisher registration を行う必要があります。
+
+- `intent-system`
+- `@j-tech-japan/intent-cli-darwin-arm64`
+- `@j-tech-japan/intent-cli-linux-x64`
+- `@j-tech-japan/intent-cli-win32-x64`
+
+各 package で GitHub Actions を trusted publisher として選び、
+`J-Tech-Japan/intent-system` repository と workflow file
+`.github/workflows/release.yml` を登録します。これは operator の account action であり、
+この repository が npm 組織を作成したり publish secret を保存したりすることはありません。
+GitHub Actions の trusted publish が成功すると npm provenance attestation は自動生成され、
+consumer は公開 package metadata から検証できます。
+
+OIDC 認証または package ごとの registration が不足している場合、release job は対象 package 名と
+不足している trusted-publisher または `id-token: write` configuration を示して fail します。
+成功した skip として報告することはありません。workflow-dispatch の dry run は publication を試みず、
+package の prepare、pack、checksum、verification だけを続けます。
+
 ## .NET tool との共存
 
 npm 経路と .NET global tool は共存できます。

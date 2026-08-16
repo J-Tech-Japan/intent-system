@@ -79,7 +79,12 @@ public sealed class NpmDistributionG702Tests
         Assert.Contains("github.event.release.tag_name", release, StringComparison.Ordinal);
         Assert.Contains("VERSION=\"${RAW#v}\"", release, StringComparison.Ordinal);
         Assert.Contains("needs: [nupkg, binaries]", release, StringComparison.Ordinal);
-        Assert.Contains("NPM_TOKEN", release, StringComparison.Ordinal);
+        Assert.DoesNotContain("NPM_TOKEN", release, StringComparison.Ordinal);
+        Assert.DoesNotContain("NODE_AUTH_TOKEN", release, StringComparison.Ordinal);
+        Assert.Contains("id-token: write", release, StringComparison.Ordinal);
+        Assert.Contains("node-version: 22.14.0", release, StringComparison.Ordinal);
+        Assert.Contains("npm@11.5.1", release, StringComparison.Ordinal);
+        Assert.Contains("OIDC trusted publishing", release, StringComparison.Ordinal);
         Assert.Contains("npm publish", release, StringComparison.Ordinal);
         Assert.Contains("if: ${{ github.event_name == 'release' }}", release, StringComparison.Ordinal);
         Assert.Contains("NUGET_API_KEY", release, StringComparison.Ordinal);

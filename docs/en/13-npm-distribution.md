@@ -73,6 +73,37 @@ NuGet. Pull-request CI runs package preparation, `npm pack`, checksum/version
 verification, and a packed-install smoke test; it never publishes to npm and
 does not require npm organization credentials.
 
+## Trusted publishing for releases (G711)
+
+The npm publish job runs only for a published GitHub Release, after the same
+tag-derived packaging, checksum verification, and release-asset steps used by
+the other distribution jobs. It authenticates with GitHub Actions OIDC
+trusted publishing. The job is explicitly pinned to Node `22.14.0` and npm
+`11.5.1`; it has job-scoped `id-token: write` permission and stores no npm
+token or registry credential in this repository.
+
+Before the first release, an operator must perform the one-time npmjs.com
+trusted-publisher registration separately for each package:
+
+- `intent-system`
+- `@j-tech-japan/intent-cli-darwin-arm64`
+- `@j-tech-japan/intent-cli-linux-x64`
+- `@j-tech-japan/intent-cli-win32-x64`
+
+For each package, select GitHub Actions as the trusted publisher and register
+the `J-Tech-Japan/intent-system` repository with the workflow file
+`.github/workflows/release.yml`. These are operator account actions; this
+repository neither creates the npm organization nor stores a publish secret.
+Successful GitHub Actions trusted publishes receive npm provenance
+attestations automatically, which consumers can verify from the published
+package metadata.
+
+If OIDC authentication or the per-package registration is missing, the
+release job fails with the package name and the missing trusted-publisher or
+`id-token: write` configuration. It never reports a successful skip. A
+workflow-dispatch dry run still prepares, packs, checksums, and verifies the
+packages without attempting publication.
+
 ## Coexisting with the .NET tool
 
 The npm route and the .NET global tool can coexist:
