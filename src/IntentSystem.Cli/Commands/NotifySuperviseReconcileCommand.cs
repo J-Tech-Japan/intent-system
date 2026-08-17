@@ -24,6 +24,10 @@ internal static class NotifySuperviseReconcileCommand
     private const string FormatMarkdown = "markdown";
     private const string LabelPrefix = "intent-cli.supervise.";
 
+    // Tests use a fake process runner to exercise the reconciliation state
+    // machine on non-macOS CI hosts. Production keeps the real OS detector.
+    internal static Func<bool> MacOsDetector { get; set; } = OperatingSystem.IsMacOS;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -74,7 +78,7 @@ internal static class NotifySuperviseReconcileCommand
             NotifySuperviseArtifactInventory.UserProfileDirectoryFactory());
 
         if (!string.Equals(options.Platform, MacOs, StringComparison.Ordinal)
-            || !OperatingSystem.IsMacOS())
+            || !MacOsDetector())
         {
             EmitFailure(
                 writer,

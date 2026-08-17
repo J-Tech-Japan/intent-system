@@ -684,13 +684,13 @@ Windows の `schtasks` compatible Task Scheduler XML、または Linux の syste
 `--platform` は明示的な cross-authoring override です。すべての artifact は
 `intent-cli.supervise.<domain>.<team>` という team 固有の名前と label を持ち、domain、team、repo、
 owner role、bound、interval を含む完全な `notify supervise` invocation を埋め込みます。output は write 先、lifetime、
-runtime log、legacy artifact の removal、registration / unregistration / reconcile の正確な command を表示します。
+runtime log、legacy artifact の削除、registration / unregistration / reconcile の正確な command を表示します。
 G712 は許可された GUI-session lifetime を選びます。artifact は routing repository の
 `.intent-cli/supervision/<domain>/<team>/install/` 配下に置き、`~/Library/LaunchAgents` には置きません。macOS plist
 は `RunAtLoad` を持たないため login auto-load も reboot persistence もなく、logout/reboot で GUI domain が消えます。
 現 GUI session で operator が有効化するときだけ `launchctl bootstrap gui/$(id -u) '<artifact-path>'` を実行します。
 `intent-cli notify supervise reconcile --write`（または `uninstall --write`）は loaded job の before/after を表示し、
-managed `intent-cli.supervise.*` job を bootout し、managed artifact と legacy の login-persistent plist を removal して
+managed `intent-cli.supervise.*` job を停止し、managed artifact と legacy の login-persistent plist を削除して
 path を明示します。install は artifact の authoring と first-cycle probe のみで、lifecycle command は実行しません。
 macOS から生成した Windows / Linux artifact は `emitted-but-unverified` と明示し、logon/default-target の auto-start trigger
 を持ちません。
@@ -726,7 +726,7 @@ result は runtime directory と両方の log path を明示します。write �
 最初の `cycles.jsonl` record を追記した後だけ成功します。そうでなければ
 `first-cycle-proof-failed` として失敗し、両 log path を示します。artifact は
 operator が確認できるよう残ります。install は registration を実行せず、明示的な
-`notify supervise reconcile --write` / `uninstall --write` が operator-approved な unload/removal path です。
+`notify supervise reconcile --write` / `uninstall --write` が operator-approved な unload/削除 path です。
 
 最初の cycle の writer は
 `.intent-cli/supervision/<domain>/<team>/installed-supervisor.json` に記録します。
@@ -771,8 +771,8 @@ binary も解決できる場合は絶対 executable として埋め込み、解�
 binary は emission result に名前を出し、残る command name を覆う記録済み
 PATH も artifact に残します。install は authoring と first-cycle proof のみで
 registration は実行しません。明示的な `notify supervise reconcile|uninstall --write`
-surface が current GUI-session の lifecycle boundary であり、managed job を bootout し、
-legacy login-persistent plist を含む artifact を removal します。無関係な job の replace や
+surface が current GUI-session の lifecycle boundary であり、managed job を停止し、
+legacy login-persistent plist を含む artifact を削除します。無関係な job の replace や
 manage は行いません。
 
 operator は live PID と最初の cycle record である `cycles.jsonl` の両方を

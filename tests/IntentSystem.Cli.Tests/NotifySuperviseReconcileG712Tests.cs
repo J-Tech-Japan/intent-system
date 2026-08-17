@@ -28,12 +28,14 @@ public sealed class NotifySuperviseReconcileG712Tests : IDisposable
         Directory.CreateDirectory(root);
         home = Path.Combine(root, "home");
         NotifyCommand.ProcessRunnerFactory = null;
+        NotifySuperviseReconcileCommand.MacOsDetector = () => true;
         NotifySuperviseArtifactInventory.UserProfileDirectoryFactory = () => home;
     }
 
     public void Dispose()
     {
         NotifyCommand.ProcessRunnerFactory = null;
+        NotifySuperviseReconcileCommand.MacOsDetector = OperatingSystem.IsMacOS;
         NotifySuperviseArtifactInventory.UserProfileDirectoryFactory =
             () => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         NotifySuperviseInstallCommand.FirstCycleProbeFactory = null;
