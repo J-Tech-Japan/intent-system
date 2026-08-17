@@ -28,7 +28,7 @@ internal static class SessionLayerTopologyCommand
     private const string ShowUsage =
         "Usage: intent-cli session-layer topology show --domain <name> --team <name> [--format markdown|json]";
     private const string ValidateUsage =
-        "Usage: intent-cli session-layer topology validate --domain <name> --team <name> [--format markdown|json]";
+        "Usage: intent-cli session-layer topology validate --domain <name> --team <name> [--live] [--format markdown|json]";
     private const string MoveUsage =
         "Usage: intent-cli session-layer topology move --domain <name> --team <name> --workspace-id <new-id> "
         + "[--pane-map <old-pane>=<new-pane>]... [--current-digest <digest>] [--dry-run|--write] [--format json]";
@@ -119,7 +119,14 @@ internal static class SessionLayerTopologyCommand
             return 0;
         }
 
-        if (!TryParseReadArguments(args, out var domain, out var team, out var format, out var error))
+        if (!TryParseReadArguments(
+                args,
+                out var domain,
+                out var team,
+                out var format,
+                out var error,
+                out var live,
+                allowLive: true))
         {
             writer.WriteLine(error);
             writer.WriteLine(ValidateUsage);
@@ -127,6 +134,12 @@ internal static class SessionLayerTopologyCommand
         }
 
         var validation = NotifyRoleTopologyStore.Validate(context.RepoRoot, domain!, team!);
+        if (live)
+        {
+            validation = HerdrPaneLabelValidation.Apply(context.RepoRoot, domain!, team!, validation);
+        }
+
+        var informationalCount = validation.Findings.Count(finding => finding.IsInformational);
         var result = new SessionLayerTopologyValidationResult
         {
             Valid = validation.Valid,
@@ -137,6 +150,9 @@ internal static class SessionLayerTopologyCommand
                 ? $"Recorded delivery topology for team '{team}' is valid."
                 : $"Recorded delivery topology for team '{team}' is invalid with "
                     + $"{validation.Findings.Count} finding(s). No topology was changed.")
+                + (informationalCount == 0
+                    ? string.Empty
+                    : $" {informationalCount} informational finding(s) do not affect valid.")
                 + FormatWarnings(validation.Warnings),
         };
 
@@ -152,7 +168,14 @@ internal static class SessionLayerTopologyCommand
             return 0;
         }
 
-        if (!TryParseReadArguments(args, out var domain, out var team, out var format, out var error))
+        if (!TryParseReadArguments(
+                args,
+                out var domain,
+                out var team,
+                out var format,
+                out var error,
+                out _,
+                allowLive: false))
         {
             writer.WriteLine(error);
             writer.WriteLine(ShowUsage);
@@ -602,12 +625,15 @@ internal static class SessionLayerTopologyCommand
         out string? domain,
         out string? team,
         out string format,
-        out string error)
+        out string error,
+        out bool live,
+        bool allowLive)
     {
         domain = null;
         team = null;
         format = FormatMarkdown;
         error = string.Empty;
+        live = false;
         for (var index = 0; index < args.Length; index++)
         {
             switch (args[index])
@@ -634,6 +660,9 @@ internal static class SessionLayerTopologyCommand
                         return false;
                     }
                     format = requestedFormat!;
+                    break;
+                case "--live" when allowLive:
+                    live = true;
                     break;
                 default:
                     error = $"Unknown argument '{args[index]}'.";
@@ -1020,7 +1049,8 @@ internal static class SessionLayerTopologyCommand
         writer.WriteLine(result.Summary);
         foreach (var finding in result.Findings)
         {
-            writer.WriteLine($"- role={finding.Role}; field={finding.Field}; cause={finding.Cause}; {finding.Message}");
+            var severity = finding.IsInformational ? "informational; " : string.Empty;
+            writer.WriteLine($"- {severity}role={finding.Role}; field={finding.Field}; cause={finding.Cause}; {finding.Message}");
         }
     }
 

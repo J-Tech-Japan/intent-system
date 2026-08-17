@@ -139,11 +139,12 @@ internal static class GuideBootstrapCommand
                 {
                     Number = 3,
                     Id = "record-topology",
-                    Instruction = "Record operator-supplied workspace, pane, cwd, kind, and reader facts through the canonical topology writer, once per role; validate and show the finished roster. Exact repeats are idempotent and conflicts fail closed.",
+                    Instruction = "Record operator-supplied workspace, pane, cwd, kind, and reader facts through the canonical topology writer, once per role; immediately set each recorded herdr pane's display label with herdr pane rename <pane-id> <logical-role> so the human can identify the pane they are about to supervise. Herdr owns that label and intent-cli never sets it as a topology-record side effect. Run the read-only live label check, then validate and show the finished roster. Exact repeats are idempotent and conflicts fail closed.",
                     EmittedCommands =
                     [
                         $"intent-cli session-layer topology record --domain {domainArg} --team {teamArg} --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> --kind <human-chosen-kind> --write --format json",
-                        $"intent-cli session-layer topology validate --domain {domainArg} --team {teamArg} --format json",
+                        "herdr pane rename <pane-id> <logical-role>",
+                        $"intent-cli session-layer topology validate --domain {domainArg} --team {teamArg} --live --format json",
                         $"intent-cli session-layer topology show --domain {domainArg} --team {teamArg} --format json",
                     ],
                 },

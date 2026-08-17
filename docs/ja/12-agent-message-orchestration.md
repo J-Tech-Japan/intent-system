@@ -1313,11 +1313,12 @@ foreign-workspace-only name、ambiguous mapping は prompt / append なしで fa
 
 ```text
 intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
+herdr pane rename <pane-id> <logical-role>
 intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
 intent-cli session-layer topology update-kind --domain <domain> --team <team> --role <role> --current-kind <kind> --new-kind <kind> --confirm-update-kind --write
 intent-cli session-layer topology update-field --domain <domain> --team <team> --role <role> --field delivery_method --current <absent|inline|file-backed> --new <inline|file-backed> --confirm-update-field --write
 intent-cli session-layer topology retire-legacy --domain <domain> --team <team> --evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write
-intent-cli session-layer topology validate --domain <domain> --team <team> --format json
+intent-cli session-layer topology validate --domain <domain> --team <team> --live --format json
 intent-cli session-layer topology show --domain <domain> --team <team> --format json
 intent-cli guide topology-workspace-move --domain <domain> --team <team> --format markdown
 intent-cli session-layer topology move --domain <domain> --team <team> --workspace-id <new-workspace-id> --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... --dry-run --format json
@@ -1346,11 +1347,16 @@ entry を 1 件追記します。定義済みの field は `timestamp_utc`、`ho
 `retired_path`、名前付きの `evidence` です。これにより、現在の legacy reader disposition を
 変更せずに、後続の ledger decision が累積した retirement を引用できます。
 
-`record` が使う値は operator が供給したものだけです。herdr query、id の guess、resource の
-provision、既存 conflict の repair は行いません。完全一致は idempotent no-op、異なる既存 role
-は file を書き換えず拒否します。read-only の `validate` は `valid: true|false` と全 finding
-を一度に返し、missing/unsupported residence、missing `pane_id`、unsafe reader、team-workspace
-mismatch を含む各 finding に role、field、cause、message を記載します。`show` も read-only
+herdr pane mapping を記録した直後に `herdr pane rename <pane-id> <logical-role>` を実行し、
+これから supervise する pane を human が識別できるようにします。display label は herdr の所有であり、
+intent-cli は pane rename を呼ばず、topology record の side effect として label を設定しません。`record`
+が使う値は operator が供給したものだけです。herdr query、id の guess、resource の provision、既存
+conflict の repair は行いません。完全一致は idempotent no-op、異なる既存 role は file を書き換えず拒否
+します。read-only の `validate` は `valid: true|false` と全 finding を一度に返します。`--live` を付けると
+`herdr pane list --workspace <workspace-id>` も read-only で読み、label のない recorded pane を
+`valid` を変えない informational finding として報告します。missing/unsupported residence、missing
+`pane_id`、unsafe reader、team-workspace mismatch を含む各 finding に role、field、cause、message を記載
+します。`show` も read-only
 であり、`notify` と同じ delivery-target 関数を通して各 pane / reader を解決し、prompt、append、
 herdr query を行いません。mapping が存在するか herdr-only が必要とする場合、`automation doctor`
 もこの health を載せ、notify の topology refusal は remedy として `topology validate` / `record`

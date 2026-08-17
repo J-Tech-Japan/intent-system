@@ -52,7 +52,12 @@ internal sealed record SessionLayerTopologyFinding(
     [property: JsonPropertyName("role")] string Role,
     [property: JsonPropertyName("field")] string Field,
     [property: JsonPropertyName("cause")] string Cause,
-    [property: JsonPropertyName("message")] string Message);
+    [property: JsonPropertyName("message")] string Message)
+{
+    [JsonPropertyName("is_informational")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool IsInformational { get; init; }
+}
 
 internal sealed record SessionLayerTopologyValidation
 {
@@ -1001,7 +1006,11 @@ internal static class NotifyRoleTopologyStore
         string role,
         string field,
         string cause,
-        string message) => new(role, field, cause, message);
+        string message,
+        bool isInformational = false) => new(role, field, cause, message)
+        {
+            IsInformational = isInformational,
+        };
 
     private static SessionLayerTopologyValidation Validation(
         string team,
@@ -1009,7 +1018,7 @@ internal static class NotifyRoleTopologyStore
         IReadOnlyList<SessionLayerTopologyFinding> findings,
         IReadOnlyList<string>? warnings = null) => new()
         {
-            Valid = findings.Count == 0,
+            Valid = findings.All(finding => finding.IsInformational),
             Team = team,
             SourcePath = path,
             Findings = findings,
