@@ -153,7 +153,7 @@ internal static class GuideBootstrapCommand
                     Id = "emit-supervision-install",
                     Instruction = state.SupervisionCycleRecorded
                         ? "Keep the existing per-team supervision installation; do not emit or register a duplicate."
-                        : $"Emit the current-platform supervision artifact and exact registration/unregistration commands. {SupervisionGuideText.InstallBoundRule} {SupervisionGuideText.InstallArtifactRule} {SupervisionGuideText.InstallEvidenceRule} The human registers it; intent-cli does not.",
+                        : $"Emit the current-platform supervision artifact and exact current-session registration/unregistration commands. {SupervisionGuideText.SessionLifetimeRule} {SupervisionGuideText.InstallBoundRule} {SupervisionGuideText.InstallArtifactRule} {SupervisionGuideText.InstallEvidenceRule} The human may register it for the current GUI session; use reconcile/uninstall to unload and remove drift.",
                     EmittedCommands = state.SupervisionCycleRecorded
                         ? []
                         : [$"intent-cli notify supervise install --domain {domainArg} --team {teamArg} --repo {repoArg} --owner-role orchestration --bound <seconds> --interval <seconds> --startup-bound <seconds> --write --format json"],

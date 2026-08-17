@@ -809,11 +809,23 @@ XML file on Windows, or a systemd user unit on Linux. `--platform` is an
 explicit cross-authoring override. Every artifact is named and labelled
 `intent-cli.supervise.<domain>.<team>` and embeds the complete `notify
 supervise` invocation, including domain, team, repo, owner role, bound, and
-interval. Output names the written path and prints exact registration and
-unregistration commands. Those commands are operator actions: intent-cli
-does not execute them and never registers, unregisters, starts, stops, or
-kills the supervisor. Windows and Linux artifacts emitted from the measured
-macOS path are explicitly `emitted-but-unverified`.
+interval. Output names the written path, lifetime, runtime logs, legacy
+artifacts removed, and exact registration/unregistration/reconcile commands.
+G712 deliberately chooses the permitted GUI-session lifetime: the artifact is
+kept under the routing repository's
+`.intent-cli/supervision/<domain>/<team>/install/`, never under
+`~/Library/LaunchAgents`; the macOS plist omits `RunAtLoad`, so it is not
+login-auto-loaded and the GUI domain disappears at logout/reboot. If the
+operator wants it active in the current GUI session, the printed command uses
+`launchctl bootstrap gui/$(id -u) '<artifact-path>'`. Use
+`intent-cli notify supervise reconcile --write` (or `uninstall --write`) to
+list loaded jobs before and after, boot out every managed
+`intent-cli.supervise.*` job, remove managed artifacts and legacy
+login-persistent plists, and name the removed paths. Install authors and
+first-cycle-probes only; reconcile/uninstall is the explicit lifecycle
+cleanup boundary. Windows and Linux artifacts emitted from the measured macOS
+path are explicitly `emitted-but-unverified` and contain no logon/default-
+target auto-start trigger.
 
 Install exactly one artifact per team outside the agent seats. The loop,
 per-cycle measurement, detection bound, one-wake-per-finding behavior, and
@@ -850,8 +862,9 @@ runtime directory and both log paths. A write reports success only after the
 managed process appends a writer-bearing first cycle within the declared
 `--startup-bound` (default 30 seconds). Otherwise it fails as
 `first-cycle-proof-failed` and names both log paths. The artifact remains for
-operator inspection, while intent-cli still does not register, start, stop, or
-unregister the scheduler.
+operator inspection. Install does not execute registration; the explicit
+`notify supervise reconcile --write` or `uninstall --write` command is the
+operator-approved unload/removal path.
 
 The first-cycle writer is recorded in
 `.intent-cli/supervision/<domain>/<team>/installed-supervisor.json`. A later
@@ -897,9 +910,12 @@ unregistering/re-registering it with the printed operator commands.
 `intent-cli` executable absolutely. Every runtime transport binary used by the
 loop is also emitted as an absolute executable when resolvable; an unresolved
 binary is named in the emission result and the artifact carries the recorded
-PATH that covers any remaining command name. The artifact and guidance remain
-emit-only: intent-cli does not register, start, stop, replace, or manage a
-scheduler job.
+PATH that covers any remaining command name. Install remains authoring and
+first-cycle proof only; it does not execute registration. The explicit
+`notify supervise reconcile|uninstall --write` surface is the named current-
+GUI-session lifecycle boundary: it boots out managed jobs and removes their
+artifacts, including legacy login-persistent plists, without replacing or
+managing unrelated jobs.
 
 The operator verifies both the live PID and the first cycle record in
 `cycles.jsonl`; a loaded PID is not proof that a loop is alive. The guidance
