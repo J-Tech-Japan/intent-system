@@ -2789,6 +2789,26 @@ internal static class GuideOrchestratorThreadCommand
                 },
                 AuthorityBoundary =
                     "This is an observation and wake-hygiene policy only. `intent-cli`/GitHub remain authoritative for workflow state; the supervisor may record, wake the owning role, and surface evidence, but never clears work or changes lifecycle state.",
+                SessionLifetime = new OrchestratorSuperviseSessionLifetime
+                {
+                    Summary =
+                        "G712 chooses the permitted GUI-session lifetime: supervision may be explicitly bootstrapped into the current GUI domain, but it is never login-auto-loaded and does not survive logout or reboot.",
+                    InstallCommand =
+                        $"intent-cli notify supervise install --domain {domain} --team {team} --repo {targetRepo} --owner-role orchestration --bound 900 --interval 300 --startup-bound {NotifySuperviseInstallCommand.DefaultStartupBoundSeconds} --platform macos --write --format json",
+                    RegistrationCommand = "launchctl bootstrap gui/$(id -u) '<artifact-path>'",
+                    ReconcileCommand = "intent-cli notify supervise reconcile --write --format json",
+                    UninstallCommand = "intent-cli notify supervise uninstall --write --format json",
+                    ArtifactLocation =
+                        "Artifacts remain under `.intent-cli/supervision/<domain>/<team>/install/`; no managed artifact is emitted to `~/Library/LaunchAgents`.",
+                    Verification = new[]
+                    {
+                        "The generated macOS plist omits `RunAtLoad`; install output names the artifact, lifetime, runtime logs, and legacy artifacts removed.",
+                        "Reconcile/uninstall records `loaded_before`, `unloaded`, `removed_artifacts`, `loaded_after`, and `artifacts_after`; use it for the three-loaded-jobs/one-plist drift shape.",
+                        "Reconcile removes only `intent-cli.supervise.*` jobs and artifacts, including legacy login-persistent plists; it never kills, replaces, or mutates unrelated jobs.",
+                    },
+                    AuthorityBoundary =
+                        "Install authors and first-cycle-probes only. Registration is an explicit operator action; reconcile/uninstall is the bounded current-session unload/removal command and does not grant workflow or recovery authority.",
+                },
                 CorroborationContract = new OrchestratorObservationCorroboration
                 {
                     Summary =
@@ -4027,6 +4047,21 @@ internal static class GuideOrchestratorThreadCommand
         {
             writer.WriteLine($"- {item}");
         }
+        writer.WriteLine();
+        writer.WriteLine("#### Session-scoped lifecycle and drift repair (G712)");
+        writer.WriteLine();
+        writer.WriteLine(supervision.EmissionHygiene.SessionLifetime.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- **install** — `{supervision.EmissionHygiene.SessionLifetime.InstallCommand}`");
+        writer.WriteLine($"- **current-session registration** — `{supervision.EmissionHygiene.SessionLifetime.RegistrationCommand}`");
+        writer.WriteLine($"- **reconcile** — `{supervision.EmissionHygiene.SessionLifetime.ReconcileCommand}`");
+        writer.WriteLine($"- **uninstall** — `{supervision.EmissionHygiene.SessionLifetime.UninstallCommand}`");
+        writer.WriteLine($"- **artifact location** — {supervision.EmissionHygiene.SessionLifetime.ArtifactLocation}");
+        foreach (var item in supervision.EmissionHygiene.SessionLifetime.Verification)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine($"> **Lifecycle authority boundary:** {supervision.EmissionHygiene.SessionLifetime.AuthorityBoundary}");
         writer.WriteLine();
         writer.WriteLine($"> **Authority boundary:** {supervision.EmissionHygiene.AuthorityBoundary}");
         writer.WriteLine();
@@ -5856,8 +5891,38 @@ internal sealed record OrchestratorEmissionHygiene
     [JsonPropertyName("authority_boundary")]
     public required string AuthorityBoundary { get; init; }
 
+    [JsonPropertyName("session_lifetime")]
+    public required OrchestratorSuperviseSessionLifetime SessionLifetime { get; init; }
+
     [JsonPropertyName("corroboration_contract")]
     public required OrchestratorObservationCorroboration CorroborationContract { get; init; }
+}
+
+internal sealed record OrchestratorSuperviseSessionLifetime
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("install_command")]
+    public required string InstallCommand { get; init; }
+
+    [JsonPropertyName("registration_command")]
+    public required string RegistrationCommand { get; init; }
+
+    [JsonPropertyName("reconcile_command")]
+    public required string ReconcileCommand { get; init; }
+
+    [JsonPropertyName("uninstall_command")]
+    public required string UninstallCommand { get; init; }
+
+    [JsonPropertyName("artifact_location")]
+    public required string ArtifactLocation { get; init; }
+
+    [JsonPropertyName("verification")]
+    public required IReadOnlyList<string> Verification { get; init; }
+
+    [JsonPropertyName("authority_boundary")]
+    public required string AuthorityBoundary { get; init; }
 }
 
 internal sealed record OrchestratorObservationCorroboration

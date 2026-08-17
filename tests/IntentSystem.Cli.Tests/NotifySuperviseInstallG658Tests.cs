@@ -6,8 +6,9 @@ using IntentSystem.Cli.Models;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G658: scheduler setup is an emit-only, per-team operation. These tests
-/// inspect all three authoring formats without invoking a process manager.
+/// G658/G712: scheduler setup authors a per-team, session-scoped artifact.
+/// These tests inspect all three authoring formats without invoking a process
+/// manager; the repo-local fixture is intentionally retained for inspection.
 /// </summary>
 [Collection("WorkerNextActionSharedState")]
 public sealed class NotifySuperviseInstallG658Tests : IDisposable
@@ -15,10 +16,14 @@ public sealed class NotifySuperviseInstallG658Tests : IDisposable
     private const string Domain = "intent-cli";
     private const string Team = "intent-cli-dev";
     private const string Label = "intent-cli.supervise.intent-cli.intent-cli-dev";
-    private readonly string root = Directory.CreateTempSubdirectory("notify-install-g658-").FullName;
+    private readonly string root = Path.Combine(
+        RepoVersionPolicySource.RepoRoot(),
+        ".artifacts",
+        "g712-notify-install-g658-" + Guid.NewGuid().ToString("N"));
 
     public NotifySuperviseInstallG658Tests()
     {
+        Directory.CreateDirectory(root);
         NotifyCommand.ProcessRunnerFactory = () =>
             throw new InvalidOperationException("supervise install must not construct a process runner");
         NotifySuperviseInstallCommand.FirstCycleProbeFactory = request => new NotifySuperviseFirstCycleResult
@@ -42,13 +47,12 @@ public sealed class NotifySuperviseInstallG658Tests : IDisposable
         NotifySuperviseInstallCommand.FirstCycleProbeFactory = null;
         NotifySuperviseInstallCommand.Delay = Thread.Sleep;
         NotifySuperviseInstallCommand.UtcNowFactory = () => DateTimeOffset.UtcNow;
-        if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
     }
 
     [Theory]
-    [InlineData("macos", ".plist", "launchctl load", "launchctl unload", null, "<key>KeepAlive</key>")]
+    [InlineData("macos", ".plist", "launchctl bootstrap", "launchctl bootout", null, "<key>KeepAlive</key>")]
     [InlineData("windows", ".xml", "schtasks /Create", "schtasks /Delete", null, "<RestartOnFailure>")]
-    [InlineData("linux", ".service", "systemctl --user link", "systemctl --user disable", null, "Restart=always")]
+    [InlineData("linux", ".service", "systemctl --user link", "systemctl --user stop", null, "Restart=always")]
     public void ExplicitPlatform_EmitsPerTeamArtifactAndOperatorCommands_WithoutExecution(
         string platform,
         string extension,
@@ -87,6 +91,23 @@ public sealed class NotifySuperviseInstallG658Tests : IDisposable
         var artifact = File.ReadAllText(artifactPath);
         Assert.Contains(Label, artifact, StringComparison.Ordinal);
         Assert.Contains(persistenceMarker, artifact, StringComparison.Ordinal);
+        Assert.Contains("current GUI session only", result.GetProperty("lifetime").GetString(), StringComparison.Ordinal);
+        Assert.Contains("reconcile --write", result.GetProperty("reconcile_command").GetString(), StringComparison.Ordinal);
+        if (platform == "macos")
+        {
+            Assert.DoesNotContain("RunAtLoad", artifact, StringComparison.Ordinal);
+            Assert.Contains("gui/$(id -u)", result.GetProperty("registration_command").GetString(), StringComparison.Ordinal);
+        }
+        if (platform == "windows")
+        {
+            Assert.DoesNotContain("LogonTrigger", artifact, StringComparison.Ordinal);
+            Assert.DoesNotContain("StartWhenAvailable>true", artifact, StringComparison.Ordinal);
+        }
+        if (platform == "linux")
+        {
+            Assert.DoesNotContain("WantedBy=default.target", artifact, StringComparison.Ordinal);
+            Assert.Contains("systemctl --user start", result.GetProperty("registration_command").GetString(), StringComparison.Ordinal);
+        }
         foreach (var value in new[] { "notify", "supervise", Domain, Team, "J-Tech-Japan/intent-system", "orchestration", "300", "120" })
         {
             Assert.Contains(value, artifact, StringComparison.Ordinal);
@@ -154,7 +175,8 @@ public sealed class NotifySuperviseInstallG658Tests : IDisposable
         Assert.Contains("preview-unverified", output, StringComparison.Ordinal);
         Assert.Contains("registration command (operator action)", output, StringComparison.Ordinal);
         Assert.Contains("unregistration command (operator action)", output, StringComparison.Ordinal);
-        Assert.Contains("process management executed by intent-cli: false", output, StringComparison.Ordinal);
+        Assert.Contains("install lifecycle command executed by intent-cli: false", output, StringComparison.Ordinal);
+        Assert.Contains("current GUI session only", output, StringComparison.Ordinal);
         AssertFullInvocation(output);
     }
 
@@ -175,7 +197,8 @@ public sealed class NotifySuperviseInstallG658Tests : IDisposable
             Assert.Contains("cycles.jsonl", setup, StringComparison.Ordinal);
             Assert.Contains("Process-name grep is an anti-pattern", setup, StringComparison.Ordinal);
             Assert.Contains("169796s", setup, StringComparison.Ordinal);
-            Assert.Contains("never runs them", setup, StringComparison.Ordinal);
+            Assert.Contains("reconcile --write", setup, StringComparison.Ordinal);
+            Assert.Contains("GUI-session lifetime", setup, StringComparison.Ordinal);
         }
 
         using var commandsWriter = new StringWriter();
@@ -185,7 +208,7 @@ public sealed class NotifySuperviseInstallG658Tests : IDisposable
             .Single(group => group.GetProperty("name").GetString() == "notify");
         var purpose = notify.GetProperty("purpose").GetString()!;
         Assert.Contains("notify supervise install", purpose, StringComparison.Ordinal);
-        Assert.Contains("without executing", purpose, StringComparison.Ordinal);
+        Assert.Contains("reconcile|uninstall", purpose, StringComparison.Ordinal);
 
         using var nextWriter = new StringWriter();
         Assert.Equal(0, GuideNextCommand.Execute(

@@ -68,7 +68,8 @@ internal static class NotifyCommand
         + "[--shell-policy <json>]... "
         + "[--format markdown|json]\n"
         + "Event mode: --event-mode keeps the blocking per-seat herdr wait inside this supervisor process and re-arms it after failure. It is the implementation of the normative SECOND wake source from herdr pane.agent_status_changed, alongside the independent interval safety floor; it does not change outcome or label behavior.\n"
-        + NotifySuperviseInstallCommand.Usage;
+        + NotifySuperviseInstallCommand.Usage + "\n"
+        + NotifySuperviseReconcileCommand.Usage;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -114,10 +115,32 @@ internal static class NotifyCommand
     public static int ExecuteStatus(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, OperationStatus);
 
-    public static int ExecuteSupervise(CliContext context, string[] args, TextWriter writer) =>
-        args.Length > 0 && string.Equals(args[0], NotifySuperviseInstallCommand.Operation, StringComparison.Ordinal)
-            ? NotifySuperviseInstallCommand.Execute(context, args[1..], writer)
-            : Execute(context, args, writer, OperationSupervise);
+    public static int ExecuteSupervise(CliContext context, string[] args, TextWriter writer)
+    {
+        if (args.Length == 0)
+        {
+            return Execute(context, args, writer, OperationSupervise);
+        }
+
+        return args[0] switch
+        {
+            NotifySuperviseInstallCommand.Operation =>
+                NotifySuperviseInstallCommand.Execute(context, args[1..], writer),
+            NotifySuperviseReconcileCommand.ReconcileOperation =>
+                NotifySuperviseReconcileCommand.Execute(
+                    context,
+                    args[1..],
+                    writer,
+                    NotifySuperviseReconcileCommand.ReconcileOperation),
+            NotifySuperviseReconcileCommand.UninstallOperation =>
+                NotifySuperviseReconcileCommand.Execute(
+                    context,
+                    args[1..],
+                    writer,
+                    NotifySuperviseReconcileCommand.UninstallOperation),
+            _ => Execute(context, args, writer, OperationSupervise),
+        };
+    }
 
     private static int Execute(CliContext context, string[] args, TextWriter writer, string operation)
     {

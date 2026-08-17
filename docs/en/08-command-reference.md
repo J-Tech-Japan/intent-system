@@ -386,11 +386,17 @@ to operator-filed feedback in issue #1441 sections D/B-1 (remote-herdr, 48
 units), including the session-scoped nohup process that died twice unnoticed.
 
 That setup step routes through `intent-cli notify supervise install`, which
-emits a launchd, Task Scheduler, or systemd artifact and exact operator
-registration/unregistration commands without executing them. For ongoing
-health, compare the age of the team's `cycles.jsonl` record with its declared
-bound. Process-name grep is an anti-pattern because a measured cross-team
-collision killed one team's supervisor while retaining another team's process.
+emits a current-session launchd, Task Scheduler, or systemd artifact and exact
+operator registration/unregistration commands without executing lifecycle
+commands. The G712 GUI-session fallback keeps artifacts out of
+`~/Library/LaunchAgents`, omits macOS `RunAtLoad`, and therefore has no login or
+reboot auto-load. Use `intent-cli notify supervise reconcile --write` (or
+`uninstall --write`) to list loaded jobs before/after, boot out managed jobs,
+remove artifacts including legacy login-persistent plists, and name the
+removals. For ongoing health, compare the age of the team's `cycles.jsonl`
+record with its declared bound. Process-name grep is an anti-pattern because
+a measured cross-team collision killed one team's supervisor while retaining
+another team's process.
 Optional `notify supervise --event-mode` keeps blocking per-seat `herdr agent
 wait` subscriptions inside that same process for seconds-scale
 implementation/review settlement wakes. It is the concrete implementation of

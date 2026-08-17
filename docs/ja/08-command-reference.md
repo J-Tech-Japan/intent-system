@@ -360,9 +360,13 @@ session-layer configuration が変わったときに再読します。同じ out
 sections D/B-1 の operator-filed feedback に帰属する measured remote-herdr incident（48 units、session-scoped
 nohup process が unnoticed のまま二度 died）も記録します。
 
-setup は `intent-cli notify supervise install` を通し、launchd、Task
+setup は `intent-cli notify supervise install` を通し、current session 用の launchd、Task
 Scheduler、または systemd artifact と operator 用の正確な registration / unregistration
-command を生成しますが実行しません。継続的な health は team の `cycles.jsonl` record の
+command を生成しますが lifecycle command は実行しません。G712 の GUI-session fallback は
+artifact を `~/Library/LaunchAgents` の外に置き、macOS `RunAtLoad` を省くため login / reboot の
+auto-load がありません。`intent-cli notify supervise reconcile --write`（または `uninstall --write`）は
+loaded job の before/after を表示し、managed job を bootout し、legacy login-persistent plist を含む
+artifact を removal して path を示します。継続的な health は team の `cycles.jsonl` record の
 age と declared bound を比較します。process-name grep は、実測で team を混同し、一方の
 supervisor を強制終了しながら別 team の process を残したアンチパターンです。supervision と
 optional `notify supervise --event-mode` は同じ process 内で seat ごとの blocking `herdr agent wait` を保持し、

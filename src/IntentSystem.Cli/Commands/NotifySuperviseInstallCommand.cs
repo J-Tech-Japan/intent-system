@@ -6,8 +6,8 @@ namespace IntentSystem.Cli.Commands;
 
 /// <summary>
 /// Emits an operator-owned scheduler definition for the measured supervisor.
-/// This command deliberately has no process-runner dependency: registration,
-/// unregistration, and process lifecycle remain explicit operator actions.
+/// Installation authors an artifact and proves its first cycle; explicit
+/// reconcile/uninstall owns lifecycle cleanup for the current GUI session.
 /// </summary>
 internal static class NotifySuperviseInstallCommand
 {
@@ -79,6 +79,16 @@ internal static class NotifySuperviseInstallCommand
             return 1;
         }
 
+        var lifetimePathError = ValidateSessionArtifactPath(
+            options.Platform,
+            artifactPath,
+            NotifySuperviseArtifactInventory.UserProfileDirectoryFactory());
+        if (lifetimePathError is not null)
+        {
+            EmitFailure(writer, options.Format, lifetimePathError);
+            return 1;
+        }
+
         try
         {
             if (TeamModeStore.Resolve(routingRoot, options.Domain, options.Team).IsAuthoringOnly)
@@ -127,6 +137,19 @@ internal static class NotifySuperviseInstallCommand
             .Where(binary => !binary.Resolved)
             .Select(binary => binary.Name)
             .ToArray();
+        var legacyArtifactsRemoved = Array.Empty<string>();
+        if (options.Write)
+        {
+            legacyArtifactsRemoved = NotifySuperviseArtifactInventory.RemoveLegacyArtifacts(
+                label,
+                NotifySuperviseArtifactInventory.UserProfileDirectoryFactory(),
+                out var legacyCleanupError).ToArray();
+            if (legacyCleanupError is not null)
+            {
+                EmitFailure(writer, options.Format, $"legacy-artifact-cleanup-failed: {legacyCleanupError}");
+                return 1;
+            }
+        }
         NotifySuperviseFirstCycleResult? firstCycle = null;
 
         if (options.Write)
@@ -218,6 +241,8 @@ internal static class NotifySuperviseInstallCommand
             Label = label,
             ArtifactPath = artifactPath,
             ArtifactWritten = options.Write,
+            Lifetime = "current GUI session only; no LaunchAgents login auto-load and no reboot persistence",
+            LegacyArtifactsRemoved = legacyArtifactsRemoved,
             VerificationStatus = verificationStatus,
             StartupBoundSeconds = options.StartupBoundSeconds,
             RuntimeDirectory = runtimeDirectory,
@@ -232,14 +257,15 @@ internal static class NotifySuperviseInstallCommand
             SuperviseInvocation = invocation,
             RegistrationCommand = registrationCommand,
             UnregistrationCommand = unregistrationCommand,
+            ReconcileCommand = "intent-cli notify supervise reconcile --write",
             CommandMode = options.Write ? "write" : "dry-run",
             ManagesProcess = false,
             RecordedPath = runtime.RecordedPath,
             RuntimeBinaries = runtime.Binaries,
             UnresolvedBinaries = unresolvedBinaries,
             Summary = options.Write
-                ? $"Emitted and first-cycle-verified the {options.Platform} supervisor artifact with event mode {(options.EventMode ? "enabled" : "disabled")}. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. First-cycle evidence is recorded at '{NotifySupervisionStore.ResolveInstalledSupervisorPath(context.ResolveSupervisionArtifactRootPath(), options.Domain, options.Team)}'. intent-cli did not register, start, stop, or unregister the scheduler."
-                : $"Previewed the {options.Platform} supervisor artifact path and operator commands without writing, probing, or executing anything. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. A write requires bounded first-cycle proof and records failure log paths.",
+                ? $"Emitted and first-cycle-verified the {options.Platform} supervisor artifact with event mode {(options.EventMode ? "enabled" : "disabled")} for the current GUI session only; no LaunchAgents login auto-load or reboot persistence is configured. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. First-cycle evidence is recorded at '{NotifySupervisionStore.ResolveInstalledSupervisorPath(context.ResolveSupervisionArtifactRootPath(), options.Domain, options.Team)}'. Legacy login-persistent artifacts removed: {legacyArtifactsRemoved.Length}. Install emitted the artifact but did not execute lifecycle registration; use 'intent-cli notify supervise reconcile --write' for explicit unload/removal."
+                : $"Previewed the {options.Platform} supervisor artifact path and operator lifecycle commands without writing, probing, or executing anything. Lifetime is current GUI session only; no LaunchAgents login auto-load or reboot persistence is configured. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. A write requires bounded first-cycle proof and records failure log paths.",
         };
         Emit(writer, options.Format, result);
         return 0;
@@ -307,6 +333,26 @@ internal static class NotifySuperviseInstallCommand
             options.Team,
             "install",
             label + extension);
+    }
+
+    private static string? ValidateSessionArtifactPath(
+        string platform,
+        string artifactPath,
+        string userProfileDirectory)
+    {
+        if (!string.Equals(platform, MacOs, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var launchAgentsRoot = Path.GetFullPath(
+            Path.Combine(userProfileDirectory, "Library", "LaunchAgents"))
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        var candidate = Path.GetFullPath(artifactPath);
+        return candidate.StartsWith(launchAgentsRoot, StringComparison.OrdinalIgnoreCase)
+            ? $"login-auto-loaded-path: refusing to emit a macOS supervisor artifact under '{launchAgentsRoot.TrimEnd(Path.DirectorySeparatorChar)}'; use the session-scoped default under .intent-cli/supervision and bootstrap the current GUI session explicitly."
+            : null;
     }
 
     private static IReadOnlyList<string> BuildSuperviseArguments(
@@ -386,8 +432,6 @@ internal static class NotifySuperviseInstallCommand
   <array>
 {programArguments.ToString().TrimEnd()}
   </array>
-  <key>RunAtLoad</key>
-  <true/>
   <key>KeepAlive</key>
   <true/>
   <key>ThrottleInterval</key>
@@ -422,9 +466,6 @@ internal static class NotifySuperviseInstallCommand
     <Description>{XmlEscape(label)} — emitted-but-unverified on macOS; operator-managed intent-cli supervision. Recorded PATH: {XmlEscape(recordedPath)}</Description>
     <URI>\{XmlEscape(label)}</URI>
   </RegistrationInfo>
-  <Triggers>
-    <LogonTrigger><Enabled>true</Enabled></LogonTrigger>
-  </Triggers>
   <Principals>
     <Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>
   </Principals>
@@ -432,7 +473,6 @@ internal static class NotifySuperviseInstallCommand
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <StartWhenAvailable>true</StartWhenAvailable>
     <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <Enabled>true</Enabled>
@@ -464,8 +504,6 @@ ExecStart={QuoteSystemdArgument(intentCliExecutable)} {commandArguments}
 Restart=always
 RestartSec=30
 
-[Install]
-WantedBy=default.target
 """;
     }
 
@@ -476,8 +514,8 @@ WantedBy=default.target
     {
         MacOs =>
         (
-            $"launchctl load {QuoteShellArgument(artifactPath)}",
-            $"launchctl unload {QuoteShellArgument(artifactPath)}"
+            $"launchctl bootstrap gui/$(id -u) {QuoteShellArgument(artifactPath)}",
+            $"launchctl bootout gui/$(id -u)/{label}"
         ),
         Windows =>
         (
@@ -486,8 +524,8 @@ WantedBy=default.target
         ),
         _ =>
         (
-            $"systemctl --user link {QuoteShellArgument(artifactPath)} && systemctl --user enable --now {QuoteShellArgument(label + ".service")}",
-            $"systemctl --user disable --now {QuoteShellArgument(label + ".service")}"
+            $"systemctl --user link {QuoteShellArgument(artifactPath)} && systemctl --user start {QuoteShellArgument(label + ".service")}",
+            $"systemctl --user stop {QuoteShellArgument(label + ".service")} && systemctl --user unlink {QuoteShellArgument(artifactPath)}"
         ),
     };
 
@@ -687,6 +725,7 @@ WantedBy=default.target
         writer.WriteLine($"- verification status: {result.VerificationStatus}");
         writer.WriteLine($"- startup bound: {result.StartupBoundSeconds}s; first-cycle status: {result.FirstCycleStatus}");
         writer.WriteLine($"- command mode: {result.CommandMode}");
+        writer.WriteLine($"- lifetime: {result.Lifetime}");
         writer.WriteLine($"- event mode: {result.EventMode.ToString().ToLowerInvariant()}");
         writer.WriteLine($"- artifact path: `{result.ArtifactPath}` (written: {result.ArtifactWritten.ToString().ToLowerInvariant()})");
         writer.WriteLine($"- supervise runtime directory: `{result.RuntimeDirectory}`");
@@ -706,7 +745,9 @@ WantedBy=default.target
         }
         writer.WriteLine($"- registration command (operator action): `{result.RegistrationCommand}`");
         writer.WriteLine($"- unregistration command (operator action): `{result.UnregistrationCommand}`");
-        writer.WriteLine("- process management executed by intent-cli: false");
+        writer.WriteLine($"- reconcile/removal command (operator action): `{result.ReconcileCommand}`");
+        writer.WriteLine($"- legacy login-persistent artifacts removed: {string.Join(", ", result.LegacyArtifactsRemoved.DefaultIfEmpty("none"))}");
+        writer.WriteLine("- install lifecycle command executed by intent-cli: false");
         writer.WriteLine();
         writer.WriteLine(result.Summary);
     }
@@ -751,6 +792,8 @@ WantedBy=default.target
         [JsonPropertyName("label")] public required string Label { get; init; }
         [JsonPropertyName("artifact_path")] public required string ArtifactPath { get; init; }
         [JsonPropertyName("artifact_written")] public required bool ArtifactWritten { get; init; }
+        [JsonPropertyName("lifetime")] public required string Lifetime { get; init; }
+        [JsonPropertyName("legacy_artifacts_removed")] public required IReadOnlyList<string> LegacyArtifactsRemoved { get; init; }
         [JsonPropertyName("verification_status")] public required string VerificationStatus { get; init; }
         [JsonPropertyName("startup_bound_seconds")] public required int StartupBoundSeconds { get; init; }
         [JsonPropertyName("runtime_directory")] public required string RuntimeDirectory { get; init; }
@@ -764,6 +807,7 @@ WantedBy=default.target
         [JsonPropertyName("supervise_invocation")] public required string SuperviseInvocation { get; init; }
         [JsonPropertyName("registration_command")] public required string RegistrationCommand { get; init; }
         [JsonPropertyName("unregistration_command")] public required string UnregistrationCommand { get; init; }
+        [JsonPropertyName("reconcile_command")] public required string ReconcileCommand { get; init; }
         [JsonPropertyName("command_mode")] public required string CommandMode { get; init; }
         [JsonPropertyName("manages_process")] public required bool ManagesProcess { get; init; }
         [JsonPropertyName("recorded_path")] public required string RecordedPath { get; init; }
