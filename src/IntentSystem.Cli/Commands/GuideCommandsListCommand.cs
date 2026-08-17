@@ -358,6 +358,15 @@ internal static class GuideCommandsListCommand
             RecommendedCaller = CallerChatAgent,
             Purpose = "Canonical host review / next-slice-loop prompt generator: `intent-cli guide workflow task review-next-slice-loop --domain <d> --target-repo <r> --agent claude --frequency 20m --format markdown` emits the paste-ready host loop prompt with current preflight + packet/issue lifecycle rules (G338)."
         },
+        new CommandGroupEntry
+        {
+            Name = "guide workflow task supervision-setup",
+            Role = RoleHostReview,
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "G712 metadata-free supervision setup route: `intent-cli guide workflow task supervision-setup --format json|markdown` renders the shipped session-scoped install, current-GUI registration, reconcile, and uninstall contract without reading host metadata or executing lifecycle commands."
+        },
     };
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)

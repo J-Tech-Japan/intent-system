@@ -447,6 +447,23 @@ intent-cli guide oneshot --kind host-review-next-slice    --domain <name>
 worker/metadata コマンドだけでループを回す operator dogfooding 向けプロンプトテンプレートは
 [`docs/automation-templates/`](../automation-templates/README.md) にあります。
 
+## セッションスコープの supervision セットアップ（G712）
+
+宣言された supervision setup route は、`.intent-cli/config.toml` や host metadata
+のない bare directory から実行できます。
+
+```bash
+intent-cli guide workflow task supervision-setup --format json
+intent-cli guide workflow task supervision-setup --format markdown
+```
+
+この route は shipped の session-scoped contract を表示します。`notify supervise install`
+は artifact を作成して first-cycle proof を確認するだけで process を登録せず、表示された
+`launchctl bootstrap gui/$(id -u) '<artifact-path>'` は現在の GUI session で operator が明示的に
+実行する action です。`notify supervise reconcile --write` / `uninstall --write` は before/after
+を報告し、managed drift だけを削除します。route 自体は read-only で、これらの lifecycle command
+を実行しません。
+
 ## 復旧
 
 ```bash

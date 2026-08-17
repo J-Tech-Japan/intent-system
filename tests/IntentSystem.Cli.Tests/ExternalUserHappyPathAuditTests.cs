@@ -61,6 +61,9 @@ public sealed class ExternalUserHappyPathAuditTests
          true),
         ("bug-to-intent-repair",
          new[] { "guide", "workflow", "task", "bug-to-intent-repair", "--format", "json" },
+         true),
+        ("supervision-setup",
+         new[] { "guide", "workflow", "task", "supervision-setup", "--format", "json" },
          true)
     };
 
