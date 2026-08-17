@@ -484,6 +484,23 @@ Operator-dogfooding prompt templates that wire these loops entirely through the
 deterministic worker/metadata commands live under
 [`docs/automation-templates/`](../automation-templates/README.md).
 
+## Session-scoped supervision setup (G712)
+
+The declared supervision setup route is executable from a bare directory with
+no `.intent-cli/config.toml` or host metadata:
+
+```bash
+intent-cli guide workflow task supervision-setup --format json
+intent-cli guide workflow task supervision-setup --format markdown
+```
+
+It renders the shipped session-scoped contract: `notify supervise install`
+authors and proves the artifact without registering a process, the printed
+`launchctl bootstrap gui/$(id -u) '<artifact-path>'` is an explicit current-GUI
+session action, and `notify supervise reconcile --write` / `uninstall --write`
+reports before/after state and removes only managed drift. The route is
+read-only and does not execute any of those lifecycle commands.
+
 ## Recovery
 
 ```bash

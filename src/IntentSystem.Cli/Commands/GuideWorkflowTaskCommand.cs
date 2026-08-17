@@ -22,7 +22,9 @@ namespace IntentSystem.Cli.Commands;
 ///         (forwards to <c>guide prompt-matrix --mode host-loop</c>);</item>
 ///   <item><c>bug-to-intent-repair</c> (G339) — guided bug-to-intent-repair
 ///         workflow: report → triage → plan → intent-repair →
-///         implementation-repair, with five gap classifications.</item>
+///         implementation-repair, with five gap classifications;</item>
+///   <item><c>supervision-setup</c> (G712) — metadata-free session-scoped
+///         supervision install/reconcile/uninstall contract.</item>
 /// </list>
 /// Future tasks (deploy-host, retire-host, migrate-host) can plug
 /// in without touching the router. Pure read-only — never mutates
@@ -30,6 +32,18 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal static class GuideWorkflowTaskCommand
 {
+    internal static readonly IReadOnlyList<string> SupportedTasks = new[]
+    {
+        "init-host",
+        "intent-interview",
+        "packet-draft",
+        "issue-publish",
+        "implementation-loop",
+        "review-next-slice-loop",
+        "bug-to-intent-repair",
+        GuideWorkflowTaskSupervisionSetupCommand.TaskName,
+    };
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -44,7 +58,7 @@ internal static class GuideWorkflowTaskCommand
 
         if (args.Length == 0)
         {
-            writer.WriteLine("guide workflow task requires a task name. Supported: init-host, intent-interview, packet-draft, issue-publish, implementation-loop, review-next-slice-loop, bug-to-intent-repair.");
+            writer.WriteLine($"guide workflow task requires a task name. Supported: {string.Join(", ", SupportedTasks)}.");
             WriteHelp(writer);
             return 1;
         }
@@ -77,13 +91,16 @@ internal static class GuideWorkflowTaskCommand
             // and the five gap classifications so observed bugs feed
             // back into intent repair packets, not ad-hoc comments.
             "bug-to-intent-repair" => GuideWorkflowTaskBugToIntentRepairCommand.Execute(context, args[1..], writer),
+            // G712: expose the declared metadata-free supervision setup
+            // route and reuse the shipped session-scoped contract.
+            GuideWorkflowTaskSupervisionSetupCommand.TaskName => GuideWorkflowTaskSupervisionSetupCommand.Execute(context, args[1..], writer),
             _ => UnknownTask(writer, task)
         };
     }
 
     private static int UnknownTask(TextWriter writer, string task)
     {
-        writer.WriteLine($"Unknown 'guide workflow task' name '{task}'. Supported: init-host, intent-interview, packet-draft, issue-publish, implementation-loop, review-next-slice-loop, bug-to-intent-repair.");
+        writer.WriteLine($"Unknown 'guide workflow task' name '{task}'. Supported: {string.Join(", ", SupportedTasks)}.");
         WriteHelp(writer);
         return 1;
     }
@@ -101,5 +118,6 @@ internal static class GuideWorkflowTaskCommand
         writer.WriteLine("- implementation-loop — paste-ready child implementation-loop prompt from minimal inputs (target-repo, agent, frequency, base-branch-policy). Forwards to `guide prompt-matrix --mode child-loop`; carries the current label/claim/complete rules so the operator does not need them from memory (G338).");
         writer.WriteLine("- review-next-slice-loop — paste-ready host review / next-slice-loop prompt from minimal inputs (domain, target-repo, agent, frequency). Forwards to `guide prompt-matrix --mode host-loop`; carries the host-sync preflight gate, automation summary call, and packet/issue lifecycle rules (G338).");
         writer.WriteLine("- bug-to-intent-repair — guided bug-to-intent-repair workflow: report → triage → plan → intent-repair → implementation-repair. Classifies five gap types (implementation-mismatch, intent-gap, packet-gap, rule-gap, metadata-workflow-gap), recommends packet creation when the bug is in intent-cli rules/guidance rather than child code, and preserves original instruction / linked issue / PR refs across the chain (G339).");
+        writer.WriteLine("- supervision-setup — metadata-free G712 session-scoped supervision install, current-GUI registration, reconcile, and uninstall contract. Read-only; executes none of the emitted commands.");
     }
 }

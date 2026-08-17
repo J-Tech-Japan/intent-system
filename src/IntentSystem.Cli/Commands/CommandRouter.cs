@@ -793,8 +793,8 @@ internal static class CommandRouter
     /// G334: canonical one-line pointers for the six workflow phases the
     /// issue names (init / interview / packet / issue / automation /
     /// bug repair), the G338 loop-setup pair (implementation-loop /
-    /// review-next-slice-loop), and the G339 bug-to-intent-repair
-    /// chain. Tests assert each phase appears in the top-level help
+    /// review-next-slice-loop), the G339 bug-to-intent-repair
+    /// chain, and the G712 supervision-setup route. Tests assert each phase appears in the top-level help
     /// output so external agents can find the workflow entry without
     /// reading local rules.
     /// </summary>
@@ -809,6 +809,7 @@ internal static class CommandRouter
         "implementation-loop — `intent-cli guide workflow task implementation-loop --target-repo <r> --agent claude --frequency 5m --format markdown` (paste-ready child implementation-loop prompt with current label/claim/complete rules, G338).",
         "review-next-slice-loop — `intent-cli guide workflow task review-next-slice-loop --domain <d> --target-repo <r> --agent claude --frequency 20m --format markdown` (paste-ready host review / next-slice-loop prompt with current host-sync preflight + packet/issue lifecycle rules, G338).",
         "bug-to-intent-repair — `intent-cli guide workflow task bug-to-intent-repair --format json` (report → triage → plan → intent-repair → implementation-repair chain; classifies implementation-mismatch / intent-gap / packet-gap / rule-gap / metadata-workflow-gap; recommends packet creation when the bug is in intent-cli rules/guidance, G339).",
+        "supervision-setup — `intent-cli guide workflow task supervision-setup --format json` (metadata-free G712 session-scoped install/current-GUI registration/reconcile/uninstall contract; renders guidance only).",
         "improve (design-thread reflection) — `intent-cli improve --domain <d> --format markdown` returns the realignment guide. Preview `improve window ... --write` declares the independent recency bound; `improve record ... --write` appends evidence after human/agent review and never grades quality, G456/G457/G662. NOT a scheduler, auto-run, stalled-work class, or operational recovery.",
         "grill (persistent interview mode) — `intent-cli grill --domain <d> --format markdown` (alias of `intent-cli guide grill`): once the user asks to grill a topic, stay in grill mode — generate an open-question backlog from current intents/packets/ADRs/docs, ask one question at a time, and continue after each answer until a stop condition holds, G463. Built on the interview artifacts; NOT clarification (blocker resolution) and NOT improve (retrospective realignment).",
         "stack (packet backlog creation) — `intent-cli stack --domain <d> --target-repo <r> --format markdown` (alias of `intent-cli guide stack`): forward planning — create an ordered packet backlog from the current intents (often ~10), commit/push durable state, and publish AT MOST the first GitHub issue by default, G464. Distinct from improve (retrospective realignment), grill (open-question interview), clarification (blocker resolution), and runtime queue transitions.",

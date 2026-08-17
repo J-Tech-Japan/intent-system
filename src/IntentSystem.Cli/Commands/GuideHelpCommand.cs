@@ -42,7 +42,8 @@ internal static class GuideHelpCommand
     /// <c>interview</c>, <c>packet</c>, <c>issue</c>,
     /// <c>automation</c>, <c>bug-repair</c>, <c>implementation-loop</c>
     /// (G338), <c>review-next-slice-loop</c> (G338),
-    /// <c>bug-to-intent-repair</c> (G339).
+    /// <c>bug-to-intent-repair</c> (G339), and <c>supervision-setup</c>
+    /// (G712).
     /// </summary>
     internal static readonly IReadOnlyList<WorkflowGuidePointer> WorkflowGuides = new[]
     {
@@ -101,6 +102,13 @@ internal static class GuideHelpCommand
             Command = "intent-cli guide workflow task review-next-slice-loop --domain <name> --target-repo <owner/repo> --agent claude --frequency 20m --format markdown",
             Purpose = "Generate a paste-ready host review / next-slice-loop prompt from minimal inputs (domain, target-repo, agent, frequency). Forwards to `guide prompt-matrix --mode host-loop`; the generated prompt carries the host-sync preflight gate, automation summary call, packet/issue lifecycle handoff, and label transition rules so the operator does not need them from memory (G338).",
             SeeAlso = new[] { "intent-cli guide prompt-matrix --mode host-loop --format json", "intent-cli automation host-sync-preflight --format json", "intent-cli automation summary --domain <name> --format json" }
+        },
+        new WorkflowGuidePointer
+        {
+            Phase = "supervision-setup",
+            Command = "intent-cli guide workflow task supervision-setup --format json",
+            Purpose = "Render the G712 session-scoped supervision contract from a bare metadata-free directory: install authors and proves first-cycle evidence, current-GUI registration is explicit, and reconcile/uninstall remove managed drift without touching unrelated jobs.",
+            SeeAlso = new[] { "intent-cli notify supervise install", "intent-cli notify supervise reconcile --write --format json", "intent-cli notify supervise uninstall --write --format json", "intent-cli guide orchestrator-thread --format markdown" }
         },
         new WorkflowGuidePointer
         {
@@ -195,8 +203,8 @@ internal static class GuideHelpCommand
         new GuideSubcommandEntry
         {
             Name = "workflow",
-            Purpose = "Workflow suggestion / scaffold plans. Subcommands: suggest (pick the right intent-cli entry for an operator goal); task <name> (bounded scaffold/init/loop/repair plan — today: `task init-host` (G335), `task intent-interview` (G336), `task packet-draft` / `task issue-publish` (G337), `task implementation-loop` / `task review-next-slice-loop` (G338), `task bug-to-intent-repair` (G339)).",
-            Example = "intent-cli guide workflow task bug-to-intent-repair --format markdown"
+            Purpose = "Workflow suggestion / scaffold plans. Subcommands: suggest (pick the right intent-cli entry for an operator goal); task <name> (bounded scaffold/init/loop/repair/operations plan — today: `task init-host` (G335), `task intent-interview` (G336), `task packet-draft` / `task issue-publish` (G337), `task implementation-loop` / `task review-next-slice-loop` (G338), `task bug-to-intent-repair` (G339), `task supervision-setup` (G712)).",
+            Example = "intent-cli guide workflow task supervision-setup --format markdown"
         },
         new GuideSubcommandEntry
         {
