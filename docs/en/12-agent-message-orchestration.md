@@ -1520,11 +1520,12 @@ by hand:
 
 ```text
 intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
+herdr pane rename <pane-id> <logical-role>
 intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
 intent-cli session-layer topology update-kind --domain <domain> --team <team> --role <role> --current-kind <kind> --new-kind <kind> --confirm-update-kind --write
 intent-cli session-layer topology update-field --domain <domain> --team <team> --role <role> --field delivery_method --current <absent|inline|file-backed> --new <inline|file-backed> --confirm-update-field --write
 intent-cli session-layer topology retire-legacy --domain <domain> --team <team> --evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write
-intent-cli session-layer topology validate --domain <domain> --team <team> --format json
+intent-cli session-layer topology validate --domain <domain> --team <team> --live --format json
 intent-cli session-layer topology show --domain <domain> --team <team> --format json
 intent-cli guide topology-workspace-move --domain <domain> --team <team> --format markdown
 intent-cli session-layer topology move --domain <domain> --team <team> --workspace-id <new-workspace-id> --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... --dry-run --format json
@@ -1561,12 +1562,18 @@ machine-local topology directory. Its defined fields are `timestamp_utc`, `host`
 can cite accumulated retirements without changing the current legacy-reader
 disposition.
 
-`record` uses only values supplied by the operator. It never queries herdr,
-guesses ids, provisions resources, or repairs an existing conflict: an exact
-match is an idempotent no-op and a different existing role is refused without
-rewriting the file. `validate` is read-only and returns `valid: true|false`
-plus every finding in one answer; each finding names its role, field, cause,
-and message, including missing/unsupported residence, missing `pane_id`, unsafe
+Immediately after recording a herdr pane mapping, run `herdr pane rename
+<pane-id> <logical-role>` so the human can identify the pane they are about to
+supervise. Herdr owns this display label; intent-cli never calls pane rename or
+sets labels as a topology-record side effect. `record` uses only values supplied
+by the operator. It never queries herdr, guesses ids, provisions resources, or
+repairs an existing conflict: an exact match is an idempotent no-op and a
+different existing role is refused without rewriting the file. `validate` is
+read-only and returns `valid: true|false` plus every finding in one answer; with
+`--live`, it also reads `herdr pane list --workspace <workspace-id>` and reports
+a missing label on a recorded pane as an informational finding without changing
+`valid` or setting the label. Each finding names its role, field, cause, and
+message, including missing/unsupported residence, missing `pane_id`, unsafe
 reader, and team-workspace mismatch. `show` is also read-only and resolves each
 pane or reader through the same delivery-target function used by `notify`, with
 no prompt, append, or herdr query. `automation doctor` carries this health when

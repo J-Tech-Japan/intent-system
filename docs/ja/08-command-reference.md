@@ -75,7 +75,7 @@ intent-cli session-layer topology move --domain <domain> --team <team> \
   --workspace-id <new-workspace-id> \
   --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... \
   [--current-digest <digest>] --write --format json
-intent-cli session-layer topology validate --domain <domain> --team <team> --format json
+intent-cli session-layer topology validate --domain <domain> --team <team> [--live] --format json
 intent-cli notify delegate --domain <domain> --team <team> --from <sender-role> \
   --to <recipient-role> --report-to <orchestrator-role> --task-id <task-id> \
   --objective <bounded-outcome> --input <reference> --expected-artifact <artifact> \
