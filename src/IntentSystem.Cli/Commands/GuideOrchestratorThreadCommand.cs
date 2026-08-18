@@ -732,6 +732,10 @@ internal static class GuideOrchestratorThreadCommand
         var agent = values["<agent>"];
         var mode = values["<mode>"];
         var multiDomain = string.Equals(mode, ModeMultiDomain, StringComparison.Ordinal);
+        var orchestratorAgent = string.IsNullOrWhiteSpace(values["<orchestrator-agent>"])
+            ? agent
+            : values["<orchestrator-agent>"];
+        var sandboxedCodexOrchestrator = string.Equals(orchestratorAgent, "codex", StringComparison.OrdinalIgnoreCase);
 
         string Apply(string template) => template
             .Replace("<domain>", domain, StringComparison.Ordinal)
@@ -774,6 +778,30 @@ internal static class GuideOrchestratorThreadCommand
                 + "domains' metadata in the same repo; those other-domain items are OUT OF SCOPE — do NOT delegate, "
                 + "publish, or repair them, even if they target `<owner/repo>`. Escalate to the operator to switch "
                 + "domain/mode instead of treating a visible other-domain item as delegable.");
+
+        var orchestratorOwns = sandboxedCodexOrchestrator
+            ? new[]
+            {
+                "Inspect canonical intent-cli / GitHub state.",
+                "Coordinate exactly ONE already-authored, `issue-cut-ready` packet per wake through the authorized host-state route; a sandboxed Codex seat does not perform the write-bearing host-state step itself.",
+                "Delegate implementation/review to the loopless receivers.",
+                "Wait for CI / review and track review state.",
+                "Route issue publication, host-state pushes, and approved-PR closeout to the non-sandboxed host-state role, then verify its authoritative result.",
+                "Report blockers and missing packets back to design.",
+            }
+            : new[]
+            {
+                "Inspect canonical intent-cli / GitHub state.",
+                "Publish exactly ONE already-authored, `issue-cut-ready` packet per wake (via canonical publish surfaces — see Next-slice publication).",
+                "Delegate implementation/review to the loopless receivers.",
+                "Wait for CI / review and track review state.",
+                "Close out approved PRs through the canonical review surfaces.",
+                "Report blockers and missing packets back to design.",
+            };
+
+        var hostStateDutyRouting = sandboxedCodexOrchestrator
+            ? "CODEX SANDBOX DUTY ROUTE: this herdr-started Codex orchestrator uses `--sandbox workspace-write --ask-for-approval never`; it cannot write `.git` even inside a declared root. The non-sandboxed host-state role (the host/review runtime or an operator seat with the host-repo write envelope) owns `intent-cli issue publish-flow ... --write`, `intent-cli automation issue-publish --write`, host-state pushes, and `intent-cli closeout pr ... --write`. The Codex orchestrator routes one bounded request, waits for the returned JSON, and re-verifies intent-cli/GitHub facts. If that route is unavailable, fail closed — do not widen the sandbox, write `.git`, ask design to perform routine workflow transitions, or improvise a clone."
+            : "HOST-STATE DUTY ROUTE: the recorded host-authority role performs write-bearing intent-cli/Git operations from the host repository. The orchestrator may execute a canonical write only when its own recorded envelope explicitly permits it; otherwise it routes the same bounded request to that non-sandboxed host-state role and verifies the returned intent-cli/GitHub facts. Never widen a seat envelope or ask design to perform routine workflow transitions.";
 
         return new OrchestratorThreadGuide
         {
@@ -847,15 +875,8 @@ internal static class GuideOrchestratorThreadCommand
                     "Release scope and version selection.",
                     "Packet content and acceptance criteria (the durable packet files).",
                 },
-                OrchestratorOwns = new[]
-                {
-                    "Inspect canonical intent-cli / GitHub state.",
-                    "Publish exactly ONE already-authored, `issue-cut-ready` packet per wake (via canonical publish surfaces — see Next-slice publication).",
-                    "Delegate implementation/review to the loopless receivers.",
-                    "Wait for CI / review and track review state.",
-                    "Close out approved PRs through the canonical review surfaces.",
-                    "Report blockers and missing packets back to design.",
-                },
+                OrchestratorOwns = orchestratorOwns,
+                HostStateDutyRouting = hostStateDutyRouting,
                 MissingPacketResponse =
                     "When a needed packet is absent or incomplete, or a vague goal would require authoring intent / "
                     + "acceptance criteria / release scope, the orchestrator does NOT invent the packet. It sends a "
@@ -1003,7 +1024,7 @@ internal static class GuideOrchestratorThreadCommand
                     "Classify each open PR's CI: pending = wait using the named mode-specific CI re-check producer (no message); green = delegate review/closeout; red = repair or escalate by ownership; stuck = escalate. Pending CI is normal progress, not a reason to message the operator.",
                     "Detect stale blockers and no-reply receivers: a delegation with no accepted/progress reply within the expected window, or a thread stuck off the official workflow.",
                     "On a no-reply receiver past the threshold (default 30m), run the SAFE stale-thread health check: send one non-destructive status-request, check read-only intent-cli/GitHub facts, keep watching if there is progress, treat waiting-permission as an operator notice (never auto-clear), and only after repeated no-reply with no progress send one idempotent re-entry or escalate.",
-                    "If intent-cli reports an `issue-cut-ready` candidate and all gates pass (same-domain or routed, complete contract, no open clarification, dependencies satisfied, under WIP, clean host-sync/preflight), publish ONE issue this wake via canonical publish-flow / issue-publish, verify it, THEN delegate that same issue to implementation in THIS SAME WAKE (G524) — do not ask the operator to create it, and do not stop after publishing to wait for a future wake to send the delegation.",
+                    "If intent-cli reports an `issue-cut-ready` candidate and all gates pass (same-domain or routed, complete contract, no open clarification, dependencies satisfied, under WIP, clean host-sync/preflight), route ONE issue this wake to the authorized host-state role for canonical publish-flow / issue-publish, verify its result, THEN delegate that same issue to implementation in THIS SAME WAKE (G524) — do not ask the operator to create it, and do not stop after routing the publish to wait for a future wake to send the delegation. A sandboxed Codex orchestrator never performs the write-bearing host-state step itself.",
                     "If the candidate has unmet dependencies, plan the chain instead of pausing: act on the EARLIEST unmet resolvable dependency (publish or route it), keep the dependent held, and escalate only ambiguous/cycle/cross-domain-unrouted cases.",
                     "The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER (implementation, review) — NOT at-most-one-message overall (G524): this wake's actions may include a publish plus its same-wake delegation, one repair message per stalled receiver, one operator escalation, and handling any pending receiver reports, all together.",
                     "Send workflow notifications only through `intent-cli notify`; it resolves the recorded session-layer mode and validates the recipient before delivery, failing closed on an unknown role (G524/G578).",
@@ -1088,13 +1109,16 @@ internal static class GuideOrchestratorThreadCommand
             {
                 Summary =
                     "Routine next-slice issue publication is an ORCHESTRATOR responsibility, not an operator question. "
-                    + "When intent-cli reports a candidate as `issue-cut-ready` and ALL safety gates pass, the "
-                    + "orchestrator publishes it itself through canonical intent-cli commands instead of stopping to ask "
-                    + "the operator to create the GitHub issue. Publish AT MOST ONE issue per wake, then verify, THEN "
-                    + "delegate that same issue to the implementation thread in THE SAME WAKE (G524) — publish and "
-                    + "delegate complete together; never defer the delegation to an unscheduled \"next wake\", since no "
-                    + "other trigger will ever wake the orchestrator to send it (this was the single largest measured "
-                    + "stall class in message-driven orchestration, ~60 hours across G807/G809/G810/G812).",
+                    + "The coordination responsibility is to route one bounded publish request to the recorded host-state "
+                    + "role. When intent-cli reports a candidate as `issue-cut-ready` and ALL safety gates pass, the "
+                    + "orchestrator routes one bounded publish request to the recorded host-state role; that role executes "
+                    + "the canonical intent-cli commands from the host repository with its write envelope. A sandboxed "
+                    + "Codex orchestrator MUST NOT execute the write-bearing host-state step itself. Publish AT MOST ONE "
+                    + "issue per wake, then verify, THEN delegate that same issue to the implementation thread in THE SAME "
+                    + "WAKE (G524) — publish and delegate complete together; never defer the delegation to an unscheduled "
+                    + "\"next wake\", since no other trigger will ever wake the orchestrator to send it (this was the "
+                    + "single largest measured stall class in message-driven orchestration, ~60 hours across "
+                    + "G807/G809/G810/G812).",
                 OnePerWake = true,
                 Preconditions = new[]
                 {
@@ -1116,14 +1140,14 @@ internal static class GuideOrchestratorThreadCommand
                 },
                 CanonicalCommands = new[]
                 {
-                    Apply("intent-cli issue publish-flow <execution-unit> --repo <owner/repo> --write --format json"),
-                    "intent-cli automation issue-publish --write --format json",
-                    "Never raw `gh issue create` or `gh ... --add-label`; publication and the `intent-target` label go through the canonical intent-cli surfaces only.",
+                    Apply("Authorized host-state role executes: intent-cli issue publish-flow <execution-unit> --repo <owner/repo> --write --format json"),
+                    "Authorized host-state role executes: intent-cli automation issue-publish --write --format json",
+                    "The orchestrator routes and verifies; a sandboxed Codex seat never executes these write-bearing commands itself. Never raw `gh issue create` or `gh ... --add-label`; publication and the `intent-target` label go through the canonical intent-cli surfaces only.",
                 },
                 PostPublishVerification = new[]
                 {
-                    "Confirm via intent-cli / GitHub (not chat) that the issue exists with the expected execution-unit body and the `intent-target` label.",
-                    "Confirm the durable workflow state (queue-state / linkage / label) reflects the publish through intent-cli surfaces.",
+                    "Confirm via intent-cli / GitHub (not chat) that the host-state role's result is terminal, the issue exists with the expected execution-unit body, and the `intent-target` label is present.",
+                    "Confirm the durable workflow state (queue-state / linkage / label) reflects the host-state role's publish through intent-cli surfaces.",
                     "Immediately after verification, in THIS SAME WAKE, delegate implementation over agmsg (G524) — do not stop after publishing and wait for a future wake to send the delegation. The implementation receiver still derives its target from `intent-cli worker next-action`, not the agmsg text.",
                 },
             },
@@ -1360,12 +1384,14 @@ internal static class GuideOrchestratorThreadCommand
                     + "clarification, release/credentials/security, destructive actions, unresolved blockers)\"}"),
                 AutonomousPublishRule =
                     "If `intent-cli` reports the next slice `issue-cut-ready` and all publish gates pass (see Next-slice "
-                    + "publication), the orchestrator creates/publishes ONE GitHub issue ITSELF via canonical intent-cli "
-                    + "commands (`issue publish-flow` / `automation issue-publish`) — it does NOT ask design to do each "
-                    + "step. At most one issue per wake; verify after publishing before delegating implementation.",
+                    + "publication), the orchestrator routes ONE bounded publish request to the recorded host-state role. "
+                    + "That role performs the canonical intent-cli commands (`issue publish-flow` / `automation issue-publish`) "
+                    + "from the host repository; a sandboxed Codex orchestrator does NOT execute the write-bearing step "
+                    + "itself. It does NOT ask design to perform routine workflow transitions. At most one issue per wake; "
+                    + "verify the host-state result before delegating implementation.",
                 EscalationBoundary =
-                    "Routine delegation (publish, delegate, CI wait, review, closeout) stays orchestrator↔receivers and "
-                    + "does NOT go to design. Return to DESIGN only for human decisions — product/design clarification, "
+                    "Routine delegation (host-state publish routing, delegate, CI wait, review, closeout) stays "
+                    + "orchestrator↔receivers/host-state role and does NOT go to design. Return to DESIGN only for human decisions — product/design clarification, "
                     + "release/credentials/security, destructive actions, or an unresolved blocker — using the structured "
                     + "escalation message (reason / current_state / evidence / decision_needed).",
                 DesignInboxWorkflow =
@@ -1757,25 +1783,33 @@ internal static class GuideOrchestratorThreadCommand
             WorktreeManagement = new OrchestratorWorktreeManagement
             {
                 Summary =
-                    "Orchestrated work creates temporary worktrees for implementation and review. Allocate them under a "
-                    + "managed, allowlisted root inside the workspace and clean them up with `git worktree remove` — "
-                    + "NEVER a raw `rm -rf` of an arbitrary `/tmp/intent-review-...` path. Safe cleanup design, not "
-                    + "disabling approvals, is the right default: a destructive `rm -rf` approval prompt is the symptom "
-                    + "of an unmanaged workspace.",
+                    "Orchestrated work creates temporary workspaces for implementation and review. A non-sandboxed "
+                    + "host-state role registers managed worktrees under the workspace and cleans them up with `git "
+                    + "worktree remove`. A sandboxed Codex seat MUST NOT run `git worktree add` because it cannot write "
+                    + "`.git` even inside a declared root. Do not call an arbitrary `/tmp` checkout a managed worktree "
+                    + "or delete it with raw `rm -rf`; when the delegation explicitly supplies a unit-scoped role-work-root "
+                    + "(for example `/private/tmp/<role>-<unit>`), that is an ordinary temporary checkout and the "
+                    + "host-state role owns its cleanup. Safe routing, not disabling approvals, is the right default.",
                 ManagedRoot =
-                    "Allocate temporary worktrees under a repo/workspace-scoped managed root — the `[project] "
-                    + "worktree_root` (default `.intent-cli/worktrees/`), git-ignored — not arbitrary `/tmp/"
-                    + "intent-review-...` paths. A managed root is allowlisted, predictable, and removable with `git "
-                    + "worktree remove`.",
+                    "The non-sandboxed host-state role allocates registered worktrees under a repo/workspace-scoped "
+                    + "managed root — the `[project] worktree_root` (default `.intent-cli/worktrees/`) — and the exact "
+                    + "managed root MUST be listed in the target repo's `.gitignore` before allocation. A sandboxed Codex "
+                    + "seat receives a prepared registered path and never runs `git worktree add` or creates a nested "
+                    + "clone under that root. The managed root is allowlisted, predictable, and removable with `git "
+                    + "worktree remove`; it is not an arbitrary `/tmp/intent-review-...` path.",
                 Allocation = new[]
                 {
-                    "Create each worktree under the managed root: `git worktree add .intent-cli/worktrees/<role>-<unit> <branch>`.",
-                    "Keep the managed root git-ignored so it never pollutes the tree.",
+                    "Host-state role: add `.intent-cli/worktrees/` (or the configured `[project] worktree_root`) to the target repo `.gitignore`, then create each registered worktree with `git worktree add .intent-cli/worktrees/<role>-<unit> <branch>`.",
+                    "Sandboxed Codex seat: use the prepared path carried by the delegation; do not run `git worktree add`, write `.git`, or create a nested clone under the managed root.",
+                    "Sandbox-safe fallback: only when the delegation explicitly supplies it, use a unit-scoped ordinary checkout under the declared role-work-root (for example `/private/tmp/<role>-<unit>`); this is not a registered worktree and the host-state role owns cleanup.",
                     "One worktree per role/unit; do not reuse a dirty worktree across units.",
                 },
                 SafeCleanup = new[]
                 {
-                    "Remove a worktree only with `git worktree remove` (it refuses a dirty worktree) — never raw `rm -rf`.",
+                    "Remove a worktree only with `git worktree remove`; registered cleanup belongs to the non-sandboxed host-state role.",
+                    "The non-sandboxed host-state role removes a registered worktree only with `git worktree remove` (it refuses a dirty worktree) — never raw `rm -rf`.",
+                    "A sandboxed Codex seat does not remove registered worktrees or mutate `.git`; it reports cleanup/blocker state to the host-state role.",
+                    "For an explicitly delegated ordinary temporary checkout under the role-work-root, the host-state role performs the approved cleanup after verifying the unit path; the seat never improvises a raw delete.",
                     "Validate the target path is INSIDE the allowlisted managed root before removal.",
                     "Confirm the path is a registered git worktree (it appears in `git worktree list`).",
                     "Confirm the worktree state is clean (no uncommitted or untracked user work) before removing.",
@@ -1786,12 +1820,14 @@ internal static class GuideOrchestratorThreadCommand
                     "The target is OUTSIDE the allowlisted managed root.",
                     "The target is the repo root, `$HOME`, or a system path (`/`, `/tmp` root, etc.).",
                     "The path is not a registered git worktree.",
+                    "A sandboxed seat is being asked to register a worktree, write `.git`, or create a nested clone under the managed root — route it to the host-state role.",
                     "The worktree has uncommitted or untracked user work — STOP and surface it; do not delete user work.",
                 },
                 ApprovalPolicyNote =
-                    "`approval_policy=never` / `danger-full-access` is NOT a substitute for safe cleanup design. Keep "
-                    + "least-privilege approvals as the default; the goal is to never need a destructive `rm -rf` prompt, "
-                    + "not to suppress the prompt.",
+                    "`approval_policy=never` / `danger-full-access` is NOT a substitute for safe routing or cleanup "
+                    + "design. Keep least-privilege approvals as the default; route `.git` work to the non-sandboxed "
+                    + "host-state role and use an explicitly declared ordinary temporary checkout when required, rather "
+                    + "than suppressing a destructive `rm -rf` prompt.",
             },
             ReviewDelegationContract = new OrchestratorReviewDelegationContract
             {
@@ -1799,29 +1835,38 @@ internal static class GuideOrchestratorThreadCommand
                     "Review delegation must carry the managed-worktree policy and require design-alignment evidence up "
                     + "front — not leave the reviewer to discover it. Dogfooding showed a reviewer allocate a raw "
                     + "`/tmp/...review...` worktree and Codex correctly ask to approve a destructive `rm -rf` — the "
-                    + "RIGHT safety behavior for the WRONG workflow. The fix is a managed root, NOT weakening approval "
-                    + "settings.",
+                    + "RIGHT safety behavior for the WRONG workflow. For a sandboxed Codex reviewer, the host-state role "
+                    + "prepares the registered path; the fix is correct routing and a git-ignored managed root, NOT "
+                    + "weakening approval settings.",
                 ManagedWorktreeRoot =
-                    "Review worktrees use the SAME managed, workspace-local root as the rest of orchestrated work — the "
-                    + "`[project] worktree_root` (default `.intent-cli/worktrees/`), e.g. "
-                    + "`.intent-cli/worktrees/review-<unit>` — NEVER an arbitrary `/tmp/...review...` path.",
+                    "The host-state role prepares each registered review worktree under the SAME managed, workspace-local "
+                    + "root as the rest of orchestrated work — the `[project] worktree_root` (default `.intent-cli/worktrees/`), "
+                    + "which MUST be git-ignored, for example `.intent-cli/worktrees/review-<unit>`. A sandboxed Codex reviewer "
+                    + "receives that prepared path and never runs `git worktree add`; if the delegation instead supplies an "
+                    + "ordinary role-work-root checkout such as `/private/tmp/review-<unit>`, use it as a temporary checkout, "
+                    + "not as a registered worktree.",
                 ProhibitedPattern =
-                    "PROHIBITED as the normal path: a raw `/tmp/...` review worktree, and a `rm -rf /tmp/... && git "
-                    + "worktree add ...` cleanup chain. Reaching for this pattern is the signal to STOP and allocate "
-                    + "under the managed root instead — not to ask the operator to approve the `rm -rf`.",
+                    "PROHIBITED as the normal path: a raw `/tmp/...` path presented as a registered review worktree, a `rm -rf /tmp/... && "
+                    + "git worktree add ...` cleanup chain, a nested clone under `.intent-cli/worktrees/`, or asking a "
+                    + "sandboxed Codex seat to run `git worktree add`. A declared ordinary role-work-root checkout may be "
+                    + "used only when the delegation names it and the host-state role owns cleanup; reaching for an "
+                    + "unmanaged path is a signal to STOP and route the repair, not to ask for `rm -rf` approval.",
                 CleanupRule =
-                    "Cleanup is `git worktree remove <managed-path>` for a REGISTERED, CLEAN worktree only — confirmed "
-                    + "via `git worktree list` and a clean `git status` first.",
+                    "The non-sandboxed host-state role performs cleanup with `git worktree remove <managed-path>` for a "
+                    + "REGISTERED, CLEAN worktree only — confirmed via `git worktree list` and a clean `git status` first. "
+                    + "A sandboxed Codex reviewer reports completion or a blocker; it does not mutate `.git` or delete the "
+                    + "path itself.",
                 UnsafeStalePathRule =
                     "A stale path that is NOT a registered git worktree, is OUTSIDE the managed root, or is dirty/"
-                    + "unsafe is NEVER an operator `rm -rf` approval prompt — it is a STRUCTURED BLOCKER agmsg reply to "
-                    + "the orchestrator (`status: blocked`) so the orchestrator can route the repair, not something the "
-                    + "reviewer resolves by force-deleting an unmanaged path.",
+                    + "unsafe is NEVER an operator `rm -rf` approval prompt — it is a STRUCTURED BLOCKER reply to the "
+                    + "orchestrator (`status: blocked`) so the host-state role can prepare or clean up the path, not "
+                    + "something the reviewer resolves by force-deleting an unmanaged path.",
                 DelegationExample =
                     "{\"delegate\":{\"domain\":\"<domain>\",\"execution_unit\":\"<unit>\",\"target_repo\":"
                     + "\"<owner/repo>\",\"pr\":\"<n>\",\"review_cwd\":\"/review/<domain>\",\"managed_worktree_policy\":"
-                    + "\"required — allocate under [project] worktree_root (default .intent-cli/worktrees/), never "
-                    + "/tmp\",\"design_alignment_required\":true,\"destination_thread\":\"review@<domain>\"}}",
+                    + "\"host-prepared registered path under git-ignored [project] worktree_root; sandbox-safe ordinary "
+                    + "role-work-root fallback only when explicitly supplied; never an arbitrary /tmp review worktree\","
+                    + "\"design_alignment_required\":true,\"destination_thread\":\"review@<domain>\"}}",
                 DesignAlignmentSources = new[]
                 {
                     "packet — the authored packet content and acceptance criteria.",
@@ -2007,11 +2052,13 @@ internal static class GuideOrchestratorThreadCommand
                         + "verify the GitHub facts that an agmsg reply claims (merged PR, CI, labels). Treat pending/"
                         + "running CI as an active wait state — re-check it on a later wake rather than asking the "
                         + "operator; delegate review/closeout only after required checks are green, route red checks to "
-                        + "repair or escalation by ownership, and escalate only stuck/ambiguous CI. If you publish a "
-                        + "ready next-slice issue this wake (when intent-cli reports it `issue-cut-ready` and all gates "
-                        + "pass — via canonical `intent-cli issue publish-flow` / `automation issue-publish`), verify it "
-                        + "exists, THEN delegate that same issue to implementation in THIS SAME WAKE (G524) — never stop "
-                        + "after publishing to wait for an unscheduled future wake to send the delegation; no other "
+                        + "repair or escalation by ownership, and escalate only stuck/ambiguous CI. If intent-cli reports "
+                        + "a ready next-slice issue this wake (`issue-cut-ready` and all gates pass), publish a ready next-slice issue by routing ONE bounded "
+                        + "publish request to the recorded host-state role for the canonical `intent-cli issue publish-flow` / "
+                        + "`automation issue-publish` commands. A sandboxed Codex orchestrator never executes that write-bearing "
+                        + "step itself. Verify the host-state result, THEN delegate that same issue to implementation in THIS "
+                        + "SAME WAKE (G524) — never stop after routing the publish to wait for an unscheduled future wake to "
+                        + "send the delegation; no other "
                         + "trigger will ever pick it back up. The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER "
                         + "(implementation, review), NOT at-most-one-message overall: alongside a publish+delegation you "
                         + "may also send one repair request per stalled receiver (pointing it back to the official "
@@ -2090,10 +2137,8 @@ internal static class GuideOrchestratorThreadCommand
                         + "`awaiting-operator-merge`; that patient state is not review debt, is never urged or "
                         + "age-escalated, and resumes at closeout only after a human merge is detected. Perform semantic review only when you are the packet `review_role` or "
                         + "explicitly assigned (G480); otherwise inspect landing_mode and orchestrate merge/closeout of an already-approved "
-                        + "direct-lane PR, or the patient wait and post-human-merge closeout-only continuation for an operator-merge PR. If you need a review worktree, allocate it under the MANAGED root "
-                        + "(`.intent-cli/worktrees/review-<unit>`) — NEVER a raw `/tmp/...review...` path, and NEVER "
-                        + "`rm -rf /tmp/... && git worktree add ...`; remove it only with `git worktree remove` once it "
-                        + "is a registered, clean worktree. A non-registered, dirty, or otherwise unsafe stale path is a "
+                        + "direct-lane PR, or the patient wait and post-human-merge closeout-only continuation for an operator-merge PR. If you need a review worktree, use the prepared path carried by the delegation. A sandboxed Codex reviewer MUST NOT run `git worktree add` (it writes `.git` even inside a declared root); reply blocked so the non-sandboxed host-state role can register `.intent-cli/worktrees/review-<unit>` under the git-ignored managed root. NEVER a raw `/tmp/...review...` path as a registered worktree. When the delegation explicitly supplies an ordinary checkout under the seat's role-work-root (for example `/private/tmp/<role>-<unit>`), use it as a temporary checkout, not as a registered worktree; never "
+                        + "`rm -rf /tmp/... && git worktree add ...`; remove registered worktrees only with `git worktree remove` through the host-state role. A non-registered, dirty, or otherwise unsafe stale path is a "
                         + "STRUCTURED BLOCKER reply to the orchestrator, not an operator `rm -rf` approval prompt (see "
                         + "Review delegation — managed worktrees and design alignment). Your review must be grounded in "
                         + "design intent, not only diff/CI: check the packet, review-context, intent tree, ADR/decision "
@@ -4385,6 +4430,10 @@ internal static class GuideOrchestratorThreadCommand
             writer.WriteLine($"- {item}");
         }
         writer.WriteLine();
+        writer.WriteLine($"### Host-state duty routing");
+        writer.WriteLine();
+        writer.WriteLine(guide.RoleBoundary.HostStateDutyRouting);
+        writer.WriteLine();
         writer.WriteLine($"- **missing packet** — {guide.RoleBoundary.MissingPacketResponse}");
         writer.WriteLine($"- **release-prep** — {guide.RoleBoundary.ReleasePrepRule}");
         writer.WriteLine($"- **design↔orchestrator double-check** — {guide.RoleBoundary.DoubleCheckRule}");
@@ -5485,6 +5534,9 @@ internal sealed record OrchestratorRoleBoundary
 
     [JsonPropertyName("orchestrator_owns")]
     public required IReadOnlyList<string> OrchestratorOwns { get; init; }
+
+    [JsonPropertyName("host_state_duty_routing")]
+    public required string HostStateDutyRouting { get; init; }
 
     [JsonPropertyName("missing_packet_response")]
     public required string MissingPacketResponse { get; init; }

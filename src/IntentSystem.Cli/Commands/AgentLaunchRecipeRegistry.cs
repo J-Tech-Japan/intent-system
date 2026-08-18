@@ -312,9 +312,12 @@ internal static class AgentLaunchRecipeRegistry
                     + "[--add-dir <host-routing-root>]",
                 RoleDerivedRoots =
                     "Use one bounded --add-dir <role-work-root> for the role checkout/worktree; add the host "
-                    + "routing root only for a role whose canonical report surface needs it. Before delegation, the "
-                    + "orchestrator compares workspace prerequisites with this recorded write envelope and prepares "
-                    + "anything outside it under orchestrator authority (G655).",
+                    + "routing root only for a role whose canonical report surface needs it. The role-work-root is the "
+                    + "seat's ordinary-file root, not permission to write repository metadata: Codex cannot write "
+                    + "`.git` even when `.git` is inside a declared root. A non-sandboxed host-state role must therefore "
+                    + "prepare registered worktrees and perform host-state git operations before delegation. Before "
+                    + "delegation, the orchestrator compares workspace prerequisites with this recorded write envelope "
+                    + "and prepares anything outside it under orchestrator authority via the authorized host-state role (G655).",
                 ContinuationBound =
                     "No product-wide continuation bound is inferred; keep any role-specific bound explicit in the "
                     + "operator's measured launch record.",
@@ -380,8 +383,11 @@ internal static class AgentLaunchRecipeRegistry
                     + "do not replace the bounded invocation with a guessed --yolo or --allow-all-paths equivalent.",
                 DenialSemantics =
                     "Measured envelope asymmetry: writes outside declared roots are denied, while reads outside "
-                    + "declared roots are not denied. Treat the read asymmetry as an explicit security fact, not as "
-                    + "a permission guarantee.",
+                    + "declared roots are not denied. Writes to `.git` are also denied even when `.git` is inside a "
+                    + "declared root (for example `.git/index`, `.git/FETCH_HEAD`, and worktree metadata); adding another "
+                    + "`--add-dir` does not make those operations available. Treat both asymmetries as explicit security "
+                    + "facts, not as permission guarantees, and route repository-metadata work to the non-sandboxed "
+                    + "host-state role.",
                 Recovery =
                     "Codex may self-update, print 'Please restart Codex', and exit to the pane's shell. Restart the "
                     + "agent in the recorded pane and re-run the READY/ping checks; classify this as a restart "
