@@ -1245,9 +1245,14 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
 
 - **Role-derived roots.** Use one bounded `--add-dir <role-work-root>` for the
   role checkout/worktree; add the host routing root only when that role's
-  canonical report surface needs it. Before delegation, the orchestrator
-  compares workspace prerequisites with this recorded write envelope and
-  prepares anything outside it under orchestrator authority (G655).
+  canonical report surface needs it. The role-work-root is an ordinary-file
+  root, not permission to write repository metadata: Codex cannot write `.git`
+  even when `.git` is inside a declared root. A non-sandboxed host-state role
+  therefore prepares registered worktrees and performs host-state git
+  operations before delegation. The orchestrator compares workspace
+  prerequisites with this recorded write envelope and prepares anything
+  outside it under orchestrator authority via that authorized host-state role
+  (G655).
 - **Measured bounded invocation.** This invocation was measured on **Codex
   v0.144.1 / macOS**; it is not a universal flag recipe for an unmeasured
   environment.
@@ -1256,8 +1261,11 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
   recorded pane and re-run READY/ping; this is a restart condition, not a
   wedge, and never a reason to widen the envelope.
 - **Measured envelope asymmetry.** Writes outside declared roots were denied,
-  while reads outside declared roots were not denied. Treat that asymmetry as
-  an explicit security fact, not as a read-permission guarantee.
+  while reads outside declared roots were not denied. Writes to `.git` are also
+  denied even when `.git` is inside a declared root (for example `.git/index`,
+  `.git/FETCH_HEAD`, and worktree metadata); another `--add-dir` does not make
+  those operations available. Treat these as explicit security facts and route
+  repository-metadata work to the non-sandboxed host-state role.
 - **Post-start interaction (G636).** No Codex post-start interaction was
   observed on **MyIntentHost** on **2026-08-07**. The structured
   `post_start_interaction` record therefore carries `status: unmeasured`,
@@ -2353,10 +2361,23 @@ design author.
 - **Design owns** — intent shaping and clarifications; ADRs and design
   decisions; release scope and version selection; packet content and acceptance
   criteria (the durable packet files).
-- **Orchestrator owns** — inspect canonical intent-cli/GitHub state; publish
-  exactly **one already-authored, `issue-cut-ready` packet per wake**; delegate
-  implementation/review; wait for CI/review; close out approved PRs through the
-  canonical review surfaces; report blockers and missing packets back to design.
+- **Orchestrator owns** — inspect canonical intent-cli/GitHub state; coordinate
+  exactly **one already-authored, `issue-cut-ready` packet per wake** through
+  the recorded host-state route; delegate implementation/review; wait for
+  CI/review; route host-state publication, pushes, and approved-PR closeout to
+  the non-sandboxed host-state role and verify the result; report blockers and
+  missing packets back to design.
+
+**Host-state duty routing (Codex herdr-only).** A herdr-started Codex
+orchestrator uses the bounded `--sandbox workspace-write --ask-for-approval
+never` recipe. It cannot write `.git` even inside a declared root. The
+non-sandboxed host/review runtime or operator seat with the host-repo write
+envelope owns `intent-cli issue publish-flow ... --write`,
+`intent-cli automation issue-publish --write`, host-state pushes, and
+`intent-cli closeout pr ... --write`. Codex routes one bounded request, waits
+for the returned JSON, and re-verifies intent-cli/GitHub facts. If that route
+is unavailable, fail closed: do not widen the sandbox, write `.git`, ask
+design to perform routine workflow transitions, or improvise a clone.
 
 When a needed packet is absent, incomplete, or would require product/release/
 design judgment, the orchestrator does **not** invent it — it sends a structured
@@ -2444,12 +2465,14 @@ either trigger runs exactly one pass:
 - Verify GitHub facts directly: open PRs, CI conclusion, approvals, merge
   state, closeout/label state.
 - Detect stale blockers and no-reply receivers.
-- **Publish + delegate in the SAME wake (G524).** If you publish a ready
-  next-slice issue this wake, verify it exists, THEN delegate it to the
-  implementation thread within this same wake — never defer the delegation
-  to an unscheduled "next wake"; nothing else will ever trigger it (this was
-  the single largest measured stall class: ~60 hours across four slices in
-  one field trace).
+- **Route publish + delegate in the SAME wake (G524).** If a ready next-slice
+  issue is found this wake, route one bounded publish request to the recorded
+  host-state role, verify its result, THEN delegate it to the implementation
+  thread within this same wake — never defer the delegation to an unscheduled
+  "next wake"; nothing else will ever trigger it (this was the single largest
+  measured stall class: ~60 hours across four slices in one field trace). A
+  sandboxed Codex orchestrator never performs the write-bearing host-state
+  step itself.
 - **Per-wake cap is at most one delegation per receiver, not
   at-most-one-message (G524).** A wake may include a publish + its
   same-wake delegation, one repair message per stalled receiver, one
@@ -2538,13 +2561,14 @@ the sleeping role wakes; liveness is never a refusal reason for a report.
 ## Next-slice publication
 
 Routine next-slice issue publication is an **orchestrator responsibility**, not
-an operator question. When intent-cli reports a candidate as `issue-cut-ready`
-and all safety gates pass, the orchestrator publishes it itself through
-canonical intent-cli commands rather than stopping to ask the operator to create
-the GitHub issue. **At most one issue per wake**, then verify, THEN **delegate
-that same issue to implementation in the SAME wake (G524)** — publish and
-delegate complete together; never defer the delegation to an unscheduled
-next wake.
+an operator question. The coordination responsibility is to route one bounded
+publish request to the recorded host-state role. When intent-cli reports a
+candidate as `issue-cut-ready` and all safety gates pass, that role executes the
+canonical intent-cli commands from the host repository with its write envelope;
+a sandboxed Codex orchestrator never performs the write-bearing step itself.
+**At most one issue per wake**, then verify, THEN **delegate that same issue to
+implementation in the SAME wake (G524)** — publish and delegate complete
+together; never defer the delegation to an unscheduled next wake.
 
 Publish only when **all** of these hold:
 
@@ -2560,12 +2584,13 @@ Otherwise **hold or escalate** — missing contract sections, open clarification
 dependency mismatch, WIP cap reached, host-sync blocker, or ambiguous target
 repo/domain are all blockers.
 
-Publish through the canonical surfaces only — `intent-cli issue publish-flow`
-and `intent-cli automation issue-publish` — never raw `gh issue create` or
-`gh ... --add-label`. After publishing, verify via intent-cli / GitHub (not
-chat) that the issue exists with the expected body and the `intent-target`
-label and that durable state reflects it, then, **in this same wake**,
-delegate implementation through `intent-cli notify delegate` (G524) — do not stop after publishing to
+The authorized host-state role executes the canonical surfaces only —
+`intent-cli issue publish-flow` and `intent-cli automation issue-publish` —
+never raw `gh issue create` or `gh ... --add-label`. After publishing, verify
+via intent-cli / GitHub (not chat) that the host-state result is terminal, the
+issue exists with the expected body and the `intent-target` label, and durable
+state reflects it, then, **in this same wake**, delegate implementation through
+`intent-cli notify delegate` (G524) — do not stop after routing the publish to
 wait for a future wake. The implementation receiver still derives its target
 from `intent-cli worker next-action`, not the notification text.
 
@@ -2753,27 +2778,50 @@ to the **MyIntentHost measurement on 2026-08-07**.
 
 ## Managed worktree cleanup
 
-Orchestrated work creates temporary worktrees for implementation and review.
-Allocate them under a **managed, allowlisted root** inside the workspace and
-clean them up with `git worktree remove` — **never** a raw `rm -rf` of an
-arbitrary `/tmp/intent-review-...` path. Safe cleanup design, not disabling
-approvals, is the right default: a destructive `rm -rf` approval prompt is the
-symptom of an unmanaged workspace.
+Orchestrated work creates temporary workspaces for implementation and review.
+A non-sandboxed host-state role registers managed worktrees under the workspace
+and cleans them up with `git worktree remove`. A sandboxed Codex seat **must not**
+run `git worktree add` because it cannot write `.git` even inside a declared
+root. Do not call an arbitrary `/tmp` checkout a managed worktree or delete it
+with raw `rm -rf`; when a delegation explicitly supplies a unit-scoped
+role-work-root (for example `/private/tmp/<role>-<unit>`), that is an ordinary
+temporary checkout and the host-state role owns cleanup. Safe routing, not
+disabling approvals, is the right default.
 
-- **Managed root** — allocate under the `[project] worktree_root` (default
-  `.intent-cli/worktrees/`, git-ignored), not arbitrary `/tmp` paths. Create
-  each with `git worktree add .intent-cli/worktrees/<role>-<unit> <branch>`,
-  one per role/unit.
-- **Safe cleanup** — remove only with `git worktree remove` (it refuses a dirty
-  worktree); validate the target is inside the allowlisted root, is a registered
-  git worktree (`git worktree list`), and is clean; then `git worktree prune`.
+- **Managed root** — the non-sandboxed host-state role allocates registered
+  worktrees under the repo/workspace-scoped `[project] worktree_root` (default
+  `.intent-cli/worktrees/`), and the exact managed root **must be listed in the
+  target repo's `.gitignore` before allocation**. A sandboxed Codex seat receives
+  a prepared registered path and never runs `git worktree add` or creates a
+  nested clone under that root. The managed root is allowlisted, predictable,
+  and removable with `git worktree remove`; it is not an arbitrary
+  `/tmp/intent-review-...` path.
+- **Approval policy** — `approval_policy=never` / `danger-full-access` is **not**
+  a substitute for safe routing or cleanup design. Keep least-privilege
+  approvals as the default; route `.git` work to the non-sandboxed host-state
+  role and use an explicitly declared ordinary temporary checkout when
+  required, rather than suppressing a destructive `rm -rf` prompt.
+- **Allocation** — the host-state role adds `.intent-cli/worktrees/` (or the
+  configured `[project] worktree_root`) to the target repo `.gitignore`, then
+  creates each registered worktree with `git worktree add
+  .intent-cli/worktrees/<role>-<unit> <branch>`. The sandboxed Codex seat uses
+  the prepared path and does not write `.git` or create a nested clone. A
+  sandbox-safe fallback is an explicitly supplied ordinary checkout under the
+  declared role-work-root, such as `/private/tmp/<role>-<unit>`; it is not a
+  registered worktree.
+- **Safe cleanup** — the host-state role removes a registered worktree only
+  with `git worktree remove` (it refuses a dirty worktree), never raw `rm -rf`.
+  A sandboxed Codex seat does not remove registered worktrees or mutate `.git`;
+  it reports cleanup/blocker state to the host-state role. For an explicitly
+  delegated ordinary temporary checkout, the host-state role performs approved
+  cleanup after verifying the unit path. Validate the target is inside the
+  allowlisted root, confirm registration with `git worktree list`, confirm a
+  clean state, and run `git worktree prune` after removal.
 - **Refuse cleanup** when the target is outside the allowlisted root, is the
   repo root / `$HOME` / a system path, is not a registered worktree, or has
-  uncommitted/untracked user work — stop and surface it; never delete user work.
-- **Approval policy** — `approval_policy=never` / `danger-full-access` is **not**
-  a substitute for safe cleanup design. Keep least-privilege approvals as the
-  default; the goal is to never need a destructive `rm -rf` prompt, not to
-  suppress it.
+  uncommitted/untracked user work. Also refuse when a sandboxed seat is being
+  asked to register a worktree, write `.git`, or create a nested clone — route
+  it to the host-state role and never delete user work.
 
 ## Review delegation — managed worktrees and design alignment
 
@@ -2781,33 +2829,42 @@ Review delegation must carry the managed-worktree policy and require
 design-alignment evidence **up front** — not leave the reviewer to discover
 it. Dogfooding showed a reviewer allocate a raw `/tmp/...review...` worktree
 and Codex correctly ask to approve a destructive `rm -rf` — the **right**
-safety behavior for the **wrong** workflow. The fix is a managed root, **not**
-weakening approval settings.
+safety behavior for the **wrong** workflow. For a sandboxed Codex reviewer, the
+host-state role prepares the registered path. The fix is correct routing and a
+git-ignored managed root, **not** weakening approval settings.
 
-- **Managed worktree root** — review worktrees use the **same** managed,
-  workspace-local root as the rest of orchestrated work — the `[project]
-  worktree_root` (default `.intent-cli/worktrees/`), e.g.
-  `.intent-cli/worktrees/review-<unit>` — **never** an arbitrary
-  `/tmp/...review...` path.
-- **Prohibited pattern** — a raw `/tmp/...` review worktree, and a
-  `rm -rf /tmp/... && git worktree add ...` cleanup chain, are **prohibited**
-  as the normal path. Reaching for this pattern is the signal to stop and
-  allocate under the managed root instead — not to ask the operator to
-  approve the `rm -rf`.
-- **Cleanup rule** — cleanup is `git worktree remove <managed-path>` for a
-  **registered, clean** worktree only (confirm via `git worktree list` and a
-  clean `git status` first).
+- **Managed worktree root** — the host-state role prepares each registered
+  review worktree under the **same** managed, workspace-local root as the rest
+  of orchestrated work — the `[project] worktree_root` (default
+  `.intent-cli/worktrees/`), which **must be git-ignored**, for example
+  `.intent-cli/worktrees/review-<unit>`. A sandboxed Codex reviewer receives
+  that prepared path and never runs `git worktree add`; if the delegation
+  instead supplies an ordinary role-work-root checkout such as
+  `/private/tmp/review-<unit>`, use it as a temporary checkout, not as a
+  registered worktree.
+- **Prohibited pattern** — a raw `/tmp/...` path presented as a registered
+  review worktree, a `rm -rf /tmp/... && git worktree add ...` cleanup chain, a
+  nested clone under `.intent-cli/worktrees/`, or asking a sandboxed Codex seat
+  to run `git worktree add`. A declared ordinary role-work-root checkout may
+  be used only when the delegation names it and the host-state role owns
+  cleanup; an unmanaged path is a signal to stop and route the repair, not to
+  ask for `rm -rf` approval.
+- **Cleanup rule** — the non-sandboxed host-state role performs cleanup with
+  `git worktree remove <managed-path>` for a **registered, clean** worktree
+  only (confirm via `git worktree list` and a clean `git status` first). A
+  sandboxed Codex reviewer reports completion or a blocker; it does not mutate
+  `.git` or delete the path itself.
 - **Unsafe/stale path rule** — a stale path that is not a registered git
   worktree, is outside the managed root, or is dirty/unsafe is **never** an
-  operator `rm -rf` approval prompt — it is a **structured blocker** agmsg
-  reply to the orchestrator (`status: blocked`) so the orchestrator can route
-  the repair, not something the reviewer resolves by force-deleting an
+  operator `rm -rf` approval prompt — it is a **structured blocker** reply to
+  the orchestrator (`status: blocked`) so the host-state role can prepare or
+  clean up the path, not something the reviewer resolves by force-deleting an
   unmanaged path.
 
 Review delegation example (orchestrator → review):
 
 ```json
-{"delegate":{"domain":"<domain>","execution_unit":"<unit>","target_repo":"<owner/repo>","pr":"<n>","review_cwd":"/review/<domain>","managed_worktree_policy":"required — allocate under [project] worktree_root (default .intent-cli/worktrees/), never /tmp","design_alignment_required":true,"destination_thread":"review@<domain>"}}
+{"delegate":{"domain":"<domain>","execution_unit":"<unit>","target_repo":"<owner/repo>","pr":"<n>","review_cwd":"/review/<domain>","managed_worktree_policy":"host-prepared registered path under git-ignored [project] worktree_root; sandbox-safe ordinary role-work-root fallback only when explicitly supplied; never an arbitrary /tmp review worktree","design_alignment_required":true,"destination_thread":"review@<domain>"}}
 ```
 
 A review `completed` reply must include design-alignment evidence:
@@ -2978,15 +3035,18 @@ First message — design → orchestrator (paste into the design thread):
 ```
 
 - **Autonomous publish** — if `intent-cli` reports the next slice
-  `issue-cut-ready` and all publish gates pass, the orchestrator creates/
-  publishes **one** GitHub issue itself via canonical intent-cli commands
-  (`issue publish-flow` / `automation issue-publish`) — it does **not** ask
-  design to do each step. At most one issue per wake; verify before delegating.
-- **Escalation boundary** — routine delegation (publish, delegate, CI wait,
-  review, closeout) stays orchestrator↔receivers. Return to **design** only for
-  human decisions (product/design clarification, release/credentials/security,
-  destructive actions, an unresolved blocker) using the structured escalation
-  message.
+  `issue-cut-ready` and all publish gates pass, the orchestrator routes **one**
+  bounded publish request to the recorded host-state role. That role performs
+  the canonical intent-cli commands (`issue publish-flow` /
+  `automation issue-publish`) from the host repository; a sandboxed Codex
+  orchestrator does **not** execute the write-bearing step itself. It does not
+  ask design to perform routine workflow transitions. At most one issue per
+  wake; verify the host-state result before delegating.
+- **Escalation boundary** — routine delegation (host-state publish routing,
+  delegate, CI wait, review, closeout) stays orchestrator↔receivers/host-state
+  role. Return to **design** only for human decisions (product/design
+  clarification, release/credentials/security, destructive actions, an
+  unresolved blocker) using the structured escalation message.
 - **Design inbox workflow** — the design thread is a loopless receiver and reads
   on demand; check the design inbox with `inbox.sh` to pick up escalations,
   especially when monitor delivery did not appear live or the design session
@@ -3166,8 +3226,9 @@ mechanism.
 - **Orchestrator idle despite a packet existing** — confirm the orchestrator
   received the design start/resume message (`inbox.sh`) and that `worker
   next-action` / `intent status` report an actionable item for **this**
-  domain/repo (not another visible domain). If issue-cut-ready and safe, the
-  orchestrator should publish one issue itself rather than wait.
+  domain/repo (not another visible domain). If issue-cut-ready and safe, route
+  one bounded publish request to the recorded host-state role rather than wait;
+  a sandboxed Codex orchestrator never performs that write-bearing step itself.
 - **`mode=monitor` but no live stream** — `delivery.sh status` `mode=monitor` is
   configuration only, not proof a Claude Code `Monitor` is attached. Verify the
   live-attachment success markers (`1 monitor` / `Monitor event`), check Windows

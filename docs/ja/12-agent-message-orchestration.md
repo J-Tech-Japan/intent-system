@@ -1070,15 +1070,20 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
 
 - **role-derived root。** role の checkout/worktree には境界付きの
   `--add-dir <role-work-root>` を 1 つ使い、その role の canonical report surface に必要な場合だけ
-  host routing root を追加します。delegation の前に orchestrator は workspace prerequisite をこの
-  記録済み write envelope と比較し、その外側にあるものを orchestrator の権限で準備します (G655)。
+  host routing root を追加します。role-work-root は ordinary file root であり、repository metadata を
+  書く権限ではありません。Codex は `.git` が宣言 root の内側にあっても `.git` に書けません。
+  したがって、non-sandboxed host-state role が delegation 前に registered worktree と host-state git
+  operation を準備します。orchestrator は workspace prerequisite を記録済み write envelope と比較し、
+  その外側にあるものを authorized host-state role 経由で準備します (G655)。
 - **実測した bounded invocation。** この invocation は **Codex v0.144.1 / macOS** で実測したものであり、
   未実測環境に対する universal な flag recipe ではありません。
 - **実測した自己更新 behavior。** Codex は自己更新して **「Please restart Codex」** を表示し、
   pane の shell へ exit することがあります。記録済み pane で agent を再起動して READY/ping を再実行します。
   これは wedge ではなく restart condition であり、回避のために envelope を広げてはいけません。
 - **実測した envelope asymmetry。** 宣言した root の外への write は拒否されましたが、外への read は拒否されませんでした。
-  これは明示的な security fact として扱い、read permission の保証と解釈してはいけません。
+  `.git` が宣言 root の内側にあっても `.git/index`、`.git/FETCH_HEAD`、worktree metadata への write は拒否され、
+  別の `--add-dir` を追加しても利用可能にはなりません。これらを明示的な security fact として扱い、repository
+  metadata の作業は non-sandboxed host-state role にルーティングします。
 - **post-start interaction (G636)。** **MyIntentHost** で **2026-08-07** に Codex の
   post-start interaction は観測されていません。したがって structured な
   `post_start_interaction` record は `status: unmeasured`、`observed: false`、prompt/answer/default safety
@@ -2058,9 +2063,18 @@ orchestrator は黙ってプロダクト/リリース/設計の author になっ
 - **design が所有** — intent shaping と clarification; ADR と設計判断; リリーススコープと
   バージョン選択; packet 内容と受け入れ基準（永続的な packet ファイル）。
 - **orchestrator が所有** — canonical な intent-cli/GitHub state の検査; **1 wake につき
-  既に authoring 済みの `issue-cut-ready` packet を 1 件だけ** publish; implementation/review
-  への委譲; CI/review の待機; canonical review surface 経由の approved PR の closeout;
+  既に authoring 済みの `issue-cut-ready` packet を 1 件だけ** recorded host-state route に
+  coordinate; implementation/review への委譲; CI/review の待機; publication、host-state push、
+  approved PR の closeout を non-sandboxed host-state role にルーティングして結果を検証;
   blocker と不足 packet を design に報告。
+
+**Host-state duty routing (Codex herdr-only)。** herdr が起動した Codex orchestrator は bounded な
+`--sandbox workspace-write --ask-for-approval never` recipe を使います。宣言 root の内側でも `.git` に
+write できません。host/review runtime または host-repo write envelope を持つ operator seat が
+`intent-cli issue publish-flow ... --write`、`intent-cli automation issue-publish --write`、host-state
+push、`intent-cli closeout pr ... --write` を所有します。Codex は bounded request を 1 件ルーティングし、
+返された JSON を待ち、intent-cli/GitHub の事実を再検証します。route が利用できなければ fail closed
+（sandbox を広げず、`.git` に書かず、routine workflow transition を design に依頼せず、clone を即興で作らない）です。
 
 必要な packet が不在・不完全、またはプロダクト/リリース/設計判断を要する場合、orchestrator は
 それを **でっち上げません** — 構造化された `packet-needed` メッセージを design に送り、design が
@@ -2140,11 +2154,11 @@ orchestrator がメッセージ駆動で動作する場合でも fallback/legacy
 - host レビュー準備状況を確認（`automation host-review-preflight`）。
 - GitHub の事実を直接検証: open PR、CI 結論、承認、マージ状態、closeout/label 状態。
 - 停滞ブロッカーと無返信の receiver を検知する。
-- **publish と delegate は SAME WAKE で行う（G524）。** この wake で next-slice issue を
-  公開した場合、存在を検証したうえで、その **同じ wake の中で** implementation
+- **publish route と delegate は SAME WAKE で行う（G524）。** この wake で ready な
+  next-slice issue を見つけたら、recorded host-state role に bounded な publish request を
+  1 件ルーティングし、その結果を検証したうえで **同じ wake の中で** implementation
   スレッドへ delegate する — delegate をスケジュールされていない「次の wake」に
-  先送りしてはいけない。他に何もそれをトリガーしないためです（フィールドトレースでは
-  4 slice にまたがり合計約 60 時間という、測定された中で最大の stall class でした）。
+  先送りしてはいけない。sandboxed Codex orchestrator は write-bearing host-state step を実行しません。
 - **1 wake あたりの上限は「receiver ごとに最大 1 件の delegation」であり、
   「最大 1 メッセージ」ではありません（G524）。** 1 回の wake に、publish とその
   同一 wake 内 delegation、停滞している receiver ごとに 1 通の repair メッセージ、
@@ -2226,12 +2240,13 @@ advisory `recipient_warning` を出力したうえで、その pane に report �
 ## next-slice の publish
 
 ルーチンな next-slice issue の publish は **orchestrator の責務** であり、オペレーターへの
-質問ではありません。intent-cli が候補を `issue-cut-ready` と報告し、すべての安全ゲートを
-通過したら、orchestrator はオペレーターに GitHub issue 作成を依頼して止まるのではなく、
-canonical な intent-cli コマンドで自分で公開します。**1 wake につき最大 1 件** で
-公開し、検証したうえで、**同じ wake の中で** その issue を implementation へ
-委譲します（G524）— publish と delegate は一緒に完了させ、delegate を
-スケジュールされていない次の wake に先送りしてはいけません。
+質問ではありません。orchestrator の coordination responsibility は、recorded host-state role に
+bounded な publish request をルーティングすることです。intent-cli が候補を `issue-cut-ready` と報告し、
+すべての安全ゲートを通過したら、その role が host repository の write envelope で canonical な
+intent-cli command を実行します。sandboxed Codex orchestrator 自身は write-bearing step を実行しません。
+**1 wake につき最大 1 件** で公開し、検証したうえで、**同じ wake の中で** その issue を implementation へ
+委譲します（G524）— publish と delegate は一緒に完了させ、delegate をスケジュールされていない次の wake
+に先送りしてはいけません。
 
 次の **すべて** が成り立つときのみ公開します:
 
@@ -2247,12 +2262,12 @@ canonical な intent-cli コマンドで自分で公開します。**1 wake に�
 依存の不一致、WIP 上限到達、host-sync ブロッカー、対象 repo/domain の曖昧さはすべて
 ブロッカーです。
 
-publish は canonical な surface のみ — `intent-cli issue publish-flow` と
-`intent-cli automation issue-publish` — を使い、生の `gh issue create` や
-`gh ... --add-label` は使いません。publish 後は intent-cli / GitHub（チャットではなく）で
-issue が期待どおりの body と `intent-target` label を持つこと、永続状態がそれを
-反映していることを検証し、**その同じ wake の中で** agmsg で実装を委譲します（G524）—
-公開した後で止まって将来の wake を待つことはしません。実装 receiver は依然として
+authorized host-state role は canonical な surface のみ — `intent-cli issue publish-flow` と
+`intent-cli automation issue-publish` — を使い、生の `gh issue create` や `gh ... --add-label` は
+使いません。publish 後は intent-cli / GitHub（チャットではなく）で host-state result が terminal であり、
+issue が期待どおりの body と `intent-target` label を持つこと、永続状態がそれを反映していることを検証し、
+**その同じ wake の中で** agmsg で実装を委譲します（G524）—公開した後で止まって将来の wake を待つことはしません。
+実装 receiver は依然として
 `intent-cli worker next-action` からターゲットを得ます（agmsg テキストからではありません）。
 
 ## end-of-wake チェック（G523/G524）
@@ -2418,53 +2433,64 @@ worktree metadata failure と retry loop は transcript 付きで **remote-herdr
 
 ## managed worktree のクリーンアップ
 
-オーケストレーション作業は実装・レビュー用の一時 worktree を作成します。ワークスペース内の
-**管理された allowlist 済みルート** の下に割り当て、`git worktree remove` でクリーンアップします
-— 任意の `/tmp/intent-review-...` パスを生の `rm -rf` で削除しては **いけません**。承認を無効化
-するのではなく安全なクリーンアップ設計が正しいデフォルトです: 破壊的な `rm -rf` 承認プロンプトは
-管理されていないワークスペースの症状です。
+オーケストレーション作業は実装・レビュー用の一時 workspace を作成します。non-sandboxed host-state role が
+ワークスペース内の managed worktree を登録し、`git worktree remove` でクリーンアップします。sandboxed
+Codex seat は宣言 root の内側でも `.git` に書けないため、`git worktree add` を実行しては **いけません**。
+任意の `/tmp` checkout を managed worktree と呼んだり、生の `rm -rf` で削除したりしません。delegation が
+unit-scoped role-work-root（例 `/private/tmp/<role>-<unit>`）を明示した場合だけ、それは registered ではない
+ordinary temporary checkout として使い、cleanup は host-state role が所有します。承認を無効化するのではなく
+safe routing を行うことが正しいデフォルトです。
 
-- **管理ルート** — `[project] worktree_root`（デフォルト `.intent-cli/worktrees/`、git-ignored）の
-  下に割り当てる。任意の `/tmp` パスではない。`git worktree add .intent-cli/worktrees/<role>-<unit>
-  <branch>` で role/unit ごとに 1 つ作成する。
-- **安全なクリーンアップ** — `git worktree remove` でのみ削除（dirty な worktree は拒否される）。
-  ターゲットが allowlist 済みルート内であること、登録済み git worktree（`git worktree list`）で
-  あること、clean であることを検証してから `git worktree prune`。
-- **クリーンアップを拒否する** — ターゲットが allowlist 済みルートの外、repo root / `$HOME` /
-  システムパス、登録されていない worktree、または uncommitted/untracked のユーザー作業がある
-  場合は停止して surface する。ユーザー作業を決して削除しない。
-- **承認ポリシー** — `approval_policy=never` / `danger-full-access` は安全なクリーンアップ設計の
-  **代替ではありません**。最小権限の承認をデフォルトに保ちます。目標は破壊的な `rm -rf` プロンプトを
-  抑制することではなく、そもそも必要としないことです。
+- **管理ルート** — non-sandboxed host-state role が repo/workspace-scoped な `[project] worktree_root`（デフォルト
+  `.intent-cli/worktrees/`）の下に registered worktree を割り当て、割り当て前に target repo の `.gitignore` に
+  exact managed root を **必ず** 記載します。sandboxed Codex seat は準備済みの registered path を受け取り、
+  `git worktree add` や managed root 内の nested clone を実行しません。managed root は allowlisted で予測可能で、
+  `git worktree remove` で削除可能です。任意の `/tmp/intent-review-...` ではありません。
+- **承認ポリシー** — `approval_policy=never` / `danger-full-access` は safe routing/cleanup design の **代替では
+  ありません**。最小権限をデフォルトにし、`.git` の作業は non-sandboxed host-state role にルーティングします。
+  必要なら delegation が明示した ordinary temporary checkout を使い、破壊的な `rm -rf` prompt を抑制しません。
+- **割り当て** — host-state role が `.intent-cli/worktrees/`（または設定済み `[project] worktree_root`）を target repo
+  `.gitignore` に追加してから `git worktree add .intent-cli/worktrees/<role>-<unit> <branch>` を実行します。
+  sandboxed Codex seat は delegation の準備済み path を使い、`.git` を書かず、nested clone を作りません。
+  sandbox-safe fallback は明示された role-work-root（例 `/private/tmp/<role>-<unit>`）の ordinary checkout だけです。
+- **安全なクリーンアップ** — registered worktree は host-state role が `git worktree remove` だけで削除します
+  （dirty なら拒否され、生の `rm -rf` は使いません）。sandboxed Codex seat は registered worktree を削除したり
+  `.git` を変更したりせず、cleanup/blocker を host-state role に報告します。target が allowlist 内であること、
+  `git worktree list` で登録を確認し、clean state を確認してから削除し、最後に `git worktree prune` を実行します。
+- **クリーンアップを拒否する** — allowlist root の外、repo root / `$HOME` / system path、未登録 worktree、または
+  uncommitted/untracked のユーザー作業が対象なら停止します。sandboxed seat に register、`.git` write、nested clone
+  を依頼された場合も host-state role にルーティングし、ユーザー作業を決して削除しません。
 
 ## review 委譲 — managed worktree と design alignment
 
 review の委譲は managed-worktree ポリシーと design-alignment のエビデンス要求を **あらかじめ**
 含んでいる必要があります — reviewer に発見させてはいけません。dogfooding では、reviewer が生の
 `/tmp/...review...` worktree を割り当て、Codex が破壊的な `rm -rf` の承認を正しく求めるという
-事例が見つかりました — これは **正しい** 安全動作ですが、**間違った** workflow です。修正は
+事例が見つかりました — これは **正しい** 安全動作ですが、**間違った** workflow です。sandboxed Codex
+reviewer には host-state role が registered path を準備します。修正は correct routing と git-ignored
 managed root であり、承認設定を弱めることでは **ありません**。
 
-- **managed worktree root** — review worktree は他のオーケストレーション作業と **同じ** managed・
-  workspace-local root を使います — `[project] worktree_root`（デフォルト `.intent-cli/worktrees/`）、
-  例: `.intent-cli/worktrees/review-<unit>` — 任意の `/tmp/...review...` パスは **決して** 使いません。
-- **禁止パターン** — 生の `/tmp/...` review worktree と `rm -rf /tmp/... && git worktree add ...`
-  のクリーンアップチェーンは、通常のパスとして **禁止** されます。このパターンに手が伸びたら、
-  それは停止して managed root の下に割り当て直す合図です — オペレーターに `rm -rf` の承認を
-  求める合図ではありません。
-- **クリーンアップルール** — クリーンアップは **登録済みで clean な** worktree に対してのみ
-  `git worktree remove <managed-path>` を使います（`git worktree list` と clean な `git status`
-  でまず確認する）。
-- **unsafe/stale パスのルール** — 登録済み git worktree ではない、managed root の外にある、
-  または dirty/unsafe な stale パスは **決して** オペレーターの `rm -rf` 承認プロンプトには
-  なりません — それは orchestrator への **structured blocker** agmsg 返信（`status: blocked`）
-  であり、orchestrator が repair としてルーティングできるようにします。reviewer が unmanaged な
-  パスを強制削除して解決するものではありません。
+- **managed worktree root** — host-state role が review の registered worktree を、他のオーケストレーション
+  作業と **同じ** managed・workspace-local root（`[project] worktree_root`、デフォルト `.intent-cli/worktrees/`）
+  の下に準備します。root は **必ず git-ignored** にし、例は `.intent-cli/worktrees/review-<unit>` です。
+  sandboxed Codex reviewer は準備済み path を受け取って `git worktree add` を実行しません。delegation が
+  `/private/tmp/review-<unit>` のような ordinary role-work-root checkout を明示した場合は temporary checkout
+  として使い、registered worktree にはしません。
+- **禁止パターン** — raw `/tmp/...` を registered review worktree として扱うこと、`rm -rf /tmp/... && git worktree add ...`
+  の cleanup chain、`.intent-cli/worktrees/` 内の nested clone、sandboxed Codex seat に `git worktree add` を頼むこと。
+  明示された ordinary role-work-root checkout は delegation が指定し、cleanup を host-state role が所有する場合だけ
+  使用します。unmanaged path に手が伸びたら停止して repair をルーティングし、`rm -rf` 承認を求めません。
+- **クリーンアップルール** — non-sandboxed host-state role が、`git worktree list` と clean な `git status` で確認した
+  **登録済みで clean な** worktree に対してのみ `git worktree remove <managed-path>` を使います。sandboxed Codex
+  reviewer は完了または blocker を報告し、自分で `.git` を変更したり path を削除したりしません。
+- **unsafe/stale パスのルール** — 登録済み git worktree ではない、managed root の外にある、または dirty/unsafe な stale
+  path は **決して** オペレーターの `rm -rf` 承認プロンプトにはなりません。orchestrator への **structured blocker**
+  返信（`status: blocked`）にして、host-state role が準備または cleanup を行えるようにします。
 
 review 委譲の例（orchestrator → review）:
 
 ```json
-{"delegate":{"domain":"<domain>","execution_unit":"<unit>","target_repo":"<owner/repo>","pr":"<n>","review_cwd":"/review/<domain>","managed_worktree_policy":"required — allocate under [project] worktree_root (default .intent-cli/worktrees/), never /tmp","design_alignment_required":true,"destination_thread":"review@<domain>"}}
+{"delegate":{"domain":"<domain>","execution_unit":"<unit>","target_repo":"<owner/repo>","pr":"<n>","review_cwd":"/review/<domain>","managed_worktree_policy":"host-prepared registered path under git-ignored [project] worktree_root; sandbox-safe ordinary role-work-root fallback only when explicitly supplied; never an arbitrary /tmp review worktree","design_alignment_required":true,"destination_thread":"review@<domain>"}}
 ```
 
 review の `completed` 返信は design-alignment のエビデンスを含む必要があります:
@@ -2622,12 +2648,14 @@ resume）します。その後 orchestrator がループを自律的に駆動し
 ```
 
 - **autonomous publish** — `intent-cli` が次のスライスを `issue-cut-ready` と報告し、すべての
-  publish ゲートが通れば、orchestrator は canonical な intent-cli コマンド（`issue publish-flow` /
-  `automation issue-publish`）で **1 つ** の GitHub issue を自分で作成・公開します — 各ステップを
-  design に頼みません。1 wake につき最大 1 件。委譲前に検証します。
-- **escalation boundary** — ルーチンな委譲（publish、delegate、CI 待ち、review、closeout）は
-  orchestrator↔receivers に留まります。**design** に戻すのは人間が必要な判断のときだけ（product/設計
-  clarification、release/認証情報/セキュリティ、破壊的操作、未解決ブロッカー）。構造化された
+  publish ゲートが通れば、orchestrator は recorded host-state role に **1 件** の bounded publish
+  request をルーティングします。その role が host repository から canonical な intent-cli command
+  （`issue publish-flow` / `automation issue-publish`）を実行し、sandboxed Codex orchestrator 自身は
+  write-bearing step を実行しません。routine workflow transition を design に頼みません。1 wake につき
+  最大 1 件。委譲前に host-state result を検証します。
+- **escalation boundary** — ルーチンな委譲（host-state publish routing、delegate、CI 待ち、review、closeout）は
+  orchestrator↔receivers/host-state role に留まります。**design** に戻すのは人間が必要な判断のときだけ
+  （product/設計 clarification、release/認証情報/セキュリティ、破壊的操作、未解決ブロッカー）。構造化された
   エスカレーションメッセージを使います。
 - **design inbox workflow** — design スレッドは loopless receiver でオンデマンドに読みます。
   エスカレーションを拾うには `inbox.sh` で design inbox を確認します — 特に monitor delivery が

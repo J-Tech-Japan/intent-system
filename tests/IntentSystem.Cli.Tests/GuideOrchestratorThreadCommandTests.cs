@@ -1080,7 +1080,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("git worktree remove <managed-path>", output, StringComparison.Ordinal);
         Assert.Contains("REGISTERED, CLEAN worktree only", output, StringComparison.Ordinal);
         // Unsafe/stale paths become a structured blocker reply, never an operator approval prompt.
-        Assert.Contains("STRUCTURED BLOCKER agmsg reply to", output, StringComparison.Ordinal);
+        Assert.Contains("STRUCTURED BLOCKER reply to", output, StringComparison.Ordinal);
         Assert.Contains("NEVER an operator `rm -rf` approval prompt", output, StringComparison.Ordinal);
         // Delegation example carries the policy + design-alignment requirement.
         Assert.Contains("\"managed_worktree_policy\":", output, StringComparison.Ordinal);
@@ -1556,10 +1556,11 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("\"domain\":\"intent-cli\"", output, StringComparison.Ordinal);
         Assert.Contains("\"target_repo\":\"J-Tech-Japan/intent-system\"", output, StringComparison.Ordinal);
         Assert.Contains("one action per wake", output, StringComparison.Ordinal);
-        // Autonomous publish: orchestrator publishes one issue-cut-ready issue itself.
+        // Autonomous publish: the orchestrator routes the write-bearing step to the recorded host-state role.
         Assert.Contains("**autonomous publish**", output, StringComparison.Ordinal);
-        Assert.Contains("creates/publishes ONE GitHub issue ITSELF", output, StringComparison.Ordinal);
-        Assert.Contains("does NOT ask design to do each step", output, StringComparison.Ordinal);
+        Assert.Contains("routes ONE bounded publish request to the recorded host-state role", output, StringComparison.Ordinal);
+        Assert.Contains("does NOT execute the write-bearing step itself", output, StringComparison.Ordinal);
+        Assert.Contains("does NOT ask design to perform routine workflow transitions", output, StringComparison.Ordinal);
         // Human-decision escalation vs routine delegation.
         Assert.Contains("**escalation boundary**", output, StringComparison.Ordinal);
         Assert.Contains("Return to DESIGN only for human decisions", output, StringComparison.Ordinal);
@@ -2106,6 +2107,9 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("recovery never changes a kind unattended", output, StringComparison.Ordinal);
         Assert.Contains("#### Codex (measured recipe, G647)", output, StringComparison.Ordinal);
         Assert.Contains("--sandbox workspace-write --ask-for-approval never --add-dir <role-work-root>", output, StringComparison.Ordinal);
+        Assert.Contains("Codex cannot write `.git` even when `.git` is inside a declared root", output, StringComparison.Ordinal);
+        Assert.Contains("CODEX SANDBOX DUTY ROUTE", output, StringComparison.Ordinal);
+        Assert.Contains("Route issue publication, host-state pushes, and approved-PR closeout", output, StringComparison.Ordinal);
         Assert.Contains("Please restart Codex", output, StringComparison.Ordinal);
         Assert.Contains("Writes outside declared roots were denied while reads outside declared roots were not", output, StringComparison.Ordinal);
         Assert.Contains(
@@ -2129,6 +2133,9 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("codex", recipes.GetProperty("recorded_kinds").EnumerateArray().Select(item => item.GetString()));
         var codexRecipe = recipes.GetProperty("codex_recipe");
         Assert.Contains("--sandbox workspace-write", codexRecipe.GetProperty("invocation").GetString(), StringComparison.Ordinal);
+        Assert.Contains("`.git` even when `.git` is inside a declared root", codexRecipe.GetProperty("role_derived_roots").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Writes to `.git` are also denied", codexRecipe.GetProperty("denial_semantics").GetString(), StringComparison.Ordinal);
+        Assert.Contains("CODEX SANDBOX DUTY ROUTE", document.RootElement.GetProperty("role_boundary").GetProperty("host_state_duty_routing").GetString(), StringComparison.Ordinal);
         var codexPostStart = codexRecipe.GetProperty("post_start_interaction");
         Assert.Equal("unmeasured", codexPostStart.GetProperty("status").GetString());
         Assert.False(codexPostStart.GetProperty("observed").GetBoolean());
@@ -2146,6 +2153,53 @@ public sealed class GuideOrchestratorThreadCommandTests
             Assert.Equal("MyIntentHost", measurement.GetProperty("host").GetString());
             Assert.Equal("2026-08-07", measurement.GetProperty("date").GetString());
         });
+    }
+
+    [Fact]
+    public void Execute_HerdrOnly_CodexDutyAndWorktreeRoutesArePerformable_G714()
+    {
+        using var workspace = new RecordedGuideWorkspace("intent-cli", "intent-cli-dev", SessionLayerMode.HerdrOnly);
+        var args = new[]
+        {
+            "--domain", "intent-cli", "--team", "intent-cli-dev", "--target-repo", "owner/repo",
+            "--agent", "codex", "--orchestrator-agent", "codex",
+        };
+        var markdown = RunMarkdown(workspace.Context, args);
+
+        var roleBoundary = SectionFrom(markdown, "## Role boundary");
+        Assert.Contains("### Host-state duty routing", roleBoundary, StringComparison.Ordinal);
+        Assert.Contains("CODEX SANDBOX DUTY ROUTE", roleBoundary, StringComparison.Ordinal);
+        Assert.Contains("non-sandboxed host-state role", roleBoundary, StringComparison.Ordinal);
+        Assert.Contains("sandboxed Codex seat does not perform the write-bearing host-state step itself", roleBoundary, StringComparison.OrdinalIgnoreCase);
+
+        var worktree = SectionFrom(markdown, "## Managed worktree cleanup");
+        Assert.Contains("exact managed root MUST be listed in the target repo's `.gitignore`", worktree, StringComparison.Ordinal);
+        Assert.Contains("sandboxed Codex seat MUST NOT run `git worktree add`", worktree, StringComparison.Ordinal);
+        Assert.Contains("ordinary temporary checkout", worktree, StringComparison.Ordinal);
+        Assert.Contains("/private/tmp/<role>-<unit>", worktree, StringComparison.Ordinal);
+
+        var review = SectionFrom(markdown, "## Review delegation — managed worktrees and design alignment");
+        Assert.Contains("host-state role prepares each registered review worktree", review, StringComparison.Ordinal);
+        Assert.Contains("which MUST be git-ignored", review, StringComparison.Ordinal);
+        Assert.Contains("ordinary role-work-root checkout such as `/private/tmp/review-<unit>`", review, StringComparison.Ordinal);
+        Assert.Contains("not as a registered worktree", review, StringComparison.Ordinal);
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, GuideOrchestratorThreadCommand.Execute(
+            workspace.Context,
+            args.Concat(new[] { "--format", "json" }).ToArray(),
+            writer));
+        using var document = JsonDocument.Parse(writer.ToString());
+        var boundary = document.RootElement.GetProperty("role_boundary");
+        Assert.Contains("CODEX SANDBOX DUTY ROUTE", boundary.GetProperty("host_state_duty_routing").GetString(), StringComparison.Ordinal);
+        var worktreeJson = document.RootElement.GetProperty("worktree_management");
+        Assert.Contains("MUST be listed in the target repo's `.gitignore`", worktreeJson.GetProperty("managed_root").GetString(), StringComparison.Ordinal);
+        Assert.Contains("MUST NOT run `git worktree add`", worktreeJson.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains(worktreeJson.GetProperty("allocation").EnumerateArray().Select(item => item.GetString()),
+            item => item is not null && item.Contains("/private/tmp/<role>-<unit>", StringComparison.Ordinal));
+        var reviewJson = document.RootElement.GetProperty("review_delegation_contract");
+        Assert.Contains("host-state role prepares", reviewJson.GetProperty("managed_worktree_root").GetString(), StringComparison.Ordinal);
+        Assert.Contains("ordinary role-work-root checkout", reviewJson.GetProperty("managed_worktree_root").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
