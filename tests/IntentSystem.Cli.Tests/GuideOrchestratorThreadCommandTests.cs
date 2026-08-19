@@ -2107,7 +2107,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("recovery never changes a kind unattended", output, StringComparison.Ordinal);
         Assert.Contains("#### Codex (measured recipe, G647)", output, StringComparison.Ordinal);
         Assert.Contains("--sandbox workspace-write --ask-for-approval never --add-dir <role-work-root>", output, StringComparison.Ordinal);
-        Assert.Contains("Codex cannot write `.git` even when `.git` is inside a declared root", output, StringComparison.Ordinal);
+        Assert.Contains("current recipe deliberately does not declare `<repo>/.git`", output, StringComparison.Ordinal);
+        Assert.Contains("E-versus-F probe", output, StringComparison.Ordinal);
         Assert.Contains("CODEX SANDBOX DUTY ROUTE", output, StringComparison.Ordinal);
         Assert.Contains("Route issue publication, host-state pushes, and approved-PR closeout", output, StringComparison.Ordinal);
         Assert.Contains("Please restart Codex", output, StringComparison.Ordinal);
@@ -2133,8 +2134,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("codex", recipes.GetProperty("recorded_kinds").EnumerateArray().Select(item => item.GetString()));
         var codexRecipe = recipes.GetProperty("codex_recipe");
         Assert.Contains("--sandbox workspace-write", codexRecipe.GetProperty("invocation").GetString(), StringComparison.Ordinal);
-        Assert.Contains("`.git` even when `.git` is inside a declared root", codexRecipe.GetProperty("role_derived_roots").GetString(), StringComparison.Ordinal);
-        Assert.Contains("Writes to `.git` are also denied", codexRecipe.GetProperty("denial_semantics").GetString(), StringComparison.Ordinal);
+        Assert.Contains("current recipe deliberately does not declare `<repo>/.git`", codexRecipe.GetProperty("role_derived_roots").GetString(), StringComparison.Ordinal);
+        Assert.Contains("`.git` is not writable unless `<repo>/.git` is itself a declared root", codexRecipe.GetProperty("denial_semantics").GetString(), StringComparison.Ordinal);
         Assert.Contains("CODEX SANDBOX DUTY ROUTE", document.RootElement.GetProperty("role_boundary").GetProperty("host_state_duty_routing").GetString(), StringComparison.Ordinal);
         var codexPostStart = codexRecipe.GetProperty("post_start_interaction");
         Assert.Equal("unmeasured", codexPostStart.GetProperty("status").GetString());
@@ -2147,16 +2148,29 @@ public sealed class GuideOrchestratorThreadCommandTests
             codexPostStart.GetProperty("absence_reason").GetString(),
             StringComparison.Ordinal);
         var codexMeasurements = codexRecipe.GetProperty("measurements").EnumerateArray().ToArray();
-        Assert.Equal(3, codexMeasurements.Length);
-        Assert.All(codexMeasurements, measurement =>
+        Assert.Equal(5, codexMeasurements.Length);
+        Assert.All(codexMeasurements.Take(3), measurement =>
         {
             Assert.Equal("MyIntentHost", measurement.GetProperty("host").GetString());
             Assert.Equal("2026-08-07", measurement.GetProperty("date").GetString());
         });
+        var probeMeasurements = codexMeasurements.Skip(3).ToArray();
+        Assert.Equal(2, probeMeasurements.Length);
+        Assert.All(probeMeasurements, measurement =>
+        {
+            Assert.Equal("design host", measurement.GetProperty("host").GetString());
+            Assert.Equal("2026-08-19", measurement.GetProperty("date").GetString());
+            Assert.Equal("codex-cli 0.147.0", measurement.GetProperty("version").GetString());
+            Assert.Contains("E versus F", measurement.GetProperty("fact").GetString(), StringComparison.Ordinal);
+        });
+        Assert.Contains(probeMeasurements, measurement =>
+            measurement.GetProperty("observation").GetString()!.Contains("denied", StringComparison.Ordinal));
+        Assert.Contains(probeMeasurements, measurement =>
+            measurement.GetProperty("observation").GetString()!.Contains("exited 0", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Execute_HerdrOnly_CodexDutyAndWorktreeRoutesArePerformable_G714()
+    public void Execute_HerdrOnly_CodexDutyAndWorktreeRoutesArePerformable_G716()
     {
         using var workspace = new RecordedGuideWorkspace("intent-cli", "intent-cli-dev", SessionLayerMode.HerdrOnly);
         var args = new[]
@@ -2170,6 +2184,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("### Host-state duty routing", roleBoundary, StringComparison.Ordinal);
         Assert.Contains("CODEX SANDBOX DUTY ROUTE", roleBoundary, StringComparison.Ordinal);
         Assert.Contains("non-sandboxed host-state role", roleBoundary, StringComparison.Ordinal);
+        Assert.Contains("We weighed both legitimate routes", roleBoundary, StringComparison.Ordinal);
+        Assert.Contains("least privilege", roleBoundary, StringComparison.Ordinal);
         Assert.Contains("sandboxed Codex seat does not perform the write-bearing host-state step itself", roleBoundary, StringComparison.OrdinalIgnoreCase);
 
         var worktree = SectionFrom(markdown, "## Managed worktree cleanup");

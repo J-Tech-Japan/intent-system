@@ -189,6 +189,9 @@ internal static class AgentLaunchRecipeRegistry
     private const string Measured = "measured";
     private const string MeasuredHost = "MyIntentHost";
     private const string MeasuredDate = "2026-08-07";
+    private const string MeasuredProbeHost = "design host";
+    private const string MeasuredProbeDate = "2026-08-19";
+    private const string MeasuredProbeVersion = "codex-cli 0.147.0";
     private const string MeasuredPlatform = "macOS";
 
     private static readonly IReadOnlyDictionary<string, AgentModelFlagGrammar> ModelFlagGrammars =
@@ -313,9 +316,14 @@ internal static class AgentLaunchRecipeRegistry
                 RoleDerivedRoots =
                     "Use one bounded --add-dir <role-work-root> for the role checkout/worktree; add the host "
                     + "routing root only for a role whose canonical report surface needs it. The role-work-root is the "
-                    + "seat's ordinary-file root, not permission to write repository metadata: Codex cannot write "
-                    + "`.git` even when `.git` is inside a declared root. A non-sandboxed host-state role must therefore "
-                    + "prepare registered worktrees and perform host-state git operations before delegation. Before "
+                    + "seat's ordinary-file root, not a blanket repository-metadata grant: the current recipe deliberately "
+                    + "does not declare `<repo>/.git`. A live E-versus-F probe on 2026-08-19 (Codex CLI 0.147.0/macOS) "
+                    + "showed `git -C work fetch origin` denied with `seatcwd, work` and succeeding with the exact "
+                    + "`work/.git` root. We weighed adding that root against retaining the non-sandboxed host-state route "
+                    + "and keep the latter for this recipe: it preserves least privilege, while `git worktree add` under "
+                    + "the corrected flags remains unmeasured. This is a routing choice, not a claim that `.git` can never "
+                    + "be granted. The non-sandboxed host-state role therefore prepares registered worktrees and performs "
+                    + "host-state git operations before delegation. Before "
                     + "delegation, the orchestrator compares workspace prerequisites with this recorded write envelope "
                     + "and prepares anything outside it under orchestrator authority via the authorized host-state role (G655).",
                 ContinuationBound =
@@ -383,11 +391,14 @@ internal static class AgentLaunchRecipeRegistry
                     + "do not replace the bounded invocation with a guessed --yolo or --allow-all-paths equivalent.",
                 DenialSemantics =
                     "Measured envelope asymmetry: writes outside declared roots are denied, while reads outside "
-                    + "declared roots are not denied. Writes to `.git` are also denied even when `.git` is inside a "
-                    + "declared root (for example `.git/index`, `.git/FETCH_HEAD`, and worktree metadata); adding another "
-                    + "`--add-dir` does not make those operations available. Treat both asymmetries as explicit security "
-                    + "facts, not as permission guarantees, and route repository-metadata work to the non-sandboxed "
-                    + "host-state role.",
+                    + "declared roots are not denied. The narrower repository-metadata rule held in both independent "
+                    + "measurements: `.git` is not writable unless `<repo>/.git` is itself a declared root. In live "
+                    + "E versus F, `git -C work fetch origin` was denied with `seatcwd, work` because `.git/FETCH_HEAD` "
+                    + "was outside the declared roots, then exited 0 and wrote `FETCH_HEAD` when `work/.git` was declared; "
+                    + "the exact `.git` declaration was the only variable. This does not establish permission for "
+                    + "unmeasured operations such as `git worktree add`. Treat both asymmetries as explicit security "
+                    + "facts, not as permission guarantees, and keep the current recipe's repository-metadata work on "
+                    + "the non-sandboxed host-state route.",
                 Recovery =
                     "Codex may self-update, print 'Please restart Codex', and exit to the pane's shell. Restart the "
                     + "agent in the recorded pane and re-run the READY/ping checks; classify this as a restart "
@@ -427,6 +438,30 @@ internal static class AgentLaunchRecipeRegistry
                         Host = MeasuredHost,
                         Date = MeasuredDate,
                         Version = "Codex v0.144.1",
+                        Platform = MeasuredPlatform,
+                    },
+                    new AgentLaunchRecipeMeasurement
+                    {
+                        Status = Measured,
+                        Fact = "E versus F: repository metadata root absent",
+                        Observation =
+                            "From cwd `seatcwd`, `git -C work fetch origin` with declared roots `seatcwd, work` was denied "
+                            + "(`cannot open '.git/FETCH_HEAD'`).",
+                        Host = MeasuredProbeHost,
+                        Date = MeasuredProbeDate,
+                        Version = MeasuredProbeVersion,
+                        Platform = MeasuredPlatform,
+                    },
+                    new AgentLaunchRecipeMeasurement
+                    {
+                        Status = Measured,
+                        Fact = "E versus F: exact repository metadata root declared",
+                        Observation =
+                            "The same `git -C work fetch origin` with declared roots `seatcwd, work, work/.git` exited 0 "
+                            + "and wrote `FETCH_HEAD`; declaring `work/.git` was the only changed variable.",
+                        Host = MeasuredProbeHost,
+                        Date = MeasuredProbeDate,
+                        Version = MeasuredProbeVersion,
                         Platform = MeasuredPlatform,
                     },
                 ],
