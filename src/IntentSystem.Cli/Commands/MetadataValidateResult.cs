@@ -70,6 +70,7 @@ internal static class MetadataValidateConstants
         public const string GithubBodyMissing = "github-body.missing";
         public const string ReviewContextMissing = "review-context.missing";
         public const string PublishYamlUnparseable = "publish.yaml.unparseable";
+        public const string RunsLogUnparseable = "runs.jsonl.unparseable";
         public const string QueueStateMissing = "queue-state.missing";
         public const string QueueStateUnparseable = "queue-state.unparseable";
         public const string ImplementationFileMissing = "implementation.file.missing";
@@ -87,6 +88,11 @@ internal static class MetadataValidateConstants
         public const string CompletedMissingClosure = "consistency.queue.completed.missing_closure";
         public const string PacketQueueDependencyMismatch = "consistency.packet-queue.dependency.mismatch";
         public const string QueueEntryMissing = "consistency.queue.entry.missing";
+
+        // Backward-compatible reading diagnostics.
+        public const string PublishLegacyIssueIdentity = "compatibility.publish.legacy_issue_identity";
+        public const string QueueLegacyLinkedPrUrl = "compatibility.queue.legacy_linked_pr_url";
+        public const string RunsCloseoutEvidence = "compatibility.runs.closeout_evidence";
 
         // Label-policy warnings.
         public const string LabelPolicyMisplacedPrCreated = "label-policy.misplaced.intent-pr-created";

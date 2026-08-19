@@ -101,6 +101,7 @@ internal static class MetadataValidateCommand
             ImplementationMarkdown = ReadIfExists(Path.Combine(unitDir, "implementation.md")),
             PublishYaml = ReadIfExists(Path.Combine(unitDir, "publish.yaml")),
             QueueStateJson = ReadIfExists(queueStatePath),
+            RunsJsonl = ReadIfExists(Path.Combine(rootPath, ".intent-cli", "runs.jsonl")),
         };
     }
 
