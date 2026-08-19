@@ -1246,9 +1246,15 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
 - **Role-derived roots.** Use one bounded `--add-dir <role-work-root>` for the
   role checkout/worktree; add the host routing root only when that role's
   canonical report surface needs it. The role-work-root is an ordinary-file
-  root, not permission to write repository metadata: Codex cannot write `.git`
-  even when `.git` is inside a declared root. A non-sandboxed host-state role
-  therefore prepares registered worktrees and performs host-state git
+  root, not a blanket repository-metadata grant: the current recipe deliberately
+  does not declare `<repo>/.git`. A live E-versus-F probe on 2026-08-19 (Codex
+  CLI 0.147.0/macOS) showed `git -C work fetch origin` denied with
+  `seatcwd, work` and succeeding with the exact `work/.git` root. We weighed
+  adding that root against retaining the non-sandboxed host-state route and keep
+  the latter for this recipe: it preserves least privilege, while `git worktree
+  add` under the corrected flags remains unmeasured. This is a routing choice,
+  not a claim that `.git` can never be granted. The non-sandboxed host-state
+  role therefore prepares registered worktrees and performs host-state git
   operations before delegation. The orchestrator compares workspace
   prerequisites with this recorded write envelope and prepares anything
   outside it under orchestrator authority via that authorized host-state role
@@ -1261,11 +1267,16 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
   recorded pane and re-run READY/ping; this is a restart condition, not a
   wedge, and never a reason to widen the envelope.
 - **Measured envelope asymmetry.** Writes outside declared roots were denied,
-  while reads outside declared roots were not denied. Writes to `.git` are also
-  denied even when `.git` is inside a declared root (for example `.git/index`,
-  `.git/FETCH_HEAD`, and worktree metadata); another `--add-dir` does not make
-  those operations available. Treat these as explicit security facts and route
-  repository-metadata work to the non-sandboxed host-state role.
+  while reads outside declared roots were not denied. The narrower
+  repository-metadata rule held in both independent measurements: `.git` is not
+  writable unless `<repo>/.git` is itself a declared root. In live E versus F,
+  `git -C work fetch origin` was denied with `seatcwd, work` because
+  `.git/FETCH_HEAD` was outside the declared roots, then exited 0 and wrote
+  `FETCH_HEAD` when `work/.git` was declared; the exact `.git` declaration was
+  the only variable. This does not establish permission for unmeasured
+  operations such as `git worktree add`. Treat these as explicit security facts,
+  not permission guarantees, and keep the current recipe's repository-metadata
+  work on the non-sandboxed host-state route.
 - **Post-start interaction (G636).** No Codex post-start interaction was
   observed on **MyIntentHost** on **2026-08-07**. The structured
   `post_start_interaction` record therefore carries `status: unmeasured`,
@@ -1437,9 +1448,12 @@ measured facts are: the bounded invocation uses workspace-write, never-ask
 approval, and role-derived roots; self-update can print **“Please restart
 Codex”** and leave the pane at a shell (restart and re-run READY/ping; this is
 not a wedge); and writes outside declared roots are denied while reads outside
-them are not. The rendered and structured measurement entries carry
-`host: MyIntentHost` and `date: 2026-08-07` for each fact. Cursor and opencode
-have no measured entry and remain placeholders by name only.
+them are not. A live follow-up on the **design host**, **2026-08-19**, **codex-cli
+0.147.0 / macOS**, supplies the E-versus-F pair: the same `git -C work fetch
+origin` is denied with `seatcwd, work` and succeeds with `seatcwd, work,
+work/.git`, writing `FETCH_HEAD`. The rendered and structured measurement
+entries carry the corresponding host/date/version provenance. Cursor and
+opencode have no measured entry and remain placeholders by name only.
 
 > **Reachability discipline (G650).** Source presence is not reachability:
 > record that this G647 guidance is reachable only after rendering the
@@ -2370,7 +2384,14 @@ design author.
 
 **Host-state duty routing (Codex herdr-only).** A herdr-started Codex
 orchestrator uses the bounded `--sandbox workspace-write --ask-for-approval
-never` recipe. It cannot write `.git` even inside a declared root. The
+never` recipe, which deliberately does not declare `<repo>/.git`. A live
+2026-08-19 E-versus-F probe on Codex CLI 0.147.0/macOS showed
+`git -C work fetch origin` denied with `seatcwd, work` and succeeding with the
+exact `work/.git` root. We weighed both legitimate routes—declaring
+`<repo>/.git` for the seat or retaining non-sandboxed host-state routing—and
+keep the latter for this recipe because it preserves least privilege while
+`git worktree add` under the corrected flags remains unmeasured. This is an
+explicit routing choice, not a claim that `.git` can never be granted. The
 non-sandboxed host/review runtime or operator seat with the host-repo write
 envelope owns `intent-cli issue publish-flow ... --write`,
 `intent-cli automation issue-publish --write`, host-state pushes, and
@@ -2781,9 +2802,10 @@ to the **MyIntentHost measurement on 2026-08-07**.
 Orchestrated work creates temporary workspaces for implementation and review.
 A non-sandboxed host-state role registers managed worktrees under the workspace
 and cleans them up with `git worktree remove`. A sandboxed Codex seat **must not**
-run `git worktree add` because it cannot write `.git` even inside a declared
-root. Do not call an arbitrary `/tmp` checkout a managed worktree or delete it
-with raw `rm -rf`; when a delegation explicitly supplies a unit-scoped
+run `git worktree add` under the current recipe: the repository's `.git` root is
+not declared, and the operation is unmeasured under the corrected flags;
+registered worktree creation remains host-state duty. Do not call an arbitrary
+`/tmp` checkout a managed worktree or delete it with raw `rm -rf`; when a delegation explicitly supplies a unit-scoped
 role-work-root (for example `/private/tmp/<role>-<unit>`), that is an ordinary
 temporary checkout and the host-state role owns cleanup. Safe routing, not
 disabling approvals, is the right default.

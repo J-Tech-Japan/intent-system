@@ -1070,20 +1070,27 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
 
 - **role-derived root。** role の checkout/worktree には境界付きの
   `--add-dir <role-work-root>` を 1 つ使い、その role の canonical report surface に必要な場合だけ
-  host routing root を追加します。role-work-root は ordinary file root であり、repository metadata を
-  書く権限ではありません。Codex は `.git` が宣言 root の内側にあっても `.git` に書けません。
-  したがって、non-sandboxed host-state role が delegation 前に registered worktree と host-state git
-  operation を準備します。orchestrator は workspace prerequisite を記録済み write envelope と比較し、
-  その外側にあるものを authorized host-state role 経由で準備します (G655)。
+  host routing root を追加します。role-work-root は ordinary file root であり、repository metadata 全体への
+  grant ではありません。current recipe は意図的に `<repo>/.git` を宣言しません。2026-08-19 の live
+  E-versus-F probe（Codex CLI 0.147.0/macOS）は、`seatcwd, work` では `git -C work fetch origin` が拒否され、
+  正確な `work/.git` root を加えると成功することを示しました。この root を追加する route と、
+  non-sandboxed host-state route を維持する route の両方を比較し、この recipe では least privilege を保つ後者を
+  選びます。corrected flags での `git worktree add` は未測定です。これは `.git` を決して grant できないという
+  主張ではなく、routing の選択です。したがって non-sandboxed host-state role が delegation 前に registered
+  worktree と host-state git operation を準備します。orchestrator は workspace prerequisite を記録済み write
+  envelope と比較し、その外側にあるものを authorized host-state role 経由で準備します (G655)。
 - **実測した bounded invocation。** この invocation は **Codex v0.144.1 / macOS** で実測したものであり、
   未実測環境に対する universal な flag recipe ではありません。
 - **実測した自己更新 behavior。** Codex は自己更新して **「Please restart Codex」** を表示し、
   pane の shell へ exit することがあります。記録済み pane で agent を再起動して READY/ping を再実行します。
   これは wedge ではなく restart condition であり、回避のために envelope を広げてはいけません。
 - **実測した envelope asymmetry。** 宣言した root の外への write は拒否されましたが、外への read は拒否されませんでした。
-  `.git` が宣言 root の内側にあっても `.git/index`、`.git/FETCH_HEAD`、worktree metadata への write は拒否され、
-  別の `--add-dir` を追加しても利用可能にはなりません。これらを明示的な security fact として扱い、repository
-  metadata の作業は non-sandboxed host-state role にルーティングします。
+  2 つの独立した測定で共通した狭い repository-metadata rule は、`.git` は `<repo>/.git` 自体が宣言 root でない限り
+  writable ではない、というものです。live E versus F では、`seatcwd, work` の `git -C work fetch origin` は
+  `.git/FETCH_HEAD` が宣言外なので拒否され、`work/.git` を宣言すると exit 0 で `FETCH_HEAD` が書かれました。変数は
+  正確な `.git` declaration だけです。corrected flags での未測定 operation（`git worktree add` など）の permission
+  までは示しません。これらを明示的な security fact として扱い、current recipe の repository-metadata work は
+  non-sandboxed host-state route に残します。
 - **post-start interaction (G636)。** **MyIntentHost** で **2026-08-07** に Codex の
   post-start interaction は観測されていません。したがって structured な
   `post_start_interaction` record は `status: unmeasured`、`observed: false`、prompt/answer/default safety
@@ -1233,11 +1240,13 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
 ```
 
 **MyIntentHost で 2026-08-07 に実測した Codex v0.144.1 / macOS** の fact は、workspace-write・never-ask
-approval・role-derived root の bounded invocation、自己更新が **「Please restart Codex」** を表示して pane を
-shell に残す挙動（再起動と READY/ping を行い、wedge とは扱わない）、宣言 root 外の write は拒否される一方で
-read は拒否されないという asymmetry です。rendered / structured の各 measurement には
-`host: MyIntentHost` と `date: 2026-08-07` を付けます。Cursor と opencode は実測 entry がなく、名前だけの
-placeholder に留めます。
+  approval・role-derived root の bounded invocation、自己更新が **「Please restart Codex」** を表示して pane を
+  shell に残す挙動（再起動と READY/ping を行い、wedge とは扱わない）、宣言 root 外の write は拒否される一方で
+  read は拒否されないという asymmetry です。rendered / structured の各 measurement には
+  `host: MyIntentHost` と `date: 2026-08-07` を付けます。さらに **design host で 2026-08-19 に実測した
+  codex-cli 0.147.0 / macOS** の E-versus-F pair は、同じ `git -C work fetch origin` が `seatcwd, work` では拒否され、
+  `seatcwd, work, work/.git` では成功して `FETCH_HEAD` を書いたことを示します。Cursor と opencode は実測 entry がなく、
+  名前だけの placeholder に留めます。
 
 > **Reachability discipline (G650)。** source に存在することは reachability ではありません。
 > この G647 guidance が到達可能だと記録するのは、実際に role が動かす build で、記録済みの
@@ -2069,8 +2078,12 @@ orchestrator は黙ってプロダクト/リリース/設計の author になっ
   blocker と不足 packet を design に報告。
 
 **Host-state duty routing (Codex herdr-only)。** herdr が起動した Codex orchestrator は bounded な
-`--sandbox workspace-write --ask-for-approval never` recipe を使います。宣言 root の内側でも `.git` に
-write できません。host/review runtime または host-repo write envelope を持つ operator seat が
+`--sandbox workspace-write --ask-for-approval never` recipe を使い、current recipe では `<repo>/.git` を宣言しません。
+2026-08-19 の live E-versus-F probe（Codex CLI 0.147.0/macOS）は、`seatcwd, work` では `git -C work fetch origin` が
+拒否され、正確な `work/.git` root を宣言すると成功することを示しました。seat に `<repo>/.git` を宣言する route と
+non-sandboxed host-state routing を維持する route の両方を比較し、corrected flags での `git worktree add` が未測定である
+こと、least privilege を保つことから、この recipe では後者を選びます。これは `.git` を決して grant できないという
+主張ではありません。host/review runtime または host-repo write envelope を持つ operator seat が
 `intent-cli issue publish-flow ... --write`、`intent-cli automation issue-publish --write`、host-state
 push、`intent-cli closeout pr ... --write` を所有します。Codex は bounded request を 1 件ルーティングし、
 返された JSON を待ち、intent-cli/GitHub の事実を再検証します。route が利用できなければ fail closed
@@ -2434,8 +2447,9 @@ worktree metadata failure と retry loop は transcript 付きで **remote-herdr
 ## managed worktree のクリーンアップ
 
 オーケストレーション作業は実装・レビュー用の一時 workspace を作成します。non-sandboxed host-state role が
-ワークスペース内の managed worktree を登録し、`git worktree remove` でクリーンアップします。sandboxed
-Codex seat は宣言 root の内側でも `.git` に書けないため、`git worktree add` を実行しては **いけません**。
+ワークスペース内の managed worktree を登録し、`git worktree remove` でクリーンアップします。current recipe では
+repository の `.git` root を宣言していないため、sandboxed Codex seat は `git worktree add` を実行しては **いけません**。
+corrected flags でのその operation は未測定であり、registered worktree の作成は host-state duty に残します。
 任意の `/tmp` checkout を managed worktree と呼んだり、生の `rm -rf` で削除したりしません。delegation が
 unit-scoped role-work-root（例 `/private/tmp/<role>-<unit>`）を明示した場合だけ、それは registered ではない
 ordinary temporary checkout として使い、cleanup は host-state role が所有します。承認を無効化するのではなく

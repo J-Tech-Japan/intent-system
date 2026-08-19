@@ -154,6 +154,25 @@ public sealed class AgentMessageOrchestrationDocsTests
     }
 
     [Fact]
+    public void BothDocs_CarryCorrectedGitEnvelopeRuleAndRoutingDecision_G716()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        Assert.Contains("E-versus-F", en, StringComparison.Ordinal);
+        Assert.Contains("`.git` is not writable unless `<repo>/.git` is itself a declared root", en, StringComparison.Ordinal);
+        Assert.Contains("We weighed both legitimate routes", en, StringComparison.Ordinal);
+        Assert.Contains("least privilege", en, StringComparison.Ordinal);
+        Assert.DoesNotContain("another `--add-dir` does not make", en, StringComparison.Ordinal);
+
+        Assert.Contains("E-versus-F", ja, StringComparison.Ordinal);
+        Assert.Contains("`.git` は `<repo>/.git` 自体が宣言 root でない限り", ja, StringComparison.Ordinal);
+        Assert.Contains("両方を比較し", ja, StringComparison.Ordinal);
+        Assert.Contains("least privilege", ja, StringComparison.Ordinal);
+        Assert.DoesNotContain("別の `--add-dir` を追加しても利用可能にはなりません", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BothDocs_DescribeTheRegistryLimitedAbsentFieldUpdate_G620()
     {
         var en = ReadDoc("en");
