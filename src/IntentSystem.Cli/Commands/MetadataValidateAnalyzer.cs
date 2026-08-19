@@ -277,7 +277,7 @@ internal static class MetadataValidateAnalyzer
         var hasCloseoutRecordedEvidence = unitRunEvents.Any(runEvent =>
             string.Equals(runEvent.Event, "closeout-recorded", StringComparison.Ordinal));
         var hasLinkageRecoveryEvidence = unitRunEvents.Any(runEvent =>
-            string.Equals(runEvent.Event, "linkage-recovery", StringComparison.Ordinal));
+            string.Equals(runEvent.Event, "linkage-recovered", StringComparison.Ordinal));
         var hasCloseoutEvidence = hasPrMergedEvidence && hasCloseoutRecordedEvidence;
 
         // ---- queue-state.json (required) -----------------------------------

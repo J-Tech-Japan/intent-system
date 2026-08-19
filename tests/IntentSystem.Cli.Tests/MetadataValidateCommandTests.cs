@@ -722,7 +722,7 @@ public sealed class MetadataValidateCommandTests : IDisposable
         if (includeLinkageRecovery)
         {
             events.Add(
-                $"{{\"ts\":\"2026-08-18T00:02:00Z\",\"execution_unit\":\"{executionUnit}\",\"event\":\"linkage-recovery\",\"by\":\"intent-cli review closeout-plan\",\"repo\":\"J-Tech-Japan/intent-system\",\"pr\":{prNumber}}}");
+                $"{{\"ts\":\"2026-08-18T00:02:00Z\",\"execution_unit\":\"{executionUnit}\",\"event\":\"linkage-recovered\",\"by\":\"intent-cli review closeout-plan\",\"repo\":\"J-Tech-Japan/intent-system\",\"pr\":{prNumber}}}");
         }
         return string.Join(Environment.NewLine, events) + Environment.NewLine;
     }
