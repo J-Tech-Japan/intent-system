@@ -316,6 +316,54 @@ public sealed class MetadataUpdateCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenLegacyCompletedRunsEvidence_RejectsAlreadyCompletedWithoutValidationBlock()
+    {
+        // G715: backward-compatible validation must reach the bounded
+        // writer's existing no-clobber guard instead of rejecting a shipped
+        // completed record before the mode can inspect it.
+        const string executionUnit = "SKS-G891";
+        using var ws = new MetadataUpdateWorkspace();
+        ws.WriteHostShapePacket(executionUnit, linkedIssue: 1550, state: "completed");
+
+        var unitDir = Path.Combine(ws.RootPath, ".intent-cli", "issues", executionUnit);
+        File.WriteAllText(Path.Combine(unitDir, "publish.yaml"), """
+            publish_status: issue-created
+            created_issue_number: 1550
+            created_issue_url: "https://github.com/J-Tech-Japan/intent-system/issues/1550"
+            """);
+        File.WriteAllText(Path.Combine(ws.RootPath, ".intent-cli", "runs.jsonl"), """
+            {"ts":"2026-08-18T00:00:00Z","execution_unit":"SKS-G891","event":"pr-merged","by":"intent-cli closeout pr","repo":"J-Tech-Japan/intent-system","pr":1551}
+            {"ts":"2026-08-18T00:01:00Z","execution_unit":"SKS-G891","event":"closeout-recorded","by":"intent-cli closeout pr","repo":"J-Tech-Japan/intent-system","pr":1551}
+            """);
+        var before = ws.SnapshotWorkspace();
+
+        using var writer = new StringWriter();
+        var exitCode = MetadataUpdateCommand.Execute(
+            ws.Context,
+            new[]
+            {
+                "--root", ws.RootPath,
+                "--execution-unit", executionUnit,
+                "--mode", "completed-closeout",
+                "--linked-pr", "1551",
+                "--linked-pr-repo", "J-Tech-Japan/intent-system",
+                "--linked-pr-url", "https://github.com/J-Tech-Japan/intent-system/pull/1551",
+                "--head-sha", "abc123",
+                "--merge-commit", "def456",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.NotEqual(0, exitCode);
+        var result = JsonSerializer.Deserialize<MetadataUpdateResult>(writer.ToString())!;
+        Assert.Contains(result.Errors, finding =>
+            finding.Code == MetadataUpdateConstants.Codes.AlreadyCompleted);
+        Assert.DoesNotContain(result.Errors, finding =>
+            finding.Code == MetadataUpdateConstants.Codes.ValidationRejected);
+        Assert.Empty(AfterDelta(before, ws.SnapshotWorkspace()));
+    }
+
+    [Fact]
     public void Execute_GivenCompletedMissingClosure_AcceptsItAsTheFixableTransition()
     {
         // A previously-completed item that lacks linked_pr would normally

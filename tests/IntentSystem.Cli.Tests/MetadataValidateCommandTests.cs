@@ -10,8 +10,8 @@ namespace IntentSystem.Cli.Tests;
 /// G207: Tests for <c>intent-cli metadata validate</c>. Cover the cases
 /// listed in #519 Acceptance Criteria: valid metadata, missing packet
 /// file, missing standalone issue section, publish/queue linked-issue
-/// mismatch, completed item missing closeout evidence, and label-policy
-/// warning. Plus the no-mutation invariants.
+/// mismatch, completed item missing closeout evidence, legacy workflow shapes,
+/// and label-policy warning. Plus the no-mutation invariants.
 /// </summary>
 public sealed class MetadataValidateCommandTests : IDisposable
 {
@@ -184,6 +184,96 @@ public sealed class MetadataValidateCommandTests : IDisposable
             $"expected completed object-shaped linked_pr to validate, errors={string.Join(", ", result.Errors.Select(e => e.Code))}");
         Assert.DoesNotContain(result.Errors, e =>
             e.Code == MetadataValidateConstants.Codes.CompletedMissingClosure);
+    }
+
+    [Fact]
+    public void Execute_GivenShippedLegacyPublishAndLinkedPrUrl_IsValidWithCompatibilityWarnings()
+    {
+        // G715: these are the durable keys emitted by the shipped issue
+        // publish / closeout workflows, not the newer validator-only shape.
+        const string executionUnit = "SKS-G890";
+        const int issueNumber = 1549;
+        const int prNumber = 1550;
+        using var ws = new MetadataValidateWorkspace();
+        ws.WriteValidPacket(executionUnit, issueNumber, linkedPr: null, status: "completed");
+
+        var unitDir = Path.Combine(ws.RootPath, ".intent-cli", "issues", executionUnit);
+        File.WriteAllText(Path.Combine(unitDir, "publish.yaml"), $"""
+            publish_status: issue-created
+            created_issue_number: {issueNumber}
+            created_issue_url: "https://github.com/J-Tech-Japan/intent-system/issues/{issueNumber}"
+            """);
+
+        var queueEntry = new Dictionary<string, object?>
+        {
+            ["execution_unit"] = executionUnit,
+            ["state"] = "completed",
+            ["linked_issue"] = new Dictionary<string, object?>
+            {
+                ["repo"] = "J-Tech-Japan/intent-system",
+                ["number"] = issueNumber,
+                ["url"] = $"https://github.com/J-Tech-Japan/intent-system/issues/{issueNumber}",
+            },
+            ["linked_pr"] = $"https://github.com/J-Tech-Japan/intent-system/pull/{prNumber}",
+        };
+        File.WriteAllText(
+            Path.Combine(ws.RootPath, ".intent-cli", "queue-state.json"),
+            JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["items"] = new[] { queueEntry },
+            }));
+        File.WriteAllText(
+            Path.Combine(ws.RootPath, ".intent-cli", "runs.jsonl"),
+            BuildCloseoutRuns(executionUnit, prNumber, includeLinkageRecovery: true));
+
+        using var writer = new StringWriter();
+        var exitCode = MetadataValidateCommand.Execute(
+            ws.Context,
+            new[] { "--root", ws.RootPath, "--execution-unit", executionUnit, "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<MetadataValidateResult>(writer.ToString())!;
+        Assert.True(result.Valid);
+        Assert.Empty(result.Errors);
+        Assert.Contains(result.Warnings, finding =>
+            finding.Code == MetadataValidateConstants.Codes.PublishLegacyIssueIdentity
+            && finding.Message.Contains("superseded", StringComparison.Ordinal));
+        Assert.Contains(result.Warnings, finding =>
+            finding.Code == MetadataValidateConstants.Codes.QueueLegacyLinkedPrUrl
+            && finding.Message.Contains("superseded", StringComparison.Ordinal));
+        Assert.Contains(result.CheckedFiles, path =>
+            path == ".intent-cli/runs.jsonl");
+    }
+
+    [Fact]
+    public void Execute_GivenCloseoutRunsEvidenceWithoutLinkedPr_IsValid()
+    {
+        // The closeout events are an independent durable proof of completion;
+        // a validator upgrade must not require the newer queue linkage object
+        // when the shipped runs evidence is present.
+        const string executionUnit = "SKS-G891";
+        const int prNumber = 1551;
+        using var ws = new MetadataValidateWorkspace();
+        ws.WriteValidPacket(executionUnit, linkedIssue: 1550, linkedPr: null, status: "completed");
+        File.WriteAllText(
+            Path.Combine(ws.RootPath, ".intent-cli", "runs.jsonl"),
+            BuildCloseoutRuns(executionUnit, prNumber, includeLinkageRecovery: true));
+
+        using var writer = new StringWriter();
+        var exitCode = MetadataValidateCommand.Execute(
+            ws.Context,
+            new[] { "--root", ws.RootPath, "--execution-unit", executionUnit, "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<MetadataValidateResult>(writer.ToString())!;
+        Assert.True(result.Valid);
+        Assert.DoesNotContain(result.Errors, finding =>
+            finding.Code == MetadataValidateConstants.Codes.CompletedMissingClosure);
+        Assert.Contains(result.Warnings, finding =>
+            finding.Code == MetadataValidateConstants.Codes.RunsCloseoutEvidence
+            && finding.Message.Contains("closeout-recorded", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -421,8 +511,9 @@ public sealed class MetadataValidateCommandTests : IDisposable
 
         Assert.NotEqual(0, exitCode);
         var result = JsonSerializer.Deserialize<MetadataValidateResult>(writer.ToString())!;
-        Assert.Contains(result.Errors, e =>
+        var finding = Assert.Single(result.Errors, e =>
             e.Code == MetadataValidateConstants.Codes.CompletedMissingClosure);
+        Assert.Contains("genuinely incomplete", finding.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -616,6 +707,24 @@ public sealed class MetadataValidateCommandTests : IDisposable
             noBlock, @"//.*?$", string.Empty,
             System.Text.RegularExpressions.RegexOptions.Multiline);
         return noLine;
+    }
+
+    private static string BuildCloseoutRuns(
+        string executionUnit,
+        int prNumber,
+        bool includeLinkageRecovery)
+    {
+        var events = new List<string>
+        {
+            $"{{\"ts\":\"2026-08-18T00:00:00Z\",\"execution_unit\":\"{executionUnit}\",\"event\":\"pr-merged\",\"by\":\"intent-cli closeout pr\",\"repo\":\"J-Tech-Japan/intent-system\",\"pr\":{prNumber}}}",
+            $"{{\"ts\":\"2026-08-18T00:01:00Z\",\"execution_unit\":\"{executionUnit}\",\"event\":\"closeout-recorded\",\"by\":\"intent-cli closeout pr\",\"repo\":\"J-Tech-Japan/intent-system\",\"pr\":{prNumber}}}",
+        };
+        if (includeLinkageRecovery)
+        {
+            events.Add(
+                $"{{\"ts\":\"2026-08-18T00:02:00Z\",\"execution_unit\":\"{executionUnit}\",\"event\":\"linkage-recovery\",\"by\":\"intent-cli review closeout-plan\",\"repo\":\"J-Tech-Japan/intent-system\",\"pr\":{prNumber}}}");
+        }
+        return string.Join(Environment.NewLine, events) + Environment.NewLine;
     }
 
     private static string LocateSourceFile(string fileName)

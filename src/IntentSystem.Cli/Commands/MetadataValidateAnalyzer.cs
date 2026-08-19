@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -199,9 +201,24 @@ internal static class MetadataValidateAnalyzer
             {
                 // The parent-host publish schema nests issue data under
                 // `issue:` (so the number is exposed as `issue.number`).
-                // Accept both that shape and the simpler flat shape.
+                // Accept both that shape and the simpler flat shape. The
+                // shipped issue-publish workflow also produced
+                // `created_issue_number` / `created_issue_url`; keep reading
+                // those superseded keys so completed records remain valid
+                // after a validator upgrade.
+                var hasLegacyIssueNumber = HasNonEmptyValue(publishFields, "created_issue_number");
+                var hasLegacyIssueUrl = HasNonEmptyValue(publishFields, "created_issue_url");
+                if (hasLegacyIssueNumber || hasLegacyIssueUrl)
+                {
+                    warnings.Add(new MetadataValidateFinding
+                    {
+                        Code = MetadataValidateConstants.Codes.PublishLegacyIssueIdentity,
+                        Message = "publish.yaml uses superseded created_issue_number / created_issue_url keys; accepted for backward compatibility.",
+                        Path = publishPath,
+                    });
+                }
                 if (!HasAnyNonEmptyValue(publishFields,
-                        "issue_number", "issueNumber", "issue.number"))
+                        "issue_number", "issueNumber", "issue.number", "created_issue_number"))
                 {
                     errors.Add(new MetadataValidateFinding
                     {
@@ -211,7 +228,7 @@ internal static class MetadataValidateAnalyzer
                     });
                 }
                 if (!HasAnyNonEmptyValue(publishFields,
-                        "issue_url", "issueUrl", "issue.url"))
+                        "issue_url", "issueUrl", "issue.url", "created_issue_url"))
                 {
                     errors.Add(new MetadataValidateFinding
                     {
@@ -223,10 +240,49 @@ internal static class MetadataValidateAnalyzer
             }
         }
 
+        QueueStateEntry? queueEntry = null;
+
+        // ---- runs.jsonl closeout evidence (optional) ----------------------
+        const string runsPath = ".intent-cli/runs.jsonl";
+        var runEvents = Array.Empty<RunEvent>();
+        if (inputs.RunsJsonl is not null)
+        {
+            checkedFiles.Add(runsPath);
+            try
+            {
+                runEvents = RunLogSerializer.DeserializeAll(inputs.RunsJsonl).ToArray();
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException
+                or InvalidOperationException
+                or JsonException)
+            {
+                errors.Add(new MetadataValidateFinding
+                {
+                    Code = MetadataValidateConstants.Codes.RunsLogUnparseable,
+                    Message = $"could not parse {runsPath}: {exception.Message}",
+                    Path = runsPath,
+                });
+            }
+        }
+
+        var unitRunEvents = runEvents
+            .Where(runEvent => string.Equals(
+                runEvent.ExecutionUnit,
+                inputs.ExecutionUnit,
+                StringComparison.Ordinal))
+            .ToArray();
+        var hasPrMergedEvidence = unitRunEvents.Any(runEvent =>
+            string.Equals(runEvent.Event, "pr-merged", StringComparison.Ordinal));
+        var hasCloseoutRecordedEvidence = unitRunEvents.Any(runEvent =>
+            string.Equals(runEvent.Event, "closeout-recorded", StringComparison.Ordinal));
+        var hasLinkageRecoveryEvidence = unitRunEvents.Any(runEvent =>
+            string.Equals(runEvent.Event, "linkage-recovery", StringComparison.Ordinal));
+        var hasCloseoutEvidence = hasPrMergedEvidence && hasCloseoutRecordedEvidence;
+
         // ---- queue-state.json (required) -----------------------------------
         const string queueStatePath = ".intent-cli/queue-state.json";
         checkedFiles.Add(queueStatePath);
-        QueueStateEntry? queueEntry = null;
         if (inputs.QueueStateJson is null)
         {
             errors.Add(new MetadataValidateFinding
@@ -263,12 +319,25 @@ internal static class MetadataValidateAnalyzer
             }
         }
 
+        if (hasCloseoutEvidence && queueEntry is not null && queueEntry.LinkedPr is null)
+        {
+            warnings.Add(new MetadataValidateFinding
+            {
+                Code = MetadataValidateConstants.Codes.RunsCloseoutEvidence,
+                Message = hasLinkageRecoveryEvidence
+                    ? "runs.jsonl contains the shipped pr-merged, closeout-recorded, and linkage-recovery events; accepted as closeout evidence for the superseded queue linkage shape."
+                    : "runs.jsonl contains the shipped pr-merged and closeout-recorded events; accepted as closeout evidence for the superseded queue linkage shape.",
+                Path = runsPath,
+            });
+        }
+
         // ---- cross-file consistency ----------------------------------------
         if (publishFields is not null && queueEntry is not null)
         {
             var publishIssue = TryGetInt(publishFields, "issue_number")
                 ?? TryGetInt(publishFields, "issueNumber")
-                ?? TryGetInt(publishFields, "issue.number");
+                ?? TryGetInt(publishFields, "issue.number")
+                ?? TryGetInt(publishFields, "created_issue_number");
             if (publishIssue.HasValue
                 && queueEntry.LinkedIssue.HasValue
                 && publishIssue.Value != queueEntry.LinkedIssue.Value)
@@ -282,14 +351,25 @@ internal static class MetadataValidateAnalyzer
             }
         }
 
+        if (queueEntry?.LinkedPrWasLegacyUrl == true)
+        {
+            warnings.Add(new MetadataValidateFinding
+            {
+                Code = MetadataValidateConstants.Codes.QueueLegacyLinkedPrUrl,
+                Message = "queue-state linked_pr is a superseded GitHub URL string; accepted for backward compatibility.",
+                Path = queueStatePath,
+            });
+        }
+
         if (queueEntry is not null
             && string.Equals(queueEntry.Status, "completed", StringComparison.OrdinalIgnoreCase)
-            && queueEntry.LinkedPr is null)
+            && queueEntry.LinkedPr is null
+            && !hasCloseoutEvidence)
         {
             errors.Add(new MetadataValidateFinding
             {
                 Code = MetadataValidateConstants.Codes.CompletedMissingClosure,
-                Message = $"queue-state entry '{inputs.ExecutionUnit}' is marked completed but has no linked_pr or closeout evidence.",
+                Message = $"queue-state entry '{inputs.ExecutionUnit}' is genuinely incomplete: state=completed has no supported linked_pr reference or both shipped closeout runs events (pr-merged and closeout-recorded).",
                 Path = queueStatePath,
             });
         }
@@ -559,10 +639,13 @@ internal static class MetadataValidateAnalyzer
                 // The host queue-state schema represents linked issue / PR
                 // as objects `{ repo, number, url }`. Accept either the
                 // object-with-number form or a flat int (legacy / tests).
+                var linkedIssue = ResolveLinkedNumber(entry, false, "linked_issue", "linkedIssue");
+                var linkedPr = ResolveLinkedNumber(entry, true, "linked_pr", "linkedPr");
                 return new QueueStateEntry(
                     Status: status,
-                    LinkedIssue: ResolveLinkedNumber(entry, "linked_issue", "linkedIssue"),
-                    LinkedPr: ResolveLinkedNumber(entry, "linked_pr", "linkedPr"),
+                    LinkedIssue: linkedIssue.Number,
+                    LinkedPr: linkedPr.Number,
+                    LinkedPrWasLegacyUrl: linkedPr.WasLegacyUrl,
                     Dependencies: TryGetStringArray(entry, "dependencies"));
             }
         }
@@ -575,7 +658,10 @@ internal static class MetadataValidateAnalyzer
     /// as objects with a <c>number</c> property. Accept either the
     /// object-with-number form or a flat integer.
     /// </summary>
-    private static int? ResolveLinkedNumber(JsonElement entry, params string[] candidateKeys)
+    private static LinkedNumber ResolveLinkedNumber(
+        JsonElement entry,
+        bool allowPullRequestUrl,
+        params string[] candidateKeys)
     {
         foreach (var key in candidateKeys)
         {
@@ -590,7 +676,7 @@ internal static class MetadataValidateAnalyzer
                 if (numberProp.ValueKind == JsonValueKind.Number
                     && numberProp.TryGetInt32(out var n))
                 {
-                    return n;
+                    return new LinkedNumber(n, WasLegacyUrl: false);
                 }
                 if (numberProp.ValueKind == JsonValueKind.String
                     && int.TryParse(numberProp.GetString(),
@@ -598,13 +684,13 @@ internal static class MetadataValidateAnalyzer
                         System.Globalization.CultureInfo.InvariantCulture,
                         out var parsedString))
                 {
-                    return parsedString;
+                    return new LinkedNumber(parsedString, WasLegacyUrl: false);
                 }
             }
             // Flat form (test fixtures / legacy):
             if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var direct))
             {
-                return direct;
+                return new LinkedNumber(direct, WasLegacyUrl: false);
             }
             if (prop.ValueKind == JsonValueKind.String
                 && int.TryParse(prop.GetString(),
@@ -612,10 +698,39 @@ internal static class MetadataValidateAnalyzer
                     System.Globalization.CultureInfo.InvariantCulture,
                     out var directParsed))
             {
-                return directParsed;
+                return new LinkedNumber(directParsed, WasLegacyUrl: false);
+            }
+            if (allowPullRequestUrl
+                && prop.ValueKind == JsonValueKind.String
+                && TryParseGitHubPullRequestUrl(prop.GetString(), out var urlNumber))
+            {
+                return new LinkedNumber(urlNumber, WasLegacyUrl: true);
             }
         }
-        return null;
+        return new LinkedNumber(null, WasLegacyUrl: false);
+    }
+
+    private static bool TryParseGitHubPullRequestUrl(string? value, out int number)
+    {
+        number = 0;
+        if (string.IsNullOrWhiteSpace(value)
+            || !Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase)
+            || (!string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length == 4
+            && string.Equals(segments[2], "pull", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(
+                segments[3],
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out number)
+            && number > 0;
     }
 
     private static string? TryGetString(JsonElement obj, string name)
@@ -669,7 +784,10 @@ internal static class MetadataValidateAnalyzer
         string? Status,
         int? LinkedIssue,
         int? LinkedPr,
+        bool LinkedPrWasLegacyUrl,
         HashSet<string>? Dependencies);
+
+    private sealed record LinkedNumber(int? Number, bool WasLegacyUrl);
 }
 
 /// <summary>
@@ -687,4 +805,5 @@ internal sealed record MetadataValidateInputs
     public string? ImplementationMarkdown { get; init; }
     public string? PublishYaml { get; init; }
     public string? QueueStateJson { get; init; }
+    public string? RunsJsonl { get; init; }
 }

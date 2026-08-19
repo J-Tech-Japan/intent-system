@@ -225,6 +225,7 @@ internal static class MetadataUpdateCommand
             // and the scoped target when neither exists (a missing read
             // is fine — the analyzer treats null as "no queue state").
             QueueStateJson = ReadIfExists(scopedPaths.QueueStatePath),
+            RunsJsonl = ReadIfExists(scopedPaths.RunLogPath),
         };
     }
 
