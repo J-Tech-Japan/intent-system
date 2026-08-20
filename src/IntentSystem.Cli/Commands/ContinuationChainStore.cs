@@ -209,6 +209,25 @@ internal static class ContinuationChainStore
             if (existing is not null
                 && existing.Links.Any(existingLink => string.Equals(existingLink.Name, link, StringComparison.Ordinal)))
             {
+                if (string.Equals(link, ReportReceived, StringComparison.Ordinal)
+                    && resultNonce is not null
+                    && (!string.Equals(existing.ResultNonce, resultNonce, StringComparison.Ordinal)
+                        || !string.Equals(existing.Status, status, StringComparison.Ordinal)
+                        || !string.Equals(existing.Artifact, artifact, StringComparison.Ordinal)
+                        || !string.Equals(
+                            NormalizeEvidence(existing.Summary ?? string.Empty),
+                            NormalizeEvidence(summary ?? string.Empty),
+                            StringComparison.Ordinal)))
+                {
+                    return new ContinuationChainWriteResult(
+                        false,
+                        false,
+                        path,
+                        existing,
+                        null,
+                        $"Existing '{ReportReceived}' link for completion signal '{completionSignalId}' conflicts with the delivered report.");
+                }
+
                 return new ContinuationChainWriteResult(false, true, path, existing, existing, null);
             }
 

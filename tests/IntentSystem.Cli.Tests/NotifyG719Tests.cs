@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
@@ -28,43 +29,155 @@ public sealed class NotifyG719Tests : IDisposable
     }
 
     [Fact]
-    public void CanonicalReportUsesSenderLocalOutboxWhenHostRoutingRootIsNotWritable_G719()
+    public void GeneratedReportRunsFromDeniedSeatAndHostReconciliationIsIdempotent_G719()
     {
+        RequireUnixNonRoot();
         var runner = new FakeTransportRunner(workspace.HerdrAgents());
         NotifyCommand.ProcessRunnerFactory = () => runner;
         var (delegateExit, delegateResult) = workspace.Run(workspace.DelegateArgs());
         Assert.Equal(0, delegateExit);
-        Assert.Contains("--routing-root", delegateResult.GetProperty("report_command").GetString(), StringComparison.Ordinal);
-        Assert.Contains("--report-root .", delegateResult.GetProperty("report_command").GetString(), StringComparison.Ordinal);
-        runner.Calls.Clear();
+        var generatedCommand = delegateResult.GetProperty("report_command").GetString()!;
+        Assert.Contains(
+            $"--routing-root '{workspace.HostRoot}' --report-root .",
+            generatedCommand,
+            StringComparison.Ordinal);
+
+        workspace.PrepareDeniedHostProofPaths();
+        var exactCommand = workspace.MaterializeReportCommand(
+            generatedCommand,
+            "https://example.test/pr/1560",
+            "generated-sandbox-report-verified");
+        Assert.Contains("--report-root .", exactCommand, StringComparison.Ordinal);
+
         var hostBefore = workspace.HostSnapshot();
+        workspace.MakeHostReadOnly();
+        try
+        {
+            var deniedWrites = workspace.RunHostWriteProbe();
+            Assert.Equal(0, deniedWrites.ExitCode);
+            Assert.Contains("denied", deniedWrites.StandardOutput, StringComparison.Ordinal);
 
-        NotifyReportOutboxStore.WriteOverride = (path, _) =>
-            path.StartsWith(workspace.HostRoot, StringComparison.Ordinal)
-                ? new NotifyReportOutboxWriteResult(false, path, "fixture denies host routing-root write")
-                : new NotifyReportOutboxWriteResult(true, path, null);
+            var reportProcess = workspace.RunExactCommand(exactCommand);
+            Assert.True(reportProcess.ExitCode == 0, reportProcess.StandardOutput + reportProcess.StandardError);
+            Assert.True(string.IsNullOrWhiteSpace(reportProcess.StandardError), reportProcess.StandardError);
+            using var reportDocument = JsonDocument.Parse(reportProcess.StandardOutput);
+            var reportResult = reportDocument.RootElement;
+            Assert.True(reportResult.GetProperty("delivered").GetBoolean());
+            Assert.Equal("sender-local-role-work-root", reportResult.GetProperty("report_storage_mode").GetString());
+            Assert.Equal("deferred-to-orchestration", reportResult.GetProperty("host_state_sync").GetString());
+            Assert.Contains("no host-root write was required", reportResult.GetProperty("summary").GetString(), StringComparison.Ordinal);
+            Assert.Contains(
+                Path.Combine(".intent-cli", "notify", Domain, Team, "report-outbox.jsonl"),
+                reportResult.GetProperty("outbox_entry_path").GetString(),
+                StringComparison.Ordinal);
+            Assert.Contains("notify reconcile", reportResult.GetProperty("reconciliation_command").GetString(), StringComparison.Ordinal);
+            Assert.Equal(hostBefore, workspace.HostSnapshot());
 
-        var (oldExit, oldResult) = workspace.Run(workspace.ReportArgs(reportRoot: workspace.HostRoot));
-        Assert.Equal(1, oldExit);
-        Assert.Equal("report-outbox-write-failed", oldResult.GetProperty("cause").GetString());
-        Assert.Empty(runner.Calls);
-        Assert.Equal(hostBefore, workspace.HostSnapshot());
+            var outbox = NotifyReportOutboxStore.Find(
+                workspace.SeatRoot,
+                Domain,
+                Team,
+                "G719-report",
+                "g719-report-nonce");
+            Assert.True(outbox.Resolved);
+            Assert.Equal("delivered", outbox.Entry!.DeliveryState);
+            var pending = NotifyPendingDelegationStore.Find(workspace.HostRoot, Domain, Team, "G719-report");
+            Assert.True(pending.Resolved);
+            Assert.True(pending.Record!.IsOpen);
+            Assert.False(File.Exists(ContinuationChainStore.ResolvePath(workspace.HostRoot, Domain, Team)));
+        }
+        finally
+        {
+            workspace.MakeHostWritable();
+        }
 
-        NotifyReportOutboxStore.WriteOverride = null;
-        var (repairedExit, repaired) = workspace.Run(workspace.ReportArgs());
+        var reconcileArgs = workspace.ReconcileArgs("G719-report");
+        var dryReconcileArgs = reconcileArgs
+            .Select(argument => string.Equals(argument, "--write", StringComparison.Ordinal) ? "--dry-run" : argument)
+            .ToArray();
+        var dryPending = File.ReadAllText(NotifyPendingDelegationStore.ResolvePath(workspace.HostRoot, Domain, Team));
+        var (dryExit, dryResult) = workspace.RunHost(dryReconcileArgs);
+        Assert.Equal(0, dryExit);
+        Assert.False(dryResult.GetProperty("reconciled").GetBoolean());
+        Assert.True(dryResult.GetProperty("would_reconcile").GetBoolean());
+        Assert.False(dryResult.GetProperty("already_converged").GetBoolean());
+        Assert.Equal(dryPending, File.ReadAllText(NotifyPendingDelegationStore.ResolvePath(workspace.HostRoot, Domain, Team)));
+        Assert.False(File.Exists(ContinuationChainStore.ResolvePath(workspace.HostRoot, Domain, Team)));
 
-        Assert.Equal(0, repairedExit);
-        Assert.True(repaired.GetProperty("delivered").GetBoolean());
-        Assert.Equal(workspace.SeatRoot, repaired.GetProperty("report_root").GetString());
-        Assert.Equal("sender-local-role-work-root", repaired.GetProperty("report_storage_mode").GetString());
-        Assert.Equal("deferred-to-orchestration", repaired.GetProperty("host_state_sync").GetString());
-        Assert.Contains("no host-root write was required", repaired.GetProperty("summary").GetString(), StringComparison.Ordinal);
-        Assert.StartsWith(workspace.SeatRoot, repaired.GetProperty("outbox_entry_path").GetString(), StringComparison.Ordinal);
-        Assert.Equal(hostBefore, workspace.HostSnapshot());
-        var pending = NotifyPendingDelegationStore.Find(workspace.HostRoot, Domain, Team, "G719-report");
-        Assert.True(pending.Resolved);
-        Assert.True(pending.Record!.IsOpen);
-        Assert.Contains(runner.Calls, call => call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wG719:p1"]));
+        var beforePending = File.ReadAllText(NotifyPendingDelegationStore.ResolvePath(workspace.HostRoot, Domain, Team));
+        var (reconcileExit, reconcileResult) = workspace.RunHost(reconcileArgs);
+        Assert.Equal(0, reconcileExit);
+        Assert.True(reconcileResult.GetProperty("reconciled").GetBoolean());
+        Assert.True(reconcileResult.GetProperty("pending_reconciled").GetBoolean());
+        Assert.True(reconcileResult.GetProperty("continuation_reconciled").GetBoolean());
+        Assert.False(reconcileResult.GetProperty("pending_already_converged").GetBoolean());
+        Assert.False(reconcileResult.GetProperty("continuation_already_converged").GetBoolean());
+
+        var pendingPath = NotifyPendingDelegationStore.ResolvePath(workspace.HostRoot, Domain, Team);
+        var chainPath = ContinuationChainStore.ResolvePath(workspace.HostRoot, Domain, Team);
+        var afterPending = File.ReadAllText(pendingPath);
+        var afterChain = File.ReadAllText(chainPath);
+        Assert.NotEqual(beforePending, afterPending);
+        Assert.Equal(2, File.ReadAllLines(pendingPath).Length);
+        Assert.Single(File.ReadAllLines(chainPath));
+        var reconciledPending = NotifyPendingDelegationStore.Find(workspace.HostRoot, Domain, Team, "G719-report");
+        Assert.True(reconciledPending.Resolved);
+        Assert.True(reconciledPending.Record!.ReportArrived);
+
+        var (replayExit, replayResult) = workspace.RunHost(reconcileArgs);
+        Assert.Equal(0, replayExit);
+        Assert.True(replayResult.GetProperty("already_converged").GetBoolean());
+        Assert.True(replayResult.GetProperty("pending_already_converged").GetBoolean());
+        Assert.True(replayResult.GetProperty("continuation_already_converged").GetBoolean());
+        Assert.Equal(afterPending, File.ReadAllText(pendingPath));
+        Assert.Equal(afterChain, File.ReadAllText(chainPath));
+    }
+
+    [Fact]
+    public void ExternalReaderRetainsSenderLocalHandoffWhenHostRootIsDenied_G719()
+    {
+        RequireUnixNonRoot();
+        var runner = new FakeTransportRunner(workspace.HerdrAgents());
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        workspace.WriteTopology(externalOrchestration: true);
+        var (delegateExit, delegateResult) = workspace.Run(workspace.DelegateArgs("G719-external", "g719-external-nonce"));
+        Assert.Equal(0, delegateExit);
+        var readerPath = workspace.ExternalReaderPath;
+        var readerBefore = File.ReadAllText(readerPath);
+        var generatedCommand = delegateResult.GetProperty("report_command").GetString()!;
+        var exactCommand = workspace.MaterializeReportCommand(
+            generatedCommand,
+            "https://example.test/pr/1560-external",
+            "external-reader-routing-retained");
+
+        workspace.MakeHostReadOnly();
+        try
+        {
+            var reportProcess = workspace.RunExactCommand(exactCommand);
+            Assert.True(reportProcess.ExitCode == 1, reportProcess.StandardOutput + reportProcess.StandardError);
+            Assert.True(string.IsNullOrWhiteSpace(reportProcess.StandardError), reportProcess.StandardError);
+            using var document = JsonDocument.Parse(reportProcess.StandardOutput);
+            var result = document.RootElement;
+            Assert.Equal("report-routing-root-write-required", result.GetProperty("cause").GetString());
+            Assert.Contains("sender-local report handoff is retained", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
+            Assert.Equal(readerBefore, File.ReadAllText(readerPath));
+            var outbox = NotifyReportOutboxStore.Find(
+                workspace.SeatRoot,
+                Domain,
+                Team,
+                "G719-external",
+                "g719-external-nonce");
+            Assert.True(outbox.Resolved);
+            Assert.Equal("undelivered", outbox.Entry!.DeliveryState);
+            Assert.Equal("report-routing-root-write-required", outbox.Entry.DeliveryError);
+            var pending = NotifyPendingDelegationStore.Find(workspace.HostRoot, Domain, Team, "G719-external");
+            Assert.True(pending.Resolved);
+            Assert.True(pending.Record!.IsOpen);
+        }
+        finally
+        {
+            workspace.MakeHostWritable();
+        }
     }
 
     [Fact]
@@ -185,6 +298,7 @@ public sealed class NotifyG719Tests : IDisposable
             HostContext = CreateContext(HostRoot);
             SeatContext = CreateContext(SeatRoot);
             WriteTopology();
+            PrepareSeatExecutables();
             using var writer = new StringWriter();
             Assert.Equal(0, SessionLayerCommand.ExecuteSet(
                 HostContext,
@@ -194,6 +308,18 @@ public sealed class NotifyG719Tests : IDisposable
 
         public string HostRoot { get; }
         public string SeatRoot { get; }
+        public string ExternalReaderPath => Path.Combine(
+            HostRoot,
+            ".intent-cli",
+            "notify",
+            Domain,
+            Team,
+            "external-reader.jsonl");
+        private string QueueStatePath => Path.Combine(HostRoot, ".intent-cli", "queue-state.json");
+        private string RunsPath => Path.Combine(HostRoot, ".takt", "runs", "G719.jsonl");
+        private string PacketPath => Path.Combine(HostRoot, "intents", Domain, "packets", "G719.yaml");
+        private string IntentCliShimPath => Path.Combine(SeatRoot, "bin", "intent-cli");
+        private string HerdrShimPath => Path.Combine(SeatRoot, "bin", "herdr");
         private CliContext HostContext { get; }
         private CliContext SeatContext { get; }
 
@@ -207,30 +333,184 @@ public sealed class NotifyG719Tests : IDisposable
             return (exitCode, JsonDocument.Parse(writer.ToString()).RootElement.Clone());
         }
 
-        public string[] DelegateArgs() =>
+        public (int ExitCode, JsonElement Result) RunHost(string[] args)
+        {
+            using var writer = new StringWriter();
+            var exitCode = CommandRouter.Execute(args, HostContext, writer);
+            return (exitCode, JsonDocument.Parse(writer.ToString()).RootElement.Clone());
+        }
+
+        public string[] DelegateArgs(string taskId = "G719-report", string resultNonce = "g719-report-nonce") =>
         [
             "notify", "delegate", "--domain", Domain, "--team", Team,
             "--from", "orchestration", "--to", "implementation", "--report-to", "orchestration",
-            "--task-id", "G719-report", "--objective", "Verify sender-local reporting",
-            "--input", "issue #1560", "--expected-artifact", "draft PR", "--result-nonce", "g719-report-nonce",
+            "--task-id", taskId, "--objective", "Verify sender-local reporting",
+            "--input", "issue #1560", "--expected-artifact", "draft PR", "--result-nonce", resultNonce,
             "--write", "--format", "json",
         ];
 
-        public string[] ReportArgs(string? reportRoot = null)
+        public string[] ReconcileArgs(string taskId) =>
+        [
+            "notify", "reconcile", "--domain", Domain, "--team", Team, "--task-id", taskId,
+            "--routing-root", HostRoot, "--report-root", SeatRoot, "--write", "--format", "json",
+        ];
+
+        public string MaterializeReportCommand(string generatedCommand, string artifact, string summary) =>
+            generatedCommand
+                .Replace("--status <completed|blocked|question>", "--status completed", StringComparison.Ordinal)
+                .Replace("--artifact <artifact>", $"--artifact {artifact}", StringComparison.Ordinal)
+                .Replace("--summary <one-line-summary>", $"--summary {summary}", StringComparison.Ordinal);
+
+        public ShellResult RunExactCommand(string command) => RunSeatShell(command);
+
+        public ShellResult RunHostWriteProbe()
         {
-            var args = new List<string>
+            var targets = new[] { QueueStatePath, RunsPath, PacketPath };
+            var command = "for target in "
+                + string.Join(" ", targets.Select(QuoteForShell))
+                + "; do if printf x >> \"$target\"; then printf 'writable'; exit 1; fi; done; printf 'denied';";
+            return RunSeatShell(command);
+        }
+
+        public void PrepareDeniedHostProofPaths()
+        {
+            foreach (var path in new[] { QueueStatePath, RunsPath, PacketPath })
             {
-                "notify", "report", "--domain", Domain, "--team", Team,
-                "--from", "implementation", "--to", "orchestration", "--task-id", "G719-report",
-                "--status", "completed", "--artifact", "https://example.test/pr/1560",
-                "--summary", "sender-local report handoff verified", "--routing-root", HostRoot,
-            };
-            if (reportRoot is not null)
-            {
-                args.AddRange(["--report-root", reportRoot]);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, $"g719-proof:{Path.GetFileName(path)}\n");
             }
-            args.AddRange(["--write", "--format", "json"]);
-            return [.. args];
+        }
+
+        public void MakeHostReadOnly()
+        {
+            if (OperatingSystem.IsWindows()) return;
+            foreach (var file in Directory.EnumerateFiles(HostRoot, "*", SearchOption.AllDirectories))
+            {
+                File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+            }
+
+            foreach (var directory in Directory.EnumerateDirectories(HostRoot, "*", SearchOption.AllDirectories)
+                .OrderByDescending(path => path.Length)
+                .ThenBy(path => path, StringComparer.Ordinal))
+            {
+                File.SetUnixFileMode(
+                    directory,
+                    UnixFileMode.UserRead | UnixFileMode.UserExecute
+                    | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+                    | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+            }
+        }
+
+        public void MakeHostWritable()
+        {
+            if (OperatingSystem.IsWindows()) return;
+            foreach (var directory in Directory.EnumerateDirectories(HostRoot, "*", SearchOption.AllDirectories)
+                .OrderBy(path => path.Length)
+                .ThenBy(path => path, StringComparer.Ordinal))
+            {
+                File.SetUnixFileMode(
+                    directory,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                    | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
+                    | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+            }
+
+            foreach (var file in Directory.EnumerateFiles(HostRoot, "*", SearchOption.AllDirectories))
+            {
+                File.SetUnixFileMode(
+                    file,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite
+                    | UnixFileMode.GroupRead | UnixFileMode.GroupWrite
+                    | UnixFileMode.OtherRead | UnixFileMode.OtherWrite);
+            }
+        }
+
+        public void WriteTopology(bool externalOrchestration = false)
+        {
+            var path = NotifyRoleTopologyStore.ResolvePath(HostRoot, Domain, Team);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            object orchestration = externalOrchestration
+                ? new { resident = NotifyRecordedRole.ExternalResident, reader = ".intent-cli/notify/intent-cli/intent-cli-dev/external-reader.jsonl" }
+                : new { resident = NotifyRecordedRole.HerdrResident, workspace_id = "wG719", pane_id = "wG719:p1" };
+            File.WriteAllText(path, JsonSerializer.Serialize(new
+            {
+                domain = Domain,
+                team = Team,
+                workspace_id = "wG719",
+                roles = new Dictionary<string, object>
+                {
+                    ["orchestration"] = orchestration,
+                    ["implementation"] = new { resident = NotifyRecordedRole.HerdrResident, workspace_id = "wG719", pane_id = "wG719:p2" },
+                },
+            }));
+
+            if (externalOrchestration)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(ExternalReaderPath)!);
+                if (!File.Exists(ExternalReaderPath)) File.WriteAllText(ExternalReaderPath, string.Empty);
+            }
+        }
+
+        private void PrepareSeatExecutables()
+        {
+            Directory.CreateDirectory(Path.Combine(SeatRoot, "bin"));
+            var cliAssembly = typeof(NotifyCommand).Assembly.Location;
+            File.WriteAllText(
+                IntentCliShimPath,
+                $"#!/bin/sh\nexec dotnet {QuoteForShell(cliAssembly)} \"$@\"\n");
+            File.WriteAllText(
+                HerdrShimPath,
+                "#!/bin/sh\nif [ \"$1\" = \"agent\" ] && [ \"$2\" = \"list\" ]; then\n"
+                + $"  cat {QuoteForShell(Path.Combine(SeatRoot, "herdr-agents.json"))}\n"
+                + "  exit 0\nfi\nexit 0\n");
+            File.WriteAllText(Path.Combine(SeatRoot, "herdr-agents.json"), HerdrAgents());
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    IntentCliShimPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                    | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+                    | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+                File.SetUnixFileMode(
+                    HerdrShimPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                    | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+                    | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+            }
+        }
+
+        private ShellResult RunSeatShell(string command)
+        {
+            var startInfo = new ProcessStartInfo("/bin/sh")
+            {
+                WorkingDirectory = SeatRoot,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add(command);
+            var currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            startInfo.Environment["PATH"] = Path.Combine(SeatRoot, "bin") + Path.PathSeparator + currentPath;
+            startInfo.Environment[NotifyTransportPaths.HerdrExecutableEnvironmentVariable] = HerdrShimPath;
+            using var process = Process.Start(startInfo)!;
+            var standardOutput = process.StandardOutput.ReadToEnd();
+            var standardError = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            return new ShellResult(process.ExitCode, standardOutput, standardError);
+        }
+
+        private static string QuoteForShell(string value) =>
+            $"'{value.Replace("'", "'\\''", StringComparison.Ordinal)}'";
+
+        public string HostSnapshot()
+        {
+            return string.Join(
+                "\n",
+                Directory.GetFiles(HostRoot, "*", SearchOption.AllDirectories)
+                    .OrderBy(path => path, StringComparer.Ordinal)
+                    .Select(path => Path.GetRelativePath(HostRoot, path) + "\0" + File.ReadAllText(path)));
         }
 
         public string HerdrAgents() => JsonSerializer.Serialize(new
@@ -263,15 +543,6 @@ public sealed class NotifyG719Tests : IDisposable
             },
         });
 
-        public string HostSnapshot()
-        {
-            return string.Join(
-                "\n",
-                Directory.GetFiles(HostRoot, "*", SearchOption.AllDirectories)
-                    .OrderBy(path => path, StringComparer.Ordinal)
-                    .Select(path => Path.GetRelativePath(HostRoot, path) + "\0" + File.ReadAllText(path)));
-        }
-
         private static CliContext CreateContext(string root) => new()
         {
             RepoRoot = root,
@@ -284,28 +555,36 @@ public sealed class NotifyG719Tests : IDisposable
                 },
             },
         };
-
-        private void WriteTopology()
-        {
-            var path = NotifyRoleTopologyStore.ResolvePath(HostRoot, Domain, Team);
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(new
-            {
-                domain = Domain,
-                team = Team,
-                workspace_id = "wG719",
-                roles = new Dictionary<string, object>
-                {
-                    ["orchestration"] = new { resident = NotifyRecordedRole.HerdrResident, workspace_id = "wG719", pane_id = "wG719:p1" },
-                    ["implementation"] = new { resident = NotifyRecordedRole.HerdrResident, workspace_id = "wG719", pane_id = "wG719:p2" },
-                },
-            }));
-        }
-
         public void Dispose()
         {
             if (Directory.Exists(HostRoot)) Directory.Delete(HostRoot, recursive: true);
             if (Directory.Exists(SeatRoot)) Directory.Delete(SeatRoot, recursive: true);
         }
     }
+
+    private static void RequireUnixNonRoot()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip("G719 OS-denied fixture requires Unix file permissions.");
+        }
+
+        var info = new ProcessStartInfo("id")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        info.ArgumentList.Add("-u");
+        using var process = Process.Start(info)!;
+        var userId = process.StandardOutput.ReadToEnd().Trim();
+        process.WaitForExit();
+        if (process.ExitCode != 0 || string.Equals(userId, "0", StringComparison.Ordinal))
+        {
+            throw Xunit.Sdk.SkipException.ForSkip("G719 OS-denied fixture cannot prove denial while running as root.");
+        }
+    }
+
+    private sealed record ShellResult(int ExitCode, string StandardOutput, string StandardError);
 }
