@@ -90,6 +90,20 @@ internal sealed record WorkerCompleteResult
     public bool? LinkedPrSyncedCamel => LinkedPrSynced;
 
     /// <summary>
+    /// G724: durable execution-unit domain resolved for host-side issue-to-PR
+    /// completion. This is deliberately separate from the startup marker,
+    /// which is display-only.
+    /// </summary>
+    [JsonPropertyName("domain")]
+    public string? Domain { get; init; }
+
+    [JsonPropertyName("domain_source")]
+    public string? DomainSource { get; init; }
+
+    [JsonPropertyName("execution_unit")]
+    public string? ExecutionUnit { get; init; }
+
+    /// <summary>
     /// G330: true when the command ran in child-cwd mode — either the
     /// operator passed <c>--child-cwd</c> explicitly OR the
     /// environment is implicitly a child cwd (no parent intent repo

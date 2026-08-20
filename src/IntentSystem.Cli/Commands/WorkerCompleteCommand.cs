@@ -77,6 +77,7 @@ internal static class WorkerCompleteCommand
                 out var number,
                 out var outcome,
                 out var prNumber,
+                out var explicitDomain,
                 out var mode,
                 out var childCwd,
                 out var githubOnly,
@@ -119,15 +120,39 @@ internal static class WorkerCompleteCommand
             return 1;
         }
 
-        // G603: the host-side linked_pr projection is a write path. Verify
-        // the command's declared domain agrees with the selected queue item
-        // before touching GitHub labels or durable state. A child github-only
-        // worker never reads queue state, so this guard is host-only.
-        if (isPrCreatedOutcome && !inChildCwdMode
-            && TryFindDomainDisagreement(context, repo!, number, out var disagreement))
+        // G724: the startup marker and the context's default domain are not
+        // execution identity. Resolve the issue's domain from durable queue /
+        // packet evidence before touching GitHub labels or linked_pr. A child
+        // github-only worker deliberately does not read host state.
+        string? resolvedDomain = null;
+        string? domainSource = null;
+        string? resolvedExecutionUnit = null;
+        if (isPrCreatedOutcome && !inChildCwdMode)
         {
-            writer.WriteLine(disagreement);
-            return 1;
+            var resolution = ResolveWorkerDomain(
+                context,
+                explicitDomain,
+                repo!,
+                number,
+                outcome!,
+                prNumber,
+                mode);
+            if (resolution.ErrorMessage is not null)
+            {
+                writer.WriteLine(resolution.ErrorMessage);
+                return 1;
+            }
+
+            resolvedDomain = resolution.Domain;
+            domainSource = resolution.Source;
+            resolvedExecutionUnit = resolution.ExecutionUnit;
+        }
+        else if (isPrCreatedOutcome)
+        {
+            resolvedDomain = explicitDomain;
+            domainSource = explicitDomain is null
+                ? "github-only-no-host-state"
+                : "explicit-no-host-state";
         }
 
         // G389: refuse to complete an issue whose contract bundles multiple
@@ -340,7 +365,13 @@ internal static class WorkerCompleteCommand
                     }
                     else
                     {
-                        var (synced, warning) = TryPatchQueueStateLinkedPr(context, number, repo!, prNumberValue);
+                        var (synced, warning) = TryPatchQueueStateLinkedPr(
+                            context,
+                            number,
+                            repo!,
+                            prNumberValue,
+                            resolvedExecutionUnit,
+                            resolvedDomain);
                         linkedPrSynced = synced;
                         if (!string.IsNullOrWhiteSpace(warning))
                         {
@@ -392,6 +423,9 @@ internal static class WorkerCompleteCommand
             PrNumber = prNumber,
             PrTargetApplied = prTargetApplied,
             LinkedPrSynced = linkedPrSynced,
+            Domain = resolvedDomain,
+            DomainSource = domainSource,
+            ExecutionUnit = resolvedExecutionUnit,
             ChildCwd = inChildCwdMode,
             GithubOnly = githubOnly,
         };
@@ -421,7 +455,9 @@ internal static class WorkerCompleteCommand
         CliContext context,
         int sourceIssueNumber,
         string repo,
-        int prNumber)
+        int prNumber,
+        string? executionUnit,
+        string? resolvedDomain)
     {
         var queueStatePath = ResolveQueueStatePath(context);
         if (!File.Exists(queueStatePath))
@@ -436,9 +472,31 @@ internal static class WorkerCompleteCommand
             var matchedIndex = -1;
             for (var index = 0; index < queueState.Items.Count; index++)
             {
-                var linkedIssue = queueState.Items[index].LinkedIssue;
+                var candidate = queueState.Items[index];
+                var linkedIssue = candidate.LinkedIssue;
                 if (GitHubWorkItemIdentity.MatchesIssue(linkedIssue, repo, sourceIssueNumber))
                 {
+                    // G724: when resolution identified the durable unit,
+                    // project linked_pr onto that same unit. This prevents a
+                    // colliding issue number from selecting another domain's
+                    // queue row merely because it appeared first.
+                    if (!string.IsNullOrWhiteSpace(executionUnit)
+                        && !string.Equals(candidate.ExecutionUnit, executionUnit, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(resolvedDomain)
+                        && string.IsNullOrWhiteSpace(executionUnit))
+                    {
+                        var candidateDomain = TryGetQueueItemDomain(candidate);
+                        if (candidateDomain is not null
+                            && !string.Equals(candidateDomain, resolvedDomain, StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
+                    }
+
                     matchedIndex = index;
                     break;
                 }
@@ -474,39 +532,275 @@ internal static class WorkerCompleteCommand
         }
     }
 
-    private static bool TryFindDomainDisagreement(CliContext context, string repo, int issueNumber, out string message)
+    /// <summary>
+    /// G724: resolve the execution-unit domain before the worker writes labels
+    /// or linked_pr. The visible startup marker and the host config are
+    /// display/default bindings, not evidence that can override a durable
+    /// queue row. A matching queue row with a declared domain wins; an
+    /// explicit --domain may select one matching row and must agree with its
+    /// declaration. Ambiguous or unreadable durable evidence fails closed with
+    /// an exact worker re-invocation instead of silently falling back.
+    /// </summary>
+    private static WorkerDomainResolution ResolveWorkerDomain(
+        CliContext context,
+        string? explicitDomain,
+        string repo,
+        int issueNumber,
+        string outcome,
+        int? prNumber,
+        string mode)
     {
-        message = string.Empty;
+        var normalizedExplicit = string.IsNullOrWhiteSpace(explicitDomain)
+            ? null
+            : explicitDomain.Trim();
         var queueStatePath = ResolveQueueStatePath(context);
-        if (!File.Exists(queueStatePath)) return false;
+        QueueState? queueState = null;
 
-        try
+        if (File.Exists(queueStatePath))
         {
-            var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
-            foreach (var item in queueState.Items)
+            try
             {
-                if (!GitHubWorkItemIdentity.MatchesIssue(item.LinkedIssue, repo, issueNumber)) continue;
-                var marker = "intents/";
-                var path = item.ClarificationReturnPath.Replace('\\', '/');
-                var start = path.IndexOf(marker, StringComparison.Ordinal);
-                if (start < 0) continue;
-                var remainder = path[(start + marker.Length)..];
-                var slash = remainder.IndexOf('/');
-                var itemDomain = slash < 0 ? remainder : remainder[..slash];
-                if (!string.IsNullOrWhiteSpace(itemDomain)
-                    && !string.Equals(itemDomain, context.Config.Project.Domain, StringComparison.Ordinal))
-                {
-                    message = $"refused queue write: command identity '{context.Config.Project.Domain}/{repo}#{issueNumber}' conflicts with queue identity '{itemDomain}/{repo}#{issueNumber}' on unit '{item.ExecutionUnit}'.";
-                    return true;
-                }
+                queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException)
+            {
+                var rerunDomain = normalizedExplicit ?? context.Config.Project.Domain;
+                return WorkerDomainResolution.Error(
+                    $"refused worker complete: durable queue state at '{queueStatePath}' could not be read ({exception.Message}). "
+                    + "The startup marker is display-only and cannot resolve this identity. Repair the durable queue state "
+                    + "through its canonical host surface, then re-run: "
+                    + $"`{BuildDomainReinvocation(repo, issueNumber, outcome, prNumber, rerunDomain, mode)}`. "
+                    + "Do not use PR-linkage recovery as a substitute for domain resolution.");
             }
         }
-        catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException)
+
+        var matches = queueState?.Items
+            .Where(item => GitHubWorkItemIdentity.MatchesIssue(item.LinkedIssue, repo, issueNumber))
+            .Select(item => new QueueDomainCandidate(item, TryGetQueueItemDomain(item)))
+            .ToArray() ?? Array.Empty<QueueDomainCandidate>();
+        var declaredDomains = matches
+            .Where(candidate => candidate.Domain is not null)
+            .Select(candidate => candidate.Domain!)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(domain => domain, StringComparer.Ordinal)
+            .ToArray();
+
+        if (declaredDomains.Length > 0)
         {
-            // Existing sync handling emits the precise persistence warning.
-            _ = exception;
+            if (matches.Any(candidate => candidate.Domain is null))
+            {
+                var candidateText = string.Join(", ", declaredDomains);
+                var rerunDomain = normalizedExplicit ?? declaredDomains[0];
+                return WorkerDomainResolution.Error(
+                    $"refused worker complete: durable queue rows for {repo}#{issueNumber} mix declared domain "
+                    + $"and legacy domain-less identity (declared candidates: {candidateText}). Repair the queue so the "
+                    + "execution unit has one domain, then re-run: "
+                    + $"`{BuildDomainReinvocation(repo, issueNumber, outcome, prNumber, rerunDomain, mode)}`. "
+                    + "The startup marker and PR-linkage recovery cannot choose the execution unit.");
+            }
+
+            if (normalizedExplicit is not null
+                && !declaredDomains.Contains(normalizedExplicit, StringComparer.Ordinal))
+            {
+                var suggestedDomain = declaredDomains[0];
+                return WorkerDomainResolution.Error(
+                    $"refused worker complete: explicit domain '{normalizedExplicit}' conflicts with durable queue domain "
+                    + $"'{suggestedDomain}' for {repo}#{issueNumber}. The startup marker is display-only. Re-invoke the "
+                    + "worker with the durable domain: "
+                    + $"`{BuildDomainReinvocation(repo, issueNumber, outcome, prNumber, suggestedDomain, mode)}`.");
+            }
+
+            var selectedDomain = normalizedExplicit ?? (declaredDomains.Length == 1 ? declaredDomains[0] : null);
+            if (selectedDomain is null)
+            {
+                var suggestions = string.Join(
+                    " or ",
+                    declaredDomains.Select(domain => $"`{BuildDomainReinvocation(repo, issueNumber, outcome, prNumber, domain, mode)}`"));
+                return WorkerDomainResolution.Error(
+                    $"refused worker complete: {repo}#{issueNumber} resolves to more than one durable domain "
+                    + $"({string.Join(", ", declaredDomains)}). Choose the execution-unit domain explicitly from the "
+                    + $"worker surface: {suggestions}. The startup marker is not an identity selector.");
+            }
+
+            var selected = matches
+                .Where(candidate => string.Equals(candidate.Domain, selectedDomain, StringComparison.Ordinal))
+                .ToArray();
+            if (selected.Length != 1)
+            {
+                return WorkerDomainResolution.Error(
+                    $"refused worker complete: durable domain '{selectedDomain}' still maps {selected.Length} queue rows "
+                    + $"for {repo}#{issueNumber}; the execution unit is not uniquely resolvable. Repair the durable queue "
+                    + $"and re-run `{BuildDomainReinvocation(repo, issueNumber, outcome, prNumber, selectedDomain, mode)}`. "
+                    + "Do not edit the startup marker or recover through PR linkage.");
+            }
+
+            return WorkerDomainResolution.Ok(
+                selectedDomain,
+                normalizedExplicit is null ? "queue-record" : "explicit+queue-record",
+                selected[0].Item.ExecutionUnit);
         }
-        return false;
+
+        if (matches.Length > 1)
+        {
+            var rerunDomain = normalizedExplicit ?? context.Config.Project.Domain;
+            return WorkerDomainResolution.Error(
+                $"refused worker complete: {repo}#{issueNumber} matches {matches.Length} legacy queue rows without a "
+                + "declared domain, so the durable execution unit cannot be selected. Add domain evidence through the "
+                + "canonical queue/packet surface, then re-run: "
+                + $"`{BuildDomainReinvocation(repo, issueNumber, outcome, prNumber, rerunDomain, mode)}`.");
+        }
+
+        var sessionRoot = context.ResolveParentIntentRepoRootPath();
+        if (string.IsNullOrWhiteSpace(sessionRoot))
+        {
+            sessionRoot = context.RepoRoot;
+        }
+
+        string[] recordedDomains;
+        try
+        {
+            recordedDomains = (SessionLayerModeStore.TryRead(sessionRoot!)?.Entries ?? Array.Empty<SessionLayerModeEntry>())
+                .Select(entry => entry.Domain)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(domain => domain, StringComparer.Ordinal)
+                .ToArray();
+        }
+        catch (InvalidOperationException exception)
+        {
+            var rerunDomain = normalizedExplicit ?? context.Config.Project.Domain;
+            return WorkerDomainResolution.Error(
+                $"refused worker complete: authoritative session-layer record at '{SessionLayerModeStore.ResolvePath(sessionRoot!)}' "
+                + $"could not be read ({exception.Message}). Repair it through `intent-cli session-layer set`, then re-run: "
+                + $"`{BuildDomainReinvocation(repo, issueNumber, outcome, prNumber, rerunDomain, mode)}`. "
+                + "The startup marker is display-only.");
+        }
+
+        if (normalizedExplicit is not null
+            && recordedDomains.Length > 0
+            && !recordedDomains.Contains(normalizedExplicit, StringComparer.Ordinal))
+        {
+            var suggestions = string.Join(
+                " or ",
+                recordedDomains.Select(domain => $"`{BuildDomainReinvocation(repo, issueNumber, outcome, prNumber, domain, mode)}`"));
+            return WorkerDomainResolution.Error(
+                $"refused worker complete: explicit domain '{normalizedExplicit}' conflicts with the authoritative "
+                + $"session-layer record ({string.Join(", ", recordedDomains)}) for {repo}#{issueNumber}. Re-invoke "
+                + $"with the recorded domain: {suggestions}. The startup marker is display-only.");
+        }
+
+        if (normalizedExplicit is not null)
+        {
+            var source = matches.Length == 1
+                ? recordedDomains.Length > 0 ? "explicit+session-layer-record+legacy-queue" : "explicit+legacy-queue"
+                : recordedDomains.Length > 0 ? "explicit+session-layer-record" : "explicit-no-queue-record";
+            return WorkerDomainResolution.Ok(
+                normalizedExplicit,
+                source,
+                matches.Length == 1 ? matches[0].Item.ExecutionUnit : null);
+        }
+
+        if (matches.Length == 1)
+        {
+            if (recordedDomains.Length == 1)
+            {
+                return WorkerDomainResolution.Ok(
+                    recordedDomains[0],
+                    "session-layer-record+legacy-queue",
+                    matches[0].Item.ExecutionUnit);
+            }
+
+            var suggestedDomain = context.Config.Project.Domain;
+            return WorkerDomainResolution.Error(
+                $"refused worker complete: queue row '{matches[0].Item.ExecutionUnit}' for {repo}#{issueNumber} has no "
+                + "declared domain. Re-invoke from the worker surface with the domain recorded for its packet: "
+                + $"`{BuildDomainReinvocation(repo, issueNumber, outcome, prNumber, suggestedDomain, mode)}`. "
+                + "A startup marker or PR-linkage recovery cannot supply missing durable identity.");
+        }
+
+        if (recordedDomains.Length > 1)
+        {
+            var suggestions = string.Join(
+                " or ",
+                recordedDomains.Select(domain => $"`{BuildDomainReinvocation(repo, issueNumber, outcome, prNumber, domain, mode)}`"));
+            return WorkerDomainResolution.Error(
+                $"refused worker complete: {repo}#{issueNumber} has no queue domain and this host records multiple "
+                + $"session-layer domains ({string.Join(", ", recordedDomains)}). Choose the packet domain explicitly: {suggestions}. "
+                + "The startup marker is display-only.");
+        }
+
+        if (recordedDomains.Length == 1)
+        {
+            return WorkerDomainResolution.Ok(
+                recordedDomains[0],
+                "session-layer-record",
+                null);
+        }
+
+        var fallbackDomain = context.Config.Project.Domain;
+        if (string.IsNullOrWhiteSpace(fallbackDomain))
+        {
+            return WorkerDomainResolution.Error(
+                $"refused worker complete: no durable domain evidence exists for {repo}#{issueNumber}, and the host has no "
+                + $"configured domain. Re-invoke with `--domain <name>` using the packet's recorded domain: "
+                + $"`{BuildDomainReinvocation(repo, issueNumber, outcome, prNumber, "<domain>", mode)}`.");
+        }
+
+        return WorkerDomainResolution.Ok(
+            fallbackDomain,
+            matches.Length == 0 ? "configured-no-queue-record" : "configured-legacy-queue",
+            matches.Length == 1 ? matches[0].Item.ExecutionUnit : null);
+    }
+
+    private static string? TryGetQueueItemDomain(QueueItem item)
+    {
+        var path = item.ClarificationReturnPath.Replace('\\', '/');
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        for (var index = 0; index + 1 < segments.Length; index++)
+        {
+            if (string.Equals(segments[index], "intents", StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(segments[index + 1]))
+            {
+                return segments[index + 1];
+            }
+        }
+
+        return null;
+    }
+
+    private static string BuildDomainReinvocation(
+        string repo,
+        int issueNumber,
+        string outcome,
+        int? prNumber,
+        string domain,
+        string mode)
+    {
+        var command = $"intent-cli worker complete --kind issue --number {issueNumber} --repo {repo} "
+            + $"--domain {domain} --outcome {outcome}";
+        if (prNumber is { } number)
+        {
+            command += $" --pr {number}";
+        }
+
+        command += string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal)
+            ? " --write"
+            : " --dry-run";
+        return command + " --format json";
+    }
+
+    private sealed record QueueDomainCandidate(QueueItem Item, string? Domain);
+
+    private sealed record WorkerDomainResolution(
+        string? Domain,
+        string? Source,
+        string? ExecutionUnit,
+        string? ErrorMessage)
+    {
+        public static WorkerDomainResolution Ok(string domain, string source, string? executionUnit) =>
+            new(domain, source, executionUnit, null);
+
+        public static WorkerDomainResolution Error(string message) =>
+            new(null, null, null, message);
     }
 
     /// <summary>
@@ -727,6 +1021,14 @@ internal static class WorkerCompleteCommand
         writer.WriteLine();
         writer.WriteLine($"- outcome: {result.Outcome}");
         writer.WriteLine($"- mode: {result.Mode}");
+        if (result.Domain is not null)
+        {
+            writer.WriteLine($"- domain: {result.Domain} ({result.DomainSource ?? "unknown source"})");
+        }
+        if (result.ExecutionUnit is not null)
+        {
+            writer.WriteLine($"- execution-unit: {result.ExecutionUnit}");
+        }
         writer.WriteLine($"- proceed: {result.Proceed}");
         writer.WriteLine($"- applied: {result.Applied}");
         writer.WriteLine($"- add: {(result.AddLabels.Count == 0 ? "(none)" : string.Join(", ", result.AddLabels))}");
@@ -769,6 +1071,7 @@ internal static class WorkerCompleteCommand
         out int number,
         out string? outcome,
         out int? prNumber,
+        out string? explicitDomain,
         out string mode,
         out bool childCwd,
         out bool githubOnly,
@@ -780,6 +1083,7 @@ internal static class WorkerCompleteCommand
         number = 0;
         outcome = null;
         prNumber = null;
+        explicitDomain = null;
         mode = WorkerClaimCompleteConstants.Modes.DryRun;
         childCwd = false;
         githubOnly = false;
@@ -811,6 +1115,16 @@ internal static class WorkerCompleteCommand
                         return false;
                     }
                     repo = args[index + 1];
+                    index++;
+                    break;
+
+                case "--domain":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--domain requires a value (the durable execution-unit domain).";
+                        return false;
+                    }
+                    explicitDomain = args[index + 1].Trim();
                     index++;
                     break;
 
@@ -885,7 +1199,7 @@ internal static class WorkerCompleteCommand
 
                 default:
                     error =
-                        $"Unknown argument '{argument}'. Supported: --repo <owner/repo> --kind <issue|pr> --number <N> --outcome <outcome> [--pr <N>] [--write] [--dry-run] [--format text|json].";
+                        $"Unknown argument '{argument}'. Supported: --repo <owner/repo> --domain <name> --kind <issue|pr> --number <N> --outcome <outcome> [--pr <N>] [--write] [--dry-run] [--format text|json].";
                     return false;
             }
         }

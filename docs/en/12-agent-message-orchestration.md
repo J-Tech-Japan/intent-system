@@ -1640,10 +1640,11 @@ shape still refuses its conflict and has no force flag.
 
 #### Visible, generated mode markers
 
-The mode record remains the only source of truth, but a team should not have to
-remember to query it before noticing which transport it uses. Put one explicit
-empty managed block for each `(domain, team)` in an agent-startup file
-(`AGENTS.md` or `CLAUDE.md`), then generate its display from the recorded mode:
+The mode record remains the only source of truth for host session-layer domain
+identity and mode. A team should not have to remember to query it before
+noticing which transport it uses. Put one explicit empty managed block for each
+`(domain, team)` in an agent-startup file (`AGENTS.md` or `CLAUDE.md`), then
+generate its display from the recorded mode:
 
 ```text
 <!-- intent-cli:session-layer-marker:start domain="<domain>" team="<team>" -->
@@ -1654,10 +1655,24 @@ intent-cli session-layer marker generate --domain <domain> --team <team> --file 
 
 The generated block carries the domain, team, mode, canonical `session-layer
 show` verification command, and a hash of the resolved canonical record. It is
-never a host-global or bare mode claim. The writer reads only the record and
-updates only that delimited block; it refuses an unrecorded team (naming
-`session-layer set ... --write`), an absent block, or malformed markers, and
-never writes `session-layer-mode.json`.
+never a host-global or bare mode claim, and it never selects a worker domain.
+The writer reads only the record and updates only the requested delimited block.
+If another valid managed block is already present and the requested
+`(domain, team)` block is missing, `marker generate --write` appends the new
+block and reports `marker_action: appended`; it preserves the existing blocks
+and never asks the operator to hand-edit `AGENTS.md` or `CLAUDE.md`. An
+otherwise unmanaged file still refuses the first marker and names the
+placeholder contract. Unrecorded teams (naming `session-layer set ... --write`)
+and malformed markers are refused, and the writer never writes
+`session-layer-mode.json`.
+
+This distinction matters on a multi-domain host: `worker complete` resolves an
+issue-to-PR execution unit from its durable queue/packet domain, not from the
+visible marker or the host's default config domain. A matching durable domain
+is reported in the worker result (`domain_source: queue-record`); an explicit
+`--domain` must agree with it. A missing or contradictory durable identity
+fails closed with an exact worker re-invocation. PR-linkage recovery is not a
+domain-identity repair.
 
 The shared preflight discovers managed markers in `AGENTS.md` / `CLAUDE.md`.
 An unmarked recorded team produces informational `marker-not-generated` with

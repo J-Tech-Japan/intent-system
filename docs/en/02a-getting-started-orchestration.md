@@ -136,14 +136,15 @@ in [doc 12](12-agent-message-orchestration.md).
 
 ### 2.3 Generate the visible marker
 
-Before generating, add the one empty managed marker block for this domain/team
-to `AGENTS.md` or `CLAUDE.md` exactly as [doc 12's generated-marker
-section](12-agent-message-orchestration.md#visible-generated-mode-markers)
-specifies. Then paste this prompt:
+If `AGENTS.md` or `CLAUDE.md` already has another valid managed marker block,
+do not edit it or add a placeholder by hand. The canonical writer will append
+the missing `(domain, team)` block. Only a startup file with no managed block
+at all still needs the one empty placeholder described by [doc 12's
+generated-marker section](12-agent-message-orchestration.md#visible-generated-mode-markers).
+Then paste this prompt:
 
 > Generate the marker for the recorded domain `<domain>` and team `<team>`.
-> Run `intent-cli session-layer marker generate --domain <domain> --team <team> --file AGENTS.md --write --format json`, then show the JSON. Change only the
-> managed marker block.
+> Run `intent-cli session-layer marker generate --domain <domain> --team <team> --file AGENTS.md --write --format json`, then show the JSON. The command may append this domain's block when another managed block exists; it must preserve every other block.
 
 The scratch-host run returned this success shape (the record hash is dynamic):
 
@@ -155,7 +156,9 @@ The scratch-host run returned this success shape (the record hash is dynamic):
   "team": "docs-team",
   "mode": "herdr-only",
   "verify_command": "intent-cli session-layer show --domain onboarding --team docs-team",
-  "summary": "Generated the managed session-layer marker for team 'docs-team' in 'AGENTS.md'."
+  "marker_action": "appended",
+  "preserved_existing_blocks": 1,
+  "summary": "Appended the managed session-layer marker for domain 'onboarding' and team 'docs-team' in 'AGENTS.md'; preserved 1 existing managed block(s)."
 }
 ```
 

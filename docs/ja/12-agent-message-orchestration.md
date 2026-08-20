@@ -1406,9 +1406,10 @@ unknown または dotted name は任意の JSON path を編集できないよう
 
 #### 可視な生成済み mode marker
 
-mode record は唯一の source of truth のままですが、team が transport を知るために毎回 query を
-思い出す必要はありません。agent-startup file（`AGENTS.md` または `CLAUDE.md`）に各
-`(domain, team)` 用の明示的な空の managed block を 1 つ置き、recorded mode から display を生成します。
+mode record は host の session-layer domain identity と mode に対する唯一の source of truth です。
+team が transport を知るために毎回 query を思い出す必要はありません。agent-startup file
+（`AGENTS.md` または `CLAUDE.md`）に各 `(domain, team)` 用の明示的な空の managed block を 1 つ置き、
+recorded mode から display を生成します。
 
 ```text
 <!-- intent-cli:session-layer-marker:start domain="<domain>" team="<team>" -->
@@ -1418,10 +1419,20 @@ intent-cli session-layer marker generate --domain <domain> --team <team> --file 
 ```
 
 生成済み block は domain、team、mode、canonical な `session-layer show` verification command、
-resolved canonical record の hash を持ちます。host-global または bare な mode claim にはなりません。
-writer は record だけを読み、その delimited block だけを更新します。unrecorded team（`session-layer
-set ... --write` を明記）、absent block、malformed marker は拒否し、
+resolved canonical record の hash を持ちます。host-global または bare な mode claim にはならず、worker の
+domain を選択もしません。writer は record だけを読み、要求された delimited block だけを更新します。
+別の valid な managed block がすでにあり、要求された `(domain, team)` block だけが無い場合は、
+`marker generate --write` が新しい block を追加し、`marker_action: appended` を出力します。既存 block
+は保持され、operator に `AGENTS.md` / `CLAUDE.md` の手編集を求めません。managed block が 1 つもない
+通常の file では従来どおり最初の marker を拒否し、placeholder contract を示します。unrecorded team
+（`session-layer set ... --write` を明記）と malformed marker は拒否し、writer は
 `session-layer-mode.json` を書きません。
+
+この違いは multi-domain host で重要です。`worker complete` は issue-to-PR execution unit の永続的な
+queue/packet domain を使い、visible marker や host の default config domain を使いません。永続 domain
+が一致すると worker result に `domain_source: queue-record` が出ます。明示した `--domain` は永続的な
+domain と一致しなければなりません。永続 identity が欠落または矛盾する場合は安全側で停止し、正確な
+worker 再実行 command を出します。PR-linkage recovery は domain identity の修復ではありません。
 
 shared preflight は `AGENTS.md` / `CLAUDE.md` 内の managed marker を発見します。recorded team に
 marker がなければ generating command を含む informational な `marker-not-generated` です。mode または

@@ -75,6 +75,45 @@ public sealed class SessionLayerMarkerG601Tests : IDisposable
     }
 
     [Fact]
+    public void Generate_SecondRecordedDomainAppendsWithoutChangingExistingClaim_G724()
+    {
+        workspace.RecordDomain("domain-a", "alpha", SessionLayerMode.Agmsg);
+        workspace.RecordDomain("domain-b", "alpha", SessionLayerMode.HerdrOnly);
+        var file = workspace.WriteStartup(Placeholder("domain-a", "alpha") + "\n");
+
+        Assert.Equal(0, workspace.GenerateDomain("domain-a", "alpha", file).ExitCode);
+        var domainABefore = File.ReadAllText(file);
+
+        var (exitCode, result) = workspace.GenerateDomain("domain-b", "alpha", file);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("appended", result.GetProperty("marker_action").GetString());
+        Assert.True(result.GetProperty("written").GetBoolean());
+        var content = File.ReadAllText(file);
+        Assert.StartsWith(domainABefore, content, StringComparison.Ordinal);
+        Assert.Contains("domain=\"domain-a\" team=\"alpha\"", content, StringComparison.Ordinal);
+        Assert.Contains("domain=\"domain-b\" team=\"alpha\"", content, StringComparison.Ordinal);
+        Assert.Contains("mode=\"herdr-only\"", content, StringComparison.Ordinal);
+        Assert.Contains("preserved 1 existing managed block(s)", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generate_SingleDomainNoChangePreservesBytes_G724()
+    {
+        workspace.Record("alpha", SessionLayerMode.Agmsg);
+        var file = workspace.WriteStartup(Placeholder("alpha") + "\n");
+        Assert.Equal(0, workspace.Generate("alpha", file).ExitCode);
+        var before = File.ReadAllBytes(file);
+
+        var (exitCode, result) = workspace.Generate("alpha", file);
+
+        Assert.Equal(0, exitCode);
+        Assert.False(result.GetProperty("written").GetBoolean());
+        Assert.Equal("replaced", result.GetProperty("marker_action").GetString());
+        Assert.Equal(before, File.ReadAllBytes(file));
+    }
+
+    [Fact]
     public void Preflight_StaleMarkerFailsClosedAndNamesFileClaimAndTruth_G601()
     {
         workspace.Record("alpha", SessionLayerMode.HerdrOnly);
@@ -195,8 +234,10 @@ public sealed class SessionLayerMarkerG601Tests : IDisposable
         Assert.Contains("source of truth", guide, StringComparison.Ordinal);
     }
 
-    private static string Placeholder(string team) =>
-        $"<!-- intent-cli:session-layer-marker:start domain=\"intent-cli\" team=\"{team}\" -->\n"
+    private static string Placeholder(string team) => Placeholder("intent-cli", team);
+
+    private static string Placeholder(string domain, string team) =>
+        $"<!-- intent-cli:session-layer-marker:start domain=\"{domain}\" team=\"{team}\" -->\n"
         + "<!-- intent-cli:session-layer-marker:end -->";
 
     private static NotifyProcessResult Success(string output = "") => new(0, output, "");
@@ -266,18 +307,24 @@ public sealed class SessionLayerMarkerG601Tests : IDisposable
         }
 
         public void Record(string team, string mode)
+            => RecordDomain(Domain, team, mode);
+
+        public void RecordDomain(string domain, string team, string mode)
         {
             using var writer = new StringWriter();
             var exitCode = SessionLayerCommand.ExecuteSet(Context,
-                ["--domain", Domain, "--team", team, "--mode", mode, "--write", "--format", "json"], writer);
+                ["--domain", domain, "--team", team, "--mode", mode, "--write", "--format", "json"], writer);
             Assert.True(exitCode == 0, writer.ToString());
         }
 
         public (int ExitCode, JsonElement Result) Generate(string team, string file)
+            => GenerateDomain(Domain, team, file);
+
+        public (int ExitCode, JsonElement Result) GenerateDomain(string domain, string team, string file)
         {
             using var writer = new StringWriter();
             var exitCode = SessionLayerMarkerCommand.Execute(Context,
-                ["generate", "--domain", Domain, "--team", team, "--file", file, "--write", "--format", "json"], writer);
+                ["generate", "--domain", domain, "--team", team, "--file", file, "--write", "--format", "json"], writer);
             return (exitCode, JsonDocument.Parse(writer.ToString()).RootElement.Clone());
         }
 

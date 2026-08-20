@@ -21,7 +21,10 @@ causes silent rewrites and can make a worker for another domain fail closed.
    specific than a domain-wide entry, exactly as the existing mode resolver
    defines. Durable execution-unit or packet domain metadata is authoritative
    for the execution unit itself. An explicit worker `--domain` is accepted
-   only when it agrees with that durable domain metadata.
+   only when it agrees with the durable queue/packet domain or, for a legacy
+   domain-less queue row, with the authoritative session-layer record. It is
+   a migration binding for that legacy shape, never an override of declared
+   durable data.
 2. The generated startup-file marker is display and verification evidence
    only. It carries the domain, team, mode, and record hash so an operator can
    see which durable record a block represents, but it never establishes

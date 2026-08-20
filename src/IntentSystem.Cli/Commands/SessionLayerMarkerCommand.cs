@@ -102,7 +102,13 @@ internal static class SessionLayerMarkerCommand
             .Where(block => string.Equals(block.Domain, request.Domain, StringComparison.Ordinal)
                 && string.Equals(block.Team, request.Team, StringComparison.Ordinal))
             .ToArray();
-        if (candidates.Length != 1)
+        // G724: when a valid managed block already exists for another
+        // domain/team, the canonical writer performs the additive migration
+        // itself. Requiring a hand-placed placeholder would recreate the
+        // shared-file race this command is meant to prevent. Keep the
+        // first-time refusal for a file with no managed blocks.
+        var append = candidates.Length == 0 && parsed.Blocks.Count > 0;
+        if (candidates.Length > 1 || (candidates.Length == 0 && !append))
         {
             return Emit(writer, request.Format, new SessionLayerMarkerGenerateResult
             {
@@ -117,8 +123,8 @@ internal static class SessionLayerMarkerCommand
             });
         }
 
-        var marker = candidates[0];
-        if (!marker.IsEmpty && !marker.IsGenerated)
+        var marker = candidates.SingleOrDefault();
+        if (marker is not null && !marker.IsEmpty && !marker.IsGenerated)
         {
             return Emit(writer, request.Format, new SessionLayerMarkerGenerateResult
             {
@@ -132,7 +138,9 @@ internal static class SessionLayerMarkerCommand
 
         var recordHash = SessionLayerMarkerStore.Hash(resolution.Entry);
         var replacement = SessionLayerMarkerStore.Render(request.Domain, request.Team, resolution.Mode, recordHash);
-        var updated = content[..marker.StartIndex] + replacement + content[marker.EndIndex..];
+        var updated = append
+            ? content + (content.EndsWith("\n", StringComparison.Ordinal) ? string.Empty : "\n") + replacement
+            : content[..marker!.StartIndex] + replacement + content[marker.EndIndex..];
         if (request.Write && !string.Equals(content, updated, StringComparison.Ordinal))
         {
             File.WriteAllText(path, updated);
@@ -147,9 +155,15 @@ internal static class SessionLayerMarkerCommand
             Mode = resolution.Mode,
             VerifyCommand = SessionLayerMarkerStore.VerifyCommand(request.Domain, request.Team),
             RecordHash = recordHash,
+            MarkerAction = append ? "appended" : "replaced",
+            PreservedExistingBlocks = parsed.Blocks.Count,
             Summary = request.Write
-                ? $"Generated the managed session-layer marker for team '{request.Team}' in '{relativePath}'."
-                : $"Would generate the managed session-layer marker for team '{request.Team}' in '{relativePath}'.",
+                ? append
+                    ? $"Appended the managed session-layer marker for domain '{request.Domain}' and team '{request.Team}' in '{relativePath}'; preserved {parsed.Blocks.Count} existing managed block(s)."
+                    : $"Generated the managed session-layer marker for team '{request.Team}' in '{relativePath}'."
+                : append
+                    ? $"Would append the managed session-layer marker for domain '{request.Domain}' and team '{request.Team}' in '{relativePath}'; existing managed blocks would be preserved."
+                    : $"Would generate the managed session-layer marker for team '{request.Team}' in '{relativePath}'.",
         });
     }
 
@@ -257,6 +271,8 @@ internal sealed record SessionLayerMarkerGenerateResult
     [JsonPropertyName("mode")] public string? Mode { get; init; }
     [JsonPropertyName("verify_command")] public string? VerifyCommand { get; init; }
     [JsonPropertyName("record_hash")] public string? RecordHash { get; init; }
+    [JsonPropertyName("marker_action")] public string? MarkerAction { get; init; }
+    [JsonPropertyName("preserved_existing_blocks")] public int? PreservedExistingBlocks { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("recording_command")] public string? RecordingCommand { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
