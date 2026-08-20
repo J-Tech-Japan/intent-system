@@ -127,13 +127,14 @@ residency の選択肢と検証規則の詳細は [doc 12](12-agent-message-orch
 
 ### 2.3 可視の marker を生成する
 
-生成の前に、domain/team 用の空の managed marker block を `AGENTS.md` または `CLAUDE.md` に
-[doc 12 の生成済み marker 節](12-agent-message-orchestration.md#可視な生成済み-mode-marker)の
-指定どおり 1 つ置きます。続けて次のプロンプトを貼り付けます。
+`AGENTS.md` または `CLAUDE.md` に別 domain の valid な managed marker block がすでにある場合は、
+手編集したり placeholder を追加したりしません。canonical writer が不足している `(domain, team)` block
+を append します。managed block が 1 つもない file だけは、[doc 12 の生成済み marker 節](12-agent-message-orchestration.md#可視な生成済み-mode-marker)
+の指定どおり空の placeholder を 1 つ置きます。続けて次のプロンプトを貼り付けます。
 
 > 記録済み domain `<domain>`、team `<team>` の marker を生成してください。
 > `intent-cli session-layer marker generate --domain <domain> --team <team> --file AGENTS.md --write --format json`
-> を実行して JSON を表示してください。managed marker block だけを変更してください。
+> を実行して JSON を表示してください。別の managed block がある場合はこの domain の block を append し、他の block をすべて保持してください。
 
 scratch-host の実行時の成功形は次のとおりです（記録 hash は動的）。
 
@@ -145,7 +146,9 @@ scratch-host の実行時の成功形は次のとおりです（記録 hash は�
   "team": "docs-team",
   "mode": "herdr-only",
   "verify_command": "intent-cli session-layer show --domain onboarding --team docs-team",
-  "summary": "Generated the managed session-layer marker for team 'docs-team' in 'AGENTS.md'."
+  "marker_action": "appended",
+  "preserved_existing_blocks": 1,
+  "summary": "Appended the managed session-layer marker for domain 'onboarding' and team 'docs-team' in 'AGENTS.md'; preserved 1 existing managed block(s)."
 }
 ```
 

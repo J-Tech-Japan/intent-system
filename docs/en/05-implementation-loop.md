@@ -58,6 +58,25 @@ copy a long loop body from this document.
 - A child agent never applies `intent-target` (host-owned) or `intent-pr-created` (issue-side marker) to a PR
 - `linked_pr_synced: false` from `worker complete` is the expected child-cwd warning — record it and move on
 
+## G724: worker domain identity on a multi-domain host
+
+The startup marker is display evidence, not a worker binding. In host context,
+`worker complete --kind issue --outcome pr-created` resolves the execution-unit
+domain from the durable queue/packet record. A domain-B worker therefore remains
+eligible even when the shared `CLAUDE.md` currently displays domain A. The JSON
+result reports the selected `domain`, `domain_source` (normally
+`queue-record`), and `execution_unit`; worker completion does not rewrite the
+marker.
+
+If a host invocation supplies `--domain`, it must match the durable queue
+domain, or the authoritative session-layer record for a legacy domain-less
+queue row. Missing, contradictory, unreadable, or ambiguous durable identity
+is a fail-closed result with an exact re-invocation using `--domain <name>`.
+Use that worker-surface recovery after repairing/selecting the canonical queue
+or packet record. Do not hand-edit the marker, apply labels manually, or use
+PR-linkage recovery as a domain-identity workaround. Child `--github-only`
+remains metadata-free and does not read host queue state.
+
 ## Preview: Git-backed cross-clone scope claims (G679)
 
 The decision and its boundaries are recorded in
@@ -147,6 +166,11 @@ intent-cli worker claim --kind issue --number <n> --repo <owner>/<repo> --github
 intent-cli worker result-summary --kind issue-to-pr --repo <owner>/<repo> --issue <n> --pr <pr> --outcome <outcome> --format json
 intent-cli worker complete --kind issue --number <n> --repo <owner>/<repo> --github-only --outcome <outcome> --pr <pr> --write --format json
 ```
+
+For a host-side completion that needs explicit domain selection, add
+`--domain <durable-domain>` to the same `worker complete` command. It must
+agree with the queue/packet record; the startup marker never supplies or
+overrides it.
 
 ## Next
 

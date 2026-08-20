@@ -95,7 +95,7 @@ Implementation steps:
 5. Run the most relevant targeted tests. Report the command and the result. If broader validation is required by the repository contract or the touched area, run it too.
 6. Push the branch and create a draft PR with `gh pr create --draft --title ""..."" --body ""..."" --repo <OWNER>/<REPO>`.
 7. Do not add `intent-target` or `intent-pr-created` to the PR.
-8. From the parent host root, run `intent-cli worker result-summary --kind issue-to-pr --issue <n> --pr <pr-n> --repo <OWNER>/<REPO> --format json`, then `intent-cli worker complete --kind issue --number <n> --repo <OWNER>/<REPO> --outcome pr-created --write --format json`.
+8. From the parent host root, run `intent-cli worker result-summary --kind issue-to-pr --issue <n> --pr <pr-n> --repo <OWNER>/<REPO> --format json`, then `intent-cli worker complete --kind issue --number <n> --repo <OWNER>/<REPO> --outcome pr-created --write --format json`. On a multi-domain host, the worker resolves the execution-unit domain from durable queue/packet evidence; add `--domain <durable-domain>` only when selecting that recorded domain. The visible startup marker never supplies worker identity.
 
 Outcome classification:
 - `pr-created` — draft PR created successfully.
@@ -112,6 +112,7 @@ Hard rules:
 - Do not add `intent-target` to the PR; it is host-owned.
 - Do not add `intent-pr-created` to the PR; it is an issue-side completion marker applied by `worker complete`.
 - All label transitions go through `intent-cli worker claim` / `intent-cli worker complete`. No manual `gh ... edit --add-label` / `--remove-label` fallback for workflow labels.
+- If host-side completion reports missing, contradictory, unreadable, or ambiguous durable domain identity, follow the exact `worker complete ... --domain <name>` re-invocation it emits after repairing/selecting the canonical queue/packet record. Do not hand-edit `AGENTS.md` / `CLAUDE.md` or use PR-linkage recovery as a domain workaround.
 - Do not call `intent-cli run`. `run` is for integration smoke/replay/dogfooding, not the chat-first implementation path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.

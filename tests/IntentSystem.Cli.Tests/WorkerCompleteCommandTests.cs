@@ -239,7 +239,67 @@ public sealed class WorkerCompleteCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_DomainDisagreement_RefusesBeforeLabelOrQueueWrite()
+    public void Execute_DurableQueueDomainWinsOverHostDefaultAndCompletes()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        workspace.WriteQueueState(workspace.CreateItem("G724", "J-Tech-Japan/intent-system", 1305, "sekiban-as-a-service"));
+        var mutator = new FakeMutator { Labels = new[] { "intent-target", "intent-issue-in-progress" } };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup
+        {
+            Body = "Closes #1305",
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--kind", "issue", "--number", "1305",
+             "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated, "--pr", "1306", "--write", "--format", "json"], writer);
+
+        Assert.True(exitCode == 0, writer.ToString());
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.Equal("sekiban-as-a-service", result.Domain);
+        Assert.Equal("queue-record", result.DomainSource);
+        Assert.Equal("G724", result.ExecutionUnit);
+        Assert.NotEmpty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_TwoDomainHost_CompletesDomainBAndLeavesDomainAMarkerUntouched_G724()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        workspace.RecordSessionLayer("intent-cli", "alpha", SessionLayerMode.Agmsg);
+        workspace.RecordSessionLayer("sekiban-as-a-service", "beta", SessionLayerMode.HerdrOnly);
+        var startup = workspace.WriteStartupMarker(
+            "<!-- intent-cli:session-layer-marker:start domain=\"intent-cli\" team=\"alpha\" -->\n"
+            + "<!-- intent-cli:session-layer-marker:end -->\n");
+        workspace.GenerateSessionLayerMarker("intent-cli", "alpha", startup);
+        var markerBefore = File.ReadAllBytes(startup);
+        workspace.WriteQueueState(workspace.CreateItem("G724", "J-Tech-Japan/intent-system", 1570, "sekiban-as-a-service"));
+
+        var mutator = new FakeMutator { Labels = new[] { "intent-target", "intent-issue-in-progress" } };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup
+        {
+            Body = "Closes #1570",
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--kind", "issue", "--number", "1570",
+             "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated, "--pr", "1571", "--write", "--format", "json"], writer);
+
+        Assert.True(exitCode == 0, writer.ToString());
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.Equal("sekiban-as-a-service", result.Domain);
+        Assert.Equal("queue-record", result.DomainSource);
+        Assert.Equal("G724", result.ExecutionUnit);
+        Assert.Equal(markerBefore, File.ReadAllBytes(startup));
+        Assert.Contains("domain=\"intent-cli\" team=\"alpha\"", File.ReadAllText(startup), StringComparison.Ordinal);
+        Assert.DoesNotContain("sekiban-as-a-service", File.ReadAllText(startup), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ExplicitDomainContradiction_RefusesBeforeLabelOrQueueWrite()
     {
         using var workspace = new WorkerCompleteWorkspace();
         workspace.WriteQueueState(workspace.CreateItem("SKS-G593", "J-Tech-Japan/intent-system", 1305, "sekiban-as-a-service"));
@@ -249,14 +309,112 @@ public sealed class WorkerCompleteCommandTests : IDisposable
 
         using var writer = new StringWriter();
         var exitCode = WorkerCompleteCommand.Execute(workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--kind", "issue", "--number", "1305",
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--kind", "issue", "--number", "1305",
              "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated, "--pr", "1306", "--write", "--format", "json"], writer);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("J-Tech-Japan/intent-system#1305", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("explicit domain 'intent-cli'", writer.ToString(), StringComparison.Ordinal);
         Assert.Contains("sekiban-as-a-service", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("--domain sekiban-as-a-service", writer.ToString(), StringComparison.Ordinal);
         Assert.Empty(mutator.AppliedTransitions);
         Assert.Equal(before, File.ReadAllBytes(workspace.QueueStatePath));
+    }
+
+    [Fact]
+    public void Execute_MissingDurableDomainOnMultiDomainHost_EmitsWorkerRecovery()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        workspace.RecordSessionLayer("intent-cli", "alpha", SessionLayerMode.Agmsg);
+        workspace.RecordSessionLayer("sekiban-as-a-service", "beta", SessionLayerMode.HerdrOnly);
+        workspace.WriteQueueState(workspace.CreateItemWithoutDomain("G724-legacy", "J-Tech-Japan/intent-system", 1570));
+        var before = File.ReadAllBytes(workspace.QueueStatePath);
+        var mutator = new FakeMutator { Labels = new[] { "intent-target", "intent-issue-in-progress" } };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--kind", "issue", "--number", "1570",
+             "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated, "--pr", "1571", "--write", "--format", "json"], writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("has no declared domain", output, StringComparison.Ordinal);
+        Assert.Contains("--domain intent-cli", output, StringComparison.Ordinal);
+        Assert.Contains("--domain sekiban-as-a-service", output, StringComparison.Ordinal);
+        Assert.Contains(" or ", output, StringComparison.Ordinal);
+        Assert.Contains("startup marker", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(mutator.AppliedTransitions);
+        Assert.Equal(before, File.ReadAllBytes(workspace.QueueStatePath));
+    }
+
+    [Fact]
+    public void Execute_LegacyDomainlessRowWithoutRecordedSessionDomains_UsesPlaceholderRecovery_G724()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        workspace.WriteQueueState(workspace.CreateItemWithoutDomain("G724-legacy", "J-Tech-Japan/intent-system", 1570));
+        var before = File.ReadAllBytes(workspace.QueueStatePath);
+        var mutator = new FakeMutator { Labels = new[] { "intent-target", "intent-issue-in-progress" } };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--kind", "issue", "--number", "1570",
+             "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated, "--pr", "1571", "--write", "--format", "json"], writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("has no declared domain", output, StringComparison.Ordinal);
+        Assert.Contains("--domain <domain>", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("--domain intent-cli", output, StringComparison.Ordinal);
+        Assert.Contains("startup marker", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(mutator.AppliedTransitions);
+        Assert.Equal(before, File.ReadAllBytes(workspace.QueueStatePath));
+    }
+
+    [Fact]
+    public void Execute_ExplicitLegacyDomainMustAgreeWithRecordedSessionLayer_G724()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        workspace.RecordSessionLayer("sekiban-as-a-service", "beta", SessionLayerMode.HerdrOnly);
+        workspace.WriteQueueState(workspace.CreateItemWithoutDomain("G724-legacy", "J-Tech-Japan/intent-system", 1570));
+        var before = File.ReadAllBytes(workspace.QueueStatePath);
+        var mutator = new FakeMutator { Labels = new[] { "intent-target", "intent-issue-in-progress" } };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--kind", "issue", "--number", "1570",
+             "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated, "--pr", "1571", "--write", "--format", "json"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("explicit domain 'intent-cli'", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("session-layer record", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("--domain sekiban-as-a-service", writer.ToString(), StringComparison.Ordinal);
+        Assert.Empty(mutator.AppliedTransitions);
+        Assert.Equal(before, File.ReadAllBytes(workspace.QueueStatePath));
+    }
+
+    [Fact]
+    public void Execute_RecordedSessionLayerDomainIsUsedWhenIssueHasNoQueueMatch_G724()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        workspace.RecordSessionLayer("sekiban-as-a-service", "beta", SessionLayerMode.HerdrOnly);
+        workspace.WriteQueueState(workspace.CreateItemWithoutDomain("unrelated", "J-Tech-Japan/intent-system", 9999));
+        var mutator = new FakeMutator { Labels = new[] { "intent-target", "intent-issue-in-progress" } };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup { Body = "Closes #1570" };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--kind", "issue", "--number", "1570",
+             "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated, "--pr", "1571", "--dry-run", "--format", "json"], writer);
+
+        Assert.True(exitCode == 0, writer.ToString());
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(string.Equals(result.Domain, "sekiban-as-a-service", StringComparison.Ordinal), writer.ToString());
+        Assert.Equal("session-layer-record", result.DomainSource);
+        Assert.Null(result.ExecutionUnit);
+        Assert.Empty(mutator.AppliedTransitions);
     }
 
     [Theory]
@@ -2057,6 +2215,29 @@ public sealed class WorkerCompleteCommandTests : IDisposable
 
         public string QueueStatePath => Path.Combine(RootPath, ".intent-cli", "queue-state.json");
 
+        public void RecordSessionLayer(string domain, string team, string mode)
+        {
+            using var writer = new StringWriter();
+            var exitCode = SessionLayerCommand.ExecuteSet(Context,
+                ["--domain", domain, "--team", team, "--mode", mode, "--write", "--format", "json"], writer);
+            Assert.Equal(0, exitCode);
+        }
+
+        public string WriteStartupMarker(string content)
+        {
+            var path = Path.Combine(RootPath, "CLAUDE.md");
+            File.WriteAllText(path, content);
+            return path;
+        }
+
+        public void GenerateSessionLayerMarker(string domain, string team, string path)
+        {
+            using var writer = new StringWriter();
+            var exitCode = SessionLayerMarkerCommand.Execute(Context,
+                ["generate", "--domain", domain, "--team", team, "--file", path, "--write", "--format", "json"], writer);
+            Assert.Equal(0, exitCode);
+        }
+
         /// <summary>G283: seed queue-state.json with a single execution-unit row whose
         /// linked_issue.number matches the source issue, optionally pre-filling linked_pr
         /// (for the idempotent rerun test).</summary>
@@ -2079,7 +2260,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                         State = QueueItemState.Queued,
                         Dependencies = Array.Empty<string>(),
                         BlockedBy = Array.Empty<string>(),
-                        ClarificationReturnPath = string.Empty,
+                        ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
                         PacketPaths = new PacketPaths
                         {
                             Implementation = $".intent-cli/issues/{executionUnit}/implementation.md",
@@ -2114,6 +2295,23 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                 PacketPaths = new PacketPaths { Implementation = "i", ReviewContext = "r", Yaml = "p" },
                 LinkedIssue = new LinkedIssue { Repo = repo, Number = issue, Url = $"https://github.com/{repo}/issues/{issue}" },
                 LinkedPr = existingLinkedPr,
+                WorkerRole = "child-impl",
+                ReviewRole = "host-review",
+                Priority = "normal",
+            };
+
+        public QueueItem CreateItemWithoutDomain(string executionUnit, string repo, int issue) =>
+            new()
+            {
+                ExecutionUnit = executionUnit,
+                Title = executionUnit,
+                State = QueueItemState.Queued,
+                Dependencies = Array.Empty<string>(),
+                BlockedBy = Array.Empty<string>(),
+                ClarificationReturnPath = string.Empty,
+                PacketPaths = new PacketPaths { Implementation = "i", ReviewContext = "r", Yaml = "p" },
+                LinkedIssue = new LinkedIssue { Repo = repo, Number = issue, Url = $"https://github.com/{repo}/issues/{issue}" },
+                LinkedPr = null,
                 WorkerRole = "child-impl",
                 ReviewRole = "host-review",
                 Priority = "normal",

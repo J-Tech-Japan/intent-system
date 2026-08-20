@@ -57,6 +57,21 @@
 - child agent は PR に `intent-target`（host 所有）や `intent-pr-created`（issue 側マーカー）を付けない
 - `worker complete` の `linked_pr_synced: false` は child-cwd で想定される警告 — 記録して先に進む
 
+## G724: multi-domain host の worker domain identity
+
+startup marker は display evidence であり、worker binding ではありません。host context の
+`worker complete --kind issue --outcome pr-created` は execution-unit の domain を durable な
+queue/packet record から解決します。そのため shared `CLAUDE.md` が現在 domain A を表示していても、
+domain B の worker は完了できます。JSON result には選択された `domain`、通常は `queue-record` となる
+`domain_source`、`execution_unit` が出力され、worker complete は marker を書き換えません。
+
+host invocation で `--domain` を指定する場合は durable queue domain、または domain のない legacy queue
+row では authoritative な session-layer record と一致する必要があります。durable identity が欠落、矛盾、
+読取不能、または曖昧な場合は fail closed し、`--domain <name>` を含む正確な再実行 command を出力します。
+canonical queue/packet record を修復または選択してから、その worker surface recovery を使います。marker の
+手編集、手動 label 操作、PR-linkage recovery による domain identity 回避は行いません。child の
+`--github-only` は metadata-free のままで host queue state を読みません。
+
 ## Preview: Git-backed cross-clone scope claim (G679)
 
 この decision と boundary は
@@ -141,6 +156,10 @@ intent-cli worker claim --kind issue --number <n> --repo <owner>/<repo> --github
 intent-cli worker result-summary --kind issue-to-pr --repo <owner>/<repo> --issue <n> --pr <pr> --outcome <outcome> --format json
 intent-cli worker complete --kind issue --number <n> --repo <owner>/<repo> --github-only --outcome <outcome> --pr <pr> --write --format json
 ```
+
+host-side completion で domain を明示的に選ぶ場合は、同じ `worker complete` command に
+`--domain <durable-domain>` を加えます。queue/packet record と一致しなければならず、startup marker が
+domain を供給・上書きすることはありません。
 
 ## 次へ
 

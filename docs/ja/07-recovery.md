@@ -88,11 +88,16 @@ child-loop 所有の修復が存在するかを示す。host 所有のカテゴ�
 > `linkage-ambiguous` エラーで fail closed する。その場合のみ正しい `--issue <n>` で再実行する。
 > child `--github-only` ループは `linked_pr` を書かない。この recovery は host closeout surface の責務。
 
-> **repo-qualified linkage と completed repair（G603）。** GitHub の issue / PR
+> **repo-qualified linkage と completed repair（G603/G724）。** GitHub の issue / PR
 > 番号は `owner/repo` と組になって初めて identity になる。worker complete、closeout、
 > review planning、stalled-work は bare な番号または別 repo の linkage を拒否し、
-> 同じ番号の foreign queue item を選ばない。host context の `worker complete` は、
-> 選ばれた unit の declared domain と command domain が違う write も拒否する。
+> 同じ番号の foreign queue item を選ばない。host context の `worker complete` は
+> execution-unit の domain を durable な queue/packet record から解決する。
+> `AGENTS.md` / `CLAUDE.md` の visible marker と host の default domain は display/default
+> context にすぎず、明示した `--domain` は durable domain と一致しなければならない。
+> durable identity が欠落、矛盾、読取不能、または曖昧なら worker は fail closed し、canonical
+> queue/packet record を修復した後に実行する正確な `worker complete ... --domain <name>` 再実行を出す。
+> これが sanctioned な domain recovery であり、PR-linkage recovery は代替にならない。
 > completed unit の `linked_pr` が別 repo を指す場合は
 > `automation host-queue-item-recovery --repo <owner/repo> --unit <unit> --issue <n> --pr <n> --write`
 > を使う。提案する PR の存在・merged・その unit 自身の issue を closes することを
