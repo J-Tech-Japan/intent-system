@@ -337,9 +337,36 @@ public sealed class WorkerCompleteCommandTests : IDisposable
              "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated, "--pr", "1571", "--write", "--format", "json"], writer);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("has no declared domain", writer.ToString(), StringComparison.Ordinal);
-        Assert.Contains("--domain intent-cli", writer.ToString(), StringComparison.Ordinal);
-        Assert.Contains("startup marker", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+        var output = writer.ToString();
+        Assert.Contains("has no declared domain", output, StringComparison.Ordinal);
+        Assert.Contains("--domain intent-cli", output, StringComparison.Ordinal);
+        Assert.Contains("--domain sekiban-as-a-service", output, StringComparison.Ordinal);
+        Assert.Contains(" or ", output, StringComparison.Ordinal);
+        Assert.Contains("startup marker", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(mutator.AppliedTransitions);
+        Assert.Equal(before, File.ReadAllBytes(workspace.QueueStatePath));
+    }
+
+    [Fact]
+    public void Execute_LegacyDomainlessRowWithoutRecordedSessionDomains_UsesPlaceholderRecovery_G724()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        workspace.WriteQueueState(workspace.CreateItemWithoutDomain("G724-legacy", "J-Tech-Japan/intent-system", 1570));
+        var before = File.ReadAllBytes(workspace.QueueStatePath);
+        var mutator = new FakeMutator { Labels = new[] { "intent-target", "intent-issue-in-progress" } };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--kind", "issue", "--number", "1570",
+             "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated, "--pr", "1571", "--write", "--format", "json"], writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("has no declared domain", output, StringComparison.Ordinal);
+        Assert.Contains("--domain <domain>", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("--domain intent-cli", output, StringComparison.Ordinal);
+        Assert.Contains("startup marker", output, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(mutator.AppliedTransitions);
         Assert.Equal(before, File.ReadAllBytes(workspace.QueueStatePath));
     }

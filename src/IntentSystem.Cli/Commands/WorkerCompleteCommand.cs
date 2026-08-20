@@ -709,11 +709,22 @@ internal static class WorkerCompleteCommand
                     matches[0].Item.ExecutionUnit);
             }
 
-            var suggestedDomain = context.Config.Project.Domain;
+            if (recordedDomains.Length > 1)
+            {
+                var suggestions = string.Join(
+                    " or ",
+                    recordedDomains.Select(domain => $"`{BuildDomainReinvocation(repo, issueNumber, outcome, prNumber, domain, mode)}`"));
+                return WorkerDomainResolution.Error(
+                    $"refused worker complete: queue row '{matches[0].Item.ExecutionUnit}' for {repo}#{issueNumber} has no "
+                    + "declared domain and this host records multiple session-layer domains "
+                    + $"({string.Join(", ", recordedDomains)}). Choose the packet domain explicitly: {suggestions}. "
+                    + "A startup marker or PR-linkage recovery cannot supply missing durable identity.");
+            }
+
             return WorkerDomainResolution.Error(
                 $"refused worker complete: queue row '{matches[0].Item.ExecutionUnit}' for {repo}#{issueNumber} has no "
                 + "declared domain. Re-invoke from the worker surface with the domain recorded for its packet: "
-                + $"`{BuildDomainReinvocation(repo, issueNumber, outcome, prNumber, suggestedDomain, mode)}`. "
+                + $"`{BuildDomainReinvocation(repo, issueNumber, outcome, prNumber, "<domain>", mode)}`. "
                 + "A startup marker or PR-linkage recovery cannot supply missing durable identity.");
         }
 
