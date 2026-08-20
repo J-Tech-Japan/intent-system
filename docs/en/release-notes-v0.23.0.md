@@ -85,6 +85,11 @@ The first-parent merge accounting for the prepared line is:
 
 - `eng/version.json` is the single policy source: `stableVersion` is `0.22.0`
   and `nextVersion` is `0.23.0`.
+- **Release identity evidence source revision:**
+  `39611e5e0f024591cc961b20bc99ada2b8e22c38`, the reviewed PR head before
+  this documentation-only repair. This provenance is intentional: the repair
+  changes the PR head, so the pasted identity below must not be presented as
+  output from the post-repair commit.
 - The Release build command was:
 
 ```bash
@@ -92,7 +97,7 @@ dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
 ```
 
-It reported exactly `intent-cli 0.23.0-e25d770-G716`.
+It reported exactly `intent-cli 0.23.0-39611e5-G718`.
 - The two new command surfaces were independently probed from that build:
 
 ```bash

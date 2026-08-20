@@ -81,6 +81,10 @@ prepared line の first-parent merge accounting は次の通りです:
 
 - `eng/version.json` が single policy source です: `stableVersion` は `0.22.0`、
   `nextVersion` は `0.23.0` です。
+- **Release identity evidence source revision:**
+  `39611e5e0f024591cc961b20bc99ada2b8e22c38`（この documentation-only repair
+  前の reviewed PR head。この source tree から build した結果を貼り付けて
+  います。repair 後の commit の出力とは主張しません。）
 - Release build の command は次の通りです:
 
 ```bash
@@ -88,7 +92,7 @@ dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
 ```
 
-表示された identity は正確に `intent-cli 0.23.0-e25d770-G716` でした。
+表示された identity は正確に `intent-cli 0.23.0-39611e5-G718` でした。
 - その build から二つの新 command surface を独立に probe しました:
 
 ```bash

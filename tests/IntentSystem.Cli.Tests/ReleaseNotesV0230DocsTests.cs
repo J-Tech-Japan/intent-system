@@ -10,6 +10,10 @@ namespace IntentSystem.Cli.Tests;
 /// </summary>
 public sealed class ReleaseNotesV0230DocsTests
 {
+    private const string ReleaseIdentityEvidenceSourceRevision =
+        "39611e5e0f024591cc961b20bc99ada2b8e22c38";
+    private const string ReleaseIdentityEvidence = "intent-cli 0.23.0-39611e5-G718";
+
     private static readonly (string Unit, string[] Prs, string[] Merges)[] Units =
     [
         ("G710", ["#1537"], ["335bb686ba966368abbdadac149bc27d9aea7c6b"]),
@@ -144,6 +148,35 @@ public sealed class ReleaseNotesV0230DocsTests
                 Assert.Contains(merge, notes, StringComparison.Ordinal);
             }
         }
+    }
+
+    [Fact]
+    public void ReleaseIdentityEvidence_IsMirroredAndBoundToItsProducingRevision_G718Repair()
+    {
+        var notes = new[] { Read("en"), Read("ja") };
+        var sourceRevisions = notes
+            .Select(note => Regex.Match(
+                note,
+                @"(?m)^- \*\*Release identity evidence source revision:\*\*\s*`(?<sha>[0-9a-f]{40})`"))
+            .ToArray();
+        var identities = notes
+            .Select(note => Regex.Match(
+                note,
+                @"intent-cli (?<version>0\.23\.0)-(?<sha>[0-9a-f]{7})-(?<unit>G\d+)"))
+            .ToArray();
+
+        Assert.All(sourceRevisions, match => Assert.True(match.Success, "Release identity evidence must name its source revision."));
+        Assert.All(identities, match => Assert.True(match.Success, "Release identity evidence must include a display identity."));
+        Assert.Equal(ReleaseIdentityEvidenceSourceRevision, sourceRevisions[0].Groups["sha"].Value);
+        Assert.Equal(ReleaseIdentityEvidenceSourceRevision, sourceRevisions[1].Groups["sha"].Value);
+        Assert.Equal(sourceRevisions[0].Groups["sha"].Value, sourceRevisions[1].Groups["sha"].Value);
+        Assert.Equal(ReleaseIdentityEvidence, identities[0].Value);
+        Assert.Equal(ReleaseIdentityEvidence, identities[1].Value);
+        Assert.Equal(
+            sourceRevisions[0].Groups["sha"].Value[..7],
+            identities[0].Groups["sha"].Value);
+        Assert.Equal("G718", identities[0].Groups["unit"].Value);
+        Assert.All(notes, note => Assert.Contains("documentation-only repair", note, StringComparison.OrdinalIgnoreCase));
     }
 
     private static string Read(string language) =>
