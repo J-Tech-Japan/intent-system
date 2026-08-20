@@ -30,22 +30,25 @@ GitHub Release を作成せず、package を publish せず、credential を扱�
 
 ## Preview lane — feature description より先に読む
 
-G710 から G716 は引き続き preview-through-1.x surface です。
+G710 から G720 は引き続き preview-through-1.x surface です。
 [1.0 compatibility promise](1.0-compatibility-promise.md) が明示的に更新されるまでこの範囲の外であり、
 minor version だけから stability guarantee を推測しないでください。
 
-## 正確に七件の merged feature unit
+## 正確に十一件の merged feature unit
 
 v0.22.0 tag `c06dc49e89446bf3b723612dd72004d628914734` から prepared head
-`e25d770caacbcdafa2aa9bebea72e895dc22fcbb` までには正確に twenty commits があります。
+`be13f7c0b9b306dad99d692903cee8837b31f0e8` までには正確に twenty-six commits があります。
 post-release roll の `c48a5635` はその一つですが、**release execution unit ではありません**。
-下記の inventory は正確に七件、G710 から G716 だけを対象にします。first-parent accounting
+下記の inventory は正確に十一件、G710 から G720 を対象にします。first-parent accounting
 には次を使いました:
 
 ```bash
+git rev-list --count v0.22.0..HEAD
 git log --first-parent v0.22.0..origin/main
 git log --first-parent v0.22.0..main
 ```
+
+count command の結果は、指定した prepared head に対して `26` でした。
 
 - G710 — PR #1537; v0.22.0 の released verification evidence、policy-derived version check、
   bilingual release documentation を修復しました。product feature の追加ではありません。merge commit `335bb686ba966368abbdadac149bc27d9aea7c6b`。
@@ -62,6 +65,18 @@ git log --first-parent v0.22.0..main
   `.git` claim は retracted/corrected されました。corrected rule は exact `<repo>/.git` root が
   measured metadata write を可能にすることを示しつつ、この recipe では least privilege を保つ
   non-sandboxed host-state routing を選びます。`git worktree add` は未測定です。merge commit `4b0a1a31b075746927d0d73c6f9b370c531e9845`。
+- G717 — PR #1559; claims-enabled host では、古い `intent-issue-in-progress` label だけで worker が
+  issue を所有済みとは扱いません。execution-unit claim が未保持なら preflight は進み、保持中なら
+  worker を止めて owner を示します。merge commit `68c11039f4335df7799c65c814c39873132f4c68`。
+- G718 — PR #1558; この line の bilingual v0.23.0 release notes と release-readiness evidence を
+  prepare しました。tag、GitHub Release、package publish、credential の処理、post-release roll は
+  作成・実行しません。merge commit `e7cbba0ce2d143edd19e1c60804073e41ac9401d`。
+- G719 — PR #1562; host routing root に write できない implementation seat でも report を sender-local
+  （seat-local）に保存して orchestration に handoff でき、external reader には delegation-level routing fault を
+  表示します。merge commit `bc13c9436b98cc48aa02c4eb85cfbb99e9fab598`。
+- G720 — PR #1563; Target section に authored `- Target paths: <path>` line がなければ、
+  `issue validate-body` が issue creation 前に distinct diagnostic で拒否し、historical published
+  body は legacy consumer で引き続き受理されます。merge commit `be13f7c0b9b306dad99d692903cee8837b31f0e8`。
 
 prepared line の first-parent merge accounting は次の通りです:
 
@@ -76,15 +91,21 @@ prepared line の first-parent merge accounting は次の通りです:
 | `c21c2c7e2e976914eed5231148cc1f1f6cf3c5e3` | G714 / PR #1548 |
 | `4b0a1a31b075746927d0d73c6f9b370c531e9845` | G716 / PR #1553 |
 | `e25d770caacbcdafa2aa9bebea72e895dc22fcbb` | G715 / PR #1554 |
+| `e7cbba0ce2d143edd19e1c60804073e41ac9401d` | G718 / PR #1558 |
+| `ea17d02d9489c60ee96e0d088693814b1daad945` | G717 claim handoff; release execution unit ではありません |
+| `68c11039f4335df7799c65c814c39873132f4c68` | G717 / PR #1559 |
+| `7f0233080366c86dd449aa7873b339037a7f8f39` | G719 claim handoff; release execution unit ではありません |
+| `bc13c9436b98cc48aa02c4eb85cfbb99e9fab598` | G719 / PR #1562 |
+| `be13f7c0b9b306dad99d692903cee8837b31f0e8` | G720 / PR #1563; prepared head |
 
 ## Release-readiness evidence
 
 - `eng/version.json` が single policy source です: `stableVersion` は `0.22.0`、
   `nextVersion` は `0.23.0` です。
 - **Release identity evidence source revision:**
-  `39611e5e0f024591cc961b20bc99ada2b8e22c38`（この documentation-only repair
-  前の reviewed PR head。この source tree から build した結果を貼り付けて
-  います。repair 後の commit の出力とは主張しません。）
+  `be13f7c0b9b306dad99d692903cee8837b31f0e8`（上で指定した exact prepared
+  head。この documentation-only PR で checkout を変更する前に、この revision
+  から Release build を実行しました。）
 - Release build の command は次の通りです:
 
 ```bash
@@ -92,7 +113,7 @@ dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
 ```
 
-表示された identity は正確に `intent-cli 0.23.0-39611e5-G718` でした。
+表示された identity は正確に `intent-cli 0.23.0-be13f7c-G718` でした。
 - その build から二つの新 command surface を独立に probe しました:
 
 ```bash
@@ -102,16 +123,22 @@ dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll guide workf
 
 前者は reconcile/uninstall usage を表示して exit 0、後者は
 `metadata_free: true` と `read_only: true` を含む contract を表示して exit 0 でした。
-- required release-note documentation tests と version-source policy guard の command（readiness section の
-  filter）は **136 passed、0 skipped、0 failed、total 136** でした。
-- full command `dotnet test IntentSystem.sln --configuration Release -p:NuGetAudit=false` は
-  **5,462 passed、1 skipped、0 failed、total 5,463** でした。
+- focused release-note documentation と version-source policy guard は次の command で実行しました:
+
+```bash
+dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj --configuration Release --no-build --no-restore -p:IsTestProject=true --filter 'FullyQualifiedName~ReleaseNotesV0230DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests'
+```
+
+**12 passed、0 skipped、0 failed、total 12** でした。
+- eleven test project を対象にした full Release sweep は **5,474 passed、1 skipped、2 failed、total 5,477** でした。
+  failure は既存の `PackagedInvocationSmokeTests` だけで、child `dotnet pack` が shared NuGet vulnerability cache を
+  更新できず (`NU1900`、permission denied) に失敗しました。この documentation/test edit の failure ではありません。
 - `docs/en/release-notes-v0.22.1.md` と `docs/ja/release-notes-v0.22.1.md` は superseded のため削除し、
   この 0.23.0 notes を bilingual replacement にします。
 
 ## Prepare-only boundary
 
-この change set は version policy と release documentation だけを変更します。tag や GitHub Release を
+この change set は prepared bilingual release documentation とその documentation test だけを変更します。tag や GitHub Release を
 作成せず、package を publish せず、credential を扱わず、post-release roll を実行しません。
 公開後の post-release roll は別の action です: `stableVersion` を公開済み version にし、
 `nextVersion` を次の patch にし、次の DRAFT stub を追加し、両言語の readiness section を更新して、

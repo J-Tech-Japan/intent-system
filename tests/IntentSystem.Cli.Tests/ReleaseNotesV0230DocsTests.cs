@@ -4,15 +4,15 @@ using IntentSystem.Cli.Infrastructure;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G718: the prepared v0.23.0 notes are a bilingual inventory of exactly
-/// G710 through G716, with the two new command surfaces and the G714/G716
-/// guidance corrections made explicit.
+/// G721: the prepared v0.23.0 notes are a bilingual inventory of exactly
+/// G710 through G720, with operator-observable G717/G719/G720 behaviour and
+/// the prepared-head release identity made explicit.
 /// </summary>
 public sealed class ReleaseNotesV0230DocsTests
 {
     private const string ReleaseIdentityEvidenceSourceRevision =
-        "39611e5e0f024591cc961b20bc99ada2b8e22c38";
-    private const string ReleaseIdentityEvidence = "intent-cli 0.23.0-39611e5-G718";
+        "be13f7c0b9b306dad99d692903cee8837b31f0e8";
+    private const string ReleaseIdentityEvidence = "intent-cli 0.23.0-be13f7c-G718";
 
     private static readonly (string Unit, string[] Prs, string[] Merges)[] Units =
     [
@@ -26,6 +26,10 @@ public sealed class ReleaseNotesV0230DocsTests
         ("G714", ["#1548"], ["c21c2c7e2e976914eed5231148cc1f1f6cf3c5e3"]),
         ("G715", ["#1554"], ["e25d770caacbcdafa2aa9bebea72e895dc22fcbb"]),
         ("G716", ["#1553"], ["4b0a1a31b075746927d0d73c6f9b370c531e9845"]),
+        ("G717", ["#1559"], ["68c11039f4335df7799c65c814c39873132f4c68"]),
+        ("G718", ["#1558"], ["e7cbba0ce2d143edd19e1c60804073e41ac9401d"]),
+        ("G719", ["#1562"], ["bc13c9436b98cc48aa02c4eb85cfbb99e9fab598"]),
+        ("G720", ["#1563"], ["be13f7c0b9b306dad99d692903cee8837b31f0e8"]),
     ];
 
     private static readonly string[] RangeCommits =
@@ -39,12 +43,18 @@ public sealed class ReleaseNotesV0230DocsTests
         "c21c2c7e2e976914eed5231148cc1f1f6cf3c5e3",
         "4b0a1a31b075746927d0d73c6f9b370c531e9845",
         "e25d770caacbcdafa2aa9bebea72e895dc22fcbb",
+        "e7cbba0ce2d143edd19e1c60804073e41ac9401d",
+        "ea17d02d9489c60ee96e0d088693814b1daad945",
+        "68c11039f4335df7799c65c814c39873132f4c68",
+        "7f0233080366c86dd449aa7873b339037a7f8f39",
+        "bc13c9436b98cc48aa02c4eb85cfbb99e9fab598",
+        "be13f7c0b9b306dad99d692903cee8837b31f0e8",
     ];
 
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void NotesCoverExactlyG710ThroughG716WithVerifiedPrsAndMerges(string language)
+    public void NotesCoverExactlyG710ThroughG720WithVerifiedPrsAndMerges(string language)
     {
         var notes = Read(language);
         var listed = Regex.Matches(notes, @"(?m)^- (G\d+) —")
@@ -52,7 +62,7 @@ public sealed class ReleaseNotesV0230DocsTests
             .ToArray();
 
         Assert.Equal(Units.Select(unit => unit.Unit), listed);
-        Assert.Equal(7, listed.Length);
+        Assert.Equal(11, listed.Length);
         foreach (var unit in Units)
         {
             var bullet = Regex.Match(notes, $@"(?m)^- {Regex.Escape(unit.Unit)} —[^\r\n]*$");
@@ -72,10 +82,12 @@ public sealed class ReleaseNotesV0230DocsTests
         Assert.Contains("git log --first-parent v0.22.0..origin/main", notes, StringComparison.Ordinal);
         Assert.Contains("git log --first-parent v0.22.0..main", notes, StringComparison.Ordinal);
         Assert.Contains(
-            language == "en" ? "exactly seven merged feature units" : "正確に七件の merged feature unit",
+            language == "en" ? "exactly eleven merged feature units" : "正確に十一件の merged feature unit",
             notes,
             StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("twenty commits", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("twenty-six commits", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("be13f7c0b9b306dad99d692903cee8837b31f0e8", notes, StringComparison.Ordinal);
+        Assert.Contains("git rev-list --count v0.22.0..HEAD", notes, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -85,7 +97,7 @@ public sealed class ReleaseNotesV0230DocsTests
     {
         var notes = Read(language);
 
-        Assert.Equal(9, RangeCommits.Length);
+        Assert.Equal(15, RangeCommits.Length);
         Assert.Equal(RangeCommits.Length, RangeCommits.Distinct(StringComparer.Ordinal).Count());
         foreach (var commit in RangeCommits)
         {
@@ -114,6 +126,15 @@ public sealed class ReleaseNotesV0230DocsTests
         Assert.Contains("linkage-recovered", notes, StringComparison.Ordinal);
         Assert.Contains("G714", notes, StringComparison.Ordinal);
         Assert.Contains("G716", notes, StringComparison.Ordinal);
+        Assert.Contains("G717", notes, StringComparison.Ordinal);
+        Assert.Contains("G718", notes, StringComparison.Ordinal);
+        Assert.Contains("G719", notes, StringComparison.Ordinal);
+        Assert.Contains("G720", notes, StringComparison.Ordinal);
+        Assert.Contains("claims-enabled host", compact, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("intent-issue-in-progress", compact, StringComparison.Ordinal);
+        Assert.Contains("sender-local", compact, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("delegation-level routing fault", compact, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Target paths", notes, StringComparison.Ordinal);
         Assert.Contains(
             language == "en" ? "correction, not a feature" : "feature ではなく correction",
             compact,
@@ -151,7 +172,7 @@ public sealed class ReleaseNotesV0230DocsTests
     }
 
     [Fact]
-    public void ReleaseIdentityEvidence_IsMirroredAndBoundToItsProducingRevision_G718Repair()
+    public void ReleaseIdentityEvidence_IsMirroredAndBoundToItsProducingRevision_G721()
     {
         var notes = new[] { Read("en"), Read("ja") };
         var sourceRevisions = notes
@@ -176,7 +197,7 @@ public sealed class ReleaseNotesV0230DocsTests
             sourceRevisions[0].Groups["sha"].Value[..7],
             identities[0].Groups["sha"].Value);
         Assert.Equal("G718", identities[0].Groups["unit"].Value);
-        Assert.All(notes, note => Assert.Contains("documentation-only repair", note, StringComparison.OrdinalIgnoreCase));
+        Assert.All(notes, note => Assert.Contains("exact prepared", note, StringComparison.OrdinalIgnoreCase));
     }
 
     private static string Read(string language) =>
