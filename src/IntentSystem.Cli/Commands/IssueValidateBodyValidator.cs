@@ -1,13 +1,19 @@
+using System.Text.RegularExpressions;
+
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
 /// Pure validator for standalone Markdown child issue bodies (G183). Checks
-/// the 10 host-review-loop Child Issue Contract headings and ensures the
-/// <c>Related Links</c> section contains at least one non-placeholder list
-/// item. Read-only and side-effect-free.
+/// the 10 host-review-loop Child Issue Contract headings and, when requested
+/// by the drafter-facing command, ensures the <c>Target Repo / Path / Part</c>
+/// section declares target paths. It also ensures the <c>Related Links</c>
+/// section contains at least one non-placeholder list item. Read-only and
+/// side-effect-free.
 /// </summary>
 internal static class IssueValidateBodyValidator
 {
+    private const string TargetRepoPathPartHeading = "Target Repo / Path / Part";
+
     /// <summary>
     /// Required Child Issue Contract headings, in canonical order.
     /// "Target Repo / Path / Part" is the canonical form; the hyphen variant
@@ -42,7 +48,21 @@ internal static class IssueValidateBodyValidator
         "-"
     };
 
-    public static IssueValidateBodyResult Validate(string sourcePath, string content)
+    // The strict drafter-facing check requires the canonical bullet form. The
+    // packet-draft guide and scaffold emit this exact line; legacy consumers
+    // do not opt into this check, so already-published bodies are not
+    // retroactively invalidated.
+    private static readonly Regex TargetPathsDeclarationRegex = new(
+        @"^\s*-\s+Target paths:\s*(?<paths>\S.*)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // The strict target-path check is opt-in so legacy consumers that inspect
+    // already-published bodies do not retroactively invalidate them. The
+    // standalone `issue validate-body` command opts in before issue creation.
+    public static IssueValidateBodyResult Validate(
+        string sourcePath,
+        string content,
+        bool requireTargetPathsDeclaration = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
         ArgumentNullException.ThrowIfNull(content);
@@ -64,7 +84,17 @@ internal static class IssueValidateBodyValidator
             (relatedLinksInvalid, relatedLinksReason) = ValidateRelatedLinks(relatedLinksBody);
         }
 
-        var isValid = missing.Count == 0 && !relatedLinksInvalid;
+        var targetPathsInvalid = false;
+        string? targetPathsReason = null;
+        if (requireTargetPathsDeclaration
+            && TryGetSection(TargetRepoPathPartHeading, sections, out var targetSectionBody))
+        {
+            (targetPathsInvalid, targetPathsReason) = ValidateTargetPathsDeclaration(targetSectionBody);
+        }
+
+        var isValid = missing.Count == 0
+            && !relatedLinksInvalid
+            && !targetPathsInvalid;
 
         return new IssueValidateBodyResult
         {
@@ -72,7 +102,9 @@ internal static class IssueValidateBodyValidator
             IsValid = isValid,
             MissingHeadings = missing,
             RelatedLinksInvalid = relatedLinksInvalid,
-            RelatedLinksReason = relatedLinksReason
+            RelatedLinksReason = relatedLinksReason,
+            TargetPathsInvalid = targetPathsInvalid,
+            TargetPathsReason = targetPathsReason
         };
     }
 
@@ -91,6 +123,31 @@ internal static class IssueValidateBodyValidator
             }
         }
 
+        return false;
+    }
+
+    private static bool TryGetSection(
+        string canonicalHeading,
+        IReadOnlyDictionary<string, string> sections,
+        out string body)
+    {
+        if (sections.TryGetValue(canonicalHeading, out body!))
+        {
+            return true;
+        }
+
+        if (HeadingAliases.TryGetValue(canonicalHeading, out var aliases))
+        {
+            foreach (var alias in aliases)
+            {
+                if (sections.TryGetValue(alias, out body!))
+                {
+                    return true;
+                }
+            }
+        }
+
+        body = string.Empty;
         return false;
     }
 
@@ -185,6 +242,23 @@ internal static class IssueValidateBodyValidator
         }
 
         return (false, null);
+    }
+
+    private static (bool Invalid, string? Reason) ValidateTargetPathsDeclaration(string body)
+    {
+        foreach (var rawLine in body.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            if (TargetPathsDeclarationRegex.IsMatch(rawLine))
+            {
+                return (false, null);
+            }
+        }
+
+        return (
+            true,
+            "Target Repo / Path / Part is present, but the declaration is missing. "
+                + "Add the literal `- Target paths: <path>` line (for example, "
+                + "`- Target paths: src/IntentSystem.Cli/Commands`).");
     }
 
     private static string StripWrappers(string value)

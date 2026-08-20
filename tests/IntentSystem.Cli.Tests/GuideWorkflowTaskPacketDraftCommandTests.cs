@@ -41,6 +41,8 @@ public sealed class GuideWorkflowTaskPacketDraftCommandTests
         // Stop conditions surface BEFORE GitHub mutation (acceptance criterion 4).
         Assert.Contains("BEFORE", output, StringComparison.Ordinal);
         Assert.Contains("issue validate-body", output, StringComparison.Ordinal);
+        Assert.Contains("- Target paths: `<comma- or space-separated paths>`", output, StringComparison.Ordinal);
+        Assert.Contains("target_paths_invalid", output, StringComparison.Ordinal);
         // intent-target warning (acceptance criterion 3).
         Assert.Contains("intent-target", output, StringComparison.Ordinal);
     }
@@ -69,6 +71,10 @@ public sealed class GuideWorkflowTaskPacketDraftCommandTests
 
         var fileNames = files.EnumerateArray().Select(f => f.GetProperty("name").GetString()).ToArray();
         Assert.Equal(new[] { "packet.yaml", "implementation.md", "review-context.md", "github-body.md" }, fileNames);
+
+        var targetSection = sections.EnumerateArray()
+            .Single(section => section.GetProperty("section").GetString() == "target-repo-path-part");
+        Assert.Contains("- Target paths: <comma- or space-separated paths>", targetSection.GetProperty("purpose").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]

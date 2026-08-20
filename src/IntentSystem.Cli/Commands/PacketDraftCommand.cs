@@ -765,7 +765,7 @@ internal static class PacketDraftCommand
 
             Repository: `<owner/repo>`
 
-            Target paths: `<comma- or space-separated paths>`
+            - Target paths: `<comma- or space-separated paths>`
 
             Target part: `<one-line target description>`
 

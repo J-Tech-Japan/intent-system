@@ -37,6 +37,11 @@ internal static class IssueValidateBodyRenderer
             }
         }
 
+        if (result.TargetPathsInvalid)
+        {
+            writer.WriteLine($"Target paths declaration: {result.TargetPathsReason ?? "invalid."}");
+        }
+
         if (result.RelatedLinksInvalid)
         {
             writer.WriteLine($"Related Links: {result.RelatedLinksReason ?? "invalid."}");

@@ -23,4 +23,10 @@ internal sealed record IssueValidateBodyResult
 
     [JsonPropertyName("related_links_reason")]
     public string? RelatedLinksReason { get; init; }
+
+    [JsonPropertyName("target_paths_invalid")]
+    public required bool TargetPathsInvalid { get; init; }
+
+    [JsonPropertyName("target_paths_reason")]
+    public string? TargetPathsReason { get; init; }
 }
