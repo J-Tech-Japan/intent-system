@@ -82,7 +82,9 @@ public sealed class NotifyG648Tests : IDisposable
         Assert.Equal(NotifyPendingLivenessResult.RegistrationLostProcessPresent, result.State);
         Assert.True(result.ProcessPresent);
         Assert.True(result.ResendPermitted);
-        Assert.Contains("re-register", result.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("agent_session", result.Summary, StringComparison.Ordinal);
+        Assert.Contains("one no-op prompt", result.Summary, StringComparison.Ordinal);
+        Assert.Contains("Do not re-register, restart, or kill", result.Summary, StringComparison.Ordinal);
 
         runner = new FakeRunner((_, arguments) =>
             Is(arguments, "agent", "list")
@@ -211,7 +213,9 @@ public sealed class NotifyG648Tests : IDisposable
         var paneFindings = findings.Where(finding => finding.Key == $"registration:{WorkspaceId}:{PaneId}").ToArray();
         Assert.Single(paneFindings);
         Assert.True(paneFindings[0].ResendPermitted);
-        Assert.Contains("re-register", paneFindings[0].Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("agent_session", paneFindings[0].Summary, StringComparison.Ordinal);
+        Assert.Contains("one no-op prompt", paneFindings[0].Summary, StringComparison.Ordinal);
+        Assert.Contains("Do not re-register", paneFindings[0].Summary, StringComparison.Ordinal);
         Assert.DoesNotContain(runner.Calls, call => call.FileName == "kill");
         Assert.DoesNotContain(runner.Calls, call => Is(call.Arguments, "agent", "start"));
         Assert.DoesNotContain(runner.Calls, call => Is(call.Arguments, "agent", "prompt"));

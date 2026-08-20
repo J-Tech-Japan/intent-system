@@ -382,6 +382,15 @@ internal static class SessionLayerFragments
         Fragment(S1, Operative("- **inconclusive rule** — An inconclusive conflict begins with verification and names the consulted producers; it prescribes no automatic action and never authorizes destructive automation.")),
         Fragment(S1, Operative("- **genuine absence rule** — When no same-cycle non-terminal seat observation exists, a verified absent seat remains eligible to emit seat-absent or registration-lost-process-present.")),
         Fragment(S1, Operative("- **recurrence rule** — The single observation-conflict per recorded seat is a same-key observation: G699 repeat backoff and park state apply, while a new key remains immediate.")),
+        Fragment(S1, Operative("- **registration diagnostic rule** — When a recorded herdr pane has foreground process(es) but no running registration, inspect the matching agent-list entry and emit agent_session=missing when that field is absent; this is one executability/actionability class with sender-local report-routing failure, not a process-death or ownership signal.")),
+        Fragment(
+            S1,
+            Operative("- **registration operator act** — Operator act: send one no-op prompt to the already-running seat at the recorded pane to establish agent_session, then rerun the bounded readiness/report check."),
+            Operative(" Do not re-register, restart, or kill the process, and do not widen the seat roots.")),
+        Fragment(
+            S1,
+            Operative("- **registration survey** — This diagnostic is consistent across notify pending liveness, herdr report delivery, herdr delegate delivery, and the supervision seat scan."),
+            Operative(" A genuinely absent process remains seat-absent/lost; active registration remains an ownership stop.")),
         Fragment(
             S1,
             Operative("> **Corroboration authority boundary:** Corroboration changes only the observation classification and evidence."),
@@ -1401,6 +1410,15 @@ internal static class SessionLayerFragments
         Fragment("design_workspace_supervision", Operative("An inconclusive conflict begins with verification and names the consulted producers; it prescribes no automatic action and never authorizes destructive automation.")),
         Fragment("design_workspace_supervision", Operative("When no same-cycle non-terminal seat observation exists, a verified absent seat remains eligible to emit seat-absent or registration-lost-process-present.")),
         Fragment("design_workspace_supervision", Operative("The single observation-conflict per recorded seat is a same-key observation: G699 repeat backoff and park state apply, while a new key remains immediate.")),
+        Fragment("design_workspace_supervision", Operative("When a recorded herdr pane has foreground process(es) but no running registration, inspect the matching agent-list entry and emit agent_session=missing when that field is absent; this is one executability/actionability class with sender-local report-routing failure, not a process-death or ownership signal.")),
+        Fragment(
+            "design_workspace_supervision",
+            Operative("Operator act: send one no-op prompt to the already-running seat at the recorded pane to establish agent_session, then rerun the bounded readiness/report check."),
+            Operative(" Do not re-register, restart, or kill the process, and do not widen the seat roots.")),
+        Fragment(
+            "design_workspace_supervision",
+            Operative("This diagnostic is consistent across notify pending liveness, herdr report delivery, herdr delegate delivery, and the supervision seat scan."),
+            Operative(" A genuinely absent process remains seat-absent/lost; active registration remains an ownership stop.")),
         Fragment(
             "design_workspace_supervision",
             Operative("Corroboration changes only the observation classification and evidence."),

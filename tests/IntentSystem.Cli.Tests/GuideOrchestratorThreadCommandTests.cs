@@ -2960,6 +2960,9 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("same-cycle", contract.GetProperty("same_cycle_rule").GetString(), StringComparison.Ordinal);
         Assert.Contains("no automatic action", contract.GetProperty("inconclusive_rule").GetString(), StringComparison.Ordinal);
         Assert.Contains("G699", contract.GetProperty("recurrence_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("agent_session=missing", contract.GetProperty("registration_diagnostic_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("one no-op prompt", contract.GetProperty("registration_operator_act").GetString(), StringComparison.Ordinal);
+        Assert.Contains("pending liveness", contract.GetProperty("registration_survey").GetString(), StringComparison.Ordinal);
 
         var markdown = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
         var section = SectionFrom(markdown, "### Same-cycle corroboration (G707)");
@@ -2968,6 +2971,9 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("consulted_observations", section, StringComparison.Ordinal);
         Assert.Contains("G699", section, StringComparison.Ordinal);
         Assert.Contains("no automatic action", section, StringComparison.Ordinal);
+        Assert.Contains("agent_session=missing", section, StringComparison.Ordinal);
+        Assert.Contains("one no-op prompt", section, StringComparison.Ordinal);
+        Assert.Contains("pending liveness", section, StringComparison.Ordinal);
     }
 
     /// <summary>

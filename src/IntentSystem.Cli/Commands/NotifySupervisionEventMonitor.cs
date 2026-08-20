@@ -202,7 +202,8 @@ internal sealed class NotifySupervisionEventMonitor
                 AgentRunning: true,
                 ReadString(agent, "agent_status"),
                 StateChangeSequence: ReadInt64(agent, "state_change_seq"),
-                LastStateChangeAt: ReadDateTimeOffset(agent, "last_state_change_at"));
+                LastStateChangeAt: ReadDateTimeOffset(agent, "last_state_change_at"),
+                AgentSessionPresent: true);
         }
         catch (JsonException exception)
         {

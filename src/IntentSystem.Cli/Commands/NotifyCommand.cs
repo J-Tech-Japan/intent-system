@@ -36,11 +36,11 @@ internal static class NotifyCommand
     private const string ReportUsage =
         "Usage: intent-cli notify report --domain <d> --team <t> --from <role> --to <role> --task-id <id> "
         + "--status completed|blocked|question --artifact <value> --summary <text> "
-        + "[--routing-root <host-root>] [--dry-run|--write] [--format markdown|json]";
+        + "[--routing-root <host-root>] [--report-root <role-work-root>] [--dry-run|--write] [--format markdown|json]";
 
     private const string CollectUsage =
         "Usage: intent-cli notify collect --domain <d> --team <t> --task-id <id> "
-        + "[--routing-root <host-root>] [--dry-run|--write] [--format markdown|json]";
+        + "[--routing-root <host-root>] [--report-root <role-work-root>] [--dry-run|--write] [--format markdown|json]";
 
     private const string EscalateUsage =
         "Usage: intent-cli notify escalate --domain <d> --team <t> --from <role> --task-id <id> "
@@ -178,6 +178,27 @@ internal static class NotifyCommand
             return 1;
         }
 
+        string? reportRoot = null;
+        if (string.Equals(operation, OperationReport, StringComparison.Ordinal)
+            || string.Equals(operation, OperationCollect, StringComparison.Ordinal))
+        {
+            try
+            {
+                reportRoot = Path.GetFullPath(options.ReportRoot ?? context.RepoRoot);
+                options = options with { ReportRoot = reportRoot };
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+            {
+                Emit(writer, options.Format, FailureResult(
+                    operation,
+                    options,
+                    SessionLayerMode.Default,
+                    "invalid-report-root",
+                    $"Could not resolve --report-root: {exception.Message}"));
+                return 1;
+            }
+        }
+
         TeamModeResolution teamMode;
         try
         {
@@ -282,7 +303,7 @@ internal static class NotifyCommand
 
         if (string.Equals(operation, OperationCollect, StringComparison.Ordinal))
         {
-            return ExecuteCollect(writer, options, routingRoot);
+            return ExecuteCollect(writer, options, routingRoot, reportRoot!);
         }
 
         if (string.Equals(operation, OperationDelegate, StringComparison.Ordinal) && options.Write)
@@ -317,7 +338,7 @@ internal static class NotifyCommand
             {
                 reportAdvisory = BuildUnmatchedReportAdvisory(options.TaskId!, pending.KnownTaskIds);
             }
-            persistedOutboxPath = NotifyReportOutboxStore.ResolvePath(routingRoot, options.Domain!, options.Team!);
+            persistedOutboxPath = NotifyReportOutboxStore.ResolvePath(reportRoot!, options.Domain!, options.Team!);
             if (options.Write)
             {
                 persistedReportOutbox = new NotifyReportOutboxEntry
@@ -328,7 +349,7 @@ internal static class NotifyCommand
                     Summary = NotifyEventWriter.NormalizeSummary(options.Summary!),
                     CreatedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(), DeliveryState = "prepared",
                 };
-                var write = NotifyReportOutboxStore.WriteNew(routingRoot, persistedReportOutbox);
+                var write = NotifyReportOutboxStore.WriteNew(reportRoot!, persistedReportOutbox);
                 persistedOutboxPath = write.Path;
                 if (!write.Written)
                 {
@@ -365,7 +386,7 @@ internal static class NotifyCommand
                     ?? scope.Findings.FirstOrDefault();
                 var cause = primaryFinding?.Cause ?? "session-layer-not-ready";
                 if (persistedReportOutbox is not null && options.Write)
-                    NotifyReportOutboxStore.MarkUndelivered(routingRoot, persistedReportOutbox, cause);
+                    NotifyReportOutboxStore.MarkUndelivered(reportRoot!, persistedReportOutbox, cause);
                 Emit(writer, options.Format, FailureResult(
                     operation,
                     options,
@@ -379,7 +400,7 @@ internal static class NotifyCommand
                 return 1;
             }
 
-            return ExecuteDelivery(writer, operation, options, resolution, preflight, reportAdvisory, persistedReportOutbox);
+            return ExecuteDelivery(writer, operation, options, resolution, preflight, reportAdvisory, persistedReportOutbox, reportRoot!);
         }
 
         SessionLayerModeResolution escalationResolution;
@@ -405,16 +426,20 @@ internal static class NotifyCommand
         string.Equals(finding.Cause, "marker-not-generated", StringComparison.Ordinal)
         || string.Equals(finding.Cause, SessionLayerMigration.ResidueCause, StringComparison.Ordinal);
 
-    private static int ExecuteCollect(TextWriter writer, NotifyOptions options, string routingRoot)
+    private static int ExecuteCollect(
+        TextWriter writer,
+        NotifyOptions options,
+        string routingRoot,
+        string reportRoot)
     {
         var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
         var outbox = pending.Resolved && pending.Record is not null
-            ? NotifyReportOutboxStore.Find(routingRoot, options.Domain!, options.Team!, options.TaskId!, pending.Record.ResultNonce)
-            : new NotifyReportOutboxReadResult(true, NotifyReportOutboxStore.ResolvePath(routingRoot, options.Domain!, options.Team!), null, null);
+            ? NotifyReportOutboxStore.Find(reportRoot, options.Domain!, options.Team!, options.TaskId!, pending.Record.ResultNonce)
+            : new NotifyReportOutboxReadResult(true, NotifyReportOutboxStore.ResolvePath(reportRoot, options.Domain!, options.Team!), null, null);
         if (outbox.Entry is null || string.Equals(outbox.Entry.DeliveryState, "delivered", StringComparison.Ordinal))
         {
             var undelivered = NotifyReportOutboxStore.FindUndelivered(
-                routingRoot,
+                reportRoot,
                 options.Domain!,
                 options.Team!,
                 options.TaskId!);
@@ -422,7 +447,7 @@ internal static class NotifyCommand
         }
         if (outbox.Entry is null && pending.Error is null)
         {
-            outbox = NotifyReportOutboxStore.Find(routingRoot, options.Domain!, options.Team!, options.TaskId!);
+            outbox = NotifyReportOutboxStore.Find(reportRoot, options.Domain!, options.Team!, options.TaskId!);
         }
         if (!outbox.Resolved || outbox.Entry is null)
         {
@@ -469,7 +494,14 @@ internal static class NotifyCommand
             return 1;
         }
 
-        return ExecuteDelivery(writer, OperationCollect, collected, resolution, preflight, existingOutbox: outbox.Entry);
+        return ExecuteDelivery(
+            writer,
+            OperationCollect,
+            collected,
+            resolution,
+            preflight,
+            existingOutbox: outbox.Entry,
+            reportRoot: reportRoot);
     }
 
     private static int? GuardDelegateOutboxLifecycle(TextWriter writer, NotifyOptions options, string routingRoot)
@@ -785,6 +817,7 @@ internal static class NotifyCommand
             RecipientRunning = liveness.Running,
             LivenessState = liveness.State,
             ProcessPresent = liveness.ProcessPresent,
+            AgentSessionPresent = liveness.AgentSessionPresent,
             ResendPermitted = liveness.ResendPermitted,
             LivenessSource = liveness.Source,
             DeliveryBasis = liveness.DeliveryBasis,
@@ -1001,6 +1034,7 @@ internal static class NotifyCommand
         writer.WriteLine($"- recipient running: {result.RecipientRunning?.ToString().ToLowerInvariant() ?? "<unknown>"}");
         writer.WriteLine($"- liveness state: {result.LivenessState ?? "<unknown>"}");
         writer.WriteLine($"- process present: {result.ProcessPresent?.ToString().ToLowerInvariant() ?? "<unknown>"}");
+        writer.WriteLine($"- agent session present: {result.AgentSessionPresent?.ToString().ToLowerInvariant() ?? "<unknown>"}");
         writer.WriteLine($"- resend permitted: {result.ResendPermitted?.ToString().ToLowerInvariant() ?? "<unknown>"}");
         writer.WriteLine($"- liveness source: {result.LivenessSource ?? "<unknown>"}");
         writer.WriteLine($"- delivery basis: {result.DeliveryBasis ?? "<unknown>"}");
@@ -1035,10 +1069,19 @@ internal static class NotifyCommand
         SessionLayerModeResolution resolution,
         SessionLayerPreflightResult preflight,
         string? reportAdvisory = null,
-        NotifyReportOutboxEntry? existingOutbox = null)
+        NotifyReportOutboxEntry? existingOutbox = null,
+        string? reportRoot = null)
     {
         var isReport = string.Equals(operation, OperationReport, StringComparison.Ordinal)
             || string.Equals(operation, OperationCollect, StringComparison.Ordinal);
+        var resolvedReportRoot = reportRoot ?? options.ReportRoot ?? options.RoutingRoot!;
+        var senderLocalReport = isReport && !PathsEqual(resolvedReportRoot, options.RoutingRoot!);
+        if (senderLocalReport)
+        {
+            reportAdvisory = CombineAdvisories(
+                reportAdvisory,
+                $"sender-local report handoff: '{resolvedReportRoot}' is the writable report root; host routing state at '{options.RoutingRoot}' is read/transport authority and is reconciled by the orchestration role.");
+        }
         var reportCommand = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? BuildReportCommand(options)
             : null;
@@ -1068,7 +1111,7 @@ internal static class NotifyCommand
         string? outboxEntryPath = null;
         if (isReport)
         {
-            outboxEntryPath = NotifyReportOutboxStore.ResolvePath(options.RoutingRoot!, options.Domain!, options.Team!);
+            outboxEntryPath = NotifyReportOutboxStore.ResolvePath(resolvedReportRoot, options.Domain!, options.Team!);
             if (options.Write && reportOutbox is null)
             {
                 reportOutbox = new NotifyReportOutboxEntry
@@ -1085,7 +1128,7 @@ internal static class NotifyCommand
                     CreatedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
                     DeliveryState = "prepared",
                 };
-                var outboxWrite = NotifyReportOutboxStore.WriteNew(options.RoutingRoot!, reportOutbox);
+                var outboxWrite = NotifyReportOutboxStore.WriteNew(resolvedReportRoot, reportOutbox);
                 outboxEntryPath = outboxWrite.Path;
                 if (!outboxWrite.Written)
                 {
@@ -1109,7 +1152,7 @@ internal static class NotifyCommand
         {
             if (reportOutbox is not null && options.Write)
             {
-                NotifyReportOutboxStore.MarkUndelivered(options.RoutingRoot!, reportOutbox, envelopeDelivery.Cause!);
+                NotifyReportOutboxStore.MarkUndelivered(resolvedReportRoot, reportOutbox, envelopeDelivery.Cause!);
             }
             Emit(writer, options.Format, FailureResult(
                 operation,
@@ -1219,7 +1262,7 @@ internal static class NotifyCommand
         {
             if (reportOutbox is not null && options.Write)
             {
-                NotifyReportOutboxStore.MarkUndelivered(options.RoutingRoot!, reportOutbox, delivery.Cause ?? "transport-failure");
+                NotifyReportOutboxStore.MarkUndelivered(resolvedReportRoot, reportOutbox, delivery.Cause ?? "transport-failure");
             }
             Emit(writer, options.Format, FailureResult(
                 operation,
@@ -1244,6 +1287,33 @@ internal static class NotifyCommand
             return 1;
         }
 
+        if (delivery.ReaderPath is not null && senderLocalReport && options.Write)
+        {
+            if (reportOutbox is not null)
+            {
+                NotifyReportOutboxStore.MarkUndelivered(
+                    resolvedReportRoot,
+                    reportOutbox,
+                    "report-routing-root-write-required");
+            }
+
+            Emit(writer, options.Format, FailureResult(
+                operation,
+                options,
+                resolution.Mode,
+                "report-routing-root-write-required",
+                $"Report delivery resolved an external reader at '{delivery.ReaderPath}', which is under the host routing root and cannot be written from this sandboxed seat. Provision the recipient through herdr/agmsg or route a narrowly writable reader root; the sender-local report handoff is retained at '{outboxEntryPath}'. This is a delegation-level routing fault, not an implementation-seat stall.",
+                payload,
+                reportCommand,
+                modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
+                preflight: deliveryPreflight,
+                deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
+                taskFile: envelopeDelivery.TaskFile,
+                deliveryPointer: envelopeDelivery.ResultPointer,
+                outboxEntryPath: outboxEntryPath));
+            return 1;
+        }
+
         var eventAppended = false;
         if (delivery.ReaderPath is not null && options.Write)
         {
@@ -1256,7 +1326,7 @@ internal static class NotifyCommand
             {
                 if (reportOutbox is not null)
                 {
-                    NotifyReportOutboxStore.MarkUndelivered(options.RoutingRoot!, reportOutbox, "event-append-failed");
+                    NotifyReportOutboxStore.MarkUndelivered(resolvedReportRoot, reportOutbox, "event-append-failed");
                 }
                 Emit(writer, options.Format, FailureResult(
                     operation,
@@ -1289,7 +1359,8 @@ internal static class NotifyCommand
 
         if (isReport
             && options.Write
-            && reportPendingRecord is not null)
+            && reportPendingRecord is not null
+            && !senderLocalReport)
         {
             var reportWrite = NotifyPendingDelegationStore.WriteReport(
                 options.RoutingRoot!,
@@ -1302,7 +1373,7 @@ internal static class NotifyCommand
             {
                 if (reportOutbox is not null)
                 {
-                    NotifyReportOutboxStore.MarkUndelivered(options.RoutingRoot!, reportOutbox, "pending-record-resolution-failed");
+                    NotifyReportOutboxStore.MarkUndelivered(resolvedReportRoot, reportOutbox, "pending-record-resolution-failed");
                 }
                 Emit(writer, options.Format, FailureResult(
                     operation,
@@ -1330,7 +1401,7 @@ internal static class NotifyCommand
         // completion-signal chain. Record it before the outbox is marked
         // delivered so a chain-write failure remains visible to collection and
         // cannot be mistaken for a fully settled signal.
-        if (isReport && options.Write)
+        if (isReport && options.Write && !senderLocalReport)
         {
             var chainWrite = ContinuationChainStore.RecordReportReceived(
                 options.RoutingRoot!,
@@ -1347,7 +1418,7 @@ internal static class NotifyCommand
                 if (reportOutbox is not null)
                 {
                     NotifyReportOutboxStore.MarkUndelivered(
-                        options.RoutingRoot!,
+                        resolvedReportRoot,
                         reportOutbox,
                         "continuation-chain-write-failed");
                 }
@@ -1379,7 +1450,7 @@ internal static class NotifyCommand
 
         if (reportOutbox is not null && options.Write)
         {
-            var deliveredWrite = NotifyReportOutboxStore.MarkDelivered(options.RoutingRoot!, reportOutbox);
+            var deliveredWrite = NotifyReportOutboxStore.MarkDelivered(resolvedReportRoot, reportOutbox);
             outboxEntryPath = deliveredWrite.Path;
             if (!deliveredWrite.Written)
             {
@@ -1399,10 +1470,14 @@ internal static class NotifyCommand
             eventAppended,
             payload,
             reportCommand,
-            eventAppended
-                ? $"Delivered {operation} to external logical role '{options.ToRole}' in team '{options.Team}' "
-                  + $"through recorded reader '{delivery.ReaderPath}'."
-                : delivery.Summary,
+            AppendReportHandoffSummary(
+                eventAppended
+                    ? $"Delivered {operation} to external logical role '{options.ToRole}' in team '{options.Team}' "
+                      + $"through recorded reader '{delivery.ReaderPath}'."
+                    : delivery.Summary,
+                senderLocalReport,
+                resolvedReportRoot,
+                options.RoutingRoot!),
             eventPath: delivery.ReaderPath,
             preflight: deliveryPreflight,
             receiverStateOutcome: delivery.ReceiverStateOutcome,
@@ -1420,6 +1495,40 @@ internal static class NotifyCommand
             continuationChain: continuationChain));
         return 0;
     }
+
+    private static string? CombineAdvisories(string? first, string? second)
+    {
+        if (string.IsNullOrWhiteSpace(first)) return second;
+        if (string.IsNullOrWhiteSpace(second)) return first;
+        return $"{first} {second}";
+    }
+
+    private static string AppendReportHandoffSummary(
+        string summary,
+        bool senderLocalReport,
+        string reportRoot,
+        string routingRoot) => senderLocalReport
+            ? $"{summary} Sender-local report handoff persisted under '{reportRoot}'; no host-root write was required. Host routing state at '{routingRoot}' remains for orchestration reconciliation."
+            : summary;
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(
+            Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    private static string? ReportStorageMode(NotifyOptions options) =>
+        options.ReportRoot is null
+            ? null
+            : PathsEqual(options.ReportRoot, options.RoutingRoot ?? string.Empty)
+                ? "routing-root"
+                : "sender-local-role-work-root";
+
+    private static string? HostStateSync(NotifyOptions options) =>
+        options.ReportRoot is not null
+        && !PathsEqual(options.ReportRoot, options.RoutingRoot ?? string.Empty)
+            ? "deferred-to-orchestration"
+            : null;
 
     private static NotifyDesignEvent BuildReaderEvent(string operation, NotifyOptions options) => new()
     {
@@ -1643,7 +1752,7 @@ internal static class NotifyCommand
     private static string BuildReportCommand(NotifyOptions options) =>
         $"intent-cli notify report --domain {options.Domain} --team {options.Team} --from {options.ToRole} "
         + $"--to {options.ReportToRole} --task-id {options.TaskId} --status <completed|blocked|question> "
-        + $"--artifact <artifact> --summary <one-line-summary> --routing-root {ShellQuote(options.RoutingRoot!)} "
+        + $"--artifact <artifact> --summary <one-line-summary> --routing-root {ShellQuote(options.RoutingRoot!)} --report-root . "
         + "--write --format json";
 
     private static string ShellQuote(string value) => $"'{value.Replace("'", "'\\''", StringComparison.Ordinal)}'";
@@ -1707,6 +1816,9 @@ internal static class NotifyCommand
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot!,
+            ReportRoot = options.ReportRoot,
+            ReportStorageMode = ReportStorageMode(options),
+            HostStateSync = HostStateSync(options),
             Domain = options.Domain!,
             Team = options.Team!,
             Mode = resolution.Mode,
@@ -1769,6 +1881,9 @@ internal static class NotifyCommand
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot ?? string.Empty,
+            ReportRoot = options.ReportRoot,
+            ReportStorageMode = ReportStorageMode(options),
+            HostStateSync = HostStateSync(options),
             Domain = options.Domain!,
             Team = options.Team!,
             Mode = mode,
@@ -1834,6 +1949,14 @@ internal static class NotifyCommand
         writer.WriteLine();
         writer.WriteLine($"- mode: {result.Mode} ({result.ModeSource ?? "unresolved"})");
         writer.WriteLine($"- command mode: {result.CommandMode}");
+        if (result.ReportRoot is not null)
+        {
+            writer.WriteLine($"- report root: {result.ReportRoot} ({result.ReportStorageMode ?? "unknown"})");
+            if (result.HostStateSync is not null)
+            {
+                writer.WriteLine($"- host state sync: {result.HostStateSync}");
+            }
+        }
         writer.WriteLine($"- delivered: {result.Delivered.ToString().ToLowerInvariant()}");
         if (result.DeliveryBasis is not null)
         {
@@ -1968,6 +2091,7 @@ internal static class NotifyCommand
         string? supersedingTaskId = null;
         string? appliedOutcomeEvidence = null;
         string? routingRoot = null;
+        string? reportRoot = null;
         string? repo = null;
         string? ownerRole = null;
         string? herdrExecutable = null;
@@ -2014,6 +2138,7 @@ internal static class NotifyCommand
                 case "--superseding-task-id": if (!ReadValue(args, ref index, argument, out supersedingTaskId, out error)) return false; break;
                 case "--applied-outcome-evidence": if (!ReadValue(args, ref index, argument, out appliedOutcomeEvidence, out error)) return false; break;
                 case "--routing-root": if (!ReadValue(args, ref index, argument, out routingRoot, out error)) return false; break;
+                case "--report-root": if (!ReadValue(args, ref index, argument, out reportRoot, out error)) return false; break;
                 case "--repo": if (!ReadValue(args, ref index, argument, out repo, out error)) return false; break;
                 case "--owner-role": if (!ReadValue(args, ref index, argument, out ownerRole, out error)) return false; break;
                 case "--herdr-executable": if (!ReadValue(args, ref index, argument, out herdrExecutable, out error)) return false; break;
@@ -2199,6 +2324,7 @@ internal static class NotifyCommand
             SupersedingTaskId = supersedingTaskId,
             AppliedOutcomeEvidence = appliedOutcomeEvidence,
             RoutingRoot = routingRoot,
+            ReportRoot = reportRoot,
             Repo = repo,
             OwnerRole = ownerRole,
             HerdrExecutable = herdrExecutable,
@@ -2274,7 +2400,14 @@ internal static class NotifyCommand
                 return false;
             }
         }
-        else if (string.Equals(operation, OperationSupervise, StringComparison.Ordinal))
+
+        if (options.ReportRoot is not null
+            && operation is not OperationReport and not OperationCollect)
+        {
+            error = "--report-root is supported only by notify report and notify collect.";
+            return false;
+        }
+        if (string.Equals(operation, OperationSupervise, StringComparison.Ordinal))
         {
             if (options.IntervalSeconds is not null
                 && (options.IntervalSeconds < 1 || options.IntervalSeconds > NotifySupervisor.MaximumIntervalSeconds))
@@ -2425,6 +2558,11 @@ internal static class NotifyCommand
                 return false;
             }
         }
+        else if (string.Equals(operation, OperationStatus, StringComparison.Ordinal))
+        {
+            // Status validation is complete above; it is intentionally read-only
+            // and has no artifact/summary requirement.
+        }
         else if (string.IsNullOrWhiteSpace(options.Artifact) || string.IsNullOrWhiteSpace(options.Summary))
         {
             error = "escalate requires --artifact and --summary.";
@@ -2503,6 +2641,7 @@ internal sealed record NotifyOptions
     public string? SupersedingTaskId { get; init; }
     public string? AppliedOutcomeEvidence { get; init; }
     public string? RoutingRoot { get; init; }
+    public string? ReportRoot { get; init; }
     public string? Repo { get; init; }
     public string? OwnerRole { get; init; }
     public string? HerdrExecutable { get; init; }
@@ -2529,6 +2668,9 @@ internal sealed record NotifyResult
 {
     [JsonPropertyName("operation")] public required string Operation { get; init; }
     [JsonPropertyName("routing_root")] public required string RoutingRoot { get; init; }
+    [JsonPropertyName("report_root")] public string? ReportRoot { get; init; }
+    [JsonPropertyName("report_storage_mode")] public string? ReportStorageMode { get; init; }
+    [JsonPropertyName("host_state_sync")] public string? HostStateSync { get; init; }
     [JsonPropertyName("domain")] public required string Domain { get; init; }
     [JsonPropertyName("team")] public required string Team { get; init; }
     [JsonPropertyName("mode")] public required string Mode { get; init; }
@@ -2647,6 +2789,7 @@ internal sealed record NotifyStatusResult
     [JsonPropertyName("recipient_running")] public bool? RecipientRunning { get; init; }
     [JsonPropertyName("liveness_state")] public string? LivenessState { get; init; }
     [JsonPropertyName("process_present")] public bool? ProcessPresent { get; init; }
+    [JsonPropertyName("agent_session_present")] public bool? AgentSessionPresent { get; init; }
     [JsonPropertyName("resend_permitted")] public bool? ResendPermitted { get; init; }
     [JsonPropertyName("liveness_source")] public string? LivenessSource { get; init; }
     [JsonPropertyName("delivery_basis")] public string? DeliveryBasis { get; init; }

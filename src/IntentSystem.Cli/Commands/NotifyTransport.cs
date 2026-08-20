@@ -436,7 +436,8 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                     topology.WorkspaceId,
                     recordedPane,
                     processInfo.Processes.Count,
-                    "The registration is lost while the recipient process is likely alive. Re-register the agent at the recorded pane; no kill, restart, or automatic re-registration is safe.");
+                    atRecordedPane.Length > 0
+                        && atRecordedPane.Any(agent => !agent.AgentSessionPresent));
             }
 
             if (atRecordedPane.Length > 0)
@@ -740,7 +741,8 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                     topology.WorkspaceId,
                     recordedPane,
                     processInfo.Processes.Count,
-                    $"The prompt failure was an absence-like registration error ('{cause}'), but a foreground process remains. Re-register the agent at the recorded pane; no kill, restart, or automatic re-registration is safe.");
+                    atRecordedPane.Length > 0
+                        && atRecordedPane.Any(agent => !agent.AgentSessionPresent));
             }
         }
 
@@ -792,7 +794,7 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
                     && !explicitlyNotReady
                     && !string.Equals(status, "unknown", StringComparison.Ordinal);
 
-                parsed.Add(new HerdrAgentState(name, agentWorkspaceId, paneId, running, status, cwd, stateChangeSequence, lastStateChangeAt, agentKind, interactiveReady));
+                parsed.Add(new HerdrAgentState(name, agentWorkspaceId, paneId, running, status, cwd, stateChangeSequence, lastStateChangeAt, agentKind, interactiveReady, hasSession));
             }
 
             return parsed;
@@ -897,9 +899,9 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
         string workspace,
         string pane,
         int processCount,
-        string guidance) => Failure(
+        bool agentSessionMissing) => Failure(
             NotifyPendingLivenessResult.RegistrationLostProcessPresent,
-            $"Team '{team}' has no running herdr registration for logical role '{role}' at recorded workspace '{workspace}' pane '{pane}', but {processCount} foreground process(es) remain. {guidance} Resend is permitted after the registration is repaired.",
+            $"Team '{team}' has no running herdr registration for logical role '{role}' at recorded workspace '{workspace}' pane '{pane}', but {processCount} foreground process(es) remain. {NotifyPendingLiveness.RegistrationRecoveryGuidance(agentSessionMissing)} Resend is permitted after the registration is repaired.",
             activePhase: new SessionLayerPreflightPhaseResult
             {
                 Status = SessionLayerPreflight.ActiveNotObserved,
@@ -947,7 +949,8 @@ internal sealed record HerdrAgentState(
     long? StateChangeSequence = null,
     DateTimeOffset? LastStateChangeAt = null,
     string? AgentKind = null,
-    bool? InteractiveReady = null);
+    bool? InteractiveReady = null,
+    bool AgentSessionPresent = false);
 
 internal static class NotifyTransportPaths
 {

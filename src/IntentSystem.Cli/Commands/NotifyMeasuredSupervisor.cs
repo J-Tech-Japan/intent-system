@@ -2476,8 +2476,15 @@ internal sealed class NotifyMeasuredSupervisor
                 continue;
             }
 
+            var workspaceId = recorded.WorkspaceId ?? topology.Topology.WorkspaceId;
+            var agentsAtPane = agents
+                .Where(agent => string.Equals(agent.WorkspaceId, workspaceId, StringComparison.Ordinal)
+                    && string.Equals(agent.PaneId, recorded.PaneId, StringComparison.Ordinal))
+                .ToArray();
+            var agentSessionMissing = agentsAtPane.Length > 0
+                && agentsAtPane.Any(agent => !agent.AgentSessionPresent);
             var running = agents.Any(agent =>
-                string.Equals(agent.WorkspaceId, recorded.WorkspaceId ?? topology.Topology.WorkspaceId, StringComparison.Ordinal)
+                string.Equals(agent.WorkspaceId, workspaceId, StringComparison.Ordinal)
                 && string.Equals(agent.PaneId, recorded.PaneId, StringComparison.Ordinal)
                 && agent.AgentRunning);
             if (!running)
@@ -2491,10 +2498,9 @@ internal sealed class NotifyMeasuredSupervisor
                     continue;
                 }
 
-                var workspaceId = recorded.WorkspaceId ?? topology.Topology.WorkspaceId;
                 var paneKey = $"registration:{workspaceId}:{recorded.PaneId}";
                 var registrationDefinition = "a recorded herdr seat is registered only when the matching agent-list entry is running at the recorded workspace and pane";
-                var registrationLookup = $"herdr agent list matched workspace='{workspaceId}' pane='{recorded.PaneId}' with running_agent=false; pane process-info returned foreground_processes={processInfo.Processes.Count.ToString(CultureInfo.InvariantCulture)}";
+                var registrationLookup = $"herdr agent list matched workspace='{workspaceId}' pane='{recorded.PaneId}' with running_agent=false, agent_session={(agentsAtPane.Length == 0 ? "not-observed" : agentSessionMissing ? "missing" : "present")}; pane process-info returned foreground_processes={processInfo.Processes.Count.ToString(CultureInfo.InvariantCulture)}";
                 if (processInfo.Processes.Count > 0)
                 {
                     observations.Add(new NotifySupervisionObservation
@@ -2504,7 +2510,7 @@ internal sealed class NotifyMeasuredSupervisor
                         OwnerRole = ownerRole,
                         SubjectRole = role,
                         Source = "recorded-topology+pane.process-info",
-                        Summary = $"Recorded herdr seat '{role}' has no running registration at workspace '{workspaceId}' pane '{recorded.PaneId}', but {processInfo.Processes.Count} foreground process(es) remain. Re-register the agent at the recorded pane; no kill, restart, or automatic re-registration is safe. Resend is permitted after repair.",
+                        Summary = $"Recorded herdr seat '{role}' has no running registration at workspace '{workspaceId}' pane '{recorded.PaneId}', but {processInfo.Processes.Count} foreground process(es) remain. {NotifyPendingLiveness.RegistrationRecoveryGuidance(agentSessionMissing)} Resend is permitted after repair.",
                         DetectableAt = null,
                         WakeAlreadyAttempted = false,
                         WakeAlreadyDelivered = false,
@@ -2517,7 +2523,7 @@ internal sealed class NotifyMeasuredSupervisor
                         ConsultedObservations =
                         [
                             $"recorded-topology: role='{role}' workspace='{workspaceId}' pane='{recorded.PaneId}'",
-                            $"herdr.agent-list: running_agent=false",
+                            $"herdr.agent-list: running_agent=false; agent_session={(agentsAtPane.Length == 0 ? "not-observed" : agentSessionMissing ? "missing" : "present")}",
                             $"pane.process-info: foreground_processes={processInfo.Processes.Count.ToString(CultureInfo.InvariantCulture)}",
                         ],
                         Evidence =
@@ -2525,7 +2531,7 @@ internal sealed class NotifyMeasuredSupervisor
                             $"registration_definition:{registrationDefinition}",
                             $"registration_lookup:{registrationLookup}",
                             "registration_result:registration-missing; foreground-processes-present",
-                            $"consulted_observations:role={role}; foreground_processes={processInfo.Processes.Count.ToString(CultureInfo.InvariantCulture)}",
+                            $"consulted_observations:role={role}; agent_session={(agentsAtPane.Length == 0 ? "not-observed" : agentSessionMissing ? "missing" : "present")}; foreground_processes={processInfo.Processes.Count.ToString(CultureInfo.InvariantCulture)}",
                         ],
                     });
                     continue;
