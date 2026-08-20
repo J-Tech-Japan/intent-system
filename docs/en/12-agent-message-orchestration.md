@@ -3139,6 +3139,8 @@ visible on the operator's screen the moment it breaks.
   only an `actionable-stall` verdict with its returned canonical notify command
   ever produces a sent nudge. Do not use `stale` or `message_body` to infer the
   action; the closed verdict is the sole decision trigger.
+- **Recorded coordinating-seat name** — `session-layer topology record --role <name>` accepts operator-supplied logical names. Heartbeat treats `orchestration` as the canonical coordinating role and `orchestrator` as its accepted recorded alias through the shared role-contract normalization used by topology delivery. A topology recorded as `orchestrator` therefore works without renaming or migration; when recording a new or corrected coordinating seat, choose either spelling and keep it in the team record. If no coordinating seat is genuinely present, `cannot-determine` names the source, missing role, recorded roster, and the `topology record --write` action that clears it.
+- **Role-consumer sweep** — `notify` delivery, pending-recipient metadata, task-envelope selection, recipient-delivery judgment, topology show, and heartbeat all use the same resolver. Semantic actor labels such as `action_owner: orchestration` are not topology lookups and remain canonical; no second alias table is maintained.
 - **Failure visibility** — silence is reserved for `healthy-active-wait`
   ONLY. A heartbeat command execution failure or
   malformed/non-object output must be surfaced **visibly** in the watchdog's

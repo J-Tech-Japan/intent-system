@@ -1772,12 +1772,14 @@ internal static class NotifyCommand
         IReadOnlyList<string>? launchArguments = null;
         var identity = $"role={options.ToRole}";
         var topology = NotifyRoleTopologyStore.Resolve(options.RoutingRoot!, options.Domain!, options.Team!);
-        if (topology.Resolved
-            && topology.Topology is { } teamTopology
-            && teamTopology.Roles.TryGetValue(options.ToRole!, out var recorded))
+        var roleResolution = topology.Resolved && topology.Topology is { } teamTopology
+            ? NotifyRoleTopologyStore.ResolveRecordedRole(teamTopology, options.ToRole!)
+            : null;
+        if (roleResolution?.Resolved == true
+            && roleResolution.Record is { } recorded)
         {
             resident = recorded.Resident;
-            workspaceId = recorded.WorkspaceId ?? teamTopology.WorkspaceId;
+            workspaceId = recorded.WorkspaceId ?? topology.Topology!.WorkspaceId;
             paneId = recorded.PaneId;
             reader = recorded.Reader;
             cwd = recorded.Cwd;
@@ -1993,9 +1995,11 @@ internal static class NotifyCommand
     private static NotifyInlinePayloadWarning? ResolveInlinePayloadWarning(NotifyOptions options, string payload)
     {
         var topology = NotifyRoleTopologyStore.Resolve(options.RoutingRoot!, options.Domain!, options.Team!);
-        if (!topology.Resolved
-            || topology.Topology is null
-            || !topology.Topology.Roles.TryGetValue(options.ToRole!, out var recipient)
+        var roleResolution = topology.Resolved && topology.Topology is { } teamTopology
+            ? NotifyRoleTopologyStore.ResolveRecordedRole(teamTopology, options.ToRole!)
+            : null;
+        if (roleResolution?.Resolved != true
+            || roleResolution.Record is not { } recipient
             || !string.Equals(recipient.Kind, "copilot", StringComparison.OrdinalIgnoreCase)
             || payload.Length <= CopilotObservedPasteRiskWarningChars)
         {

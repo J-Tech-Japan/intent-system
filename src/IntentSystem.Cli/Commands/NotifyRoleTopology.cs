@@ -41,9 +41,20 @@ internal sealed record NotifyRoleDeliveryResolution
 {
     public required bool Resolved { get; init; }
     public required string Role { get; init; }
+    public string? RecordedRole { get; init; }
     public string? Resident { get; init; }
     public string? TargetKind { get; init; }
     public string? Target { get; init; }
+    public string? Cause { get; init; }
+    public required string Summary { get; init; }
+}
+
+internal sealed record NotifyRecordedRoleResolution
+{
+    public required bool Resolved { get; init; }
+    public required string Role { get; init; }
+    public string? RecordedRole { get; init; }
+    public NotifyRecordedRole? Record { get; init; }
     public string? Cause { get; init; }
     public required string Summary { get; init; }
 }
@@ -371,12 +382,13 @@ internal static class NotifyRoleTopologyStore
         NotifyTeamTopology topology,
         string role)
     {
-        if (!topology.Roles.TryGetValue(role, out var record))
+        var roleResolution = ResolveRecordedRole(topology, role);
+        if (!roleResolution.Resolved || roleResolution.Record is not { } record)
         {
             return DeliveryFailure(
                 role,
-                "unknown-role",
-                $"Recorded role topology '{topology.SourcePath}' does not contain logical role '{role}'.");
+                roleResolution.Cause ?? "unknown-role",
+                roleResolution.Summary);
         }
 
         if (string.Equals(record.Resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal))
@@ -410,10 +422,13 @@ internal static class NotifyRoleTopologyStore
             {
                 Resolved = true,
                 Role = role,
+                RecordedRole = roleResolution.RecordedRole,
                 Resident = record.Resident,
                 TargetKind = "reader",
                 Target = readerPath,
-                Summary = $"Resolved external logical role '{role}' to recorded reader '{readerPath}'.",
+                Summary = $"Resolved external logical role '{role}'"
+                    + RoleAliasSuffix(role, roleResolution.RecordedRole)
+                    + $" to recorded reader '{readerPath}'.",
             };
         }
 
@@ -429,12 +444,91 @@ internal static class NotifyRoleTopologyStore
         {
             Resolved = true,
             Role = role,
+            RecordedRole = roleResolution.RecordedRole,
             Resident = record.Resident,
             TargetKind = "pane",
             Target = record.PaneId,
-            Summary = $"Resolved herdr logical role '{role}' to recorded pane '{record.PaneId}' in workspace "
+            Summary = $"Resolved herdr logical role '{role}'"
+                + RoleAliasSuffix(role, roleResolution.RecordedRole)
+                + $" to recorded pane '{record.PaneId}' in workspace "
                 + $"'{topology.WorkspaceId}'.",
         };
+    }
+
+    /// <summary>
+    /// Resolves a requested logical role against the operator-recorded roster.
+    /// The role-contract guidance owns normalization and its aliases; every
+    /// topology consumer reaches this lookup instead of maintaining a second
+    /// role map.
+    /// </summary>
+    public static NotifyRecordedRoleResolution ResolveRecordedRole(
+        NotifyTeamTopology topology,
+        string role)
+    {
+        if (string.IsNullOrWhiteSpace(role))
+        {
+            return RoleResolutionFailure(
+                topology,
+                role,
+                "unknown-role",
+                "A non-empty logical role is required.");
+        }
+
+        if (topology.Roles.TryGetValue(role, out var exactRecord))
+        {
+            return new NotifyRecordedRoleResolution
+            {
+                Resolved = true,
+                Role = role,
+                RecordedRole = role,
+                Record = exactRecord,
+                Summary = $"Resolved recorded logical role '{role}' in topology '{topology.SourcePath}'.",
+            };
+        }
+
+        var canonicalRole = GuideRoleContractGuidance.Normalize(role) ?? role;
+        var aliasMatches = topology.Roles
+            .Where(entry => string.Equals(
+                GuideRoleContractGuidance.Normalize(entry.Key) ?? entry.Key,
+                canonicalRole,
+                StringComparison.Ordinal))
+            .ToArray();
+        if (aliasMatches.Length == 1)
+        {
+            var match = aliasMatches[0];
+            return new NotifyRecordedRoleResolution
+            {
+                Resolved = true,
+                Role = role,
+                RecordedRole = match.Key,
+                Record = match.Value,
+                Summary = $"Resolved requested logical role '{role}' through accepted recorded alias '{match.Key}' "
+                    + $"in topology '{topology.SourcePath}'.",
+            };
+        }
+
+        if (aliasMatches.Length > 1)
+        {
+            return RoleResolutionFailure(
+                topology,
+                role,
+                "ambiguous-role",
+                $"Multiple recorded roles ({string.Join(", ", aliasMatches.Select(entry => $"'{entry.Key}'"))}) "
+                + $"normalize to logical role '{canonicalRole}'. Keep one accepted spelling in the team record "
+                + "before retrying notify.");
+        }
+
+        var acceptedName = string.Equals(canonicalRole, "orchestration", StringComparison.Ordinal)
+            ? " The coordinating seat is accepted as canonical 'orchestration' or accepted recorded alias 'orchestrator'; an existing record under either name does not need renaming."
+            : string.Empty;
+        return RoleResolutionFailure(
+            topology,
+            role,
+            "unknown-role",
+            $"Recorded role topology '{topology.SourcePath}' for team '{topology.Team}' workspace "
+            + $"'{topology.WorkspaceId}' does not contain logical role '{role}' (found in that team scope: "
+            + $"{FormatRoles(topology.Roles.Keys)}). Record that role for this team before retrying notify."
+            + acceptedName);
     }
 
     /// <summary>
@@ -1001,6 +1095,37 @@ internal static class NotifyRoleTopologyStore
         Cause = cause,
         Summary = summary,
     };
+
+    private static NotifyRecordedRoleResolution RoleResolutionFailure(
+        NotifyTeamTopology topology,
+        string role,
+        string cause,
+        string summary)
+    {
+        var canonicalRole = GuideRoleContractGuidance.Normalize(role) ?? role;
+        var roleOptions = string.Equals(canonicalRole, "orchestration", StringComparison.Ordinal)
+            ? "<orchestration|orchestrator>"
+            : $"<{role}>";
+        var domain = topology.Domain ?? "<domain>";
+        var remedy = $" Record it with \u0060intent-cli session-layer topology record --domain {domain} --team "
+            + $"{topology.Team} --role {roleOptions} ... --write\u0060; do not rename an existing accepted alias."
+            + " Then rerun the heartbeat/notify command.";
+        return new NotifyRecordedRoleResolution
+        {
+            Resolved = false,
+            Role = role,
+            Cause = cause,
+            Summary = summary + remedy,
+        };
+    }
+
+    private static string RoleAliasSuffix(string requestedRole, string? recordedRole) =>
+        string.IsNullOrWhiteSpace(recordedRole)
+            || string.Equals(requestedRole, recordedRole, StringComparison.Ordinal)
+            ? string.Empty
+            : $" through recorded alias '{recordedRole}'";
+
+    private static string FormatRoles(IEnumerable<string> roles) => string.Join(", ", roles.OrderBy(role => role, StringComparer.Ordinal));
 
     private static SessionLayerTopologyFinding Finding(
         string role,

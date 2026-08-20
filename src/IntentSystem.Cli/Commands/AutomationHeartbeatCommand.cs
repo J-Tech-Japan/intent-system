@@ -110,6 +110,8 @@ internal static class AutomationHeartbeatCommand
             DedupeKey = decision.DedupeKey,
             ActionOwner = decision.ActionOwner,
             TargetRole = decision.TargetRole,
+            ResolvedRecordedRole = decision.ResolvedRecordedRole,
+            ResolvedDestination = decision.ResolvedDestination,
             CanonicalNotifyCommand = decision.CanonicalNotifyCommand,
             WaitCondition = decision.WaitCondition,
             WaitEndSignal = decision.WaitEndSignal,
@@ -368,7 +370,11 @@ internal static class AutomationHeartbeatCommand
         var route = ResolveOrchestratorRoute(context, domain, team);
         if (!route.Resolved)
         {
-            return CannotDetermine(route.Reason!, stalledWork.Items.FirstOrDefault(), "recorded topology");
+            return CannotDetermine(
+                route.Reason!,
+                stalledWork.Items.FirstOrDefault(),
+                "recorded topology",
+                route.Reason);
         }
 
         // A concrete actionable finding always wins over a legitimate active
@@ -400,7 +406,9 @@ internal static class AutomationHeartbeatCommand
                 WaitCondition: $"CI for PR #{ciPending.Pr?.Number} head {ciPending.PrHeadSha} to reach a terminal outcome",
                 WaitEndSignal: "the mode-specific CI-completion wake followed by an exact-head GitHub re-check",
                 WaitBoundMinutes: staleMinutes,
-                SuggestedAction: "Wait for the named CI completion signal, then re-evaluate this heartbeat decision.");
+                SuggestedAction: "Wait for the named CI completion signal, then re-evaluate this heartbeat decision.",
+                ResolvedRecordedRole: route.RecordedRole,
+                ResolvedDestination: route.Destination);
         }
 
         if (ciPending is not null)
@@ -430,7 +438,9 @@ internal static class AutomationHeartbeatCommand
             WaitCondition: null,
             WaitEndSignal: null,
             WaitBoundMinutes: null,
-            SuggestedAction: "Run the canonical notify command once for this no-pending-transition dedupe key.");
+            SuggestedAction: "Run the canonical notify command once for this no-pending-transition dedupe key.",
+            ResolvedRecordedRole: route.RecordedRole,
+            ResolvedDestination: route.Destination);
     }
 
     private static HeartbeatDecision AttentionRequired(StalledWorkItem record, string owner, HeartbeatRoute? route)
@@ -453,7 +463,9 @@ internal static class AutomationHeartbeatCommand
             WaitCondition: null,
             WaitEndSignal: null,
             WaitBoundMinutes: null,
-            SuggestedAction: action);
+            SuggestedAction: action,
+            ResolvedRecordedRole: route?.RecordedRole,
+            ResolvedDestination: route?.Destination);
     }
 
     private static HeartbeatDecision ActionableStall(
@@ -479,10 +491,16 @@ internal static class AutomationHeartbeatCommand
             WaitCondition: null,
             WaitEndSignal: null,
             WaitBoundMinutes: null,
-            SuggestedAction: $"Run the canonical notify command once for dedupe key '{dedupeKey}'.");
+            SuggestedAction: $"Run the canonical notify command once for dedupe key '{dedupeKey}'.",
+            ResolvedRecordedRole: route.RecordedRole,
+            ResolvedDestination: route.Destination);
     }
 
-    private static HeartbeatDecision CannotDetermine(string reason, StalledWorkItem? item, string source) => new(
+    private static HeartbeatDecision CannotDetermine(
+        string reason,
+        StalledWorkItem? item,
+        string source,
+        string? suggestedAction = null) => new(
         Verdict: "cannot-determine",
         Reason: reason,
         LastProgressBasis: item is null ? source : ProgressBasis(item),
@@ -495,7 +513,8 @@ internal static class AutomationHeartbeatCommand
         WaitCondition: null,
         WaitEndSignal: null,
         WaitBoundMinutes: null,
-        SuggestedAction: $"Repair or inspect the named {source} failure before treating this heartbeat as healthy.");
+        SuggestedAction: suggestedAction
+            ?? $"Repair or inspect the named {source} failure before treating this heartbeat as healthy.");
 
     private static HeartbeatRoute ResolveOrchestratorRoute(
         CliContext context,
@@ -522,7 +541,13 @@ internal static class AutomationHeartbeatCommand
             + " --summary <one-line-summary>"
             + $" --routing-root '{context.RepoRoot.Replace("'", "'\\''", StringComparison.Ordinal)}'"
             + " --write --format json";
-        return new HeartbeatRoute(true, null, "orchestration", command);
+        return new HeartbeatRoute(
+            true,
+            null,
+            "orchestration",
+            command,
+            recipient.RecordedRole,
+            $"{recipient.TargetKind}:{recipient.Target}");
     }
 
     private static HeartbeatRoute ResolveAttentionOwnerRoute(CliContext context, string domain, string team, string owner)
@@ -546,7 +571,13 @@ internal static class AutomationHeartbeatCommand
             + " --summary <one-line-summary>"
             + $" --routing-root '{context.RepoRoot.Replace("'", "'\\''", StringComparison.Ordinal)}'"
             + " --write --format json";
-        return new HeartbeatRoute(true, null, owner, command);
+        return new HeartbeatRoute(
+            true,
+            null,
+            owner,
+            command,
+            recipient.RecordedRole,
+            $"{recipient.TargetKind}:{recipient.Target}");
     }
 
     private static string MaterialKey(string verdict, StalledWorkItem? item, string owner, string? targetRole) =>
@@ -671,6 +702,14 @@ internal static class AutomationHeartbeatCommand
         if (result.TargetRole is not null)
         {
             writer.WriteLine($"- target_role: {result.TargetRole}");
+        }
+        if (result.ResolvedRecordedRole is not null)
+        {
+            writer.WriteLine($"- resolved_recorded_role: {result.ResolvedRecordedRole}");
+        }
+        if (result.ResolvedDestination is not null)
+        {
+            writer.WriteLine($"- resolved_destination: {result.ResolvedDestination}");
         }
         if (result.WaitCondition is not null)
         {
@@ -826,6 +865,14 @@ internal sealed record AutomationHeartbeatResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public required string? TargetRole { get; init; }
 
+    [JsonPropertyName("resolved_recorded_role")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResolvedRecordedRole { get; init; }
+
+    [JsonPropertyName("resolved_destination")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResolvedDestination { get; init; }
+
     [JsonPropertyName("canonical_notify_command")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public required string? CanonicalNotifyCommand { get; init; }
@@ -908,9 +955,17 @@ internal sealed record HeartbeatDecision(
     string? WaitCondition,
     string? WaitEndSignal,
     int? WaitBoundMinutes,
-    string SuggestedAction);
+    string SuggestedAction,
+    string? ResolvedRecordedRole = null,
+    string? ResolvedDestination = null);
 
-internal sealed record HeartbeatRoute(bool Resolved, string? Reason, string? TargetRole, string? CanonicalNotifyCommand)
+internal sealed record HeartbeatRoute(
+    bool Resolved,
+    string? Reason,
+    string? TargetRole,
+    string? CanonicalNotifyCommand,
+    string? RecordedRole = null,
+    string? Destination = null)
 {
     public static HeartbeatRoute Failure(string reason) => new(false, reason, null, null);
 }

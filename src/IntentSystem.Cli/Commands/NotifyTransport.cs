@@ -319,18 +319,23 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
         var topology = topologyResolution.Topology!;
         foreach (var role in rolesToValidate.Distinct(StringComparer.Ordinal))
         {
-            if (!topology.Roles.ContainsKey(role))
+            var roleResolution = NotifyRoleTopologyStore.ResolveRecordedRole(topology, role);
+            if (!roleResolution.Resolved)
             {
                 return Failure(
-                    "unknown-role",
-                    $"Recorded role topology '{topology.SourcePath}' for team '{team}' workspace "
-                    + $"'{topology.WorkspaceId}' does not contain logical role '{role}' (found in that team scope: "
-                    + $"{FormatRoles(topology.Roles.Keys)}). Record that role for this team before retrying notify. "
-                    + NotifyRoleTopologyStore.TopologyRemedy(team));
+                    roleResolution.Cause ?? "unknown-role",
+                    roleResolution.Summary + " " + NotifyRoleTopologyStore.TopologyRemedy(team));
             }
         }
 
-        var recipient = topology.Roles[toRole];
+        var recipientResolution = NotifyRoleTopologyStore.ResolveRecordedRole(topology, toRole);
+        if (!recipientResolution.Resolved || recipientResolution.Record is not { } recipient)
+        {
+            return Failure(
+                recipientResolution.Cause ?? "unknown-role",
+                recipientResolution.Summary + " " + NotifyRoleTopologyStore.TopologyRemedy(team));
+        }
+
         var deliveryTarget = NotifyRoleTopologyStore.ResolveDeliveryTarget(routingRoot, topology, toRole);
         if (!deliveryTarget.Resolved)
         {
@@ -826,12 +831,6 @@ internal sealed class HerdrNotifyTransport : INotifyTransport
     {
         var separator = paneId?.IndexOf(':', StringComparison.Ordinal) ?? -1;
         return separator > 0 ? paneId![..separator] : null;
-    }
-
-    private static string FormatRoles(IEnumerable<string> roles)
-    {
-        var ordered = roles.OrderBy(value => value, StringComparer.Ordinal).ToArray();
-        return ordered.Length == 0 ? "none" : string.Join(", ", ordered);
     }
 
     private static string FormatAgents(IEnumerable<HerdrAgentState> agents)
