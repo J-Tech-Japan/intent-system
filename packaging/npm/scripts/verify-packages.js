@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const provenanceRepositoryUrl = 'https://github.com/J-Tech-Japan/intent-system';
 const platforms = [
   { directory: 'darwin-arm64', package: '@j-tech-japan/intent-cli-darwin-arm64', rid: 'osx-arm64', binary: 'intent-cli' },
   { directory: 'linux-x64', package: '@j-tech-japan/intent-cli-linux-x64', rid: 'linux-x64', binary: 'intent-cli' },
@@ -59,6 +60,7 @@ function main() {
   assert(mainPackage.name === 'intent-system', 'main package name drifted');
   assert(mainPackage.version === options.expectedversion, `main package version ${mainPackage.version} != ${options.expectedversion}`);
   assert(mainPackage.bin?.['intent-cli'] === 'bin/intent-cli.js', 'main package must expose the intent-cli shim');
+  assert(mainPackage.repository?.url === 'git+https://github.com/J-Tech-Japan/intent-system.git', 'main package repository.url drifted');
   assert(!mainPackage.scripts?.postinstall, 'main package must not have a postinstall hook');
 
   for (const platform of platforms) {
@@ -66,6 +68,7 @@ function main() {
     const packageJson = readJson(path.join(directory, 'package.json'));
     assert(packageJson.name === platform.package, `${platform.rid} package name drifted`);
     assert(packageJson.version === options.expectedversion, `${platform.rid} package version drifted`);
+    assert(packageJson.repository?.url === provenanceRepositoryUrl, `${platform.rid} package repository.url must match npm provenance source`);
     assert(packageJson.intentCli?.version === options.expectedversion, `${platform.rid} recorded binary version drifted`);
     assert(packageJson.intentCli?.platform === platform.rid, `${platform.rid} platform metadata drifted`);
     assert(!packageJson.scripts?.postinstall, `${platform.rid} package must not have a postinstall hook`);

@@ -3,6 +3,10 @@
   "version": "0.0.0-dev",
   "description": "Self-contained intent-cli binary for Linux x64.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/J-Tech-Japan/intent-system"
+  },
   "os": [
     "linux"
   ],

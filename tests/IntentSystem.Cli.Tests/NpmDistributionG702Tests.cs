@@ -40,6 +40,8 @@ public sealed class NpmDistributionG702Tests
             Assert.Equal("0.0.0-dev", template.RootElement.GetProperty("version").GetString());
             Assert.Equal(platform.Os, template.RootElement.GetProperty("os")[0].GetString());
             Assert.Equal(platform.Cpu, template.RootElement.GetProperty("cpu")[0].GetString());
+            Assert.Equal("git", template.RootElement.GetProperty("repository").GetProperty("type").GetString());
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system", template.RootElement.GetProperty("repository").GetProperty("url").GetString());
             Assert.Equal(platform.Rid, template.RootElement.GetProperty("intentCli").GetProperty("platform").GetString());
             Assert.Equal("0.0.0-dev", template.RootElement.GetProperty("intentCli").GetProperty("version").GetString());
             Assert.Equal("__BINARY_SHA256__", template.RootElement.GetProperty("intentCli").GetProperty("binarySha256").GetString());
