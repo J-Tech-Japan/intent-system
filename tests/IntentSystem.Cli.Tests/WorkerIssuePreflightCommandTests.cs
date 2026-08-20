@@ -7,6 +7,7 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection("WorkerNextActionSharedState")]
 public sealed class WorkerIssuePreflightCommandTests : IDisposable
 {
     public WorkerIssuePreflightCommandTests()

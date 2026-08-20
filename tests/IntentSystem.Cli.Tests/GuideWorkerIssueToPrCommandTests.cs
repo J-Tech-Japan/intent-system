@@ -213,6 +213,26 @@ public sealed class GuideWorkerIssueToPrCommandTests
     }
 
     [Fact]
+    public void Execute_Json_PromptCoversG717ClaimPrecedenceWorkerPath()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkerIssueToPrCommand.Execute(
+            CreateContext(),
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("claim registry", prompt, StringComparison.Ordinal);
+        Assert.Contains("stale shadow state", prompt, StringComparison.Ordinal);
+        Assert.Contains("active or unavailable claim remains an ownership stop", prompt, StringComparison.Ordinal);
+        Assert.Contains("without adding/removing that label", prompt, StringComparison.Ordinal);
+        Assert.Contains("claim acquire", prompt, StringComparison.Ordinal);
+        Assert.Contains("no raw GitHub label mutation", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_Json_PromptCoversDraftPrCreation()
     {
         using var writer = new StringWriter();

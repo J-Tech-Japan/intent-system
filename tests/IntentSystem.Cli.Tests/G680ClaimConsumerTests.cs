@@ -255,7 +255,10 @@ public sealed class G680ClaimConsumerTests : IDisposable
             ["--repo", "J-Tech-Japan/intent-system", "--team", "team-a", "--format", "json"],
             writer));
         using var labelledDocument = JsonDocument.Parse(labelled.Output);
-        Assert.Equal(WorkerNextActionConstants.Actions.None, labelledDocument.RootElement.GetProperty("action").GetString());
+        Assert.Equal(WorkerNextActionConstants.Actions.Wait, labelledDocument.RootElement.GetProperty("action").GetString());
+        Assert.Contains("active or unavailable claim evidence remains an ownership stop",
+            labelledDocument.RootElement.GetProperty("reason").GetString(),
+            StringComparison.Ordinal);
     }
 
     [Fact]

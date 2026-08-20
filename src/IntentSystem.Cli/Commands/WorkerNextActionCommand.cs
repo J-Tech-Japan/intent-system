@@ -128,10 +128,18 @@ internal static class WorkerNextActionCommand
             return 1;
         }
 
+        // G717: consult the execution-unit claim for lifecycle-labelled issue
+        // candidates before the selector applies the label exclusion. This is
+        // the normal worker route's counterpart to issue-preflight: an unheld
+        // claim makes intent-issue-in-progress stale shadow state, while an
+        // active/unavailable claim remains a stop. No GitHub label is changed
+        // by this read-only projection.
+        var issueClaims = ResolveStaleLabelClaims(context.RepoRoot, team, issues);
+
         WorkerNextActionResult result;
         try
         {
-            result = WorkerNextActionAnalyzer.Analyze(repo!, prs, issues);
+            result = WorkerNextActionAnalyzer.Analyze(repo!, prs, issues, issueClaims);
         }
         catch (Exception exception) when (
             exception is ArgumentException
@@ -154,7 +162,7 @@ internal static class WorkerNextActionCommand
             ? Directory.GetCurrentDirectory()
             : workdir!;
         result = ConsultPreflightForPrCommentFix(result, repo!, resolvedWorkdir, prs);
-        result = ConsultExecutionUnitClaim(result, context.RepoRoot, team, issues);
+        result = ConsultExecutionUnitClaim(result, context.RepoRoot, team, issues, issueClaims);
 
         // G281: --workdir is child worktree CONTEXT only — selection runs against
         // GitHub state for --repo, never against the workdir's local filesystem.
@@ -321,14 +329,16 @@ internal static class WorkerNextActionCommand
     /// G680: an issue-to-PR action starts execution-unit work, so the selected
     /// issue must pass the same Git-backed ownership judgment as packet draft
     /// and publish. Hosts without a claims store return the analyzer result
-    /// byte-for-byte unchanged. Existing label exclusions remain in the
-    /// analyzer as defence in depth.
+    /// byte-for-byte unchanged. A lifecycle-labelled issue is projected with
+    /// the same claim-over-label precedence as issue-preflight before the
+    /// legacy post-selection ownership check runs.
     /// </summary>
     private static WorkerNextActionResult ConsultExecutionUnitClaim(
         WorkerNextActionResult result,
         string repoRoot,
         string? team,
-        IReadOnlyList<GitHubAutomationIssueCandidate> issues)
+        IReadOnlyList<GitHubAutomationIssueCandidate> issues,
+        IReadOnlyDictionary<int, ClaimOwnershipVerification> issueClaims)
     {
         if (!string.Equals(result.Action, WorkerNextActionConstants.Actions.IssueToPr, StringComparison.Ordinal)
             || result.Number is not { } issueNumber)
@@ -369,11 +379,23 @@ internal static class WorkerNextActionCommand
             };
         }
 
-        var verification = ClaimOwnershipVerifier.Verify(
-            repoRoot, $"execution-unit:{executionUnit}", team);
+        var verification = issueClaims.TryGetValue(issueNumber, out var observed)
+            ? observed
+            : ClaimOwnershipVerifier.Verify(
+                repoRoot, $"execution-unit:{executionUnit}", team);
         if (verification.Status == ClaimOwnershipVerification.StatusNotConfigured)
         {
             return result;
+        }
+        if (IsUnheldClaim(verification)
+            && issue is not null
+            && HasInProgressLabel(issue))
+        {
+            var warnings = new List<string>(result.Warnings)
+            {
+                $"claim registry is authoritative for execution-unit:{executionUnit}; the '{WorkerNextActionConstants.Labels.IntentIssueInProgress}' label is stale shadow state and worker claim/preflight may proceed without relabeling."
+            };
+            return result with { Warnings = warnings };
         }
         if (verification.Passed)
         {
@@ -390,6 +412,60 @@ internal static class WorkerNextActionCommand
             ForbiddenTerminalOutcomes = null,
         };
     }
+
+    private static IReadOnlyDictionary<int, ClaimOwnershipVerification> ResolveStaleLabelClaims(
+        string repoRoot,
+        string? team,
+        IReadOnlyList<GitHubAutomationIssueCandidate> issues)
+    {
+        var claims = new Dictionary<int, ClaimOwnershipVerification>();
+        foreach (var issue in issues)
+        {
+            if (!HasInProgressLabel(issue))
+            {
+                continue;
+            }
+
+            var match = LeadingExecutionUnitPattern.Match(issue.Title ?? string.Empty);
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            var scope = $"execution-unit:{match.Value}";
+            try
+            {
+                claims[issue.Number] = ClaimOwnershipVerifier.Verify(
+                    repoRoot,
+                    scope,
+                    team,
+                    allowUnheld: true);
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException
+                or InvalidOperationException
+                or IOException
+                or FormatException)
+            {
+                // Preserve the existing fail-closed label behavior if claim
+                // evidence cannot be consulted. The selector must never infer
+                // that a stale label is safe without canonical evidence.
+            }
+        }
+
+        return claims;
+    }
+
+    private static bool HasInProgressLabel(GitHubAutomationIssueCandidate issue) =>
+        issue.Labels.Any(label => string.Equals(
+            label.Name,
+            WorkerNextActionConstants.Labels.IntentIssueInProgress,
+            StringComparison.Ordinal));
+
+    private static bool IsUnheldClaim(ClaimOwnershipVerification claim) =>
+        claim.StoreConfigured
+        && (claim.Status == ClaimOwnershipVerification.StatusUnheld
+            || claim.Status == ClaimOwnershipVerification.StatusUnheldAvailable);
 
     private static readonly System.Text.RegularExpressions.Regex LeadingExecutionUnitPattern = new(
         @"^(?:[A-Z][A-Z0-9]*-G?[0-9]+|G[0-9]+)(?![A-Za-z0-9])",

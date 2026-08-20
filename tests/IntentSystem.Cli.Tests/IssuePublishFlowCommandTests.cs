@@ -7,6 +7,7 @@ using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection("WorkerNextActionSharedState")]
 public sealed class IssuePublishFlowCommandTests : IDisposable
 {
     public IssuePublishFlowCommandTests()

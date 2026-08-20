@@ -104,6 +104,7 @@ internal static class WorkerClaimCompleteConstants
     {
         public const string MissingTarget = "claim.missing.intent-target";
         public const string AlreadyInProgress = "claim.stale.already-in-progress";
+        public const string ClaimRegistryRefused = "claim.registry.refused";
         public const string AlreadyCompleted = "claim.stale.already-completed";
         public const string MissingRepairRequested = "claim.missing.intent-pr-request-update";
         public const string AlreadyRereviewReady = "claim.stale.already-rereview-ready";
