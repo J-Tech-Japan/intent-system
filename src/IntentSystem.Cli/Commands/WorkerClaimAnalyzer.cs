@@ -19,14 +19,17 @@ internal static class WorkerClaimAnalyzer
     /// the caller decides whether to apply (write mode) or just emit
     /// (dry-run mode).
     /// </summary>
-    public static ClaimDecision Analyze(string kind, IReadOnlyList<string> currentLabels)
+    public static ClaimDecision Analyze(
+        string kind,
+        IReadOnlyList<string> currentLabels,
+        ClaimOwnershipVerification? claimVerification = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(kind);
         ArgumentNullException.ThrowIfNull(currentLabels);
 
         if (string.Equals(kind, GhCliGitHubLabelMutator.Kinds.Issue, StringComparison.Ordinal))
         {
-            return AnalyzeIssue(currentLabels);
+            return AnalyzeIssue(currentLabels, claimVerification);
         }
         if (string.Equals(kind, GhCliGitHubLabelMutator.Kinds.Pr, StringComparison.Ordinal))
         {
@@ -46,7 +49,9 @@ internal static class WorkerClaimAnalyzer
         };
     }
 
-    private static ClaimDecision AnalyzeIssue(IReadOnlyList<string> currentLabels)
+    private static ClaimDecision AnalyzeIssue(
+        IReadOnlyList<string> currentLabels,
+        ClaimOwnershipVerification? claimVerification)
     {
         var errors = new List<string>();
         var warnings = new List<string>();
@@ -57,13 +62,21 @@ internal static class WorkerClaimAnalyzer
             WorkerNextActionConstants.Labels.IntentIssueInProgress, StringComparer.Ordinal);
         var hasPrCreated = currentLabels.Contains(
             WorkerNextActionConstants.Labels.IntentPrCreated, StringComparer.Ordinal);
+        var staleInProgress = hasInProgress && IsUnheldClaim(claimVerification);
+
+        if (claimVerification is not null
+            && IsActiveOrUnavailableClaim(claimVerification))
+        {
+            errors.Add(
+                $"{WorkerClaimCompleteConstants.ErrorCodes.ClaimRegistryRefused}: {claimVerification.Detail} active or unavailable claim evidence remains an ownership stop.");
+        }
 
         if (!hasTarget)
         {
             errors.Add(
                 $"{WorkerClaimCompleteConstants.ErrorCodes.MissingTarget}: issue does not carry '{WorkerNextActionConstants.Labels.IntentTarget}'.");
         }
-        if (hasInProgress)
+        if (hasInProgress && !staleInProgress)
         {
             errors.Add(
                 $"{WorkerClaimCompleteConstants.ErrorCodes.AlreadyInProgress}: issue already carries '{WorkerNextActionConstants.Labels.IntentIssueInProgress}'.");
@@ -74,18 +87,28 @@ internal static class WorkerClaimAnalyzer
                 $"{WorkerClaimCompleteConstants.ErrorCodes.AlreadyCompleted}: issue already carries '{WorkerNextActionConstants.Labels.IntentPrCreated}'.");
         }
 
+        if (staleInProgress)
+        {
+            warnings.Add(
+                $"claim registry is authoritative for {claimVerification!.Scope}; the '{WorkerNextActionConstants.Labels.IntentIssueInProgress}' label is stale shadow state and no label mutation is required.");
+        }
+
         var proceed = errors.Count == 0;
         return new ClaimDecision
         {
             Proceed = proceed,
             AddLabels = proceed
-                ? new[] { WorkerNextActionConstants.Labels.IntentIssueInProgress }
+                ? staleInProgress
+                    ? Array.Empty<string>()
+                    : new[] { WorkerNextActionConstants.Labels.IntentIssueInProgress }
                 : Array.Empty<string>(),
             RemoveLabels = Array.Empty<string>(),
             Errors = errors,
             Warnings = warnings,
             Summary = proceed
-                ? $"Would add '{WorkerNextActionConstants.Labels.IntentIssueInProgress}' to claim the issue."
+                ? staleInProgress
+                    ? $"Claim registry reports {claimVerification!.Scope} unheld; the existing '{WorkerNextActionConstants.Labels.IntentIssueInProgress}' label is stale shadow state, so worker claim proceeds without relabeling."
+                    : $"Would add '{WorkerNextActionConstants.Labels.IntentIssueInProgress}' to claim the issue."
                 : "Refusing to claim issue: stale or ineligible target.",
         };
     }
@@ -147,6 +170,20 @@ internal static class WorkerClaimAnalyzer
                 : "Refusing to claim PR: stale or ineligible target.",
         };
     }
+
+    private static bool IsUnheldClaim(ClaimOwnershipVerification? claim) =>
+        claim is not null
+        && claim.StoreConfigured
+        && (claim.Status == ClaimOwnershipVerification.StatusUnheld
+            || claim.Status == ClaimOwnershipVerification.StatusUnheldAvailable);
+
+    private static bool IsActiveOrUnavailableClaim(ClaimOwnershipVerification claim) =>
+        claim.StoreConfigured
+        && (claim.Status == ClaimOwnershipVerification.StatusOwned
+            || claim.Status == ClaimOwnershipVerification.StatusHeldByOtherTeam
+            || claim.Status == ClaimOwnershipVerification.StatusTeamRequired
+            || claim.Status == ClaimOwnershipVerification.StatusCanonicalUnavailable
+            || claim.Status == ClaimOwnershipVerification.StatusInvalid);
 
     /// <summary>
     /// G211: Pure data record returned by

@@ -95,7 +95,7 @@ internal static class CommandRouter
         "automation pr-transition --transition review-start --write",
         "automation pr-transition --transition request-update --write",
         "automation pr-transition --transition approved --write",
-        "automation publish-lifecycle-repair --repo <r> [--write]",
+        "automation publish-lifecycle-repair --repo <r> [--issue <n>|--execution-unit <u>] [--write]",
         "automation publish-recovery --repo <r> [--write]",
         "automation reconcile [--lane host-review|next-slice|all] [--write]",
         "automation runs-audit [--repo <r>] [--domain <d>] [--write] [--apply-inferred] [--format json|markdown]",

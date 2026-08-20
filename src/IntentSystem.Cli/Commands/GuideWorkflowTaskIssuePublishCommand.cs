@@ -49,7 +49,7 @@ internal static class GuideWorkflowTaskIssuePublishCommand
             Stage = "publish-flow",
             Command = "intent-cli issue publish-flow <execution-unit> --repo <owner/repo> [--domain <name>] [--team <team>] [--write] [--format json|markdown]",
             Purpose = "End-to-end publish: validate packet → create issue → advance durable state. Without `--write` this is a dry run that surfaces missing contract sections.",
-            Boundary = "Stage boundary: durable host state is now advanced (queue-state, packet publish.yaml, runs.jsonl). The issue is on GitHub but the `intent-target` LABEL has not been applied yet.",
+            Boundary = "Stage boundary: durable host state is now advanced (queue-state, packet publish.yaml, runs.jsonl). The issue is on GitHub but the `intent-target` LABEL has not been applied yet; the drafting `execution-unit:<unit>` claim remains held until the attributed drafter explicitly hands it over.",
             FailsOpen = "If validation surfaces missing contract sections (Goal / AC / OOS / Verification / Closes ref etc.), STOP and repair the packet. `publish-flow` without `--write` is the canonical preflight."
         },
         new PublishStage
@@ -57,8 +57,8 @@ internal static class GuideWorkflowTaskIssuePublishCommand
             Stage = "automation issue-publish",
             Command = "intent-cli automation issue-publish --repo <owner/repo> --issue <n> --write [--dry-run] [--format text|json]",
             Purpose = "FINAL publish boundary: apply the `intent-target` label so the child implementation loop picks the issue up next. This is the ONE place `intent-target` is added.",
-            Boundary = "Stage boundary: `intent-target` is now on the GitHub issue. The child loop's `worker next-action` selector will return this issue as `action: issue-to-pr` on its next wake.",
-            FailsOpen = "Raw `gh issue edit --add-label intent-target` is FORBIDDEN — it skips the issue-publish capability check, the publish.yaml advance, and the host audit trail. If `automation issue-publish` refuses (missing publish.yaml, mismatched repo, host-sync-preflight not clean), repair the gap; never bypass."
+            Boundary = "Stage boundary: `intent-target` is now on the GitHub issue. The child loop's `worker next-action` selector will return this issue as `action: issue-to-pr` on its next wake; after this boundary, the attributed drafter must release `execution-unit:<unit>` so the implementation worker can acquire it.",
+            FailsOpen = "Raw `gh issue edit --add-label intent-target` is FORBIDDEN — it skips the issue-publish capability check, the publish.yaml advance, and the host audit trail. If `automation issue-publish` refuses (missing publish.yaml, mismatched repo, host-sync-preflight not clean), repair the gap; never bypass. `publish-flow` and `automation issue-publish` do not guess the claim actor; run the attributed `intent-cli claim release` handoff explicitly."
         }
     };
 
@@ -70,6 +70,11 @@ internal static class GuideWorkflowTaskIssuePublishCommand
     internal static readonly IReadOnlyList<string> Invariants = new[]
     {
         "`intent-target` is the FINAL publish boundary, not the default for issue creation. It is applied ONLY by `intent-cli automation issue-publish --write` after `issue publish-flow` has advanced durable host state. Hand-applying `intent-target` via raw `gh` bypasses the publish lifecycle and is forbidden.",
+        "G717 precedence: the execution-unit claim registry is authoritative over lifecycle labels; when they disagree, follow the claim and repair the label shadow through intent-cli rather than failing closed on the label.",
+        "G717 publish handoff: `issue publish-flow` and `automation issue-publish` do not release the drafting claim automatically; after the final publish boundary, the attributed drafter must run `intent-cli claim release --scope execution-unit:<unit> --actor <design-actor> --team <team> --reason \"hand off after publish\" --write`, then the implementation worker acquires that scope.",
+        "`automation issue-release` removes only the host-owned `intent-target` label; it does not release `intent-issue-in-progress`, change the claim registry, or hand off an execution-unit claim.",
+        "`automation publish-lifecycle-repair --repo <r> --issue <n> --write` or `--execution-unit <unit> --write` scopes a lifecycle repair to one unit; omit both only when an intentional repo-wide repair is safe.",
+        "G717 scenario outputs: (1) `claim acquire` → `status=acquired`; (2) `issue publish-flow` → `durable_state_synced=true`, `intent-target=false`; (3) `automation issue-publish` → `applied=true`; (4) attributed `claim release` → `status=released`; (5) worker preflight with stale `intent-issue-in-progress` → `classification=ready-to-implement`, `actionable=true`, and a claim/label disagreement reason; (6) scoped `publish-lifecycle-repair` → `scope=execution-unit:<unit>`, `applied_count=1`, other drift unchanged; (7) a second process relabel → the next preflight reports the disagreement again. This design does not prevent unauthorized relabeling and does not add retry/backoff.",
         "G680 (preview-through-1.x): `intent-cli automation queue-seed-from-packet --execution-unit <unit> --team <team>` and `issue publish-flow` run the same `claim verify` judgment before their existing gates. A configured store requires the invoking team to hold `execution-unit:<unit>`; refusals name scope, holder, and holder team. No claims store preserves legacy output byte-for-byte.",
         "draft → create → publish-flow → automation issue-publish is a sequence, not a synonym set. Skipping a stage breaks host audit trail (no publish.yaml entry, no runs.jsonl event) and can deadlock the host-loop's WIP-cap check (G288).",
         "`issue publish-flow` without `--write` is the canonical preflight: it surfaces missing contract sections (Goal / Why / AC / OOS / Verification / Closes ref) BEFORE any GitHub mutation. Always run the dry-run first.",

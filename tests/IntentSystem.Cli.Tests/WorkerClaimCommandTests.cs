@@ -14,17 +14,20 @@ namespace IntentSystem.Cli.Tests;
 /// (no Process.Start in command/analyzer; no GitHub mutation in
 /// dry-run; whole-workspace byte-snapshot stability).
 /// </summary>
+[Collection("WorkerNextActionSharedState")]
 public sealed class WorkerClaimCommandTests : IDisposable
 {
     public WorkerClaimCommandTests()
     {
         WorkerClaimCommand.MutatorFactory = null;
+        WorkerClaimCommand.IssueLookupFactory = null;
         WorkerClaimCommand.NestedProviderLauncher = null;
     }
 
     public void Dispose()
     {
         WorkerClaimCommand.MutatorFactory = null;
+        WorkerClaimCommand.IssueLookupFactory = null;
         WorkerClaimCommand.NestedProviderLauncher = null;
     }
 
@@ -106,6 +109,81 @@ public sealed class WorkerClaimCommandTests : IDisposable
         Assert.False(result.Proceed);
         Assert.False(result.Applied);
         Assert.Contains(result.Errors, e => e.StartsWith(WorkerClaimCompleteConstants.ErrorCodes.AlreadyInProgress, StringComparison.Ordinal));
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_G717_StaleInProgressLabelWithUnheldClaim_ProceedsWithoutRelabeling()
+    {
+        using var workspace = new WorkerClaimWorkspace();
+        Directory.CreateDirectory(Path.Combine(workspace.RootPath, ClaimCommand.ClaimsDirectory));
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerClaimCommand.MutatorFactory = () => mutator;
+        WorkerClaimCommand.IssueLookupFactory = () => new FakeIssueLookup("G717 claim precedence");
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerClaimCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "717",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerClaimResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+        Assert.False(result.Applied);
+        Assert.Empty(result.AddLabels);
+        Assert.Empty(result.RemoveLabels);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("stale shadow state", StringComparison.Ordinal));
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_G717_ActiveClaimRemainsOwnershipStopEvenWithoutLifecycleLabel()
+    {
+        using var workspace = new WorkerClaimWorkspace();
+        var claimsPath = Path.Combine(workspace.RootPath, ClaimCommand.ClaimPath("execution-unit:G717"));
+        Directory.CreateDirectory(Path.GetDirectoryName(claimsPath)!);
+        File.WriteAllText(
+            claimsPath,
+            JsonSerializer.Serialize(new ClaimRecord(
+                "1", "execution-unit:G717", "alice", "implementation",
+                new DateTimeOffset(2026, 8, 19, 0, 0, 0, TimeSpan.Zero), "abc123")));
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target" },
+        };
+        WorkerClaimCommand.MutatorFactory = () => mutator;
+        WorkerClaimCommand.IssueLookupFactory = () => new FakeIssueLookup("G717 claim precedence");
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerClaimCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "717",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(2, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerClaimResult>(writer.ToString())!;
+        Assert.False(result.Proceed);
+        Assert.Contains(result.Errors, error =>
+            error.StartsWith(WorkerClaimCompleteConstants.ErrorCodes.ClaimRegistryRefused, StringComparison.Ordinal));
         Assert.Empty(mutator.AppliedTransitions);
     }
 
@@ -553,6 +631,25 @@ public sealed class WorkerClaimCommandTests : IDisposable
         public required int Number { get; init; }
         public required IReadOnlyList<string> AddLabels { get; init; }
         public required IReadOnlyList<string> RemoveLabels { get; init; }
+    }
+
+    private sealed class FakeIssueLookup : IGitHubIssueLookup
+    {
+        private readonly string title;
+
+        public FakeIssueLookup(string title)
+        {
+            this.title = title;
+        }
+
+        public GitHubIssueLookupResult Lookup(string repo, int issueNumber) => new()
+        {
+            Number = issueNumber,
+            State = "OPEN",
+            Title = title,
+            Body = string.Empty,
+            Labels = Array.Empty<GitHubIssueLabel>(),
+        };
     }
 
     // --- G333: --github-only strict child-loop assertion --------------------

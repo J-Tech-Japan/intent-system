@@ -7,6 +7,7 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection("WorkerNextActionSharedState")]
 public sealed class WorkerIssuePreflightCommandTests : IDisposable
 {
     public WorkerIssuePreflightCommandTests()
@@ -96,6 +97,44 @@ public sealed class WorkerIssuePreflightCommandTests : IDisposable
         var result = JsonSerializer.Deserialize<WorkerIssuePreflightResult>(writer.ToString())!;
         Assert.Equal(WorkerIssuePreflightConstants.Classifications.AlreadyInProgress, result.Classification);
         Assert.Equal(WorkerIssuePreflightConstants.RecommendedActions.NoAction, result.RecommendedAction);
+    }
+
+    [Fact]
+    public void Execute_GivenInProgressLabelButUnheldClaim_ReportsDisagreementAndProceeds_G717()
+    {
+        using var workspace = new WorkerIssuePreflightWorkspace();
+        Directory.CreateDirectory(Path.Combine(workspace.RootPath, ".intent-cli", "claims"));
+        var unrelatedClaim = new ClaimRecord(
+            "1",
+            "execution-unit:G999",
+            "alice",
+            "design",
+            new DateTimeOffset(2026, 8, 19, 0, 0, 0, TimeSpan.Zero),
+            "abc123");
+        File.WriteAllText(
+            Path.Combine(workspace.RootPath, ClaimCommand.ClaimPath(unrelatedClaim.Scope)),
+            JsonSerializer.Serialize(unrelatedClaim));
+
+        WorkerIssuePreflightCommand.IssueLookupFactory = () => new FakeLookup(BuildIssue(
+            number: 717,
+            state: "OPEN",
+            title: "G717 claim precedence",
+            body: ValidBody("J-Tech-Japan/intent-system"),
+            labelNames: new[] { "intent-target", "intent-issue-in-progress" }));
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerIssuePreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--issue", "717", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerIssuePreflightResult>(writer.ToString())!;
+        Assert.True(result.Actionable);
+        Assert.Equal(WorkerIssuePreflightConstants.Classifications.ReadyToImplement, result.Classification);
+        Assert.Equal(ClaimOwnershipVerification.StatusUnheld, result.ClaimStatus);
+        Assert.Contains(result.Reasons, reason => reason.Contains("disagrees", StringComparison.Ordinal));
+        Assert.Contains(result.Reasons, reason => reason.Contains("claim registry is authoritative", StringComparison.Ordinal));
     }
 
     [Fact]

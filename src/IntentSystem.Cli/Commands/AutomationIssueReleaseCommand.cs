@@ -18,6 +18,8 @@ internal static class AutomationIssueReleaseCommand
     private const string FormatText = "text";
     private const string FormatJson = "json";
     private const string ReleasedLabel = WorkerNextActionConstants.Labels.IntentTarget;
+    private const string DoesNotDo =
+        "Does not release intent-issue-in-progress, change the claim registry, or hand off an execution-unit claim.";
 
     public static Func<IGitHubLabelMutator>? MutatorFactory { get; set; }
 
@@ -126,6 +128,7 @@ internal static class AutomationIssueReleaseCommand
             RemoveLabels = [ReleasedLabel],
             CurrentLabels = currentLabels,
             ReleasedAt = releasedAt,
+            DoesNotDo = DoesNotDo,
             Summary = hasTarget
                 ? $"Would release issue #{issue.Value} by removing {ReleasedLabel}"
                     + (string.IsNullOrWhiteSpace(reason) ? "." : $" (reason: {reason}).")
@@ -239,6 +242,7 @@ internal static class AutomationIssueReleaseCommand
         writer.WriteLine($"released_label: {result.ReleasedLabel}");
         writer.WriteLine($"had_target_label: {result.HadTargetLabel.ToString().ToLowerInvariant()}");
         writer.WriteLine($"applied: {result.Applied.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"does_not_do: {result.DoesNotDo}");
         if (!string.IsNullOrWhiteSpace(result.Reason))
         {
             writer.WriteLine($"reason: {result.Reason}");
@@ -251,6 +255,7 @@ internal static class AutomationIssueReleaseCommand
         writer.WriteLine("automation issue-release");
         writer.WriteLine("Usage: intent-cli automation issue-release --repo <owner/repo> --issue <n> [--reason <text>] [--write] [--dry-run] [--format text|json]");
         writer.WriteLine("Releases an issue that was mistakenly published as a child target by removing the host-owned intent-target label (G462). The safe counterpart to automation issue-publish; never uses raw gh label mutation.");
+        writer.WriteLine($"{DoesNotDo}");
     }
 }
 
@@ -291,6 +296,9 @@ internal sealed record AutomationIssueReleaseResult
 
     [JsonPropertyName("released_at")]
     public required DateTimeOffset ReleasedAt { get; init; }
+
+    [JsonPropertyName("does_not_do")]
+    public required string DoesNotDo { get; init; }
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }

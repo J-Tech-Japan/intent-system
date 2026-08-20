@@ -19,7 +19,8 @@ internal static class WorkerNextActionAnalyzer
     public static WorkerNextActionResult Analyze(
         string repo,
         IReadOnlyList<GitHubAutomationPrCandidate> intentTargetPrs,
-        IReadOnlyList<GitHubAutomationIssueCandidate> intentTargetIssues)
+        IReadOnlyList<GitHubAutomationIssueCandidate> intentTargetIssues,
+        IReadOnlyDictionary<int, ClaimOwnershipVerification>? issueClaims = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
         ArgumentNullException.ThrowIfNull(intentTargetPrs);
@@ -129,33 +130,88 @@ internal static class WorkerNextActionAnalyzer
         // value, but for now the loop falls through to priority 3.
 
         // Priority 3: Issue-to-PR target.
-        // Eligible: open issue with intent-target, NOT intent-issue-in-progress,
-        // NOT intent-pr-created.
+        // Eligible: open issue with intent-target, NOT intent-pr-created, and
+        // either no in-progress label or a claim-registry observation proving
+        // that the in-progress label is stale. The claim registry is the
+        // authority: an active/unavailable claim remains a stop even when the
+        // label is missing, while an unheld claim explicitly overrides the
+        // stale lifecycle shadow.
+        var claimBlockedIssues = intentTargetIssues
+            .Where(issue =>
+            {
+                var labels = LabelNames(issue.Labels);
+                if (!labels.Contains(WorkerNextActionConstants.Labels.IntentIssueInProgress, StringComparer.Ordinal)
+                    || issueClaims is null
+                    || !issueClaims.TryGetValue(issue.Number, out var claim))
+                {
+                    return false;
+                }
+
+                return IsActiveOrUnavailableClaim(claim);
+            })
+            .OrderBy(issue => issue.CreatedAt, StringComparer.Ordinal)
+            .FirstOrDefault();
+
         var issueToPr = intentTargetIssues
             .Where(issue =>
             {
                 var labels = LabelNames(issue.Labels);
-                return !labels.Contains(WorkerNextActionConstants.Labels.IntentIssueInProgress, StringComparer.Ordinal)
-                    && !labels.Contains(WorkerNextActionConstants.Labels.IntentPrCreated, StringComparer.Ordinal);
+                if (labels.Contains(WorkerNextActionConstants.Labels.IntentPrCreated, StringComparer.Ordinal))
+                {
+                    return false;
+                }
+
+                if (!labels.Contains(WorkerNextActionConstants.Labels.IntentIssueInProgress, StringComparer.Ordinal))
+                {
+                    return true;
+                }
+
+                return issueClaims is not null
+                    && issueClaims.TryGetValue(issue.Number, out var claim)
+                    && IsUnheldClaim(claim);
             })
             .OrderBy(issue => issue.CreatedAt, StringComparer.Ordinal)
             .FirstOrDefault();
 
         if (issueToPr is not null)
         {
+            var selectedLabels = LabelNames(issueToPr.Labels);
+            var staleLifecycleLabel = selectedLabels.Contains(
+                WorkerNextActionConstants.Labels.IntentIssueInProgress, StringComparer.Ordinal)
+                && issueClaims is not null
+                && issueClaims.TryGetValue(issueToPr.Number, out var selectedClaim)
+                && IsUnheldClaim(selectedClaim);
+
             return new WorkerNextActionResult
             {
                 Action = WorkerNextActionConstants.Actions.IssueToPr,
                 Repo = repo,
                 Number = issueToPr.Number,
                 Url = issueToPr.Url,
-                Reason = "oldest open intent-target issue without in-progress or pr-created state",
+                Reason = staleLifecycleLabel
+                    ? "oldest open intent-target issue whose claim registry is unheld; the intent-issue-in-progress label is stale shadow state and next-action proceeds to worker claim/preflight"
+                    : "oldest open intent-target issue without in-progress or pr-created state",
                 RecommendedWorkflow = WorkerNextActionConstants.RecommendedWorkflows.GhIssueToPr,
                 Warnings = warnings,
                 SourceClassification = WorkerNextActionConstants.SourceClassifications.ReadyToImplement,
                 MustCreatePr = true,
                 AllowedTerminalOutcomes = WorkerNextActionConstants.TerminalOutcomes.IssueToPrAllowed,
                 ForbiddenTerminalOutcomes = WorkerNextActionConstants.TerminalOutcomes.IssueToPrForbidden,
+            };
+        }
+
+        if (claimBlockedIssues is not null)
+        {
+            return new WorkerNextActionResult
+            {
+                Action = WorkerNextActionConstants.Actions.Wait,
+                Repo = repo,
+                Number = claimBlockedIssues.Number,
+                Url = claimBlockedIssues.Url,
+                Reason = issueClaims![claimBlockedIssues.Number].Detail
+                    + " claim registry is authoritative over the intent-issue-in-progress lifecycle label; active or unavailable claim evidence remains an ownership stop.",
+                Warnings = warnings,
+                SourceClassification = WorkerNextActionConstants.SourceClassifications.ClaimRefused,
             };
         }
 
@@ -237,4 +293,17 @@ internal static class WorkerNextActionAnalyzer
         }
         return names;
     }
+
+    private static bool IsUnheldClaim(ClaimOwnershipVerification claim) =>
+        claim.StoreConfigured
+        && (claim.Status == ClaimOwnershipVerification.StatusUnheld
+            || claim.Status == ClaimOwnershipVerification.StatusUnheldAvailable);
+
+    private static bool IsActiveOrUnavailableClaim(ClaimOwnershipVerification claim) =>
+        claim.StoreConfigured
+        && (claim.Status == ClaimOwnershipVerification.StatusOwned
+            || claim.Status == ClaimOwnershipVerification.StatusHeldByOtherTeam
+            || claim.Status == ClaimOwnershipVerification.StatusTeamRequired
+            || claim.Status == ClaimOwnershipVerification.StatusCanonicalUnavailable
+            || claim.Status == ClaimOwnershipVerification.StatusInvalid);
 }

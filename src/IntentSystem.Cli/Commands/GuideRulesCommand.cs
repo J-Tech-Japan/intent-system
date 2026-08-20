@@ -36,6 +36,9 @@ internal static class GuideRulesCommand
                 "`intent-target` is the host-owned publish boundary. The child loop never adds or removes it.",
                 "`intent-pr-created` is an issue-side completion marker; never apply it to a PR.",
                 "`intent-issue-in-progress` and `intent-pr-update-in-progress` are exclusive work markers; only one item per lane at a time.",
+                "G717 precedence: the execution-unit claim registry is authoritative over lifecycle labels; when they disagree, follow the claim and repair the label shadow through intent-cli rather than failing closed on the label.",
+                "At publish, `issue publish-flow` and `automation issue-publish` leave the drafting claim held; after the final boundary, the attributed drafter must run `intent-cli claim release --scope execution-unit:<unit> --actor <design-actor> --team <team> --reason \"hand off after publish\" --write` so the implementation worker can acquire it.",
+                "`automation issue-release` removes only `intent-target`; it does not release `intent-issue-in-progress` or change the claim registry.",
                 "Label transitions for installed surfaces (`issue-publish`, `pr-transition.review-start|request-update|approved`) go through `intent-cli automation` commands; raw `gh ... edit --label` is not the normal path."
             },
             SourceReferences = new[]
@@ -48,6 +51,8 @@ internal static class GuideRulesCommand
             {
                 "intent-cli automation summary --format json — current label contract, capability JSON, schema version.",
                 "intent-cli automation issue-publish --repo <r> --issue <n> --write — supported issue-side `intent-target` apply.",
+                "intent-cli automation publish-lifecycle-repair --repo <r> --issue <n> --write (or `--execution-unit <u>`) — scoped lifecycle repair; omit the scope only for an intentional repo-wide repair.",
+                "intent-cli claim verify / claim release — inspect and hand off the execution-unit claim; lifecycle labels are only its shadow.",
                 "intent-cli automation pr-transition --repo <r> --pr <n> --transition <review-start|request-update|approved> --write — supported PR transitions.",
                 "intent-cli worker claim / worker complete — child-loop label ownership; do not invent transitions in prompts."
             }

@@ -1241,6 +1241,8 @@ internal static class IssuePublishFlowCommand
         {
             nextSteps.Add("Commit and push the parent durable state for this execution unit (queue-state, runs, packet files).");
             nextSteps.Add($"Then apply the publish boundary with: intent-cli automation issue-publish --repo {repo} --issue {(issueNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "<issue-number>")} --write --format json");
+            nextSteps.Add(
+                $"G717 claim handoff: publish-flow does not release the drafting claim; after the final publish boundary, the drafter must run `intent-cli claim release --scope execution-unit:{executionUnit} --actor <design-actor> --team {authorization?.Team ?? "<team>"} --reason \"hand off after publish\" --write --format json`. The implementation worker then acquires the same scope before starting work.");
         }
         else if (idempotent)
         {
@@ -1249,6 +1251,8 @@ internal static class IssuePublishFlowCommand
             {
                 nextSteps.Add($"Apply the publish boundary if needed with: intent-cli automation issue-publish --repo {repo} --issue {issueNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)} --write --format json");
             }
+            nextSteps.Add(
+                $"G717 claim handoff: publish-flow does not release the drafting claim; after the final publish boundary, the drafter must release `execution-unit:{executionUnit}` with the attributed `intent-cli claim release --actor <design-actor> --team {authorization?.Team ?? "<team>"} --reason \"hand off after publish\" --write` command.");
         }
 
         return new IssuePublishFlowResult
@@ -1758,6 +1762,7 @@ internal static class IssuePublishFlowCommand
         writer.WriteLine("issue publish-flow");
         writer.WriteLine(UsageLine);
         writer.WriteLine("Validates the packet, creates the GitHub issue without intent-target, syncs parent durable state (queue-state, publish.yaml, runs.jsonl), and reports the publish boundary as a next step.");
+        writer.WriteLine("G717: publish-flow does not release the drafting execution-unit claim; after automation issue-publish, the attributed drafter must release it for the implementation worker.");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()

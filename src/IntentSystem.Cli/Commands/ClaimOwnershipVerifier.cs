@@ -156,6 +156,21 @@ internal static class ClaimOwnershipVerifier
     }
 
     /// <summary>
+    /// G717: construct a fail-closed observation when a consumer cannot
+    /// resolve the execution-unit claim evidence needed to interpret a stale
+    /// lifecycle label. This is read-only; claim acquisition/release remains
+    /// exclusively owned by the G679 transaction primitive.
+    /// </summary>
+    internal static ClaimOwnershipVerification Unavailable(string scope, string detail) =>
+        Refused(
+            ClaimOwnershipVerification.StatusCanonicalUnavailable,
+            scope,
+            invokingTeam: null,
+            holder: null,
+            holderTeam: null,
+            detail: detail);
+
+    /// <summary>
     /// A Git worktree must use the pushed remote fact, never local absence or
     /// a stale local record. Non-Git roots retain the local evidence path used
     /// by deterministic command fixtures and embedded callers.

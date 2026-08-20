@@ -1,12 +1,15 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G211: <c>intent-cli worker claim</c> command. Applies (or in
+/// G211/G717: <c>intent-cli worker claim</c> command. Applies (or in
 /// dry-run mode, describes) the in-progress label transition for a
 /// selected issue or PR target — the explicit mutation boundary that
-/// replaces ad-hoc label edits in prompts.
+/// replaces ad-hoc label edits in prompts. When an issue's claim registry
+/// proves an existing in-progress label stale, the command succeeds as a
+/// no-op and leaves the shadow label untouched.
 ///
 /// No-mutation invariants (verified by tests):
 /// - dry-run mode (default) NEVER calls
@@ -30,6 +33,14 @@ internal static class WorkerClaimCommand
     /// here so no real GitHub network call is made.
     /// </summary>
     public static Func<IGitHubLabelMutator>? MutatorFactory { get; set; }
+
+    /// <summary>
+    /// G717 test seam: issue title lookup used to resolve the execution-unit
+    /// claim before the lifecycle-label decision. Production callers use the
+    /// default GitHub lookup; tests inject a payload so the claim path stays
+    /// hermetic.
+    /// </summary>
+    public static Func<IGitHubIssueLookup>? IssueLookupFactory { get; set; }
 
     /// <summary>
     /// Test sentinel: must NEVER be invoked. Tests assert it remains
@@ -92,10 +103,19 @@ internal static class WorkerClaimCommand
         }
 
         var currentNames = LabelNames(currentLabels);
-        var decision = WorkerClaimAnalyzer.Analyze(kind!, currentNames);
+        var claimVerification = ResolveIssueClaimVerification(
+            context,
+            repo!,
+            kind!,
+            number);
+        var decision = WorkerClaimAnalyzer.Analyze(
+            kind!,
+            currentNames,
+            claimVerification);
 
         var applied = false;
         if (decision.Proceed
+            && (decision.AddLabels.Count > 0 || decision.RemoveLabels.Count > 0)
             && string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal))
         {
             try
@@ -160,6 +180,63 @@ internal static class WorkerClaimCommand
         }
         return names;
     }
+
+    private static ClaimOwnershipVerification? ResolveIssueClaimVerification(
+        CliContext context,
+        string repo,
+        string kind,
+        int number)
+    {
+        if (!string.Equals(kind, GhCliGitHubLabelMutator.Kinds.Issue, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var store = ClaimOwnershipVerifier.ProbeStore(context.RepoRoot);
+        if (!store.StoreConfigured)
+        {
+            return null;
+        }
+        if (!store.Available)
+        {
+            return ClaimOwnershipVerifier.Unavailable(
+                $"execution-unit:issue-{number}",
+                $"claim verification refused issue #{number}: fresh canonical Git evidence is unavailable ({store.Detail}).");
+        }
+
+        try
+        {
+            var lookup = IssueLookupFactory?.Invoke() ?? new GhCliGitHubIssueLookup();
+            var issue = lookup.Lookup(repo, number);
+            var match = LeadingExecutionUnitPattern.Match(issue.Title ?? string.Empty);
+            if (!match.Success)
+            {
+                return ClaimOwnershipVerifier.Unavailable(
+                    $"execution-unit:issue-{number}",
+                    $"claim verification refused issue #{number}: could not resolve a leading execution-unit token from the issue title on a claims-enabled host.");
+            }
+
+            return ClaimOwnershipVerifier.Verify(
+                context.RepoRoot,
+                $"execution-unit:{match.Value}",
+                invokingTeam: null,
+                allowUnheld: true);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+            or InvalidOperationException
+            or IOException
+            or FormatException)
+        {
+            return ClaimOwnershipVerifier.Unavailable(
+                $"execution-unit:issue-{number}",
+                $"claim verification refused issue #{number}: canonical issue/title lookup failed ({exception.Message}).");
+        }
+    }
+
+    private static readonly Regex LeadingExecutionUnitPattern = new(
+        @"^(?:[A-Z][A-Z0-9]*-G?[0-9]+|G[0-9]+)(?![A-Za-z0-9])",
+        RegexOptions.Compiled);
 
     private static void WriteText(TextWriter writer, WorkerClaimResult result)
     {

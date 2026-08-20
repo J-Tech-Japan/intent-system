@@ -518,6 +518,43 @@ public sealed class WorkerNextActionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G717_UnheldClaimOverridesStaleInProgressLabel()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        Directory.CreateDirectory(Path.Combine(workspace.RootPath, ClaimCommand.ClaimsDirectory));
+        WorkerNextActionCommand.CandidateListerFactory = () => new FakeLister
+        {
+            Prs = Array.Empty<GitHubAutomationPrCandidate>(),
+            Issues = new[]
+            {
+                BuildIssue(717, "G717 claim precedence", "https://github.com/J-Tech-Japan/intent-system/issues/717",
+                    createdAt: "2026-08-19T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-issue-in-progress" }),
+            },
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--team", "implementation",
+                "--github-only",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.IssueToPr, result.Action);
+        Assert.Equal(717, result.Number);
+        Assert.Equal(WorkerNextActionConstants.SourceClassifications.ReadyToImplement, result.SourceClassification);
+        Assert.Contains("stale shadow state", result.Reason, StringComparison.Ordinal);
+        Assert.Contains(result.Warnings, warning => warning.Contains("without relabeling", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Execute_GivenNoCandidates_ReturnsNoneActionWithDeterministicReason()
     {
         using var workspace = new WorkerNextActionWorkspace();
