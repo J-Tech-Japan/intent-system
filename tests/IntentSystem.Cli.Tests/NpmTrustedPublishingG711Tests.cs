@@ -113,7 +113,7 @@ public sealed class NpmTrustedPublishingG711Tests
         Assert.Contains("the authenticated publish reached npm", npmJob, StringComparison.Ordinal);
         Assert.Contains("repository.url matches https://github.com/J-Tech-Japan/intent-system", npmJob, StringComparison.Ordinal);
         Assert.Contains("npm trusted publishing authentication failure for package", npmJob, StringComparison.Ordinal);
-        Assert.Contains("register this package's npmjs.com trusted publisher", npmJob, StringComparison.Ordinal);
+        Assert.Contains("registering this package's npmjs.com trusted publisher", npmJob, StringComparison.Ordinal);
         Assert.Contains("${GITHUB_REPOSITORY}", npmJob, StringComparison.Ordinal);
         Assert.Contains(".github/workflows/release.yml", npmJob, StringComparison.Ordinal);
         Assert.Contains("id-token: write", npmJob, StringComparison.Ordinal);
