@@ -56,6 +56,10 @@ public sealed class GuideWorkflowTaskIssuePublishCommandTests
         Assert.Contains("FINAL publish boundary", output, StringComparison.Ordinal);
         // The forbidden raw-gh path must be called out.
         Assert.Contains("FORBIDDEN", output, StringComparison.Ordinal);
+        Assert.Contains("claim registry is authoritative", output, StringComparison.Ordinal);
+        Assert.Contains("publish-flow` and `automation issue-publish` do not release", output, StringComparison.Ordinal);
+        Assert.Contains("scope=execution-unit:<unit>", output, StringComparison.Ordinal);
+        Assert.Contains("second process relabel", output, StringComparison.Ordinal);
     }
 
     [Fact]

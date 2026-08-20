@@ -31,6 +31,31 @@ internal sealed record WorkerIssuePreflightResult
     [JsonPropertyName("labels")]
     public required IReadOnlyList<string> Labels { get; init; }
 
+    /// <summary>
+    /// G717: when the claims store is configured, expose the ownership fact
+    /// that was consulted so a label/claim disagreement is inspectable in the
+    /// same preflight result. Legacy hosts omit these fields.
+    /// </summary>
+    [JsonPropertyName("claim_scope")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ClaimScope { get; init; }
+
+    [JsonPropertyName("claim_status")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ClaimStatus { get; init; }
+
+    [JsonPropertyName("claim_holder")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ClaimHolder { get; init; }
+
+    [JsonPropertyName("claim_holder_team")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ClaimHolderTeam { get; init; }
+
+    [JsonPropertyName("claim_detail")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ClaimDetail { get; init; }
+
     [JsonPropertyName("reasons")]
     public required IReadOnlyList<string> Reasons { get; init; }
 
@@ -85,6 +110,12 @@ internal static class WorkerIssuePreflightConstants
         /// the G458 / issue #1018 regression class.
         /// </summary>
         public const string HostOnlyPacket = "host-only-packet";
+
+        /// <summary>
+        /// G717: the canonical claim could not be read, so preflight cannot
+        /// safely decide whether a lifecycle label is a valid work marker.
+        /// </summary>
+        public const string ClaimUnavailable = "claim-unavailable";
     }
 
     public static class RecommendedActions

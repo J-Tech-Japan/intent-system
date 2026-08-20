@@ -21,7 +21,8 @@ internal static class WorkerIssuePreflightAnalyzer
         GitHubIssueLookupResult lookup,
         string repo,
         int issueNumber,
-        string workdir)
+        string workdir,
+        ClaimOwnershipVerification? claimVerification = null)
     {
         ArgumentNullException.ThrowIfNull(lookup);
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
@@ -38,6 +39,34 @@ internal static class WorkerIssuePreflightAnalyzer
         var stateNormalized = state.ToLowerInvariant();
         var body = lookup.Body ?? string.Empty;
         var title = lookup.Title ?? string.Empty;
+        var hasInProgressLabel = labelsSet.Contains(WorkerIssuePreflightConstants.Labels.IntentIssueInProgress);
+        var claimIsUnheld = claimVerification is
+        {
+            StoreConfigured: true,
+            Status: ClaimOwnershipVerification.StatusUnheld
+                or ClaimOwnershipVerification.StatusUnheldAvailable
+        };
+        var claimIsHeld = claimVerification is
+        {
+            StoreConfigured: true,
+            Status: ClaimOwnershipVerification.StatusOwned
+                or ClaimOwnershipVerification.StatusHeldByOtherTeam
+                or ClaimOwnershipVerification.StatusTeamRequired
+        };
+        var claimIsUnavailable = claimVerification is
+        {
+            StoreConfigured: true,
+            Status: ClaimOwnershipVerification.StatusCanonicalUnavailable
+                or ClaimOwnershipVerification.StatusInvalid
+        };
+        var claimDisagreement = hasInProgressLabel && claimIsUnheld;
+        var claimDisagreementReasons = claimDisagreement
+            ? new[]
+            {
+                $"lifecycle label '{WorkerIssuePreflightConstants.Labels.IntentIssueInProgress}' disagrees with claim registry scope '{claimVerification!.Scope}': the claim is unheld; claim registry is authoritative, so preflight proceeds and treats the label as stale shadow state.",
+                "the next worker action must acquire the unheld execution-unit claim before implementation starts; do not repair this by treating the lifecycle label as ownership evidence."
+            }
+            : Array.Empty<string>();
 
         // Step 1: non-actionable — closed or non-open state.
         // gh emits state in upper case ("OPEN", "CLOSED"); also honor the
@@ -75,8 +104,61 @@ internal static class WorkerIssuePreflightAnalyzer
                 WorkerIssuePreflightConstants.RecommendedActions.NoAction);
         }
 
-        // Step 3: already-in-progress.
-        if (labelsSet.Contains(WorkerIssuePreflightConstants.Labels.IntentIssueInProgress))
+        // Step 3: claim/lifecycle precedence (G717). The claim registry is
+        // authoritative; lifecycle labels are only its visible shadow. An
+        // active claim therefore remains an in-progress stop even when the
+        // label is absent, while an unheld claim makes an in-progress label
+        // stale and allows the normal preflight to continue.
+        if (claimIsUnavailable)
+        {
+            return Build(
+                lookup,
+                repo,
+                issueNumber,
+                title,
+                state,
+                labels,
+                WorkerIssuePreflightConstants.Classifications.ClaimUnavailable,
+                new[]
+                {
+                    claimVerification!.Detail,
+                    "claim registry is authoritative over lifecycle labels; refusing to infer ownership until fresh claim evidence is available."
+                },
+                actionable: false,
+                WorkerIssuePreflightConstants.RecommendedActions.WaitForClarification,
+                claimVerification: claimVerification);
+        }
+
+        if (claimIsHeld)
+        {
+            var reasons = new List<string>
+            {
+                claimVerification!.Detail,
+                "claim registry is authoritative over lifecycle labels; this execution unit remains in progress under its active claim."
+            };
+            if (!hasInProgressLabel)
+            {
+                reasons.Add(
+                    $"lifecycle label '{WorkerIssuePreflightConstants.Labels.IntentIssueInProgress}' is absent, but the active claim still governs ownership.");
+            }
+
+            return Build(
+                lookup,
+                repo,
+                issueNumber,
+                title,
+                state,
+                labels,
+                WorkerIssuePreflightConstants.Classifications.AlreadyInProgress,
+                reasons,
+                actionable: false,
+                WorkerIssuePreflightConstants.RecommendedActions.NoAction,
+                claimVerification: claimVerification);
+        }
+
+        // An unheld claim explicitly overrides a stale in-progress label.
+        // Continue through target/contract checks rather than failing closed.
+        if (hasInProgressLabel && !claimIsUnheld)
         {
             return Build(
                 lookup,
@@ -88,7 +170,8 @@ internal static class WorkerIssuePreflightAnalyzer
                 WorkerIssuePreflightConstants.Classifications.AlreadyInProgress,
                 ["issue carries intent-issue-in-progress label; an issue-to-PR worker has already claimed this issue"],
                 actionable: false,
-                WorkerIssuePreflightConstants.RecommendedActions.NoAction);
+                WorkerIssuePreflightConstants.RecommendedActions.NoAction,
+                claimVerification: claimVerification);
         }
 
         // Step 4: missing-target-label.
@@ -209,10 +292,11 @@ internal static class WorkerIssuePreflightAnalyzer
             state,
             labels,
             WorkerIssuePreflightConstants.Classifications.ReadyToImplement,
-            Array.Empty<string>(),
+            claimDisagreementReasons,
             actionable: true,
             WorkerIssuePreflightConstants.RecommendedActions.Implement,
-            advisories);
+            advisories,
+            claimVerification);
     }
 
     private static IReadOnlyList<string> DetectTargetMismatch(string body, string repo, string workdir, IReadOnlyList<string> declaredPaths)
@@ -277,7 +361,8 @@ internal static class WorkerIssuePreflightAnalyzer
         IReadOnlyList<string> reasons,
         bool actionable,
         string recommendedAction,
-        IReadOnlyList<string>? advisories = null)
+        IReadOnlyList<string>? advisories = null,
+        ClaimOwnershipVerification? claimVerification = null)
     {
         _ = lookup;
         var derivedAdvisories = advisories
@@ -297,7 +382,12 @@ internal static class WorkerIssuePreflightAnalyzer
             Reasons = reasons,
             Advisories = derivedAdvisories,
             RecommendedAction = recommendedAction,
-            SummaryLine = summaryLine
+            SummaryLine = summaryLine,
+            ClaimScope = claimVerification?.Scope,
+            ClaimStatus = claimVerification?.Status,
+            ClaimHolder = claimVerification?.Holder,
+            ClaimHolderTeam = claimVerification?.HolderTeam,
+            ClaimDetail = claimVerification?.Detail
         };
     }
 }

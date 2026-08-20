@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -14,6 +15,10 @@ internal static class WorkerIssuePreflightCommand
 {
     private const string FormatText = "text";
     private const string FormatJson = "json";
+
+    private static readonly Regex LeadingExecutionUnitPattern = new(
+        @"^(?:[A-Z][A-Z0-9]*-G?[0-9]+|G[0-9]+)(?![A-Za-z0-9])",
+        RegexOptions.Compiled);
 
     /// <summary>
     /// Test seam: tests inject a fake <see cref="IGitHubIssueLookup"/> here so
@@ -86,11 +91,15 @@ internal static class WorkerIssuePreflightCommand
         WorkerIssuePreflightResult result;
         try
         {
+            var claimVerification = ResolveClaimVerification(
+                context.RepoRoot,
+                issuePayload.Title);
             result = WorkerIssuePreflightAnalyzer.Analyze(
                 issuePayload,
                 repo!,
                 issueNumber,
-                resolvedWorkdir);
+                resolvedWorkdir,
+                claimVerification);
         }
         catch (Exception exception) when (
             exception is ArgumentException
@@ -112,6 +121,44 @@ internal static class WorkerIssuePreflightCommand
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// G717: consult the canonical execution-unit claim before applying the
+    /// lifecycle-label precedence. The preflight workdir remains a target
+    /// mismatch context; claim evidence comes from the command's repository
+    /// root so a child worktree cannot substitute a stale local label or
+    /// record. Hosts without a claims store return the legacy no-store result.
+    /// </summary>
+    private static ClaimOwnershipVerification? ResolveClaimVerification(
+        string repoRoot,
+        string? issueTitle)
+    {
+        var match = LeadingExecutionUnitPattern.Match(issueTitle ?? string.Empty);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        try
+        {
+            return ClaimOwnershipVerifier.Verify(
+                repoRoot,
+                $"execution-unit:{match.Value}",
+                invokingTeam: null);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+            or InvalidOperationException
+            or IOException
+            or FormatException)
+        {
+            // The analyzer remains usable for legacy/test callers when the
+            // optional claim consultation cannot be initialized. A claims
+            // enabled Git checkout reports canonical-unavailable through the
+            // verifier itself; this catch is only for an unavailable seam.
+            return null;
+        }
     }
 
     private static void WriteText(TextWriter writer, WorkerIssuePreflightResult result)
@@ -138,6 +185,17 @@ internal static class WorkerIssuePreflightCommand
             }
         }
         writer.WriteLine();
+
+        if (result.ClaimStatus is not null)
+        {
+            writer.WriteLine("## Claim registry");
+            writer.WriteLine($"- scope: {result.ClaimScope}");
+            writer.WriteLine($"- status: {result.ClaimStatus}");
+            writer.WriteLine($"- holder: {result.ClaimHolder ?? "(none)"}");
+            writer.WriteLine($"- holder_team: {result.ClaimHolderTeam ?? "(none)"}");
+            writer.WriteLine($"- detail: {result.ClaimDetail}");
+            writer.WriteLine();
+        }
 
         writer.WriteLine("## Reasons");
         if (result.Reasons.Count == 0)

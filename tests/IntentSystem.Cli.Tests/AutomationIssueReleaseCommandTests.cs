@@ -47,6 +47,7 @@ public sealed class AutomationIssueReleaseCommandTests : IDisposable
         Assert.Contains("intent-target", result.RemoveLabels);
         Assert.Empty(result.AddLabels);
         Assert.Equal("host-only packet (G458)", result.Reason);
+        Assert.Contains("does not release intent-issue-in-progress", result.DoesNotDo, StringComparison.OrdinalIgnoreCase);
 
         var transition = Assert.Single(mutator.Transitions);
         Assert.Equal("issue", transition.Kind);

@@ -103,7 +103,8 @@ internal static class GuideModelCommand
                         "Run the conversation; ask one focused question at a time; surface tradeoffs.",
                         "Call `intent-cli` internally to retrieve rules (`guide rules`), state (`intent status`), discovery (`intent search` / `explain`), and planning facts (`intent next-slice --dry-run`).",
                         "Drive durable state through `interview record-answer --write` and `intent draft-from-interview --write` only after operator acceptance.",
-                        "Implement child issues via the `worker next-action` / `worker claim` / `worker complete` flow when running the implementation loop."
+                        "Implement child issues via the `worker next-action` / `worker claim` / `worker complete` flow when running the implementation loop.",
+                        "After the final publish boundary, release the attributed drafting claim so the implementation worker can acquire the same execution-unit scope."
                     }
                 },
                 new GuideModelRole
@@ -114,6 +115,7 @@ internal static class GuideModelCommand
                         "Deterministic guide / artifact authority for rules, workflows, packet contracts, queue/runs state, and label transitions.",
                         "Read-only by default; explicit `--write` is required for any state mutation.",
                         "Owns label state for `intent-target`, `intent-pr-created`, and the installed transition surfaces.",
+                        "Treats the execution-unit claim registry as authoritative over lifecycle-label shadows and exposes the explicit publish handoff.",
                         "Does not launch AI providers and does not replace operator decisions."
                     }
                 },
@@ -135,6 +137,7 @@ internal static class GuideModelCommand
                 "intents/<domain>/drafts/<session>.md — accepted-answer drafts before promotion.",
                 ".intent-cli/queue-state.json — execution-unit lifecycle state.",
                 ".intent-cli/runs.jsonl — append-only event log (pr-merged, closeout-recorded, etc.).",
+                ".intent-cli/claims/ — non-union active execution-unit claim records; the claim registry is authoritative over lifecycle labels.",
                 ".intent-cli/issues/<execution-unit>/ — per-unit packet (packet.yaml, implementation.md, review-context.md, github-body.md)."
             },
             OptionalAdvancedRuntime = new[]
@@ -149,7 +152,8 @@ internal static class GuideModelCommand
                 "intent-cli must not replace operator decisions; canonical mutation requires explicit operator acceptance.",
                 "Routine collaboration must not require manually opening `intents/rules` files; agents call `intent-cli guide ...` instead.",
                 "`intent-target` is the host-owned publish boundary; the child loop never adds or removes it.",
-                "`intent-pr-created` is an issue-side completion marker; never apply it to a PR."
+                "`intent-pr-created` is an issue-side completion marker; never apply it to a PR.",
+                "When a lifecycle label disagrees with an execution-unit claim, the claim registry wins; publish-flow leaves the drafting claim held until the attributed drafter explicitly releases it for implementation."
             }
         };
     }

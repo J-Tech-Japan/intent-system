@@ -25,7 +25,7 @@ internal static class GuideRulesListCommand
         {
             Id = "label-ownership",
             Title = "Label ownership",
-            Description = "intent-target / intent-pr-created boundaries and the installed transition surfaces.",
+            Description = "Claim-registry precedence, intent-target / intent-pr-created boundaries, and installed transition surfaces.",
             Category = "automation"
         },
         new RulesTopicEntry
