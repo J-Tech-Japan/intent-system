@@ -68,7 +68,7 @@ internal static class GuideWorkflowTaskPacketDraftCommand
         new IssueContractSection { Section = "why-this-slice-exists-now", Purpose = "Why this slice cannot wait. Names the blocker and the user observation that forced the slice." },
         new IssueContractSection { Section = "current-observed-state", Purpose = "What an external agent or operator sees today, before the slice lands. Pins the regression target." },
         new IssueContractSection { Section = "accepted-baseline-you-may-assume", Purpose = "What the agent does not have to relitigate (collaboration model, intent-cli routing, no-local-rule rule, etc.)." },
-        new IssueContractSection { Section = "target-repo-path-part", Purpose = "Exact repository / folder / surface the change must land in. Disambiguates host-vs-child mutation targets." },
+        new IssueContractSection { Section = "target-repo-path-part", Purpose = "Exact repository / folder / surface the change must land in. Disambiguates host-vs-child mutation targets. Include the literal bullet `- Target paths: <comma- or space-separated paths>` with authored paths; do not infer it from other fields." },
         new IssueContractSection { Section = "in-scope", Purpose = "Bullet list of what is in scope. Mirrors the slice goal; one slice cuts cleanly so this list stays small." },
         new IssueContractSection { Section = "out-of-scope", Purpose = "Bullet list of what is explicitly NOT in this slice. Reviewers refuse PRs that broaden scope without an out-of-scope amendment." },
         // G482: standalone restatement and base branch policy are publish-ready
@@ -136,7 +136,7 @@ internal static class GuideWorkflowTaskPacketDraftCommand
         "On a claims-enabled host, `packet draft` runs the shared claim verification first. Stop when `execution-unit:<id>` is unheld or held by another team; the refusal names the scope, holder, and holder team. A host with no claims store follows the legacy path byte-for-byte.",
         "`packet draft --dry-run` flags missing files: stop, repair the design host packet directory before publishing. Hand-editing the four files is allowed during design; routine automation mutates them through `packet draft --write` only.",
         "**Dry-run the publish validation BEFORE declaring the packet issue-ready (G482)**: never call a packet ready for GitHub issue creation until a publish-validation dry-run reports zero missing contract sections. Run `intent-cli issue validate-body --from-file <github-body.md> --format json` (offline body check), `intent-cli packet draft --execution-unit <id> --dry-run --format json` (re-scaffold + contract check), and — for the host loop — `intent-cli intent next-slice --dry-run --format json`; all three share one required-section source of truth, so a clean result on one is a clean result on all. A freshly scaffolded packet already carries every required section (Goal, Current Observed State, Why This Slice Exists Now, Accepted Baseline You May Assume, Target Repo / Path / Part, In Scope, Out Of Scope, Standalone Child Issue Contract, Acceptance Criteria, Verification, Related Links, Base Branch Policy); fill the placeholders, do not delete sections.",
-        "`issue validate-body --from-file <github-body.md> --format json` reports `errors[]` (missing contract sections): stop, repair the body, validate again, only then move to `issue publish-flow`.",
+        "`issue validate-body --from-file <github-body.md> --format json` reports either missing headings or a separate `target_paths_invalid` declaration error: stop, repair the body, validate again, only then move to `issue publish-flow`. When `Target Repo / Path / Part` is present, it must contain the literal `- Target paths: <comma- or space-separated paths>` line.",
         "`packet.yaml` lacks `intent_reference_paths` or names them with broad-domain placeholders: stop, narrow to PR-specific references. Broad-domain intent paths defeat G316 review-context isolation.",
         "Operator names `intent-target` on the GitHub issue manually (raw `gh issue edit --add-label intent-target`): refuse, surface the gap — `intent-target` is the FINAL publish boundary applied by `automation issue-publish --write` after `issue publish-flow` succeeds, never the default."
     };
@@ -221,6 +221,12 @@ internal static class GuideWorkflowTaskPacketDraftCommand
         {
             writer.WriteLine($"- **{section.Section}** — {section.Purpose}");
         }
+        writer.WriteLine();
+        writer.WriteLine("When composing **target-repo-path-part**, put this declaration inside the section with the authored paths (do not infer it):");
+        writer.WriteLine();
+        writer.WriteLine("- Target paths: `<comma- or space-separated paths>`");
+        writer.WriteLine();
+        writer.WriteLine("`issue validate-body` reports a missing heading separately from a missing target-path declaration, so the two omissions remain distinguishable before GitHub mutation.");
         writer.WriteLine();
 
         writer.WriteLine("## Packet-time intent maintenance (optional, normal path)");

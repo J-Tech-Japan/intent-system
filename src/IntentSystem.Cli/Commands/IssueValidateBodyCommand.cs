@@ -4,7 +4,8 @@ namespace IntentSystem.Cli.Commands;
 /// G183: Read-only <c>intent-cli issue validate-body --from-file &lt;path&gt;
 /// [--format text|json]</c> command. Validates a standalone Markdown child
 /// issue body against the host-review-loop Child Issue Contract: required
-/// headings present, <c>Related Links</c> contains at least one
+/// headings present, the <c>Target Repo / Path / Part</c> section contains a
+/// target-path declaration, and <c>Related Links</c> contains at least one
 /// non-placeholder list item. Exits 0 when valid and non-zero otherwise.
 /// Never mutates parent queue state, runs, packets, GitHub objects, or labels.
 /// </summary>
@@ -32,7 +33,10 @@ internal static class IssueValidateBodyCommand
         }
 
         var content = File.ReadAllText(fromFile);
-        var result = IssueValidateBodyValidator.Validate(fromFile, content);
+        var result = IssueValidateBodyValidator.Validate(
+            fromFile,
+            content,
+            requireTargetPathsDeclaration: true);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {

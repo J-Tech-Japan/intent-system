@@ -99,6 +99,86 @@ public sealed class IssueValidateBodyCommandTests
     }
 
     [Fact]
+    public void Execute_GivenTargetSectionWithoutDeclaration_ReportsDistinctFailureThenValidatesAfterLineAdded()
+    {
+        // G720: the target heading and its required declaration are separate
+        // checks. Exercise the full drafter walk: omit the line, observe the
+        // refusal, add the authored line, and validate again.
+        using var workspace = new IssueValidateBodyWorkspace();
+        var bodyWithoutTargetPaths = CompleteValidBody.Replace(
+            "- Target paths: `src/IntentSystem.Cli/Commands`, `tests/IntentSystem.Cli.Tests`\n",
+            string.Empty,
+            StringComparison.Ordinal);
+        workspace.WriteBody("issue.md", bodyWithoutTargetPaths);
+
+        using var refusalWriter = new StringWriter();
+        var refusalExitCode = IssueValidateBodyCommand.Execute(
+            workspace.Context,
+            ["--from-file", workspace.GetPath("issue.md")],
+            refusalWriter);
+
+        Assert.Equal(1, refusalExitCode);
+        var refusalOutput = refusalWriter.ToString();
+        Assert.Contains("Target paths declaration:", refusalOutput, StringComparison.Ordinal);
+        Assert.Contains("- Target paths: <path>", refusalOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("Missing required headings:", refusalOutput, StringComparison.Ordinal);
+
+        using var refusalJsonWriter = new StringWriter();
+        var refusalJsonExitCode = IssueValidateBodyCommand.Execute(
+            workspace.Context,
+            ["--from-file", workspace.GetPath("issue.md"), "--format", "json"],
+            refusalJsonWriter);
+
+        Assert.Equal(1, refusalJsonExitCode);
+        using (var refusalDocument = JsonDocument.Parse(refusalJsonWriter.ToString()))
+        {
+            var refusalRoot = refusalDocument.RootElement;
+            Assert.False(refusalRoot.GetProperty("is_valid").GetBoolean());
+            Assert.True(refusalRoot.GetProperty("target_paths_invalid").GetBoolean());
+            Assert.Equal(0, refusalRoot.GetProperty("missing_headings").GetArrayLength());
+        }
+
+        var repairedBody = bodyWithoutTargetPaths.Replace(
+            "- Likely areas: src/, tests/\n",
+            "- Target paths: `src/IntentSystem.Cli/Commands`, `tests/IntentSystem.Cli.Tests`\n- Likely areas: src/, tests/\n",
+            StringComparison.Ordinal);
+        workspace.WriteBody("issue.md", repairedBody);
+
+        using var validWriter = new StringWriter();
+        var validExitCode = IssueValidateBodyCommand.Execute(
+            workspace.Context,
+            ["--from-file", workspace.GetPath("issue.md"), "--format", "json"],
+            validWriter);
+
+        Assert.Equal(0, validExitCode);
+        using var validDocument = JsonDocument.Parse(validWriter.ToString());
+        var validRoot = validDocument.RootElement;
+        Assert.True(validRoot.GetProperty("is_valid").GetBoolean());
+        Assert.False(validRoot.GetProperty("target_paths_invalid").GetBoolean());
+    }
+
+    [Fact]
+    public void Execute_GivenTargetPathsWithoutCanonicalBullet_ReportsTargetDeclarationFailure()
+    {
+        using var workspace = new IssueValidateBodyWorkspace();
+        var nonCanonicalBody = CompleteValidBody.Replace(
+            "- Target paths:",
+            "Target paths:",
+            StringComparison.Ordinal);
+        workspace.WriteBody("issue.md", nonCanonicalBody);
+
+        using var writer = new StringWriter();
+        var exitCode = IssueValidateBodyCommand.Execute(
+            workspace.Context,
+            ["--from-file", workspace.GetPath("issue.md")],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Target paths declaration:", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("literal `- Target paths: <path>`", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenMissingFromFileFlag_ReturnsNonZero()
     {
         // Required scenario 4 (a): missing --from-file flag.
@@ -160,6 +240,7 @@ public sealed class IssueValidateBodyCommandTests
         var root = document.RootElement;
         Assert.True(root.GetProperty("is_valid").GetBoolean());
         Assert.False(root.GetProperty("related_links_invalid").GetBoolean());
+        Assert.False(root.GetProperty("target_paths_invalid").GetBoolean());
         Assert.Equal(JsonValueKind.Array, root.GetProperty("missing_headings").ValueKind);
         Assert.Equal(0, root.GetProperty("missing_headings").GetArrayLength());
         Assert.True(root.TryGetProperty("source_path", out _));
@@ -226,6 +307,7 @@ public sealed class IssueValidateBodyCommandTests
         ## Target Repo / Path / Part
 
         - Repository: J-Tech-Japan/intent-system
+        - Target paths: `src/IntentSystem.Cli/Commands`, `tests/IntentSystem.Cli.Tests`
         - Likely areas: src/, tests/
 
         ## In Scope
