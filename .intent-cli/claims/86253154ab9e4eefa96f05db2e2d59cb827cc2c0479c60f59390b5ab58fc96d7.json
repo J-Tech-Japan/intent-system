@@ -1,0 +1,8 @@
+{
+  "schema_version": "1",
+  "scope": "execution-unit:G717",
+  "actor": "codex",
+  "team": "intent-cli-dev",
+  "claimed_at": "2026-08-20T00:38:06.850609+00:00",
+  "base_commit": "e7cbba0ce2d143edd19e1c60804073e41ac9401d"
+}
