@@ -2826,16 +2826,16 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 使っています: 現在のバージョンの 2 つ目のコピーは同期し続けるべき対象が 1 つ増えることを
 意味し、しかも誰も見ていない roll でこそ stale になります。
 
-### 次リリース準備(v0.22.1)
+### 次リリース準備(v0.23.0)
 
 **`v0.22.0` は出荷済み**(GitHub Release + NuGet)で、次に準備するラインは
-`0.22.1` です。[v0.22.0 notes](release-notes-v0.22.0.md) は凍結された
-released evidence で、[v0.22.1 DRAFT](release-notes-v0.22.1.md) は次のラインの stub です。
+`0.23.0` です。[v0.22.0 notes](release-notes-v0.22.0.md) は凍結された
+released evidence で、[v0.23.0 DRAFT](release-notes-v0.23.0.md) は次のラインの stub です。
 古い出荷範囲は [release-notes-v0.21.0.md](release-notes-v0.21.0.md) を参照し、ここでは重複記載しません。
 
-Rolled policy: `stableVersion → 0.22.0`; `nextVersion → 0.22.1`。
+Rolled policy: `stableVersion → 0.22.0`; `nextVersion → 0.23.0`。
 
-**`v0.22.1` のリリース準備検証:**
+**`v0.23.0` のリリース準備検証:**
 
 claims-enabled host では release artifact を編集する前に release scope を acquire / verify します。
 同じ shared verification が G680 の全 start surface を gate し、claims store が無ければ legacy
@@ -2844,30 +2844,33 @@ tag または Release を作成せず、package を publish せず、credentials
 
 ```bash
 # 0. 次の patch line の release-prep ownership を acquire / verify。
-intent-cli claim acquire --scope release-prep:<owner/repo>:0.22.1 --actor <actor> --team <team> --write --format json
-intent-cli claim verify --scope release-prep:<owner/repo>:0.22.1 --team <team> --format json
+intent-cli claim acquire --scope release-prep:<owner/repo>:0.23.0 --actor <actor> --team <team> --write --format json
+intent-cli claim verify --scope release-prep:<owner/repo>:0.23.0 --team <team> --format json
 
 # 1. roll 済み version policy を確認。
-cat eng/version.json   # stableVersion 0.22.0 (published), nextVersion 0.22.1 (next line)
+cat eng/version.json   # stableVersion 0.22.0 (published), nextVersion 0.23.0 (next line)
 
 # 2. 次のラインの表示バージョン識別を build して確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-#   期待する形: intent-cli 0.22.1-<sha>-G<unit>
+#   期待する形: intent-cli 0.23.0-<sha>-G<unit>
 
 # 3. この roll では package を publish しない。v0.22.0 の npm gap は下記に記録し、
 #    四つの npm tarball と checksum companion は既存 Release に残る。
-#    次のラインの package identity は JTechJapan.IntentSystem.Cli.0.22.1.nupkg。
+#    次のラインの package identity は JTechJapan.IntentSystem.Cli.0.23.0.nupkg。
 
 # 4. metadata-free directory から既存 installed guide route を実行。
 intent-cli guide orchestrator-thread --domain intent-cli --target-repo J-Tech-Japan/intent-system --agent <agent> --format json
 intent-cli guide orchestrator-thread --domain intent-cli --target-repo J-Tech-Japan/intent-system --agent <agent> --format markdown
-#   この roll は新しい guide-facing surface を宣言しないため、reachability debt が無いことを確認。
+#   retargeted Release build から二つの新 G712 surface も確認する:
+intent-cli notify supervise reconcile --help
+intent-cli guide workflow task supervision-setup --format json
+#   前者は notify supervise reconcile|uninstall surface、後者は metadata-free かつ read-only です。
 
-# 5. 凍結した v0.22.0 evidence と v0.22.1 version guard を確認。
+# 5. 凍結した v0.22.0 evidence と v0.23.0 version guard を確認。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter \
-  "FullyQualifiedName~ReleaseNotesV0220DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+  "FullyQualifiedName~ReleaseNotesV0230DocsTests|FullyQualifiedName~ReleaseNotesV0220DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 
 # 6. formatting と complete Release suite を確認。
 git diff --check
@@ -2889,7 +2892,7 @@ G702 npm publish step は v0.22.0 では実行せず、四つの npm tarball と
 orchestration は EN source のみを使います:
 `gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/en/release-notes-v0.22.0.md`。
 公開済みの body はすでに存在し、この implementation roll は command を実行せず GitHub Release state を変更しません。
-この roll は新しい guide-facing surface を追加せず、reachability debt も作りません。既存の metadata-free
+この line は上記二つの G712 command surface を追加し、Release-build の probe で reachability を確認します。既存の metadata-free
 guide entry point が operator/agent interface のままです。
 
 ### 削除済みリリースタグ（`v0.3.3`）の再作成

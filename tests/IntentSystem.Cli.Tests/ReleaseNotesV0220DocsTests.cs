@@ -280,21 +280,24 @@ public sealed class ReleaseNotesV0220DocsTests
     public void DeveloperReadinessMirrorsTheReleasedRollContract(string language)
     {
         var root = RepoVersionPolicySource.RepoRoot();
+        var policy = RepoVersionPolicySource.Read();
         var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
         var heading = language == "en"
-            ? "### Next release readiness (v0.22.1)"
-            : "### 次リリース準備(v0.22.1)";
+            ? $"### Next release readiness (v{policy.NextVersion})"
+            : $"### 次リリース準備(v{policy.NextVersion})";
         var start = reference.IndexOf(heading, StringComparison.Ordinal);
         Assert.True(start >= 0);
         var nextHeading = reference.IndexOf("\n### ", start + heading.Length, StringComparison.Ordinal);
         var section = reference[start..(nextHeading < 0 ? reference.Length : nextHeading)];
         var compact = Regex.Replace(section, @"\s+", " ");
 
-        Assert.Contains("release-notes-v0.22.0.md", section, StringComparison.Ordinal);
-        Assert.Contains("release-notes-v0.22.1.md", section, StringComparison.Ordinal);
+        Assert.Contains($"release-notes-v{policy.StableVersion}.md", section, StringComparison.Ordinal);
+        Assert.Contains($"release-notes-v{policy.NextVersion}.md", section, StringComparison.Ordinal);
         Assert.Contains("G702 npm publish step", section, StringComparison.Ordinal);
         Assert.Contains("distribution gap", section, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("guide orchestrator-thread", section, StringComparison.Ordinal);
+        Assert.Contains("notify supervise reconcile|uninstall", section, StringComparison.Ordinal);
+        Assert.Contains("guide workflow task supervision-setup", section, StringComparison.Ordinal);
         Assert.Contains("ReleaseNotesV0220DocsTests", section, StringComparison.Ordinal);
         Assert.DoesNotContain("v0.21.1", section, StringComparison.Ordinal);
         Assert.Contains(
@@ -307,7 +310,7 @@ public sealed class ReleaseNotesV0220DocsTests
             Assert.DoesNotContain("--notes-file docs/ja/release-notes-v0.22.0.md", section, StringComparison.Ordinal);
         }
         Assert.Contains(
-            language == "en" ? "no guide reachability debt" : "reachability debt も作りません",
+            language == "en" ? "metadata-free and read-only" : "metadata-free かつ read-only",
             compact,
             StringComparison.OrdinalIgnoreCase);
     }
