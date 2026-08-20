@@ -5,7 +5,7 @@ namespace IntentSystem.Cli.Tests;
 /// <summary>
 /// G711: release npm publication must use job-scoped GitHub Actions OIDC
 /// trusted publishing. The workflow source is the contract boundary for the
-/// permission, toolchain, credential absence, and named authentication
+/// permission, toolchain, credential absence, and classified publish
 /// failure that ordinary unit tests cannot exercise against npmjs.com.
 /// </summary>
 public sealed class NpmTrustedPublishingG711Tests
@@ -35,7 +35,7 @@ public sealed class NpmTrustedPublishingG711Tests
     }
 
     [Fact]
-    public void Workflow_FailsNamedForThePackageWhenOidcConfigurationIsMissing()
+    public void Workflow_ClassifiesTheActualFailureAndNamesTheClearingAct()
     {
         var workflow = ReadWorkflow();
         var npmJob = ExtractNpmJob(workflow);
@@ -55,8 +55,8 @@ public sealed class NpmTrustedPublishingG711Tests
     {
         var workflow = ReadWorkflow();
         var invalid = workflow.Replace(
-            "npm trusted publishing authentication failed for package",
-            "NPM_TOKEN is not set; skipping npm publish.\n            exit 0\n            npm trusted publishing authentication failed for package",
+            "npm registry/provenance rejection for package",
+            "NPM_TOKEN is not set; skipping npm publish.\n            exit 0\n            npm registry/provenance rejection for package",
             StringComparison.Ordinal);
 
         var failure = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
@@ -108,11 +108,16 @@ public sealed class NpmTrustedPublishingG711Tests
     {
         Assert.Contains("publish_package()", npmJob, StringComparison.Ordinal);
         Assert.Contains("if ! publish_output=\"$(npm publish", npmJob, StringComparison.Ordinal);
-        Assert.Contains("npm trusted publishing authentication failed for package", npmJob, StringComparison.Ordinal);
+        Assert.Contains("classify_publish_failure()", npmJob, StringComparison.Ordinal);
+        Assert.Contains("npm registry/provenance rejection for package", npmJob, StringComparison.Ordinal);
+        Assert.Contains("the authenticated publish reached npm", npmJob, StringComparison.Ordinal);
+        Assert.Contains("repository.url matches https://github.com/J-Tech-Japan/intent-system", npmJob, StringComparison.Ordinal);
+        Assert.Contains("npm trusted publishing authentication failure for package", npmJob, StringComparison.Ordinal);
         Assert.Contains("register this package's npmjs.com trusted publisher", npmJob, StringComparison.Ordinal);
         Assert.Contains("${GITHUB_REPOSITORY}", npmJob, StringComparison.Ordinal);
         Assert.Contains(".github/workflows/release.yml", npmJob, StringComparison.Ordinal);
         Assert.Contains("id-token: write", npmJob, StringComparison.Ordinal);
+        Assert.Contains("then rerun this release publish", npmJob, StringComparison.Ordinal);
         Assert.DoesNotContain("exit 0", npmJob, StringComparison.Ordinal);
     }
 

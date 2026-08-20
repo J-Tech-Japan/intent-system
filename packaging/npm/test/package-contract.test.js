@@ -6,6 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const packageRoot = path.resolve(__dirname, '..');
+const provenanceRepositoryUrl = 'https://github.com/J-Tech-Japan/intent-system';
 const platforms = [
   { directory: 'darwin-arm64', name: '@j-tech-japan/intent-cli-darwin-arm64', os: 'darwin', cpu: 'arm64', rid: 'osx-arm64' },
   { directory: 'linux-x64', name: '@j-tech-japan/intent-cli-linux-x64', os: 'linux', cpu: 'x64', rid: 'linux-x64' },
@@ -33,6 +34,8 @@ test('platform templates declare npm selection, release RID, and checksum metada
     assert.equal(manifest.name, platform.name);
     assert.deepEqual(manifest.os, [platform.os]);
     assert.deepEqual(manifest.cpu, [platform.cpu]);
+    assert.equal(manifest.repository?.type, 'git');
+    assert.equal(manifest.repository?.url, provenanceRepositoryUrl);
     assert.equal(manifest.intentCli.platform, platform.rid);
     assert.equal(manifest.intentCli.binarySha256, '__BINARY_SHA256__');
     assert.equal(manifest.scripts?.postinstall, undefined);

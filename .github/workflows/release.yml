@@ -406,10 +406,22 @@ jobs:
             local publish_output
             if ! publish_output="$(npm publish "${package_path}" --access public 2>&1)"; then
               printf '%s\n' "${publish_output}" >&2
-              echo "npm trusted publishing authentication failed for package ${package_name}: register this package's npmjs.com trusted publisher for repository ${GITHUB_REPOSITORY} and workflow .github/workflows/release.yml, and keep id-token: write on the npm job; no npm token fallback is supported." >&2
+              classify_publish_failure "${package_name}" "${publish_output}"
               return 1
             fi
             printf '%s\n' "${publish_output}"
+          }
+
+          classify_publish_failure() {
+            local package_name="$1"
+            local publish_output="$2"
+            if printf '%s\n' "${publish_output}" | grep -Eiq 'E422|provenance|repository information|Unprocessable Entity'; then
+              echo "npm registry/provenance rejection for package ${package_name}: the authenticated publish reached npm but the registry rejected the package metadata. Clear this by publishing a package whose repository.url matches https://github.com/J-Tech-Japan/intent-system, then rerun this release publish." >&2
+            elif printf '%s\n' "${publish_output}" | grep -Eiq 'E401|ENEEDAUTH|E403|not authorized|authentication|trusted publisher'; then
+              echo "npm trusted publishing authentication failure for package ${package_name}: the publish could not authenticate with npm. Clear this by registering this package's npmjs.com trusted publisher for repository ${GITHUB_REPOSITORY} and workflow .github/workflows/release.yml, keeping id-token: write on the npm job, then rerun this release publish." >&2
+            else
+              echo "npm publish failure for package ${package_name}: the registry or client rejected the request; the npm output above is the source of the failure. Clear this by correcting the reported publish error, then rerun this release publish." >&2
+            fi
           }
 
           publish_package \

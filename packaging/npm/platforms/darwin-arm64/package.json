@@ -3,6 +3,10 @@
   "version": "0.0.0-dev",
   "description": "Self-contained intent-cli binary for macOS Apple Silicon.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/J-Tech-Japan/intent-system"
+  },
   "os": [
     "darwin"
   ],
