@@ -6,6 +6,14 @@ namespace IntentSystem.Cli.Commands;
 
 internal sealed record NotifyPendingStoreWriteResult(bool Written, string Path, string? Error);
 
+internal sealed record NotifyPendingReconciliationResult(
+    bool Applied,
+    bool AlreadyConverged,
+    string Path,
+    NotifyPendingDelegation? Record,
+    NotifyPendingDelegation? Preview,
+    string? Error);
+
 internal sealed record NotifyPendingDisposition
 {
     [JsonPropertyName("kind")] public required string Kind { get; init; }
@@ -138,16 +146,152 @@ internal static class NotifyPendingDelegationStore
         DateTimeOffset reportedAt)
     {
         var path = ResolvePath(routingRoot, record.Domain, record.Team);
+        var normalizedSummary = NotifyEventWriter.NormalizeSummary(summary);
         lock (Sync)
         {
+            var current = ReadCurrent(path, out var readError);
+            if (readError is not null)
+            {
+                return new NotifyPendingStoreWriteResult(false, path, readError);
+            }
+
+            if (current.TryGetValue(record.TaskId, out var currentRecord))
+            {
+                if (!string.Equals(currentRecord.ResultNonce, record.ResultNonce, StringComparison.Ordinal))
+                {
+                    return new NotifyPendingStoreWriteResult(false, path,
+                        $"Task '{record.TaskId}' changed result nonce before its report could be recorded.");
+                }
+
+                if (currentRecord.ReportArrived)
+                {
+                    var sameReport = string.Equals(currentRecord.ReportStatus, status, StringComparison.Ordinal)
+                        && string.Equals(currentRecord.ReportArtifact, artifact, StringComparison.Ordinal)
+                        && string.Equals(currentRecord.ReportSummary, normalizedSummary, StringComparison.Ordinal);
+                    return new NotifyPendingStoreWriteResult(
+                        sameReport,
+                        path,
+                        sameReport ? null : $"Task '{record.TaskId}' already has a different report.");
+                }
+
+                record = currentRecord;
+            }
+
             return Append(path, record with
             {
                 ReportArrived = true,
                 ReportStatus = status,
                 ReportArtifact = artifact,
-                ReportSummary = summary,
+                ReportSummary = normalizedSummary,
                 ReportedAt = reportedAt,
             });
+        }
+    }
+
+    /// <summary>
+    /// Reconciles one delivered sender-local report into the host-owned
+    /// pending delegation state. The task and result nonce identify the
+    /// dispatch generation; an already matching report is a successful
+    /// replay, while a different report is a durable conflict.
+    /// </summary>
+    public static NotifyPendingReconciliationResult ReconcileReport(
+        string routingRoot,
+        NotifyPendingDelegation record,
+        string status,
+        string artifact,
+        string summary,
+        DateTimeOffset reportedAt,
+        bool write = true)
+    {
+        string path;
+        try
+        {
+            path = ResolvePath(routingRoot, record.Domain, record.Team);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            return new NotifyPendingReconciliationResult(false, false, routingRoot, null, null, exception.Message);
+        }
+
+        var normalizedSummary = NotifyEventWriter.NormalizeSummary(summary);
+        lock (Sync)
+        {
+            var current = ReadCurrent(path, out var readError);
+            if (readError is not null)
+            {
+                return new NotifyPendingReconciliationResult(false, false, path, null, null, readError);
+            }
+
+            if (!current.TryGetValue(record.TaskId, out var currentRecord))
+            {
+                return new NotifyPendingReconciliationResult(
+                    false,
+                    false,
+                    path,
+                    null,
+                    null,
+                    $"Task '{record.TaskId}' is unknown in the pending delegation store.");
+            }
+
+            if (!string.Equals(currentRecord.ResultNonce, record.ResultNonce, StringComparison.Ordinal))
+            {
+                return new NotifyPendingReconciliationResult(
+                    false,
+                    false,
+                    path,
+                    currentRecord,
+                    null,
+                    $"Task '{record.TaskId}' changed result nonce before its report could be reconciled.");
+            }
+
+            if (currentRecord.ReportArrived)
+            {
+                var sameReport = string.Equals(currentRecord.ReportStatus, status, StringComparison.Ordinal)
+                    && string.Equals(currentRecord.ReportArtifact, artifact, StringComparison.Ordinal)
+                    && string.Equals(currentRecord.ReportSummary, normalizedSummary, StringComparison.Ordinal);
+                return sameReport
+                    ? new NotifyPendingReconciliationResult(false, true, path, currentRecord, currentRecord, null)
+                    : new NotifyPendingReconciliationResult(
+                        false,
+                        false,
+                        path,
+                        currentRecord,
+                        null,
+                        $"Task '{record.TaskId}' already has a different report; refusing to overwrite host-owned pending state.");
+            }
+
+            if (currentRecord.Disposition is not null)
+            {
+                return new NotifyPendingReconciliationResult(
+                    false,
+                    false,
+                    path,
+                    currentRecord,
+                    null,
+                    $"Task '{record.TaskId}' is already settled by disposition; sender-local report reconciliation cannot overwrite it.");
+            }
+
+            var updated = currentRecord with
+            {
+                ReportArrived = true,
+                ReportStatus = status,
+                ReportArtifact = artifact,
+                ReportSummary = normalizedSummary,
+                ReportedAt = reportedAt,
+            };
+            if (!write)
+            {
+                return new NotifyPendingReconciliationResult(false, false, path, currentRecord, updated, null);
+            }
+
+            var append = Append(path, updated);
+            return new NotifyPendingReconciliationResult(
+                append.Written,
+                false,
+                path,
+                append.Written ? updated : currentRecord,
+                updated,
+                append.Error);
         }
     }
 

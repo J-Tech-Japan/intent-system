@@ -10,6 +10,7 @@ internal static class NotifyCommand
     private const string OperationDelegate = "delegate";
     private const string OperationReport = "report";
     private const string OperationCollect = "collect";
+    private const string OperationReconcile = "reconcile";
     private const string OperationEscalate = "escalate";
     private const string OperationDispose = "dispose";
     internal const string OperationStatus = "status";
@@ -36,11 +37,15 @@ internal static class NotifyCommand
     private const string ReportUsage =
         "Usage: intent-cli notify report --domain <d> --team <t> --from <role> --to <role> --task-id <id> "
         + "--status completed|blocked|question --artifact <value> --summary <text> "
-        + "[--routing-root <host-root>] [--dry-run|--write] [--format markdown|json]";
+        + "[--routing-root <host-root>] [--report-root <role-work-root>] [--dry-run|--write] [--format markdown|json]";
 
     private const string CollectUsage =
         "Usage: intent-cli notify collect --domain <d> --team <t> --task-id <id> "
-        + "[--routing-root <host-root>] [--dry-run|--write] [--format markdown|json]";
+        + "[--routing-root <host-root>] [--report-root <role-work-root>] [--dry-run|--write] [--format markdown|json]";
+
+    private const string ReconcileUsage =
+        "Usage: intent-cli notify reconcile --domain <d> --team <t> --task-id <id> "
+        + "--routing-root <host-root> --report-root <role-work-root> [--dry-run|--write] [--format markdown|json]";
 
     private const string EscalateUsage =
         "Usage: intent-cli notify escalate --domain <d> --team <t> --from <role> --task-id <id> "
@@ -105,6 +110,9 @@ internal static class NotifyCommand
 
     public static int ExecuteCollect(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, OperationCollect);
+
+    public static int ExecuteReconcile(CliContext context, string[] args, TextWriter writer) =>
+        Execute(context, args, writer, OperationReconcile);
 
     public static int ExecuteEscalate(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, OperationEscalate);
@@ -176,6 +184,37 @@ internal static class NotifyCommand
                 "invalid-routing-root",
                 $"Could not resolve --routing-root: {exception.Message}"));
             return 1;
+        }
+
+        string? reportRoot = null;
+        if (string.Equals(operation, OperationReport, StringComparison.Ordinal)
+            || string.Equals(operation, OperationCollect, StringComparison.Ordinal)
+            || string.Equals(operation, OperationReconcile, StringComparison.Ordinal))
+        {
+            try
+            {
+                reportRoot = Path.GetFullPath(options.ReportRoot ?? context.RepoRoot);
+                options = options with { ReportRoot = reportRoot };
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+            {
+                Emit(writer, options.Format, FailureResult(
+                    operation,
+                    options,
+                    SessionLayerMode.Default,
+                    "invalid-report-root",
+                    $"Could not resolve --report-root: {exception.Message}"));
+                return 1;
+            }
+        }
+
+        // Sender-local reports are deliberately consumed by an explicit
+        // orchestration-side command. It has no transport or session-layer
+        // dependency and is the only path allowed to reconcile host state
+        // after a child seat has persisted its local report.
+        if (string.Equals(operation, OperationReconcile, StringComparison.Ordinal))
+        {
+            return ExecuteReconcile(writer, options, routingRoot, reportRoot!);
         }
 
         TeamModeResolution teamMode;
@@ -282,7 +321,7 @@ internal static class NotifyCommand
 
         if (string.Equals(operation, OperationCollect, StringComparison.Ordinal))
         {
-            return ExecuteCollect(writer, options, routingRoot);
+            return ExecuteCollect(writer, options, routingRoot, reportRoot!);
         }
 
         if (string.Equals(operation, OperationDelegate, StringComparison.Ordinal) && options.Write)
@@ -317,7 +356,7 @@ internal static class NotifyCommand
             {
                 reportAdvisory = BuildUnmatchedReportAdvisory(options.TaskId!, pending.KnownTaskIds);
             }
-            persistedOutboxPath = NotifyReportOutboxStore.ResolvePath(routingRoot, options.Domain!, options.Team!);
+            persistedOutboxPath = NotifyReportOutboxStore.ResolvePath(reportRoot!, options.Domain!, options.Team!);
             if (options.Write)
             {
                 persistedReportOutbox = new NotifyReportOutboxEntry
@@ -328,7 +367,7 @@ internal static class NotifyCommand
                     Summary = NotifyEventWriter.NormalizeSummary(options.Summary!),
                     CreatedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(), DeliveryState = "prepared",
                 };
-                var write = NotifyReportOutboxStore.WriteNew(routingRoot, persistedReportOutbox);
+                var write = NotifyReportOutboxStore.WriteNew(reportRoot!, persistedReportOutbox);
                 persistedOutboxPath = write.Path;
                 if (!write.Written)
                 {
@@ -365,7 +404,7 @@ internal static class NotifyCommand
                     ?? scope.Findings.FirstOrDefault();
                 var cause = primaryFinding?.Cause ?? "session-layer-not-ready";
                 if (persistedReportOutbox is not null && options.Write)
-                    NotifyReportOutboxStore.MarkUndelivered(routingRoot, persistedReportOutbox, cause);
+                    NotifyReportOutboxStore.MarkUndelivered(reportRoot!, persistedReportOutbox, cause);
                 Emit(writer, options.Format, FailureResult(
                     operation,
                     options,
@@ -379,7 +418,7 @@ internal static class NotifyCommand
                 return 1;
             }
 
-            return ExecuteDelivery(writer, operation, options, resolution, preflight, reportAdvisory, persistedReportOutbox);
+            return ExecuteDelivery(writer, operation, options, resolution, preflight, reportAdvisory, persistedReportOutbox, reportRoot!);
         }
 
         SessionLayerModeResolution escalationResolution;
@@ -405,16 +444,20 @@ internal static class NotifyCommand
         string.Equals(finding.Cause, "marker-not-generated", StringComparison.Ordinal)
         || string.Equals(finding.Cause, SessionLayerMigration.ResidueCause, StringComparison.Ordinal);
 
-    private static int ExecuteCollect(TextWriter writer, NotifyOptions options, string routingRoot)
+    private static int ExecuteCollect(
+        TextWriter writer,
+        NotifyOptions options,
+        string routingRoot,
+        string reportRoot)
     {
         var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
         var outbox = pending.Resolved && pending.Record is not null
-            ? NotifyReportOutboxStore.Find(routingRoot, options.Domain!, options.Team!, options.TaskId!, pending.Record.ResultNonce)
-            : new NotifyReportOutboxReadResult(true, NotifyReportOutboxStore.ResolvePath(routingRoot, options.Domain!, options.Team!), null, null);
+            ? NotifyReportOutboxStore.Find(reportRoot, options.Domain!, options.Team!, options.TaskId!, pending.Record.ResultNonce)
+            : new NotifyReportOutboxReadResult(true, NotifyReportOutboxStore.ResolvePath(reportRoot, options.Domain!, options.Team!), null, null);
         if (outbox.Entry is null || string.Equals(outbox.Entry.DeliveryState, "delivered", StringComparison.Ordinal))
         {
             var undelivered = NotifyReportOutboxStore.FindUndelivered(
-                routingRoot,
+                reportRoot,
                 options.Domain!,
                 options.Team!,
                 options.TaskId!);
@@ -422,7 +465,7 @@ internal static class NotifyCommand
         }
         if (outbox.Entry is null && pending.Error is null)
         {
-            outbox = NotifyReportOutboxStore.Find(routingRoot, options.Domain!, options.Team!, options.TaskId!);
+            outbox = NotifyReportOutboxStore.Find(reportRoot, options.Domain!, options.Team!, options.TaskId!);
         }
         if (!outbox.Resolved || outbox.Entry is null)
         {
@@ -469,7 +512,210 @@ internal static class NotifyCommand
             return 1;
         }
 
-        return ExecuteDelivery(writer, OperationCollect, collected, resolution, preflight, existingOutbox: outbox.Entry);
+        return ExecuteDelivery(
+            writer,
+            OperationCollect,
+            collected,
+            resolution,
+            preflight,
+            existingOutbox: outbox.Entry,
+            reportRoot: reportRoot);
+    }
+
+    private static int ExecuteReconcile(
+        TextWriter writer,
+        NotifyOptions options,
+        string routingRoot,
+        string reportRoot)
+    {
+        var pending = NotifyPendingDelegationStore.Find(
+            routingRoot,
+            options.Domain,
+            options.Team,
+            options.TaskId!);
+        if (!pending.Resolved || pending.Record is null)
+        {
+            EmitReconciliation(writer, options.Format, new NotifyReconciliationResult
+            {
+                RoutingRoot = routingRoot,
+                ReportRoot = reportRoot,
+                Domain = options.Domain!,
+                Team = options.Team!,
+                TaskId = options.TaskId!,
+                CommandMode = options.Write ? "write" : "dry-run",
+                ReportOutboxPath = NotifyReportOutboxStore.ResolvePath(reportRoot, options.Domain!, options.Team!),
+                PendingRecordPath = pending.Path,
+                Cause = pending.Error is null ? "unknown-task-id" : "pending-store-unreadable",
+                Summary = pending.Error
+                    ?? $"Task '{options.TaskId}' has no host-owned pending delegation record to reconcile."
+                    + $" Known open task ids: {FormatKnownTaskIds(pending.KnownTaskIds)}",
+            });
+            return 1;
+        }
+
+        var pendingRecord = pending.Record;
+        var outbox = NotifyReportOutboxStore.Find(
+            reportRoot,
+            options.Domain!,
+            options.Team!,
+            options.TaskId!,
+            pendingRecord.ResultNonce);
+        if (!outbox.Resolved)
+        {
+            EmitReconciliation(writer, options.Format, new NotifyReconciliationResult
+            {
+                RoutingRoot = routingRoot,
+                ReportRoot = reportRoot,
+                Domain = options.Domain!,
+                Team = options.Team!,
+                TaskId = options.TaskId!,
+                CommandMode = options.Write ? "write" : "dry-run",
+                ReportOutboxPath = outbox.Path,
+                PendingRecordPath = pending.Path,
+                Cause = "report-outbox-unreadable",
+                Summary = outbox.Error ?? $"Sender-local report outbox '{outbox.Path}' could not be read.",
+            });
+            return 1;
+        }
+
+        var report = outbox.Entry;
+        if (report is null)
+        {
+            EmitReconciliation(writer, options.Format, new NotifyReconciliationResult
+            {
+                RoutingRoot = routingRoot,
+                ReportRoot = reportRoot,
+                Domain = options.Domain!,
+                Team = options.Team!,
+                TaskId = options.TaskId!,
+                CommandMode = options.Write ? "write" : "dry-run",
+                ReportOutboxPath = outbox.Path,
+                PendingRecordPath = pending.Path,
+                Cause = "sender-local-report-not-found",
+                Summary = $"No sender-local report for task '{options.TaskId}' and result nonce '{pendingRecord.ResultNonce ?? "<none>"}' was found at '{outbox.Path}'.",
+            });
+            return 1;
+        }
+
+        if (!string.Equals(report.DeliveryState, "delivered", StringComparison.Ordinal))
+        {
+            EmitReconciliation(writer, options.Format, new NotifyReconciliationResult
+            {
+                RoutingRoot = routingRoot,
+                ReportRoot = reportRoot,
+                Domain = options.Domain!,
+                Team = options.Team!,
+                TaskId = options.TaskId!,
+                CommandMode = options.Write ? "write" : "dry-run",
+                ReportOutboxPath = outbox.Path,
+                ReportDeliveryState = report.DeliveryState,
+                PendingRecordPath = pending.Path,
+                Cause = "sender-local-report-not-delivered",
+                Summary = $"Sender-local report for task '{options.TaskId}' is '{report.DeliveryState}', not delivered; the local handoff remains available for its delivery-level recovery path.",
+            });
+            return 1;
+        }
+
+        var reportedAt = (report.DeliveredAt ?? report.LastAttemptAt ?? UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        var pendingReconciliation = NotifyPendingDelegationStore.ReconcileReport(
+            routingRoot,
+            pendingRecord,
+            report.Status,
+            report.Artifact,
+            report.Summary,
+            reportedAt,
+            options.Write);
+        if (pendingReconciliation.Error is not null)
+        {
+            EmitReconciliation(writer, options.Format, new NotifyReconciliationResult
+            {
+                RoutingRoot = routingRoot,
+                ReportRoot = reportRoot,
+                Domain = options.Domain!,
+                Team = options.Team!,
+                TaskId = options.TaskId!,
+                CommandMode = options.Write ? "write" : "dry-run",
+                ReportOutboxPath = outbox.Path,
+                ReportDeliveryState = report.DeliveryState,
+                PendingRecordPath = pendingReconciliation.Path,
+                PendingAlreadyConverged = pendingReconciliation.AlreadyConverged,
+                Cause = "pending-reconciliation-failed",
+                Summary = $"The delivered sender-local report was read, but host pending reconciliation failed: {pendingReconciliation.Error}",
+            });
+            return 1;
+        }
+
+        var chain = ContinuationChainStore.RecordReportReceived(
+            routingRoot,
+            options.Domain!,
+            options.Team!,
+            options.TaskId!,
+            report.ResultNonce,
+            report.Status,
+            report.Artifact,
+            report.Summary,
+            reportedAt,
+            options.Write,
+            source: "notify-reconcile");
+        if (options.Write && !chain.Applied && !chain.AlreadyConverged)
+        {
+            EmitReconciliation(writer, options.Format, new NotifyReconciliationResult
+            {
+                RoutingRoot = routingRoot,
+                ReportRoot = reportRoot,
+                Domain = options.Domain!,
+                Team = options.Team!,
+                TaskId = options.TaskId!,
+                CommandMode = options.Write ? "write" : "dry-run",
+                ReportOutboxPath = outbox.Path,
+                ReportDeliveryState = report.DeliveryState,
+                PendingRecordPath = pendingReconciliation.Path,
+                PendingReconciled = pendingReconciliation.Applied,
+                PendingAlreadyConverged = pendingReconciliation.AlreadyConverged,
+                ContinuationChainPath = chain.Path,
+                ContinuationChain = chain.Record ?? chain.Preview,
+                Cause = "continuation-chain-reconciliation-failed",
+                Summary = $"Host pending state was reconciled, but continuation link '{ContinuationChainStore.ReportReceived}' could not be reconciled: {chain.Error}",
+            });
+            return 1;
+        }
+
+        var pendingReconciled = pendingReconciliation.Applied;
+        var pendingAlreadyConverged = pendingReconciliation.AlreadyConverged;
+        var chainReconciled = chain.Applied;
+        var chainAlreadyConverged = chain.AlreadyConverged;
+        var changed = pendingReconciled || chainReconciled;
+        var alreadyConverged = pendingAlreadyConverged && chainAlreadyConverged;
+        var summary = options.Write
+            ? changed
+                ? $"Orchestration reconciled delivered sender-local report '{report.EntryId ?? report.TaskId}' into host pending state and continuation link exactly once; retries are idempotent."
+                : $"Delivered sender-local report '{report.EntryId ?? report.TaskId}' was already reconciled into host pending state and continuation link; no duplicate state was written."
+            : alreadyConverged
+                ? $"Dry-run verified that delivered sender-local report '{report.EntryId ?? report.TaskId}' is already reconciled; no store would change."
+                : $"Dry-run verified that delivered sender-local report '{report.EntryId ?? report.TaskId}' would reconcile host pending state and continuation link without writing either store.";
+        EmitReconciliation(writer, options.Format, new NotifyReconciliationResult
+        {
+            RoutingRoot = routingRoot,
+            ReportRoot = reportRoot,
+            Domain = options.Domain!,
+            Team = options.Team!,
+            TaskId = options.TaskId!,
+            CommandMode = options.Write ? "write" : "dry-run",
+            ReportOutboxPath = outbox.Path,
+            ReportDeliveryState = report.DeliveryState,
+            PendingRecordPath = pendingReconciliation.Path,
+            PendingReconciled = pendingReconciled,
+            PendingAlreadyConverged = pendingAlreadyConverged,
+            ContinuationChainPath = chain.Path,
+            ContinuationReconciled = chainReconciled,
+            ContinuationAlreadyConverged = chainAlreadyConverged,
+            ContinuationChain = chain.Record ?? chain.Preview,
+            Reconciled = options.Write && changed,
+            AlreadyConverged = options.Write ? !changed : alreadyConverged,
+            WouldReconcile = !options.Write && !alreadyConverged,
+            Summary = summary,
+        });
+        return 0;
     }
 
     private static int? GuardDelegateOutboxLifecycle(TextWriter writer, NotifyOptions options, string routingRoot)
@@ -785,6 +1031,7 @@ internal static class NotifyCommand
             RecipientRunning = liveness.Running,
             LivenessState = liveness.State,
             ProcessPresent = liveness.ProcessPresent,
+            AgentSessionPresent = liveness.AgentSessionPresent,
             ResendPermitted = liveness.ResendPermitted,
             LivenessSource = liveness.Source,
             DeliveryBasis = liveness.DeliveryBasis,
@@ -1001,6 +1248,7 @@ internal static class NotifyCommand
         writer.WriteLine($"- recipient running: {result.RecipientRunning?.ToString().ToLowerInvariant() ?? "<unknown>"}");
         writer.WriteLine($"- liveness state: {result.LivenessState ?? "<unknown>"}");
         writer.WriteLine($"- process present: {result.ProcessPresent?.ToString().ToLowerInvariant() ?? "<unknown>"}");
+        writer.WriteLine($"- agent session present: {result.AgentSessionPresent?.ToString().ToLowerInvariant() ?? "<unknown>"}");
         writer.WriteLine($"- resend permitted: {result.ResendPermitted?.ToString().ToLowerInvariant() ?? "<unknown>"}");
         writer.WriteLine($"- liveness source: {result.LivenessSource ?? "<unknown>"}");
         writer.WriteLine($"- delivery basis: {result.DeliveryBasis ?? "<unknown>"}");
@@ -1035,10 +1283,19 @@ internal static class NotifyCommand
         SessionLayerModeResolution resolution,
         SessionLayerPreflightResult preflight,
         string? reportAdvisory = null,
-        NotifyReportOutboxEntry? existingOutbox = null)
+        NotifyReportOutboxEntry? existingOutbox = null,
+        string? reportRoot = null)
     {
         var isReport = string.Equals(operation, OperationReport, StringComparison.Ordinal)
             || string.Equals(operation, OperationCollect, StringComparison.Ordinal);
+        var resolvedReportRoot = reportRoot ?? options.ReportRoot ?? options.RoutingRoot!;
+        var senderLocalReport = isReport && !PathsEqual(resolvedReportRoot, options.RoutingRoot!);
+        if (senderLocalReport)
+        {
+            reportAdvisory = CombineAdvisories(
+                reportAdvisory,
+                $"sender-local report handoff: '{resolvedReportRoot}' is the writable report root; host routing state at '{options.RoutingRoot}' is read/transport authority and is reconciled by the orchestration role.");
+        }
         var reportCommand = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? BuildReportCommand(options)
             : null;
@@ -1068,7 +1325,7 @@ internal static class NotifyCommand
         string? outboxEntryPath = null;
         if (isReport)
         {
-            outboxEntryPath = NotifyReportOutboxStore.ResolvePath(options.RoutingRoot!, options.Domain!, options.Team!);
+            outboxEntryPath = NotifyReportOutboxStore.ResolvePath(resolvedReportRoot, options.Domain!, options.Team!);
             if (options.Write && reportOutbox is null)
             {
                 reportOutbox = new NotifyReportOutboxEntry
@@ -1085,7 +1342,7 @@ internal static class NotifyCommand
                     CreatedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
                     DeliveryState = "prepared",
                 };
-                var outboxWrite = NotifyReportOutboxStore.WriteNew(options.RoutingRoot!, reportOutbox);
+                var outboxWrite = NotifyReportOutboxStore.WriteNew(resolvedReportRoot, reportOutbox);
                 outboxEntryPath = outboxWrite.Path;
                 if (!outboxWrite.Written)
                 {
@@ -1109,7 +1366,7 @@ internal static class NotifyCommand
         {
             if (reportOutbox is not null && options.Write)
             {
-                NotifyReportOutboxStore.MarkUndelivered(options.RoutingRoot!, reportOutbox, envelopeDelivery.Cause!);
+                NotifyReportOutboxStore.MarkUndelivered(resolvedReportRoot, reportOutbox, envelopeDelivery.Cause!);
             }
             Emit(writer, options.Format, FailureResult(
                 operation,
@@ -1219,7 +1476,7 @@ internal static class NotifyCommand
         {
             if (reportOutbox is not null && options.Write)
             {
-                NotifyReportOutboxStore.MarkUndelivered(options.RoutingRoot!, reportOutbox, delivery.Cause ?? "transport-failure");
+                NotifyReportOutboxStore.MarkUndelivered(resolvedReportRoot, reportOutbox, delivery.Cause ?? "transport-failure");
             }
             Emit(writer, options.Format, FailureResult(
                 operation,
@@ -1244,6 +1501,33 @@ internal static class NotifyCommand
             return 1;
         }
 
+        if (delivery.ReaderPath is not null && senderLocalReport && options.Write)
+        {
+            if (reportOutbox is not null)
+            {
+                NotifyReportOutboxStore.MarkUndelivered(
+                    resolvedReportRoot,
+                    reportOutbox,
+                    "report-routing-root-write-required");
+            }
+
+            Emit(writer, options.Format, FailureResult(
+                operation,
+                options,
+                resolution.Mode,
+                "report-routing-root-write-required",
+                $"Report delivery resolved an external reader at '{delivery.ReaderPath}', which is under the host routing root and cannot be written from this sandboxed seat. Provision the recipient through herdr/agmsg or route a narrowly writable reader root; the sender-local report handoff is retained at '{outboxEntryPath}'. This is a delegation-level routing fault, not an implementation-seat stall.",
+                payload,
+                reportCommand,
+                modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
+                preflight: deliveryPreflight,
+                deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
+                taskFile: envelopeDelivery.TaskFile,
+                deliveryPointer: envelopeDelivery.ResultPointer,
+                outboxEntryPath: outboxEntryPath));
+            return 1;
+        }
+
         var eventAppended = false;
         if (delivery.ReaderPath is not null && options.Write)
         {
@@ -1256,7 +1540,7 @@ internal static class NotifyCommand
             {
                 if (reportOutbox is not null)
                 {
-                    NotifyReportOutboxStore.MarkUndelivered(options.RoutingRoot!, reportOutbox, "event-append-failed");
+                    NotifyReportOutboxStore.MarkUndelivered(resolvedReportRoot, reportOutbox, "event-append-failed");
                 }
                 Emit(writer, options.Format, FailureResult(
                     operation,
@@ -1289,7 +1573,8 @@ internal static class NotifyCommand
 
         if (isReport
             && options.Write
-            && reportPendingRecord is not null)
+            && reportPendingRecord is not null
+            && !senderLocalReport)
         {
             var reportWrite = NotifyPendingDelegationStore.WriteReport(
                 options.RoutingRoot!,
@@ -1302,7 +1587,7 @@ internal static class NotifyCommand
             {
                 if (reportOutbox is not null)
                 {
-                    NotifyReportOutboxStore.MarkUndelivered(options.RoutingRoot!, reportOutbox, "pending-record-resolution-failed");
+                    NotifyReportOutboxStore.MarkUndelivered(resolvedReportRoot, reportOutbox, "pending-record-resolution-failed");
                 }
                 Emit(writer, options.Format, FailureResult(
                     operation,
@@ -1330,7 +1615,7 @@ internal static class NotifyCommand
         // completion-signal chain. Record it before the outbox is marked
         // delivered so a chain-write failure remains visible to collection and
         // cannot be mistaken for a fully settled signal.
-        if (isReport && options.Write)
+        if (isReport && options.Write && !senderLocalReport)
         {
             var chainWrite = ContinuationChainStore.RecordReportReceived(
                 options.RoutingRoot!,
@@ -1347,7 +1632,7 @@ internal static class NotifyCommand
                 if (reportOutbox is not null)
                 {
                     NotifyReportOutboxStore.MarkUndelivered(
-                        options.RoutingRoot!,
+                        resolvedReportRoot,
                         reportOutbox,
                         "continuation-chain-write-failed");
                 }
@@ -1379,7 +1664,7 @@ internal static class NotifyCommand
 
         if (reportOutbox is not null && options.Write)
         {
-            var deliveredWrite = NotifyReportOutboxStore.MarkDelivered(options.RoutingRoot!, reportOutbox);
+            var deliveredWrite = NotifyReportOutboxStore.MarkDelivered(resolvedReportRoot, reportOutbox);
             outboxEntryPath = deliveredWrite.Path;
             if (!deliveredWrite.Written)
             {
@@ -1399,10 +1684,14 @@ internal static class NotifyCommand
             eventAppended,
             payload,
             reportCommand,
-            eventAppended
-                ? $"Delivered {operation} to external logical role '{options.ToRole}' in team '{options.Team}' "
-                  + $"through recorded reader '{delivery.ReaderPath}'."
-                : delivery.Summary,
+            AppendReportHandoffSummary(
+                eventAppended
+                    ? $"Delivered {operation} to external logical role '{options.ToRole}' in team '{options.Team}' "
+                      + $"through recorded reader '{delivery.ReaderPath}'."
+                    : delivery.Summary,
+                senderLocalReport,
+                resolvedReportRoot,
+                options.RoutingRoot!),
             eventPath: delivery.ReaderPath,
             preflight: deliveryPreflight,
             receiverStateOutcome: delivery.ReceiverStateOutcome,
@@ -1420,6 +1709,40 @@ internal static class NotifyCommand
             continuationChain: continuationChain));
         return 0;
     }
+
+    private static string? CombineAdvisories(string? first, string? second)
+    {
+        if (string.IsNullOrWhiteSpace(first)) return second;
+        if (string.IsNullOrWhiteSpace(second)) return first;
+        return $"{first} {second}";
+    }
+
+    private static string AppendReportHandoffSummary(
+        string summary,
+        bool senderLocalReport,
+        string reportRoot,
+        string routingRoot) => senderLocalReport
+            ? $"{summary} Sender-local report handoff persisted under '{reportRoot}'; no host-root write was required. Host routing state at '{routingRoot}' remains for orchestration reconciliation."
+            : summary;
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(
+            Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    private static string? ReportStorageMode(NotifyOptions options) =>
+        options.ReportRoot is null
+            ? null
+            : PathsEqual(options.ReportRoot, options.RoutingRoot ?? string.Empty)
+                ? "routing-root"
+                : "sender-local-role-work-root";
+
+    private static string? HostStateSync(NotifyOptions options) =>
+        options.ReportRoot is not null
+        && !PathsEqual(options.ReportRoot, options.RoutingRoot ?? string.Empty)
+            ? "deferred-to-orchestration"
+            : null;
 
     private static NotifyDesignEvent BuildReaderEvent(string operation, NotifyOptions options) => new()
     {
@@ -1643,8 +1966,17 @@ internal static class NotifyCommand
     private static string BuildReportCommand(NotifyOptions options) =>
         $"intent-cli notify report --domain {options.Domain} --team {options.Team} --from {options.ToRole} "
         + $"--to {options.ReportToRole} --task-id {options.TaskId} --status <completed|blocked|question> "
-        + $"--artifact <artifact> --summary <one-line-summary> --routing-root {ShellQuote(options.RoutingRoot!)} "
+        + $"--artifact <artifact> --summary <one-line-summary> --routing-root {ShellQuote(options.RoutingRoot!)} --report-root . "
         + "--write --format json";
+
+    private static string? BuildReconciliationCommand(string operation, NotifyOptions options) =>
+        (string.Equals(operation, OperationReport, StringComparison.Ordinal)
+            || string.Equals(operation, OperationCollect, StringComparison.Ordinal))
+        && options.ReportRoot is not null
+        && !PathsEqual(options.ReportRoot, options.RoutingRoot ?? string.Empty)
+            ? $"intent-cli notify reconcile --domain {options.Domain} --team {options.Team} --task-id {options.TaskId} "
+              + $"--routing-root {ShellQuote(options.RoutingRoot!)} --report-root {ShellQuote(options.ReportRoot)} --write --format json"
+            : null;
 
     private static string ShellQuote(string value) => $"'{value.Replace("'", "'\\''", StringComparison.Ordinal)}'";
 
@@ -1707,6 +2039,9 @@ internal static class NotifyCommand
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot!,
+            ReportRoot = options.ReportRoot,
+            ReportStorageMode = ReportStorageMode(options),
+            HostStateSync = HostStateSync(options),
             Domain = options.Domain!,
             Team = options.Team!,
             Mode = resolution.Mode,
@@ -1738,6 +2073,7 @@ internal static class NotifyCommand
             Cause = null,
             Payload = payload,
             ReportCommand = reportCommand,
+            ReconciliationCommand = BuildReconciliationCommand(operation, options),
             ContinuationChain = continuationChain,
             Summary = summary,
         };
@@ -1769,6 +2105,9 @@ internal static class NotifyCommand
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot ?? string.Empty,
+            ReportRoot = options.ReportRoot,
+            ReportStorageMode = ReportStorageMode(options),
+            HostStateSync = HostStateSync(options),
             Domain = options.Domain!,
             Team = options.Team!,
             Mode = mode,
@@ -1800,6 +2139,7 @@ internal static class NotifyCommand
             Cause = cause,
             Payload = payload,
             ReportCommand = reportCommand,
+            ReconciliationCommand = BuildReconciliationCommand(operation, options),
             ContinuationChain = continuationChain,
             Summary = summary,
         };
@@ -1834,6 +2174,14 @@ internal static class NotifyCommand
         writer.WriteLine();
         writer.WriteLine($"- mode: {result.Mode} ({result.ModeSource ?? "unresolved"})");
         writer.WriteLine($"- command mode: {result.CommandMode}");
+        if (result.ReportRoot is not null)
+        {
+            writer.WriteLine($"- report root: {result.ReportRoot} ({result.ReportStorageMode ?? "unknown"})");
+            if (result.HostStateSync is not null)
+            {
+                writer.WriteLine($"- host state sync: {result.HostStateSync}");
+            }
+        }
         writer.WriteLine($"- delivered: {result.Delivered.ToString().ToLowerInvariant()}");
         if (result.DeliveryBasis is not null)
         {
@@ -1889,6 +2237,10 @@ internal static class NotifyCommand
         {
             writer.WriteLine($"- report command: `{result.ReportCommand}`");
         }
+        if (result.ReconciliationCommand is not null)
+        {
+            writer.WriteLine($"- reconciliation command: `{result.ReconciliationCommand}`");
+        }
         if (result.EventPath is not null)
         {
             writer.WriteLine($"- event path: `{result.EventPath}`");
@@ -1900,6 +2252,50 @@ internal static class NotifyCommand
         if (result.OutboxEntryPath is not null)
         {
             writer.WriteLine("- report outbox: " + result.OutboxEntryPath);
+        }
+        writer.WriteLine();
+        writer.WriteLine(result.Summary);
+    }
+
+    private static void EmitReconciliation(
+        TextWriter writer,
+        string format,
+        NotifyReconciliationResult result)
+    {
+        if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+        {
+            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            return;
+        }
+
+        writer.WriteLine($"# notify reconcile — {result.TaskId}");
+        writer.WriteLine();
+        writer.WriteLine($"- command mode: {result.CommandMode}");
+        writer.WriteLine($"- routing root: {result.RoutingRoot}");
+        writer.WriteLine($"- report root: {result.ReportRoot}");
+        writer.WriteLine($"- report delivery state: {result.ReportDeliveryState ?? "<unavailable>"}");
+        writer.WriteLine($"- pending reconciled: {result.PendingReconciled.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"- pending already converged: {result.PendingAlreadyConverged.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"- continuation reconciled: {result.ContinuationReconciled.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"- continuation already converged: {result.ContinuationAlreadyConverged.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"- reconciled: {result.Reconciled.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"- already converged: {result.AlreadyConverged.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"- would reconcile: {result.WouldReconcile.ToString().ToLowerInvariant()}");
+        if (result.Cause is not null)
+        {
+            writer.WriteLine($"- cause: {result.Cause}");
+        }
+        if (result.PendingRecordPath is not null)
+        {
+            writer.WriteLine($"- pending record: {result.PendingRecordPath}");
+        }
+        if (result.ReportOutboxPath is not null)
+        {
+            writer.WriteLine($"- report outbox: {result.ReportOutboxPath}");
+        }
+        if (result.ContinuationChainPath is not null)
+        {
+            writer.WriteLine($"- continuation chain: {result.ContinuationChainPath}");
         }
         writer.WriteLine();
         writer.WriteLine(result.Summary);
@@ -1968,6 +2364,7 @@ internal static class NotifyCommand
         string? supersedingTaskId = null;
         string? appliedOutcomeEvidence = null;
         string? routingRoot = null;
+        string? reportRoot = null;
         string? repo = null;
         string? ownerRole = null;
         string? herdrExecutable = null;
@@ -2014,6 +2411,7 @@ internal static class NotifyCommand
                 case "--superseding-task-id": if (!ReadValue(args, ref index, argument, out supersedingTaskId, out error)) return false; break;
                 case "--applied-outcome-evidence": if (!ReadValue(args, ref index, argument, out appliedOutcomeEvidence, out error)) return false; break;
                 case "--routing-root": if (!ReadValue(args, ref index, argument, out routingRoot, out error)) return false; break;
+                case "--report-root": if (!ReadValue(args, ref index, argument, out reportRoot, out error)) return false; break;
                 case "--repo": if (!ReadValue(args, ref index, argument, out repo, out error)) return false; break;
                 case "--owner-role": if (!ReadValue(args, ref index, argument, out ownerRole, out error)) return false; break;
                 case "--herdr-executable": if (!ReadValue(args, ref index, argument, out herdrExecutable, out error)) return false; break;
@@ -2199,6 +2597,7 @@ internal static class NotifyCommand
             SupersedingTaskId = supersedingTaskId,
             AppliedOutcomeEvidence = appliedOutcomeEvidence,
             RoutingRoot = routingRoot,
+            ReportRoot = reportRoot,
             Repo = repo,
             OwnerRole = ownerRole,
             HerdrExecutable = herdrExecutable,
@@ -2230,6 +2629,8 @@ internal static class NotifyCommand
         var requiredIdentity = string.Equals(operation, OperationStatus, StringComparison.Ordinal)
             ? new[] { ("--task-id", options.TaskId) }
             : string.Equals(operation, OperationCollect, StringComparison.Ordinal)
+                ? new[] { ("--domain", options.Domain), ("--team", options.Team), ("--task-id", options.TaskId) }
+            : string.Equals(operation, OperationReconcile, StringComparison.Ordinal)
                 ? new[] { ("--domain", options.Domain), ("--team", options.Team), ("--task-id", options.TaskId) }
             : string.Equals(operation, OperationSupervise, StringComparison.Ordinal)
                 ? new[] { ("--domain", options.Domain), ("--team", options.Team) }
@@ -2274,7 +2675,34 @@ internal static class NotifyCommand
                 return false;
             }
         }
-        else if (string.Equals(operation, OperationSupervise, StringComparison.Ordinal))
+
+        if (options.ReportRoot is not null
+            && operation is not OperationReport and not OperationCollect and not OperationReconcile)
+        {
+            error = "--report-root is supported only by notify report, notify collect, and notify reconcile.";
+            return false;
+        }
+        if (string.Equals(operation, OperationReconcile, StringComparison.Ordinal))
+        {
+            if (string.IsNullOrWhiteSpace(options.ReportRoot))
+            {
+                error = "reconcile requires --report-root for the sender-local role work root.";
+                return false;
+            }
+
+            if (options.FromRole is not null
+                || options.ToRole is not null
+                || options.ReportToRole is not null
+                || options.Status is not null
+                || options.Artifact is not null
+                || options.Summary is not null
+                || options.ResultNonce is not null)
+            {
+                error = "reconcile accepts only domain, team, task-id, routing-root, report-root, write/dry-run, and format.";
+                return false;
+            }
+        }
+        if (string.Equals(operation, OperationSupervise, StringComparison.Ordinal))
         {
             if (options.IntervalSeconds is not null
                 && (options.IntervalSeconds < 1 || options.IntervalSeconds > NotifySupervisor.MaximumIntervalSeconds))
@@ -2395,6 +2823,12 @@ internal static class NotifyCommand
                 return false;
             }
         }
+        else if (string.Equals(operation, OperationReconcile, StringComparison.Ordinal))
+        {
+            // Reconciliation validation is complete above. It deliberately
+            // does not resolve or contact a transport; the orchestration seat
+            // owns only the two durable host stores.
+        }
         else if (string.Equals(operation, OperationDispose, StringComparison.Ordinal))
         {
             if (options.DispositionKind is not (DispositionKindSuperseded or DispositionKindAppliedElsewhere)
@@ -2424,6 +2858,11 @@ internal static class NotifyCommand
                 error = "applied-elsewhere disposition requires --applied-outcome-evidence.";
                 return false;
             }
+        }
+        else if (string.Equals(operation, OperationStatus, StringComparison.Ordinal))
+        {
+            // Status validation is complete above; it is intentionally read-only
+            // and has no artifact/summary requirement.
         }
         else if (string.IsNullOrWhiteSpace(options.Artifact) || string.IsNullOrWhiteSpace(options.Summary))
         {
@@ -2475,6 +2914,7 @@ internal static class NotifyCommand
         OperationDelegate => DelegateUsage,
         OperationReport => ReportUsage,
         OperationCollect => CollectUsage,
+        OperationReconcile => ReconcileUsage,
         OperationStatus => StatusUsage,
         OperationSupervise => SuperviseUsage,
         OperationDispose => DisposeUsage,
@@ -2503,6 +2943,7 @@ internal sealed record NotifyOptions
     public string? SupersedingTaskId { get; init; }
     public string? AppliedOutcomeEvidence { get; init; }
     public string? RoutingRoot { get; init; }
+    public string? ReportRoot { get; init; }
     public string? Repo { get; init; }
     public string? OwnerRole { get; init; }
     public string? HerdrExecutable { get; init; }
@@ -2529,6 +2970,9 @@ internal sealed record NotifyResult
 {
     [JsonPropertyName("operation")] public required string Operation { get; init; }
     [JsonPropertyName("routing_root")] public required string RoutingRoot { get; init; }
+    [JsonPropertyName("report_root")] public string? ReportRoot { get; init; }
+    [JsonPropertyName("report_storage_mode")] public string? ReportStorageMode { get; init; }
+    [JsonPropertyName("host_state_sync")] public string? HostStateSync { get; init; }
     [JsonPropertyName("domain")] public required string Domain { get; init; }
     [JsonPropertyName("team")] public required string Team { get; init; }
     [JsonPropertyName("mode")] public required string Mode { get; init; }
@@ -2560,6 +3004,7 @@ internal sealed record NotifyResult
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("payload")] public string? Payload { get; init; }
     [JsonPropertyName("report_command")] public string? ReportCommand { get; init; }
+    [JsonPropertyName("reconciliation_command")] public string? ReconciliationCommand { get; init; }
     [JsonPropertyName("continuation_chain")] public ContinuationChainRecord? ContinuationChain { get; init; }
     [JsonPropertyName("completion_signal_id")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -2567,6 +3012,31 @@ internal sealed record NotifyResult
     [JsonPropertyName("continuation_chain_id")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ContinuationChainId => ContinuationChain?.ChainId;
+    [JsonPropertyName("summary")] public required string Summary { get; init; }
+}
+
+internal sealed record NotifyReconciliationResult
+{
+    [JsonPropertyName("operation")] public string Operation { get; init; } = "reconcile";
+    [JsonPropertyName("routing_root")] public required string RoutingRoot { get; init; }
+    [JsonPropertyName("report_root")] public required string ReportRoot { get; init; }
+    [JsonPropertyName("domain")] public required string Domain { get; init; }
+    [JsonPropertyName("team")] public required string Team { get; init; }
+    [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+    [JsonPropertyName("command_mode")] public required string CommandMode { get; init; }
+    [JsonPropertyName("report_outbox_path")] public required string ReportOutboxPath { get; init; }
+    [JsonPropertyName("report_delivery_state")] public string? ReportDeliveryState { get; init; }
+    [JsonPropertyName("pending_record_path")] public string? PendingRecordPath { get; init; }
+    [JsonPropertyName("pending_reconciled")] public bool PendingReconciled { get; init; }
+    [JsonPropertyName("pending_already_converged")] public bool PendingAlreadyConverged { get; init; }
+    [JsonPropertyName("continuation_chain_path")] public string? ContinuationChainPath { get; init; }
+    [JsonPropertyName("continuation_reconciled")] public bool ContinuationReconciled { get; init; }
+    [JsonPropertyName("continuation_already_converged")] public bool ContinuationAlreadyConverged { get; init; }
+    [JsonPropertyName("continuation_chain")] public ContinuationChainRecord? ContinuationChain { get; init; }
+    [JsonPropertyName("reconciled")] public bool Reconciled { get; init; }
+    [JsonPropertyName("already_converged")] public bool AlreadyConverged { get; init; }
+    [JsonPropertyName("would_reconcile")] public bool WouldReconcile { get; init; }
+    [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
 }
 
@@ -2647,6 +3117,7 @@ internal sealed record NotifyStatusResult
     [JsonPropertyName("recipient_running")] public bool? RecipientRunning { get; init; }
     [JsonPropertyName("liveness_state")] public string? LivenessState { get; init; }
     [JsonPropertyName("process_present")] public bool? ProcessPresent { get; init; }
+    [JsonPropertyName("agent_session_present")] public bool? AgentSessionPresent { get; init; }
     [JsonPropertyName("resend_permitted")] public bool? ResendPermitted { get; init; }
     [JsonPropertyName("liveness_source")] public string? LivenessSource { get; init; }
     [JsonPropertyName("delivery_basis")] public string? DeliveryBasis { get; init; }

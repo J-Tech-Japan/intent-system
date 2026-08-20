@@ -150,10 +150,10 @@ internal static class Program
     }
 
     /// <summary>
-    /// G578: a receiver runs the canonical report command from its isolated
+    /// G719: a receiver runs the canonical report command from its isolated
     /// child checkout. The delegate payload supplies the host routing root as
-    /// data, so notify must reach its bounded resolver without requiring the
-    /// child cwd itself to contain host metadata.
+    /// data, while report persistence defaults to the child cwd; the child
+    /// therefore needs no host-root write access.
     /// </summary>
     private static bool IsNotifyCommand(string[] args)
     {

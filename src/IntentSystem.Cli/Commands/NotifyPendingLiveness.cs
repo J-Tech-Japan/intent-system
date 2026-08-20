@@ -8,6 +8,7 @@ internal sealed record NotifyPendingLivenessResult
     public bool? Running { get; init; }
     public string State { get; init; } = "unavailable";
     public bool? ProcessPresent { get; init; }
+    public bool? AgentSessionPresent { get; init; }
     public bool? ResendPermitted { get; init; }
     public string? AgentStatus { get; init; }
     public long? StateChangeSequence { get; init; }
@@ -121,6 +122,7 @@ internal static class NotifyPendingLiveness
                 Running = true,
                 State = "live",
                 ProcessPresent = null,
+                AgentSessionPresent = agent.AgentSessionPresent,
                 Source = "herdr.agent_running",
                 AgentStatus = agent.AgentStatus,
                 StateChangeSequence = agent.StateChangeSequence,
@@ -143,15 +145,18 @@ internal static class NotifyPendingLiveness
 
         if (processInfo.Processes.Count > 0)
         {
+            var agentSessionMissing = atRecordedPane.Length > 0
+                && atRecordedPane.Any(agent => !agent.AgentSessionPresent);
             return new NotifyPendingLivenessResult
             {
                 Resolved = true,
                 Running = false,
                 State = NotifyPendingLivenessResult.RegistrationLostProcessPresent,
                 ProcessPresent = true,
+                AgentSessionPresent = atRecordedPane.Length == 0 ? null : !agentSessionMissing,
                 ResendPermitted = true,
                 Source = "herdr.registration-and-process",
-                Summary = $"The recorded recipient identity '{record.RecipientIdentity}' has no running herdr registration, but {processInfo.Processes.Count} foreground process(es) remain at the recorded pane '{record.PaneId}'. Registration is lost while the recipient is likely alive; re-register the agent at the recorded pane. No recovery action is safe.",
+                Summary = $"The recorded recipient identity '{record.RecipientIdentity}' has no running herdr registration, but {processInfo.Processes.Count} foreground process(es) remain at the recorded pane '{record.PaneId}'. Registration is lost while the recipient is likely alive. {RegistrationRecoveryGuidance(agentSessionMissing)}",
             };
         }
 
@@ -161,6 +166,7 @@ internal static class NotifyPendingLiveness
             Running = false,
             State = "lost",
             ProcessPresent = false,
+            AgentSessionPresent = atRecordedPane.Length == 0 ? null : atRecordedPane.All(agent => agent.AgentSessionPresent),
             Source = "herdr.agent_running+pane.process-info",
             Summary = $"The recorded recipient identity '{record.RecipientIdentity}' has no agent with running=true (status strings are ignored), no foreground process at the recorded pane, and is corroborated lost.",
         };
@@ -218,6 +224,10 @@ internal static class NotifyPendingLiveness
         Cause = cause,
         Summary = summary,
     };
+
+    internal static string RegistrationRecoveryGuidance(bool agentSessionMissing) => agentSessionMissing
+        ? "The recorded herdr agent entry is missing `agent_session`; send one no-op prompt to the already-running seat at the recorded pane to establish `agent_session`, then rerun the bounded readiness/report check. Do not re-register, restart, or kill the process."
+        : "Inspect the recorded herdr agent entry and pane process together; if `agent_session` is missing, send one no-op prompt to the already-running seat at the recorded pane to establish it, then rerun the bounded readiness/report check. Do not re-register, restart, or kill the process.";
 
     private static string OneLine(params string[] values)
     {

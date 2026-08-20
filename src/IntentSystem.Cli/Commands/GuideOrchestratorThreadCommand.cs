@@ -2425,8 +2425,11 @@ internal static class GuideOrchestratorThreadCommand
                 ReadyBranch =
                     "For an unattended seat, run the normal G556 liveness checks AND prove all three recipe-specific "
                     + "facts: an expected action inside the recorded roots succeeds, the role can reach its canonical "
-                    + "reporting surface (for review, `intent-cli notify report` through its host routing root), and a "
-                    + "deliberately out-of-scope action is denied. Capture the denied result for review; a live pane or "
+                    + "reporting surface, and a deliberately out-of-scope action is denied. For implementation, "
+                    + "the canonical report uses `--routing-root <host-routing-root> --report-root .`: the host root is "
+                    + "read/transport authority and the sender-local role root is the only report write root; do not add "
+                    + "the host root to the implementation seat. A role with an external recorded reader must prove its "
+                    + "narrowly writable reader route separately. Capture the denied result for review; a live pane or "
                     + "successful allowed action alone is NOT READY. If a denial probe unexpectedly succeeds, first check "
                     + "whether the post-start interaction was answered with its default; accepting an unsafe default is a "
                     + "supervision failure, not a shortcut.",
@@ -2881,6 +2884,12 @@ internal static class GuideOrchestratorThreadCommand
                         "When no same-cycle non-terminal seat observation exists, a verified absent seat remains eligible to emit seat-absent or registration-lost-process-present.",
                     RecurrenceRule =
                         "The single observation-conflict per recorded seat is a same-key observation: G699 repeat backoff and park state apply, while a new key remains immediate.",
+                    RegistrationDiagnosticRule =
+                        "When a recorded herdr pane has foreground process(es) but no running registration, inspect the matching agent-list entry and emit agent_session=missing when that field is absent; this is one executability/actionability class with sender-local report-routing failure, not a process-death or ownership signal.",
+                    RegistrationOperatorAct =
+                        "Operator act: send one no-op prompt to the already-running seat at the recorded pane to establish agent_session, then rerun the bounded readiness/report check. Do not re-register, restart, or kill the process, and do not widen the seat roots.",
+                    RegistrationSurvey =
+                        "This diagnostic is consistent across notify pending liveness, herdr report delivery, herdr delegate delivery, and the supervision seat scan. A genuinely absent process remains seat-absent/lost; active registration remains an ownership stop.",
                     AuthorityBoundary =
                         "Corroboration changes only the observation classification and evidence. It does not alter canonical workflow state, ownership, or the observation-only boundary.",
                 },
@@ -4128,6 +4137,9 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **inconclusive rule** — {supervision.EmissionHygiene.CorroborationContract.InconclusiveRule}");
         writer.WriteLine($"- **genuine absence rule** — {supervision.EmissionHygiene.CorroborationContract.GenuineAbsenceRule}");
         writer.WriteLine($"- **recurrence rule** — {supervision.EmissionHygiene.CorroborationContract.RecurrenceRule}");
+        writer.WriteLine($"- **registration diagnostic rule** — {supervision.EmissionHygiene.CorroborationContract.RegistrationDiagnosticRule}");
+        writer.WriteLine($"- **registration operator act** — {supervision.EmissionHygiene.CorroborationContract.RegistrationOperatorAct}");
+        writer.WriteLine($"- **registration survey** — {supervision.EmissionHygiene.CorroborationContract.RegistrationSurvey}");
         writer.WriteLine();
         writer.WriteLine($"> **Corroboration authority boundary:** {supervision.EmissionHygiene.CorroborationContract.AuthorityBoundary}");
         writer.WriteLine();
@@ -6003,6 +6015,15 @@ internal sealed record OrchestratorObservationCorroboration
 
     [JsonPropertyName("recurrence_rule")]
     public required string RecurrenceRule { get; init; }
+
+    [JsonPropertyName("registration_diagnostic_rule")]
+    public required string RegistrationDiagnosticRule { get; init; }
+
+    [JsonPropertyName("registration_operator_act")]
+    public required string RegistrationOperatorAct { get; init; }
+
+    [JsonPropertyName("registration_survey")]
+    public required string RegistrationSurvey { get; init; }
 
     [JsonPropertyName("authority_boundary")]
     public required string AuthorityBoundary { get; init; }

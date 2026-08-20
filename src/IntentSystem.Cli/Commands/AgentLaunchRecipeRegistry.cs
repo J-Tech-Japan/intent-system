@@ -314,8 +314,11 @@ internal static class AgentLaunchRecipeRegistry
                     + "--ask-for-approval never --add-dir <role-work-root> "
                     + "[--add-dir <host-routing-root>]",
                 RoleDerivedRoots =
-                    "Use one bounded --add-dir <role-work-root> for the role checkout/worktree; add the host "
-                    + "routing root only for a role whose canonical report surface needs it. The role-work-root is the "
+                    "Use one bounded --add-dir <role-work-root> for the role checkout/worktree. The implementation "
+                    + "seat does not receive --add-dir <host-routing-root> and does not receive MyIntentHost write "
+                    + "access: its canonical report command carries --routing-root <host-routing-root> as read/transport "
+                    + "authority and --report-root . for the writable sender-local handoff. Add a host root only for a "
+                    + "role whose own external-reader surface explicitly requires it. The role-work-root is the "
                     + "seat's ordinary-file root, not a blanket repository-metadata grant: the current recipe deliberately "
                     + "does not declare `<repo>/.git`. A live E-versus-F probe on 2026-08-19 (Codex CLI 0.147.0/macOS) "
                     + "showed `git -C work fetch origin` denied with `seatcwd, work` and succeeding with the exact "
