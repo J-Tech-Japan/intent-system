@@ -2731,6 +2731,8 @@ credential/keychain セットアップも不要で(セッションの他の部�
   nudge を捏造・送信することは決してありません。送信する nudge は
   `actionable-stall` verdict とともに返された canonical notify command の場合だけです。
   `stale` や `message_body` から action を推論せず、closed verdict だけを decision trigger にします。
+- **記録する coordinating seat の名前** — `session-layer topology record --role <name>` は operator が logical role 名を指定する surface です。heartbeat は `orchestration` を canonical な coordinating role とし、topology delivery と共有する role-contract normalization によって `orchestrator` を記録済み alias として受け入れます。したがって `orchestrator` で記録済みの topology を rename や migration なしで使えます。新規または修正の coordinating seat を記録するときは、どちらかの spelling を team record に残してください。本当に seat がない場合の `cannot-determine` は source、missing role、記録済み roster、それを解消する `topology record --write` action を出力します。
+- **role consumer の sweep** — `notify` delivery、pending recipient metadata、task-envelope 選択、recipient-delivery judgment、topology show、heartbeat はすべて同じ resolver を使います。`action_owner: orchestration` のような semantic actor label は topology lookup ではないため canonical のままです。alias table を別に持ちません。
 - **failure visibility** — 沈黙は `healthy-active-wait` の heartbeat 結果にのみ
   許されます。heartbeat コマンドの実行失敗や不正な/オブジェクトでない出力は、
   この wake の watchdog 自身の turn 出力で **可視的に** 表面化させなければ

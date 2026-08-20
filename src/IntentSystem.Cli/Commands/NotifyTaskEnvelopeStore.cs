@@ -88,8 +88,11 @@ internal sealed record NotifyTaskEnvelopeDelivery
     public static NotifyTaskEnvelopeDelivery Resolve(NotifyOptions options, string payload)
     {
         var topology = NotifyRoleTopologyStore.Resolve(options.RoutingRoot!, options.Domain!, options.Team!);
-        if (!topology.Resolved || topology.Topology is null
-            || !topology.Topology.Roles.TryGetValue(options.ToRole!, out var recipient)
+        var roleResolution = topology.Resolved && topology.Topology is { } teamTopology
+            ? NotifyRoleTopologyStore.ResolveRecordedRole(teamTopology, options.ToRole!)
+            : null;
+        if (roleResolution?.Resolved != true
+            || roleResolution.Record is not { } recipient
             || string.IsNullOrWhiteSpace(recipient.DeliveryMethod))
         {
             return Inline(payload);

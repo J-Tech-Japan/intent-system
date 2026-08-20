@@ -71,6 +71,41 @@ public sealed class AutomationHeartbeatDecisionG597Tests : IDisposable
     }
 
     [Fact]
+    public void Execute_RecordedOrchestratorAliasResolvesAndEmitsDestination_G723()
+    {
+        using var workspace = new HeartbeatWorkspace();
+        workspace.WriteTopology("orchestrator");
+        workspace.WritePacketDomain("G600");
+        var issue = Issue(1600, "G600: action needed", FixedNow.AddHours(-2), "intent-target");
+
+        var result = Run(workspace, new FakeLister([issue]));
+
+        Assert.Equal("actionable-stall", result.GetProperty("verdict").GetString());
+        Assert.Equal("orchestration", result.GetProperty("target_role").GetString());
+        Assert.Equal("orchestrator", result.GetProperty("resolved_recorded_role").GetString());
+        Assert.Equal("pane:wH:p1", result.GetProperty("resolved_destination").GetString());
+        Assert.Contains("--to orchestration", result.GetProperty("canonical_notify_command").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GenuineMissingCoordinatingSeatExplainsTheRecordAction_G723()
+    {
+        using var workspace = new HeartbeatWorkspace();
+        workspace.WriteTopology(coordinatingRole: null);
+
+        var result = Run(workspace, new FakeLister());
+
+        Assert.Equal("cannot-determine", result.GetProperty("verdict").GetString());
+        var reason = result.GetProperty("reason").GetString()!;
+        Assert.Contains("logical role 'orchestration'", reason, StringComparison.Ordinal);
+        Assert.Contains("accepted recorded alias 'orchestrator'", reason, StringComparison.Ordinal);
+        Assert.Contains("session-layer topology record", reason, StringComparison.Ordinal);
+        Assert.Contains("--write", reason, StringComparison.Ordinal);
+        Assert.Contains("do not rename", reason, StringComparison.Ordinal);
+        Assert.Contains("session-layer topology record", result.GetProperty("suggested_action").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_DedupeKeyIsStableAcrossPollsAndChangesOnlyWithMaterialState_G597()
     {
         using var workspace = new HeartbeatWorkspace();
@@ -307,20 +342,24 @@ public sealed class AutomationHeartbeatDecisionG597Tests : IDisposable
             File.WriteAllText(Path.Combine(directory, "packet.yaml"), "domain: intent-cli\n");
         }
 
-        public void WriteTopology()
+        public void WriteTopology(string? coordinatingRole = "orchestration")
         {
             var path = NotifyRoleTopologyStore.ResolvePath(RootPath, "intent-cli", "intent-cli-dev");
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var roles = new Dictionary<string, object>
+            {
+                ["design"] = new { resident = "herdr", workspace_id = "wH", pane_id = "wH:p3" },
+            };
+            if (coordinatingRole is not null)
+            {
+                roles[coordinatingRole] = new { resident = "herdr", workspace_id = "wH", pane_id = "wH:p1" };
+            }
             File.WriteAllText(path, JsonSerializer.Serialize(new
             {
                 domain = "intent-cli",
                 team = "intent-cli-dev",
                 workspace_id = "wH",
-                roles = new Dictionary<string, object>
-                {
-                    ["design"] = new { resident = "herdr", workspace_id = "wH", pane_id = "wH:p3" },
-                    ["orchestration"] = new { resident = "herdr", workspace_id = "wH", pane_id = "wH:p1" },
-                },
+                roles,
             }));
         }
 

@@ -24,7 +24,9 @@ internal static class SessionLayerTopologyCommand
         + "[--format markdown|json]\n"
         + "   or: intent-cli session-layer topology record --domain <name> --team <name> --role <name> --resident external "
         + "--reader <routing-root-relative-path> [--frontend <name>] [--dry-run|--write] "
-        + "[--format markdown|json]";
+        + "[--format markdown|json]\n"
+        + "   Heartbeat coordination accepts recorded role 'orchestration' or the alias 'orchestrator'; existing "
+        + "records under either name need no rename or migration.";
     private const string ShowUsage =
         "Usage: intent-cli session-layer topology show --domain <name> --team <name> [--format markdown|json]";
     private const string ValidateUsage =
@@ -1254,8 +1256,12 @@ internal static class SessionLayerTopologyWriter
             AlreadyRecorded = false,
             Conflict = false,
             Summary = request.Write
-                ? $"Recorded operator-supplied role '{request.Role}' for team '{request.Team}'."
-                : $"Dry-run: would record operator-supplied role '{request.Role}' for team '{request.Team}'.",
+                ? $"Recorded operator-supplied role '{request.Role}' for team '{request.Team}'. "
+                    + "Heartbeat coordination accepts recorded role 'orchestration' or the alias 'orchestrator'; "
+                    + "existing records under either name need no rename or migration."
+                : $"Dry-run: would record operator-supplied role '{request.Role}' for team '{request.Team}'. "
+                    + "Heartbeat coordination accepts recorded role 'orchestration' or the alias 'orchestrator'; "
+                    + "existing records under either name need no rename or migration.",
         };
     }
 
