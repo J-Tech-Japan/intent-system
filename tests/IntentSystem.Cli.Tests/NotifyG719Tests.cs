@@ -50,12 +50,17 @@ public sealed class NotifyG719Tests : IDisposable
         Assert.Contains("--report-root .", exactCommand, StringComparison.Ordinal);
 
         var hostBefore = workspace.HostSnapshot();
+        var originalHostRootMode = workspace.HostRootMode();
         workspace.MakeHostReadOnly();
         try
         {
             var deniedWrites = workspace.RunHostWriteProbe();
             Assert.Equal(0, deniedWrites.ExitCode);
-            Assert.Contains("denied", deniedWrites.StandardOutput, StringComparison.Ordinal);
+            Assert.Contains("denied:root", deniedWrites.StandardOutput, StringComparison.Ordinal);
+            Assert.Contains("denied:queue", deniedWrites.StandardOutput, StringComparison.Ordinal);
+            Assert.Contains("denied:runs", deniedWrites.StandardOutput, StringComparison.Ordinal);
+            Assert.Contains("denied:packet", deniedWrites.StandardOutput, StringComparison.Ordinal);
+            Assert.Contains("all-host-write-probes-denied", deniedWrites.StandardOutput, StringComparison.Ordinal);
 
             var reportProcess = workspace.RunExactCommand(exactCommand);
             Assert.True(reportProcess.ExitCode == 0, reportProcess.StandardOutput + reportProcess.StandardError);
@@ -89,6 +94,7 @@ public sealed class NotifyG719Tests : IDisposable
         finally
         {
             workspace.MakeHostWritable();
+            Assert.Equal(originalHostRootMode, workspace.HostRootMode());
         }
 
         var reconcileArgs = workspace.ReconcileArgs("G719-report");
@@ -320,6 +326,7 @@ public sealed class NotifyG719Tests : IDisposable
         private string PacketPath => Path.Combine(HostRoot, "intents", Domain, "packets", "G719.yaml");
         private string IntentCliShimPath => Path.Combine(SeatRoot, "bin", "intent-cli");
         private string HerdrShimPath => Path.Combine(SeatRoot, "bin", "herdr");
+        private UnixFileMode? hostRootModeBeforeReadOnly;
         private CliContext HostContext { get; }
         private CliContext SeatContext { get; }
 
@@ -365,10 +372,18 @@ public sealed class NotifyG719Tests : IDisposable
 
         public ShellResult RunHostWriteProbe()
         {
-            var targets = new[] { QueueStatePath, RunsPath, PacketPath };
-            var command = "for target in "
-                + string.Join(" ", targets.Select(QuoteForShell))
-                + "; do if printf x >> \"$target\"; then printf 'writable'; exit 1; fi; done; printf 'denied';";
+            var probes = new[]
+            {
+                (Name: "root", Path: Path.Combine(HostRoot, "g719-root-level-probe")),
+                (Name: "queue", Path: QueueStatePath),
+                (Name: "runs", Path: RunsPath),
+                (Name: "packet", Path: PacketPath),
+            };
+            var command = string.Join(
+                Environment.NewLine,
+                probes.Select(probe =>
+                    $"if printf x > {QuoteForShell(probe.Path)}; then printf 'writable:{probe.Name}\\n'; rm -f {QuoteForShell(probe.Path)}; exit 1; else printf 'denied:{probe.Name}\\n'; fi;"))
+                + " printf 'all-host-write-probes-denied\\n';";
             return RunSeatShell(command);
         }
 
@@ -384,6 +399,7 @@ public sealed class NotifyG719Tests : IDisposable
         public void MakeHostReadOnly()
         {
             if (OperatingSystem.IsWindows()) return;
+            hostRootModeBeforeReadOnly ??= File.GetUnixFileMode(HostRoot);
             foreach (var file in Directory.EnumerateFiles(HostRoot, "*", SearchOption.AllDirectories))
             {
                 File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
@@ -399,6 +415,11 @@ public sealed class NotifyG719Tests : IDisposable
                     | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
                     | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
             }
+
+            File.SetUnixFileMode(
+                HostRoot,
+                File.GetUnixFileMode(HostRoot)
+                & ~(UnixFileMode.UserWrite | UnixFileMode.GroupWrite | UnixFileMode.OtherWrite));
         }
 
         public void MakeHostWritable()
@@ -423,6 +444,18 @@ public sealed class NotifyG719Tests : IDisposable
                     | UnixFileMode.GroupRead | UnixFileMode.GroupWrite
                     | UnixFileMode.OtherRead | UnixFileMode.OtherWrite);
             }
+
+            if (hostRootModeBeforeReadOnly is { } originalMode)
+            {
+                File.SetUnixFileMode(HostRoot, originalMode);
+                hostRootModeBeforeReadOnly = null;
+            }
+        }
+
+        public UnixFileMode HostRootMode()
+        {
+            if (OperatingSystem.IsWindows()) return default;
+            return File.GetUnixFileMode(HostRoot);
         }
 
         public void WriteTopology(bool externalOrchestration = false)
