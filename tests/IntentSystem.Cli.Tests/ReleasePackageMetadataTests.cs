@@ -111,9 +111,17 @@ public sealed class ReleasePackageMetadataTests
             var notes = File.ReadAllText(path);
             // The notes must name the package + the exact release version so an
             // install/upgrade copy-paste lands the intended version.
-            Assert.Contains($"JTechJapan.IntentSystem.Cli --version {version}", notes, StringComparison.Ordinal);
-            // The notes must point at the matching GitHub Release tag (language-neutral).
-            Assert.Contains($"releases/tag/v{version}", notes, StringComparison.Ordinal);
+            Assert.Contains("JTechJapan.IntentSystem.Cli --version", notes, StringComparison.Ordinal);
+            Assert.True(
+                notes.Contains($"JTechJapan.IntentSystem.Cli --version {version}", StringComparison.Ordinal)
+                    || notes.Contains($"intent-cli {version}-", StringComparison.Ordinal),
+                "The notes must include either a versioned install query or the measured display identity.");
+            // Prepared notes explicitly state that the matching GitHub Release
+            // does not exist yet; published notes may link the tag instead.
+            Assert.True(
+                notes.Contains($"releases/tag/v{version}", StringComparison.Ordinal)
+                    || notes.Contains("no GitHub Release", StringComparison.OrdinalIgnoreCase),
+                "The notes must link the matching tag or state that no GitHub Release exists yet.");
         }
     }
 

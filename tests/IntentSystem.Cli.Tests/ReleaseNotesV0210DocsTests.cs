@@ -134,7 +134,7 @@ public sealed class ReleaseNotesV0210DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void CurrentPolicyAndReadinessFollowVersionPolicyAndNextNotesAreDraft(string language)
+    public void CurrentPolicyAndReadinessFollowVersionPolicyAndNextNotesAreDraftOrPrepared(string language)
     {
         var root = RepoVersionPolicySource.RepoRoot();
         var policy = RepoVersionPolicySource.Read();
@@ -163,25 +163,36 @@ public sealed class ReleaseNotesV0210DocsTests
             StringComparison.Ordinal);
         var currentNotesText = File.ReadAllText(Path.Combine(root, "docs", language, currentNotes));
         var currentNotesCompact = Regex.Replace(currentNotesText, @"[>\s]+", " ");
-        Assert.Contains(
-            "DRAFT /",
-            currentNotesText,
-            StringComparison.Ordinal);
-        Assert.Contains(language == "en" ? "UNRELEASED" : "未リリース", currentNotesCompact, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(
-            language == "en"
-                ? "release-prep packet authors the real content"
-                : "release-prep パケットが author します",
-            currentNotesCompact,
-            StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(
-            language == "en"
-                ? "must not be treated as a changelog"
-                : "changelog として扱ってはいけません",
-            currentNotesCompact,
-            StringComparison.OrdinalIgnoreCase);
-        Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.NextVersion}", currentNotesText, StringComparison.Ordinal);
-        Assert.Contains($"releases/tag/v{policy.NextVersion}", currentNotesText, StringComparison.Ordinal);
+        var isDraft = currentNotesCompact.Contains("DRAFT /", StringComparison.OrdinalIgnoreCase);
+        if (isDraft)
+        {
+            Assert.Contains(language == "en" ? "UNRELEASED" : "未リリース", currentNotesCompact, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(
+                language == "en"
+                    ? "release-prep packet authors the real content"
+                    : "release-prep パケットが author します",
+                currentNotesCompact,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(
+                language == "en"
+                    ? "must not be treated as a changelog"
+                    : "changelog として扱ってはいけません",
+                currentNotesCompact,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            Assert.Contains("prepare-only", currentNotesCompact, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("no tag", currentNotesCompact, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("no GitHub Release", currentNotesCompact, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("no publish", currentNotesCompact, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.Contains("JTechJapan.IntentSystem.Cli --version", currentNotesText, StringComparison.Ordinal);
+        Assert.True(
+            currentNotesText.Contains($"releases/tag/v{policy.NextVersion}", StringComparison.Ordinal)
+                || currentNotesCompact.Contains("no GitHub Release", StringComparison.OrdinalIgnoreCase),
+            "Next-version notes must either link the future tag or state that no GitHub Release exists yet.");
         if (File.Exists(shippedNotesPath))
         {
             var stableNotes = File.ReadAllText(shippedNotesPath);

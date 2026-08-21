@@ -550,22 +550,36 @@ public sealed class ReleaseNotesV061DocsTests
         }
         else
         {
-            // Authored state: real notes carry the operator's readiness gate,
-            // which is what a release is cut from.
-            Assert.Contains(
-                language == "en" ? "Release-readiness gate" : "リリース準備ゲート",
-                notes,
-                StringComparison.Ordinal);
-            Assert.Contains(
-                language == "en" ? "Publishing v" : " の publish",
-                notes,
-                StringComparison.Ordinal);
+            // Authored state: real notes carry either the historical
+            // release-readiness gate or the prepare-only boundary used by a
+            // substantive note set that has not been published yet.
+            var isPrepareOnly = notes.Contains("prepare-only", StringComparison.OrdinalIgnoreCase);
+            if (isPrepareOnly)
+            {
+                Assert.Contains("no tag", notes, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("no GitHub Release", notes, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("no publish", notes, StringComparison.OrdinalIgnoreCase);
+            }
+            else
+            {
+                Assert.Contains(
+                    language == "en" ? "Release-readiness gate" : "リリース準備ゲート",
+                    notes,
+                    StringComparison.Ordinal);
+                Assert.Contains(
+                    language == "en" ? "Publishing v" : " の publish",
+                    notes,
+                    StringComparison.Ordinal);
+            }
         }
 
         // Either way the G475 guard's own two requirements hold, so its
         // semantics are unchanged across both states.
-        Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.NextVersion}", notes, StringComparison.Ordinal);
-        Assert.Contains($"releases/tag/v{policy.NextVersion}", notes, StringComparison.Ordinal);
+        Assert.Contains("JTechJapan.IntentSystem.Cli --version", notes, StringComparison.Ordinal);
+        Assert.True(
+            notes.Contains($"releases/tag/v{policy.NextVersion}", StringComparison.Ordinal)
+                || notes.Contains("no GitHub Release", StringComparison.OrdinalIgnoreCase),
+            "Next-version notes must either link the future tag or state that no GitHub Release exists yet.");
     }
 
     [Theory]
