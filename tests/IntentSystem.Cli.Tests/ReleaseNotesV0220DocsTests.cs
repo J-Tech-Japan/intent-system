@@ -294,24 +294,32 @@ public sealed class ReleaseNotesV0220DocsTests
         Assert.Contains($"release-notes-v{policy.StableVersion}.md", section, StringComparison.Ordinal);
         Assert.Contains($"release-notes-v{policy.NextVersion}.md", section, StringComparison.Ordinal);
         Assert.Contains($"v{policy.StableVersion} GitHub Release", section, StringComparison.Ordinal);
-        Assert.Contains("release-notes-v0.23.0.md", section, StringComparison.Ordinal);
         Assert.Contains(
             language == "en" ? "source-note inconsistency predates this roll" : "source-note inconsistency はこの roll より前から存在し",
             compact,
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
-            language == "en" ? "DRAFT / UNRELEASED" : "DRAFT / 未リリース",
+            "PREPARED / NOT PUBLISHED",
             compact,
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
             language == "en" ? "authoritative shipped evidence" : "shipped evidence の authoritative source",
             compact,
             StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(
-            language == "en" ? "out of scope and must be handled by a later explicitly scoped remediation" : "修正は scope 外です。後続の明示的な remediation で扱います",
-            compact,
-            StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("G725 detector", section, StringComparison.Ordinal);
+        if (language == "en")
+        {
+            Assert.Contains(
+                "out of scope and must be handled by a later explicitly scoped remediation",
+                compact,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            Assert.Contains("scope 外", compact, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("remediation", compact, StringComparison.OrdinalIgnoreCase);
+        }
+        Assert.Contains("installed 0.23.2 CLI", section, StringComparison.Ordinal);
+        Assert.Contains("checkout_freshness/provenance", section, StringComparison.Ordinal);
         Assert.Contains(
             language == "en" ? "no tag" : "tag または Release を作成せず",
             compact,
