@@ -10,6 +10,47 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal static class AutomationSummaryAnalyzer
 {
+    /// <summary>
+    /// Resolve the configured checkout for a requested GitHub repository using
+    /// the same domain bindings that <c>automation summary</c> emits. This is
+    /// deliberately a configuration lookup only: it does not infer a sibling
+    /// repository, inspect an arbitrary path, or synchronize a checkout.
+    /// </summary>
+    public static string? TryResolveConfiguredTargetRepoRoot(
+        CliContext context,
+        string domain,
+        string repo)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(domain);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+
+        var bindings = LoadBindings(context, domain, new List<string>());
+        if (!string.Equals(bindings.Repo, repo, StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(bindings.SubmodulePath))
+        {
+            return null;
+        }
+
+        var baseRoot = context.ResolveParentIntentRepoRootPath();
+        if (string.IsNullOrWhiteSpace(baseRoot))
+        {
+            baseRoot = context.RepoRoot;
+        }
+
+        try
+        {
+            return Path.GetFullPath(
+                Path.IsPathRooted(bindings.SubmodulePath)
+                    ? bindings.SubmodulePath
+                    : Path.Combine(baseRoot, bindings.SubmodulePath));
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
     public static AutomationSummaryResult Analyze(CliContext context, string? domainOverride)
     {
         ArgumentNullException.ThrowIfNull(context);

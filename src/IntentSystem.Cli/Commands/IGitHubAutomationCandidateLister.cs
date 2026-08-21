@@ -69,6 +69,21 @@ internal interface IGitHubAutomationCandidateLister
         IReadOnlyCollection<string> requiredLabels,
         GitHubAutomationReadSurface surface)
         => ListClosedPullRequests(repo, requiredLabels);
+
+    /// <summary>
+    /// G725: list published GitHub Releases so repository-level release
+    /// closeout can be compared with the local version policy. Existing
+    /// fakes retain the empty default, which represents a repository with no
+    /// published release rather than inventing a release from local state.
+    /// </summary>
+    IReadOnlyList<GitHubAutomationReleaseCandidate> ListPublishedReleases(
+        string repo)
+        => Array.Empty<GitHubAutomationReleaseCandidate>();
+
+    IReadOnlyList<GitHubAutomationReleaseCandidate> ListPublishedReleases(
+        string repo,
+        GitHubAutomationReadSurface surface)
+        => ListPublishedReleases(repo);
 }
 
 /// <summary>
@@ -210,6 +225,22 @@ internal sealed record GitHubAutomationLabel
 {
     [JsonPropertyName("name")]
     public string Name { get; init; } = string.Empty;
+}
+
+/// <summary>G725: published stable-release metadata used by stalled-work.</summary>
+internal sealed record GitHubAutomationReleaseCandidate
+{
+    [JsonPropertyName("tagName")]
+    public string TagName { get; init; } = string.Empty;
+
+    [JsonPropertyName("publishedAt")]
+    public string PublishedAt { get; init; } = string.Empty;
+
+    [JsonPropertyName("isDraft")]
+    public bool IsDraft { get; init; }
+
+    [JsonPropertyName("isPrerelease")]
+    public bool IsPrerelease { get; init; }
 }
 
 /// <summary>G674: captured read-only <c>gh</c> process result for adapter tests.</summary>
@@ -368,6 +399,25 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
     }
 
     /// <summary>
+    /// G725: builds the read-only release list used to observe published
+    /// stable releases. Draft and prerelease rows are filtered after
+    /// deserialization so the transport remains a simple existing <c>gh</c>
+    /// read and the no-release case remains an honest empty observation.
+    /// </summary>
+    internal static IReadOnlyList<string> BuildReleaseListArguments(string repo)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+        return
+        [
+            "release",
+            "list",
+            "--repo", repo,
+            "--json", "tagName,publishedAt,isDraft,isPrerelease",
+            "--limit", "100",
+        ];
+    }
+
+    /// <summary>
     /// G674: builds the REST issue-list request. <c>--paginate --slurp</c>
     /// preserves the old adapter's 200-row upper bound by flattening the
     /// server's ordered pages in the deserializer; no cross-agent cache,
@@ -477,6 +527,32 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
         var args = BuildMergedPrListArguments(repo, requiredLabels);
         var stdout = RunGh(args, $"list merged PRs in {repo}");
         return DeserializeList<GitHubAutomationPrCandidate>(stdout, $"`gh pr list --state merged` for {repo}");
+    }
+
+    public IReadOnlyList<GitHubAutomationReleaseCandidate> ListPublishedReleases(
+        string repo)
+    {
+        var args = BuildReleaseListArguments(repo);
+        var stdout = RunGh(args, $"list published releases in {repo}");
+        return DeserializeList<GitHubAutomationReleaseCandidate>(
+            stdout,
+            $"`gh release list` for {repo}");
+    }
+
+    public IReadOnlyList<GitHubAutomationReleaseCandidate> ListPublishedReleases(
+        string repo,
+        GitHubAutomationReadSurface surface)
+    {
+        var args = BuildReleaseListArguments(repo);
+        var stdout = RunGh(
+            args,
+            $"list published releases in {repo}",
+            GitHubApiQuotaConstants.GraphQlResource,
+            GitHubApiReadDependencies.GraphQlBound,
+            GitHubApiReadInventory.UnverifiedFieldsFor(surface));
+        return DeserializeList<GitHubAutomationReleaseCandidate>(
+            stdout,
+            $"`gh release list` for {repo}");
     }
 
     public IReadOnlyList<GitHubAutomationPrCandidate> ListMergedPullRequests(

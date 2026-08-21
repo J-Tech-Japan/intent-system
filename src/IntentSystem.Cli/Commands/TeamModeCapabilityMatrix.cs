@@ -92,6 +92,7 @@ internal sealed record TeamModeCapabilityMatrix
             or AutomationStalledWorkCommand.KindBlockedParked
             or AutomationStalledWorkCommand.KindStateDrift
             or AutomationStalledWorkCommand.KindDesignDecisionPending
+            or AutomationStalledWorkCommand.KindVersionRollRequired
             => TeamModeCapabilityClasses.ContractReadiness,
         AutomationStalledWorkCommand.KindCiPending
             or AutomationStalledWorkCommand.KindCiAllGreenNotTransitioned

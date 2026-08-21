@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using IntentSystem.Clarify.Models;
 using IntentSystem.Clarify.Serialization;
+using IntentSystem.Cli.Infrastructure;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 
@@ -17,8 +18,10 @@ namespace IntentSystem.Cli.Commands;
 /// heartbeat) can detect a stall without a human cross-checking GitHub
 /// labels, PR state, and queue-state by hand.
 ///
-/// Actionable categories (carry a runnable <c>recommended_action</c> command,
-/// <see cref="StalledWorkItem.IsInformational"/> is <see langword="false"/>):
+/// Actionable categories carry an actionable <c>recommended_action</c> (a
+/// runnable transition command where one exists; the version-roll category
+/// deliberately names a human edit), and <see
+/// cref="StalledWorkItem.IsInformational"/> is <see langword="false"/>:
 /// <list type="bullet">
 /// <item><c>published-not-delegated</c> — an OPEN issue carries
 ///   <c>intent-target</c>, has no claim label
@@ -70,6 +73,11 @@ namespace IntentSystem.Cli.Commands;
 ///   <see cref="BuildRepairStalledAction"/>). Covers draft PRs too, which
 ///   every other PR kind here deliberately skips — the four-day G545 stall
 ///   was invisible precisely because its repair PR was a draft.</item>
+/// <item><c>version-roll-required</c> — a published stable release is newer
+///   than the local <c>eng/version.json</c> policy, or the policy does not
+///   name the required next patch. The finding includes both expected values
+///   and deliberately recommends a human follow-up edit; this read-only
+///   surface never mutates release or version state.</item>
 /// </list>
 ///
 /// Informational categories (G533 — age for visibility only,
@@ -446,6 +454,14 @@ internal static class AutomationStalledWorkCommand
     public const string KindGuideReachabilityPending = "guide-reachability-pending";
 
     /// <summary>
+    /// G725: a published stable release requires the post-release roll in
+    /// <c>eng/version.json</c>. This is actionable immediately and remains
+    /// read-only because the human follow-up also owns release-note,
+    /// readiness, and child-main CI closeout.
+    /// </summary>
+    public const string KindVersionRollRequired = "version-roll-required";
+
+    /// <summary>
     /// G564: a closed-out unit's write-back metadata — its packet's G461
     /// declaration, the runs log the closeout is read from, or an existing
     /// write-back record — is present but unreadable. Reported here WITH the
@@ -620,6 +636,9 @@ internal static class AutomationStalledWorkCommand
             repo,
             Array.Empty<string>(),
             GitHubAutomationReadSurface.StalledWork));
+        var publishedReleases = ReadGitHub(() => lister.ListPublishedReleases(
+            repo,
+            GitHubAutomationReadSurface.StalledWork));
 
         var candidateDomains = DomainCandidateScanner.Scan(context);
         var items = new List<StalledWorkItem>();
@@ -695,6 +714,7 @@ internal static class AutomationStalledWorkCommand
         CollectDraftRepairStalled(context, domain, candidateDomains, openIssues, openPrs, repo, now, repairSilentMinutes, items, excluded);
         CollectMergedNotClosedOut(context, domain, candidateDomains, repo, mergedPrs, now, items, excluded, warnings);
         CollectClaimedButSilent(context, domain, candidateDomains, openIssues, openPrs, repo, now, claimedSilentMinutes, items, excluded, warnings);
+        CollectVersionRollRequired(context, domain, repo, now, publishedReleases, items, warnings);
         CollectBacklogReadyIdle(context, domain, candidateDomains, openIssues, openPrs, repo, now, backlogIdleMinutes, items, excluded);
         CollectDesignDecisionPending(context, domain, candidateDomains, repo, now, items, excluded);
         CollectKnowledgeWritebackPending(
@@ -736,6 +756,7 @@ internal static class AutomationStalledWorkCommand
             .Where(item => item.Kind is KindOperatorAttentionPending or KindOperatorAttentionCannotDetermine
                 or KindCiPending or KindCiAllGreenNotTransitioned or KindCiFailedNotTransitioned or KindCiHeadMoved
                 or KindBranchRoutingConflict or KindAwaitingOperatorMerge or KindOperatorMergeDetected
+                or KindVersionRollRequired
                 || item.AgeMinutes >= staleMinutes)
             .Where(item => capabilityMatrix.IsStalledKindApplicable(item.Kind))
             .OrderByDescending(item => item.AgeMinutes)
@@ -803,6 +824,112 @@ internal static class AutomationStalledWorkCommand
 
         return $"cause={exception.Cause}; operation={exception.Operation}; detection is unavailable; "
             + "local-only findings are partial. No automatic retry or wait is scheduled.";
+    }
+
+    /// <summary>
+    /// G725: compare the repository's latest published stable release with
+    /// the local version policy. No release means no closeout obligation, so
+    /// an empty release observation intentionally remains silent. When a
+    /// release is present but the policy cannot be read, retain an explicit
+    /// warning rather than claiming the host is healthy.
+    /// </summary>
+    private static void CollectVersionRollRequired(
+        CliContext context,
+        string domain,
+        string repo,
+        DateTimeOffset now,
+        IReadOnlyList<GitHubAutomationReleaseCandidate> releases,
+        List<StalledWorkItem> items,
+        List<string> warnings)
+    {
+        var latestRelease = default(GitHubAutomationReleaseCandidate);
+        var latestVersion = string.Empty;
+        foreach (var release in releases)
+        {
+            if (release.IsDraft
+                || release.IsPrerelease
+                || !VersionPolicy.TryNormalizeStableVersion(release.TagName, out var normalized))
+            {
+                continue;
+            }
+
+            if (latestRelease is null
+                || VersionPolicy.CompareStableVersions(normalized, latestVersion) > 0)
+            {
+                latestRelease = release;
+                latestVersion = normalized;
+            }
+        }
+
+        if (latestRelease is null)
+        {
+            return;
+        }
+
+        var policyRoot = context.RepoRoot;
+        var policyFile = Path.Combine("eng", "version.json");
+        var policy = VersionPolicy.TryReadFromRepo(policyRoot);
+        if (policy is null
+            && !File.Exists(Path.Combine(context.RepoRoot, policyFile)))
+        {
+            var configuredTargetRoot = AutomationSummaryAnalyzer.TryResolveConfiguredTargetRepoRoot(
+                context,
+                domain,
+                repo);
+            if (!string.IsNullOrWhiteSpace(configuredTargetRoot))
+            {
+                policyRoot = configuredTargetRoot;
+                var configuredPolicyPath = Path.Combine(policyRoot, "eng", "version.json");
+                policyFile = ToDisplayPath(context.RepoRoot, configuredPolicyPath);
+                policy = VersionPolicy.TryReadFromFile(configuredPolicyPath);
+            }
+        }
+
+        if (policy is null)
+        {
+            warnings.Add(
+                $"version-roll detection could not read '{policyFile}' "
+                + $"after published release {latestVersion}; no version-roll finding was fabricated.");
+            return;
+        }
+
+        if (!VersionPolicy.TryNormalizeStableVersion(policy.StableVersion, out _)
+            || !VersionPolicy.TryNormalizeStableVersion(policy.NextVersion, out _))
+        {
+            warnings.Add(
+                $"version-roll detection found malformed values in '{policyFile}' "
+                + $"after published release {latestVersion}; no version-roll finding was fabricated.");
+            return;
+        }
+
+        if (!policy.TryGetRequiredPostReleaseRoll(latestVersion, out var expectation))
+        {
+            return;
+        }
+
+        var ageMinutes = ComputeAgeMinutes(latestRelease.PublishedAt, now);
+        items.Add(new StalledWorkItem
+        {
+            Kind = KindVersionRollRequired,
+            ExecutionUnit = "version-roll",
+            AgeMinutes = ageMinutes,
+            IsInformational = false,
+            RecommendedAction =
+                $"Edit {policyFile} in a follow-up commit: set stableVersion to {expectation.ExpectedStableVersion} "
+                + $"and nextVersion to {expectation.ExpectedNextVersion}; then verify child-main CI. "
+                + "This detector is read-only and does not perform the release roll.",
+            ReleasedVersion = expectation.ReleasedVersion,
+            ExpectedStableVersion = expectation.ExpectedStableVersion,
+            ExpectedNextVersion = expectation.ExpectedNextVersion,
+        });
+    }
+
+    private static string ToDisplayPath(string repoRoot, string absolutePath)
+    {
+        var relative = Path.GetRelativePath(repoRoot, absolutePath);
+        return relative
+            .Replace(Path.DirectorySeparatorChar, '/')
+            .Replace(Path.AltDirectorySeparatorChar, '/');
     }
 
     private static void CollectStaleClaims(
@@ -4527,6 +4654,18 @@ internal static class AutomationStalledWorkCommand
                 {
                     writer.WriteLine($"- pr: #{pr.Number} — {pr.Url}");
                 }
+                if (item.ReleasedVersion is { } releasedVersion)
+                {
+                    writer.WriteLine($"- released_version: {releasedVersion}");
+                }
+                if (item.ExpectedStableVersion is { } expectedStableVersion)
+                {
+                    writer.WriteLine($"- expected_stable_version: {expectedStableVersion}");
+                }
+                if (item.ExpectedNextVersion is { } expectedNextVersion)
+                {
+                    writer.WriteLine($"- expected_next_version: {expectedNextVersion}");
+                }
                 if (item.LaneId is { } laneId)
                 {
                     writer.WriteLine($"- lane_id: {laneId}");
@@ -4834,6 +4973,22 @@ internal sealed record StalledWorkItem
 
     [JsonPropertyName("recommended_action")]
     public required string RecommendedAction { get; init; }
+
+    /// <summary>
+    /// G725: the release and the two policy values required to clear the
+    /// post-release roll finding. Null for all other stalled-work kinds.
+    /// </summary>
+    [JsonPropertyName("released_version")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ReleasedVersion { get; init; }
+
+    [JsonPropertyName("expected_stable_version")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExpectedStableVersion { get; init; }
+
+    [JsonPropertyName("expected_next_version")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExpectedNextVersion { get; init; }
 
     /// <summary>G673: this finding remains computable but is partial because a
     /// GitHub-derived detector was unavailable during the scan.</summary>

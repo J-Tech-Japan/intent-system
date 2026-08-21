@@ -65,6 +65,45 @@ public sealed class GitHubApiReadG674Tests : IDisposable
     }
 
     [Fact]
+    public void ReleaseListArguments_ReadPublishedStableReleaseMetadataWithoutMutation_G725()
+    {
+        var args = GhCliGitHubAutomationCandidateLister.BuildReleaseListArguments(
+            "J-Tech-Japan/intent-system");
+
+        Assert.Equal(["release", "list"], args.Take(2));
+        Assert.Contains("--repo", args);
+        Assert.Contains("J-Tech-Japan/intent-system", args);
+        Assert.Contains("--json", args);
+        Assert.Contains("tagName,publishedAt,isDraft,isPrerelease", args);
+        Assert.Contains("--limit", args);
+        Assert.Contains("100", args);
+        Assert.DoesNotContain("delete", args, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain("publish", args, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ReleaseLister_ProjectsPublishedReleaseRows_G725()
+    {
+        GhCliGitHubAutomationCandidateLister.ProcessRunner = args =>
+        {
+            Assert.Equal("release", args[0]);
+            return new GhCliProcessResult(
+                0,
+                "[{\"tagName\":\"v0.23.1\",\"publishedAt\":\"2026-08-20T08:09:24Z\",\"isDraft\":false,\"isPrerelease\":false}]",
+                string.Empty);
+        };
+
+        var release = Assert.Single(new GhCliGitHubAutomationCandidateLister().ListPublishedReleases(
+            "J-Tech-Japan/intent-system",
+            GitHubAutomationReadSurface.StalledWork));
+
+        Assert.Equal("v0.23.1", release.TagName);
+        Assert.Equal("2026-08-20T08:09:24Z", release.PublishedAt);
+        Assert.False(release.IsDraft);
+        Assert.False(release.IsPrerelease);
+    }
+
+    [Fact]
     public void RestIssueDeserializer_FiltersPullRequestsAndNormalizesExistingShape()
     {
         const string restPages = """

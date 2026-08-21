@@ -306,7 +306,8 @@ batching を行いません。
 区別します:
 
 **actionable なカテゴリ**（`is_informational: false` —
-`recommended_action` は常に実行可能な `intent-cli` コマンド）:
+`recommended_action` は、存在する場合は実行可能な `intent-cli` コマンドを
+名指しします。`version-roll-required` は意図的に必要な human edit を名指しします）:
 
 - `published-not-delegated` — OPEN の issue が `intent-target` を持つが、
   claim label（`intent-issue-in-progress` / `intent-pr-created`）がまだ無く、
@@ -382,6 +383,19 @@ batching を行いません。
   これを更新します)。`claimed-but-silent` と同様に fail closed です:
   `updatedAt` が欠落・不正な場合は沈黙を確立できないため、使えない証拠に
   基づいて flag するのではなく promotion **しません**。
+- `version-roll-required` (G725) — `stalled-work` は repository の公開済み
+  stable release も読み取り、最新の stable tag と `eng/version.json` を
+  比較します。対象は publish 済み、draft でなく、prerelease でなく、
+  有効な `major.minor.patch` tag だけです。そのような release が無ければ、
+  local policy が古く見えても host は沈黙します。policy がすでに
+  `stableVersion = <releasedVersion>`、`nextVersion = <nextPatch>` なら
+  それも沈黙します。それ以外では finding が `released_version`、
+  `expected_stable_version`、`expected_next_version` と、
+  `recommended_action` に finding を消すための正確な follow-up edit を
+  持ちます。roll は human の follow-up commit のままです。この surface は
+  意図的に read-only であり、roll は release-note stub、次リリース準備
+  section、child-main CI と一緒に調整する必要があります。検出だけをこの
+  slice の scope とし、release automation は行いません。
 - `design-decision-pending` (G552) — **design の判断** で止まっている hold で、
   canonical な clarify surface (`intent-cli clarify open`) を通じて OPEN な
   clarification artifact として記録されたもの。ブロックされている execution
@@ -2772,6 +2786,24 @@ closeout の 1 ステップであり、飛ばすと preview チャンネルが�
 `dotnet tool update` は新しい build を「より古い」として拒否し、手動 uninstall/install
 以外に手段がありませんでした。直ちに roll すれば次の preview は `0.6.2-preview.N` となり
 `0.6.1` より上にソートされるため、`dotnet tool update` が再び機能します。
+
+#### roll 飛ばしの検出(G725)
+
+既存の `intent-cli automation stalled-work --domain <d> --repo <r>`
+surface がこの closeout を確認します。公開済みの stable GitHub Release を読み、policy の
+記録済み stable line より新しい release がある場合（または next value が次の patch でない
+場合）に、`version-roll-required` を出力します。finding には release version、期待する
+`stableVersion`、期待する `nextVersion`、そして解消するための edit が含まれます。公開済み
+release が無い場合と、すでに正しい組になっている場合はどちらも finding を出しません —
+健康な host の empty result を release の取りこぼしと解釈してはいけません。この command は
+read-only のままで、`eng/version.json` を編集したり release を publish したりしません。
+operator が release-note / readiness の更新と一緒に follow-up edit を行い、child-main CI を
+検証します。これは closeout ルールが要求する手順であり、検出だけがこの slice の scope です。
+
+command を、`eng/version.json` を持たない configured host root から実行した場合は、domain の
+`automation summary` binding が指定する target checkout（例: `submodules/intent-system`）に
+従って、その場所の policy を読みます。別の sibling repository を推測したり checkout を
+同期したりはせず、finding の edit path に configured child のファイルを明示します。
 
 **リリース closeout チェックリスト**(roll はステップ 4 — ステップ 3 で止めないこと。
 そして roll はステップ 6 まで終えて初めて完了です):
