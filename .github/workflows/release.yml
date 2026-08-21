@@ -44,8 +44,55 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-reachability:
+    name: Verify release commit reachability
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch repository default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
+
+      - name: Gate exact commit being released
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_COMMIT: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_COMMIT="${WORKFLOW_COMMIT}"
+          if [ "${EVENT_NAME}" = "release" ]; then
+            test -n "${RELEASE_TAG}"
+            RELEASE_COMMIT="$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")"
+          fi
+          ./eng/release-reachability.sh \
+            --commit "${RELEASE_COMMIT}" \
+            --default-branch "${DEFAULT_BRANCH}"
+
+      - name: Survey all existing version tags
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./eng/release-reachability.sh \
+            --survey \
+            --default-branch "${DEFAULT_BRANCH}"
+
   nupkg:
     name: NuGet package
+    needs: [release-reachability]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -145,6 +192,7 @@ jobs:
 
   binaries:
     name: Self-contained ${{ matrix.rid }}
+    needs: [release-reachability]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:

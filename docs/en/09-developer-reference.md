@@ -2700,6 +2700,43 @@ exist to remove.
 | Stable release | `<nextVersion>` | Publishing the GitHub Release for tag `v<nextVersion>` triggers `release.yml` (`on: release: published`); the tag supplies the version (`-p:Version=<tag>` wins) |
 | Post-release main builds | `<nextPatch>-preview.<run>.<attempt>` | After rolling `nextVersion` to `<nextPatch>` |
 
+### Release commit reachability gate (G726)
+
+Before creating a release tag, check the exact commit that would be tagged against
+the repository's default branch:
+
+```bash
+./eng/release-reachability.sh \
+  --commit <commit-or-tag> \
+  --default-branch <repository-default-branch>
+```
+
+The gate resolves the repository default branch and tests
+`git merge-base --is-ancestor <commit> <default-branch>`. It does not use a
+branch name, pull-request state, or the fact that a commit is the current
+checkout as identity evidence. A reachable commit exits successfully and emits
+`ordinary_path=non-interactive`; the ordinary release path has no prompt.
+
+An unreachable commit is refused with a non-zero exit. The output states the
+consequence plainly: **the repository default branch will not contain the
+released source until the commit lands**, so no release build or publish may
+proceed. The operator must land the commit on the default branch and rerun the
+gate. There is no ambiguous confirmation prompt or silent override.
+
+The `release.yml` workflow repeats the check for the exact target of the
+published release tag before any build, upload, or package publish job can run.
+It also runs `--survey` over every existing `v*` tag and reports each tag as
+reachable, unreachable, or unresolved relative to the same default branch. The
+survey is diagnostic and read-only: it never creates, moves, deletes, or
+rewrites a tag or branch. A normal run therefore emits evidence such as:
+
+```text
+release-reachability: reachable ... ordinary_path=non-interactive
+release-reachability: REFUSED ...
+consequence: the repository default branch will not contain the released source until this commit lands; no release build or publish may proceed.
+release-tag-survey: total=<n> reachable=<n> unreachable=<n> unresolved=<n> ...
+```
+
 ### Post-release version roll (G554) — required, immediate
 
 **The moment a GitHub Release is published and verified, roll `eng/version.json`

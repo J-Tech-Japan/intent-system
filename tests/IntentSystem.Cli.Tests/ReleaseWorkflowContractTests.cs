@@ -23,6 +23,27 @@ public sealed class ReleaseWorkflowContractTests
     }
 
     [Fact]
+    public void ReleaseWorkflow_GatesExactCommitAgainstRepositoryDefaultBranch()
+    {
+        var workflow = File.ReadAllText(LocateReleaseWorkflow());
+
+        Assert.Contains("release-reachability:", workflow, StringComparison.Ordinal);
+        Assert.Contains("github.event.repository.default_branch", workflow, StringComparison.Ordinal);
+        Assert.Contains("git rev-list -n 1 \"refs/tags/${RELEASE_TAG}\"", workflow, StringComparison.Ordinal);
+        Assert.Contains("./eng/release-reachability.sh", workflow, StringComparison.Ordinal);
+        Assert.Contains("--commit", workflow, StringComparison.Ordinal);
+        Assert.Contains("--survey", workflow, StringComparison.Ordinal);
+        Assert.Contains("needs: [release-reachability]", workflow, StringComparison.Ordinal);
+        Assert.Contains("fetch-depth: 0", workflow, StringComparison.Ordinal);
+
+        // Reachability is an ancestry fact. It must not be inferred from a
+        // branch name or from whether a pull request happens to be open.
+        Assert.DoesNotContain("github.head_ref", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("pull_request", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("git branch --contains", workflow, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReleaseWorkflow_PacksAndPublishesNuGet_GuardedAgainstForksAndMissingSecret()
     {
         var workflow = File.ReadAllText(LocateReleaseWorkflow());

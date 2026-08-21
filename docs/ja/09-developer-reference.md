@@ -2764,6 +2764,42 @@ truth です。G468 以降、ローカル `dotnet pack` のデフォルト `<Ver
 | 安定版リリース | `<nextVersion>` | タグ `v<nextVersion>` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する（`-p:Version=<tag>` が優先） |
 | リリース後の main ビルド | `<nextPatch>-preview.<run>.<attempt>` | `nextVersion` を `<nextPatch>` に roll した後 |
 
+### リリース commit の到達性 gate(G726)
+
+リリースタグを作成する前に、タグを付ける正確な commit が repository の
+default branch に到達しているかを確認します。
+
+```bash
+./eng/release-reachability.sh \
+  --commit <commit-or-tag> \
+  --default-branch <repository-default-branch>
+```
+
+この gate は repository の default branch を解決し、
+`git merge-base --is-ancestor <commit> <default-branch>` を実行します。
+branch 名、pull request の状態、または現在の checkout であることを identity
+evidence として使いません。到達している commit は成功し、
+`ordinary_path=non-interactive` を出力します。通常の release path に prompt はありません。
+
+到達していない commit は non-zero で拒否されます。出力は、**commit が
+default branch に入るまで repository の default branch は released source を
+含まない**ため、release build / publish を続行してはいけない、という結果を明示します。
+operator は commit を default branch に入れてから gate を再実行します。曖昧な確認 prompt や
+黙った override はありません。
+
+`release.yml` workflow でも、publish された release tag の正確な target を build、upload、
+package publish の各 job より前に再検査します。同じ default branch に対して、既存のすべての
+`v*` tag に `--survey` を実行し、各 tag を reachable / unreachable / unresolved として出力します。
+survey は診断専用で read-only です。tag や branch を作成、移動、削除、history rewrite しません。
+通常の実行では次のような evidence が出ます。
+
+```text
+release-reachability: reachable ... ordinary_path=non-interactive
+release-reachability: REFUSED ...
+consequence: the repository default branch will not contain the released source until this commit lands; no release build or publish may proceed.
+release-tag-survey: total=<n> reachable=<n> unreachable=<n> unresolved=<n> ...
+```
+
 ### リリース後の version roll(G554) — 必須・即時
 
 **GitHub Release を publish して検証した直後に、follow-up commit で
