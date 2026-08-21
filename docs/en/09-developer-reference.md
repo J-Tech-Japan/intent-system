@@ -2859,8 +2859,14 @@ to keep in sync, and it goes stale on exactly the roll nobody is watching.
 
 **`v0.23.1` shipped** (GitHub Release, NuGet, binaries, and npm). The
 published recovery release is recorded by the [v0.23.1 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.1).
-The child source tree has no tracked `release-notes-v0.23.1.md`; this roll
-does not recreate or edit shipped notes. The [v0.23.2 DRAFT](release-notes-v0.23.2.md)
+The published [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0)
+and its tag are authoritative shipped evidence, but the tracked EN and JA
+`release-notes-v0.23.0.md` files still carry `DRAFT / UNRELEASED` banners.
+The source-note inconsistency predates this roll; correcting shipped v0.23.0
+or v0.23.1 notes is out of scope and must be handled by a later explicitly
+scoped remediation. The child source tree has no tracked
+`release-notes-v0.23.1.md`; this roll does not recreate or edit shipped notes.
+The [v0.23.2 DRAFT](release-notes-v0.23.2.md)
 is the empty stub for the next line and must remain content-free until a later
 release-prep packet replaces it.
 
@@ -2899,10 +2905,15 @@ dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
 # 3. The G725 detector must be silent after the roll; it is read-only.
 intent-cli automation stalled-work --domain intent-cli --repo J-Tech-Japan/intent-system --format json
 
-# 4. Confirm the historical v0.23.0 preparation source was not changed and
-#    the published v0.23.1 evidence remains the GitHub Release body.
-git diff -- docs/en/release-notes-v0.23.0.md docs/ja/release-notes-v0.23.0.md
+# 4. Record the shipped-note check honestly: source notes are unchanged, but
+#    v0.23.0 still has a DRAFT / UNRELEASED banner despite the published Release.
+git diff --quiet -- docs/en/release-notes-v0.23.0.md docs/ja/release-notes-v0.23.0.md
+grep -n "DRAFT / UNRELEASED" docs/en/release-notes-v0.23.0.md
+grep -n "DRAFT / 未リリース" docs/ja/release-notes-v0.23.0.md
+gh release view v0.23.0 --repo J-Tech-Japan/intent-system
 gh release view v0.23.1 --repo J-Tech-Japan/intent-system
+#    Published GitHub Releases/tags are authoritative; note remediation is
+#    explicitly out of scope for this version roll.
 
 # 5. Run the focused documentation/version guards, then the full suite.
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release \

@@ -139,14 +139,22 @@ public sealed class ReleaseNotesV0210DocsTests
         var root = RepoVersionPolicySource.RepoRoot();
         var policy = RepoVersionPolicySource.Read();
         var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
+        var referenceCompact = Regex.Replace(reference, @"\s+", " ");
         var notes = Read(language);
         var currentNotes = $"release-notes-v{policy.NextVersion}.md";
+        var shippedNotes = $"release-notes-v{policy.StableVersion}.md";
+        var shippedNotesPath = Path.Combine(root, "docs", language, shippedNotes);
+        var missingStableNoteMarker = language == "en"
+            ? $"no tracked `{shippedNotes}`"
+            : $"tracked な `{shippedNotes}` がなく";
 
-        // v0.23.1's shipped body is the GitHub Release evidence rather than a
-        // local source note; only the new DRAFT is required in this checkout.
         RepoVersionPolicySource.AssertReleaseToBeCutIsAheadOfPublishedStable(policy);
         Assert.True(File.Exists(Path.Combine(root, "docs", language, currentNotes)));
         Assert.Contains(currentNotes, reference, StringComparison.Ordinal);
+        Assert.Contains(shippedNotes, reference, StringComparison.Ordinal);
+        Assert.True(
+            File.Exists(shippedNotesPath) || referenceCompact.Contains(missingStableNoteMarker, StringComparison.Ordinal),
+            $"Readiness must either carry the policy-derived stable note {shippedNotes} or explain its missing local source file.");
         Assert.Contains(
             language == "en"
                 ? $"Next release readiness (v{policy.NextVersion})"
@@ -174,7 +182,19 @@ public sealed class ReleaseNotesV0210DocsTests
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.NextVersion}", currentNotesText, StringComparison.Ordinal);
         Assert.Contains($"releases/tag/v{policy.NextVersion}", currentNotesText, StringComparison.Ordinal);
-        Assert.Contains("v0.23.1 GitHub Release", reference, StringComparison.Ordinal);
+        if (File.Exists(shippedNotesPath))
+        {
+            var stableNotes = File.ReadAllText(shippedNotesPath);
+            Assert.Contains($"releases/tag/v{policy.StableVersion}", stableNotes, StringComparison.Ordinal);
+            Assert.DoesNotContain("DRAFT /", stableNotes, StringComparison.Ordinal);
+            Assert.DoesNotContain("UNRELEASED", stableNotes, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("未リリース", stableNotes, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("prepare-only", stableNotes, StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            Assert.Contains($"v{policy.StableVersion} GitHub Release", referenceCompact, StringComparison.Ordinal);
+        }
     }
 
     [Theory]

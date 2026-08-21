@@ -123,15 +123,26 @@ public sealed class ReleaseNotesV0190DocsTests
         var root = RepoVersionPolicySource.RepoRoot();
         var policy = RepoVersionPolicySource.Read();
         var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
+        var referenceCompact = Regex.Replace(reference, @"\s+", " ");
         var notes = Read(language);
         var currentNotes = $"release-notes-v{policy.NextVersion}.md";
+        var shippedNotes = $"release-notes-v{policy.StableVersion}.md";
+        var shippedNotesPath = Path.Combine(root, "docs", language, shippedNotes);
+        var missingStableNoteMarker = language == "en"
+            ? $"no tracked `{shippedNotes}`"
+            : $"tracked な `{shippedNotes}` がなく";
 
-        // The published v0.23.1 body is on GitHub; this child source tree does
-        // not carry a local v0.23.1 note file, so this historical guard must
-        // not turn the post-release roll into an unrelated note recreation.
         RepoVersionPolicySource.AssertReleaseToBeCutIsAheadOfPublishedStable(policy);
         Assert.True(File.Exists(Path.Combine(root, "docs", language, currentNotes)));
         Assert.Contains(currentNotes, reference, StringComparison.Ordinal);
+        Assert.Contains(shippedNotes, reference, StringComparison.Ordinal);
+        Assert.True(
+            File.Exists(shippedNotesPath) || referenceCompact.Contains(missingStableNoteMarker, StringComparison.Ordinal),
+            $"Readiness must either carry the policy-derived stable note {shippedNotes} or explain its missing local source file.");
+        if (!File.Exists(shippedNotesPath))
+        {
+            Assert.Contains($"v{policy.StableVersion} GitHub Release", referenceCompact, StringComparison.Ordinal);
+        }
         Assert.Contains(
             language == "en"
                 ? $"Next release readiness (v{policy.NextVersion})"

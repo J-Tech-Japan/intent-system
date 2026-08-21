@@ -2915,8 +2915,13 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 
 **`v0.23.1` は出荷済み**(GitHub Release、NuGet、binary、npm)です。公開済みの recovery
 release は [v0.23.1 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.1)
-に記録されています。child source tree には tracked な `release-notes-v0.23.1.md` がなく、
-この roll で出荷済み note を再作成・編集しません。[v0.23.2 DRAFT](release-notes-v0.23.2.md)
+に記録されています。公開済みの [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0)
+とその tag が shipped evidence の authoritative source ですが、tracked な EN/JA の
+`release-notes-v0.23.0.md` にはまだ `DRAFT / 未リリース` banner が残っています。
+この source-note inconsistency はこの roll より前から存在し、出荷済み v0.23.0/v0.23.1 note の
+修正は scope 外です。後続の明示的な remediation で扱います。child source tree には tracked な
+`release-notes-v0.23.1.md` がなく、この roll で出荷済み note を再作成・編集しません。
+[v0.23.2 DRAFT](release-notes-v0.23.2.md)
 は次のラインの空の stub で、後続の release-prep packet が置き換えるまで内容を持ちません。
 
 Rolled policy: `stableVersion → 0.23.1`; `nextVersion → 0.23.2`。
@@ -2952,10 +2957,15 @@ dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
 # 3. G725 detector は roll 後に silent でなければならない(read-only)。
 intent-cli automation stalled-work --domain intent-cli --repo J-Tech-Japan/intent-system --format json
 
-# 4. 過去の v0.23.0 preparation source に変更がないことと、出荷済み v0.23.1
-#    evidence が GitHub Release body に残っていることを確認。
-git diff -- docs/en/release-notes-v0.23.0.md docs/ja/release-notes-v0.23.0.md
+# 4. shipped-note check を正直に記録する: source note は未変更だが、公開済み
+#    Release にもかかわらず v0.23.0 には DRAFT / 未リリース banner が残る。
+git diff --quiet -- docs/en/release-notes-v0.23.0.md docs/ja/release-notes-v0.23.0.md
+grep -n "DRAFT / UNRELEASED" docs/en/release-notes-v0.23.0.md
+grep -n "DRAFT / 未リリース" docs/ja/release-notes-v0.23.0.md
+gh release view v0.23.0 --repo J-Tech-Japan/intent-system
 gh release view v0.23.1 --repo J-Tech-Japan/intent-system
+#    公開済み GitHub Release/tag が authoritative evidence であり、note remediation は
+#    この version roll の scope 外です。
 
 # 5. focused な documentation/version guard と full suite を実行。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release \
