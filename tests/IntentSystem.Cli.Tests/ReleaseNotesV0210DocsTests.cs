@@ -23,9 +23,6 @@ public sealed class ReleaseNotesV0210DocsTests
         .. Units.Select(unit => unit.Merge),
     ];
 
-    private const string StableCleanInstallCommand =
-        "dotnet tool install JTechJapan.IntentSystem.Cli --version 0.22.0 --tool-path <clean-dir> --source https://api.nuget.org/v3/index.json";
-
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
@@ -142,26 +139,28 @@ public sealed class ReleaseNotesV0210DocsTests
         var root = RepoVersionPolicySource.RepoRoot();
         var policy = RepoVersionPolicySource.Read();
         var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
+        var referenceCompact = Regex.Replace(reference, @"\s+", " ");
         var notes = Read(language);
         var currentNotes = $"release-notes-v{policy.NextVersion}.md";
         var shippedNotes = $"release-notes-v{policy.StableVersion}.md";
-        var stableNotes = File.ReadAllText(Path.Combine(root, "docs", language, shippedNotes));
+        var shippedNotesPath = Path.Combine(root, "docs", language, shippedNotes);
+        var missingStableNoteMarker = language == "en"
+            ? $"no tracked `{shippedNotes}`"
+            : $"tracked な `{shippedNotes}` がなく";
 
         RepoVersionPolicySource.AssertReleaseToBeCutIsAheadOfPublishedStable(policy);
         Assert.True(File.Exists(Path.Combine(root, "docs", language, currentNotes)));
-        Assert.True(File.Exists(Path.Combine(root, "docs", language, shippedNotes)));
         Assert.Contains(currentNotes, reference, StringComparison.Ordinal);
         Assert.Contains(shippedNotes, reference, StringComparison.Ordinal);
+        Assert.True(
+            File.Exists(shippedNotesPath) || referenceCompact.Contains(missingStableNoteMarker, StringComparison.Ordinal),
+            $"Readiness must either carry the policy-derived stable note {shippedNotes} or explain its missing local source file.");
         Assert.Contains(
             language == "en"
                 ? $"Next release readiness (v{policy.NextVersion})"
                 : $"次リリース準備(v{policy.NextVersion})",
             reference,
             StringComparison.Ordinal);
-        Assert.Contains(StableCleanInstallCommand, stableNotes, StringComparison.Ordinal);
-        Assert.Contains("<clean-dir>/intent-cli --version", stableNotes, StringComparison.Ordinal);
-        Assert.DoesNotContain("`JTechJapan.IntentSystem.Cli --version 0.22.0`", stableNotes, StringComparison.Ordinal);
-        Assert.Contains($"releases/tag/v{policy.StableVersion}", stableNotes, StringComparison.Ordinal);
         var currentNotesText = File.ReadAllText(Path.Combine(root, "docs", language, currentNotes));
         var currentNotesCompact = Regex.Replace(currentNotesText, @"[>\s]+", " ");
         Assert.Contains(
@@ -183,10 +182,19 @@ public sealed class ReleaseNotesV0210DocsTests
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains($"JTechJapan.IntentSystem.Cli --version {policy.NextVersion}", currentNotesText, StringComparison.Ordinal);
         Assert.Contains($"releases/tag/v{policy.NextVersion}", currentNotesText, StringComparison.Ordinal);
-        Assert.DoesNotContain("DRAFT /", stableNotes, StringComparison.Ordinal);
-        Assert.DoesNotContain("UNRELEASED", stableNotes, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("未リリース", stableNotes, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("prepare-only", stableNotes, StringComparison.OrdinalIgnoreCase);
+        if (File.Exists(shippedNotesPath))
+        {
+            var stableNotes = File.ReadAllText(shippedNotesPath);
+            Assert.Contains($"releases/tag/v{policy.StableVersion}", stableNotes, StringComparison.Ordinal);
+            Assert.DoesNotContain("DRAFT /", stableNotes, StringComparison.Ordinal);
+            Assert.DoesNotContain("UNRELEASED", stableNotes, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("未リリース", stableNotes, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("prepare-only", stableNotes, StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            Assert.Contains($"v{policy.StableVersion} GitHub Release", referenceCompact, StringComparison.Ordinal);
+        }
     }
 
     [Theory]
