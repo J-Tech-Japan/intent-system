@@ -2700,6 +2700,43 @@ exist to remove.
 | Stable release | `<nextVersion>` | Publishing the GitHub Release for tag `v<nextVersion>` triggers `release.yml` (`on: release: published`); the tag supplies the version (`-p:Version=<tag>` wins) |
 | Post-release main builds | `<nextPatch>-preview.<run>.<attempt>` | After rolling `nextVersion` to `<nextPatch>` |
 
+### Release commit reachability gate (G726)
+
+Before creating a release tag, check the exact commit that would be tagged against
+the repository's default branch:
+
+```bash
+./eng/release-reachability.sh \
+  --commit <commit-or-tag> \
+  --default-branch <repository-default-branch>
+```
+
+The gate resolves the repository default branch and tests
+`git merge-base --is-ancestor <commit> <default-branch>`. It does not use a
+branch name, pull-request state, or the fact that a commit is the current
+checkout as identity evidence. A reachable commit exits successfully and emits
+`ordinary_path=non-interactive`; the ordinary release path has no prompt.
+
+An unreachable commit is refused with a non-zero exit. The output states the
+consequence plainly: **the repository default branch will not contain the
+released source until the commit lands**, so no release build or publish may
+proceed. The operator must land the commit on the default branch and rerun the
+gate. There is no ambiguous confirmation prompt or silent override.
+
+The `release.yml` workflow repeats the check for the exact target of the
+published release tag before any build, upload, or package publish job can run.
+It also runs `--survey` over every existing `v*` tag and reports each tag as
+reachable, unreachable, or unresolved relative to the same default branch. The
+survey is diagnostic and read-only: it never creates, moves, deletes, or
+rewrites a tag or branch. A normal run therefore emits evidence such as:
+
+```text
+release-reachability: reachable ... ordinary_path=non-interactive
+release-reachability: REFUSED ...
+consequence: the repository default branch will not contain the released source until this commit lands; no release build or publish may proceed.
+release-tag-survey: total=<n> reachable=<n> unreachable=<n> unresolved=<n> ...
+```
+
 ### Post-release version roll (G554) — required, immediate
 
 **The moment a GitHub Release is published and verified, roll `eng/version.json`
@@ -2744,46 +2781,64 @@ the named target checkout (for example, `submodules/intent-system`) and reads
 the policy there. It does not guess another sibling repository or synchronize
 the checkout; the finding's edit path names the configured child file.
 
-**Release closeout checklist** (the roll is step 4 — do not stop at step 3, and
-the roll is not done until step 6):
+**Release closeout checklist** (the roll is step 5 — do not stop at step 4, and
+the roll is not done until step 7):
 
-1. Publish the GitHub Release for the version (this fires `release.yml`).
-2. Verify the published artifacts: NuGet page, release assets, `.sha256`
+1. **Before creating the release tag or publishing the GitHub Release, run the
+   gate for the exact commit to be tagged:**
+
+   ```bash
+   ./eng/release-reachability.sh \
+     --commit <exact-commit-to-tag> \
+     --default-branch <repository-default-branch>
+   ```
+
+   Continue only when the result is reachable. If it is refused, do not create
+   the tag or publish the Release; land the commit on the default branch and
+   rerun this gate.
+2. Create the release tag and publish the GitHub Release for the version (this
+   fires `release.yml`). The pre-publish operator gate in step 1 protects this
+   tag/Release creation act. For a real release, `release.yml` receives
+   `release: published` only after this act, and its package publication steps
+   are conditioned on that event and remain downstream of the reachability job.
+   Its `workflow_dispatch` path is a dry run and does not publish. The workflow
+   cannot protect tag/Release creation itself.
+3. Verify the published artifacts: NuGet page, release assets, `.sha256`
    checksums, and `intent-cli --version` after `dotnet tool update`.
-3. Notify the operator and any waiting downstream consumers.
-4. **Roll `eng/version.json` in a follow-up commit** — `stableVersion` = the
+4. Notify the operator and any waiting downstream consumers.
+5. **Roll `eng/version.json` in a follow-up commit** — `stableVersion` = the
    released version, `nextVersion` = the next patch — **and, in the same
    commit, add DRAFT `docs/{en,ja}/release-notes-v<nextVersion>.md` stubs.**
    The G475 guard requires notes to exist for whatever `nextVersion` names, so
    a roll that moves the field without the stubs turns main red the moment it
    lands. The stubs carry no changelog content — the next release-prep packet
    authors that.
-5. **Refresh the "Next release readiness" section to the new line** in the same
+6. **Refresh the "Next release readiness" section to the new line** in the same
    roll — it names the release being cut, so a roll that moves `nextVersion`
    without it leaves the section describing the previous cycle. Update both
    language mirrors.
-6. **Verify child main CI is green after pushing the roll.** The roll is
+7. **Verify child main CI is green after pushing the roll.** The roll is
    complete only when CI is: a red main blocks every unrelated PR that inherits
    it, so the roller owns the result, not just the commit.
 
 Existing preview artifacts are **not** renumbered retroactively; the rule fixes
 the channel going forward.
 
-> **Why steps 4-6 read this way (G557, G560).** The roll's first live execution
+> **Why steps 5-7 read this way (G557, G560).** The roll's first live execution
 > (commit `00936844`, `nextVersion` 0.6.1 → 0.6.2) moved the field alone and
 > turned main red on four checks: three tests pinned the version pair by value,
 > and the G475 guard demanded `release-notes-v0.6.2.md`. An unrelated PR
 > inherited the red main and was frozen until a hotfix landed. The assertions
 > are now derived from `eng/version.json` so a correct roll cannot break them,
-> and the two steps above close the rest: create the stubs with the roll, and
-> confirm green before calling it done.
+> and the remaining closeout steps above close the rest: create the stubs with
+> the roll, refresh readiness, and confirm green before calling it done.
 >
 > **Second incident (G560), roll 0.6.2 → 0.6.3.** The amended rule worked — the
 > post-roll CI check caught that the readiness section still described the
 > previous line, which had been passing only incidentally because the new
 > version happened to appear in unrelated preview examples. Refreshing it then
 > flipped four transitional test theories that pinned the *previous* cycle's
-> readiness heading by literal. Hence step 5 above, and the rule below.
+> readiness heading by literal. Hence step 6 above, and the rule below.
 
 **Release-prep guidance: never add a current-state version literal.** When a
 release-prep packet writes or updates a guard over the developer reference, the
@@ -2853,11 +2908,11 @@ git diff --check
 dotnet test IntentSystem.sln -c Release
 ```
 
-This roll follows **steps 4–6** of the [post-release version roll](#post-release-version-roll-g554--required-immediate):
-the **DRAFT note stubs in the same commit** (step 4), the **"Next release
+This roll follows **steps 5–7** of the [post-release version roll](#post-release-version-roll-g554--required-immediate):
+the **DRAFT note stubs in the same commit** (step 5), the **"Next release
 readiness" section refreshed to the new line in both language mirrors** (step
-5), and a **post-roll green child-main CI check** before the roll counts as
-complete (step 6).
+6), and a **post-roll green child-main CI check** before the roll counts as
+complete (step 7).
 
 The v0.22.0 npm registry publication remains skipped because npm organisation
 (organization) access and package-name reservation are incomplete operator
