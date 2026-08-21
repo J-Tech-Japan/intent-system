@@ -2673,10 +2673,17 @@ the remote has moved. A genuinely current checkout emits no freshness notice.
 When the remote cannot be checked, it emits `checkout_freshness: unknown`
 with the reason instead of implying currency. The probe uses only
 `git rev-parse` and `git ls-remote --symref`; it never fetches, pulls, resets,
-or otherwise syncs the shared host checkout. `automation heartbeat` carries
-the same warning because it wraps this scan. Other read-only host-state
-surfaces remain outside this slice because they do not make the same
-stalled-work answer-from-checkout claim.
+or otherwise syncs the shared host checkout. The remote probe is bounded to
+three seconds across process exit and both output reads, kills the process
+tree on expiry, closes stdin, and disables terminal/SSH prompts; expiry is an
+explicit `unknown` result. `automation heartbeat` carries the same warning
+because it wraps this scan. The sibling survey found that `intent status` is
+independently stale-provenance-bearing on the same clone, and that
+`automation summary`, `automation state-doctor`, and
+`host-loop-next-action` also read `context.RepoRoot`; they need a follow-up
+freshness/provenance contract. This slice remains scoped to stalled-work plus
+heartbeat inheritance. `status brief` and host-review diagnostics do not read
+`RepoRoot` for these answers and are unaffected by this specific path.
 
 - **Never defer** — process every actionable item the check reports in THIS
   wake (delegate, repair, or route to closeout) before sleeping. Do not

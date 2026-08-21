@@ -15,6 +15,10 @@ internal static class CheckoutFreshnessProbe
     public const string Stale = "stale";
     public const string Unknown = "unknown";
 
+    // Keep the timeout short enough that a stalled host wake remains useful,
+    // while allowing ordinary local and remote Git calls to complete.
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(3);
+
     public static CheckoutFreshnessObservation? Capture(
         string repoRoot,
         IGitRemoteCommandRunner runner)
@@ -73,6 +77,17 @@ internal static class CheckoutFreshnessProbe
 
         if (remote.ExitCode != 0)
         {
+            if (remote.TimedOut)
+            {
+                return UnknownObservation(
+                    localHead,
+                    null,
+                    null,
+                    FirstNonEmpty(
+                        remote.StdErr,
+                        $"git ls-remote --symref origin HEAD timed out after {DefaultTimeout.TotalSeconds:0.###} seconds"));
+            }
+
             var detail = FirstNonEmpty(remote.StdErr, "the origin default branch could not be queried");
             return UnknownObservation(localHead, null, null, detail);
         }

@@ -378,15 +378,27 @@ default-branch `HEAD` returned by `git ls-remote --symref origin HEAD`:
 - If the remote cannot be queried (offline, missing remote, or an incomplete
   response), `checkout_freshness: unknown` is emitted with a reason. Unknown
   must not be read as current.
+- The remote probe is bounded to three seconds, reads stdout and stderr under
+  that same bound, kills the Git process tree on expiry, closes stdin, and
+  disables terminal/SSH prompts. A timeout is therefore an actionable
+  `unknown`, not a stalled wake.
 
 The probe is read-only: it uses no `fetch`, `pull`, `reset`, or other sync
 operation, and it does not change the existing stalled-work finding logic.
 `automation heartbeat` wraps `stalled-work` and therefore carries the same
-warning. The sibling read-only surfaces were surveyed: `automation summary`,
-`intent status`, `automation state-doctor`, `status brief`,
-`host-loop-next-action`, and host-review diagnostics do not make this
-stalled-work checkout-freshness claim and remain unchanged. The survey is not
-a reason to widen G727 to those surfaces.
+warning. The survey does **not** classify every sibling as unaffected:
+`intent status` was independently demonstrated on the same stale clone to
+return stale local queue state without checkout provenance. Source inspection
+also shows `automation summary`, `automation state-doctor`,
+`host-loop-next-action`, and `automation heartbeat` read `context.RepoRoot`, so
+they share the unstated-checkout provenance property (heartbeat inherits the
+new warning here, while the others remain follow-up work). This slice is
+deliberately scoped to `stalled-work` plus heartbeat inheritance. A follow-up
+must extend and test an explicit freshness/provenance contract for those
+RepoRoot-reading siblings. `status brief` and host-review diagnostics were
+also inspected and do not read `RepoRoot` for these answers; they are
+unaffected by this specific unstated-checkout path, not globally certified as
+current. The survey is not a reason to widen G727 here.
 
 G672 adds an optional invoking-role pointer (preview-through-1.x):
 

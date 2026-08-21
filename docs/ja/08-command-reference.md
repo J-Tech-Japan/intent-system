@@ -354,14 +354,23 @@ reset scheduling、request budgeting、transport change、cache、batching を�
   出しません。notice を稀に保つことで signal としての意味を維持します。
 - remote を問い合わせられない場合（offline、remote 不在、応答不完全）は理由つきで
   `checkout_freshness: unknown` を出します。unknown を current と解釈してはいけません。
+- remote probe は 3 秒で bounded です。stdout と stderr の read も同じ bound に含め、
+  expiry では Git process tree を終了させ、stdin を閉じ、terminal/SSH prompt を無効にします。
+  timeout は wake を止めず、理由つきの actionable な `unknown` になります。
 
 この probe は read-only です。`fetch`、`pull`、`reset`、その他の sync operation を
 実行せず、既存の stalled-work の finding logic も変更しません。`automation heartbeat` は
-`stalled-work` を wrapper するため同じ warning を運びます。兄弟の read-only surface も
-survey しました: `automation summary`、`intent status`、`automation state-doctor`、
-`status brief`、`host-loop-next-action`、host-review diagnostics はこの
-stalled-work checkout-freshness claim を行わず、変更していません。この survey を理由に
-G727 の scope を広げません。
+`stalled-work` を wrapper するため同じ warning を運びます。兄弟をすべて unaffected とは
+分類していません。同じ stale clone で `intent status` が stale な local queue state を
+checkout provenance なしに返すことを独立に実証しました。source survey でも
+`automation summary`、`automation state-doctor`、`host-loop-next-action`、
+`automation heartbeat` は `context.RepoRoot` を読むため、unstated checkout provenance の
+property を共有します（heartbeat はこの slice の warning を継承し、他は follow-up です）。
+この slice の scope は `stalled-work` と heartbeat inheritance に限定します。これらの
+RepoRoot-reading sibling には、freshness/provenance contract と test を追加する follow-up
+が必要です。`status brief` と host-review diagnostics はこの answer で `RepoRoot` を読まず、
+この特定の unstated-checkout path には unaffected です。ただし全体が current だと証明した
+わけではありません。この survey を理由に G727 の scope をここで広げません。
 
 G672 は invoking role の pointer を optional に追加します（preview-through-1.x）。
 

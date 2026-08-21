@@ -833,7 +833,8 @@ internal static class AutomationStalledWorkCommand
         {
             var observation = CheckoutFreshnessProbe.Capture(
                 context.RepoRoot,
-                GitCommandRunnerFactory?.Invoke() ?? new GitRemoteCommandRunner());
+                GitCommandRunnerFactory?.Invoke()
+                    ?? new CheckoutFreshnessGitCommandRunner(CheckoutFreshnessProbe.DefaultTimeout));
             if (observation is { Status: not CheckoutFreshnessProbe.Current })
             {
                 warnings.Add(observation.Warning);

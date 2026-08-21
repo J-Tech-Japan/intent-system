@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
@@ -290,6 +293,47 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
                 string.Equals(argument, "fetch", StringComparison.Ordinal)
                 || string.Equals(argument, "pull", StringComparison.Ordinal)
                 || string.Equals(argument, "reset", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Analyze_BlackholeRemoteTimesOutAndLeavesCheckoutUntouched_G727()
+    {
+        using var fixture = new FreshnessCheckoutFixture();
+        using var blackhole = new BlackholeGitTransport();
+        fixture.SetOrigin($"http://127.0.0.1:{blackhole.Port}/blackhole.git");
+        fixture.WritePacketDomain("G727", "intent-cli");
+
+        var localHeadBefore = fixture.RunGit("rev-parse", "HEAD");
+        var trackingHeadBefore = fixture.RunGit("rev-parse", "refs/remotes/origin/main");
+        var worktreeBefore = fixture.RunGit("status", "--porcelain");
+        var issue = BuildIssue(1575, "G727: blackhole freshness evidence", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+        AutomationStalledWorkCommand.GitCommandRunnerFactory = () =>
+            new CheckoutFreshnessGitCommandRunner(TimeSpan.FromMilliseconds(250));
+
+        var stopwatch = Stopwatch.StartNew();
+        var result = AutomationStalledWorkCommand.Analyze(
+            fixture.Context,
+            "intent-cli",
+            "J-Tech-Japan/intent-system",
+            staleMinutes: 60);
+        stopwatch.Stop();
+
+        Assert.True(blackhole.Accepted, "The blackhole transport must receive the real ls-remote connection.");
+        Assert.Equal(CheckoutFreshnessProbe.Unknown, result.CheckoutFreshness?.Status);
+        Assert.Contains("timed out", result.CheckoutFreshness?.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("checkout freshness: unknown", StringComparison.Ordinal)
+            && warning.Contains("timed out", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Items, item =>
+            item.Kind == AutomationStalledWorkCommand.KindPublishedNotDelegated);
+        Assert.InRange(stopwatch.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(3));
+
+        // The freshness probe may observe the remote, but it must not update
+        // local refs, HEAD, or the worktree while handling the timeout.
+        Assert.Equal(localHeadBefore, fixture.RunGit("rev-parse", "HEAD"));
+        Assert.Equal(trackingHeadBefore, fixture.RunGit("rev-parse", "refs/remotes/origin/main"));
+        Assert.Equal(worktreeBefore, fixture.RunGit("status", "--porcelain"));
     }
 
     [Fact]
@@ -4144,6 +4188,15 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
 
         public string RunGit(params string[] arguments) => RunGit(CheckoutPath, arguments);
 
+        public void SetOrigin(string url) => RunGit(CheckoutPath, "remote", "set-url", "origin", url);
+
+        public void WritePacketDomain(string executionUnit, string domain)
+        {
+            var directory = Path.Combine(CheckoutPath, ".intent-cli", "issues", executionUnit);
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "packet.yaml"), $"domain: {domain}\n");
+        }
+
         public void MoveRemoteForward()
         {
             File.AppendAllText(Path.Combine(publisher, "state.txt"), "moved\n");
@@ -4192,6 +4245,52 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
                     $"G727 git fixture command failed ({string.Join(' ', arguments)}): {error}");
             }
             return output.Trim();
+        }
+    }
+
+    private sealed class BlackholeGitTransport : IDisposable
+    {
+        private readonly TcpListener listener;
+        private readonly Thread acceptThread;
+        private TcpClient? connection;
+
+        public BlackholeGitTransport()
+        {
+            listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            Port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            acceptThread = new Thread(AcceptConnection)
+            {
+                IsBackground = true,
+            };
+            acceptThread.Start();
+        }
+
+        public int Port { get; }
+
+        public bool Accepted => Volatile.Read(ref connection) is not null;
+
+        public void Dispose()
+        {
+            listener.Stop();
+            Interlocked.Exchange(ref connection, null)?.Dispose();
+            acceptThread.Join(TimeSpan.FromSeconds(1));
+        }
+
+        private void AcceptConnection()
+        {
+            try
+            {
+                Interlocked.Exchange(ref connection, listener.AcceptTcpClient());
+            }
+            catch (SocketException)
+            {
+                // Expected when Dispose stops the listener before connect.
+            }
+            catch (ObjectDisposedException)
+            {
+                // Expected when Dispose stops the listener before connect.
+            }
         }
     }
 

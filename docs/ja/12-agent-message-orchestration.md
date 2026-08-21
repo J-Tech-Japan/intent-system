@@ -2331,9 +2331,15 @@ remote が動いている場合、`stalled-work` は local `HEAD`、実際の `o
 本当に current な checkout では freshness notice を出しません。remote を確認できない場合は
 current を暗黙に意味させず、理由つきで `checkout_freshness: unknown` を出します。probe が使うのは
 `git rev-parse` と `git ls-remote --symref` だけで、共有 host checkout を fetch、pull、reset、
-その他の sync で変更しません。`automation heartbeat` はこの scan を wrapper するため同じ
-warning を運びます。同じ stalled-work の answer-from-checkout claim を行わない他の
-read-only host-state surface はこの slice の scope 外に残します。
+その他の sync で変更しません。remote probe は process exit と stdout/stderr の read を含めて
+3 秒で bounded であり、expiry では process tree を終了させ、stdin と terminal/SSH prompt を
+閉じて `unknown` を返します。`automation heartbeat` はこの scan を wrapper するため同じ
+warning を運びます。同じ stale clone で `intent status` が checkout provenance なしに stale
+local queue state を返すことを独立に実証しました。`automation summary`、
+`automation state-doctor`、`host-loop-next-action` も `context.RepoRoot` を読むため同じ
+unstated-checkout provenance property を持ちます。これらは follow-up であり、この slice は
+`stalled-work` と heartbeat inheritance に限定します。`status brief` と host-review diagnostics
+はこの answer で `RepoRoot` を読まず、この特定の path には unaffected です。
 
 - **先送りしない** — このチェックが報告するすべての actionable item を、眠りにつく前に
   この wake の中で処理する（delegate、repair、または closeout へのルーティング）。
