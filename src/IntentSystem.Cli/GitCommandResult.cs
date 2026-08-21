@@ -7,4 +7,6 @@ internal sealed record GitRemoteCommandResult
     public required string StdOut { get; init; }
 
     public required string StdErr { get; init; }
+
+    public bool TimedOut { get; init; }
 }

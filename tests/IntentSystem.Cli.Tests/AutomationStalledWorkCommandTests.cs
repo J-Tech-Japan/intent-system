@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
@@ -18,12 +21,14 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     {
         AutomationStalledWorkCommand.CandidateListerFactory = null;
         AutomationStalledWorkCommand.UtcNowFactory = () => FixedNow;
+        AutomationStalledWorkCommand.GitCommandRunnerFactory = null;
     }
 
     public void Dispose()
     {
         AutomationStalledWorkCommand.CandidateListerFactory = null;
         AutomationStalledWorkCommand.UtcNowFactory = null;
+        AutomationStalledWorkCommand.GitCommandRunnerFactory = null;
     }
 
     [Fact]
@@ -207,6 +212,128 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         Assert.False(result.Stalled);
         Assert.DoesNotContain(result.Items, item =>
             item.Kind == AutomationStalledWorkCommand.KindVersionRollRequired);
+    }
+
+    [Fact]
+    public void Analyze_MovedRemoteReportsStaleThenSyncMakesCurrentCheckoutSilent_G727()
+    {
+        using var fixture = new FreshnessCheckoutFixture();
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        var localHeadBefore = fixture.RunGit("rev-parse", "HEAD");
+        var trackingHeadBefore = fixture.RunGit("rev-parse", "refs/remotes/origin/main");
+        fixture.MoveRemoteForward();
+
+        var stale = AutomationStalledWorkCommand.Analyze(
+            fixture.Context,
+            "intent-cli",
+            "J-Tech-Japan/intent-system",
+            staleMinutes: 60);
+
+        Assert.Equal(CheckoutFreshnessProbe.Stale, stale.CheckoutFreshness?.Status);
+        Assert.Equal("main", stale.CheckoutFreshness?.DefaultBranch);
+        Assert.NotEqual(stale.CheckoutFreshness?.LocalHead, stale.CheckoutFreshness?.RemoteHead);
+        Assert.Contains(stale.Warnings, warning =>
+            warning.Contains("checkout freshness: stale", StringComparison.Ordinal)
+            && warning.Contains("fetch, pull, reset, or sync", StringComparison.Ordinal));
+        Assert.Equal(localHeadBefore, fixture.RunGit("rev-parse", "HEAD"));
+        Assert.Equal(trackingHeadBefore, fixture.RunGit("rev-parse", "refs/remotes/origin/main"));
+
+        // The operator performs the sync outside the read-only report. The
+        // next report sees the moved remote and stays quiet once equal.
+        fixture.SyncToOrigin();
+        var current = AutomationStalledWorkCommand.Analyze(
+            fixture.Context,
+            "intent-cli",
+            "J-Tech-Japan/intent-system",
+            staleMinutes: 60);
+
+        Assert.Null(current.CheckoutFreshness);
+        Assert.DoesNotContain(current.Warnings, warning =>
+            warning.Contains("checkout freshness", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Analyze_OfflineFreshnessReportsUnknownWithoutSyncCommands_G727()
+    {
+        using var fixture = new FreshnessCheckoutFixture();
+        var runner = new RecordingGitRunner
+        {
+            Responses = new Dictionary<string, GitRemoteCommandResult>(StringComparer.Ordinal)
+            {
+                ["rev-parse HEAD"] = new GitRemoteCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "local-head\n",
+                    StdErr = string.Empty,
+                },
+                ["ls-remote --symref origin HEAD"] = new GitRemoteCommandResult
+                {
+                    ExitCode = 128,
+                    StdOut = string.Empty,
+                    StdErr = "Could not resolve host: offline\n",
+                },
+            },
+        };
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+        AutomationStalledWorkCommand.GitCommandRunnerFactory = () => runner;
+
+        var result = AutomationStalledWorkCommand.Analyze(
+            fixture.Context,
+            "intent-cli",
+            "J-Tech-Japan/intent-system",
+            staleMinutes: 60);
+
+        Assert.Equal(CheckoutFreshnessProbe.Unknown, result.CheckoutFreshness?.Status);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("checkout freshness: unknown", StringComparison.Ordinal)
+            && warning.Contains("Do not treat this report as evidence", StringComparison.Ordinal));
+        Assert.DoesNotContain(runner.Calls, call =>
+            call.Arguments.Any(argument =>
+                string.Equals(argument, "fetch", StringComparison.Ordinal)
+                || string.Equals(argument, "pull", StringComparison.Ordinal)
+                || string.Equals(argument, "reset", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Analyze_BlackholeRemoteTimesOutAndLeavesCheckoutUntouched_G727()
+    {
+        using var fixture = new FreshnessCheckoutFixture();
+        using var blackhole = new BlackholeGitTransport();
+        fixture.SetOrigin($"http://127.0.0.1:{blackhole.Port}/blackhole.git");
+        fixture.WritePacketDomain("G727", "intent-cli");
+
+        var localHeadBefore = fixture.RunGit("rev-parse", "HEAD");
+        var trackingHeadBefore = fixture.RunGit("rev-parse", "refs/remotes/origin/main");
+        var worktreeBefore = fixture.RunGit("status", "--porcelain");
+        var issue = BuildIssue(1575, "G727: blackhole freshness evidence", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+        AutomationStalledWorkCommand.GitCommandRunnerFactory = () =>
+            new CheckoutFreshnessGitCommandRunner(TimeSpan.FromMilliseconds(250));
+
+        var stopwatch = Stopwatch.StartNew();
+        var result = AutomationStalledWorkCommand.Analyze(
+            fixture.Context,
+            "intent-cli",
+            "J-Tech-Japan/intent-system",
+            staleMinutes: 60);
+        stopwatch.Stop();
+
+        Assert.True(blackhole.Accepted, "The blackhole transport must receive the real ls-remote connection.");
+        Assert.Equal(CheckoutFreshnessProbe.Unknown, result.CheckoutFreshness?.Status);
+        Assert.Contains("timed out", result.CheckoutFreshness?.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("checkout freshness: unknown", StringComparison.Ordinal)
+            && warning.Contains("timed out", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Items, item =>
+            item.Kind == AutomationStalledWorkCommand.KindPublishedNotDelegated);
+        Assert.InRange(stopwatch.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(3));
+
+        // The freshness probe may observe the remote, but it must not update
+        // local refs, HEAD, or the worktree while handling the timeout.
+        Assert.Equal(localHeadBefore, fixture.RunGit("rev-parse", "HEAD"));
+        Assert.Equal(trackingHeadBefore, fixture.RunGit("rev-parse", "refs/remotes/origin/main"));
+        Assert.Equal(worktreeBefore, fixture.RunGit("status", "--porcelain"));
     }
 
     [Fact]
@@ -3978,6 +4105,193 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         public IReadOnlyList<GitHubAutomationPrCandidate> ListMergedPullRequests(string repo, IReadOnlyCollection<string> requiredLabels) => mergedPrs;
 
         public IReadOnlyList<GitHubAutomationReleaseCandidate> ListPublishedReleases(string repo) => releases;
+    }
+
+    private sealed class RecordingGitRunner : IGitRemoteCommandRunner
+    {
+        public Dictionary<string, GitRemoteCommandResult> Responses { get; init; } = new(StringComparer.Ordinal);
+
+        public List<GitCommandCall> Calls { get; } = [];
+
+        public GitRemoteCommandResult Run(string workingDirectory, IReadOnlyList<string> arguments)
+        {
+            Calls.Add(new GitCommandCall
+            {
+                WorkingDirectory = workingDirectory,
+                Arguments = [.. arguments],
+            });
+
+            var key = string.Join(' ', arguments);
+            return Responses.TryGetValue(key, out var response)
+                ? response
+                : new GitRemoteCommandResult
+                {
+                    ExitCode = 1,
+                    StdOut = string.Empty,
+                    StdErr = $"unexpected git probe: {key}",
+                };
+        }
+    }
+
+    private sealed record GitCommandCall
+    {
+        public required string WorkingDirectory { get; init; }
+
+        public required IReadOnlyList<string> Arguments { get; init; }
+    }
+
+    private sealed class FreshnessCheckoutFixture : IDisposable
+    {
+        private readonly string root;
+        private readonly string publisher;
+        private readonly string remote;
+
+        public FreshnessCheckoutFixture()
+        {
+            root = Directory.CreateTempSubdirectory("stalled-work-g727-git-").FullName;
+            publisher = Path.Combine(root, "publisher");
+            remote = Path.Combine(root, "remote.git");
+            CheckoutPath = Path.Combine(root, "checkout");
+
+            RunGit(root, "init", "--bare", remote);
+            RunGit(root, "init", "-q", publisher);
+            RunGit(publisher, "config", "user.email", "g727@example.invalid");
+            RunGit(publisher, "config", "user.name", "G727 Test");
+            File.WriteAllText(Path.Combine(publisher, "state.txt"), "initial\n");
+            RunGit(publisher, "add", "state.txt");
+            RunGit(publisher, "commit", "-m", "initial");
+            RunGit(publisher, "branch", "-M", "main");
+            RunGit(publisher, "remote", "add", "origin", remote);
+            RunGit(publisher, "push", "-u", "origin", "main");
+            RunGit(root, "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/main");
+            RunGit(root, "clone", remote, CheckoutPath);
+            Directory.CreateDirectory(Path.Combine(CheckoutPath, ".intent-cli"));
+
+            Context = new CliContext
+            {
+                RepoRoot = CheckoutPath,
+                Config = new CliConfig
+                {
+                    Project = new ProjectConfig
+                    {
+                        Domain = "intent-cli",
+                        ArtifactRoot = ".intent-cli",
+                        WorktreeRoot = ".intent-cli/worktrees",
+                    },
+                },
+            };
+        }
+
+        public string CheckoutPath { get; }
+
+        public CliContext Context { get; }
+
+        public string RunGit(params string[] arguments) => RunGit(CheckoutPath, arguments);
+
+        public void SetOrigin(string url) => RunGit(CheckoutPath, "remote", "set-url", "origin", url);
+
+        public void WritePacketDomain(string executionUnit, string domain)
+        {
+            var directory = Path.Combine(CheckoutPath, ".intent-cli", "issues", executionUnit);
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "packet.yaml"), $"domain: {domain}\n");
+        }
+
+        public void MoveRemoteForward()
+        {
+            File.AppendAllText(Path.Combine(publisher, "state.txt"), "moved\n");
+            RunGit(publisher, "add", "state.txt");
+            RunGit(publisher, "commit", "-m", "move remote");
+            RunGit(publisher, "push", "origin", "main");
+        }
+
+        public void SyncToOrigin()
+        {
+            RunGit(CheckoutPath, "fetch", "origin", "main");
+            RunGit(CheckoutPath, "merge", "--ff-only", "origin/main");
+        }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+
+        private static string RunGit(string workingDirectory, params string[] arguments)
+        {
+            var startInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "git",
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            foreach (var argument in arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+
+            using var process = System.Diagnostics.Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Could not start git for G727 fixture.");
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            if (process.ExitCode != 0)
+            {
+                throw new InvalidOperationException(
+                    $"G727 git fixture command failed ({string.Join(' ', arguments)}): {error}");
+            }
+            return output.Trim();
+        }
+    }
+
+    private sealed class BlackholeGitTransport : IDisposable
+    {
+        private readonly TcpListener listener;
+        private readonly Thread acceptThread;
+        private TcpClient? connection;
+
+        public BlackholeGitTransport()
+        {
+            listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            Port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            acceptThread = new Thread(AcceptConnection)
+            {
+                IsBackground = true,
+            };
+            acceptThread.Start();
+        }
+
+        public int Port { get; }
+
+        public bool Accepted => Volatile.Read(ref connection) is not null;
+
+        public void Dispose()
+        {
+            listener.Stop();
+            Interlocked.Exchange(ref connection, null)?.Dispose();
+            acceptThread.Join(TimeSpan.FromSeconds(1));
+        }
+
+        private void AcceptConnection()
+        {
+            try
+            {
+                Interlocked.Exchange(ref connection, listener.AcceptTcpClient());
+            }
+            catch (SocketException)
+            {
+                // Expected when Dispose stops the listener before connect.
+            }
+            catch (ObjectDisposedException)
+            {
+                // Expected when Dispose stops the listener before connect.
+            }
+        }
     }
 
     private sealed class EmptyNotifyProcessRunner : INotifyProcessRunner

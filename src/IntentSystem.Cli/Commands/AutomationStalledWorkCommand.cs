@@ -504,6 +504,13 @@ internal static class AutomationStalledWorkCommand
 
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
 
+    /// <summary>
+    /// G727 test seam for the read-only checkout freshness probe. The default
+    /// runner only invokes <c>git rev-parse</c> and
+    /// <c>git ls-remote --symref</c>; it never fetches or changes the checkout.
+    /// </summary>
+    public static Func<IGitRemoteCommandRunner>? GitCommandRunnerFactory { get; set; }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -596,6 +603,7 @@ internal static class AutomationStalledWorkCommand
         var capabilityMatrix = TeamModeCapabilityMatrix.Resolve(context.RepoRoot, domain, team);
         var now = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var warnings = new List<string>();
+        var checkoutFreshness = CaptureCheckoutFreshness(context, warnings);
         GitHubApiRequestException? githubApiFailure = null;
         GitHubApiDegradedState? githubApiDegradedState = null;
         var lister = CandidateListerFactory?.Invoke() ?? new GhCliGitHubAutomationCandidateLister();
@@ -788,6 +796,11 @@ internal static class AutomationStalledWorkCommand
             Items = resultItems,
             Excluded = excluded,
             Warnings = warnings,
+            // G727: current checkouts stay silent; stale and unknown
+            // observations carry their structured evidence and warning.
+            CheckoutFreshness = checkoutFreshness is { Status: not CheckoutFreshnessProbe.Current }
+                ? checkoutFreshness
+                : null,
             Partial = githubApiFailure is not null,
             DetectionAvailable = detectionAvailable ? null : false,
             DetectionStatus = detectionAvailable ? null : "unavailable",
@@ -810,6 +823,38 @@ internal static class AutomationStalledWorkCommand
                 ? null
                 : operatorAttention.Error,
         };
+    }
+
+    private static CheckoutFreshnessObservation? CaptureCheckoutFreshness(
+        CliContext context,
+        List<string> warnings)
+    {
+        try
+        {
+            var observation = CheckoutFreshnessProbe.Capture(
+                context.RepoRoot,
+                GitCommandRunnerFactory?.Invoke()
+                    ?? new CheckoutFreshnessGitCommandRunner(CheckoutFreshnessProbe.DefaultTimeout));
+            if (observation is { Status: not CheckoutFreshnessProbe.Current })
+            {
+                warnings.Add(observation.Warning);
+            }
+            return observation;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or InvalidOperationException
+            or UnauthorizedAccessException
+            or System.ComponentModel.Win32Exception)
+        {
+            var observation = new CheckoutFreshnessObservation
+            {
+                Status = CheckoutFreshnessProbe.Unknown,
+                Reason = $"the checkout freshness probe failed ({exception.Message})",
+            };
+            warnings.Add(observation.Warning);
+            return observation;
+        }
     }
 
     private static string GitHubApiFailureMessage(GitHubApiRequestException exception)
@@ -4634,6 +4679,26 @@ internal static class AutomationStalledWorkCommand
         {
             writer.WriteLine($"- operator_attention_error: {result.OperatorAttentionError}");
         }
+        if (result.CheckoutFreshness is { } checkoutFreshness)
+        {
+            writer.WriteLine($"- checkout_freshness: {checkoutFreshness.Status}");
+            if (checkoutFreshness.LocalHead is { } localHead)
+            {
+                writer.WriteLine($"- checkout_local_head: {localHead}");
+            }
+            if (checkoutFreshness.DefaultBranch is { } defaultBranch)
+            {
+                writer.WriteLine($"- checkout_default_branch: {defaultBranch}");
+            }
+            if (checkoutFreshness.RemoteHead is { } remoteHead)
+            {
+                writer.WriteLine($"- checkout_remote_head: {remoteHead}");
+            }
+            if (checkoutFreshness.Reason is { } reason)
+            {
+                writer.WriteLine($"- checkout_freshness_reason: {reason}");
+            }
+        }
         writer.WriteLine();
 
         if (result.Items.Count == 0)
@@ -4879,6 +4944,15 @@ internal sealed record AutomationStalledWorkResult
 
     [JsonPropertyName("warnings")]
     public required IReadOnlyList<string> Warnings { get; init; }
+
+    /// <summary>
+    /// G727: omitted for a genuinely current checkout so healthy reports stay
+    /// quiet. Stale and unknown observations name the local and remote
+    /// evidence (or the reason it could not be established).
+    /// </summary>
+    [JsonPropertyName("checkout_freshness")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CheckoutFreshnessObservation? CheckoutFreshness { get; init; }
 
     [JsonPropertyName("operator_attention_status")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
