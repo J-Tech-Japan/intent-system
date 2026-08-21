@@ -2687,7 +2687,7 @@ literal:
 ```
 
 The shape is written with placeholders on purpose: **read the actual values from
-`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0230)
+`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0232)
 for the line currently being cut. A worked example here would be a second copy
 of the version pair that goes stale on the next roll — the defect G557/G560
 exist to remove.
@@ -2855,55 +2855,58 @@ For the same reason the version-flow example above uses placeholders rather than
 a worked version pair: a second copy of the current versions is a second thing
 to keep in sync, and it goes stale on exactly the roll nobody is watching.
 
-### Next release readiness (v0.23.0)
+### Next release readiness (v0.23.2)
 
-**`v0.22.0` shipped** (GitHub Release + NuGet), and the next prepared line is
-`0.23.0`. [The v0.22.0 notes](release-notes-v0.22.0.md) are the frozen
-released evidence; [the v0.23.0 DRAFT](release-notes-v0.23.0.md) is the next
-line's stub. See [release-notes-v0.21.0.md](release-notes-v0.21.0.md) for the
-older shipped scope; it is linked, not restated.
+**`v0.23.1` shipped** (GitHub Release, NuGet, binaries, and npm). The
+published recovery release is recorded by the [v0.23.1 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.1).
+The child source tree has no tracked `release-notes-v0.23.1.md`; this roll
+does not recreate or edit shipped notes. The [v0.23.2 DRAFT](release-notes-v0.23.2.md)
+is the empty stub for the next line and must remain content-free until a later
+release-prep packet replaces it.
 
-Rolled policy: `stableVersion → 0.22.0`; `nextVersion → 0.23.0`.
+Rolled policy: `stableVersion → 0.23.1`; `nextVersion → 0.23.2`.
 
-**Release-readiness verification for the `v0.23.0` line:**
+The next-line package identity is `JTechJapan.IntentSystem.Cli.0.23.2.nupkg`;
+this is a derived verification value, not release content.
 
-On a claims-enabled host, acquire and verify the release scope before editing
-release artifacts. The same shared verification gates all G680 start surfaces;
-no claims store preserves legacy single-team behavior. This roll changes only
-release documentation and version policy: it creates no tag or Release,
-publishes no package, and handles no credentials.
+**Release-readiness verification for the `v0.23.2` line:**
+
+This post-release roll changes only the version policy, the empty next-line
+stubs, and this readiness section in both language mirrors. It creates no tag
+or Release, publishes no package, handles no credentials, and authors no
+feature notes for the unshipped line.
+
+On a claims-enabled host, acquire and verify release-prep ownership before a
+later release-prep packet edits these artifacts. This roll itself performs no
+claim acquisition:
 
 ```bash
-# 0. Acquire and verify release-prep ownership for the next patch line.
-intent-cli claim acquire --scope release-prep:<owner/repo>:0.23.0 --actor <actor> --team <team> --write --format json
-intent-cli claim verify --scope release-prep:<owner/repo>:0.23.0 --team <team> --format json
+intent-cli claim acquire --scope release-prep:<owner/repo>:0.23.2 --actor <actor> --team <team> --write --format json
+intent-cli claim verify --scope release-prep:<owner/repo>:0.23.2 --team <team> --format json
+```
 
-# 1. Confirm the rolled version policy.
-cat eng/version.json   # stableVersion 0.22.0 (published), nextVersion 0.23.0 (next line)
+```bash
+# 1. Confirm the rolled version policy and both content-free DRAFT stubs.
+cat eng/version.json   # stableVersion 0.23.1 (published), nextVersion 0.23.2 (next line)
+test -f docs/en/release-notes-v0.23.2.md
+test -f docs/ja/release-notes-v0.23.2.md
 
 # 2. Build and confirm the display version identity from the next line.
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-#   expected shape: intent-cli 0.23.0-<sha>-G<unit>
+#   expected shape: intent-cli 0.23.2-<sha>-G<unit>
 
-# 3. Do not publish a package in this roll. The v0.22.0 npm gap is documented
-#    below; the four npm tarballs and checksum companions remain attached.
-#    The next-line package identity is JTechJapan.IntentSystem.Cli.0.23.0.nupkg.
+# 3. The G725 detector must be silent after the roll; it is read-only.
+intent-cli automation stalled-work --domain intent-cli --repo J-Tech-Japan/intent-system --format json
 
-# 4. From a metadata-free directory, execute the existing installed guide route.
-intent-cli guide orchestrator-thread --domain intent-cli --target-repo J-Tech-Japan/intent-system --agent <agent> --format json
-intent-cli guide orchestrator-thread --domain intent-cli --target-repo J-Tech-Japan/intent-system --agent <agent> --format markdown
-#   Also verify the two new G712 surfaces from the retargeted Release build:
-intent-cli notify supervise reconcile --help
-intent-cli guide workflow task supervision-setup --format json
-#   the first verifies the notify supervise reconcile|uninstall surface; the second is metadata-free and read-only.
+# 4. Confirm the historical v0.23.0 preparation source was not changed and
+#    the published v0.23.1 evidence remains the GitHub Release body.
+git diff -- docs/en/release-notes-v0.23.0.md docs/ja/release-notes-v0.23.0.md
+gh release view v0.23.1 --repo J-Tech-Japan/intent-system
 
-# 5. Confirm the frozen v0.22.0 evidence and v0.23.0 version guards.
-dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
-  -c Release --filter \
-  "FullyQualifiedName~ReleaseNotesV0230DocsTests|FullyQualifiedName~ReleaseNotesV0220DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
-
-# 6. Confirm formatting and run the complete Release suite.
+# 5. Run the focused documentation/version guards, then the full suite.
+dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release \
+  --filter "FullyQualifiedName~ReleaseNotesV0220DocsTests|FullyQualifiedName~ReleaseNotesV0230DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 git diff --check
 dotnet test IntentSystem.sln -c Release
 ```
@@ -2912,23 +2915,8 @@ This roll follows **steps 5–7** of the [post-release version roll](#post-relea
 the **DRAFT note stubs in the same commit** (step 5), the **"Next release
 readiness" section refreshed to the new line in both language mirrors** (step
 6), and a **post-roll green child-main CI check** before the roll counts as
-complete (step 7).
-
-The v0.22.0 npm registry publication remains skipped because npm organisation
-(organization) access and package-name reservation are incomplete operator
-account actions and `NPM_TOKEN` is absent. The G702 npm publish step does not
-run for v0.22.0; four npm tarballs and their checksum companions are attached
-to the existing Release. This is a distribution gap, not a defect. No npm
-credentials are requested or handled.
-
-The published v0.22.0 notes are the canonical EN source for the GitHub Release
-body. If a body resync is needed, orchestration uses only this source:
-`gh release edit v0.22.0 --repo J-Tech-Japan/intent-system --notes-file docs/en/release-notes-v0.22.0.md`.
-The published body is already present; this implementation roll does not
-execute that command or mutate GitHub Release state. This line adds the two
-G712 command surfaces listed above; their reachability is confirmed by the
-Release-build probes above. Existing metadata-free guide entry points remain
-the operator/agent interface.
+complete (step 7). Existing release tags, Releases, packages, and workflows
+are not changed.
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 
