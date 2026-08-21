@@ -2800,6 +2800,11 @@ read-only のままで、`eng/version.json` を編集したり release を publi
 operator が release-note / readiness の更新と一緒に follow-up edit を行い、child-main CI を
 検証します。これは closeout ルールが要求する手順であり、検出だけがこの slice の scope です。
 
+command を、`eng/version.json` を持たない configured host root から実行した場合は、domain の
+`automation summary` binding が指定する target checkout（例: `submodules/intent-system`）に
+従って、その場所の policy を読みます。別の sibling repository を推測したり checkout を
+同期したりはせず、finding の edit path に configured child のファイルを明示します。
+
 **リリース closeout チェックリスト**(roll はステップ 4 — ステップ 3 で止めないこと。
 そして roll はステップ 6 まで終えて初めて完了です):
 

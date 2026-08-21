@@ -85,6 +85,87 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
+    public void Analyze_HostRootWithoutVersionPolicy_UsesConfiguredTargetCheckout_G725Repair()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteConfiguredChildVersionPolicy(
+            "J-Tech-Japan/intent-system",
+            "0.22.0",
+            "0.23.0");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(
+            releases:
+            [
+                new GitHubAutomationReleaseCandidate
+                {
+                    TagName = "v0.23.1",
+                    PublishedAt = "2026-07-13T12:00:00Z",
+                },
+            ]);
+
+        var result = AutomationStalledWorkCommand.Analyze(
+            workspace.Context,
+            "intent-cli",
+            "J-Tech-Japan/intent-system",
+            staleMinutes: 60);
+
+        var item = Assert.Single(result.Items, item =>
+            item.Kind == AutomationStalledWorkCommand.KindVersionRollRequired);
+        Assert.Equal("0.23.1", item.ReleasedVersion);
+        Assert.Equal("0.23.1", item.ExpectedStableVersion);
+        Assert.Equal("0.23.2", item.ExpectedNextVersion);
+        Assert.Contains(
+            "submodules/intent-system/eng/version.json",
+            item.RecommendedAction,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            result.Warnings,
+            warning => warning.Contains("version-roll detection", StringComparison.Ordinal));
+        Assert.False(File.Exists(Path.Combine(workspace.RootPath, "eng", "version.json")));
+        Assert.Equal(
+            "0.22.0",
+            JsonDocument.Parse(File.ReadAllText(Path.Combine(
+                workspace.RootPath,
+                "submodules",
+                "intent-system",
+                "eng",
+                "version.json")))
+                .RootElement.GetProperty("stableVersion")
+                .GetString());
+    }
+
+    [Fact]
+    public void Analyze_HostRootWithoutVersionPolicy_DoesNotGuessAnotherConfiguredRepo_G725Repair()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteConfiguredChildVersionPolicy(
+            "J-Tech-Japan/another-repo",
+            "0.22.0",
+            "0.23.0");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(
+            releases:
+            [
+                new GitHubAutomationReleaseCandidate
+                {
+                    TagName = "v0.23.1",
+                    PublishedAt = "2026-07-13T12:00:00Z",
+                },
+            ]);
+
+        var result = AutomationStalledWorkCommand.Analyze(
+            workspace.Context,
+            "intent-cli",
+            "J-Tech-Japan/intent-system",
+            staleMinutes: 60);
+
+        Assert.DoesNotContain(result.Items, item =>
+            item.Kind == AutomationStalledWorkCommand.KindVersionRollRequired);
+        Assert.Contains(
+            result.Warnings,
+            warning => warning.Contains("version-roll detection", StringComparison.Ordinal)
+                && warning.Contains("eng/version.json", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Analyze_NoPublishedRelease_DoesNotNagAboutStaleVersionPolicy_G725()
     {
         using var workspace = new StalledWorkWorkspace();
@@ -3944,6 +4025,29 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         {
             WriteFile(
                 "eng/version.json",
+                $$"""
+                {
+                  "stableVersion": "{{stableVersion}}",
+                  "nextVersion": "{{nextVersion}}"
+                }
+                """);
+        }
+
+        public void WriteConfiguredChildVersionPolicy(
+            string configuredRepo,
+            string stableVersion,
+            string nextVersion)
+        {
+            WriteFile(
+                "intents/intent-cli/automation/bindings.md",
+                $$"""
+                ---
+                child_repo: {{configuredRepo}}
+                child_submodule_path: submodules/intent-system
+                ---
+                """);
+            WriteFile(
+                "submodules/intent-system/eng/version.json",
                 $$"""
                 {
                   "stableVersion": "{{stableVersion}}",

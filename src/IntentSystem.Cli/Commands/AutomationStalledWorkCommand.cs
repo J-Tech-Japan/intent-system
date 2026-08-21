@@ -714,7 +714,7 @@ internal static class AutomationStalledWorkCommand
         CollectDraftRepairStalled(context, domain, candidateDomains, openIssues, openPrs, repo, now, repairSilentMinutes, items, excluded);
         CollectMergedNotClosedOut(context, domain, candidateDomains, repo, mergedPrs, now, items, excluded, warnings);
         CollectClaimedButSilent(context, domain, candidateDomains, openIssues, openPrs, repo, now, claimedSilentMinutes, items, excluded, warnings);
-        CollectVersionRollRequired(context, now, publishedReleases, items, warnings);
+        CollectVersionRollRequired(context, domain, repo, now, publishedReleases, items, warnings);
         CollectBacklogReadyIdle(context, domain, candidateDomains, openIssues, openPrs, repo, now, backlogIdleMinutes, items, excluded);
         CollectDesignDecisionPending(context, domain, candidateDomains, repo, now, items, excluded);
         CollectKnowledgeWritebackPending(
@@ -835,6 +835,8 @@ internal static class AutomationStalledWorkCommand
     /// </summary>
     private static void CollectVersionRollRequired(
         CliContext context,
+        string domain,
+        string repo,
         DateTimeOffset now,
         IReadOnlyList<GitHubAutomationReleaseCandidate> releases,
         List<StalledWorkItem> items,
@@ -864,11 +866,29 @@ internal static class AutomationStalledWorkCommand
             return;
         }
 
-        var policy = VersionPolicy.TryReadFromRepo(context.RepoRoot);
+        var policyRoot = context.RepoRoot;
+        var policyFile = Path.Combine("eng", "version.json");
+        var policy = VersionPolicy.TryReadFromRepo(policyRoot);
+        if (policy is null
+            && !File.Exists(Path.Combine(context.RepoRoot, policyFile)))
+        {
+            var configuredTargetRoot = AutomationSummaryAnalyzer.TryResolveConfiguredTargetRepoRoot(
+                context,
+                domain,
+                repo);
+            if (!string.IsNullOrWhiteSpace(configuredTargetRoot))
+            {
+                policyRoot = configuredTargetRoot;
+                var configuredPolicyPath = Path.Combine(policyRoot, "eng", "version.json");
+                policyFile = ToDisplayPath(context.RepoRoot, configuredPolicyPath);
+                policy = VersionPolicy.TryReadFromFile(configuredPolicyPath);
+            }
+        }
+
         if (policy is null)
         {
             warnings.Add(
-                $"version-roll detection could not read '{Path.Combine("eng", "version.json")}' "
+                $"version-roll detection could not read '{policyFile}' "
                 + $"after published release {latestVersion}; no version-roll finding was fabricated.");
             return;
         }
@@ -877,7 +897,7 @@ internal static class AutomationStalledWorkCommand
             || !VersionPolicy.TryNormalizeStableVersion(policy.NextVersion, out _))
         {
             warnings.Add(
-                $"version-roll detection found malformed values in 'eng/version.json' "
+                $"version-roll detection found malformed values in '{policyFile}' "
                 + $"after published release {latestVersion}; no version-roll finding was fabricated.");
             return;
         }
@@ -895,13 +915,21 @@ internal static class AutomationStalledWorkCommand
             AgeMinutes = ageMinutes,
             IsInformational = false,
             RecommendedAction =
-                $"Edit eng/version.json in a follow-up commit: set stableVersion to {expectation.ExpectedStableVersion} "
+                $"Edit {policyFile} in a follow-up commit: set stableVersion to {expectation.ExpectedStableVersion} "
                 + $"and nextVersion to {expectation.ExpectedNextVersion}; then verify child-main CI. "
                 + "This detector is read-only and does not perform the release roll.",
             ReleasedVersion = expectation.ReleasedVersion,
             ExpectedStableVersion = expectation.ExpectedStableVersion,
             ExpectedNextVersion = expectation.ExpectedNextVersion,
         });
+    }
+
+    private static string ToDisplayPath(string repoRoot, string absolutePath)
+    {
+        var relative = Path.GetRelativePath(repoRoot, absolutePath);
+        return relative
+            .Replace(Path.DirectorySeparatorChar, '/')
+            .Replace(Path.AltDirectorySeparatorChar, '/');
     }
 
     private static void CollectStaleClaims(

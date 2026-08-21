@@ -2738,6 +2738,12 @@ does not edit `eng/version.json` or publish a release. The operator makes the
 follow-up edit together with the release-note/readiness updates and verifies
 child-main CI, as required by this closeout rule.
 
+When the command runs from a configured host root that does not contain
+`eng/version.json`, it follows that domain's `automation summary` binding to
+the named target checkout (for example, `submodules/intent-system`) and reads
+the policy there. It does not guess another sibling repository or synchronize
+the checkout; the finding's edit path names the configured child file.
+
 **Release closeout checklist** (the roll is step 4 — do not stop at step 3, and
 the roll is not done until step 6):
 
