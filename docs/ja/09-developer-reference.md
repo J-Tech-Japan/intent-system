@@ -2841,43 +2841,60 @@ command を、`eng/version.json` を持たない configured host root から実�
 従って、その場所の policy を読みます。別の sibling repository を推測したり checkout を
 同期したりはせず、finding の edit path に configured child のファイルを明示します。
 
-**リリース closeout チェックリスト**(roll はステップ 4 — ステップ 3 で止めないこと。
-そして roll はステップ 6 まで終えて初めて完了です):
+**リリース closeout チェックリスト**(roll はステップ 5 — ステップ 4 で止めないこと。
+そして roll はステップ 7 まで終えて初めて完了です):
 
-1. 対象バージョンの GitHub Release を publish する(これが `release.yml` を発火させる)。
-2. publish された成果物を検証する: NuGet ページ、release assets、`.sha256` チェックサム、
+1. **release tag を作成、または GitHub Release を publish する前に、tag を付ける正確な
+   commit に対して gate を実行する:**
+
+   ```bash
+   ./eng/release-reachability.sh \
+     --commit <exact-commit-to-tag> \
+     --default-branch <repository-default-branch>
+   ```
+
+   reachable の結果の場合だけ続行します。拒否された場合は tag を作成せず Release も
+   publish せず、commit を default branch に入れてから gate を再実行します。
+2. release tag を作成し、対象バージョンの GitHub Release を publish する(これが
+   `release.yml` を発火させる)。ステップ 1 の pre-publish operator gate が、この
+   tag/Release 作成の act を保護します。実際の release では、この act の後に
+   `release.yml` が `release: published` を受け取り、package publication の step はその
+   event を条件にしつつ reachability job の下流で実行されます。`workflow_dispatch` path は
+   dry run であり publish しません。workflow 自体が tag/Release の作成を保護することはありません。
+3. publish された成果物を検証する: NuGet ページ、release assets、`.sha256` チェックサム、
    `dotnet tool update` 後の `intent-cli --version`。
-3. オペレーターと、待っている下流の利用者へ通知する。
-4. **follow-up commit で `eng/version.json` を roll する** — `stableVersion` = リリース
+4. オペレーターと、待っている下流の利用者へ通知する。
+5. **follow-up commit で `eng/version.json` を roll する** — `stableVersion` = リリース
    したバージョン、`nextVersion` = 次の patch — **さらに同じ commit で DRAFT の
    `docs/{en,ja}/release-notes-v<nextVersion>.md` stub を追加する。** G475 のガードは
    `nextVersion` が指すバージョンのノートの存在を要求するため、stub 無しでフィールドだけを
    動かす roll は、着地した瞬間に main を red にします。stub に changelog の中身は不要で、
    実際の内容は次の release-prep パケットが author します。
-5. **同じ roll で「次リリース準備」セクションを新しいラインへ更新する。** このセクションは
+6. **同じ roll で「次リリース準備」セクションを新しいラインへ更新する。** このセクションは
    カット対象のリリースを名指しするため、`nextVersion` だけを動かす roll はセクションを
    前サイクルの記述のまま残します。ja/en 両方のミラーを更新してください。
-6. **push 後に child main の CI が green であることを検証する。** roll は CI が green に
+7. **push 後に child main の CI が green であることを検証する。** roll は CI が green に
    なって初めて完了です: red な main は、それを継承するすべての無関係な PR をブロックする
    ため、roll した人は commit だけでなく結果まで責任を持ちます。
 
 既存の preview 成果物は **遡って番号を振り直しません**。このルールはチャンネルを今後に
 向けて修正するものです。
 
-> **ステップ 4-6 がこの形である理由(G557, G560)。** roll の最初の実運用(commit `00936844`、
+> **ステップ 5-7 がこの形である理由(G557, G560)。** roll の最初の実運用(commit `00936844`、
 > `nextVersion` 0.6.1 → 0.6.2)はフィールドだけを動かし、4 つのチェックで main を red に
 > しました: 3 つのテストがバージョンの組を値で固定しており、G475 のガードが
 > `release-notes-v0.6.2.md` を要求したためです。無関係な PR が red な main を継承して
 > 凍結され、hotfix が着地するまで解除されませんでした。assertion は `eng/version.json`
 > から導出するようになり、正しい roll がそれらを壊すことはなくなりました。残りを塞ぐのが
-> 上記 2 ステップです: roll と同時に stub を作り、green を確認してから完了とする。
+> 残りの closeout ステップです: roll と同時に stub を作り、readiness を更新し、green を
+> 確認してから完了とする。
 >
 > **2 件目のインシデント(G560、roll 0.6.2 → 0.6.3)。** 改訂したルールは機能しました —
 > roll 後の CI チェックが、readiness セクションが前のラインを記述したままであることを
 > 検出したのです。それまで通っていたのは、新しいバージョンがたまたま無関係な preview の
 > 例に現れていたからにすぎませんでした。そこでセクションを更新すると、今度は *前サイクル* の
 > readiness 見出しをリテラルで固定していた 4 つの transitional な test theory が落ちました。
-> それが上記ステップ 5 と、下記のルールの理由です。
+> それが上記ステップ 6 と、下記のルールの理由です。
 
 **release-prep のガイダンス: current-state のバージョンリテラルを新たに書かない。**
 release-prep パケットが developer reference・README・その他「今のリポジトリの状態」を
@@ -2946,9 +2963,9 @@ dotnet test IntentSystem.sln -c Release
 ```
 
 この roll は [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
-**ステップ 4–6** に従います。**同一コミットに DRAFT note スタブ**(ステップ 4)、
-**「次リリース準備」セクションを ja/en 両ミラーで新しいラインへ更新**(ステップ 5)、
-そして **roll 後の child main CI green 確認**(ステップ 6)が完了条件です。
+**ステップ 5–7** に従います。**同一コミットに DRAFT note スタブ**(ステップ 5)、
+**「次リリース準備」セクションを ja/en 両ミラーで新しいラインへ更新**(ステップ 6)、
+そして **roll 後の child main CI green 確認**(ステップ 7)が完了条件です。
 
 v0.22.0 の npm registry publication は、npm organisation (organization) access、
 package-name reservation が未完了の operator account action であり、`NPM_TOKEN` も absent のため skip した。

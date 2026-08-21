@@ -140,11 +140,11 @@ public sealed class ReleaseNotesV061DocsTests
 
         // And it is a numbered closeout step, not advice floating next to one.
         Assert.Contains(
-            language == "en" ? "**Release closeout checklist** (the roll is step 4" : "**リリース closeout チェックリスト**(roll はステップ 4",
+            language == "en" ? "**Release closeout checklist** (the roll is step 5" : "**リリース closeout チェックリスト**(roll はステップ 5",
             reference,
             StringComparison.Ordinal);
         Assert.Contains(
-            language == "en" ? "4. **Roll `eng/version.json` in a follow-up commit**" : "4. **follow-up commit で `eng/version.json` を roll する**",
+            language == "en" ? "5. **Roll `eng/version.json` in a follow-up commit**" : "5. **follow-up commit で `eng/version.json` を roll する**",
             reference,
             StringComparison.Ordinal);
     }
@@ -203,26 +203,26 @@ public sealed class ReleaseNotesV061DocsTests
             StringComparison.Ordinal);
 
         // Regression for the stale steps 4-5 cross-reference: the readiness
-        // closeout must point at steps 4-6 and spell out same-commit stubs, the
+        // closeout must point at steps 5-7 and spell out same-commit stubs, the
         // readiness refresh, and the post-roll green-CI check.
         Assert.DoesNotContain(
             language == "en" ? "per steps 4–5 of the" : "のステップ 4–5 に従います",
             reference,
             StringComparison.Ordinal);
         Assert.Contains(
-            language == "en" ? "**steps 4–6** of the" : "**ステップ 4–6** に従い",
+            language == "en" ? "**steps 5–7** of the" : "**ステップ 5–7** に従い",
             reference,
             StringComparison.Ordinal);
         Assert.Contains(
-            language == "en" ? "DRAFT note stubs in the same commit** (step 4)" : "同一コミットに DRAFT note スタブ**(ステップ 4)",
+            language == "en" ? "DRAFT note stubs in the same commit** (step 5)" : "同一コミットに DRAFT note スタブ**(ステップ 5)",
             reference,
             StringComparison.Ordinal);
         Assert.Contains(
-            language == "en" ? "refreshed to the new line in both language mirrors** (step" : "両ミラーで新しいラインへ更新**(ステップ 5)",
+            language == "en" ? "refreshed to the new line in both language mirrors** (step" : "両ミラーで新しいラインへ更新**(ステップ 6)",
             reference,
             StringComparison.Ordinal);
         Assert.Contains(
-            language == "en" ? "post-roll green child-main CI check** before the roll counts as" : "roll 後の child main CI green 確認**(ステップ 6)",
+            language == "en" ? "post-roll green child-main CI check** before the roll counts as" : "roll 後の child main CI green 確認**(ステップ 7)",
             reference,
             StringComparison.Ordinal);
     }
@@ -489,20 +489,20 @@ public sealed class ReleaseNotesV061DocsTests
     {
         var reference = ReadDeveloperReference(language);
 
-        // G557 step 4: the roll commit creates the next-version DRAFT stubs, or
+        // G557 step 5: the roll commit creates the next-version DRAFT stubs, or
         // it turns main red the moment it lands.
         Assert.Contains(
             language == "en" ? "add DRAFT `docs/{en,ja}/release-notes-v<nextVersion>.md` stubs" : "DRAFT の\n`docs/{en,ja}/release-notes-v<nextVersion>.md` stub を追加する".Replace("\n", " "),
             reference,
             StringComparison.Ordinal);
 
-        // G557 step 5: the roll is not complete until child main CI is green.
+        // G557 step 7: the roll is not complete until child main CI is green.
         Assert.Contains(
             language == "en" ? "Verify child main CI is green after pushing the roll" : "push 後に child main の CI が green であることを検証する",
             reference,
             StringComparison.Ordinal);
         Assert.Contains(
-            language == "en" ? "the roll is not done until step 6" : "roll はステップ 6 まで終えて初めて完了",
+            language == "en" ? "the roll is not done until step 7" : "roll はステップ 7 まで終えて初めて完了",
             reference,
             StringComparison.Ordinal);
 

@@ -44,6 +44,37 @@ public sealed class ReleaseWorkflowContractTests
     }
 
     [Fact]
+    public void ReleaseCloseoutChecklist_RunsPrePublishGateBeforeReleasePublication_InBothMirrors()
+    {
+        var mirrors = new[]
+        {
+            (Language: "en", Heading: "**Release closeout checklist**"),
+            (Language: "ja", Heading: "**リリース closeout チェックリスト**"),
+        };
+
+        foreach (var mirror in mirrors)
+        {
+            var document = File.ReadAllText(LocateDeveloperReference(mirror.Language));
+            var checklist = ExtractChecklist(document, mirror.Heading);
+            var firstStep = checklist.IndexOf("\n1. ", StringComparison.Ordinal);
+            var secondStep = checklist.IndexOf("\n2. ", firstStep + 1, StringComparison.Ordinal);
+            var gate = checklist.IndexOf("release-reachability.sh", StringComparison.Ordinal);
+            var releasePublished = checklist.IndexOf("release: published", StringComparison.Ordinal);
+
+            Assert.True(firstStep >= 0, $"{mirror.Language} closeout checklist has no step 1.");
+            Assert.True(secondStep > firstStep, $"{mirror.Language} closeout checklist has no step 2.");
+            Assert.True(gate > firstStep && gate < secondStep,
+                $"{mirror.Language} step 1 must run release-reachability.sh before step 2.");
+            Assert.Contains("--commit <exact-commit-to-tag>", checklist, StringComparison.Ordinal);
+            Assert.Contains("--default-branch <repository-default-branch>", checklist, StringComparison.Ordinal);
+            Assert.True(releasePublished > secondStep,
+                $"{mirror.Language} must explain that release.yml follows release: published.");
+            Assert.Contains("pre-publish", checklist, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("package", checklist, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
     public void ReleaseWorkflow_PacksAndPublishesNuGet_GuardedAgainstForksAndMissingSecret()
     {
         var workflow = File.ReadAllText(LocateReleaseWorkflow());
@@ -129,5 +160,30 @@ public sealed class ReleaseWorkflowContractTests
         }
 
         throw new FileNotFoundException("Could not locate .github/workflows/release.yml");
+    }
+
+    private static string LocateDeveloperReference(string language)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var candidate = Path.Combine(dir.FullName, "docs", language, "09-developer-reference.md");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            dir = dir.Parent;
+        }
+
+        throw new FileNotFoundException($"Could not locate docs/{language}/09-developer-reference.md");
+    }
+
+    private static string ExtractChecklist(string document, string heading)
+    {
+        var start = document.IndexOf(heading, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Could not locate checklist heading {heading}.");
+        var end = document.IndexOf("\n### ", start + heading.Length, StringComparison.Ordinal);
+        return document[start..(end >= 0 ? end : document.Length)];
     }
 }
