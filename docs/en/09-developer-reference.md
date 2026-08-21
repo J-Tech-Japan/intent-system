@@ -320,7 +320,8 @@ reset, budget requests, change transport, cache, or batch.
 Every item carries `is_informational` (`bool`) distinguishing two families:
 
 **Actionable categories** (`is_informational: false` — `recommended_action`
-is always a runnable `intent-cli` command):
+names a runnable `intent-cli` command where one exists; `version-roll-required`
+deliberately names the required human edit):
 
 - `published-not-delegated` — an OPEN issue carries `intent-target` but has
   no claim label (`intent-issue-in-progress` / `intent-pr-created`) yet, and
@@ -389,6 +390,19 @@ is always a runnable `intent-cli` command):
   closed like `claimed-but-silent`: a missing or malformed `updatedAt` means
   silence cannot be established, so the PR is **not** promoted rather than
   flagged on unusable evidence.
+- `version-roll-required` (G725) — `stalled-work` also reads the repository's
+  published stable releases and compares the newest stable tag with
+  `eng/version.json`. A release is considered only when it is published,
+  non-draft, non-prerelease, and a valid `major.minor.patch` tag. If no such
+  release exists, a host with a stale-looking local policy is silent; if the
+  policy already says `stableVersion = <releasedVersion>` and
+  `nextVersion = <nextPatch>`, it is silent as well. Otherwise the finding
+  carries `released_version`, `expected_stable_version`, and
+  `expected_next_version`, plus the exact follow-up edit in
+  `recommended_action`. The roll stays a human follow-up commit: this
+  surface is deliberately read-only, and the roll must be coordinated with
+  release-note stubs, the next-release readiness section, and child-main CI;
+  detection alone is the in-scope recovery signal, not release automation.
 - `design-decision-pending` (G552) — a hold blocked on a **design decision**,
   recorded as an OPEN clarification artifact through the canonical clarify
   surface (`intent-cli clarify open`). Reports the blocking execution unit,
@@ -2709,6 +2723,20 @@ subsequent preview builds as `<released>-preview.N` — and a prerelease sorts
 manual uninstall/install was the only way forward. Rolling immediately makes the
 next preview `0.6.2-preview.N`, which sorts above `0.6.1`, and `dotnet tool
 update` works again.
+
+#### Detecting a skipped roll (G725)
+
+The existing `intent-cli automation stalled-work --domain <d> --repo <r>`
+surface checks this closeout. It reads published stable GitHub Releases and,
+when one is newer than the policy's recorded stable line (or the next value is
+not the following patch), emits `version-roll-required` with the released
+version, expected `stableVersion`, expected `nextVersion`, and the edit that
+clears the finding. No published release and an already-correct pair both
+produce no finding; an empty result in either healthy case must not be treated
+as evidence that a release was skipped. The command remains read-only and
+does not edit `eng/version.json` or publish a release. The operator makes the
+follow-up edit together with the release-note/readiness updates and verifies
+child-main CI, as required by this closeout rule.
 
 **Release closeout checklist** (the roll is step 4 — do not stop at step 3, and
 the roll is not done until step 6):

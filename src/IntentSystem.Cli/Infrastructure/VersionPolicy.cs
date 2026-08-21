@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 
 namespace IntentSystem.Cli.Infrastructure;
@@ -40,6 +41,118 @@ internal sealed record VersionPolicy
         ArgumentException.ThrowIfNullOrWhiteSpace(runNumber);
         ArgumentException.ThrowIfNullOrWhiteSpace(runAttempt);
         return $"{NextVersion}-preview.{runNumber}.{runAttempt}";
+    }
+
+    /// <summary>
+    /// Determines whether the policy still needs the required post-release
+    /// roll for <paramref name="releasedVersion"/>. A release older than the
+    /// recorded stable line is not evidence of a new closeout obligation;
+    /// the latest release at or beyond that line must have both fields
+    /// settled to the released version and its next patch.
+    /// </summary>
+    public bool TryGetRequiredPostReleaseRoll(
+        string releasedVersion,
+        out VersionRollExpectation expectation)
+    {
+        expectation = null!;
+        if (!TryNormalizeStableVersion(releasedVersion, out var released)
+            || !TryNormalizeStableVersion(StableVersion, out var stable)
+            || !TryNormalizeStableVersion(NextVersion, out var nextVersion))
+        {
+            return false;
+        }
+
+        var comparison = CompareNormalizedStableVersions(released, stable);
+        if (comparison < 0)
+        {
+            return false;
+        }
+
+        var next = IncrementPatch(released);
+        if (comparison == 0 && string.Equals(nextVersion, next, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        expectation = new VersionRollExpectation
+        {
+            ReleasedVersion = released,
+            ExpectedStableVersion = released,
+            ExpectedNextVersion = next,
+        };
+        return true;
+    }
+
+    /// <summary>
+    /// Normalizes a stable release tag or policy value to a strict
+    /// <c>major.minor.patch</c> form. Prerelease tags are deliberately not
+    /// accepted here; the stalled-work detector only compares published
+    /// stable releases.
+    /// </summary>
+    public static bool TryNormalizeStableVersion(string value, out string normalized)
+    {
+        normalized = string.Empty;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var candidate = value.Trim();
+        if (candidate.StartsWith('v') || candidate.StartsWith('V'))
+        {
+            candidate = candidate[1..];
+        }
+
+        var parts = candidate.Split('.', StringSplitOptions.None);
+        if (parts.Length != 3
+            || !int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var major)
+            || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var minor)
+            || !int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var patch)
+            || major < 0
+            || minor < 0
+            || patch < 0)
+        {
+            return false;
+        }
+
+        normalized = $"{major}.{minor}.{patch}";
+        return true;
+    }
+
+    /// <summary>Compares two values already accepted by <see cref="TryNormalizeStableVersion"/>.</summary>
+    public static int CompareStableVersions(string left, string right)
+    {
+        if (!TryNormalizeStableVersion(left, out var normalizedLeft)
+            || !TryNormalizeStableVersion(right, out var normalizedRight))
+        {
+            throw new ArgumentException("Both stable versions must be major.minor.patch values.");
+        }
+
+        return CompareNormalizedStableVersions(normalizedLeft, normalizedRight);
+    }
+
+    private static int CompareNormalizedStableVersions(string left, string right)
+    {
+        var leftParts = left.Split('.');
+        var rightParts = right.Split('.');
+        for (var index = 0; index < 3; index++)
+        {
+            var comparison = int.Parse(leftParts[index], CultureInfo.InvariantCulture)
+                .CompareTo(int.Parse(rightParts[index], CultureInfo.InvariantCulture));
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+        }
+
+        return 0;
+    }
+
+    private static string IncrementPatch(string normalizedVersion)
+    {
+        var parts = normalizedVersion.Split('.');
+        var patch = checked(int.Parse(parts[2], CultureInfo.InvariantCulture) + 1);
+        return $"{parts[0]}.{parts[1]}.{patch}";
     }
 
     /// <summary>
@@ -87,4 +200,11 @@ internal sealed record VersionPolicy
         var filePath = Path.Combine(repoRoot, "eng", "version.json");
         return TryReadFromFile(filePath);
     }
+}
+
+internal sealed record VersionRollExpectation
+{
+    public required string ReleasedVersion { get; init; }
+    public required string ExpectedStableVersion { get; init; }
+    public required string ExpectedNextVersion { get; init; }
 }
