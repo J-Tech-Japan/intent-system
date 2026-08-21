@@ -10,7 +10,7 @@
 
 ## v0.23.2 の内容
 
-公開済み v0.23.1 tag は `d49984dae761d589b2568f8eb1677ce3ff2facbc7` です。
+公開済み v0.23.1 tag は `d49984dae761d589b2568f8eb1677ce3ff2facbc` です。
 下記の exact inventory は、その tag 以降に未出荷の六つの execution unit だけを含みます。
 各項目は merge commit と operator が観測できる結果を記録します。
 
@@ -38,7 +38,7 @@
   release-note preparation を開始します。tag、publish、次の post-release roll は行いません。
 
 `eb65cbc100e9a2bea9f3c7d912315233d0a6720c` は inventory item として意図的に含めません。
-その content は公開済み v0.23.1 tag `d49984dae761d589b2568f8eb1677ce3ff2facbc7` に
+その content は公開済み v0.23.1 tag `d49984dae761d589b2568f8eb1677ce3ff2facbc` に
 ship 済みです。後から merge された位置だけでは、この line の新しい content とは判断できません。
 
 ## 六つの inventory の accounting

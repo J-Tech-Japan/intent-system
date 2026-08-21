@@ -9,7 +9,7 @@ Install verification for the prepared functional line: `JTechJapan.IntentSystem.
 
 ## What is in v0.23.2
 
-The published v0.23.1 tag is `d49984dae761d589b2568f8eb1677ce3ff2facbc7`.
+The published v0.23.1 tag is `d49984dae761d589b2568f8eb1677ce3ff2facbc`.
 The exact inventory below contains the six execution units that are
 unreleased since that tag. Each entry names its merge commit and the result an
 operator can observe.
@@ -41,7 +41,7 @@ operator can observe.
 
 The merge commit `eb65cbc100e9a2bea9f3c7d912315233d0a6720c` is deliberately
 not an inventory item: its content shipped in the published v0.23.1 tag
-`d49984dae761d589b2568f8eb1677ce3ff2facbc7`. A later merge position is not
+`d49984dae761d589b2568f8eb1677ce3ff2facbc`. A later merge position is not
 evidence that shipped content is new to this line.
 
 ## Accounting for the six-unit inventory
