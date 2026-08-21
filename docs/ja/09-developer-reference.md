@@ -2911,25 +2911,30 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 使っています: 現在のバージョンの 2 つ目のコピーは同期し続けるべき対象が 1 つ増えることを
 意味し、しかも誰も見ていない roll でこそ stale になります。
 
-### 次リリース準備(v0.23.2)
+### 次リリース準備(v0.23.3)
 
-**`v0.23.1` は出荷済み**(GitHub Release、NuGet、binary、npm)です。公開済みの recovery
-release は [v0.23.1 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.1)
-に記録されています。公開済みの [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0)
-とその tag が shipped evidence の authoritative source ですが、tracked な EN/JA の
+**`v0.23.2` は出荷済み**(GitHub Release、NuGet、binary、npm)です。公開済みの
+release は [v0.23.2 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.2)
+に記録されています。この published GitHub Release とその tag が shipped evidence の
+authoritative source ですが、tracked な EN/JA の `release-notes-v0.23.2.md` にはまだ
+`PREPARED / NOT PUBLISHED` banner が残っています。この source-note inconsistency はこの roll
+より前から存在し、出荷済み v0.23.2 note の修正は scope 外です。後続の明示的な remediation で
+扱います。child source tree には tracked な `release-notes-v0.23.1.md` がなく、この roll で
+出荷済み note を再作成・編集しません。
+公開済みの [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0)
+とその tag も shipped evidence の authoritative source ですが、tracked な EN/JA の
 `release-notes-v0.23.0.md` にはまだ `DRAFT / 未リリース` banner が残っています。
-この source-note inconsistency はこの roll より前から存在し、出荷済み v0.23.0/v0.23.1 note の
-修正は scope 外です。後続の明示的な remediation で扱います。child source tree には tracked な
-`release-notes-v0.23.1.md` がなく、この roll で出荷済み note を再作成・編集しません。
-[v0.23.2 DRAFT](release-notes-v0.23.2.md)
+この source-note inconsistency はこの roll より前から存在し、出荷済み v0.23.0 note の修正は
+scope 外です。後続の明示的な remediation で扱います。この roll は v0.23.0 note file を変更しません。
+[v0.23.3 DRAFT](release-notes-v0.23.3.md)
 は次のラインの空の stub で、後続の release-prep packet が置き換えるまで内容を持ちません。
 
-Rolled policy: `stableVersion → 0.23.1`; `nextVersion → 0.23.2`。
+Rolled policy: `stableVersion → 0.23.2`; `nextVersion → 0.23.3`。
 
-次のラインの package identity は `JTechJapan.IntentSystem.Cli.0.23.2.nupkg` です。
+次のラインの package identity は `JTechJapan.IntentSystem.Cli.0.23.3.nupkg` です。
 これは導出された verification value であり、release content ではありません。
 
-**`v0.23.2` のリリース準備検証:**
+**`v0.23.3` のリリース準備検証:**
 
 この post-release roll が変更するのは version policy、次のラインの空の stub、そして ja/en
 両ミラーのこの readiness section だけです。tag または Release を作成せず、package を publish せず、
@@ -2939,37 +2944,37 @@ claims-enabled host では、後続の release-prep packet がこれらの artif
 release-prep ownership を acquire / verify します。この roll 自身は claim acquisition を実行しません:
 
 ```bash
-intent-cli claim acquire --scope release-prep:<owner/repo>:0.23.2 --actor <actor> --team <team> --write --format json
-intent-cli claim verify --scope release-prep:<owner/repo>:0.23.2 --team <team> --format json
+intent-cli claim acquire --scope release-prep:<owner/repo>:0.23.3 --actor <actor> --team <team> --write --format json
+intent-cli claim verify --scope release-prep:<owner/repo>:0.23.3 --team <team> --format json
 ```
 
 ```bash
 # 1. roll 済み version policy と、内容のない両言語 DRAFT stub を確認。
-cat eng/version.json   # stableVersion 0.23.1 (published), nextVersion 0.23.2 (next line)
-test -f docs/en/release-notes-v0.23.2.md
-test -f docs/ja/release-notes-v0.23.2.md
+cat eng/version.json   # stableVersion 0.23.2 (published), nextVersion 0.23.3 (next line)
+test -f docs/en/release-notes-v0.23.3.md
+test -f docs/ja/release-notes-v0.23.3.md
 
 # 2. 次のラインの表示バージョン識別を build して確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-#   期待する形: intent-cli 0.23.2-<sha>-G<unit>
+#   期待する形: intent-cli 0.23.3-<sha>-G<unit>
 
-# 3. G725 detector は roll 後に silent でなければならない(read-only)。
+# 3. canonical host checkout から installed 0.23.2 CLI を実行し、silent な verdict と
+#    G727 checkout_freshness/provenance statement の両方を記録する(read-only)。
 intent-cli automation stalled-work --domain intent-cli --repo J-Tech-Japan/intent-system --format json
 
-# 4. shipped-note check を正直に記録する: source note は未変更だが、公開済み
-#    Release にもかかわらず v0.23.0 には DRAFT / 未リリース banner が残る。
-git diff --quiet -- docs/en/release-notes-v0.23.0.md docs/ja/release-notes-v0.23.0.md
-grep -n "DRAFT / UNRELEASED" docs/en/release-notes-v0.23.0.md
-grep -n "DRAFT / 未リリース" docs/ja/release-notes-v0.23.0.md
-gh release view v0.23.0 --repo J-Tech-Japan/intent-system
-gh release view v0.23.1 --repo J-Tech-Japan/intent-system
+# 4. shipped-note check を正直に記録する: source v0.23.2 note は未変更だが、公開済み
+#    Release にもかかわらず PREPARED / NOT PUBLISHED banner が残る。
+git diff --quiet -- docs/en/release-notes-v0.23.2.md docs/ja/release-notes-v0.23.2.md
+grep -n "PREPARED / NOT PUBLISHED" docs/en/release-notes-v0.23.2.md
+grep -n "PREPARED / NOT PUBLISHED" docs/ja/release-notes-v0.23.2.md
+gh release view v0.23.2 --repo J-Tech-Japan/intent-system
 #    公開済み GitHub Release/tag が authoritative evidence であり、note remediation は
 #    この version roll の scope 外です。
 
 # 5. focused な documentation/version guard と full suite を実行。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release \
-  --filter "FullyQualifiedName~ReleaseNotesV0220DocsTests|FullyQualifiedName~ReleaseNotesV0230DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+  --filter "FullyQualifiedName~ReleaseNotesV0220DocsTests|FullyQualifiedName~ReleaseNotesV0230DocsTests|FullyQualifiedName~ReleaseNotesV0232DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
 git diff --check
 dotnet test IntentSystem.sln -c Release
 ```
