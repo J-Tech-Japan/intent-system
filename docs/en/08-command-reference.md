@@ -365,6 +365,29 @@ when quota makes GitHub-consulting surfaces inoperable. Callers decide whether
 to wait for reset; no command retries, sleeps, schedules a reset, budgets
 requests, changes transport, caches, or batches in G673.
 
+### Checkout freshness in host-state reports (G727)
+
+`automation stalled-work` also reports what checkout its answer came from when
+that fact is not safely current. It compares the local `HEAD` with the actual
+default-branch `HEAD` returned by `git ls-remote --symref origin HEAD`:
+
+- `checkout_freshness: stale` names the local and remote commit IDs and tells
+  the operator to sync and rerun the report.
+- A genuinely current checkout omits `checkout_freshness` and emits no
+  freshness banner. This keeps the notice rare enough to remain useful.
+- If the remote cannot be queried (offline, missing remote, or an incomplete
+  response), `checkout_freshness: unknown` is emitted with a reason. Unknown
+  must not be read as current.
+
+The probe is read-only: it uses no `fetch`, `pull`, `reset`, or other sync
+operation, and it does not change the existing stalled-work finding logic.
+`automation heartbeat` wraps `stalled-work` and therefore carries the same
+warning. The sibling read-only surfaces were surveyed: `automation summary`,
+`intent status`, `automation state-doctor`, `status brief`,
+`host-loop-next-action`, and host-review diagnostics do not make this
+stalled-work checkout-freshness claim and remain unchanged. The survey is not
+a reason to widen G727 to those surfaces.
+
 G672 adds an optional invoking-role pointer (preview-through-1.x):
 
 ```bash

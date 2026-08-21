@@ -2325,6 +2325,16 @@ publish-then-sleep と silent-completion の stall class を、タイマーを�
 intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json
 ```
 
+G727 は healthy な wake に noise を追加せず、answer の input view を明示します。
+remote が動いている場合、`stalled-work` は local `HEAD`、実際の `origin` default branch の
+`HEAD`、sync 後に再実行する案内とともに `checkout_freshness: stale` を出します。
+本当に current な checkout では freshness notice を出しません。remote を確認できない場合は
+current を暗黙に意味させず、理由つきで `checkout_freshness: unknown` を出します。probe が使うのは
+`git rev-parse` と `git ls-remote --symref` だけで、共有 host checkout を fetch、pull、reset、
+その他の sync で変更しません。`automation heartbeat` はこの scan を wrapper するため同じ
+warning を運びます。同じ stalled-work の answer-from-checkout claim を行わない他の
+read-only host-state surface はこの slice の scope 外に残します。
+
 - **先送りしない** — このチェックが報告するすべての actionable item を、眠りにつく前に
   この wake の中で処理する（delegate、repair、または closeout へのルーティング）。
   明示的な fallback/legacy タイマーが実際にそれを実行するようスケジュールされていない

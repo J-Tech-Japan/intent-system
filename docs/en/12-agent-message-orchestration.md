@@ -2666,6 +2666,18 @@ timer.
 intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json
 ```
 
+G727 makes the input view explicit without adding noise to healthy wakes.
+`stalled-work` emits `checkout_freshness: stale` with the local `HEAD`, the
+actual `origin` default-branch `HEAD`, and a sync-and-rerun instruction when
+the remote has moved. A genuinely current checkout emits no freshness notice.
+When the remote cannot be checked, it emits `checkout_freshness: unknown`
+with the reason instead of implying currency. The probe uses only
+`git rev-parse` and `git ls-remote --symref`; it never fetches, pulls, resets,
+or otherwise syncs the shared host checkout. `automation heartbeat` carries
+the same warning because it wraps this scan. Other read-only host-state
+surfaces remain outside this slice because they do not make the same
+stalled-work answer-from-checkout claim.
+
 - **Never defer** — process every actionable item the check reports in THIS
   wake (delegate, repair, or route to closeout) before sleeping. Do not
   announce work for a future wake unless an explicit fallback/legacy timer

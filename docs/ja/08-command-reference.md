@@ -342,6 +342,27 @@ quota exhaustion では machine-readable な `cause: github-api-quota-exhausted`
 `ok` 以外の verdict を返します。reset を待つかどうかは caller が判断します。G673 は retry、sleep、
 reset scheduling、request budgeting、transport change、cache、batching を追加しません。
 
+### host-state report の checkout freshness（G727）
+
+`automation stalled-work` は、answer を計算した checkout が current であると
+安全に言えない場合、その事実も報告します。local `HEAD` と、
+`git ls-remote --symref origin HEAD` が返す実際の default branch の `HEAD` を比較します。
+
+- `checkout_freshness: stale` は local と remote の commit ID を示し、sync して
+  report を再実行するよう案内します。
+- 本当に current な checkout では `checkout_freshness` を省略し、freshness banner も
+  出しません。notice を稀に保つことで signal としての意味を維持します。
+- remote を問い合わせられない場合（offline、remote 不在、応答不完全）は理由つきで
+  `checkout_freshness: unknown` を出します。unknown を current と解釈してはいけません。
+
+この probe は read-only です。`fetch`、`pull`、`reset`、その他の sync operation を
+実行せず、既存の stalled-work の finding logic も変更しません。`automation heartbeat` は
+`stalled-work` を wrapper するため同じ warning を運びます。兄弟の read-only surface も
+survey しました: `automation summary`、`intent status`、`automation state-doctor`、
+`status brief`、`host-loop-next-action`、host-review diagnostics はこの
+stalled-work checkout-freshness claim を行わず、変更していません。この survey を理由に
+G727 の scope を広げません。
+
 G672 は invoking role の pointer を optional に追加します（preview-through-1.x）。
 
 ```bash
