@@ -1,0 +1,8 @@
+{
+  "schema_version": "1",
+  "scope": "execution-unit:G726",
+  "actor": "implementation",
+  "team": "intent-cli-dev",
+  "claimed_at": "2026-08-21T00:55:44.020668+00:00",
+  "base_commit": "54b050df80aab021d16de55a5a8c01309f301cbc"
+}
