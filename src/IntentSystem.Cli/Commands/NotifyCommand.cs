@@ -599,6 +599,10 @@ internal static class NotifyCommand
 
         if (!string.Equals(report.DeliveryState, "delivered", StringComparison.Ordinal))
         {
+            var recoveryCommand = NotifyReportOutboxStore.BuildCollectCommand(
+                routingRoot,
+                report,
+                reportRoot);
             EmitReconciliation(writer, options.Format, new NotifyReconciliationResult
             {
                 RoutingRoot = routingRoot,
@@ -611,7 +615,9 @@ internal static class NotifyCommand
                 ReportDeliveryState = report.DeliveryState,
                 PendingRecordPath = pending.Path,
                 Cause = "sender-local-report-not-delivered",
-                Summary = $"Sender-local report for task '{options.TaskId}' is '{report.DeliveryState}', not delivered; the local handoff remains available for its delivery-level recovery path.",
+                RecoveryCommand = recoveryCommand,
+                Summary = $"Sender-local report for task '{options.TaskId}' is '{report.DeliveryState}', not delivered; "
+                    + $"recover the local handoff with '{recoveryCommand}'.",
             });
             return 1;
         }
@@ -1501,33 +1507,6 @@ internal static class NotifyCommand
             return 1;
         }
 
-        if (delivery.ReaderPath is not null && senderLocalReport && options.Write)
-        {
-            if (reportOutbox is not null)
-            {
-                NotifyReportOutboxStore.MarkUndelivered(
-                    resolvedReportRoot,
-                    reportOutbox,
-                    "report-routing-root-write-required");
-            }
-
-            Emit(writer, options.Format, FailureResult(
-                operation,
-                options,
-                resolution.Mode,
-                "report-routing-root-write-required",
-                $"Report delivery resolved an external reader at '{delivery.ReaderPath}', which is under the host routing root and cannot be written from this sandboxed seat. Provision the recipient through herdr/agmsg or route a narrowly writable reader root; the sender-local report handoff is retained at '{outboxEntryPath}'. This is a delegation-level routing fault, not an implementation-seat stall.",
-                payload,
-                reportCommand,
-                modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
-                preflight: deliveryPreflight,
-                deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
-                taskFile: envelopeDelivery.TaskFile,
-                deliveryPointer: envelopeDelivery.ResultPointer,
-                outboxEntryPath: outboxEntryPath));
-            return 1;
-        }
-
         var eventAppended = false;
         if (delivery.ReaderPath is not null && options.Write)
         {
@@ -1538,17 +1517,28 @@ internal static class NotifyCommand
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
+                var routingWriteFailure = isReport && senderLocalReport;
+                var cause = routingWriteFailure
+                    ? "report-routing-root-write-required"
+                    : "event-append-failed";
                 if (reportOutbox is not null)
                 {
-                    NotifyReportOutboxStore.MarkUndelivered(resolvedReportRoot, reportOutbox, "event-append-failed");
+                    NotifyReportOutboxStore.MarkUndelivered(resolvedReportRoot, reportOutbox, cause);
                 }
+
+                var summary = routingWriteFailure
+                    ? $"Could not append notification to external role '{options.ToRole}' through recorded reader "
+                      + $"'{delivery.ReaderPath}' in the current execution context: {exception.Message} "
+                      + $"The attempted host-root write failed, so the sender-local report handoff is retained at '{outboxEntryPath}'. "
+                      + "This measured write failure is a delegation-level routing fault, not an implementation-seat stall."
+                    : $"Could not append notification to external role '{options.ToRole}' through recorded reader "
+                      + $"'{delivery.ReaderPath}': {exception.Message} Fix reader access and retry notify.";
                 Emit(writer, options.Format, FailureResult(
                     operation,
                     options,
                     resolution.Mode,
-                    "event-append-failed",
-                    $"Could not append notification to external role '{options.ToRole}' through recorded reader "
-                    + $"'{delivery.ReaderPath}': {exception.Message} Fix reader access and retry notify.",
+                    cause,
+                    summary,
                     payload,
                     reportCommand,
                     modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
@@ -1690,6 +1680,8 @@ internal static class NotifyCommand
                       + $"through recorded reader '{delivery.ReaderPath}'."
                     : delivery.Summary,
                 senderLocalReport,
+                eventAppended,
+                options.Write,
                 resolvedReportRoot,
                 options.RoutingRoot!),
             eventPath: delivery.ReaderPath,
@@ -1720,10 +1712,24 @@ internal static class NotifyCommand
     private static string AppendReportHandoffSummary(
         string summary,
         bool senderLocalReport,
+        bool eventAppended,
+        bool write,
         string reportRoot,
-        string routingRoot) => senderLocalReport
-            ? $"{summary} Sender-local report handoff persisted under '{reportRoot}'; no host-root write was required. Host routing state at '{routingRoot}' remains for orchestration reconciliation."
-            : summary;
+        string routingRoot)
+    {
+        if (!senderLocalReport)
+        {
+            return summary;
+        }
+
+        var hostWrite = eventAppended
+            ? $"the host routing event was appended at '{routingRoot}'"
+            : write
+                ? "no host-root write was required for this recorded pane delivery"
+                : "no host routing write was attempted in this dry-run";
+        return $"{summary} Sender-local report handoff persisted under '{reportRoot}'; {hostWrite}. "
+            + $"Host pending and continuation state at '{routingRoot}' remains for orchestration reconciliation.";
+    }
 
     private static bool PathsEqual(string left, string right) =>
         string.Equals(
@@ -2288,6 +2294,10 @@ internal static class NotifyCommand
         if (result.Cause is not null)
         {
             writer.WriteLine($"- cause: {result.Cause}");
+        }
+        if (result.RecoveryCommand is not null)
+        {
+            writer.WriteLine($"- recovery command: `{result.RecoveryCommand}`");
         }
         if (result.PendingRecordPath is not null)
         {
@@ -3041,6 +3051,7 @@ internal sealed record NotifyReconciliationResult
     [JsonPropertyName("already_converged")] public bool AlreadyConverged { get; init; }
     [JsonPropertyName("would_reconcile")] public bool WouldReconcile { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
+    [JsonPropertyName("recovery_command")] public string? RecoveryCommand { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
 }
 

@@ -187,6 +187,88 @@ public sealed class NotifyG719Tests : IDisposable
     }
 
     [Fact]
+    public void CollectRecoversGenuinelyUndeliveredSenderLocalReportByObservedHostWrite_G731()
+    {
+        RequireUnixNonRoot();
+        var runner = new FakeTransportRunner(workspace.HerdrAgents());
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        workspace.WriteTopology(
+            externalOrchestration: true,
+            externalReader: NotifyEventWriter.RelativePathFor(Domain, Team));
+        var (delegateExit, delegateResult) = workspace.Run(
+            workspace.DelegateArgs("G731-recovery", "g731-recovery-nonce"));
+        Assert.Equal(0, delegateExit);
+        var exactCommand = workspace.MaterializeReportCommand(
+            delegateResult.GetProperty("report_command").GetString()!,
+            "https://example.test/pr/1586",
+            "recover-stuck-sender-local-report");
+
+        workspace.MakeHostReadOnly();
+        try
+        {
+            var reportProcess = workspace.RunExactCommand(exactCommand);
+            Assert.Equal(1, reportProcess.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(reportProcess.StandardError), reportProcess.StandardError);
+            using var reportDocument = JsonDocument.Parse(reportProcess.StandardOutput);
+            var reportResult = reportDocument.RootElement;
+            Assert.Equal("report-routing-root-write-required", reportResult.GetProperty("cause").GetString());
+            Assert.Contains(
+                "The attempted host-root write failed",
+                reportResult.GetProperty("summary").GetString(),
+                StringComparison.Ordinal);
+
+            var (reconcileExit, reconcileResult) = workspace.RunHost(
+                workspace.ReconcileArgs("G731-recovery"));
+            Assert.Equal(1, reconcileExit);
+            Assert.Equal("sender-local-report-not-delivered", reconcileResult.GetProperty("cause").GetString());
+            var recoveryCommand = reconcileResult.GetProperty("recovery_command").GetString()!;
+            Assert.Contains("intent-cli notify collect", recoveryCommand, StringComparison.Ordinal);
+            Assert.Contains($"--routing-root {workspace.HostRoot}", recoveryCommand, StringComparison.Ordinal);
+            Assert.Contains($"--report-root {workspace.SeatRoot}", recoveryCommand, StringComparison.Ordinal);
+            Assert.Contains(recoveryCommand, reconcileResult.GetProperty("summary").GetString(), StringComparison.Ordinal);
+            Assert.Empty(File.ReadAllLines(workspace.ExternalReaderPath));
+        }
+        finally
+        {
+            workspace.MakeHostWritable();
+        }
+
+        var beforeLines = File.ReadAllLines(workspace.ExternalReaderPath).Length;
+        var collectArgs = new[]
+        {
+            "notify", "collect", "--domain", Domain, "--team", Team, "--task-id", "G731-recovery",
+            "--routing-root", workspace.HostRoot, "--report-root", workspace.SeatRoot,
+            "--write", "--format", "json",
+        };
+        var (collectExit, collectResult) = workspace.RunHost(collectArgs);
+        Assert.Equal(0, collectExit);
+        Assert.True(collectResult.GetProperty("delivered").GetBoolean());
+        Assert.True(collectResult.GetProperty("event_appended").GetBoolean());
+        Assert.Contains("host routing event was appended", collectResult.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Equal(beforeLines + 1, File.ReadAllLines(workspace.ExternalReaderPath).Length);
+
+        using (var eventDocument = JsonDocument.Parse(File.ReadAllLines(workspace.ExternalReaderPath).Single()))
+        {
+            Assert.Equal("completion", eventDocument.RootElement.GetProperty("kind").GetString());
+            Assert.Equal("G731-recovery", eventDocument.RootElement.GetProperty("unit").GetString());
+        }
+
+        var outbox = NotifyReportOutboxStore.Find(
+            workspace.SeatRoot,
+            Domain,
+            Team,
+            "G731-recovery",
+            "g731-recovery-nonce");
+        Assert.True(outbox.Resolved);
+        Assert.Equal("delivered", outbox.Entry!.DeliveryState);
+
+        var (finalReconcileExit, finalReconcile) = workspace.RunHost(
+            workspace.ReconcileArgs("G731-recovery"));
+        Assert.Equal(0, finalReconcileExit);
+        Assert.True(finalReconcile.GetProperty("reconciled").GetBoolean());
+    }
+
+    [Fact]
     public void RegistrationLossNamesMissingAgentSessionAndTheBoundedOperatorAct_G719()
     {
         var record = new NotifyPendingDelegation
@@ -314,7 +396,8 @@ public sealed class NotifyG719Tests : IDisposable
 
         public string HostRoot { get; }
         public string SeatRoot { get; }
-        public string ExternalReaderPath => Path.Combine(
+        private string? externalReaderPath;
+        public string ExternalReaderPath => externalReaderPath ?? Path.Combine(
             HostRoot,
             ".intent-cli",
             "notify",
@@ -458,12 +541,17 @@ public sealed class NotifyG719Tests : IDisposable
             return File.GetUnixFileMode(HostRoot);
         }
 
-        public void WriteTopology(bool externalOrchestration = false)
+        public void WriteTopology(bool externalOrchestration = false, string? externalReader = null)
         {
             var path = NotifyRoleTopologyStore.ResolvePath(HostRoot, Domain, Team);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var reader = externalReader
+                ?? $".intent-cli/notify/{Domain}/{Team}/external-reader.jsonl";
+            externalReaderPath = Path.IsPathRooted(reader)
+                ? Path.GetFullPath(reader)
+                : Path.GetFullPath(Path.Combine(HostRoot, reader));
             object orchestration = externalOrchestration
-                ? new { resident = NotifyRecordedRole.ExternalResident, reader = ".intent-cli/notify/intent-cli/intent-cli-dev/external-reader.jsonl" }
+                ? new { resident = NotifyRecordedRole.ExternalResident, reader }
                 : new { resident = NotifyRecordedRole.HerdrResident, workspace_id = "wG719", pane_id = "wG719:p1" };
             File.WriteAllText(path, JsonSerializer.Serialize(new
             {
