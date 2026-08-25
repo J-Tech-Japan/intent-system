@@ -118,31 +118,33 @@ internal static class TaskCommand
             Workdir = parsed.Workdir,
             Domain = parsed.Domain,
             TargetRepo = parsed.TargetRepo,
-            Summary = $"Implement {parsed.Repo}#{parsed.Issue}: claim the issue, branch off main in {parsed.Workdir}, run the issue-to-PR workflow on the source URL ONLY, open a PR with `Closes #{parsed.Issue}` (G311), then summarize and complete via `worker complete`.",
+            Summary = $"Implement {parsed.Repo}#{parsed.Issue}: consume host claim evidence, claim the child issue through the GitHub-only worker path, branch from origin/main in {parsed.Workdir}, run the issue-to-PR workflow on the source URL ONLY, open a ready-for-review PR with `Closes #{parsed.Issue}` (G311), then summarize and complete without a host round trip.",
             Preconditions = new[]
             {
                 "Operator/controller has authoritatively selected this issue number — no selector lookup is performed by this planner.",
                 $"Workdir `{parsed.Workdir}` is the child-cwd implementation repo (no `.intent-cli/` per G300; presence is fine but child loop must NOT read it).",
-                "`gh auth status` is clean and `intent-cli` resolves on PATH (G305 abort gates).",
-                "`intent-cli automation doctor --format json` reports `status: ok` (no `stale-host-cli`).",
-                "If parent host workdir is dirty, host-side has already run `automation host-sync-preflight` + `automation durable-state-preflight` per G304/G306/G312 — child loop never repairs parent metadata."
+                "`gh auth status` is clean for the target child repository and the child GitHub API path is available (G305 abort gates).",
+                "The host role has returned execution-unit claim JSON with `status=acquired`, `push_succeeded=true`, matching scope/actor/team and commit, plus `claim verify` evidence `passed=true` / `status=owned`.",
+                "The child does not run host `intent-cli` preflight/acquire, read host metadata, use host credentials, or call the host-repository GitHub API; if host evidence is absent, send the exact G733 `intent-cli notify report` request in the implementation steps."
             },
             Steps = new[]
             {
-                $"intent-cli worker claim --kind issue --repo {parsed.Repo} --number {parsed.Issue} --write --format json",
-                $"cd {parsed.Workdir} && git checkout main && git pull --ff-only && git checkout -b claude/g-issue-{parsed.Issue}",
+                $"intent-cli worker claim --kind issue --repo {parsed.Repo} --number {parsed.Issue} --github-only --write --format json",
+                $"Host-duty request when claim evidence is absent: {ChildHostDutyBoundaryGuidance.Build(parsed.Domain ?? "<DOMAIN>").HostDutyRequest}",
+                $"cd {parsed.Workdir} && git fetch origin main && git checkout -b claude/g-issue-{parsed.Issue} origin/main",
                 $"# Read GitHub issue body (gh issue view {parsed.Issue} --repo {parsed.Repo} --json title,body,labels) — it IS the implementation contract; do not read repo skill files for routine work.",
                 "# Implement the narrow scope; tests + build green.",
-                $"git push -u origin claude/g-issue-{parsed.Issue}",
-                $"# Open PR via `gh pr create --repo {parsed.Repo} --base main --title \"...\" --body \"... Closes #{parsed.Issue}\"` (G311 — body MUST contain Closes/Fixes/Resolves #{parsed.Issue}; `worker complete` validates and refuses on missing/wrong/multiple).",
+                $"cd {parsed.Workdir} && git push -u origin claude/g-issue-{parsed.Issue}",
+                $"# Open ready-for-review PR via `gh pr create --repo {parsed.Repo} --base main --title \"...\" --body \"... Closes #{parsed.Issue}\"` (G311 — body MUST contain Closes/Fixes/Resolves #{parsed.Issue}; `worker complete` validates and refuses on missing/wrong/multiple).",
                 $"intent-cli automation base-branch-check --repo {parsed.Repo} --pr <new-pr-n> --policy direct-main --actual-base $(gh pr view <new-pr-n> --repo {parsed.Repo} --json baseRefName --jq .baseRefName) --format json",
                 $"IS_DRAFT=$(gh pr view <new-pr-n> --repo {parsed.Repo} --json isDraft --jq .isDraft)",
                 $"intent-cli worker result-summary --kind issue-to-pr --repo {parsed.Repo} --outcome pr-created --issue {parsed.Issue} --pr <new-pr-n> --pr-draft $IS_DRAFT --format json",
-                $"intent-cli worker complete --kind issue --repo {parsed.Repo} --number {parsed.Issue} --outcome pr-created --pr <new-pr-n> --write --format json"
+                $"intent-cli worker complete --kind issue --repo {parsed.Repo} --number {parsed.Issue} --outcome pr-created --pr <new-pr-n> --github-only --write --format json"
             },
             LabelTransitions = new[]
             {
-                "claim → add `intent-issue-in-progress` (issue side); the host owns `intent-target` and never the child.",
+                "host claim acquire/verify → execution-unit ownership; the child consumes the returned evidence and does not acquire it.",
+                "child worker claim → add `intent-issue-in-progress` (issue side) through the GitHub-only path; the host owns `intent-target` and never the child.",
                 "complete pr-created → swap `intent-issue-in-progress` → `intent-pr-created` on the source ISSUE (NEVER on the PR — G287/G317).",
                 "Child loop NEVER applies `intent-target` and NEVER applies `intent-pr-created` directly to a PR."
             },

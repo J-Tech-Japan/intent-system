@@ -58,6 +58,69 @@ copy a long loop body from this document.
 - A child agent never applies `intent-target` (host-owned) or `intent-pr-created` (issue-side marker) to a PR
 - `linked_pr_synced: false` from `worker complete` is the expected child-cwd warning — record it and move on
 
+## G733: contractual seat/host duty boundary ([ADR 0010](../adr/0010-seat-host-duty-route.md))
+
+The implementation seat owns the child repository end to end. From the
+assigned GitHub issue it reads the standalone contract, runs `git fetch origin
+main`, creates a branch from `origin/main`, edits and tests the child code,
+commits, pushes, opens a **ready-for-review** PR with `Closes #<issue>`, and
+reports the result. The child path uses the target repository's GitHub facts
+and `intent-cli worker ... --github-only`; it does not need a host round trip
+for those steps.
+
+The host role owns host state: `.intent-cli/` queue-state, claims, runs,
+packets, metadata branches, host-repository Git refresh/push, and
+host-repository credentials/API operations. Execution-unit claim acquisition
+is a host duty and is not inferred from a lifecycle label or from a local
+file. The host role must return both of these canonical JSON results before
+the seat edits:
+
+```bash
+intent-cli claim acquire --scope execution-unit:<EU> --actor <actor> --team <team> --write --format json
+intent-cli claim verify --scope execution-unit:<EU> --team <team> --format json
+```
+
+The evidence must show `status=acquired`, `push_succeeded=true`, matching
+scope/actor/team and the pushed `commit`, followed by `passed=true` and
+`status=owned`. This preserves the G679 Git compare-and-swap: pull, immutable
+claim record, commit, and plain push; only the successful remote push acquires
+ownership. Labels, a local claim file, a local commit, or preflight output are
+not ownership, and no force-push, time expiry, or inferred takeover is valid.
+
+### Exact host-duty request
+
+When that evidence is missing, or any other host-owned operation is required,
+the implementation seat sends this request through the team's canonical
+message channel. It does not enter the host repository or hand-write agmsg or
+herdr transport:
+
+```bash
+intent-cli notify report --domain <domain> --team <team> --from implementation --to orchestration --task-id <task-id> --status question --artifact <child-artifact> --summary 'HOST DUTY REQUEST: run intent-cli claim acquire --scope execution-unit:<EU> --actor <actor> --team <team> --write --format json; then intent-cli claim verify --scope execution-unit:<EU> --team <team> --format json; return the JSON evidence, pushed commit, and owned verdict.' --routing-root <host-routing-root> --report-root . --write --format json
+```
+
+The seat still cannot read or mutate host `.intent-cli/`, queue-state,
+claims, runs, packets, metadata branches, or host Git; acquire/release/take
+over an execution-unit claim; use host-repository credentials or the
+host-repository GitHub API; or perform host publish, linkage, review, or
+closeout transitions. If a canonical host-aware preflight refuses because the
+seat cannot refresh host `FETCH_HEAD`, report the exact command and refusal as
+the host duty. Do not widen roots, create an improvised clone, or retry by
+entering the host repo.
+
+This rule remains necessary on a co-located machine. Host files and
+credentials may appear readable today only because the seats share a machine;
+remote-herdr can place the implementation seat on another VM with neither a
+shared filesystem nor host credentials. Co-location is therefore not a
+contractual capability and must never become a child dependency.
+
+Seat-owned verification emits all three boundaries: the child
+`worker ... --github-only` selection/claim/complete JSON plus branch, test,
+commit, push, and PR evidence; the exact `notify report` host-duty request and
+the host claim JSON; and a still-refused boundary probe such as
+`touch <host-routing-root>/.intent-cli/probe-should-fail`, which must exit
+nonzero with `Operation not permitted`. Use a test-owned sentinel and never
+delete it if the negative probe unexpectedly succeeds.
+
 ## G724: worker domain identity on a multi-domain host
 
 The startup marker is display evidence, not a worker binding. In host context,

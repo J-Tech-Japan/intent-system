@@ -8,8 +8,9 @@ namespace IntentSystem.Cli.Commands;
 /// paste-ready, skill-free issue-to-PR implementation prompt so AI agents can
 /// implement issues without depending on local <c>gh-issue-to-pr</c> skill
 /// files or copied prompt files. The prompt includes the standalone contract
-/// gate, origin/main branch creation, minimal implementation, focused
-/// validation, draft PR creation, and worker claim/complete handoff.
+/// gate, the G733 seat/host duty boundary, origin/main branch creation,
+/// minimal implementation, focused validation, ready-for-review PR creation,
+/// and worker claim/complete handoff.
 /// Never mutates state. Never launches an AI provider.
 /// </summary>
 internal static class GuideWorkerIssueToPrCommand
@@ -63,8 +64,9 @@ internal static class GuideWorkerIssueToPrCommand
         var repoLabel = string.IsNullOrWhiteSpace(repo) ? "the repo in the current worktree" : $"`{repo}`";
         var domainPlaceholder = string.IsNullOrWhiteSpace(domain) ? "<DOMAIN>" : domain;
 
+        var seatHostBoundary = ChildHostDutyBoundaryGuidance.Build(domainPlaceholder);
         var prompt =
-$@"Implement the issue returned by `intent-cli worker next-action` as a draft PR for {repoLabel}. Do not use the `gh-issue-to-pr` skill file, local skill files, or copied prompt files.
+$@"Implement the issue returned by `intent-cli worker next-action` as a ready-for-review PR for {repoLabel}. Do not use the `gh-issue-to-pr` skill file, local skill files, or copied prompt files.
 
 First-call sequence (read-only; required before any code work):
 1. `intent-cli guide model --format json` — confirm chat-first / CLI-internal collaboration model.
@@ -86,19 +88,23 @@ Read the issue body with `gh issue view <n> --repo <OWNER>/<REPO>`. The body mus
 
 If any required section is missing or if the real contract lives only in linked parent files, decline before creating any branch or code change. Report the missing sections and stop. Set outcome to `declined-contract-incomplete`.
 
+{ChildHostDutyBoundaryGuidance.RenderPromptBlock(domainPlaceholder)}
+
+G717 claim precedence remains in force: the claim registry is authoritative over lifecycle labels; stale shadow state never overrides it, and an active or unavailable claim remains an ownership stop. Follow the worker surface without adding/removing that label by hand; no raw GitHub label mutation is permitted.
+
 Implementation steps:
-1. On a claims-enabled host, select with `intent-cli worker next-action --repo <OWNER>/<REPO> --team <team> --format json`. For an issue carrying `intent-issue-in-progress`, the shared `execution-unit:<EU>` claim verification is authoritative: an unheld claim makes that lifecycle label stale shadow state and next-action returns the canonical issue-to-PR action; an active or unavailable claim remains an ownership stop with the holder/evidence named. With no claims store, selection is byte-identical to the legacy path.
-   Then run `intent-cli worker claim --kind issue --number <n> --repo <OWNER>/<REPO> --write --format json`. When the lifecycle label is stale, worker claim succeeds without adding/removing that label; no raw GitHub label mutation is a repair path. Before implementation, run `intent-cli worker issue-preflight --repo <OWNER>/<REPO> --issue <n> --format json`. The execution-unit claim registry is authoritative over `intent-issue-in-progress`: preflight reports the disagreement and proceeds on the unheld claim. After that eligibility check, acquire the execution-unit claim through the explicit G679 `intent-cli claim acquire` command with the attributed actor/team before editing source; do not re-run preflight as a substitute for ownership acquisition.
+1. From the child cwd, select with `intent-cli worker next-action --repo <OWNER>/<REPO> --github-only --format json` and use its returned issue URL/number. Claim only the target-repository lifecycle label with `intent-cli worker claim --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --write --format json`. These GitHub-only worker calls do not acquire the execution-unit claim and do not read host metadata.
+   Execution-unit claim acquisition is a host duty. Before editing, consume the host-provided JSON evidence: `status=acquired`, `push_succeeded=true`, matching scope/actor/team and pushed `commit`, followed by `intent-cli claim verify ...` with `passed=true` and `status=owned`. If that evidence is missing, send the exact G733 `intent-cli notify report ... --status question ...` host-duty request above. Never run host claim acquire from the seat, widen roots, or treat `intent-issue-in-progress`, a local claim file, or `worker issue-preflight` as ownership. If a canonical child preflight refuses because it cannot reach host `FETCH_HEAD`, record the exact refusal and route the duty; do not retry by entering the host repo.
 2. Fetch origin/main: `git fetch origin main`. Create a new branch `claude/<slug>` from `origin/main`. Never reuse an existing unrelated branch.
 3. Read only the source files needed to implement the issue correctly. Match the repository's existing style and patterns.
 4. Implement only the requested change. Do not widen scope. Do not add unrequested refactors.
 5. Run the most relevant targeted tests. Report the command and the result. If broader validation is required by the repository contract or the touched area, run it too.
-6. Push the branch and create a draft PR with `gh pr create --draft --title ""..."" --body ""..."" --repo <OWNER>/<REPO>`.
+6. Push the branch and create a ready-for-review PR with `gh pr create --title ""..."" --body ""..."" --repo <OWNER>/<REPO>`. The body must include `Closes #<n>`.
 7. Do not add `intent-target` or `intent-pr-created` to the PR.
-8. From the parent host root, run `intent-cli worker result-summary --kind issue-to-pr --issue <n> --pr <pr-n> --repo <OWNER>/<REPO> --format json`, then `intent-cli worker complete --kind issue --number <n> --repo <OWNER>/<REPO> --outcome pr-created --write --format json`. On a multi-domain host, the worker resolves the execution-unit domain from durable queue/packet evidence; add `--domain <durable-domain>` only when selecting that recorded domain. The visible startup marker never supplies worker identity.
+8. From the child cwd, run `intent-cli worker result-summary --kind issue-to-pr --issue <n> --pr <pr-n> --repo <OWNER>/<REPO> --pr-draft false --format json`, then `intent-cli worker complete --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --outcome pr-created --pr <pr-n> --write --format json`. A child-cwd `linked_pr_synced: false` warning is host-owned follow-up, not permission to enter the host repo.
 
 Outcome classification:
-- `pr-created` — draft PR created successfully.
+- `pr-created` — ready-for-review PR created successfully.
 - `declined-contract-incomplete` — issue body missing required sections; no branch or PR created.
 - `clarification-required` — ambiguous contract or blocker found during implementation; no PR created.
 - `already-resolved` — the issue is already fixed in origin/main; no PR created.
@@ -112,7 +118,7 @@ Hard rules:
 - Do not add `intent-target` to the PR; it is host-owned.
 - Do not add `intent-pr-created` to the PR; it is an issue-side completion marker applied by `worker complete`.
 - All label transitions go through `intent-cli worker claim` / `intent-cli worker complete`. No manual `gh ... edit --add-label` / `--remove-label` fallback for workflow labels.
-- If host-side completion reports missing, contradictory, unreadable, or ambiguous durable domain identity, follow the exact `worker complete ... --domain <name>` re-invocation it emits after repairing/selecting the canonical queue/packet record. Do not hand-edit `AGENTS.md` / `CLAUDE.md` or use PR-linkage recovery as a domain workaround.
+- If a host-side completion or linkage step reports missing, contradictory, unreadable, or ambiguous durable state, report the exact canonical refusal to orchestration. Do not enter the host repo, hand-edit `AGENTS.md` / `CLAUDE.md`, or use PR-linkage recovery from the child seat.
 - Do not call `intent-cli run`. `run` is for integration smoke/replay/dogfooding, not the chat-first implementation path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -171,7 +177,7 @@ Repeated-stall recovery (G408: when the same issue has stalled without progress 
             },
             OutcomeClassification = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["pr-created"] = "Draft PR created successfully.",
+                ["pr-created"] = "Ready-for-review PR created successfully.",
                 ["declined-contract-incomplete"] = "Issue body missing required sections; no branch or PR created.",
                 ["clarification-required"] = "Ambiguous contract or blocker found during implementation; no PR created.",
                 ["already-resolved"] = "The issue is already fixed in origin/main; no PR created.",
@@ -187,7 +193,8 @@ Repeated-stall recovery (G408: when the same issue has stalled without progress 
                 "parent host packet files (for filling contract gaps)"
             },
             LabelOwnership = "All label transitions delegated to installed intent-cli worker claim / worker complete. Manual `gh ... edit --label` fallback is forbidden.",
-            WorktreeFriendly = "The prompt resolves the repo from the child worktree's `gh` / `git remote` and runs worker commands from the parent host root with --repo; no hard-coded paths."
+            WorktreeFriendly = "The prompt resolves the repo from the child worktree's `gh` / `git remote` and runs child worker commands from the child cwd with `--github-only`; no parent host root, host credentials, or host-repository GitHub API is required.",
+            SeatHostBoundary = seatHostBoundary
         };
     }
 
@@ -234,6 +241,53 @@ Repeated-stall recovery (G408: when the same issue has stalled without progress 
         writer.WriteLine("## Worktree-friendly assumption");
         writer.WriteLine();
         writer.WriteLine(result.WorktreeFriendly);
+        writer.WriteLine();
+
+        writer.WriteLine("## Seat/host duty boundary (G733)");
+        writer.WriteLine();
+        writer.WriteLine(result.SeatHostBoundary.Summary);
+        writer.WriteLine();
+        writer.WriteLine("### The implementation seat performs");
+        writer.WriteLine();
+        foreach (var item in result.SeatHostBoundary.SeatResponsibilities)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### The host role performs");
+        writer.WriteLine();
+        foreach (var item in result.SeatHostBoundary.HostResponsibilities)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Exact host-duty request");
+        writer.WriteLine();
+        writer.WriteLine("```bash");
+        writer.WriteLine(result.SeatHostBoundary.HostDutyRequest);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine("### Claim safety");
+        writer.WriteLine();
+        writer.WriteLine(result.SeatHostBoundary.ClaimSafety);
+        writer.WriteLine();
+        writer.WriteLine("### Seat limitations");
+        writer.WriteLine();
+        foreach (var item in result.SeatHostBoundary.SeatCannot)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Co-location rule");
+        writer.WriteLine();
+        writer.WriteLine(result.SeatHostBoundary.CoLocationRule);
+        writer.WriteLine();
+        writer.WriteLine("### Required emitted verification");
+        writer.WriteLine();
+        foreach (var item in result.SeatHostBoundary.Verification)
+        {
+            writer.WriteLine($"- {item}");
+        }
         writer.WriteLine();
 
         writer.WriteLine("## Repeated-stall recovery (G408)");
@@ -373,6 +427,9 @@ internal sealed record GuideWorkerIssueToPrResult
 
     [JsonPropertyName("worktree_friendly")]
     public required string WorktreeFriendly { get; init; }
+
+    [JsonPropertyName("seat_host_boundary")]
+    public required ChildHostDutyBoundary SeatHostBoundary { get; init; }
 
     [JsonPropertyName("repeated_stall_recovery")]
     public required RepeatedStallRecoveryGuidance RepeatedStallRecovery { get; init; }

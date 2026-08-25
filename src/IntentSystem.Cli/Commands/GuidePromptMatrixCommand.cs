@@ -596,6 +596,8 @@ First-call sequence (read-only; required before any mutation):
 3. `intent-cli guide commands list --format json` — `primary` vs `support` vs `advanced` (`run`) vs `experimental` classification.
 4. `intent-cli automation summary --domain {domainPlaceholder} --format json` — canonical label-driven contract and capability JSON for the parent intent domain.
 
+{ChildHostDutyBoundaryGuidance.RenderPromptBlock(domainPlaceholder)}
+
 Loop body (single wake; the operator drives subsequent wakes if any):
 1. Save the child worktree path: `CHILD_WORKTREE=""$PWD""`. Confirm it is a git worktree root. Stop with `wrong-worktree` if not.
 2. Resolve `<OWNER>/<REPO>` from the child cwd: `gh repo view --json nameWithOwner --jq .nameWithOwner` (fall back to `git remote get-url origin`).

@@ -57,6 +57,70 @@
 - child agent は PR に `intent-target`（host 所有）や `intent-pr-created`（issue 側マーカー）を付けない
 - `worker complete` の `linked_pr_synced: false` は child-cwd で想定される警告 — 記録して先に進む
 
+## G733: seat / host duty の契約上の境界（[ADR 0010](../adr/0010-seat-host-duty-route.md)）
+
+implementation seat は child repository の作業を end to end で担当します。
+割り当てられた GitHub issue から standalone contract を読み、`git fetch
+origin main` を実行し、`origin/main` から branch を作り、child code を編集・
+test し、commit、push、`Closes #<issue>` を含む **ready-for-review** PR を作り、
+結果を報告します。この child path は target repository の GitHub facts と
+`intent-cli worker ... --github-only` を使い、host への round trip を必要と
+しません。
+
+host role は host state を担当します。`.intent-cli` の queue-state、claims、
+runs、packet、metadata branch、host repository の Git refresh / push、host
+repository の credentials / API operation が対象です。execution-unit の
+claim acquisition は host duty であり、lifecycle label や local file から
+推測しません。seat が編集を始める前に host role は次の canonical JSON を
+返します:
+
+```bash
+intent-cli claim acquire --scope execution-unit:<EU> --actor <actor> --team <team> --write --format json
+intent-cli claim verify --scope execution-unit:<EU> --team <team> --format json
+```
+
+evidence には `status=acquired`、`push_succeeded=true`、一致する
+scope/actor/team と push 済みの `commit`、続いて `passed=true` と
+`status=owned` が必要です。これは G679 の Git compare-and-swap を守るため
+です: pull、immutable な claim record、commit、plain push の順であり、remote
+push 成功だけが ownership です。label、local claim file、local commit、
+preflight output は ownership ではありません。force-push、時間による expiry、
+推測した takeover も許可しません。
+
+### 正確な host-duty request
+
+この evidence がない場合、または別の host-owned operation が必要な場合、
+implementation seat は team の canonical message channel を使って次の request
+を送ります。host repository に入ったり、agmsg / herdr transport を手書きしたり
+しません:
+
+```bash
+intent-cli notify report --domain <domain> --team <team> --from implementation --to orchestration --task-id <task-id> --status question --artifact <child-artifact> --summary 'HOST DUTY REQUEST: run intent-cli claim acquire --scope execution-unit:<EU> --actor <actor> --team <team> --write --format json; then intent-cli claim verify --scope execution-unit:<EU> --team <team> --format json; return the JSON evidence, pushed commit, and owned verdict.' --routing-root <host-routing-root> --report-root . --write --format json
+```
+
+seat は host の `.intent-cli/`、queue-state、claims、runs、packet、metadata
+branch、host Git を読んだり変更したりできません。execution-unit claim の
+acquire / release / takeover、host repository の credentials や host repository
+GitHub API の使用、host の publish、linkage、review、closeout transition も
+できません。seat から host-aware preflight を呼び、host `FETCH_HEAD` を refresh
+できないという refusal が返った場合は、正確な command と refusal を host duty
+として報告します。root を広げたり、即席の clone を作ったり、host repository に
+入って再試行したりしません。
+
+この rule は co-located machine でも変わりません。host file や credentials が
+今日読めるように見えるのは seat が同じ machine を共有しているからにすぎず、
+remote-herdr では implementation seat が別 VM に配置され、shared filesystem も
+host credentials も持たない可能性があります。したがって co-location は
+contractual capability ではなく、child の dependency にしてはいけません。
+
+seat-owned verification は次の 3 境界をすべて出力します。child の
+`worker ... --github-only` による selection / claim / complete JSON と branch、
+test、commit、push、PR の evidence、正確な `notify report` host-duty request と
+host claim JSON、そして拒否され続ける boundary probe です。例えば
+`touch <host-routing-root>/.intent-cli/probe-should-fail` は `Operation not
+permitted` とともに nonzero で終了しなければなりません。test-owned sentinel を
+使い、negative probe が予想に反して成功した場合は削除しません。
+
 ## G724: multi-domain host の worker domain identity
 
 startup marker は display evidence であり、worker binding ではありません。host context の
