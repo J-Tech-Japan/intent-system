@@ -4,9 +4,10 @@
 > GitHub Release、NuGet package、self-contained binary を出荷しました。npm leg は
 > registry に到達しなかったため、`0.23.0` が npm で利用できるとは扱わないでください。
 
-このラインの install verification: `JTechJapan.IntentSystem.Cli --version 0.23.0`。
-将来の Release は
-https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0 で公開されます。
+出荷済みの NuGet/バイナリ line に対する install verification:
+`JTechJapan.IntentSystem.Cli --version 0.23.0`。
+公開済み Release は
+https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0 にあります。
 
 ## なぜこのラインは v0.23.0 なのか
 

@@ -2923,7 +2923,7 @@ authoritative source ですが、tracked な EN/JA の `release-notes-v0.23.2.md
 出荷済み note を再作成・編集しません。
 公開済みの [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0)
 とその tag は authoritative shipped evidence です。v0.23.0 の shipped artifact は GitHub Release、
-NuGet package、self-contained binary です。ただし npm leg は registry に到達しなかったため、
+NuGet package、自己完結型バイナリです。ただし npm leg は registry に到達しなかったため、
 `0.23.0` は npm で利用できると扱ってはいけません。tracked な EN/JA の
 `release-notes-v0.23.0.md` files はこの shipped-artifact status を記録します。
 [v0.23.3 DRAFT](release-notes-v0.23.3.md)

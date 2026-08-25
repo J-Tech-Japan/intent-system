@@ -360,7 +360,7 @@ public sealed class ReleaseNotesV0220DocsTests
         else
         {
             Assert.Contains(
-                "self-contained binary",
+                "自己完結型バイナリ",
                 compact,
                 StringComparison.OrdinalIgnoreCase);
             Assert.Contains("npm leg は registry に到達しなかった", compact, StringComparison.OrdinalIgnoreCase);

@@ -5,8 +5,9 @@
 > leg never reached the registry; `0.23.0` must not be treated as available
 > from npm.
 
-Install verification for the line being cut: `JTechJapan.IntentSystem.Cli --version 0.23.0`.
-The eventual release will be published at
+Install verification applies to the shipped NuGet/binary line:
+`JTechJapan.IntentSystem.Cli --version 0.23.0`.
+The published release is at
 https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0.
 
 ## Why this line is v0.23.0
