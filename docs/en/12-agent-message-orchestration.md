@@ -557,7 +557,21 @@ unrecognised identifier would silence unsolicited reports and answers to
 escalations—the messages whose information the recipient did not know to
 request.
 
-**Sender-local report routing and executability/actionability diagnostics (G719 — preview-through-1.x).** An implementation seat receives exactly one bounded `--add-dir <role-work-root>` and is not granted `--add-dir <host-routing-root>` or host-root write access. Its canonical report carries `--routing-root <host-routing-root> --report-root .`: the host root remains read/transport authority and the role root is the writable sender-local outbox. A report on a seat that genuinely lacks the host routing root must persist its local outbox, identify `report_storage_mode: sender-local-role-work-root`, and identify `host_state_sync: deferred-to-orchestration`; orchestration reconciles host pending/continuation state with `intent-cli notify reconcile --domain <d> --team <t> --task-id <id> --routing-root <host> --report-root <role-work-root> --write --format json`. It must not retry a host write, hand-write transport, or widen the seat. If delivery resolves an external reader under the host root, it fails before appending with `report-routing-root-write-required` as a delegation-level routing fault and retains the local handoff.
+**Sender-local report routing and executability/actionability diagnostics (G719/G731 — preview-through-1.x).** An implementation seat receives exactly one bounded `--add-dir <role-work-root>` and is not granted `--add-dir <host-routing-root>` or host-root write access. Its canonical report carries `--routing-root <host-routing-root> --report-root .`: the host root remains read/transport authority and the role root is the writable sender-local outbox. A report on a seat that genuinely lacks the host routing root must persist its local outbox, identify `report_storage_mode: sender-local-role-work-root`, and identify `host_state_sync: deferred-to-orchestration`; orchestration reconciles host pending/continuation state with `intent-cli notify reconcile --domain <d> --team <t> --task-id <id> --routing-root <host> --report-root <role-work-root> --write --format json`. It must not retry a host write, hand-write transport, or widen the seat.
+
+G731 makes the delivery decision capability/outcome-based across both
+`notify report` and `notify collect`: differing report and routing roots are
+not a refusal. Each caller attempts the external-reader append in its current
+execution context. A successful host append delivers the report even when the
+roots differ; the sender-local outbox is then marked delivered, while host
+pending/continuation state remains the orchestration boundary. If the append
+actually raises an I/O or access error, the report remains `undelivered` and
+the emitted `report-routing-root-write-required` message describes the
+observed failure rather than asserting an unmeasured sandbox constraint.
+`notify collect --routing-root <host> --report-root <role-work-root>` is the
+named delivery-level recovery command. `notify reconcile` does not retry that
+append; for an undelivered entry it returns the exact collect command in
+`recovery_command` and in its summary.
 
 The measured sender-local routing surface and the measured process-present/missing-registration surface are one executability/actionability class: the underlying state may be true while the sandboxed reader cannot act on it. A missing `agent_session` is therefore a diagnostic fact, not process death or ownership loss; active registration remains an ownership stop.
 
