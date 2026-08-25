@@ -1,8 +1,9 @@
 # Release Notes — intent-cli v0.23.0
 
-> **⚠️ DRAFT / UNRELEASED.** This is the release-prep evidence for the line
-> after v0.22.0. The release-prep packet authors the real content; until a
-> GitHub Release is published, this file must not be treated as a changelog.
+> **RELEASED FROM TAG `v0.23.0` — NPM PUBLICATION GAP.** The GitHub Release,
+> NuGet package, and self-contained binaries shipped from this tag. The npm
+> leg never reached the registry; `0.23.0` must not be treated as available
+> from npm.
 
 Install verification for the line being cut: `JTechJapan.IntentSystem.Cli --version 0.23.0`.
 The eventual release will be published at

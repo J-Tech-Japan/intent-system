@@ -1,8 +1,8 @@
 # リリースノート — intent-cli v0.23.0
 
-> **⚠️ DRAFT / 未リリース。** これは v0.22.0 後のラインに対する
-> release-prep evidence です。release-prep パケットが author します。
-> GitHub Release が公開されるまで、このファイルを changelog として扱ってはいけません。
+> **tag `v0.23.0` から出荷済み — NPM PUBLICATION GAP。** この tag から
+> GitHub Release、NuGet package、self-contained binary を出荷しました。npm leg は
+> registry に到達しなかったため、`0.23.0` が npm で利用できるとは扱わないでください。
 
 このラインの install verification: `JTechJapan.IntentSystem.Cli --version 0.23.0`。
 将来の Release は

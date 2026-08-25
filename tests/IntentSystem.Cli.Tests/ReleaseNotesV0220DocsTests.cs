@@ -286,7 +286,7 @@ public sealed class ReleaseNotesV0220DocsTests
         Assert.Contains($"release-notes-v{policy.StableVersion}.md", section, StringComparison.Ordinal);
         Assert.Contains($"release-notes-v{policy.NextVersion}.md", section, StringComparison.Ordinal);
         Assert.Contains($"v{policy.StableVersion} GitHub Release", section, StringComparison.Ordinal);
-        AssertV0230SourceNoteDisclosure(section, language);
+        AssertV0230ShippedArtifactStatus(section, language);
         Assert.Contains(
             language == "en" ? "source-note inconsistency predates this roll" : "source-note inconsistency はこの roll より前から存在し",
             compact,
@@ -323,24 +323,6 @@ public sealed class ReleaseNotesV0220DocsTests
             StringComparison.OrdinalIgnoreCase);
     }
 
-    [Theory]
-    [InlineData("en")]
-    [InlineData("ja")]
-    public void V0230SourceNoteDisclosureTripwireRejectsRemovedDisclosure(string language)
-    {
-        var policy = RepoVersionPolicySource.Read();
-        var section = ReadinessSection(language, policy.NextVersion);
-        AssertV0230SourceNoteDisclosure(section, language);
-
-        var removed = section
-            .Replace("v0.23.0", "v0.99.0", StringComparison.Ordinal)
-            .Replace("DRAFT / UNRELEASED", "RELEASED", StringComparison.Ordinal)
-            .Replace("DRAFT / 未リリース", "公開済み", StringComparison.Ordinal);
-
-        Assert.ThrowsAny<Xunit.Sdk.XunitException>(
-            () => AssertV0230SourceNoteDisclosure(removed, language));
-    }
-
     private static string ReadinessSection(string language, string nextVersion)
     {
         var root = RepoVersionPolicySource.RepoRoot();
@@ -354,36 +336,36 @@ public sealed class ReleaseNotesV0220DocsTests
         return reference[start..(nextHeading < 0 ? reference.Length : nextHeading)];
     }
 
-    private static void AssertV0230SourceNoteDisclosure(string section, string language)
+    // G732 deliberately retires G730's mutation tripwire: that tripwire
+    // guarded the v0.23.0 source-note disclosure, and this shipped-artifact
+    // assertion now guards the corrected contract whose subject is fixed.
+    private static void AssertV0230ShippedArtifactStatus(string section, string language)
     {
         Assert.Contains(
             "https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0",
             section,
             StringComparison.Ordinal);
         Assert.Contains("release-notes-v0.23.0.md", section, StringComparison.Ordinal);
-        Assert.Contains(
-            language == "en" ? "DRAFT / UNRELEASED" : "DRAFT / 未リリース",
-            section,
-            StringComparison.OrdinalIgnoreCase);
-
         var compact = Regex.Replace(section, @"\s+", " ");
         if (language == "en")
         {
-            Assert.Contains("source-note inconsistency predates this roll", compact, StringComparison.OrdinalIgnoreCase);
             Assert.Contains(
-                "correcting shipped v0.23.0 notes is out of scope and must be handled by a later explicitly scoped remediation",
+                "self-contained binaries",
                 compact,
                 StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("v0.23.0 note files remain untouched by this roll", compact, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("npm leg never reached the registry", compact, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("must not be treated as available from npm", compact, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("DRAFT / UNRELEASED", section, StringComparison.OrdinalIgnoreCase);
         }
         else
         {
-            Assert.Contains("source-note inconsistency はこの roll より前から存在し", compact, StringComparison.OrdinalIgnoreCase);
             Assert.Contains(
-                "出荷済み v0.23.0 note の修正は scope 外です。後続の明示的な remediation で扱います",
+                "self-contained binary",
                 compact,
                 StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("この roll は v0.23.0 note file を変更しません", compact, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("npm leg は registry に到達しなかった", compact, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("npm で利用できると扱ってはいけません", compact, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("DRAFT / 未リリース", section, StringComparison.OrdinalIgnoreCase);
         }
     }
 

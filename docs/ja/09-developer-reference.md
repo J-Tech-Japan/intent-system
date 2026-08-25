@@ -2922,10 +2922,10 @@ authoritative source ですが、tracked な EN/JA の `release-notes-v0.23.2.md
 扱います。child source tree には tracked な `release-notes-v0.23.1.md` がなく、この roll で
 出荷済み note を再作成・編集しません。
 公開済みの [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0)
-とその tag も shipped evidence の authoritative source ですが、tracked な EN/JA の
-`release-notes-v0.23.0.md` にはまだ `DRAFT / 未リリース` banner が残っています。
-この source-note inconsistency はこの roll より前から存在し、出荷済み v0.23.0 note の修正は
-scope 外です。後続の明示的な remediation で扱います。この roll は v0.23.0 note file を変更しません。
+とその tag は authoritative shipped evidence です。v0.23.0 の shipped artifact は GitHub Release、
+NuGet package、self-contained binary です。ただし npm leg は registry に到達しなかったため、
+`0.23.0` は npm で利用できると扱ってはいけません。tracked な EN/JA の
+`release-notes-v0.23.0.md` files はこの shipped-artifact status を記録します。
 [v0.23.3 DRAFT](release-notes-v0.23.3.md)
 は次のラインの空の stub で、後続の release-prep packet が置き換えるまで内容を持ちません。
 

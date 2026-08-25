@@ -201,9 +201,9 @@ public sealed class ReleaseNotesV0210DocsTests
                 || stableNotes.Contains("prepare-only", StringComparison.OrdinalIgnoreCase);
             if (stableNoteIsPrepareOnly)
             {
-                // G730 records the real published Release as authoritative
-                // while deliberately leaving this pre-existing source-note
-                // inconsistency for a separately scoped remediation.
+                // A prepare-only stable note can coexist with authoritative
+                // published Release evidence; readiness records that
+                // source-note inconsistency for the still-prepared line.
                 Assert.Contains(
                     $"v{policy.StableVersion} GitHub Release",
                     referenceCompact,
