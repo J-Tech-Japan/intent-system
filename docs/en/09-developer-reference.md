@@ -2866,11 +2866,11 @@ this roll; correcting shipped v0.23.2 notes is out of scope and must be handled
 by a later explicitly scoped remediation. The child source tree has no tracked
 `release-notes-v0.23.1.md`; this roll does not recreate or edit shipped notes.
 The published [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0)
-and its tag are also authoritative shipped evidence, but the tracked EN and JA
-`release-notes-v0.23.0.md` files still carry `DRAFT / UNRELEASED` banners.
-This source-note inconsistency predates this roll; correcting shipped v0.23.0
-notes is out of scope and must be handled by a later explicitly scoped
-remediation. The v0.23.0 note files remain untouched by this roll.
+and its tag are authoritative shipped evidence. The v0.23.0 shipped artifacts
+are the GitHub Release, NuGet package, and self-contained binaries; its npm leg
+never reached the registry, so `0.23.0` must not be treated as available from
+npm. The tracked EN and JA `release-notes-v0.23.0.md` files now state this
+shipped-artifact status.
 The [v0.23.3 DRAFT](release-notes-v0.23.3.md)
 is the empty stub for the next line and must remain content-free until a later
 release-prep packet replaces it.

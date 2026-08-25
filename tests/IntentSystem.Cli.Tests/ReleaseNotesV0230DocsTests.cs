@@ -4,9 +4,9 @@ using IntentSystem.Cli.Infrastructure;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G721: the prepared v0.23.0 notes are a bilingual inventory of exactly
-/// G710 through G720, with operator-observable G717/G719/G720 behaviour and
-/// the prepared-head release identity made explicit.
+/// G721/G732: the v0.23.0 notes are a bilingual inventory of exactly G710
+/// through G720, with operator-observable G717/G719/G720 behaviour, the
+/// prepared-head release identity, and the shipped-artifact status made explicit.
 /// </summary>
 public sealed class ReleaseNotesV0230DocsTests
 {
@@ -50,6 +50,28 @@ public sealed class ReleaseNotesV0230DocsTests
         "bc13c9436b98cc48aa02c4eb85cfbb99e9fab598",
         "be13f7c0b9b306dad99d692903cee8837b31f0e8",
     ];
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void ShippedArtifactBannerNamesTheNpmPublicationGap(string language)
+    {
+        var notes = Read(language);
+        var banner = notes.Split("\n\n", StringSplitOptions.None)[1];
+
+        Assert.DoesNotContain("DRAFT /", banner, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("UNRELEASED", banner, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("未リリース", banner, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("v0.23.0", banner, StringComparison.Ordinal);
+        Assert.Contains("NuGet", banner, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("self-contained", banner, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("npm", banner, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("registry", banner, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            language == "en" ? "RELEASED FROM TAG" : "出荷済み",
+            banner,
+            StringComparison.OrdinalIgnoreCase);
+    }
 
     [Theory]
     [InlineData("en")]
