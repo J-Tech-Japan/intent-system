@@ -51,10 +51,10 @@ internal static class TopologyWorkspaceMoveGuidance
                     + "--objective <bounded-outcome> --input <reference> --expected-artifact <artifact> "
                     + "--result-nonce <nonce> --dry-run --format json",
             },
-            PaneMapContract = "Supply one old-pane=new-pane pair for every recorded herdr role. New pane ids must belong to the supplied new workspace; external roles have no pane mapping.",
+            PaneMapContract = "Supply one old-pane=new-pane pair for every distinct recorded herdr pane. Multiple roles may share one old pane and travel together to its one new pane; distinct old panes may not converge on one new pane. New pane ids must belong to the supplied new workspace; external roles have no pane mapping.",
             PreservationContract = "The move changes only the team workspace id and recorded herdr role workspace_id/pane_id values. Role membership, cwd, kind, delivery_method, reader, frontend, launch arguments, profiles, and all other JSON fields remain unchanged.",
             CasContract = "The write holds the topology CAS lock and compares the recorded digest before replacement. Pass --current-digest from a prior preview when an operator wants an explicit stale-snapshot refusal; a changed record is never silently overwritten.",
-            AuthorityBoundary = "The move is an explicit operator-supplied transition. It never queries herdr, discovers a workspace, provisions panes, changes role membership, or repairs a per-role record refusal. A per-role workspace mismatch remains fail-closed and points here as the sanctioned whole-team operation.",
+            AuthorityBoundary = "The move is an explicit operator-supplied transition. It never queries herdr, discovers a workspace, provisions panes, changes role membership, or repairs a per-role record refusal. A per-role workspace mismatch remains fail-closed and points here as the working sanctioned whole-team operation; the complete map resolves the record/move recovery path without hand editing.",
         };
     }
 }
