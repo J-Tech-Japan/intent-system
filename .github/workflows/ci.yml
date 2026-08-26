@@ -38,10 +38,32 @@ jobs:
         run: dotnet build IntentSystem.sln --configuration Release --no-restore
 
       - name: Test
+        env:
+          G734_VERIFICATION_ROOT: ${{ github.workspace }}/.artifacts/g734-verification
         run: |
+          mkdir -p .artifacts/g734-verification
           dotnet test IntentSystem.sln --configuration Release --no-build \
             --logger "trx;LogFilePrefix=test-results" \
             --results-directory "${{ github.workspace }}/.artifacts/test-results"
+
+      - name: Emit G734 verification artifact
+        if: success()
+        run: |
+          bash eng/emit-g734-verification.sh \
+            --results-directory "${{ github.workspace }}/.artifacts/test-results" \
+            --verification-directory "${{ github.workspace }}/.artifacts/g734-verification" \
+            --head-sha "${GITHUB_SHA}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --repository "${GITHUB_REPOSITORY}"
+
+      - name: Upload G734 verification artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: g734-verification
+          path: .artifacts/g734-verification/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload test results
         if: always()

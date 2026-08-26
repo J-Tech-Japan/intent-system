@@ -27,6 +27,8 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
     private static readonly DateTimeOffset FixtureEpoch =
         new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
+    private const string VerificationRootEnvironmentVariable = "G734_VERIFICATION_ROOT";
+
     public void Dispose()
     {
         NotifyCommand.UtcNowFactory = null;
@@ -462,6 +464,21 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
         Assert.True(beforeAverage > 4_970, $"fixture should exercise the issue baseline; measured {beforeAverage}");
         Assert.True(afterAverage < beforeAverage);
         Assert.True(result.GetProperty("invariant_text").GetProperty("other_record_bytes_saved").GetInt64() == 0);
+        WriteVerificationArtifact(
+            "density",
+            new
+            {
+                schema = "intent-system.g734-density/v1",
+                source_test = nameof(DensityReport_MeasuresTenThousandRecordsAgainstTheIssueBaseline),
+                command = "intent-cli notify supervise shrink --domain intent-cli --team intent-cli-dev --write --format json",
+                before_bytes = result.GetProperty("before_bytes").GetInt64(),
+                after_bytes = result.GetProperty("after_bytes").GetInt64(),
+                record_count = recordCount,
+                before_average_bytes_per_record = beforeAverage,
+                after_average_bytes_per_record = afterAverage,
+                baseline_bytes_per_record = 4_970,
+                invariant_text = result.GetProperty("invariant_text"),
+            });
         Console.WriteLine($"G734 density: before_bytes={result.GetProperty("before_bytes").GetInt64()}; after_bytes={result.GetProperty("after_bytes").GetInt64()}; records={recordCount}; before_average={beforeAverage:F2}; after_average={afterAverage:F2}; baseline=4970; invariant={result.GetProperty("invariant_text")}");
     }
 
@@ -553,6 +570,20 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
             var rawStalls = File.ReadAllText(stallsPath);
             Assert.DoesNotContain(NotifySupervisionStore.HerdrRegistrationDefinition, rawStalls, StringComparison.Ordinal);
             Assert.Contains("evidence_ref", rawStalls, StringComparison.Ordinal);
+            WriteVerificationArtifact(
+                "live",
+                new
+                {
+                    schema = "intent-system.g734-live-supervisor/v1",
+                    source_test = nameof(ShrinkWrite_ReportsRunningExternalSupervisorAndNextCycleAppends),
+                    command = "intent-cli notify supervise shrink --domain intent-cli --team intent-cli-dev --write --format json",
+                    supervisor_process_state = supervisorProcessState,
+                    cycle_count_before = cycleCountBeforeShrink,
+                    cycle_count_after = cycleCountAfterShrink,
+                    next_cycle_appended = cycleCountAfterShrink > cycleCountBeforeShrink,
+                    timestamp_dependent_fields = new[] { "cycles.jsonl", "shrink.audit.record.occurred_at" },
+                    shrink = rootElement,
+                });
             Console.WriteLine($"G734 live supervisor shrink: state=running; cycles={cycleCountBeforeShrink}->{cycleCountAfterShrink}; shrink={shrinkOutput.Trim()}");
             supervisor.Kill(entireProcessTree: true);
             await supervisor.WaitForExitAsync();
@@ -684,5 +715,20 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
         }
 
         Assert.True(predicate(), "Timed out waiting for the live supervision fixture.");
+    }
+
+    private static void WriteVerificationArtifact(string name, object payload)
+    {
+        var outputRoot = Environment.GetEnvironmentVariable(VerificationRootEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(outputRoot))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(outputRoot);
+        var finalPath = Path.Combine(outputRoot, $"{name}.json");
+        var temporaryPath = Path.Combine(outputRoot, $".{name}.{Guid.NewGuid():N}.tmp");
+        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(payload, JsonOptions));
+        File.Move(temporaryPath, finalPath, overwrite: true);
     }
 }

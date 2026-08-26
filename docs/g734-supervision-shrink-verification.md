@@ -1,116 +1,128 @@
 # G734 supervision-state shrink verification
 
-This artifact records the G734 implementation proof from test-owned temporary
-roots. The implementation never reads or changes host `.intent-cli` state.
-The density totals below cover `stalls.jsonl` and `cycles.jsonl`; the readable
-evidence manifest, transaction journal, and append-only audit are reported
-separately because they are control and audit state rather than compacted
-records.
+This document is the committed verification contract for G734. The evidence
+record is emitted by the focused tests in test-owned temporary roots and then
+assembled by `eng/emit-g734-verification.sh`. It never reads or changes host
+`.intent-cli` state.
+
+## One source of truth for exact-head evidence
+
+The CI source-contract job sets `G734_VERIFICATION_ROOT` and the two focused
+tests write these inputs:
+
+| input | producer | contents |
+| --- | --- | --- |
+| `density.json` | `DensityReport_MeasuresTenThousandRecordsAgainstTheIssueBaseline` | deterministic 10,063-record before/after totals, averages, baseline, and measured invariant-text split |
+| `live.json` | `ShrinkWrite_ReportsRunningExternalSupervisorAndNextCycleAppends` | the emitted shrink JSON, running-supervisor identity/state, cycle counts before/after, next-cycle append proof, and timestamp-dependent fields |
+
+The CI step then validates those inputs and the TRX files and writes one
+machine-readable artifact, `g734-verification.json`, with this schema:
+
+```text
+intent-system.g734-supervision-verification/v1
+  source.repository
+  source.head_sha
+  source.ci_run_id / source.ci_run_url
+  tests.source_contract.{passed, skipped, failed}
+  tests.focused_g734
+  density.{before_bytes, after_bytes, record_count,
+           before_average_bytes_per_record, after_average_bytes_per_record,
+           baseline_bytes_per_record, invariant_text}
+  live.{supervisor_state_at_shrink, cycle_count_before, cycle_count_after,
+        next_cycle_appended, timestamp_dependent_fields, shrink}
+  integrity.{invariant_saving, audit_outcome, records_archived,
+              records_discarded, records_rotated}
+```
+
+The script refuses to emit the final artifact unless the density saving
+reconciles, the shrink observed `supervisor_state=running`, the next cycle
+appended, the retained live record count is unchanged, the focused class has
+15 passing tests, and the complete TRX set has no failed test. It also writes
+`g734-verification.json.sha256` beside the report.
+
+The exact-head rule is explicit: consume the artifact only when
+`source.head_sha` equals the commit under review. The run URL and the test
+counts come from that same artifact; they are not copied from a different
+run. The PR summary is a human-readable rendering of the same fields.
 
 ## Density gate and reproducible calculation
 
-The issue baseline is 10,063 records at 4,970 bytes/record. The focused
-fixture uses exactly 10,063 legacy stall records, a fixed `2026-01-01T00:00:00Z`
-timestamp epoch, and a 4,100-character payload. It invokes the real command:
+The issue baseline is 10,063 records at 4,970 bytes/record. The density test
+uses a fixed `2026-01-01T00:00:00Z` epoch and a 4,100-character payload, so
+its byte totals are deterministic. The artifact must report:
+
+```text
+before_bytes=50,735,552
+after_bytes=48,561,944
+records=10,063
+before_average=5,041.79 bytes/record
+after_average=4,825.79 bytes/record
+baseline=4,970 bytes/record
+```
+
+The calculation is `50,735,552 - 48,561,944 = 2,173,608` bytes saved while
+retaining all 10,063 records. The invariant split is measured by the command
+and carried in `density.invariant_text`:
+
+```text
+literal_bytes_removed_from_records = 2,435,246
+reference_bytes_added_to_records   =   322,016
+net_record_bytes_saved              = 2,173,608
+other_record_bytes_saved            =         0
+```
+
+The direct byte delta and the command's `net_record_bytes_saved` are both
+2,173,608, and the resulting average is 144.21 bytes/record below the 4,970
+issue baseline. The literal/reference counters are diagnostic occurrence
+counters: `2,435,246 - 322,016 = 2,113,230` is not used as the byte-saving
+claim because the serialized field and prefix changes needed to replace the
+invariant payload are included in the direct record delta. `other_record_bytes_saved=0`
+means the command attributes the measured changed-record saving to the
+invariant rewrite rather than to a second transformation.
+
+## Live supervisor and existing-file recovery
+
+The live regression seeds 10,063 existing legacy records in a test-owned root,
+starts a separate `dotnet ... notify supervise --interval 1 --write` process,
+waits for its first cycle, and invokes the sanctioned command while that
+process is still alive:
 
 ```text
 intent-cli notify supervise shrink --domain intent-cli --team intent-cli-dev --write --format json
 ```
 
-The emitted density line was:
+The exact values for the live files are deliberately not hardcoded in this
+document. The supervisor writes wall-clock timestamps, so `cycles.jsonl` byte
+length and the total live before/after byte counts can legitimately change by
+one or more bytes between otherwise identical CI runs. A copied transcript
+would become stale again. Instead, the exact-head emitted artifact is the
+numeric source for these fields:
 
-```text
-G734 density: before_bytes=50735552; after_bytes=48561944; records=10063; before_average=5041.79; after_average=4825.79; baseline=4970
-```
+| proof | artifact field |
+| --- | --- |
+| supervisor was genuinely running | `live.supervisor_state_at_shrink` and `live.shrink.supervisor_writer` |
+| shrink before/after totals | `live.shrink.before_bytes`, `live.shrink.after_bytes` |
+| retained records | `live.shrink.before_record_count`, `live.shrink.after_record_count` |
+| `stalls.jsonl` totals | `live.shrink.files.stalls.*` |
+| `cycles.jsonl` totals | `live.shrink.files.cycles.*` |
+| next cycle after replacement | `live.cycle_count_before`, `live.cycle_count_after`, `live.next_cycle_appended` |
+| timestamp explanation | `live.timestamp_dependent_fields` |
 
-The corresponding command metrics were:
+The artifact therefore preserves the actual emitted live transcript without
+pretending that timestamp-dependent fixture bytes are a fixed constant. It
+also proves that the existing file is shrunk in place: the seeded records are
+present before the live shrink, the retained record count is unchanged, and a
+later cycle appends after the atomic replacement. It is not a rotation-only or
+stopped-supervisor demonstration.
 
-```json
-{
-  "before_bytes": 50735552,
-  "after_bytes": 48561944,
-  "before_record_count": 10063,
-  "after_record_count": 10063,
-  "before_average_bytes_per_record": 5041.79,
-  "after_average_bytes_per_record": 4825.79,
-  "literal_bytes_removed_from_records": 2435246,
-  "reference_bytes_added_to_records": 322016,
-  "net_record_bytes_saved": 2173608,
-  "other_record_bytes_saved": 0,
-  "definition_manifest": "<test-root>/.intent-cli/supervision/intent-cli/intent-cli-dev/evidence-definitions.json",
-  "resolution": "Read evidence-definitions.json and resolve the evidence_ref 'recorded-herdr-seat-registration'."
-}
-```
-
-The calculation is reproducible: `50,735,552 - 48,561,944 = 2,173,608`
-bytes saved while retaining all 10,063 records, and the average falls from
-5,041.79 to 4,825.79 bytes/record, 144.21 below the 4,970 issue baseline.
-The command attributes 2,173,608 bytes to the invariant-record rewrite,
-reports 2,435,246 literal bytes removed and 322,016 reference bytes added,
-and reports 0 bytes from other record changes.
-
-## Live supervisor and existing-file recovery
-
-The live regression seeded 10,063 existing legacy records in a test-owned
-root, started a separate `dotnet ... notify supervise --interval 1 --write`
-process, waited for its first cycle, and ran shrink while that process was
-still alive. The emitted result reported:
-
-```json
-{
-  "supervisor_state": "running",
-  "before_bytes": 10986486,
-  "after_bytes": 8812878,
-  "before_record_count": 20127,
-  "after_record_count": 20127,
-  "stalls_before_bytes": 10985655,
-  "stalls_after_bytes": 8812047,
-  "stalls_before_records": 20126,
-  "stalls_after_records": 20126,
-  "cycles_before_bytes": 831,
-  "cycles_after_bytes": 831,
-  "cycles_before_records": 1,
-  "cycles_after_records": 1,
-  "invariant_bytes_saved_in_records": 2173608,
-  "other_bytes_saved": 0
-}
-```
-
-The same test emitted `G734 live supervisor shrink: state=running;
-cycles=1->2`. The second cycle appended after the atomic replacement, so the
-proof covers a genuinely running external supervisor and the next-cycle
-write, not only a stopped-process demonstration. The unchanged record count
-and the seeded existing file prove the sanctioned path shrinks state that
-already exists rather than only changing future files.
-
-The audit names both files and the outcome:
-
-```json
-{
-  "outcome": "completed",
-  "records_archived": 0,
-  "records_discarded": 0,
-  "records_compacted": 20127,
-  "records_rotated": 0,
-  "files": {
-    "stalls.jsonl": {
-      "action": "atomically compacted; every stall event retained"
-    },
-    "cycles.jsonl": {
-      "action": "atomically rewritten; every cycle and prompt-audit event retained"
-    }
-  },
-  "evidence_reference": "evidence-definitions.json#recorded-herdr-seat-registration"
-}
-```
-
-No records were archived, discarded, or rotated. `.intent-cli/runs/*.provider.jsonl`
-was not inspected or changed; it remains outside G734.
+The audit record in `live.shrink.audit.record` names both files and the
+outcome. The accepted proof expects zero archived, discarded, and rotated
+records, with all retained records compacted in place. `.intent-cli/runs/*.provider.jsonl`
+is outside this unit and is neither read nor changed.
 
 ## Readable evidence and fail-closed validation
 
-The manifest is human-readable and resolves the reference rather than using
-an opaque code:
+The evidence manifest remains human-readable and resolvable:
 
 ```json
 {
@@ -124,48 +136,34 @@ an opaque code:
 Before planning any replacement, shrink holds the same directory lock and
 resolves every retained `evidence_ref`, validates the manifest schema and
 definitions, and only then stages or writes anything. Constructed tests cover
-all three failure boundaries:
-
-- an unknown reference;
-- the canonical reference with no definition manifest; and
-- a malformed/unsupported definition manifest.
-
-Each returns exit code 1 with the named `shrink-validation-failed` error. In
-each case `stalls.jsonl`, `cycles.jsonl`, the definition manifest, and
-`shrink-audit.jsonl` remain byte-identical; no audit line is appended and no
-transaction journal is created.
+an unknown reference, the canonical reference with no definition manifest,
+and a malformed/unsupported definition manifest. Each returns exit code 1
+with `shrink-validation-failed`; `stalls.jsonl`, `cycles.jsonl`, the
+definition manifest, and `shrink-audit.jsonl` stay byte-identical, with no
+audit line and no transaction journal.
 
 ## Recoverable replacement transaction
 
 Write mode stages complete manifest, stalls, and cycles replacements under a
-transaction-specific directory. It durably writes
-`shrink-transaction.json` with before/after SHA-256 hashes before replacing a
-target. After each replacement and before the final audit append, the focused
-tests inject a failure and then restart the canonical shrink command. Recovery
-verifies the hashes, completes only missing staged replacements, appends a
-`recovered-completed` audit outcome, and removes the journal. All four fault
-points produced exit `1` on the injected run, exit `0` on restart, 3 retained
-stall records, 1 retained cycle, readable evidence, and a removed journal:
+transaction-specific directory. It durably writes `shrink-transaction.json`
+with before/after SHA-256 hashes before replacing a target. Fault injection
+after each replacement and immediately before final audit append is followed
+by a fresh canonical invocation. Recovery verifies the hashes, completes only
+missing staged replacements, appends `recovered-completed`, and removes the
+journal. The constructed external-target conflict records `aborted` without
+overwriting the unexpected target. The matrix is:
 
-| injected point | restart result | durable outcomes |
+| injected point | restart result | durable outcome |
 | --- | --- | --- |
 | after manifest replacement | readable, exit 0 | `recovered-completed`, then `completed` |
 | after stalls replacement | readable, exit 0 | `recovered-completed`, then `completed` |
 | after cycles replacement | readable, exit 0 | `recovered-completed`, then `completed` |
 | before final audit append | readable, exit 0 | `recovered-completed`, then `completed` |
+| unexpected external target | readable, no overwrite | `aborted` |
 
-A fifth constructed test mutates a target after the simulated crash. Recovery
-does not overwrite the unexpected hash; it appends a durable `aborted` audit
-outcome, removes the journal, and leaves the externally appended valid cycle
-and the already-readable stall state intact. Thus completed, recovered, and
-aborted outcomes are all accounted for without silent record loss.
-
-The final implementation GitHub Actions run was `32929074724`. Its uploaded TRX emitted the
-density line, the live `running`/`cycles=1->2` transcript, all four recovery
-rows, and the aborted-target transcript above. The source-contract job passed
-5,538 tests with 1 expected skip across all projects; the CLI project passed
-5,208 with 1 expected skip. The focused G734 class contributed 15 passing
-tests, including the density measurement, live-supervisor cycle transition,
-three no-write validation counterexamples, four replacement/audit fault
-points, and the aborted-target proof. The npm package dry-run job was also
-green.
+The focused G734 class covers the density measurement, live-supervisor cycle
+transition, three no-write validation counterexamples, four replacement/audit
+fault points, and the aborted-target proof. The exact test count and complete
+source-contract count belong to `g734-verification.json`, so this document,
+the PR summary, and the emitted CI artifact cannot silently acquire different
+run IDs, live byte totals, averages, savings, transcripts, or test counts.
