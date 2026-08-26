@@ -291,6 +291,9 @@ public sealed class TopologyWorkspaceMoveG697Tests
         Assert.Contains("topology move", commands.GetProperty("apply").GetString(), StringComparison.Ordinal);
         Assert.Contains("notify delegate", commands.GetProperty("notify_preflight").GetString(), StringComparison.Ordinal);
         Assert.Contains("CAS", root.GetProperty("cas_contract").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Multiple roles may share one old pane", root.GetProperty("pane_map_contract").GetString(), StringComparison.Ordinal);
+        Assert.Contains("distinct old panes may not converge", root.GetProperty("pane_map_contract").GetString(), StringComparison.Ordinal);
+        Assert.Contains("without hand editing", root.GetProperty("authority_boundary").GetString(), StringComparison.Ordinal);
     }
 
     private static CliContext CreateFixture()

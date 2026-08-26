@@ -1365,9 +1365,12 @@ G697 は意図的な workspace rebuild の path を追加します。インス�
 `guide orchestrator-thread` から到達でき、inspect → dry-run preview → explicit write →
 validate → notify preflight の完全な順序を表示します。move は herdr role ごとの operator-supplied
 old-pane から new-pane への完全な map を必要とし、CAS lock を保持して topology digest を比較します。
-team と role の workspace/pane id だけを atomic に更新し、他の role field は維持します。herdr query、
-pane 作成、membership 変更、per-role conflict の repair は行いません。既存の refusal は sanctioned な
-whole-team transition としてこの move command を示します。
+同じ old pane を共有する複数の role は、その old pane が一つの new pane に対応すれば一緒に移動します。
+異なる old pane を一つの new pane に集約する map は ambiguity として拒否されます。team と role の
+workspace/pane id だけを atomic に更新し、他の role field は維持します。herdr query、pane 作成、
+membership 変更、per-role conflict の repair は行いません。per-role `topology record` workspace mismatch
+refusal は動作する whole-team move command を示すため、二つの surface が互いを指す recovery dead end には
+なりません。machine-local JSON を手編集しないでください。
 
 agent kind は herdr が起動できる任意の kind です。Claude、Codex、Copilot、Cursor、OpenCode などは
 例であり、supported-set の制約ではありません。logical role の既定値は `implementation`、`review`、
