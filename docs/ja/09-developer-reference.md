@@ -2943,7 +2943,7 @@ result は literal bytes の削減、追加した reference bytes、record の n
 `shrink-audit.jsonl` に明記します。`.intent-cli/runs/*.provider.jsonl` は別の provider-run state なので
 scope 外です。`--dry-run` なら manifest、JSONL、audit を書き込まずに測定済み plan だけを確認できます。
 
-### 次リリース準備(v0.23.3)
+### 次リリース準備(v0.24.0)
 
 **`v0.23.2` は出荷済み**(GitHub Release、NuGet、binary、npm)です。公開済みの
 release は [v0.23.2 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.2)
@@ -2958,64 +2958,76 @@ authoritative source ですが、tracked な EN/JA の `release-notes-v0.23.2.md
 NuGet package、自己完結型バイナリです。ただし npm leg は registry に到達しなかったため、
 `0.23.0` は npm で利用できると扱ってはいけません。tracked な EN/JA の
 `release-notes-v0.23.0.md` files はこの shipped-artifact status を記録します。
-[v0.23.3 DRAFT](release-notes-v0.23.3.md)
-は次のラインの空の stub で、後続の release-prep packet が置き換えるまで内容を持ちません。
+[v0.24.0 prepare-only notes](release-notes-v0.24.0.md) が実質的な次の line です。不要になった
+v0.23.3 DRAFT stub は、競合する line を残さないため、この release-prep unit で削除しました。
 
-Rolled policy: `stableVersion → 0.23.2`; `nextVersion → 0.23.3`。
+post-release roll は feature content が入る前に `nextVersion` を `0.23.3` placeholder として記録しました。
+Release-prep は、測定した line に `notify supervise shrink` と
+`session-layer topology record-host-state` が追加され、installed 0.23.2 CLI には無いため、`0.24.0` に retarget します。
+六つの release unit と除外した G730 roll は v0.24.0 notes で account します。
 
-次のラインの package identity は `JTechJapan.IntentSystem.Cli.0.23.3.nupkg` です。
+Rolled policy: `stableVersion → 0.23.2`; `nextVersion → 0.24.0`。
+
+次の line の package identity は `JTechJapan.IntentSystem.Cli.0.24.0.nupkg` です。
 これは導出された verification value であり、release content ではありません。
 
-**`v0.23.3` のリリース準備検証:**
+**`v0.24.0` のリリース準備検証:**
 
-この post-release roll が変更するのは version policy、次のラインの空の stub、そして ja/en
-両ミラーのこの readiness section だけです。tag または Release を作成せず、package を publish せず、
-credentials を扱わず、未出荷ラインの feature note を author しません。
+この prepare-only unit が変更するのは version policy、実質的な EN/JA v0.24.0 notes、この readiness section、
+release-note/version tests、そして superseded v0.23.3 stub の削除です。tag または Release を作成せず、package を publish せず、
+credentials を扱わず、post-release roll を実行しません。
 
-claims-enabled host では、後続の release-prep packet がこれらの artifact を編集する前に
-release-prep ownership を acquire / verify します。この roll 自身は claim acquisition を実行しません:
+Functional prepared head はこの release-prep unit の外側です。正確な Release identity evidence の source revision は
+`a7d10026a9a4dd2693f464a5c5e34ce134b2c661`、そこから生成された display identity は
+`intent-cli 0.23.3-a7d1002-G734` です。この unit が policy を retarget する前の測定値であり、eventual v0.24.0 tag はこの documentation merge commit の後です。
+
+claims-enabled host では、release-prep operator がこれらの artifact を編集する前に current release-prep scope を acquire / verify します。
+この child PR は host-state command を実行しません:
 
 ```bash
-intent-cli claim acquire --scope release-prep:<owner/repo>:0.23.3 --actor <actor> --team <team> --write --format json
-intent-cli claim verify --scope release-prep:<owner/repo>:0.23.3 --team <team> --format json
+intent-cli claim acquire --scope release-prep:<owner/repo>:0.24.0 --actor <actor> --team <team> --write --format json
+intent-cli claim verify --scope release-prep:<owner/repo>:0.24.0 --team <team> --format json
 ```
 
 ```bash
-# 1. roll 済み version policy と、内容のない両言語 DRAFT stub を確認。
-cat eng/version.json   # stableVersion 0.23.2 (published), nextVersion 0.23.3 (next line)
-test -f docs/en/release-notes-v0.23.3.md
-test -f docs/ja/release-notes-v0.23.3.md
+# 1. retarget 済み policy、実在する v0.24.0 notes、削除した stub を確認。
+cat eng/version.json   # stableVersion 0.23.2 (published), nextVersion 0.24.0 (next line)
+test -f docs/en/release-notes-v0.24.0.md
+test -f docs/ja/release-notes-v0.24.0.md
+test ! -e docs/en/release-notes-v0.23.3.md
+test ! -e docs/ja/release-notes-v0.23.3.md
 
-# 2. 次のラインの表示バージョン識別を build して確認。
+# 2. first-parent inventory と prepared functional identity を記録。
+git log --first-parent v0.23.2..main
+git rev-list --first-parent --count v0.23.2..main
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-#   期待する形: intent-cli 0.23.3-<sha>-G<unit>
+#   prepared functional head: a7d10026a9a4dd2693f464a5c5e34ce134b2c661
+#   identity from that revision: intent-cli 0.23.3-a7d1002-G734
 
-# 3. canonical host checkout から installed 0.23.2 CLI を実行し、silent な verdict と
-#    G727 checkout_freshness/provenance statement の両方を記録する(read-only)。
+# 3. installed 0.23.2 CLI を read-only で実行して freshness evidence を残す。
 intent-cli automation stalled-work --domain intent-cli --repo J-Tech-Japan/intent-system --format json
+#   silent verdict と checkout_freshness/provenance statement の両方を記録。
 
-# 4. shipped-note check を正直に記録する: source v0.23.2 note は未変更だが、公開済み
+# 4. shipped-note check を正直に記録: source v0.23.2 note は未変更だが、公開済み
 #    Release にもかかわらず PREPARED / NOT PUBLISHED banner が残る。
 git diff --quiet -- docs/en/release-notes-v0.23.2.md docs/ja/release-notes-v0.23.2.md
 grep -n "PREPARED / NOT PUBLISHED" docs/en/release-notes-v0.23.2.md
 grep -n "PREPARED / NOT PUBLISHED" docs/ja/release-notes-v0.23.2.md
 gh release view v0.23.2 --repo J-Tech-Japan/intent-system
-#    公開済み GitHub Release/tag が authoritative evidence であり、note remediation は
-#    この version roll の scope 外です。
 
-# 5. focused な documentation/version guard と full suite を実行。
+# 5. targeted release-prep guard と full Release suite を実行。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release \
-  --filter "FullyQualifiedName~ReleaseNotesV0220DocsTests|FullyQualifiedName~ReleaseNotesV0230DocsTests|FullyQualifiedName~ReleaseNotesV0232DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+  --filter "FullyQualifiedName~ReleaseNotesV0240DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~VersionSourcePolicyGuardTests|FullyQualifiedName~ReleaseNotesV0220DocsTests|FullyQualifiedName~ReleaseNotesV0230DocsTests|FullyQualifiedName~ReleaseNotesV0232DocsTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests"
 git diff --check
-dotnet test IntentSystem.sln -c Release
+dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release
 ```
 
-この roll は [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
+Targeted と full Release の test count は、final documentation edit 後の v0.24.0 notes に貼り付けます。
+この prepare-only unit は [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
 **ステップ 5–7** に従います。**同一コミットに DRAFT note スタブ**(ステップ 5)、
 **「次リリース準備」section を ja/en 両ミラーで新しいラインへ更新**(ステップ 6)、
-そして **roll 後の child main CI green 確認**(ステップ 7)が完了条件です。既存の release tag、
-Release、package、workflow は変更しません。
+そして **roll 後の child main CI green 確認**(ステップ 7)が完了条件です。既存の release tag、Release、package、workflow、post-release roll は変更しません。
 
 ### 削除済みリリースタグ（`v0.3.3`）の再作成
 
