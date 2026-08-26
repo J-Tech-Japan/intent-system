@@ -2911,6 +2911,36 @@ assert するのは構造的に安定です — 上記のようなインシデ�
 使っています: 現在のバージョンの 2 つ目のコピーは同期し続けるべき対象が 1 つ増えることを
 意味し、しかも誰も見ていない roll でこそ stale になります。
 
+### supervision state の shrink (G734)
+
+supervision state は evidence なので、`.intent-cli/supervision` を手編集しないでください。
+`stalls.jsonl` または `cycles.jsonl` が大きくなったときは、次の sanctioned command を使います。
+
+```bash
+intent-cli notify supervise shrink --domain <domain> --team <team> --dry-run --format json
+intent-cli notify supervise shrink --domain <domain> --team <team> --write --format json
+```
+
+この command は supervision の append writer と同じ directory lock を取得し、2 つの JSONL を
+検証してから、完全なファイルを同じ directory 内で atomic に置き換えます。そのため running
+supervisor に対して実行しても、現在の append が終わってから shrink されるか、完全な replacement
+へ append され、次の cycle も読み取り可能です。JSON result は観測した supervisor の PID、start
+time、host と writer がまだ `running` かを出すので、write は standing supervisor が running の間に
+実行してください。stopped writer に対する one-off も同じ lock と atomic replacement で保護される
+ため、supported です。
+
+既存の legacy stall record もその場で書き換えます。new file にだけ効く機能ではありません。
+繰り返される registration definition は human-readable な `evidence-definitions.json` manifest に
+1 回だけ保存し、各 record は `evidence_ref` を持ちます。CLI は read 時にその reference を sentence
+へ解決するので、record から元の prose を取り除いても audit の意味を後から確認できます。JSON
+result は literal bytes の削減、追加した reference bytes、record の net savings、その他の savings、
+前後の bytes、前後の平均 bytes per record を測定して出します。
+
+`cycles.jsonl` も、現在の event に invariant-text rewrite が不要でも、同じ atomic boundary の対象です。
+この command は record を archive、discard、rotate しません。その事実を result と
+`shrink-audit.jsonl` に明記します。`.intent-cli/runs/*.provider.jsonl` は別の provider-run state なので
+scope 外です。`--dry-run` なら manifest、JSONL、audit を書き込まずに測定済み plan だけを確認できます。
+
 ### 次リリース準備(v0.23.3)
 
 **`v0.23.2` は出荷済み**(GitHub Release、NuGet、binary、npm)です。公開済みの

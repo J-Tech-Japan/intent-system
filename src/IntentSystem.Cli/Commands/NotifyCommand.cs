@@ -73,6 +73,7 @@ internal static class NotifyCommand
         + "[--shell-policy <json>]... "
         + "[--format markdown|json]\n"
         + "Event mode: --event-mode keeps the blocking per-seat herdr wait inside this supervisor process and re-arms it after failure. It is the implementation of the normative SECOND wake source from herdr pane.agent_status_changed, alongside the independent interval safety floor; it does not change outcome or label behavior.\n"
+        + NotifySuperviseShrinkCommand.Usage + "\n"
         + NotifySuperviseInstallCommand.Usage + "\n"
         + NotifySuperviseReconcileCommand.Usage;
 
@@ -132,6 +133,8 @@ internal static class NotifyCommand
 
         return args[0] switch
         {
+            NotifySuperviseShrinkCommand.Operation =>
+                NotifySuperviseShrinkCommand.Execute(context, args[1..], writer),
             NotifySuperviseInstallCommand.Operation =>
                 NotifySuperviseInstallCommand.Execute(context, args[1..], writer),
             NotifySuperviseReconcileCommand.ReconcileOperation =>

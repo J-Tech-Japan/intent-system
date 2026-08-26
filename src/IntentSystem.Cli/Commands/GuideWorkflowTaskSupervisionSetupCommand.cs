@@ -22,6 +22,7 @@ internal static class GuideWorkflowTaskSupervisionSetupCommand
         SupervisionGuideText.InstallArtifactRule,
         SupervisionGuideText.InstallEvidenceRule,
         SupervisionGuideText.SessionLifetimeRule,
+        SupervisionGuideText.ShrinkRule,
     };
 
     internal static readonly IReadOnlyList<SupervisionSetupCommand> Commands = new[]
@@ -49,6 +50,12 @@ internal static class GuideWorkflowTaskSupervisionSetupCommand
             Name = "uninstall",
             Command = "intent-cli notify supervise uninstall --write --format json",
             Purpose = "Run the same explicit current-session drift-removal contract when the operator wants supervision removed.",
+        },
+        new SupervisionSetupCommand
+        {
+            Name = "shrink",
+            Command = "intent-cli notify supervise shrink --domain <domain> --team <team> --write --format json",
+            Purpose = "Compact existing stalls and cycles under the append lock, retain every record, resolve readable invariant evidence, and append the shrink audit.",
         },
     };
 

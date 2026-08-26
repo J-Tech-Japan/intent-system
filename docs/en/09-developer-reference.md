@@ -2855,6 +2855,41 @@ For the same reason the version-flow example above uses placeholders rather than
 a worked version pair: a second copy of the current versions is a second thing
 to keep in sync, and it goes stale on exactly the roll nobody is watching.
 
+### Supervision-state shrink (G734)
+
+Supervision state is evidence, so do not hand-edit `.intent-cli/supervision`.
+When `stalls.jsonl` or `cycles.jsonl` has grown, use the sanctioned command:
+
+```bash
+intent-cli notify supervise shrink --domain <domain> --team <team> --dry-run --format json
+intent-cli notify supervise shrink --domain <domain> --team <team> --write --format json
+```
+
+The command takes the same directory lock as supervision appenders, validates
+both JSONL files, and replaces each file with a complete same-directory atomic
+file. A running supervisor therefore either finishes its current append before
+the shrink or appends to the complete replacement; its next cycle remains
+readable. The JSON result names the observed supervisor PID/start time/host and
+reports whether that writer is still `running`, so perform the write while the
+standing supervisor is running. A stopped writer is still a supported one-off
+case because the same lock and atomic replacement protect the files.
+
+Existing legacy stall records are rewritten in place; this is not a new-files-
+only feature. The repeated registration definition is stored once in the
+human-readable `evidence-definitions.json` manifest. Each record carries an
+`evidence_ref` that the CLI resolves back to the sentence when it is read, so
+the audit meaning remains available after the original prose is removed from
+the record. The JSON result measures literal bytes removed, reference bytes
+added, net record savings, other savings, before/after bytes, and the
+before/after average bytes per record.
+
+`cycles.jsonl` is covered by the same atomic boundary even when its current
+events need no invariant-text rewrite. No records are archived, discarded, or
+rotated by this command; the result and `shrink-audit.jsonl` say so explicitly.
+`.intent-cli/runs/*.provider.jsonl` is unrelated provider-run state and remains
+out of scope. Use `--dry-run` to inspect the measured plan without writing the
+manifest, JSONL files, or audit.
+
 ### Next release readiness (v0.23.3)
 
 **`v0.23.2` shipped** (GitHub Release, NuGet, binaries, and npm). The

@@ -17,11 +17,25 @@ internal static class NotifySupervisionStore
     public const string InstalledSupervisorFileName = "installed-supervisor.json";
     public const string CycleFileName = "cycles.jsonl";
     public const string StallFileName = "stalls.jsonl";
+    public const string EvidenceDefinitionsFileName = "evidence-definitions.json";
+    public const string ShrinkAuditFileName = "shrink-audit.jsonl";
+    private const string LockFileName = ".supervision.lock";
+    internal const string EvidenceSchema = "intent-cli.supervision-evidence/v1";
+    internal const string HerdrRegistrationEvidenceKey = "recorded-herdr-seat-registration";
+    internal const string HerdrRegistrationDefinition =
+        "a recorded herdr seat is registered only when the matching agent-list entry is running at the recorded workspace and pane";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
+
+    private static readonly JsonSerializerOptions ManifestJsonOptions = new(JsonOptions)
+    {
+        WriteIndented = true,
+    };
+
+    private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     private static readonly object Sync = new();
 
@@ -50,6 +64,12 @@ internal static class NotifySupervisionStore
     public static string ResolveStallPath(string artifactRoot, string domain, string team) =>
         Path.Combine(ResolveDirectory(artifactRoot, domain, team), StallFileName);
 
+    public static string ResolveEvidenceDefinitionsPath(string artifactRoot, string domain, string team) =>
+        Path.Combine(ResolveDirectory(artifactRoot, domain, team), EvidenceDefinitionsFileName);
+
+    public static string ResolveShrinkAuditPath(string artifactRoot, string domain, string team) =>
+        Path.Combine(ResolveDirectory(artifactRoot, domain, team), ShrinkAuditFileName);
+
     public static NotifySupervisionReadResult Read(string artifactRoot, string domain, string team)
     {
         string directory;
@@ -66,13 +86,17 @@ internal static class NotifySupervisionStore
         {
             try
             {
+                using var directoryLock = Directory.Exists(directory)
+                    ? AcquireDirectoryLock(directory, createDirectory: false)
+                    : null;
+                var definitions = ReadEvidenceDefinitions(Path.Combine(directory, EvidenceDefinitionsFileName));
                 var bound = ReadBound(Path.Combine(directory, BoundFileName));
                 var emissionPolicy = ReadEmissionPolicy(Path.Combine(directory, EmissionPolicyFileName));
                 var installedSupervisor = ReadInstalledSupervisor(Path.Combine(directory, InstalledSupervisorFileName));
                 var cyclePath = Path.Combine(directory, CycleFileName);
                 var cycles = ReadCycles(cyclePath);
                 var promptAudits = ReadPromptAudits(cyclePath);
-                var stalls = ReadStalls(Path.Combine(directory, StallFileName));
+                var stalls = ReadStalls(Path.Combine(directory, StallFileName), definitions);
                 return new NotifySupervisionReadResult
                 {
                     Resolved = true,
@@ -127,8 +151,8 @@ internal static class NotifySupervisionStore
         {
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                File.WriteAllText(path, line, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                using var directoryLock = AcquireDirectoryLock(Path.GetDirectoryName(path)!, createDirectory: true);
+                File.WriteAllText(path, line, Utf8NoBom);
                 return new NotifySupervisionWriteResult(true, false, path, null);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -168,8 +192,8 @@ internal static class NotifySupervisionStore
         {
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                File.WriteAllText(path, line, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                using var directoryLock = AcquireDirectoryLock(Path.GetDirectoryName(path)!, createDirectory: true);
+                File.WriteAllText(path, line, Utf8NoBom);
                 return new NotifySupervisionWriteResult(true, false, path, null);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -212,8 +236,8 @@ internal static class NotifySupervisionStore
         {
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                File.WriteAllText(path, line, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                using var directoryLock = AcquireDirectoryLock(Path.GetDirectoryName(path)!, createDirectory: true);
+                File.WriteAllText(path, line, Utf8NoBom);
                 return new NotifySupervisionWriteResult(true, false, path, null);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -295,18 +319,21 @@ internal static class NotifySupervisionStore
 
     private static NotifySupervisionWriteResult Append(string path, NotifySupervisionEvent entry)
     {
-        var line = JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine;
         if (WriteOverride is { } writeOverride)
         {
-            return writeOverride(path, line);
+            var overriddenLine = JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine;
+            return writeOverride(path, overriddenLine);
         }
 
         lock (Sync)
         {
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                File.AppendAllText(path, line, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                var directory = Path.GetDirectoryName(path)!;
+                using var directoryLock = AcquireDirectoryLock(directory, createDirectory: true);
+                var storedEntry = PrepareEventForStorage(entry, directory, ensureDefinitions: true);
+                var line = JsonSerializer.Serialize(storedEntry, JsonOptions) + Environment.NewLine;
+                File.AppendAllText(path, line, Utf8NoBom);
                 return new NotifySupervisionWriteResult(true, false, path, null);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -403,7 +430,9 @@ internal static class NotifySupervisionStore
         return audits.OrderBy(item => item.Timestamp).ToArray();
     }
 
-    private static IReadOnlyList<NotifySupervisionStallRecord> ReadStalls(string path)
+    private static IReadOnlyList<NotifySupervisionStallRecord> ReadStalls(
+        string path,
+        IReadOnlyDictionary<string, string> definitions)
     {
         if (!File.Exists(path))
         {
@@ -423,7 +452,7 @@ internal static class NotifySupervisionStore
                 ?? throw new InvalidDataException("A supervision stall event was empty.");
             if (string.Equals(entry.Kind, "open", StringComparison.Ordinal) && entry.Stall is not null)
             {
-                current[entry.Stall.Key] = entry.Stall;
+                current[entry.Stall.Key] = ResolveStoredStall(entry.Stall, definitions);
                 continue;
             }
 
@@ -449,6 +478,471 @@ internal static class NotifySupervisionStore
             .ToArray();
     }
 
+    private static IReadOnlyDictionary<string, string> ReadEvidenceDefinitions(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+
+        var document = JsonSerializer.Deserialize<NotifySupervisionEvidenceDefinitions>(
+            File.ReadAllText(path),
+            JsonOptions)
+            ?? throw new InvalidDataException("The supervision evidence definition file was empty.");
+        if (!string.Equals(document.Schema, EvidenceSchema, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException($"Unsupported supervision evidence definition schema '{document.Schema}'.");
+        }
+
+        return document.Definitions.ToDictionary(
+            item => item.Key,
+            item => item.Value,
+            StringComparer.Ordinal);
+    }
+
+    private static NotifySupervisionStallRecord ResolveStoredStall(
+        NotifySupervisionStallRecord record,
+        IReadOnlyDictionary<string, string> definitions)
+    {
+        if (record.EvidenceReference is null)
+        {
+            return record;
+        }
+
+        if (!definitions.TryGetValue(record.EvidenceReference, out var definition))
+        {
+            throw new InvalidDataException(
+                $"Stall '{record.Key}' references unknown supervision evidence '{record.EvidenceReference}'.");
+        }
+
+        var evidence = record.Evidence;
+        if (record.EvidenceReferenceIncludesEvidence == true)
+        {
+            evidence = [
+                $"registration_definition:{definition}",
+                .. (evidence ?? []),
+            ];
+        }
+
+        return record with
+        {
+            RegistrationDefinition = record.RegistrationDefinition ?? definition,
+            Evidence = evidence,
+        };
+    }
+
+    private static NotifySupervisionEvent PrepareEventForStorage(
+        NotifySupervisionEvent entry,
+        string directory,
+        bool ensureDefinitions)
+    {
+        if (entry.Stall is null)
+        {
+            return entry;
+        }
+
+        var compacted = CompactStall(entry.Stall, out var changed);
+        if (!changed)
+        {
+            return entry;
+        }
+
+        if (ensureDefinitions)
+        {
+            EnsureEvidenceDefinitions(directory);
+        }
+        return entry with { Stall = compacted };
+    }
+
+    private static NotifySupervisionStallRecord CompactStall(
+        NotifySupervisionStallRecord record,
+        out bool changed)
+    {
+        var definitionMatches = string.Equals(
+            record.RegistrationDefinition,
+            HerdrRegistrationDefinition,
+            StringComparison.Ordinal);
+        var evidence = record.Evidence;
+        var definitionEvidence = $"registration_definition:{HerdrRegistrationDefinition}";
+        var evidenceContainsDefinition = evidence?.Contains(definitionEvidence, StringComparer.Ordinal) == true;
+        if (!definitionMatches && !evidenceContainsDefinition)
+        {
+            changed = false;
+            return record;
+        }
+
+        var remainingEvidence = evidenceContainsDefinition
+            ? evidence!.Where(item => !string.Equals(item, definitionEvidence, StringComparison.Ordinal)).ToArray()
+            : evidence;
+        var compacted = record with
+        {
+            RegistrationDefinition = null,
+            Evidence = remainingEvidence,
+            EvidenceReference = HerdrRegistrationEvidenceKey,
+            EvidenceReferenceIncludesEvidence = evidenceContainsDefinition,
+        };
+        changed = !string.Equals(record.EvidenceReference, compacted.EvidenceReference, StringComparison.Ordinal)
+            || record.EvidenceReferenceIncludesEvidence != compacted.EvidenceReferenceIncludesEvidence
+            || record.RegistrationDefinition is not null
+            || !ReferenceEquals(record.Evidence, compacted.Evidence);
+        return compacted;
+    }
+
+    private static void EnsureEvidenceDefinitions(string directory)
+    {
+        var path = Path.Combine(directory, EvidenceDefinitionsFileName);
+        NotifySupervisionEvidenceDefinitions document;
+        if (File.Exists(path))
+        {
+            document = JsonSerializer.Deserialize<NotifySupervisionEvidenceDefinitions>(
+                File.ReadAllText(path),
+                JsonOptions)
+                ?? throw new InvalidDataException("The supervision evidence definition file was empty.");
+            if (!string.Equals(document.Schema, EvidenceSchema, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException($"Unsupported supervision evidence definition schema '{document.Schema}'.");
+            }
+
+            if (document.Definitions.TryGetValue(HerdrRegistrationEvidenceKey, out var existing)
+                && string.Equals(existing, HerdrRegistrationDefinition, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var definitions = new Dictionary<string, string>(document.Definitions, StringComparer.Ordinal)
+            {
+                [HerdrRegistrationEvidenceKey] = HerdrRegistrationDefinition,
+            };
+            document = document with { Definitions = definitions };
+        }
+        else
+        {
+            document = new NotifySupervisionEvidenceDefinitions
+            {
+                Schema = EvidenceSchema,
+                Definitions = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [HerdrRegistrationEvidenceKey] = HerdrRegistrationDefinition,
+                },
+            };
+        }
+
+        File.WriteAllText(path, JsonSerializer.Serialize(document, ManifestJsonOptions) + Environment.NewLine, Utf8NoBom);
+    }
+
+    internal static NotifySupervisionShrinkResult Shrink(
+        string artifactRoot,
+        string domain,
+        string team,
+        bool write,
+        DateTimeOffset occurredAt,
+        string supervisorState,
+        NotifySupervisionWriterIdentity? supervisorWriter)
+    {
+        string directory;
+        try
+        {
+            directory = ResolveDirectory(artifactRoot, domain, team);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            return NotifySupervisionShrinkResult.Failure(artifactRoot, exception.Message);
+        }
+
+        if (!Directory.Exists(directory) && !write)
+        {
+            return NotifySupervisionShrinkResult.Empty(directory, write);
+        }
+
+        lock (Sync)
+        {
+            try
+            {
+                using var directoryLock = AcquireDirectoryLock(directory, createDirectory: write);
+                var definitionsPath = Path.Combine(directory, EvidenceDefinitionsFileName);
+                _ = ReadEvidenceDefinitions(definitionsPath);
+                var stalls = PlanFile(Path.Combine(directory, StallFileName), transformStalls: true);
+                var cycles = PlanFile(Path.Combine(directory, CycleFileName), transformStalls: false);
+                var plans = new[] { stalls, cycles };
+                var beforeBytes = plans.Sum(item => item.BeforeBytes);
+                var afterBytes = plans.Sum(item => item.AfterBytes);
+                var beforeRecords = plans.Sum(item => item.BeforeRecords);
+                var afterRecords = plans.Sum(item => item.AfterRecords);
+                var invariantLiteralBytesRemoved = plans.Sum(item =>
+                    item.InvariantLiteralBytesBefore - item.InvariantLiteralBytesAfter);
+                var invariantReferenceBytesAdded = plans.Sum(item =>
+                    item.InvariantReferenceBytesAfter - item.InvariantReferenceBytesBefore);
+                var invariantBytesSavedInRecords = plans.Sum(item => item.InvariantBytesSavedInChangedLines);
+                var otherBytesSaved = beforeBytes - afterBytes - invariantBytesSavedInRecords;
+                var referencesNeeded = plans.Any(item => item.EvidenceReferencesAfter > 0);
+
+                var audit = new NotifySupervisionShrinkAudit
+                {
+                    Schema = "intent-cli.supervision-shrink/v1",
+                    OccurredAt = occurredAt,
+                    SupervisorState = supervisorState,
+                    SupervisorWriter = supervisorWriter,
+                    BeforeBytes = beforeBytes,
+                    AfterBytes = afterBytes,
+                    BeforeRecordCount = beforeRecords,
+                    AfterRecordCount = afterRecords,
+                    BeforeAverageBytesPerRecord = Average(beforeBytes, beforeRecords),
+                    AfterAverageBytesPerRecord = Average(afterBytes, afterRecords),
+                    InvariantLiteralBytesRemoved = invariantLiteralBytesRemoved,
+                    InvariantReferenceBytesAdded = invariantReferenceBytesAdded,
+                    InvariantBytesSavedInRecords = invariantBytesSavedInRecords,
+                    OtherBytesSaved = otherBytesSaved,
+                    RecordsArchived = 0,
+                    RecordsDiscarded = 0,
+                    RecordsCompacted = afterRecords,
+                    RecordsRotated = 0,
+                    Files = plans.ToDictionary(
+                        item => item.Name,
+                        item => new NotifySupervisionFileShrinkAudit
+                        {
+                            BeforeBytes = item.BeforeBytes,
+                            AfterBytes = item.AfterBytes,
+                            BeforeRecordCount = item.BeforeRecords,
+                            AfterRecordCount = item.AfterRecords,
+                            Action = item.Exists
+                                ? item.TransformStalls
+                                    ? "atomically compacted; every stall event retained"
+                                    : "atomically rewritten; every cycle and prompt-audit event retained"
+                                : "absent; no rotation or discard",
+                        },
+                        StringComparer.Ordinal),
+                    EvidenceReference = referencesNeeded
+                        ? $"{EvidenceDefinitionsFileName}#{HerdrRegistrationEvidenceKey}"
+                        : null,
+                    AuditSummary = "No records were archived, discarded, or rotated. Existing stalls and cycles were retained in place; invariant registration prose was moved once to the readable definition manifest and records now reference it.",
+                };
+
+                if (write)
+                {
+                    if (referencesNeeded)
+                    {
+                        EnsureEvidenceDefinitions(directory);
+                    }
+
+                    foreach (var plan in plans)
+                    {
+                        if (!plan.Exists)
+                        {
+                            continue;
+                        }
+
+                        // Rewriting cycles through the same atomic path is
+                        // deliberate: cycles.jsonl has the same append-only
+                        // shape and must not be left outside the shrink
+                        // boundary merely because its current records do not
+                        // carry the repeated stall definition.
+                        if (plan.TransformStalls && !plan.Changed)
+                        {
+                            continue;
+                        }
+
+                        ReplaceAtomically(plan.Path, plan.Content);
+                    }
+
+                    var auditPath = Path.Combine(directory, ShrinkAuditFileName);
+                    File.AppendAllText(
+                        auditPath,
+                        JsonSerializer.Serialize(audit, JsonOptions) + Environment.NewLine,
+                        Utf8NoBom);
+                }
+
+                return new NotifySupervisionShrinkResult
+                {
+                    Applied = write,
+                    WouldChange = stalls.Changed || cycles.Exists,
+                    Directory = directory,
+                    StallFile = stalls.ToMeasurement(),
+                    CycleFile = cycles.ToMeasurement(),
+                    BeforeBytes = beforeBytes,
+                    AfterBytes = afterBytes,
+                    BeforeRecordCount = beforeRecords,
+                    AfterRecordCount = afterRecords,
+                    BeforeAverageBytesPerRecord = Average(beforeBytes, beforeRecords),
+                    AfterAverageBytesPerRecord = Average(afterBytes, afterRecords),
+                    InvariantLiteralBytesRemoved = invariantLiteralBytesRemoved,
+                    InvariantReferenceBytesAdded = invariantReferenceBytesAdded,
+                    InvariantBytesSavedInRecords = invariantBytesSavedInRecords,
+                    OtherBytesSaved = otherBytesSaved,
+                    EvidenceDefinitionsPath = referencesNeeded
+                        ? definitionsPath
+                        : File.Exists(definitionsPath) ? definitionsPath : null,
+                    AuditPath = write ? Path.Combine(directory, ShrinkAuditFileName) : null,
+                    Audit = audit,
+                    Error = null,
+                };
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                    or UnauthorizedAccessException
+                    or JsonException
+                    or InvalidDataException)
+            {
+                return NotifySupervisionShrinkResult.Failure(directory, exception.Message);
+            }
+        }
+    }
+
+    private static FileCompactionPlan PlanFile(string path, bool transformStalls)
+    {
+        if (!File.Exists(path))
+        {
+            return FileCompactionPlan.Absent(path, transformStalls);
+        }
+
+        var original = File.ReadAllText(path);
+        var lines = original
+            .Split(["\r\n", "\n"], StringSplitOptions.None)
+            .ToList();
+        var trailingNewline = lines.Count > 0 && lines[^1].Length == 0;
+        if (trailingNewline)
+        {
+            lines.RemoveAt(lines.Count - 1);
+        }
+
+        var transformed = new List<string>(lines.Count);
+        var changed = false;
+        var invariantBytesSavedInChangedLines = 0L;
+        foreach (var line in lines)
+        {
+            if (!transformStalls || string.IsNullOrWhiteSpace(line))
+            {
+                transformed.Add(line);
+                continue;
+            }
+
+            var entry = JsonSerializer.Deserialize<NotifySupervisionEvent>(line, JsonOptions)
+                ?? throw new InvalidDataException($"The supervision event in '{path}' was empty.");
+            var compacted = PrepareEventForStorage(
+                entry,
+                Path.GetDirectoryName(path)!,
+                ensureDefinitions: false);
+            var compactLine = JsonSerializer.Serialize(compacted, JsonOptions);
+            transformed.Add(compactLine);
+            if (!string.Equals(line, compactLine, StringComparison.Ordinal))
+            {
+                changed = true;
+                invariantBytesSavedInChangedLines +=
+                    Utf8NoBom.GetByteCount(line) - Utf8NoBom.GetByteCount(compactLine);
+            }
+        }
+
+        var newline = original.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var content = string.Join(newline, transformed) + (trailingNewline ? newline : string.Empty);
+        var beforeBytes = new FileInfo(path).Length;
+        var beforeRecords = lines.Count(line => !string.IsNullOrWhiteSpace(line));
+        var afterRecords = transformed.Count(line => !string.IsNullOrWhiteSpace(line));
+        return new FileCompactionPlan
+        {
+            Name = Path.GetFileName(path),
+            Path = path,
+            Exists = true,
+            TransformStalls = transformStalls,
+            Changed = changed,
+            Content = content,
+            BeforeBytes = beforeBytes,
+            AfterBytes = Utf8NoBom.GetByteCount(content),
+            BeforeRecords = beforeRecords,
+            AfterRecords = afterRecords,
+            InvariantLiteralBytesBefore = CountOccurrences(original, HerdrRegistrationDefinition)
+                * Utf8NoBom.GetByteCount(HerdrRegistrationDefinition),
+            InvariantLiteralBytesAfter = CountOccurrences(content, HerdrRegistrationDefinition)
+                * Utf8NoBom.GetByteCount(HerdrRegistrationDefinition),
+            InvariantReferenceBytesBefore = CountOccurrences(original, HerdrRegistrationEvidenceKey)
+                * Utf8NoBom.GetByteCount(HerdrRegistrationEvidenceKey),
+            InvariantReferenceBytesAfter = CountOccurrences(content, HerdrRegistrationEvidenceKey)
+                * Utf8NoBom.GetByteCount(HerdrRegistrationEvidenceKey),
+            InvariantBytesSavedInChangedLines = invariantBytesSavedInChangedLines,
+            EvidenceReferencesAfter = CountOccurrences(content, HerdrRegistrationEvidenceKey),
+        };
+    }
+
+    private static void ReplaceAtomically(string path, string content)
+    {
+        var directory = Path.GetDirectoryName(path)!;
+        var temporary = Path.Combine(
+            directory,
+            $".{Path.GetFileName(path)}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            using (var stream = new FileStream(
+                temporary,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 4096,
+                options: FileOptions.WriteThrough))
+            using (var writer = new StreamWriter(stream, Utf8NoBom, 4096, leaveOpen: true))
+            {
+                writer.Write(content);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
+        }
+    }
+
+    private static FileStream AcquireDirectoryLock(string directory, bool createDirectory)
+    {
+        if (createDirectory)
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var lockPath = Path.Combine(directory, LockFileName);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (true)
+        {
+            try
+            {
+                return new FileStream(
+                    lockPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 1,
+                    options: FileOptions.WriteThrough);
+            }
+            catch (IOException) when (DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(10);
+            }
+        }
+    }
+
+    private static int CountOccurrences(string value, string needle)
+    {
+        if (needle.Length == 0)
+        {
+            return 0;
+        }
+
+        var count = 0;
+        var offset = 0;
+        while ((offset = value.IndexOf(needle, offset, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            offset += needle.Length;
+        }
+
+        return count;
+    }
+
+    private static double? Average(long bytes, int records) =>
+        records == 0 ? null : (double)bytes / records;
+
     private static NotifySupervisionReadResult Failure(string directory, string error) => new()
     {
         Resolved = false,
@@ -468,6 +962,178 @@ internal static class NotifySupervisionStore
             throw new ArgumentException($"Supervision {name} '{value}' is not a safe path segment.", name);
         }
     }
+}
+
+internal sealed record NotifySupervisionEvidenceDefinitions
+{
+    [JsonPropertyName("schema")] public required string Schema { get; init; }
+    [JsonPropertyName("definitions")] public required IReadOnlyDictionary<string, string> Definitions { get; init; }
+}
+
+internal sealed record NotifySupervisionFileShrinkAudit
+{
+    [JsonPropertyName("before_bytes")] public required long BeforeBytes { get; init; }
+    [JsonPropertyName("after_bytes")] public required long AfterBytes { get; init; }
+    [JsonPropertyName("before_record_count")] public required int BeforeRecordCount { get; init; }
+    [JsonPropertyName("after_record_count")] public required int AfterRecordCount { get; init; }
+    [JsonPropertyName("action")] public required string Action { get; init; }
+}
+
+internal sealed record NotifySupervisionShrinkAudit
+{
+    [JsonPropertyName("schema")] public required string Schema { get; init; }
+    [JsonPropertyName("occurred_at")] public required DateTimeOffset OccurredAt { get; init; }
+    [JsonPropertyName("supervisor_state")] public required string SupervisorState { get; init; }
+    [JsonPropertyName("supervisor_writer")] public NotifySupervisionWriterIdentity? SupervisorWriter { get; init; }
+    [JsonPropertyName("before_bytes")] public required long BeforeBytes { get; init; }
+    [JsonPropertyName("after_bytes")] public required long AfterBytes { get; init; }
+    [JsonPropertyName("before_record_count")] public required int BeforeRecordCount { get; init; }
+    [JsonPropertyName("after_record_count")] public required int AfterRecordCount { get; init; }
+    [JsonPropertyName("before_average_bytes_per_record")] public double? BeforeAverageBytesPerRecord { get; init; }
+    [JsonPropertyName("after_average_bytes_per_record")] public double? AfterAverageBytesPerRecord { get; init; }
+    [JsonPropertyName("invariant_literal_bytes_removed")] public required long InvariantLiteralBytesRemoved { get; init; }
+    [JsonPropertyName("invariant_reference_bytes_added")] public required long InvariantReferenceBytesAdded { get; init; }
+    [JsonPropertyName("invariant_bytes_saved_in_records")] public required long InvariantBytesSavedInRecords { get; init; }
+    [JsonPropertyName("other_bytes_saved")] public required long OtherBytesSaved { get; init; }
+    [JsonPropertyName("records_archived")] public required int RecordsArchived { get; init; }
+    [JsonPropertyName("records_discarded")] public required int RecordsDiscarded { get; init; }
+    [JsonPropertyName("records_compacted")] public required int RecordsCompacted { get; init; }
+    [JsonPropertyName("records_rotated")] public required int RecordsRotated { get; init; }
+    [JsonPropertyName("files")] public required IReadOnlyDictionary<string, NotifySupervisionFileShrinkAudit> Files { get; init; }
+    [JsonPropertyName("evidence_reference")] public string? EvidenceReference { get; init; }
+    [JsonPropertyName("audit_summary")] public required string AuditSummary { get; init; }
+}
+
+internal sealed record NotifySupervisionFileShrinkMeasurement
+{
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("exists")] public required bool Exists { get; init; }
+    [JsonPropertyName("before_bytes")] public required long BeforeBytes { get; init; }
+    [JsonPropertyName("after_bytes")] public required long AfterBytes { get; init; }
+    [JsonPropertyName("before_record_count")] public required int BeforeRecords { get; init; }
+    [JsonPropertyName("after_record_count")] public required int AfterRecords { get; init; }
+    [JsonPropertyName("changed")] public required bool Changed { get; init; }
+
+    public static NotifySupervisionFileShrinkMeasurement Empty(string name) => new()
+    {
+        Name = name,
+        Exists = false,
+        BeforeBytes = 0,
+        AfterBytes = 0,
+        BeforeRecords = 0,
+        AfterRecords = 0,
+        Changed = false,
+    };
+}
+
+internal sealed record NotifySupervisionShrinkResult
+{
+    public required bool Applied { get; init; }
+    public required bool WouldChange { get; init; }
+    public required string Directory { get; init; }
+    public required NotifySupervisionFileShrinkMeasurement StallFile { get; init; }
+    public required NotifySupervisionFileShrinkMeasurement CycleFile { get; init; }
+    public required long BeforeBytes { get; init; }
+    public required long AfterBytes { get; init; }
+    public required int BeforeRecordCount { get; init; }
+    public required int AfterRecordCount { get; init; }
+    public double? BeforeAverageBytesPerRecord { get; init; }
+    public double? AfterAverageBytesPerRecord { get; init; }
+    public required long InvariantLiteralBytesRemoved { get; init; }
+    public required long InvariantReferenceBytesAdded { get; init; }
+    public required long InvariantBytesSavedInRecords { get; init; }
+    public required long OtherBytesSaved { get; init; }
+    public string? EvidenceDefinitionsPath { get; init; }
+    public string? AuditPath { get; init; }
+    public NotifySupervisionShrinkAudit? Audit { get; init; }
+    public string? Error { get; init; }
+
+    public static NotifySupervisionShrinkResult Empty(string directory, bool write) => new()
+    {
+        Applied = false,
+        WouldChange = false,
+        Directory = directory,
+        StallFile = NotifySupervisionFileShrinkMeasurement.Empty(NotifySupervisionStore.StallFileName),
+        CycleFile = NotifySupervisionFileShrinkMeasurement.Empty(NotifySupervisionStore.CycleFileName),
+        BeforeBytes = 0,
+        AfterBytes = 0,
+        BeforeRecordCount = 0,
+        AfterRecordCount = 0,
+        InvariantLiteralBytesRemoved = 0,
+        InvariantReferenceBytesAdded = 0,
+        InvariantBytesSavedInRecords = 0,
+        OtherBytesSaved = 0,
+        Error = null,
+    };
+
+    public static NotifySupervisionShrinkResult Failure(string directory, string error) => new()
+    {
+        Applied = false,
+        WouldChange = false,
+        Directory = directory,
+        StallFile = NotifySupervisionFileShrinkMeasurement.Empty(NotifySupervisionStore.StallFileName),
+        CycleFile = NotifySupervisionFileShrinkMeasurement.Empty(NotifySupervisionStore.CycleFileName),
+        BeforeBytes = 0,
+        AfterBytes = 0,
+        BeforeRecordCount = 0,
+        AfterRecordCount = 0,
+        InvariantLiteralBytesRemoved = 0,
+        InvariantReferenceBytesAdded = 0,
+        InvariantBytesSavedInRecords = 0,
+        OtherBytesSaved = 0,
+        Error = error,
+    };
+}
+
+internal sealed record FileCompactionPlan
+{
+    public required string Name { get; init; }
+    public required string Path { get; init; }
+    public required bool Exists { get; init; }
+    public required bool TransformStalls { get; init; }
+    public required bool Changed { get; init; }
+    public required string Content { get; init; }
+    public required long BeforeBytes { get; init; }
+    public required long AfterBytes { get; init; }
+    public required int BeforeRecords { get; init; }
+    public required int AfterRecords { get; init; }
+    public required long InvariantLiteralBytesBefore { get; init; }
+    public required long InvariantLiteralBytesAfter { get; init; }
+    public required long InvariantReferenceBytesBefore { get; init; }
+    public required long InvariantReferenceBytesAfter { get; init; }
+    public required long InvariantBytesSavedInChangedLines { get; init; }
+    public required int EvidenceReferencesAfter { get; init; }
+
+    public static FileCompactionPlan Absent(string path, bool transformStalls) => new()
+    {
+        Name = System.IO.Path.GetFileName(path),
+        Path = path,
+        Exists = false,
+        TransformStalls = transformStalls,
+        Changed = false,
+        Content = string.Empty,
+        BeforeBytes = 0,
+        AfterBytes = 0,
+        BeforeRecords = 0,
+        AfterRecords = 0,
+        InvariantLiteralBytesBefore = 0,
+        InvariantLiteralBytesAfter = 0,
+        InvariantReferenceBytesBefore = 0,
+        InvariantReferenceBytesAfter = 0,
+        InvariantBytesSavedInChangedLines = 0,
+        EvidenceReferencesAfter = 0,
+    };
+
+    public NotifySupervisionFileShrinkMeasurement ToMeasurement() => new()
+    {
+        Name = Name,
+        Exists = Exists,
+        BeforeBytes = BeforeBytes,
+        AfterBytes = AfterBytes,
+        BeforeRecords = BeforeRecords,
+        AfterRecords = AfterRecords,
+        Changed = Changed,
+    };
 }
 
 internal sealed record NotifySupervisionBound
@@ -674,6 +1340,8 @@ internal sealed record NotifySupervisionStallRecord
     [JsonPropertyName("registration_lookup")] public string? RegistrationLookup { get; init; }
     [JsonPropertyName("registration_result")] public string? RegistrationResult { get; init; }
     [JsonPropertyName("consulted_observations")] public IReadOnlyList<string>? ConsultedObservations { get; init; }
+    [JsonPropertyName("evidence_ref")] public string? EvidenceReference { get; init; }
+    [JsonPropertyName("evidence_ref_in_evidence")] public bool? EvidenceReferenceIncludesEvidence { get; init; }
     [JsonPropertyName("observed_prompt")] public NotifyObservedPrompt? Prompt { get; init; }
     [JsonPropertyName("first_seen")] public DateTimeOffset? FirstSeenAt { get; init; }
     [JsonPropertyName("last_seen")] public DateTimeOffset? LastSeenAt { get; init; }
