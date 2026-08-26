@@ -160,8 +160,7 @@ outcome, removes the journal, and leaves the externally appended valid cycle
 and the already-readable stall state intact. Thus completed, recovered, and
 aborted outcomes are all accounted for without silent record loss.
 
-The exact-head GitHub Actions run was `32928645986` at implementation head
-`27dafc50b8285fca1a2e67583bdab374d1a07bf8`. Its uploaded TRX emitted the
+The final implementation GitHub Actions run was `32929074724`. Its uploaded TRX emitted the
 density line, the live `running`/`cycles=1->2` transcript, all four recovery
 rows, and the aborted-target transcript above. The source-contract job passed
 5,538 tests with 1 expected skip across all projects; the CLI project passed
