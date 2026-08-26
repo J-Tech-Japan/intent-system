@@ -1203,35 +1203,46 @@ internal sealed record NotifySupervisionWriterIdentity
 {
     [JsonPropertyName("pid")] public required int Pid { get; init; }
     [JsonPropertyName("process_start_time")] public required DateTimeOffset ProcessStartTime { get; init; }
+    [JsonPropertyName("process_start_time_source")] public string? ProcessStartTimeSource { get; init; }
     [JsonPropertyName("host")] public required string Host { get; init; }
 
     public static NotifySupervisionWriterIdentity Current()
     {
         DateTimeOffset processStartTime;
+        var processStartTimeSource = "process";
         try
         {
             using var process = Process.GetCurrentProcess();
             processStartTime = new DateTimeOffset(process.StartTime.ToUniversalTime());
         }
-        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or InvalidOperationException
+                or System.ComponentModel.Win32Exception
+                or NotSupportedException)
         {
             // The identity remains additive even on a platform that refuses
             // to expose process metadata. A current timestamp makes the
-            // record explicit but cannot falsely match a later live process.
+            // record explicit; liveness falls back to same-host PID evidence
+            // only when this source is named, never silently.
             processStartTime = DateTimeOffset.UtcNow;
+            processStartTimeSource = "clock-fallback";
         }
 
         return new NotifySupervisionWriterIdentity
         {
             Pid = Environment.ProcessId,
             ProcessStartTime = processStartTime,
+            ProcessStartTimeSource = processStartTimeSource,
             Host = Environment.MachineName,
         };
     }
 
     public bool IsSameWriter(NotifySupervisionWriterIdentity other) =>
         Pid == other.Pid
-        && ProcessStartTime == other.ProcessStartTime
+        && (ProcessStartTime == other.ProcessStartTime
+            || IsStartTimeUnverified(this)
+            || IsStartTimeUnverified(other))
         && string.Equals(Host, other.Host, StringComparison.OrdinalIgnoreCase);
 
     public bool IsLiveOn(NotifySupervisionWriterIdentity current)
@@ -1249,6 +1260,11 @@ internal sealed record NotifySupervisionWriterIdentity
                 return false;
             }
 
+            if (IsStartTimeUnverified(this) || IsStartTimeUnverified(current))
+            {
+                return true;
+            }
+
             var actualStart = new DateTimeOffset(process.StartTime.ToUniversalTime());
             return actualStart == ProcessStartTime;
         }
@@ -1261,6 +1277,9 @@ internal sealed record NotifySupervisionWriterIdentity
             return false;
         }
     }
+
+    private static bool IsStartTimeUnverified(NotifySupervisionWriterIdentity identity) =>
+        string.Equals(identity.ProcessStartTimeSource, "clock-fallback", StringComparison.Ordinal);
 }
 
 internal sealed record NotifySupervisionTransition

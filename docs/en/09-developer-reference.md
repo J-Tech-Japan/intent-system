@@ -2871,7 +2871,10 @@ file. A running supervisor therefore either finishes its current append before
 the shrink or appends to the complete replacement; its next cycle remains
 readable. The JSON result names the observed supervisor PID/start time/host and
 reports whether that writer is still `running`, so perform the write while the
-standing supervisor is running. A stopped writer is still a supported one-off
+standing supervisor is running. The emitted writer identity also names whether
+the process start time came from process metadata or a platform clock fallback;
+the fallback is only same-host live-PID evidence and is explicit in the result.
+A stopped writer is still a supported one-off
 case because the same lock and atomic replacement protect the files.
 
 Existing legacy stall records are rewritten in place; this is not a new-files-

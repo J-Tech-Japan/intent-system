@@ -2926,7 +2926,9 @@ intent-cli notify supervise shrink --domain <domain> --team <team> --write --for
 supervisor に対して実行しても、現在の append が終わってから shrink されるか、完全な replacement
 へ append され、次の cycle も読み取り可能です。JSON result は観測した supervisor の PID、start
 time、host と writer がまだ `running` かを出すので、write は standing supervisor が running の間に
-実行してください。stopped writer に対する one-off も同じ lock と atomic replacement で保護される
+実行してください。writer identity には process metadata から取得した start time か platform の
+clock fallback かも明記されます。fallback の場合は同じ host の live PID による evidence だけを使い、
+result にそのことを明示します。stopped writer に対する one-off も同じ lock と atomic replacement で保護される
 ため、supported です。
 
 既存の legacy stall record もその場で書き換えます。new file にだけ効く機能ではありません。

@@ -166,6 +166,19 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
     }
 
     [Fact]
+    public void ClockFallbackWriterIdentityUsesExplicitSameHostPidLiveness()
+    {
+        var current = NotifySupervisionWriterIdentity.Current();
+        var fallback = current with
+        {
+            ProcessStartTime = DateTimeOffset.UtcNow,
+            ProcessStartTimeSource = "clock-fallback",
+        };
+
+        Assert.True(fallback.IsLiveOn(current));
+    }
+
+    [Fact]
     public void DensityReport_MeasuresTenThousandRecordsAgainstTheIssueBaseline()
     {
         var context = CreateContext();
