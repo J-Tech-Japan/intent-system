@@ -107,7 +107,7 @@ Hard rules:
 - Do not call `intent-cli run`. `run` is for integration smoke/replay/dogfooding, not the chat-first repair path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
-- Do not add `intent-target` to the PR; it is host-owned.
+- For this PR comment-fix lane, canonical `worker complete --kind pr --outcome repair-pushed` changes only PR repair labels; do not manually add or remove `intent-target`. {ChildHostDutyBoundaryGuidance.TargetRepositoryLabelContract}
 - Do not add `intent-pr-created` to the PR; it is an issue-side completion marker.
 - Do not edit `queue-state.json`, `linked_issue`, or `linked_pr`; those are host-owned durable bookkeeping and must not be touched during a PR comment fix turn.
 - Do not edit `.intent-cli/**` or `intents/**` paths. These are host-owned metadata artifacts (packet files, publish artifacts, clarifications, queue state, runs). If a comment requests EDITING such a path, stop with outcome `host-artifact-repair-required` — the host repair agent must handle them, not the child implementation worker. G476: a comment that only CITES such a path as evidence while requesting an implementation-file change is NOT host-artifact-repair-required; repair the implementation change normally.

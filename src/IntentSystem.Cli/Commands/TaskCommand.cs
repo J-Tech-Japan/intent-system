@@ -146,7 +146,7 @@ internal static class TaskCommand
                 "host claim acquire/verify → execution-unit ownership; the child consumes the returned evidence and does not acquire it.",
                 "child worker claim → add `intent-issue-in-progress` (issue side) through the GitHub-only path; no raw label mutation is allowed.",
                 "canonical `worker complete --kind issue --outcome pr-created --github-only --write` → swap `intent-issue-in-progress` → `intent-pr-created` on the source ISSUE and apply target-repository `intent-target` to the PR; this command-owned transition is distinct from host-state linkage/publication (G287/G317/G733).",
-                "The child never manually applies `intent-target` or `intent-pr-created` to a PR, and never edits host metadata or host-state linkage/publication."
+                "Raw/manual label mutation is forbidden; the child never manually applies `intent-target` or `intent-pr-created`; " + ChildHostDutyBoundaryGuidance.TargetRepositoryLabelContract
             },
             AbortConditions = new[]
             {
@@ -327,7 +327,7 @@ internal static class TaskCommand
             {
                 "claim → add `intent-pr-update-in-progress` to the PR (already has `intent-pr-request-update`).",
                 "complete repair-pushed → swap `intent-pr-update-in-progress` → `intent-pr-rereview-ready` and remove `intent-pr-request-update` from the PR.",
-                "Child loop NEVER applies `intent-target` or `intent-pr-created` from this lane."
+                "For this PR comment-fix lane, canonical `worker complete --kind pr --outcome repair-pushed` changes only PR repair labels; raw/manual `intent-target` and `intent-pr-created` mutation is forbidden. The sole child exception is canonical `worker complete --kind issue --outcome pr-created --github-only --write`, which may apply target-repository `intent-target` to the PR; host-state publication/linkage remains host-owned."
             },
             AbortConditions = new[]
             {
@@ -403,7 +403,7 @@ internal static class TaskCommand
             },
             LabelTransitions = new[]
             {
-                "`automation issue-publish --write` adds `intent-target` to the newly created issue. The host owns this label; child loops never apply it.",
+                "`automation issue-publish --write` adds `intent-target` to the newly created issue. The host owns this issue-publish boundary; the sole child target-repository PR-label exception is canonical issue-to-PR `worker complete --kind issue --outcome pr-created --github-only --write`, while host-state publication/linkage remains host-owned.",
                 "No PR-side label transitions — this is an issue-publish task."
             },
             AbortConditions = new[]

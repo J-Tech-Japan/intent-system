@@ -10,6 +10,9 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal static class ChildHostDutyBoundaryGuidance
 {
+    public const string TargetRepositoryLabelContract =
+        "Raw/manual target-repository label mutation is forbidden, and host-state publication/linkage remains host-owned. The sole child exception is the installed canonical `worker complete --kind issue --outcome pr-created --github-only --write`, which may apply target-repository `intent-target` to the PR; `intent-pr-created` remains on the source issue and is never applied to the PR. For PR `repair-pushed`, canonical child completion changes only PR repair labels.";
+
     public static ChildHostDutyBoundary Build(string domainPlaceholder) =>
         new()
         {

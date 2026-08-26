@@ -97,6 +97,77 @@ public sealed class G733SeatHostDutyRouteTests
         Assert.Contains("danger-full-access review seat evidence is excluded", transcript, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RenderedGuidanceUsesCanonicalTargetRepositoryLabelContract_G733()
+    {
+        var surfaces = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["guide model"] = Render((writer) => GuideModelCommand.Execute(CreateContext(), [], writer)),
+            ["guide rules label ownership"] = Render((writer) => GuideRulesCommand.Execute(
+                CreateContext(), ["--topic", "label-ownership", "--format", "markdown"], writer)),
+            ["automation summary"] = Render((writer) => AutomationSummaryCommand.Execute(
+                CreateContext(), ["--domain", "intent-cli", "--format", "json"], writer)),
+            ["guide automation host"] = Render((writer) => GuideAutomationCommand.Execute(
+                CreateContext(), ["--kind", "host-review", "--domain", "intent-cli"], writer)),
+            ["guide automation child"] = Render((writer) => GuideAutomationCommand.Execute(
+                CreateContext(), ["--kind", "child-implement-update", "--repo", "J-Tech-Japan/intent-system"], writer)),
+            ["guide automation setup child"] = Render((writer) => GuideAutomationSetupCommand.Execute(
+                CreateContext(), ["--kind", "child-implement", "--repo", "J-Tech-Japan/intent-system", "--format", "markdown"], writer)),
+            ["guide oneshot child"] = Render((writer) => GuideOneshotCommand.Execute(
+                CreateContext(), ["--kind", "child-implement-or-update", "--repo", "J-Tech-Japan/intent-system"], writer)),
+            ["guide workflow task implementation-loop"] = Render((writer) => GuideWorkflowTaskImplementationLoopCommand.Execute(
+                CreateContext(), ["--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"], writer)),
+            ["guide worker issue-to-pr"] = Render((writer) => GuideWorkerIssueToPrCommand.Execute(
+                CreateContext(), ["--format", "json"], writer)),
+            ["guide worker pr-comment-fix"] = Render((writer) => GuideWorkerPrCommentFixCommand.Execute(
+                CreateContext(), ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"], writer)),
+            ["guide prompt matrix child-loop"] = Render((writer) => GuidePromptMatrixCommand.Execute(
+                CreateContext(), [
+                    "--mode", "child-loop", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system",
+                    "--agent", "claude", "--frequency", "5m", "--format", "json"
+                ], writer)),
+            ["task issue-to-pr"] = Render((writer) => TaskCommand.Execute(
+                CreateContext(), ["issue-to-pr", "--repo", "J-Tech-Japan/intent-system", "--issue", "1588", "--workdir", "/tmp/implementation-G733", "--format", "json"], writer)),
+            ["task fix-pr-comments"] = Render((writer) => TaskCommand.Execute(
+                CreateContext(), ["fix-pr-comments", "--repo", "J-Tech-Japan/intent-system", "--pr", "1595", "--workdir", "/tmp/implementation-G733", "--format", "json"], writer))
+        };
+
+        var forbiddenAbsoluteStatements = new[]
+        {
+            "never adds or removes it",
+            "never apply or remove intent-target from the child loop",
+            "only the parent automation may apply or remove it",
+            "do not add intent-target to the PR",
+            "never apply intent-target from the child loop",
+            "the child worker must not apply or remove intent-target",
+            "child loop never applies intent-target"
+        };
+
+        foreach (var (surface, output) in surfaces)
+        {
+            Assert.Contains("worker complete --kind issue --outcome pr-created", output, StringComparison.Ordinal);
+            Assert.Contains("target-repository", output, StringComparison.Ordinal);
+            Assert.Contains("host-state publication/linkage", output, StringComparison.Ordinal);
+            Assert.True(
+                output.Contains("raw/manual", StringComparison.OrdinalIgnoreCase)
+                    || output.Contains("never manually", StringComparison.OrdinalIgnoreCase),
+                $"{surface} must forbid raw/manual mutation while naming the canonical exception.");
+
+            foreach (var forbidden in forbiddenAbsoluteStatements)
+            {
+                Assert.DoesNotContain(forbidden, output, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+    }
+
+    private static string Render(Func<TextWriter, int> render)
+    {
+        using var writer = new StringWriter();
+        var exitCode = render(writer);
+        Assert.Equal(0, exitCode);
+        return writer.ToString();
+    }
+
     private static CliContext CreateContext() => new()
     {
         RepoRoot = Path.GetTempPath(),

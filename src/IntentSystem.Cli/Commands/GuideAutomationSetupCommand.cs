@@ -304,7 +304,7 @@ Hard rules:
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
 - All label transitions go through installed `intent-cli automation` / `intent-cli worker` commands. No manual `gh ... edit --add-label` / `--remove-label` fallback for workflow labels.
-- Never apply `intent-target` from the child loop; it is host-owned.
+- {ChildHostDutyBoundaryGuidance.TargetRepositoryLabelContract}
 - Never apply `intent-pr-created` to a PR; it is an issue-side completion marker.
 - Process at most one action per wake.
 - For `pr-comment-fix` turns: never edit `queue-state.json`, `linked_issue`, or `linked_pr`; those are host-owned durable bookkeeping and must not be repaired from the child loop.

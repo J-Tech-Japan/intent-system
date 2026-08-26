@@ -115,7 +115,7 @@ Hard rules:
 - Use the issue body as the standalone contract. Do not read parent host packet files, `intents/rules/**`, local skill files, or copied prompt files to fill contract gaps.
 - Do not use the `gh-issue-to-pr` skill file or any local skill file that restates workflow.
 - {DispatcherSkillCarveOut.Sentence}
-- Do not manually add `intent-target` to the PR. For issue-to-PR completion, only the canonical `worker complete --kind issue --outcome pr-created --github-only --write` transition may add target-repository `intent-target`; host-state linkage/publication remains host-owned.
+- {ChildHostDutyBoundaryGuidance.TargetRepositoryLabelContract}
 - Do not add `intent-pr-created` to the PR; it is an issue-side completion marker applied by `worker complete`.
 - All label transitions go through `intent-cli worker claim` / `intent-cli worker complete`. No manual `gh ... edit --add-label` / `--remove-label` fallback for workflow labels.
 - If a host-side completion or linkage step reports missing, contradictory, unreadable, or ambiguous durable state, report the exact canonical refusal to orchestration. Do not enter the host repo, hand-edit `AGENTS.md` / `CLAUDE.md`, or use PR-linkage recovery from the child seat.
