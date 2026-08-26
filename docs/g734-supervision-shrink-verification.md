@@ -59,16 +59,16 @@ still alive. The emitted result reported:
 ```json
 {
   "supervisor_state": "running",
-  "before_bytes": 10976411,
-  "after_bytes": 8802803,
+  "before_bytes": 10986486,
+  "after_bytes": 8812878,
   "before_record_count": 20127,
   "after_record_count": 20127,
-  "stalls_before_bytes": 10975592,
-  "stalls_after_bytes": 8801984,
+  "stalls_before_bytes": 10985655,
+  "stalls_after_bytes": 8812047,
   "stalls_before_records": 20126,
   "stalls_after_records": 20126,
-  "cycles_before_bytes": 819,
-  "cycles_after_bytes": 819,
+  "cycles_before_bytes": 831,
+  "cycles_after_bytes": 831,
   "cycles_before_records": 1,
   "cycles_after_records": 1,
   "invariant_bytes_saved_in_records": 2173608,
@@ -160,7 +160,13 @@ outcome, removes the journal, and leaves the externally appended valid cycle
 and the already-readable stall state intact. Thus completed, recovered, and
 aborted outcomes are all accounted for without silent record loss.
 
-The focused G734 class finished with 15 passed tests, including the density
-measurement, live-supervisor cycle transition, three no-write validation
-counterexamples, four replacement/audit fault points, and the aborted-target
-proof.
+The exact-head GitHub Actions run was `32928645986` at implementation head
+`27dafc50b8285fca1a2e67583bdab374d1a07bf8`. Its uploaded TRX emitted the
+density line, the live `running`/`cycles=1->2` transcript, all four recovery
+rows, and the aborted-target transcript above. The source-contract job passed
+5,538 tests with 1 expected skip across all projects; the CLI project passed
+5,208 with 1 expected skip. The focused G734 class contributed 15 passing
+tests, including the density measurement, live-supervisor cycle transition,
+three no-write validation counterexamples, four replacement/audit fault
+points, and the aborted-target proof. The npm package dry-run job was also
+green.
