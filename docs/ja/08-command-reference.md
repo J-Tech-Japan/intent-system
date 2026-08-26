@@ -91,6 +91,27 @@ per-role refusal の repair は行いません。writer は CAS lock を保持�
 stale な `--current-digest` は拒否されます。既存の per-role `topology record` workspace mismatch message は、
 動作する sanctioned な whole-team transition としてこの command を示します。machine-local JSON を手編集しないでください。
 
+## topology の host-state declaration (G736)
+
+host-state work を担当する role と、その work に使う envelope を記録します。この command は明示された権限を記録する
+だけで、residence、agent kind、external placement、co-location から推測しません:
+
+```bash
+intent-cli session-layer topology record-host-state \
+  --domain <domain> --team <team> --role <role> \
+  --envelope <named-host-state-envelope> --write --format json
+intent-cli session-layer topology validate \
+  --domain <domain> --team <team> --format json
+intent-cli guide orchestrator-thread \
+  --domain <domain> --team <team> --target-repo <owner/repo> \
+  --agent <agent> --format markdown
+```
+
+validate result は declaration を、guide は探索された route を出力します。`host_state` のない legacy topology は valid のまま
+migrate されませんが、publish 前に informational な `host-state-role-missing` finding が出ます。その finding は team が
+実行できない host-state workflow work を示し、declaration だけでは non-sandboxed participant が供給されないことも伝えます。
+design role は明示的に declaration された場合は正当です。禁止されるのは undeclared / ad-hoc な routine request だけです。
+
 ---
 
 ## プロジェクトセットアップ

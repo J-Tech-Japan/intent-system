@@ -20,13 +20,18 @@ internal sealed record NotifyRecordedRole(
     public const string ExternalResident = "external";
 }
 
+internal sealed record NotifyHostStateDeclaration(
+    string Role,
+    string Envelope);
+
 internal sealed record NotifyTeamTopology(
     string SourcePath,
     string? Domain,
     string Team,
     string WorkspaceId,
     IReadOnlyDictionary<string, NotifyRecordedRole> Roles,
-    IReadOnlyDictionary<string, AgentLaunchEnvelopeProfile> EnvelopeProfiles);
+    IReadOnlyDictionary<string, AgentLaunchEnvelopeProfile> EnvelopeProfiles,
+    NotifyHostStateDeclaration? HostState = null);
 
 internal sealed record NotifyTopologyResolution
 {
@@ -76,6 +81,7 @@ internal sealed record SessionLayerTopologyValidation
     public required string Team { get; init; }
     public required string SourcePath { get; init; }
     public required IReadOnlyList<SessionLayerTopologyFinding> Findings { get; init; }
+    public NotifyHostStateDeclaration? HostState { get; init; }
     public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
@@ -87,6 +93,8 @@ internal sealed record SessionLayerTopologyValidation
 /// </summary>
 internal static class NotifyRoleTopologyStore
 {
+    public const string HostStateRoleMissingCause = "host-state-role-missing";
+    public const string HostStatePropertyName = "host_state";
     public const string LegacyRelativePath = ".intent-cli/role-pane-mapping.json";
     public const string TopologyDirectoryRelativePath = ".intent-cli/topology";
     public const string LocalIgnoreFileName = ".gitignore";
@@ -355,10 +363,27 @@ internal static class NotifyRoleTopologyStore
                 }
             }
 
+            if (!TryReadHostState(
+                    root,
+                    teamElement,
+                    roles.Keys,
+                    out var hostState,
+                    out var hostStateError))
+            {
+                return Failure("host-state-invalid", hostStateError);
+            }
+
             return new NotifyTopologyResolution
             {
                 Resolved = true,
-                Topology = new NotifyTeamTopology(path, expectedDomain, team, workspaceId, roles, envelopeProfiles),
+                Topology = new NotifyTeamTopology(
+                    path,
+                    expectedDomain,
+                    team,
+                    workspaceId,
+                    roles,
+                    envelopeProfiles,
+                    hostState),
                 Summary = $"Resolved recorded role topology for team '{team}' from '{path}'.",
             };
         }
@@ -541,6 +566,7 @@ internal static class NotifyRoleTopologyStore
     public static SessionLayerTopologyValidation Validate(string routingRoot, string? domain, string team)
     {
         var findings = new List<SessionLayerTopologyFinding>();
+        NotifyHostStateDeclaration? discoveredHostState = null;
         var path = string.IsNullOrWhiteSpace(domain)
             ? ResolvePath(routingRoot)
             : ResolvePath(routingRoot, domain, team);
@@ -682,6 +708,33 @@ internal static class NotifyRoleTopologyStore
                     $"Team '{team}' contains no recorded roles."));
             }
 
+            var roleNames = rolesElement.EnumerateObject()
+                .Where(property => !IsTopologyEnvelopeProperty(property.Name))
+                .Select(property => property.Name)
+                .ToArray();
+            var hostStateDeclarationMissing = false;
+            if (!TryReadHostState(
+                    document.RootElement,
+                    teamElement,
+                    roleNames,
+                    out var hostState,
+                    out var hostStateError))
+            {
+                findings.Add(Finding(
+                    "<host-state>",
+                    HostStatePropertyName,
+                    "host-state-invalid",
+                    hostStateError));
+            }
+            else if (hostState is null)
+            {
+                hostStateDeclarationMissing = true;
+            }
+            else
+            {
+                discoveredHostState = hostState;
+            }
+
             if (string.IsNullOrWhiteSpace(teamWorkspaceId))
             {
                 var inferred = InferConsistentWorkspace(rolesElement);
@@ -698,6 +751,20 @@ internal static class NotifyRoleTopologyStore
             {
                 findings.Add(Finding("<topology>", "envelope_profile", "profile-invalid", profileResolution.Summary));
             }
+
+            // A missing declaration is an actionable capacity finding for an
+            // otherwise usable legacy topology. Do not obscure a malformed
+            // record with a second, derivative finding; the caller must repair
+            // the structural error first.
+            if (hostStateDeclarationMissing && findings.All(finding => finding.IsInformational))
+            {
+                findings.Add(Finding(
+                    "<host-state>",
+                    "role",
+                    HostStateRoleMissingCause,
+                    HostStateRoleMissingMessage(team, path),
+                    isInformational: true));
+            }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -705,7 +772,7 @@ internal static class NotifyRoleTopologyStore
                 $"Topology file '{path}' is unreadable: {exception.Message}"));
         }
 
-        return Validation(team, path, findings);
+        return Validation(team, path, findings, hostState: discoveredHostState);
     }
 
     public static bool TryResolveReaderPath(
@@ -952,6 +1019,66 @@ internal static class NotifyRoleTopologyStore
         return true;
     }
 
+    private static bool TryReadHostState(
+        JsonElement root,
+        JsonElement teamElement,
+        IEnumerable<string> roleNames,
+        out NotifyHostStateDeclaration? declaration,
+        out string error)
+    {
+        declaration = null;
+        error = string.Empty;
+
+        JsonElement hostState;
+        if (teamElement.TryGetProperty(HostStatePropertyName, out var teamHostState))
+        {
+            hostState = teamHostState;
+        }
+        else if (root.TryGetProperty(HostStatePropertyName, out var rootHostState))
+        {
+            hostState = rootHostState;
+        }
+        else
+        {
+            return true;
+        }
+
+        if (hostState.ValueKind != JsonValueKind.Object)
+        {
+            error = "Topology field 'host_state' must be an object with explicit 'role' and 'envelope' fields.";
+            return false;
+        }
+
+        var role = ReadString(hostState, "role");
+        var envelope = ReadString(hostState, "envelope")
+            ?? ReadString(hostState, "envelope_profile");
+        if (string.IsNullOrWhiteSpace(role) || string.IsNullOrWhiteSpace(envelope))
+        {
+            error = "Topology field 'host_state' must declare non-empty 'role' and 'envelope' values; authority is never inferred from resident, kind, or placement.";
+            return false;
+        }
+
+        var names = roleNames.ToArray();
+        var exact = names.Contains(role, StringComparer.Ordinal);
+        var normalized = GuideRoleContractGuidance.Normalize(role) ?? role;
+        var aliases = names.Where(name => string.Equals(
+                GuideRoleContractGuidance.Normalize(name) ?? name,
+                normalized,
+                StringComparison.Ordinal))
+            .ToArray();
+        if (!exact && aliases.Length != 1)
+        {
+            error = $"Topology host_state.role '{role}' is not one uniquely recorded team role; authority is never inferred from resident, kind, external placement, or co-location. Record the role first, then record host_state explicitly.";
+            return false;
+        }
+
+        declaration = new NotifyHostStateDeclaration(role, envelope);
+        return true;
+    }
+
+    public static string HostStateRoleMissingMessage(string team, string path) =>
+        $"Topology for team '{team}' remains valid for backward compatibility and needs no migration, but '{path}' declares no host-state role. This team cannot perform required host-state workflow work (including host-state publication and repository Git operations) before publish. Record an actually capable participant and an explicit host-state role plus envelope; a declaration alone does not supply a non-sandboxed participant, and resident, kind, external placement, or co-location never grants authority.";
+
     private static string? ConsistentWorkspaceFromRoles(IEnumerable<NotifyRecordedRole> roles)
     {
         var workspaceIds = roles
@@ -988,7 +1115,7 @@ internal static class NotifyRoleTopologyStore
 
     private static bool IsTopologyEnvelopeProperty(string property) => property is
         "schema_version" or "team" or "workspace" or "workspace_id" or "tab_id" or "updated_at" or "roles"
-        or "envelope_profiles" or "profiles";
+        or "envelope_profiles" or "profiles" or HostStatePropertyName;
 
     private static string? InferConsistentWorkspace(JsonElement rolesElement)
     {
@@ -1063,7 +1190,8 @@ internal static class NotifyRoleTopologyStore
             && Equals(entry.Value, other))
         && left.EnvelopeProfiles.Count == right.EnvelopeProfiles.Count
         && left.EnvelopeProfiles.All(entry => right.EnvelopeProfiles.TryGetValue(entry.Key, out var other)
-            && Equals(entry.Value, other));
+            && Equals(entry.Value, other))
+        && Equals(left.HostState, right.HostState);
 
     private static IEnumerable<string> FindNewTopologyPaths(string routingRoot, string team)
     {
@@ -1141,12 +1269,14 @@ internal static class NotifyRoleTopologyStore
         string team,
         string path,
         IReadOnlyList<SessionLayerTopologyFinding> findings,
-        IReadOnlyList<string>? warnings = null) => new()
+        IReadOnlyList<string>? warnings = null,
+        NotifyHostStateDeclaration? hostState = null) => new()
         {
             Valid = findings.All(finding => finding.IsInformational),
             Team = team,
             SourcePath = path,
             Findings = findings,
+            HostState = hostState,
             Warnings = warnings ?? [],
         };
 }

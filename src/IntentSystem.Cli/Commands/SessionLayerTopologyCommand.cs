@@ -17,7 +17,7 @@ internal static class SessionLayerTopologyCommand
     private const string FormatMarkdown = "markdown";
 
     private const string Usage =
-        "Usage: intent-cli session-layer topology record|record-profile|show|validate|move|update-kind|update-field|retire-legacy [options]";
+        "Usage: intent-cli session-layer topology record|record-host-state|record-profile|show|validate|move|update-kind|update-field|retire-legacy [options]";
     private const string RecordUsage =
         "Usage: intent-cli session-layer topology record --domain <name> --team <name> --role <name> --resident herdr "
         + "--workspace-id <id> --pane-id <id> --cwd <path> [--kind <kind>] [--delivery-method inline|file-backed] [--dry-run|--write] "
@@ -27,6 +27,9 @@ internal static class SessionLayerTopologyCommand
         + "[--format markdown|json]\n"
         + "   Heartbeat coordination accepts recorded role 'orchestration' or the alias 'orchestrator'; existing "
         + "records under either name need no rename or migration.";
+    private const string RecordHostStateUsage =
+        "Usage: intent-cli session-layer topology record-host-state --domain <name> --team <name> --role <name> "
+        + "--envelope <named-host-state-envelope> [--dry-run|--write] [--format markdown|json]";
     private const string ShowUsage =
         "Usage: intent-cli session-layer topology show --domain <name> --team <name> [--format markdown|json]";
     private const string ValidateUsage =
@@ -69,6 +72,7 @@ internal static class SessionLayerTopologyCommand
         {
             writer.WriteLine(Usage);
             writer.WriteLine(RecordUsage);
+            writer.WriteLine(RecordHostStateUsage);
             writer.WriteLine(ShowUsage);
             writer.WriteLine(ValidateUsage);
             writer.WriteLine(MoveUsage);
@@ -102,6 +106,7 @@ internal static class SessionLayerTopologyCommand
         return args[0] switch
         {
             "record" => ExecuteRecord(context, args[1..], writer),
+            "record-host-state" => ExecuteRecordHostState(context, args[1..], writer),
             "record-profile" => ExecuteRecordProfile(context, args[1..], writer),
             "show" => ExecuteShow(context, args[1..], writer),
             "validate" => ExecuteValidate(context, args[1..], writer),
@@ -145,10 +150,11 @@ internal static class SessionLayerTopologyCommand
         var result = new SessionLayerTopologyValidationResult
         {
             Valid = validation.Valid,
-            Team = team!,
-            RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
-            Findings = validation.Findings,
-            Summary = (validation.Valid
+                Team = team!,
+                RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
+                Findings = validation.Findings,
+                HostState = validation.HostState,
+                Summary = (validation.Valid
                 ? $"Recorded delivery topology for team '{team}' is valid."
                 : $"Recorded delivery topology for team '{team}' is invalid with "
                     + $"{validation.Findings.Count} finding(s). No topology was changed.")
@@ -195,6 +201,7 @@ internal static class SessionLayerTopologyCommand
                 RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
                 Roles = [],
                 EnvelopeProfiles = [],
+                HostState = validation.HostState,
                 Findings = validation.Findings,
                 Summary = $"Recorded delivery topology for team '{team}' is invalid; no delivery targets were "
                     + "invented or resolved." + FormatWarnings(validation.Warnings),
@@ -252,6 +259,7 @@ internal static class SessionLayerTopologyCommand
                             RecordedAt = profile.RecordedAt,
                         })
                         .ToArray(),
+                    HostState = topology.HostState,
                     Findings =
                     [
                         new SessionLayerTopologyFinding(
@@ -296,6 +304,7 @@ internal static class SessionLayerTopologyCommand
                     RecordedAt = profile.RecordedAt,
                 })
                 .ToArray(),
+            HostState = topology.HostState,
             Findings = [],
             Summary = $"Resolved {roles.Count} recorded delivery target(s) for team '{team}' without sending."
                 + FormatWarnings(topologyResolution.Warnings),
@@ -341,6 +350,39 @@ internal static class SessionLayerTopologyCommand
 
         var result = SessionLayerTopologyWriter.Record(context.RepoRoot, request!);
         EmitRecord(writer, request!.Format, result);
+        return result.Conflict ? 1 : 0;
+    }
+
+    internal static int ExecuteRecordHostState(CliContext context, string[] args, TextWriter writer)
+    {
+        if (IsHelp(args))
+        {
+            writer.WriteLine(RecordHostStateUsage);
+            return 0;
+        }
+
+        if (!TryParseRecordHostStateArguments(args, out var request, out var error))
+        {
+            writer.WriteLine(error);
+            writer.WriteLine(RecordHostStateUsage);
+            return 1;
+        }
+
+        var result = SessionLayerTopologyWriter.RecordHostState(context.RepoRoot, request!);
+        if (string.Equals(request!.Format, FormatJson, StringComparison.Ordinal))
+        {
+            WriteJson(writer, result);
+        }
+        else
+        {
+            writer.WriteLine($"# Session-layer host-state declaration — {result.Team}");
+            writer.WriteLine($"mode: {result.Mode}");
+            writer.WriteLine($"applied: {result.Applied.ToString().ToLowerInvariant()}");
+            writer.WriteLine($"changed: {result.Changed.ToString().ToLowerInvariant()}");
+            writer.WriteLine($"conflict: {result.Conflict.ToString().ToLowerInvariant()}");
+            writer.WriteLine(result.Summary);
+        }
+
         return result.Conflict ? 1 : 0;
     }
 
@@ -841,6 +883,94 @@ internal static class SessionLayerTopologyCommand
         return true;
     }
 
+    private static bool TryParseRecordHostStateArguments(
+        string[] args,
+        out SessionLayerTopologyHostStateRecordRequest? request,
+        out string error)
+    {
+        request = null;
+        error = string.Empty;
+        string? domain = null;
+        string? team = null;
+        string? role = null;
+        string? envelope = null;
+        var requestedWrite = false;
+        var requestedDryRun = false;
+        var format = FormatMarkdown;
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            switch (args[index])
+            {
+                case "--domain":
+                    if (!TryReadValue(args, ref index, "--domain", out domain, out error)) return false;
+                    break;
+                case "--team":
+                    if (!TryReadValue(args, ref index, "--team", out team, out error)) return false;
+                    break;
+                case "--role":
+                    if (!TryReadValue(args, ref index, "--role", out role, out error)) return false;
+                    break;
+                case "--envelope" or "--envelope-profile":
+                    if (!TryReadValue(args, ref index, args[index], out var value, out error)) return false;
+                    if (envelope is not null)
+                    {
+                        error = "--envelope and --envelope-profile may not both be supplied.";
+                        return false;
+                    }
+                    envelope = value;
+                    break;
+                case "--write":
+                    requestedWrite = true;
+                    break;
+                case "--dry-run":
+                    requestedDryRun = true;
+                    break;
+                case "--format":
+                    if (!TryReadValue(args, ref index, "--format", out var requestedFormat, out error)
+                        || !IsKnownFormat(requestedFormat!))
+                    {
+                        error = string.IsNullOrEmpty(error)
+                            ? $"--format must be 'markdown' or 'json' (got '{requestedFormat}')."
+                            : error;
+                        return false;
+                    }
+                    format = requestedFormat!;
+                    break;
+                default:
+                    error = $"Unknown argument '{args[index]}'.";
+                    return false;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(domain)
+            || string.IsNullOrWhiteSpace(team)
+            || string.IsNullOrWhiteSpace(role)
+            || string.IsNullOrWhiteSpace(envelope)
+            || (!requestedWrite && !requestedDryRun))
+        {
+            error = "--domain, --team, --role, --envelope, and either --write or --dry-run are required.";
+            return false;
+        }
+
+        if (requestedWrite && requestedDryRun)
+        {
+            error = "--write and --dry-run are mutually exclusive.";
+            return false;
+        }
+
+        request = new SessionLayerTopologyHostStateRecordRequest
+        {
+            Domain = domain!,
+            Team = team!,
+            Role = role!,
+            Envelope = envelope!,
+            Write = requestedWrite,
+            Format = format,
+        };
+        return true;
+    }
+
     private static bool TryParseMoveArguments(
         string[] args,
         out SessionLayerTopologyMoveRequest? request,
@@ -1263,6 +1393,135 @@ internal static class SessionLayerTopologyWriter
                 : $"Dry-run: would record operator-supplied role '{request.Role}' for team '{request.Team}'. "
                     + "Heartbeat coordination accepts recorded role 'orchestration' or the alias 'orchestrator'; "
                     + "existing records under either name need no rename or migration.",
+        };
+    }
+
+    public static SessionLayerTopologyHostStateRecordResult RecordHostState(
+        string routingRoot,
+        SessionLayerTopologyHostStateRecordRequest request)
+    {
+        var path = NotifyRoleTopologyStore.ResolvePath(routingRoot, request.Domain, request.Team);
+        JsonObject root;
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return HostStateConflict(
+                    request,
+                    path,
+                    $"Topology file '{path}' is absent. Record the team topology and the serving role before declaring host-state authority.");
+            }
+
+            root = JsonNode.Parse(File.ReadAllText(path)) as JsonObject
+                ?? throw new JsonException("the root is not a JSON object");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return HostStateConflict(
+                request,
+                path,
+                $"Topology file '{path}' is unreadable: {exception.Message} Refusing to overwrite it.");
+        }
+
+        var recordedDomain = ReadString(root, "domain");
+        if (!string.Equals(recordedDomain, request.Domain, StringComparison.Ordinal))
+        {
+            return HostStateConflict(
+                request,
+                path,
+                $"Topology file '{path}' identifies domain '{recordedDomain ?? "missing"}', not requested domain "
+                + $"'{request.Domain}'. Refusing to overwrite a copied or misplaced machine record.");
+        }
+
+        if (!TrySelectTeamForWrite(root, request.Team, out var team, out var selectError))
+        {
+            return HostStateConflict(request, path, selectError);
+        }
+
+        if (!TrySelectRolesForWrite(team!, out var roles, out var rolesError)
+            || !roles!.TryGetPropertyValue(request.Role, out var roleNode)
+            || roleNode is not JsonObject)
+        {
+            return HostStateConflict(
+                request,
+                path,
+                $"Host-state role '{request.Role}' is not one of the already recorded team roles. Record that role first; authority is never inferred from resident, kind, external placement, or co-location.");
+        }
+
+        var requested = new JsonObject
+        {
+            ["role"] = request.Role,
+            ["envelope"] = request.Envelope,
+        };
+        if (team!.TryGetPropertyValue(NotifyRoleTopologyStore.HostStatePropertyName, out var existingNode))
+        {
+            if (existingNode is not JsonObject existing)
+            {
+                return HostStateConflict(
+                    request,
+                    path,
+                    "Topology field 'host_state' is not an object. Refusing to replace a malformed declaration.");
+            }
+
+            var existingRole = ReadString(existing, "role");
+            var existingEnvelope = ReadString(existing, "envelope")
+                ?? ReadString(existing, "envelope_profile");
+            if (!string.Equals(existingRole, request.Role, StringComparison.Ordinal)
+                || !string.Equals(existingEnvelope, request.Envelope, StringComparison.Ordinal))
+            {
+                return HostStateConflict(
+                    request,
+                    path,
+                    $"Topology already declares host_state role '{existingRole ?? "missing"}' with envelope "
+                    + $"'{existingEnvelope ?? "missing"}', not the requested role '{request.Role}' and envelope "
+                    + $"'{request.Envelope}'. Refusing to replace an operator-supplied authority declaration silently.");
+            }
+
+            return new SessionLayerTopologyHostStateRecordResult
+            {
+                Team = request.Team,
+                Role = request.Role,
+                Envelope = request.Envelope,
+                Mode = request.Write ? "write" : "dry-run",
+                RecordPath = NotifyRoleTopologyStore.RelativePathFor(request.Domain, request.Team),
+                Applied = false,
+                Changed = false,
+                AlreadyRecorded = true,
+                Conflict = false,
+                Summary = $"Host-state role '{request.Role}' with envelope '{request.Envelope}' for team '{request.Team}' already exactly matches; idempotent no-op. The declaration records routing authority; it does not provision a non-sandboxed participant.",
+            };
+        }
+
+        team[NotifyRoleTopologyStore.HostStatePropertyName] = requested;
+        var applied = false;
+        if (request.Write)
+        {
+            try
+            {
+                EnsureLocalIgnore(routingRoot);
+                WriteAtomically(path, root.ToJsonString(FileJsonOptions) + Environment.NewLine);
+                applied = true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return HostStateConflict(request, path, $"Topology file '{path}' could not be written: {exception.Message}");
+            }
+        }
+
+        return new SessionLayerTopologyHostStateRecordResult
+        {
+            Team = request.Team,
+            Role = request.Role,
+            Envelope = request.Envelope,
+            Mode = request.Write ? "write" : "dry-run",
+            RecordPath = NotifyRoleTopologyStore.RelativePathFor(request.Domain, request.Team),
+            Applied = applied,
+            Changed = true,
+            AlreadyRecorded = false,
+            Conflict = false,
+            Summary = request.Write
+                ? $"Recorded explicit host-state role '{request.Role}' with envelope '{request.Envelope}' for team '{request.Team}'. The declaration is the sole authority route; it does not provision a non-sandboxed participant."
+                : $"Dry-run: would record explicit host-state role '{request.Role}' with envelope '{request.Envelope}' for team '{request.Team}'. The declaration is the sole authority route; it does not provision a non-sandboxed participant.",
         };
     }
 
@@ -2078,7 +2337,7 @@ internal static class SessionLayerTopologyWriter
 
     private static bool IsEnvelopeProperty(string property) => property is
         "schema_version" or "team" or "workspace" or "workspace_id" or "tab_id" or "updated_at" or "roles"
-        or "envelope_profiles" or "profiles";
+        or "envelope_profiles" or "profiles" or NotifyRoleTopologyStore.HostStatePropertyName;
 
     private static void WriteAtomically(string path, string content)
     {
@@ -2150,6 +2409,23 @@ internal static class SessionLayerTopologyWriter
             Summary = summary,
         };
 
+    private static SessionLayerTopologyHostStateRecordResult HostStateConflict(
+        SessionLayerTopologyHostStateRecordRequest request,
+        string path,
+        string summary) => new()
+        {
+            Team = request.Team,
+            Role = request.Role,
+            Envelope = request.Envelope,
+            Mode = request.Write ? "write" : "dry-run",
+            RecordPath = NotifyRoleTopologyStore.RelativePathFor(request.Domain, request.Team),
+            Applied = false,
+            Changed = false,
+            AlreadyRecorded = false,
+            Conflict = true,
+            Summary = summary,
+        };
+
     private static SessionLayerTopologyProfileRecordResult ProfileConflict(
         SessionLayerTopologyProfileRecordRequest request,
         string path,
@@ -2200,11 +2476,35 @@ internal sealed record SessionLayerTopologyRecordRequest
     public required string Format { get; init; }
 }
 
+internal sealed record SessionLayerTopologyHostStateRecordRequest
+{
+    public required string Domain { get; init; }
+    public required string Team { get; init; }
+    public required string Role { get; init; }
+    public required string Envelope { get; init; }
+    public required bool Write { get; init; }
+    public required string Format { get; init; }
+}
+
 internal sealed record SessionLayerTopologyRecordResult
 {
     public required string Team { get; init; }
     public required string Role { get; init; }
     public required string Resident { get; init; }
+    public required string Mode { get; init; }
+    public required string RecordPath { get; init; }
+    public required bool Applied { get; init; }
+    public required bool Changed { get; init; }
+    public required bool AlreadyRecorded { get; init; }
+    public required bool Conflict { get; init; }
+    public required string Summary { get; init; }
+}
+
+internal sealed record SessionLayerTopologyHostStateRecordResult
+{
+    public required string Team { get; init; }
+    public required string Role { get; init; }
+    public required string Envelope { get; init; }
     public required string Mode { get; init; }
     public required string RecordPath { get; init; }
     public required bool Applied { get; init; }
@@ -2303,6 +2603,7 @@ internal sealed record SessionLayerTopologyValidationResult
     public required string Team { get; init; }
     public required string RecordPath { get; init; }
     public required IReadOnlyList<SessionLayerTopologyFinding> Findings { get; init; }
+    public NotifyHostStateDeclaration? HostState { get; init; }
     public required string Summary { get; init; }
 }
 
@@ -2314,6 +2615,7 @@ internal sealed record SessionLayerTopologyShowResult
     public required string RecordPath { get; init; }
     public required IReadOnlyList<SessionLayerTopologyShownRole> Roles { get; init; }
     public required IReadOnlyList<SessionLayerTopologyShownProfile> EnvelopeProfiles { get; init; }
+    public NotifyHostStateDeclaration? HostState { get; init; }
     public required IReadOnlyList<SessionLayerTopologyFinding> Findings { get; init; }
     public required string Summary { get; init; }
 }

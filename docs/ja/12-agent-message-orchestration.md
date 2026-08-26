@@ -2122,7 +2122,26 @@ non-sandboxed host-state routing を維持する route の両方を比較し、c
 `intent-cli issue publish-flow ... --write`、`intent-cli automation issue-publish --write`、host-state
 push、`intent-cli closeout pr ... --write` を所有します。Codex は bounded request を 1 件ルーティングし、
 返された JSON を待ち、intent-cli/GitHub の事実を再検証します。route が利用できなければ fail closed
-（sandbox を広げず、`.git` に書かず、routine workflow transition を design に依頼せず、clone を即興で作らない）です。
+（sandbox を広げず、`.git` に書かず、clone を即興で作らない）です。design に routine workflow transition を
+依頼してはいけないのは **undeclared / ad-hoc request** の場合です。topology が design role を host-state role
+として明示的に宣言している場合、その recorded duty への routing は正当です。
+
+**topology の host-state declaration と探索 (G736)。** role topology と並べて、host-state を担当する role と
+その named envelope を記録します:
+
+```bash
+intent-cli session-layer topology record-host-state --domain <domain> --team <team> \
+  --role <role> --envelope <named-host-state-envelope> --write --format json
+```
+
+`intent-cli session-layer topology validate --domain <domain> --team <team> --format json` は、存在する場合は明示的な
+`host_state` declaration を出力します。declaration のない legacy topology は valid のままで migration も不要ですが、
+publish 前に informational な `host-state-role-missing` finding を出します。そこでは host-state の publication や
+repository-Git work を実行できないこと、declaration だけでは non-sandboxed participant は供給されないこと、実際に
+capable な participant と明示的な declaration の両方が必要なことを伝えます。権限は `resident`、`kind`、external
+placement、co-location から推測しません。`guide orchestrator-thread --domain <domain> --team <team>` は recorded role と
+envelope を記録から探索し、その経路を表示します。したがって `design` を明示的に host-state role とする topology
+は許可され、undeclared / ad-hoc な design request だけが禁止されます。
 
 必要な packet が不在・不完全、またはプロダクト/リリース/設計判断を要する場合、orchestrator は
 それを **でっち上げません** — 構造化された `packet-needed` メッセージを design に送り、design が
@@ -2716,8 +2735,9 @@ resume）します。その後 orchestrator がループを自律的に駆動し
   publish ゲートが通れば、orchestrator は recorded host-state role に **1 件** の bounded publish
   request をルーティングします。その role が host repository から canonical な intent-cli command
   （`issue publish-flow` / `automation issue-publish`）を実行し、sandboxed Codex orchestrator 自身は
-  write-bearing step を実行しません。routine workflow transition を design に頼みません。1 wake につき
-  最大 1 件。委譲前に host-state result を検証します。
+  write-bearing step を実行しません。undeclared / ad-hoc request によって design に routine workflow transition を
+  頼みません。topology-declared な design host-state role への recorded routing は正当です。1 wake につき最大 1 件。
+  委譲前に host-state result を検証します。
 - **escalation boundary** — ルーチンな委譲（host-state publish routing、delegate、CI 待ち、review、closeout）は
   orchestrator↔receivers/host-state role に留まります。**design** に戻すのは人間が必要な判断のときだけ
   （product/設計 clarification、release/認証情報/セキュリティ、破壊的操作、未解決ブロッカー）。構造化された

@@ -131,6 +131,29 @@ the host claim JSON; and a still-refused boundary probe such as
 nonzero with `Operation not permitted`. Use a test-owned sentinel and never
 delete it if the negative probe unexpectedly succeeds.
 
+## G736: topology records host-state capacity ([ADR 0011](../adr/0011-topology-host-state-role.md))
+
+The session-layer topology may explicitly record the host-state role and its
+named envelope:
+
+```bash
+intent-cli session-layer topology record-host-state --domain <domain> --team <team> --role <role> --envelope <named-host-state-envelope> --write --format json
+```
+
+This is an authority declaration, not an inference from `resident`, `kind`,
+external placement, or co-location. `topology validate` keeps legacy records
+valid and does not migrate them, but reports informational
+`host-state-role-missing` before publish when no declaration exists. The
+finding says that the team cannot perform required host-state publication or
+repository-Git work. A declaration does not create a non-sandboxed
+participant; an actually capable participant and the explicit declaration are
+both required. The orchestrator discovers the role and envelope from the
+record. A design role explicitly declared as host-state is legitimate; the
+existing prohibition is limited to undeclared or ad-hoc routine requests.
+
+Durable emitted record, validation, and rendered-discovery evidence is in
+[the G736 verification transcript](../g736-topology-host-state-verification.md).
+
 ## G724: worker domain identity on a multi-domain host
 
 The startup marker is display evidence, not a worker binding. In host context,

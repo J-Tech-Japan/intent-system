@@ -99,6 +99,31 @@ before replacement; a stale `--current-digest` is refused. The per-role
 `topology record` workspace-mismatch message points to this working command as
 the sanctioned whole-team transition; do not hand-edit the machine-local JSON.
 
+## Topology host-state declaration (G736)
+
+Record the role that owns host-state work and the envelope under which it may
+perform that work. The command records explicit authority; it never infers it
+from residence, agent kind, external placement, or co-location:
+
+```bash
+intent-cli session-layer topology record-host-state \
+  --domain <domain> --team <team> --role <role> \
+  --envelope <named-host-state-envelope> --write --format json
+intent-cli session-layer topology validate \
+  --domain <domain> --team <team> --format json
+intent-cli guide orchestrator-thread \
+  --domain <domain> --team <team> --target-repo <owner/repo> \
+  --agent <agent> --format markdown
+```
+
+The validate result exposes the declaration and the guide exposes the
+discovered route. A legacy topology without `host_state` remains valid and is
+not migrated, but gets the informational `host-state-role-missing` finding
+before publish. The finding names the host-state workflow work the team
+cannot perform and says that a declaration alone does not supply a
+non-sandboxed participant. A design role is legitimate when explicitly
+declared; only undeclared/ad-hoc routine requests to design are prohibited.
+
 ---
 
 ## Project setup
