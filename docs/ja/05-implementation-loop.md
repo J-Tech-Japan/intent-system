@@ -131,6 +131,25 @@ host claim JSON、そして拒否され続ける boundary probe です。例え�
 permitted` とともに nonzero で終了しなければなりません。test-owned sentinel を
 使い、negative probe が予想に反して成功した場合は削除しません。
 
+## G736: topology に host-state capacity を記録する（[ADR 0011](../adr/0011-topology-host-state-role.md)）
+
+session-layer topology には、host-state を担当する role と named envelope を明示的に記録できます:
+
+```bash
+intent-cli session-layer topology record-host-state --domain <domain> --team <team> --role <role> --envelope <named-host-state-envelope> --write --format json
+```
+
+これは `resident`、`kind`、external placement、co-location から推測する権限ではなく、明示的な declaration です。
+`topology validate` は legacy record を valid のままにして migration もしませんが、declaration がない場合は publish 前に
+informational な `host-state-role-missing` を報告します。その finding は、team が必要な host-state publication や
+repository-Git work を実行できないことを伝えます。declaration だけで non-sandboxed participant が作られるわけではなく、
+実際に capable な participant と明示的な declaration の両方が必要です。orchestrator は record から role と envelope を
+探索します。design role を host-state と明示的に宣言することは正当であり、既存の禁止は undeclared / ad-hoc な
+routine request に限られます。
+
+record、validate、render された discovery の永続的な証拠は
+[G736 verification transcript](../g736-topology-host-state-verification.md) にあります。
+
 ## G724: multi-domain host の worker domain identity
 
 startup marker は display evidence であり、worker binding ではありません。host context の

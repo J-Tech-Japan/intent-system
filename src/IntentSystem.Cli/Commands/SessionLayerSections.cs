@@ -133,6 +133,8 @@ internal static class SessionLayerSections
         // mode-independent — unchanged in both.
         new("## Session layer", "session_layer", Applicability.ModeIndependent),
         new(SessionLayerSwitchChecklist.Heading, SessionLayerSwitchChecklist.JsonProperty, Applicability.ModeIndependent),
+        new("## Host-state topology discovery (G736)", null, Applicability.ModeIndependent),
+        new("(json) host-state topology discovery", "host_state_discovery", Applicability.ModeIndependent),
         new("## Guide reachability (G645/G696)", "guide_reachability", Applicability.ModeIndependent),
         new("## Topology workspace move reachability (G697)", "topology_workspace_move", Applicability.ModeIndependent),
         new("## Closeout runs write-truth and repair (G708)", "closeout_runs_contract", Applicability.ModeIndependent),

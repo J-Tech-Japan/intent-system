@@ -115,6 +115,10 @@ internal static class GuideOrchestratorThreadCommand
             return 1;
         }
 
+        var hostStateDiscovery = modeResolved && requestedTeam is not null
+            ? DiscoverHostState(context.RepoRoot, requestedDomain!, requestedTeam)
+            : OrchestratorHostStateDiscovery.NotRequested(values["<domain>"], values["<team>"]);
+
         SessionLayerModeResolution sessionLayer;
         if (!modeResolved)
         {
@@ -137,7 +141,7 @@ internal static class GuideOrchestratorThreadCommand
         }
 
         var guide = ApplySessionLayer(
-            BuildGuide(values, sessionLayer.IsHerdrOnly),
+            BuildGuide(values, sessionLayer.IsHerdrOnly, hostStateDiscovery),
             sessionLayer,
             values,
             preflight,
@@ -725,7 +729,57 @@ internal static class GuideOrchestratorThreadCommand
         }
     }
 
-    private static OrchestratorThreadGuide BuildGuide(IReadOnlyDictionary<string, string> values, bool herdrOnly)
+    private static OrchestratorHostStateDiscovery DiscoverHostState(
+        string repoRoot,
+        string domain,
+        string team)
+    {
+        var resolution = NotifyRoleTopologyStore.Resolve(repoRoot, domain, team);
+        var recordPath = NotifyRoleTopologyStore.RelativePathFor(domain, team);
+        if (!resolution.Resolved)
+        {
+            return new OrchestratorHostStateDiscovery
+            {
+                Status = "topology-unavailable",
+                Source = recordPath,
+                Role = null,
+                Envelope = null,
+                Route = "No host-state route can be discovered because the recorded topology is unavailable. Repair or record the topology before publish; do not infer authority from residence, kind, external placement, or co-location.",
+                Summary = $"Topology discovery could not resolve the recorded topology for domain '{domain}' and team '{team}' ({resolution.Cause ?? "topology-unavailable"}). Record or repair it before publish.",
+                RecordCommand = $"intent-cli session-layer topology record --domain {domain} --team {team} ... --write --format json",
+            };
+        }
+
+        if (resolution.Topology?.HostState is not { } declaration)
+        {
+            return new OrchestratorHostStateDiscovery
+            {
+                Status = "missing-declaration",
+                Source = recordPath,
+                Role = null,
+                Envelope = null,
+                Route = $"cause={NotifyRoleTopologyStore.HostStateRoleMissingCause}; {NotifyRoleTopologyStore.HostStateRoleMissingMessage(team, recordPath)}",
+                Summary = "Topology discovery found a legacy-compatible record but no explicit host-state declaration. The record remains usable and is not migrated automatically.",
+                RecordCommand = $"intent-cli session-layer topology record-host-state --domain {domain} --team {team} --role <role> --envelope <named-host-state-envelope> --write --format json",
+            };
+        }
+
+        return new OrchestratorHostStateDiscovery
+        {
+            Status = "declared",
+            Source = recordPath,
+            Role = declaration.Role,
+            Envelope = declaration.Envelope,
+            Route = $"Topology discovery selected host-state role '{declaration.Role}' with envelope '{declaration.Envelope}' from '{recordPath}'. Route host-state publication, host Git, and linkage to that recorded role. A declared design host-state role is legitimate; the prohibition is only on undeclared or ad-hoc requests. The declaration records the route but does not supply a non-sandboxed participant or create host capability.",
+            Summary = $"Discovered explicit host-state role '{declaration.Role}' with envelope '{declaration.Envelope}' from the recorded topology.",
+            RecordCommand = $"intent-cli session-layer topology record-host-state --domain {domain} --team {team} --role {declaration.Role} --envelope {declaration.Envelope} --write --format json",
+        };
+    }
+
+    private static OrchestratorThreadGuide BuildGuide(
+        IReadOnlyDictionary<string, string> values,
+        bool herdrOnly,
+        OrchestratorHostStateDiscovery hostStateDiscovery)
     {
         var domain = values["<domain>"];
         var repo = values["<owner/repo>"];
@@ -736,6 +790,10 @@ internal static class GuideOrchestratorThreadCommand
             ? agent
             : values["<orchestrator-agent>"];
         var sandboxedCodexOrchestrator = string.Equals(orchestratorAgent, "codex", StringComparison.OrdinalIgnoreCase);
+        var qualifiedDesignRule =
+            "It does NOT ask design to perform routine workflow transitions through an undeclared or ad-hoc request; "
+            + "a topology-declared design host-state role is legitimate and is routed as a recorded duty. "
+            + "The declaration does not supply a non-sandboxed participant or create host capability.";
 
         string Apply(string template) => template
             .Replace("<domain>", domain, StringComparison.Ordinal)
@@ -800,11 +858,15 @@ internal static class GuideOrchestratorThreadCommand
             };
 
         var hostStateDutyRouting = sandboxedCodexOrchestrator
-            ? "CODEX SANDBOX DUTY ROUTE: this herdr-started Codex orchestrator uses `--sandbox workspace-write --ask-for-approval never`; the current recipe deliberately does not declare `<repo>/.git`. A live 2026-08-19 E-versus-F probe on Codex CLI 0.147.0/macOS showed `git -C work fetch origin` denied with `seatcwd, work` and succeeding with the exact `work/.git` root. We weighed both legitimate routes — declaring `<repo>/.git` for the seat, or retaining non-sandboxed host-state routing — and keep the latter for this recipe because it preserves least privilege while `git worktree add` under the corrected flags remains unmeasured. This is an explicit routing choice, not a claim that `.git` can never be granted. The non-sandboxed host-state role (the host/review runtime or an operator seat with the host-repo write envelope) owns `intent-cli issue publish-flow ... --write`, `intent-cli automation issue-publish --write`, host-state pushes, and `intent-cli closeout pr ... --write`. The Codex orchestrator routes one bounded request, waits for the returned JSON, and re-verifies intent-cli/GitHub facts. If that route is unavailable, fail closed — do not widen the sandbox, add an unrecorded `.git` root, write `.git`, ask design to perform routine workflow transitions, or improvise a clone."
-            : "HOST-STATE DUTY ROUTE: the recorded host-authority role performs write-bearing intent-cli/Git operations from the host repository. The orchestrator may execute a canonical write only when its own recorded envelope explicitly permits it; otherwise it routes the same bounded request to that non-sandboxed host-state role and verifies the returned intent-cli/GitHub facts. Never widen a seat envelope or ask design to perform routine workflow transitions.";
+            ? "CODEX SANDBOX DUTY ROUTE: this herdr-started Codex orchestrator uses `--sandbox workspace-write --ask-for-approval never`; the current recipe deliberately does not declare `<repo>/.git`. A live 2026-08-19 E-versus-F probe on Codex CLI 0.147.0/macOS showed `git -C work fetch origin` denied with `seatcwd, work` and succeeding with the exact `work/.git` root. We weighed both legitimate routes — declaring `<repo>/.git` for the seat, or retaining non-sandboxed host-state routing — and keep the latter for this recipe because it preserves least privilege while `git worktree add` under the corrected flags remains unmeasured. This is an explicit routing choice, not a claim that `.git` can never be granted. The non-sandboxed host-state role owns `intent-cli issue publish-flow ... --write`, `intent-cli automation issue-publish --write`, host-state pushes, and `intent-cli closeout pr ... --write`. The Codex orchestrator routes one bounded request, waits for the returned JSON, and re-verifies intent-cli/GitHub facts. "
+                + hostStateDiscovery.Route + " If that route is unavailable, fail closed — do not widen the sandbox, add an unrecorded `.git` root, write `.git`, or improvise a clone. "
+                + qualifiedDesignRule
+            : "HOST-STATE DUTY ROUTE: " + hostStateDiscovery.Route + " The recorded host-authority role performs write-bearing intent-cli/Git operations from the host repository. The orchestrator may execute a canonical write only when its own recorded envelope explicitly permits it; otherwise it routes the same bounded request to that role and verifies the returned intent-cli/GitHub facts. Never widen a seat envelope. "
+                + qualifiedDesignRule;
 
         return new OrchestratorThreadGuide
         {
+            HostStateDiscovery = hostStateDiscovery,
             SessionLayerSwitchChecklist = SessionLayerSwitchChecklist.Create(),
             SetupIntake = BuildSetupIntake(values, herdrOnly),
             // G696/G645: the orchestrator surface names the review seat's
@@ -1387,7 +1449,7 @@ internal static class GuideOrchestratorThreadCommand
                     + "publication), the orchestrator routes ONE bounded publish request to the recorded host-state role. "
                     + "That role performs the canonical intent-cli commands (`issue publish-flow` / `automation issue-publish`) "
                     + "from the host repository; a sandboxed Codex orchestrator does NOT execute the write-bearing step "
-                    + "itself. It does NOT ask design to perform routine workflow transitions. At most one issue per wake; "
+                    + "itself. " + qualifiedDesignRule + " At most one issue per wake; "
                     + "verify the host-state result before delegating implementation.",
                 EscalationBoundary =
                     "Routine delegation (host-state publish routing, delegate, CI wait, review, closeout) stays "
@@ -4402,6 +4464,18 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine("- route is read-only guidance; the operator supplies the workspace and pane mapping and explicitly chooses --write.");
         writer.WriteLine();
 
+        writer.WriteLine("## Host-state topology discovery (G736)");
+        writer.WriteLine();
+        writer.WriteLine($"- status: `{guide.HostStateDiscovery.Status}`");
+        writer.WriteLine($"- source: `{guide.HostStateDiscovery.Source}`");
+        writer.WriteLine($"- role: `{guide.HostStateDiscovery.Role ?? "unresolved"}`");
+        writer.WriteLine($"- envelope: `{guide.HostStateDiscovery.Envelope ?? "unresolved"}`");
+        writer.WriteLine($"- {guide.HostStateDiscovery.Summary}");
+        writer.WriteLine($"- route: {guide.HostStateDiscovery.Route}");
+        writer.WriteLine($"- declaration command: `{guide.HostStateDiscovery.RecordCommand}`");
+        writer.WriteLine("- authority is recorded only by the explicit role+envelope declaration; resident, kind, external placement, and co-location do not authorize host-state work.");
+        writer.WriteLine();
+
         WriteCloseoutRunsContract(writer, guide.CloseoutRunsContract);
 
         // G701: the registry and dialog rule are mode-independent guide
@@ -5375,8 +5449,51 @@ internal sealed record OrchestratorSetupInputs
     public string? ExistingLoopPolicy { get; init; }
 }
 
+internal sealed record OrchestratorHostStateDiscovery
+{
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    [JsonPropertyName("source")]
+    public required string Source { get; init; }
+
+    [JsonPropertyName("role")]
+    public required string? Role { get; init; }
+
+    [JsonPropertyName("envelope")]
+    public required string? Envelope { get; init; }
+
+    [JsonPropertyName("route")]
+    public required string Route { get; init; }
+
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("record_command")]
+    public required string RecordCommand { get; init; }
+
+    public static OrchestratorHostStateDiscovery NotRequested(string domain, string team) => new()
+    {
+        Status = "not-requested",
+        Source = "not-read",
+        Role = null,
+        Envelope = null,
+        Route = "No topology host-state discovery was requested because this guide invocation did not include a concrete team. Pass --team <team> to discover the recorded host-state role and envelope.",
+        Summary = "Host-state topology discovery is scoped to an explicit domain/team invocation.",
+        RecordCommand = $"intent-cli session-layer topology record-host-state --domain {domain} --team {team} --role <role> --envelope <named-host-state-envelope> --write --format json",
+    };
+}
+
 internal sealed record OrchestratorThreadGuide
 {
+    /// <summary>
+    /// G736: the orchestrator discovers host-state authority only from the
+    /// explicit topology declaration; residence, kind, and placement are not
+    /// authority signals.
+    /// </summary>
+    [JsonPropertyName("host_state_discovery")]
+    public required OrchestratorHostStateDiscovery HostStateDiscovery { get; init; }
+
     /// <summary>G570: which session-layer transport this guide is rendering for, and how that was decided.</summary>
     [JsonPropertyName("session_layer")]
     public OrchestratorSessionLayer? SessionLayer { get; init; }

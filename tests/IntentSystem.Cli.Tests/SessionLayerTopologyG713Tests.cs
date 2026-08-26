@@ -29,7 +29,9 @@ public sealed class SessionLayerTopologyG713Tests : IDisposable
 
         Assert.Equal(0, before.ExitCode);
         Assert.True(before.Result.GetProperty("valid").GetBoolean());
-        var beforeFinding = Assert.Single(before.Result.GetProperty("findings").EnumerateArray());
+        var beforeFinding = Assert.Single(
+            before.Result.GetProperty("findings").EnumerateArray(),
+            finding => finding.GetProperty("field").GetString() == "pane_label");
         Assert.Equal("orchestration", beforeFinding.GetProperty("role").GetString());
         Assert.Equal("pane_label", beforeFinding.GetProperty("field").GetString());
         Assert.Equal("pane-label-missing", beforeFinding.GetProperty("cause").GetString());
@@ -43,7 +45,10 @@ public sealed class SessionLayerTopologyG713Tests : IDisposable
 
         Assert.Equal(0, after.ExitCode);
         Assert.True(after.Result.GetProperty("valid").GetBoolean());
-        Assert.Empty(after.Result.GetProperty("findings").EnumerateArray());
+        var afterFindings = after.Result.GetProperty("findings").EnumerateArray().ToArray();
+        Assert.DoesNotContain(afterFindings, finding => finding.GetProperty("field").GetString() == "pane_label");
+        Assert.Contains(afterFindings, finding =>
+            finding.GetProperty("cause").GetString() == NotifyRoleTopologyStore.HostStateRoleMissingCause);
         Assert.Equal(2, runner.Calls.Count);
         Assert.All(runner.Calls, call =>
         {

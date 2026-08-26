@@ -2454,8 +2454,32 @@ envelope owns `intent-cli issue publish-flow ... --write`,
 `intent-cli automation issue-publish --write`, host-state pushes, and
 `intent-cli closeout pr ... --write`. Codex routes one bounded request, waits
 for the returned JSON, and re-verifies intent-cli/GitHub facts. If that route
-is unavailable, fail closed: do not widen the sandbox, write `.git`, ask
-design to perform routine workflow transitions, or improvise a clone.
+is unavailable, fail closed: do not widen the sandbox, write `.git`, or
+improvise a clone. The prohibition on asking design to perform routine
+workflow transitions applies to **undeclared or ad-hoc requests**; a design
+role explicitly declared as the topology's host-state role is legitimate and
+is routed as that recorded duty.
+
+**Topology host-state declaration and discovery (G736).** A team records the
+host-state role and its named envelope alongside the role topology:
+
+```bash
+intent-cli session-layer topology record-host-state --domain <domain> --team <team> \
+  --role <role> --envelope <named-host-state-envelope> --write --format json
+```
+
+`intent-cli session-layer topology validate --domain <domain> --team <team>
+--format json` reports an explicit `host_state` declaration when present. A
+legacy topology without it remains valid and needs no migration, but emits the
+informational `host-state-role-missing` finding before publish: the team cannot
+perform required host-state publication or repository-Git work. The message
+must say that declaration alone does not supply a non-sandboxed participant;
+the team needs an actually capable participant plus the explicit declaration.
+Authority is never inferred from `resident`, `kind`, external placement, or
+co-location. `guide orchestrator-thread --domain <domain> --team <team>`
+discovers the recorded role and envelope and renders the route. A topology
+that explicitly declares `design` is therefore allowed; only an undeclared or
+ad-hoc design request remains prohibited.
 
 When a needed packet is absent, incomplete, or would require product/release/
 design judgment, the orchestrator does **not** invent it — it sends a structured
@@ -3138,8 +3162,9 @@ First message — design → orchestrator (paste into the design thread):
   the canonical intent-cli commands (`issue publish-flow` /
   `automation issue-publish`) from the host repository; a sandboxed Codex
   orchestrator does **not** execute the write-bearing step itself. It does not
-  ask design to perform routine workflow transitions. At most one issue per
-  wake; verify the host-state result before delegating.
+  ask design to perform routine workflow transitions through an undeclared or
+  ad-hoc request; a topology-declared design host-state role is legitimate.
+  At most one issue per wake; verify the host-state result before delegating.
 - **Escalation boundary** — routine delegation (host-state publish routing,
   delegate, CI wait, review, closeout) stays orchestrator↔receivers/host-state
   role. Return to **design** only for human decisions (product/design

@@ -313,7 +313,7 @@ internal static class SessionLayerPreflight
                     .ToArray();
                 validation = validation with
                 {
-                    Valid = routeRelevantFindings.Length == 0,
+                    Valid = routeRelevantFindings.All(finding => finding.IsInformational),
                     Findings = routeRelevantFindings,
                 };
             }
