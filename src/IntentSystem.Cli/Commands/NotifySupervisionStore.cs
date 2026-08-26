@@ -1201,6 +1201,8 @@ internal sealed record NotifySupervisionCycle
 
 internal sealed record NotifySupervisionWriterIdentity
 {
+    private static readonly TimeSpan ProcessStartTimeResolution = TimeSpan.FromMilliseconds(100);
+
     [JsonPropertyName("pid")] public required int Pid { get; init; }
     [JsonPropertyName("process_start_time")] public required DateTimeOffset ProcessStartTime { get; init; }
     [JsonPropertyName("process_start_time_source")] public string? ProcessStartTimeSource { get; init; }
@@ -1266,7 +1268,7 @@ internal sealed record NotifySupervisionWriterIdentity
             }
 
             var actualStart = new DateTimeOffset(process.StartTime.ToUniversalTime());
-            return actualStart == ProcessStartTime;
+            return StartTimesMatch(actualStart, ProcessStartTime);
         }
         catch (Exception exception) when (
             exception is ArgumentException
@@ -1280,6 +1282,9 @@ internal sealed record NotifySupervisionWriterIdentity
 
     private static bool IsStartTimeUnverified(NotifySupervisionWriterIdentity identity) =>
         string.Equals(identity.ProcessStartTimeSource, "clock-fallback", StringComparison.Ordinal);
+
+    private static bool StartTimesMatch(DateTimeOffset actual, DateTimeOffset expected) =>
+        (actual - expected).Duration() <= ProcessStartTimeResolution;
 }
 
 internal sealed record NotifySupervisionTransition

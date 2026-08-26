@@ -179,6 +179,17 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
     }
 
     [Fact]
+    public void ProcessStartTimeResolutionToleranceDoesNotAcceptAgedPidReuse()
+    {
+        var current = NotifySupervisionWriterIdentity.Current();
+        var near = current with { ProcessStartTime = current.ProcessStartTime.AddMilliseconds(50) };
+        var far = current with { ProcessStartTime = current.ProcessStartTime.AddSeconds(1) };
+
+        Assert.True(near.IsLiveOn(current));
+        Assert.False(far.IsLiveOn(current));
+    }
+
+    [Fact]
     public void DensityReport_MeasuresTenThousandRecordsAgainstTheIssueBaseline()
     {
         var context = CreateContext();
