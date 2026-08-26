@@ -2687,7 +2687,7 @@ literal:
 ```
 
 The shape is written with placeholders on purpose: **read the actual values from
-`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0233)
+`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0240)
 for the line currently being cut. A worked example here would be a second copy
 of the version pair that goes stale on the next roll — the defect G557/G560
 exist to remove.
@@ -2893,7 +2893,7 @@ rotated by this command; the result and `shrink-audit.jsonl` say so explicitly.
 out of scope. Use `--dry-run` to inspect the measured plan without writing the
 manifest, JSONL files, or audit.
 
-### Next release readiness (v0.23.3)
+### Next release readiness (v0.24.0)
 
 **`v0.23.2` shipped** (GitHub Release, NuGet, binaries, and npm). The
 published release is recorded by the [v0.23.2 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.2).
@@ -2909,45 +2909,63 @@ are the GitHub Release, NuGet package, and self-contained binaries; its npm leg
 never reached the registry, so `0.23.0` must not be treated as available from
 npm. The tracked EN and JA `release-notes-v0.23.0.md` files now state this
 shipped-artifact status.
-The [v0.23.3 DRAFT](release-notes-v0.23.3.md)
-is the empty stub for the next line and must remain content-free until a later
-release-prep packet replaces it.
+The [v0.24.0 prepare-only notes](release-notes-v0.24.0.md) are the substantive
+next line; the superseded v0.23.3 DRAFT stubs were deleted by this release-prep
+unit rather than left as a competing line.
 
-Rolled policy: `stableVersion → 0.23.2`; `nextVersion → 0.23.3`.
+The post-release roll had left `nextVersion` at `0.23.3` before this line had
+feature content. Release-prep retargets to `0.24.0` because the measured line
+adds the new command surfaces `notify supervise shrink` and
+`session-layer topology record-host-state`, both absent from the installed
+0.23.2 CLI. The six release units and the excluded G730 roll are accounted for
+in the v0.24.0 notes.
 
-The next-line package identity is `JTechJapan.IntentSystem.Cli.0.23.3.nupkg`;
+Rolled policy: `stableVersion → 0.23.2`; `nextVersion → 0.24.0`.
+
+The next-line package identity is `JTechJapan.IntentSystem.Cli.0.24.0.nupkg`;
 this is a derived verification value, not release content.
 
-**Release-readiness verification for the `v0.23.3` line:**
+**Release-readiness verification for the `v0.24.0` line:**
 
-This post-release roll changes only the version policy, the empty next-line
-stubs, and this readiness section in both language mirrors. It creates no tag
-or Release, publishes no package, handles no credentials, and authors no
-feature notes for the unshipped line.
+This prepare-only unit changes the version policy, the substantive EN/JA
+v0.24.0 notes, this readiness section, the release-note/version tests, and
+deletes the superseded v0.23.3 stubs. It creates no tag or Release, publishes no
+package, handles no credentials, and performs no post-release roll.
 
-On a claims-enabled host, acquire and verify release-prep ownership before a
-later release-prep packet edits these artifacts. This roll itself performs no
-claim acquisition:
+The functional prepared head is outside this release-prep unit. Its exact
+Release identity evidence is source revision
+`a7d10026a9a4dd2693f464a5c5e34ce134b2c661`, which produced
+`intent-cli 0.23.3-a7d1002-G734` before this unit retargeted the policy. The
+eventual v0.24.0 tag belongs after this documentation merge commit lands.
+
+On a claims-enabled host, a release-prep operator acquires and verifies the
+current release-prep scope before editing these artifacts. This child PR does
+not execute those host-state commands:
 
 ```bash
-intent-cli claim acquire --scope release-prep:<owner/repo>:0.23.3 --actor <actor> --team <team> --write --format json
-intent-cli claim verify --scope release-prep:<owner/repo>:0.23.3 --team <team> --format json
+intent-cli claim acquire --scope release-prep:<owner/repo>:0.24.0 --actor <actor> --team <team> --write --format json
+intent-cli claim verify --scope release-prep:<owner/repo>:0.24.0 --team <team> --format json
 ```
 
 ```bash
-# 1. Confirm the rolled version policy and both content-free DRAFT stubs.
-cat eng/version.json   # stableVersion 0.23.2 (published), nextVersion 0.23.3 (next line)
-test -f docs/en/release-notes-v0.23.3.md
-test -f docs/ja/release-notes-v0.23.3.md
+# 1. Confirm the retargeted policy, the real v0.24.0 notes, and deleted stubs.
+cat eng/version.json   # stableVersion 0.23.2 (published), nextVersion 0.24.0 (next line)
+test -f docs/en/release-notes-v0.24.0.md
+test -f docs/ja/release-notes-v0.24.0.md
+test ! -e docs/en/release-notes-v0.23.3.md
+test ! -e docs/ja/release-notes-v0.23.3.md
 
-# 2. Build and confirm the display version identity from the next line.
+# 2. Record the first-parent inventory and the prepared functional identity.
+git log --first-parent v0.23.2..main
+git rev-list --first-parent --count v0.23.2..main
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-#   expected shape: intent-cli 0.23.3-<sha>-G<unit>
+#   prepared functional head: a7d10026a9a4dd2693f464a5c5e34ce134b2c661
+#   identity from that revision: intent-cli 0.23.3-a7d1002-G734
 
-# 3. Run the installed 0.23.2 CLI from the canonical host checkout. Record
-#    both the silent verdict and the G727 checkout_freshness/provenance statement.
+# 3. Run the installed 0.23.2 CLI read-only and retain checkout freshness evidence.
 intent-cli automation stalled-work --domain intent-cli --repo J-Tech-Japan/intent-system --format json
+#   record both the silent verdict and the checkout_freshness/provenance statement.
 
 # 4. Record the shipped-note check honestly: source v0.23.2 notes are unchanged,
 #    but they still have PREPARED / NOT PUBLISHED banners despite the published Release.
@@ -2955,22 +2973,22 @@ git diff --quiet -- docs/en/release-notes-v0.23.2.md docs/ja/release-notes-v0.23
 grep -n "PREPARED / NOT PUBLISHED" docs/en/release-notes-v0.23.2.md
 grep -n "PREPARED / NOT PUBLISHED" docs/ja/release-notes-v0.23.2.md
 gh release view v0.23.2 --repo J-Tech-Japan/intent-system
-#    The published GitHub Release/tag is authoritative; note remediation is
-#    explicitly out of scope for this version roll.
 
-# 5. Run the focused documentation/version guards, then the full suite.
+# 5. Run targeted release-prep guards and the full Release suite.
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release \
-  --filter "FullyQualifiedName~ReleaseNotesV0220DocsTests|FullyQualifiedName~ReleaseNotesV0230DocsTests|FullyQualifiedName~ReleaseNotesV0232DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests|FullyQualifiedName~VersionSourcePolicyGuardTests"
+  --filter "FullyQualifiedName~ReleaseNotesV0240DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~VersionSourcePolicyGuardTests|FullyQualifiedName~ReleaseNotesV0220DocsTests|FullyQualifiedName~ReleaseNotesV0230DocsTests|FullyQualifiedName~ReleaseNotesV0232DocsTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests"
 git diff --check
-dotnet test IntentSystem.sln -c Release
+dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release
 ```
 
-This roll follows **steps 5–7** of the [post-release version roll](#post-release-version-roll-g554--required-immediate):
+The targeted and full Release test counts are pasted into the v0.24.0 notes
+after the final documentation edit. This prepare-only unit follows **steps
+5–7** of the [post-release version roll](#post-release-version-roll-g554--required-immediate):
 the **DRAFT note stubs in the same commit** (step 5), the **"Next release
 readiness" section refreshed to the new line in both language mirrors** (step
-6), and a **post-roll green child-main CI check** before the roll counts as
-complete (step 7). Existing release tags, Releases, packages, and workflows
-are not changed.
+6), and the **post-roll green child-main CI check** before the roll counts as
+complete (step 7). Existing release tags, Releases, packages, workflows, and
+the post-release roll are not changed.
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 
