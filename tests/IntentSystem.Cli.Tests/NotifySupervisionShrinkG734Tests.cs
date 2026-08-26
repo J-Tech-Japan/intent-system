@@ -24,10 +24,14 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
+    private static readonly DateTimeOffset FixtureEpoch =
+        new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
     public void Dispose()
     {
         NotifyCommand.UtcNowFactory = null;
         NotifySupervisionStore.WriteOverride = null;
+        NotifySupervisionStore.ShrinkFaultInjector = null;
         if (Directory.Exists(root))
         {
             Directory.Delete(root, recursive: true);
@@ -163,6 +167,244 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
         Assert.Equal(beforeCycles, File.ReadAllText(cyclesPath));
         Assert.False(File.Exists(NotifySupervisionStore.ResolveEvidenceDefinitionsPath(artifactRoot, Domain, Team)));
         Assert.False(File.Exists(NotifySupervisionStore.ResolveShrinkAuditPath(artifactRoot, Domain, Team)));
+    }
+
+    [Fact]
+    public void ShrinkWrite_RejectsUnknownEvidenceReferenceWithoutChangingAnyStateFile()
+    {
+        var context = CreateContext();
+        var artifactRoot = context.ResolveSupervisionArtifactRootPath();
+        var stallsPath = NotifySupervisionStore.ResolveStallPath(artifactRoot, Domain, Team);
+        var cyclesPath = NotifySupervisionStore.ResolveCyclePath(artifactRoot, Domain, Team);
+        var definitionsPath = NotifySupervisionStore.ResolveEvidenceDefinitionsPath(artifactRoot, Domain, Team);
+        var auditPath = NotifySupervisionStore.ResolveShrinkAuditPath(artifactRoot, Domain, Team);
+        Directory.CreateDirectory(Path.GetDirectoryName(stallsPath)!);
+
+        var unresolved = CreateStall("unknown-reference", includeDefinitionEvidence: true) with
+        {
+            RegistrationDefinition = null,
+            EvidenceReference = "constructed-unknown-reference",
+            EvidenceReferenceIncludesEvidence = false,
+        };
+        File.WriteAllText(stallsPath, SerializeOpenStall(unresolved) + Environment.NewLine);
+        File.WriteAllText(cyclesPath, SerializeCycleEvent("unreadable-reference-cycle") + Environment.NewLine);
+        var beforeStalls = File.ReadAllText(stallsPath);
+        var beforeCycles = File.ReadAllText(cyclesPath);
+
+        using var output = new StringWriter();
+        var exitCode = NotifySuperviseShrinkCommand.Execute(
+            context,
+            ["--domain", Domain, "--team", Team, "--write", "--format", "json"],
+            output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("shrink-validation-failed", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("unknown supervision evidence", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(beforeStalls, File.ReadAllText(stallsPath));
+        Assert.Equal(beforeCycles, File.ReadAllText(cyclesPath));
+        Assert.False(File.Exists(definitionsPath));
+        Assert.False(File.Exists(auditPath));
+        Assert.False(File.Exists(NotifySupervisionStore.ResolveShrinkTransactionPath(artifactRoot, Domain, Team)));
+    }
+
+    [Fact]
+    public void ShrinkWrite_RejectsMissingEvidenceDefinitionWithoutChangingAnyStateFile()
+    {
+        var context = CreateContext();
+        var artifactRoot = context.ResolveSupervisionArtifactRootPath();
+        var stallsPath = NotifySupervisionStore.ResolveStallPath(artifactRoot, Domain, Team);
+        var cyclesPath = NotifySupervisionStore.ResolveCyclePath(artifactRoot, Domain, Team);
+        var definitionsPath = NotifySupervisionStore.ResolveEvidenceDefinitionsPath(artifactRoot, Domain, Team);
+        var auditPath = NotifySupervisionStore.ResolveShrinkAuditPath(artifactRoot, Domain, Team);
+        Directory.CreateDirectory(Path.GetDirectoryName(stallsPath)!);
+
+        var missingDefinition = CreateStall("missing-definition", includeDefinitionEvidence: false) with
+        {
+            RegistrationDefinition = null,
+            Evidence = ["registration_lookup:test-owned counterexample"],
+            EvidenceReference = NotifySupervisionStore.HerdrRegistrationEvidenceKey,
+            EvidenceReferenceIncludesEvidence = false,
+        };
+        File.WriteAllText(stallsPath, SerializeOpenStall(missingDefinition) + Environment.NewLine);
+        File.WriteAllText(cyclesPath, SerializeCycleEvent("missing-definition-cycle") + Environment.NewLine);
+        var beforeStalls = File.ReadAllText(stallsPath);
+        var beforeCycles = File.ReadAllText(cyclesPath);
+
+        using var output = new StringWriter();
+        var exitCode = NotifySuperviseShrinkCommand.Execute(
+            context,
+            ["--domain", Domain, "--team", Team, "--write", "--format", "json"],
+            output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("shrink-validation-failed", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("unknown supervision evidence", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(beforeStalls, File.ReadAllText(stallsPath));
+        Assert.Equal(beforeCycles, File.ReadAllText(cyclesPath));
+        Assert.False(File.Exists(definitionsPath));
+        Assert.False(File.Exists(auditPath));
+    }
+
+    [Fact]
+    public void ShrinkWrite_RejectsUnreadableEvidenceManifestWithoutChangingAnyStateFile()
+    {
+        var context = CreateContext();
+        var artifactRoot = context.ResolveSupervisionArtifactRootPath();
+        var stallsPath = NotifySupervisionStore.ResolveStallPath(artifactRoot, Domain, Team);
+        var cyclesPath = NotifySupervisionStore.ResolveCyclePath(artifactRoot, Domain, Team);
+        var definitionsPath = NotifySupervisionStore.ResolveEvidenceDefinitionsPath(artifactRoot, Domain, Team);
+        var auditPath = NotifySupervisionStore.ResolveShrinkAuditPath(artifactRoot, Domain, Team);
+        Directory.CreateDirectory(Path.GetDirectoryName(stallsPath)!);
+
+        var storedReference = CreateStall("unreadable-manifest", includeDefinitionEvidence: false) with
+        {
+            RegistrationDefinition = null,
+            Evidence = ["registration_lookup:test-owned counterexample"],
+            EvidenceReference = NotifySupervisionStore.HerdrRegistrationEvidenceKey,
+            EvidenceReferenceIncludesEvidence = false,
+        };
+        File.WriteAllText(stallsPath, SerializeOpenStall(storedReference) + Environment.NewLine);
+        File.WriteAllText(cyclesPath, SerializeCycleEvent("unreadable-manifest-cycle") + Environment.NewLine);
+        File.WriteAllText(
+            definitionsPath,
+            "{\"schema\":\"intent-cli.supervision-evidence/unknown\",\"definitions\":{}}\n");
+        var beforeStalls = File.ReadAllText(stallsPath);
+        var beforeCycles = File.ReadAllText(cyclesPath);
+        var beforeDefinitions = File.ReadAllText(definitionsPath);
+
+        using var output = new StringWriter();
+        var exitCode = NotifySuperviseShrinkCommand.Execute(
+            context,
+            ["--domain", Domain, "--team", Team, "--write", "--format", "json"],
+            output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("shrink-validation-failed", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(beforeStalls, File.ReadAllText(stallsPath));
+        Assert.Equal(beforeCycles, File.ReadAllText(cyclesPath));
+        Assert.Equal(beforeDefinitions, File.ReadAllText(definitionsPath));
+        Assert.False(File.Exists(auditPath));
+    }
+
+    [Theory]
+    [InlineData("AfterManifestReplacement")]
+    [InlineData("AfterStallsReplacement")]
+    [InlineData("AfterCyclesReplacement")]
+    [InlineData("BeforeAuditAppend")]
+    public void ShrinkFaultBoundaries_RecoverReadableStateAndDurableAccounting(string faultName)
+    {
+        var faultPoint = Enum.Parse<NotifySupervisionShrinkFaultPoint>(faultName, ignoreCase: false);
+        var context = CreateContext();
+        var artifactRoot = context.ResolveSupervisionArtifactRootPath();
+        var stallsPath = NotifySupervisionStore.ResolveStallPath(artifactRoot, Domain, Team);
+        var cyclesPath = NotifySupervisionStore.ResolveCyclePath(artifactRoot, Domain, Team);
+        var auditPath = NotifySupervisionStore.ResolveShrinkAuditPath(artifactRoot, Domain, Team);
+        var transactionPath = NotifySupervisionStore.ResolveShrinkTransactionPath(artifactRoot, Domain, Team);
+        Directory.CreateDirectory(Path.GetDirectoryName(stallsPath)!);
+        File.WriteAllText(
+            stallsPath,
+            string.Join(
+                    Environment.NewLine,
+                    Enumerable.Range(0, 3).Select(index => SerializeLegacyStall(index)))
+                + Environment.NewLine);
+        File.WriteAllText(cyclesPath, SerializeCycleEvent("transaction-cycle") + Environment.NewLine);
+
+        NotifySupervisionStore.ShrinkFaultInjector = point =>
+        {
+            if (point == faultPoint)
+            {
+                throw new IOException($"fault-injected:{point}");
+            }
+        };
+
+        using var firstOutput = new StringWriter();
+        var firstExitCode = NotifySuperviseShrinkCommand.Execute(
+            context,
+            ["--domain", Domain, "--team", Team, "--write", "--format", "json"],
+            firstOutput);
+        Assert.Equal(1, firstExitCode);
+        Assert.Contains("fault-injected", firstOutput.ToString(), StringComparison.Ordinal);
+        Assert.True(File.Exists(transactionPath), firstOutput.ToString());
+
+        NotifySupervisionStore.ShrinkFaultInjector = null;
+        using var recoveryOutput = new StringWriter();
+        var recoveryExitCode = NotifySuperviseShrinkCommand.Execute(
+            context,
+            ["--domain", Domain, "--team", Team, "--write", "--format", "json"],
+            recoveryOutput);
+        Assert.Equal(0, recoveryExitCode);
+        Assert.False(File.Exists(transactionPath));
+
+        var read = NotifySupervisionStore.Read(artifactRoot, Domain, Team);
+        Assert.True(read.Resolved, read.Error);
+        Assert.Equal(3, read.StallHistory.Count(record => record.Kind == "g734-legacy-stall"));
+        Assert.Empty(read.PromptAudits);
+        Assert.NotNull(read.LastCycle);
+        var auditLines = File.ReadLines(auditPath).Where(line => !string.IsNullOrWhiteSpace(line)).ToArray();
+        Assert.Contains(
+            auditLines,
+            line => line.Contains("\"outcome\":\"recovered-completed\"", StringComparison.Ordinal));
+        Assert.All(
+            auditLines,
+            line => Assert.Contains("transaction_id", line, StringComparison.Ordinal));
+        Console.WriteLine(
+            $"G734 transaction recovery: fault={faultPoint}; first_exit={firstExitCode}; recovery_exit={recoveryExitCode}; "
+            + $"stalls={read.StallHistory.Count}; cycles=1; audit_outcomes=recovered-completed,completed; "
+            + $"journal_removed={!File.Exists(transactionPath)}");
+    }
+
+    [Fact]
+    public void ShrinkRecovery_AbortsUnexpectedTargetAndAuditsTheAbortedOutcome()
+    {
+        var context = CreateContext();
+        var artifactRoot = context.ResolveSupervisionArtifactRootPath();
+        var stallsPath = NotifySupervisionStore.ResolveStallPath(artifactRoot, Domain, Team);
+        var cyclesPath = NotifySupervisionStore.ResolveCyclePath(artifactRoot, Domain, Team);
+        var auditPath = NotifySupervisionStore.ResolveShrinkAuditPath(artifactRoot, Domain, Team);
+        var transactionPath = NotifySupervisionStore.ResolveShrinkTransactionPath(artifactRoot, Domain, Team);
+        Directory.CreateDirectory(Path.GetDirectoryName(stallsPath)!);
+        File.WriteAllText(stallsPath, SerializeLegacyStall(1) + Environment.NewLine);
+        File.WriteAllText(cyclesPath, SerializeCycleEvent("abort-cycle") + Environment.NewLine);
+
+        NotifySupervisionStore.ShrinkFaultInjector = point =>
+        {
+            if (point == NotifySupervisionShrinkFaultPoint.AfterManifestReplacement)
+            {
+                throw new IOException("fault-injected:abort-fixture");
+            }
+        };
+        using var firstOutput = new StringWriter();
+        Assert.Equal(
+            1,
+            NotifySuperviseShrinkCommand.Execute(
+                context,
+                ["--domain", Domain, "--team", Team, "--write", "--format", "json"],
+                firstOutput));
+        NotifySupervisionStore.ShrinkFaultInjector = null;
+
+        // A valid external append after the simulated crash is an unexpected
+        // target hash. Recovery must not overwrite it or silently claim the
+        // original transaction completed.
+        File.AppendAllText(cyclesPath, SerializeCycleEvent("external-cycle") + Environment.NewLine);
+        using var recoveryOutput = new StringWriter();
+        var recoveryExitCode = NotifySuperviseShrinkCommand.Execute(
+            context,
+            ["--domain", Domain, "--team", Team, "--write", "--format", "json"],
+            recoveryOutput);
+
+        Assert.Equal(1, recoveryExitCode);
+        Assert.Contains("shrink-recovery-aborted", recoveryOutput.ToString(), StringComparison.Ordinal);
+        Assert.False(File.Exists(transactionPath));
+        var read = NotifySupervisionStore.Read(artifactRoot, Domain, Team);
+        Assert.True(read.Resolved, read.Error);
+        Assert.Single(read.StallHistory);
+        Assert.Equal(2, File.ReadLines(cyclesPath).Count());
+        Assert.Contains(
+            File.ReadLines(auditPath),
+            line => line.Contains("\"outcome\":\"aborted\"", StringComparison.Ordinal));
+        Console.WriteLine(
+            $"G734 transaction recovery: fault=external-target-conflict; exit={recoveryExitCode}; "
+            + "audit_outcome=aborted; retained_stalls=1; retained_cycles=2");
     }
 
     [Fact]
@@ -338,6 +580,7 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
         {
             Key = $"legacy:{index}",
             Kind = "g734-legacy-stall",
+            SurfacedAt = FixtureEpoch.AddSeconds(index),
             Summary = payloadLength == 0
                 ? "A retained legacy stall with a dynamic registration observation."
                 : new string('x', payloadLength),
@@ -347,6 +590,27 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
             new NotifySupervisionEvent { Kind = "open", Stall = record },
             JsonOptions);
     }
+
+    private static string SerializeOpenStall(NotifySupervisionStallRecord record) =>
+        JsonSerializer.Serialize(
+            new NotifySupervisionEvent { Kind = "open", Stall = record },
+            JsonOptions);
+
+    private static string SerializeCycleEvent(string cycleId) =>
+        JsonSerializer.Serialize(
+            new NotifySupervisionEvent
+            {
+                Kind = "cycle",
+                Cycle = new NotifySupervisionCycle
+                {
+                    CycleId = cycleId,
+                    StartedAt = DateTimeOffset.UtcNow,
+                    CompletedAt = DateTimeOffset.UtcNow,
+                    Writer = NotifySupervisionWriterIdentity.Current(),
+                    IntervalSeconds = 1,
+                },
+            },
+            JsonOptions);
 
     private static NotifySupervisionStallRecord CreateStall(string key, bool includeDefinitionEvidence) => new()
     {

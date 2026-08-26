@@ -146,7 +146,7 @@ internal static class NotifySuperviseShrinkCommand
                 records_compacted = result.Audit?.RecordsCompacted ?? 0,
                 records_rotated = result.Audit?.RecordsRotated ?? 0,
             },
-            safety = "Appenders and shrink share a directory lock; each JSONL replacement is same-directory atomic, so a running supervisor appends to either the old complete file or the new complete file and the next cycle is readable.",
+            safety = "Appenders and shrink share a directory lock; shrink stages complete manifest/stalls/cycles replacements and durably journals their hashes before any target move. A restart verifies and completes the journal, or records an aborted outcome without overwriting an unexpected target, so a running supervisor keeps readable append-only state.",
             error = result.Error,
             summary = BuildSummary(result, supervisorState, options.Write),
         };
@@ -180,7 +180,7 @@ internal static class NotifySuperviseShrinkCommand
         bool write) => result.Error is not null
         ? $"Supervision shrink failed while the observed supervisor state was '{supervisorState}': {result.Error}"
         : write
-            ? $"Compacted existing supervision state in place while supervisor state was '{supervisorState}'; retained {result.AfterRecordCount} records, archived 0, discarded 0, rotated 0, and appended a durable shrink audit record."
+            ? $"Compacted existing supervision state in place while supervisor state was '{supervisorState}'; retained {result.AfterRecordCount} records, archived 0, discarded 0, rotated 0, and appended a durable '{result.Audit?.Outcome ?? "completed"}' shrink audit record."
             : $"Dry-run would compact existing supervision state while the observed supervisor state is '{supervisorState}'; no files or audit records were changed."
               + " Use --write for the sanctioned lock-and-atomic-replace path.";
 
