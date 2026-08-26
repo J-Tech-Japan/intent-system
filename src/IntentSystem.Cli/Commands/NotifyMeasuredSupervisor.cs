@@ -378,7 +378,7 @@ internal sealed class NotifyMeasuredSupervisor
                         WakeSuppressed = !IsOwnerSubject(pending.RecipientRole),
                         WorkspaceId = pending.WorkspaceId,
                         PaneId = pending.PaneId,
-                        RegistrationDefinition = "a recorded herdr seat is registered only when the matching agent-list entry is running at the recorded workspace and pane",
+                        RegistrationDefinition = NotifySupervisionStore.HerdrRegistrationDefinition,
                         RegistrationLookup = $"notify pending liveness lookup source='{activity.Source}' for recipient='{pending.RecipientIdentity}' at workspace='{pending.WorkspaceId}' pane='{pending.PaneId}'",
                         RegistrationResult = $"running={activity.Running}; agent_status='{activity.AgentStatus ?? "missing"}'; state_change_seq={activity.StateChangeSequence?.ToString(CultureInfo.InvariantCulture) ?? "missing"}",
                         ConsultedObservations =
@@ -387,7 +387,7 @@ internal sealed class NotifyMeasuredSupervisor
                         ],
                         Evidence =
                         [
-                            "registration_definition:a recorded herdr seat is registered only when the matching agent-list entry is running at the recorded workspace and pane",
+                            $"registration_definition:{NotifySupervisionStore.HerdrRegistrationDefinition}",
                             $"registration_lookup:notify pending liveness lookup source='{activity.Source}' for recipient='{pending.RecipientIdentity}' at workspace='{pending.WorkspaceId}' pane='{pending.PaneId}'",
                             $"registration_result:running={activity.Running}; agent_status='{activity.AgentStatus ?? "missing"}'; state_change_seq={activity.StateChangeSequence?.ToString(CultureInfo.InvariantCulture) ?? "missing"}",
                             $"consulted_observations:activity:{paneKey}",
@@ -435,7 +435,7 @@ internal sealed class NotifyMeasuredSupervisor
                     WorkspaceId = registrationLoss ? record?.WorkspaceId : null,
                     PaneId = registrationLoss ? record?.PaneId : null,
                     RegistrationDefinition = registrationLoss
-                        ? "a recorded herdr seat is registered only when the matching agent-list entry is running at the recorded workspace and pane"
+                        ? NotifySupervisionStore.HerdrRegistrationDefinition
                         : null,
                     RegistrationLookup = registrationLoss
                         ? $"notify pending liveness lookup for recipient='{action.RecipientRole}' at workspace='{record?.WorkspaceId ?? "missing"}' pane='{record?.PaneId ?? "missing"}'"
@@ -447,7 +447,7 @@ internal sealed class NotifyMeasuredSupervisor
                     Evidence = registrationLoss
                         ?
                         [
-                            "registration_definition:a recorded herdr seat is registered only when the matching agent-list entry is running at the recorded workspace and pane",
+                            $"registration_definition:{NotifySupervisionStore.HerdrRegistrationDefinition}",
                             $"registration_lookup:notify pending liveness lookup for recipient='{action.RecipientRole}' at workspace='{record?.WorkspaceId ?? "missing"}' pane='{record?.PaneId ?? "missing"}'",
                             $"registration_result:{action.Verdict}",
                             $"consulted_observations:notify-pending-liveness verdict={action.Verdict}",
@@ -1531,7 +1531,7 @@ internal sealed class NotifyMeasuredSupervisor
             : "missing";
         var kinds = string.Join(", ", contradictory.Select(item => item.Kind).Distinct(StringComparer.Ordinal));
         var role = first.SubjectRole ?? "unknown";
-        var definition = "a recorded herdr seat is registered only when the matching agent-list entry is running at the recorded workspace and pane";
+        var definition = NotifySupervisionStore.HerdrRegistrationDefinition;
         var lookup = string.Join(
             "; ",
             contradictory.Select(item => item.RegistrationLookup ?? $"producer='{item.Source}' lookup was not named"));
@@ -2499,7 +2499,7 @@ internal sealed class NotifyMeasuredSupervisor
                 }
 
                 var paneKey = $"registration:{workspaceId}:{recorded.PaneId}";
-                var registrationDefinition = "a recorded herdr seat is registered only when the matching agent-list entry is running at the recorded workspace and pane";
+                var registrationDefinition = NotifySupervisionStore.HerdrRegistrationDefinition;
                 var registrationLookup = $"herdr agent list matched workspace='{workspaceId}' pane='{recorded.PaneId}' with running_agent=false, agent_session={(agentsAtPane.Length == 0 ? "not-observed" : agentSessionMissing ? "missing" : "present")}; pane process-info returned foreground_processes={processInfo.Processes.Count.ToString(CultureInfo.InvariantCulture)}";
                 if (processInfo.Processes.Count > 0)
                 {

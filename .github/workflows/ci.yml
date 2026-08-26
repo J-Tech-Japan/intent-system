@@ -38,10 +38,51 @@ jobs:
         run: dotnet build IntentSystem.sln --configuration Release --no-restore
 
       - name: Test
+        env:
+          G734_VERIFICATION_ROOT: ${{ github.workspace }}/.artifacts/g734-verification
         run: |
+          mkdir -p .artifacts/g734-verification
           dotnet test IntentSystem.sln --configuration Release --no-build \
             --logger "trx;LogFilePrefix=test-results" \
             --results-directory "${{ github.workspace }}/.artifacts/test-results"
+
+      - name: Emit G734 verification artifact
+        if: success()
+        env:
+          G734_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          bash eng/emit-g734-verification.sh \
+            --results-directory "${{ github.workspace }}/.artifacts/test-results" \
+            --verification-directory "${{ github.workspace }}/.artifacts/g734-verification" \
+            --head-sha "${G734_HEAD_SHA}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --repository "${GITHUB_REPOSITORY}"
+
+      - name: Verify downloaded G734 artifact pair from a consumer directory
+        if: success()
+        run: |
+          consumer_directory="$(mktemp -d)"
+          cp \
+            .artifacts/g734-verification/g734-verification.json \
+            .artifacts/g734-verification/g734-verification.json.sha256 \
+            "${consumer_directory}/"
+          (
+            cd "${consumer_directory}"
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum --check g734-verification.json.sha256
+            else
+              shasum -a 256 -c g734-verification.json.sha256
+            fi
+          )
+
+      - name: Upload G734 verification artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: g734-verification
+          path: .artifacts/g734-verification/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload test results
         if: always()

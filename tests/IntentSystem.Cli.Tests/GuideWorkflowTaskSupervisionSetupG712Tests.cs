@@ -41,7 +41,7 @@ public sealed class GuideWorkflowTaskSupervisionSetupG712Tests
         Assert.True(result.GetProperty("read_only").GetBoolean());
 
         var commands = result.GetProperty("commands").EnumerateArray().ToArray();
-        Assert.Equal(4, commands.Length);
+        Assert.Equal(5, commands.Length);
         Assert.Contains(commands, command =>
             command.GetProperty("name").GetString() == "install"
             && command.GetProperty("command").GetString()!.Contains("notify supervise install", StringComparison.Ordinal));
@@ -54,6 +54,9 @@ public sealed class GuideWorkflowTaskSupervisionSetupG712Tests
         Assert.Contains(commands, command =>
             command.GetProperty("name").GetString() == "uninstall"
             && command.GetProperty("command").GetString()!.Contains("notify supervise uninstall --write", StringComparison.Ordinal));
+        Assert.Contains(commands, command =>
+            command.GetProperty("name").GetString() == "shrink"
+            && command.GetProperty("command").GetString()!.Contains("notify supervise shrink --domain", StringComparison.Ordinal));
 
         Assert.Contains(
             "no managed artifact is emitted to `~/Library/LaunchAgents`",
@@ -84,6 +87,7 @@ public sealed class GuideWorkflowTaskSupervisionSetupG712Tests
         Assert.Contains("launchctl bootstrap gui/$(id -u)", output, StringComparison.Ordinal);
         Assert.Contains("notify supervise reconcile --write --format json", output, StringComparison.Ordinal);
         Assert.Contains("notify supervise uninstall --write --format json", output, StringComparison.Ordinal);
+        Assert.Contains("notify supervise shrink --domain <domain> --team <team> --write --format json", output, StringComparison.Ordinal);
         Assert.Contains("must not read .intent-cli/config.toml", output, StringComparison.Ordinal);
         Assert.Contains("must not be emitted under ~/Library/LaunchAgents", output, StringComparison.Ordinal);
         Assert.Contains("never auto-kill or mutate unrelated jobs", output, StringComparison.Ordinal);
