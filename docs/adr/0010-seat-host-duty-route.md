@@ -25,10 +25,14 @@ role separation.
 1. The implementation seat owns the child-repository path end to end: issue
    contract, child Git fetch and branch, source edits, tests, commit, push,
    ready-for-review PR with `Closes #<issue>`, and GitHub-only worker
-   completion.
+   completion. For issue-to-PR `pr-created`, that canonical completion may add
+   target-repository `intent-target` to the PR and `intent-pr-created` to the
+   source issue. This command-owned transition is allowed; raw/manual label
+   mutation is not.
 2. The host role owns `.intent-cli/` queue-state, claims, runs, packets,
    metadata branches, host Git, host credentials, and host-repository API
-   operations. Execution-unit claim acquisition remains a host duty.
+   operations, including host-state linkage/publication and closeout.
+   Execution-unit claim acquisition remains a host duty.
 3. The host role acquires and verifies ownership only through the existing
    compare-and-swap surfaces:
 
@@ -59,6 +63,9 @@ role separation.
 
 - Child Git and PR delivery are no longer silently delegated to design or
   orchestration merely because the child cannot reach host state.
+- The child may use the installed `worker complete` target-repository label
+  transition; this is distinct from raw label mutation and from host-state
+  linkage/publication, which remain outside the child seat.
 - Host ownership remains auditable and race-safe: **Only successful remote push is acquisition.**
   The successful push is still the claim fact, and compare-and-swap semantics
   are unchanged.

@@ -144,9 +144,9 @@ internal static class TaskCommand
             LabelTransitions = new[]
             {
                 "host claim acquire/verify → execution-unit ownership; the child consumes the returned evidence and does not acquire it.",
-                "child worker claim → add `intent-issue-in-progress` (issue side) through the GitHub-only path; the host owns `intent-target` and never the child.",
-                "complete pr-created → swap `intent-issue-in-progress` → `intent-pr-created` on the source ISSUE (NEVER on the PR — G287/G317).",
-                "Child loop NEVER applies `intent-target` and NEVER applies `intent-pr-created` directly to a PR."
+                "child worker claim → add `intent-issue-in-progress` (issue side) through the GitHub-only path; no raw label mutation is allowed.",
+                "canonical `worker complete --kind issue --outcome pr-created --github-only --write` → swap `intent-issue-in-progress` → `intent-pr-created` on the source ISSUE and apply target-repository `intent-target` to the PR; this command-owned transition is distinct from host-state linkage/publication (G287/G317/G733).",
+                "The child never manually applies `intent-target` or `intent-pr-created` to a PR, and never edits host metadata or host-state linkage/publication."
             },
             AbortConditions = new[]
             {

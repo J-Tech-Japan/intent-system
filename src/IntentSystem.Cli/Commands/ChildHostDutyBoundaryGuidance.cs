@@ -19,14 +19,14 @@ internal static class ChildHostDutyBoundaryGuidance
             {
                 "Use the assigned issue/PR and target-repository GitHub facts as the child contract; run the child workflow from the child worktree.",
                 "Run `git fetch origin main`, create the implementation branch from `origin/main`, edit only the requested child-repository paths, run focused tests, commit, push, and open a ready-for-review PR containing `Closes #<issue>`.",
-                "Use `intent-cli worker ... --github-only` for target-repository lifecycle labels and completion; this path does not read or write parent host metadata.",
+                "Use `intent-cli worker ... --github-only` for target-repository lifecycle labels and completion. For issue-to-PR `pr-created`, the canonical completion may apply target-repository `intent-target` to the PR; that command-owned transition is allowed and is not raw label mutation or host-state publication.",
                 "Emit the exact host-duty request over `intent-cli notify report` when host evidence is missing or a host-owned operation is required; do not turn that request into a local host write."
             },
             HostResponsibilities = new[]
             {
                 "Own `.intent-cli/` queue, claims, runs, packet, and metadata state, including the host Git refresh and host-repository pushes.",
                 "Acquire and verify the execution-unit claim with the canonical claim commands, preserving the Git compare-and-swap transaction and returning its JSON evidence to the implementation seat.",
-                "Perform host-repository credential/API operations and host-side linkage or closeout that the child `--github-only` path explicitly cannot perform."
+                "Perform host-repository credential/API operations and host-state linkage, queue publication, review, or closeout that the child `--github-only` path explicitly cannot perform."
             },
             HostDutyRequest = BuildHostDutyRequest(domainPlaceholder),
             HostClaimCommands = new[]
@@ -40,7 +40,7 @@ internal static class ChildHostDutyBoundaryGuidance
             {
                 "Read or mutate host `.intent-cli/`, queue-state, claims, runs, packet files, metadata branches, or host-repository Git state.",
                 "acquire, release, or take over an execution-unit claim; the seat can only consume host-returned claim evidence.",
-                "Use host-repository credentials or the host-repository GitHub API, or perform host-side linkage, queue, publish, review, or closeout transitions.",
+                "Use host-repository credentials or the host-repository GitHub API, or perform host-state linkage, queue publication, review, or closeout transitions.",
                 "Widen its sandbox, add a host root, create an improvised clone, or make co-located host access a hidden fallback."
             },
             CoLocationRule =
@@ -48,6 +48,7 @@ internal static class ChildHostDutyBoundaryGuidance
             Verification = new[]
             {
                 "Seat-owned issue-to-PR proof: emitted `worker ... --github-only` JSON plus child `git fetch`, branch, test, commit, push, and ready-for-review PR evidence, with no host-repository command in the path.",
+                "Behavioral label proof: canonical child-cwd `worker complete --kind issue --outcome pr-created --github-only --write` applies `intent-pr-created` to the source issue and `intent-target` to the target-repository PR; this installed transition is allowed, while raw/manual label mutation is forbidden and `linked_pr_synced=false` remains host-state follow-up.",
                 "Host-duty proof: the exact `intent-cli notify report ... --status question ...` request names both canonical claim commands and asks for their JSON evidence, including the pushed commit and `passed=true` verification.",
                 "Boundary proof: a test-owned sentinel under the host routing root is refused by the sandbox (`touch <host-routing-root>/.intent-cli/probe-should-fail` exits nonzero with `Operation not permitted`); do not widen roots or tidy a file if the probe unexpectedly succeeds."
             }

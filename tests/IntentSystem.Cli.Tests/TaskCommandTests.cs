@@ -60,13 +60,15 @@ public sealed class TaskCommandTests
         Assert.Contains(aborts, a => a.Contains("Closes #5000", StringComparison.Ordinal));
         Assert.Contains(aborts, a => a.Contains("base-branch-check", StringComparison.Ordinal));
 
-        // Label transitions never apply intent-target / intent-pr-created
-        // from the child loop.
+        // Canonical worker completion owns target-repository PR publication;
+        // raw/manual label mutation and host-state linkage remain forbidden.
         var labels = root.GetProperty("label_transitions")
             .EnumerateArray().Select(e => e.GetString()!).ToArray();
         Assert.Contains(labels, l => l.Contains("intent-issue-in-progress", StringComparison.Ordinal));
         Assert.Contains(labels, l => l.Contains("intent-pr-created", StringComparison.Ordinal));
-        Assert.Contains(labels, l => l.Contains("NEVER applies `intent-target`", StringComparison.Ordinal));
+        Assert.Contains(labels, l => l.Contains("canonical `worker complete --kind issue --outcome pr-created", StringComparison.Ordinal));
+        Assert.Contains(labels, l => l.Contains("target-repository `intent-target`", StringComparison.Ordinal));
+        Assert.Contains(labels, l => l.Contains("never manually applies `intent-target`", StringComparison.Ordinal));
     }
 
     [Fact]

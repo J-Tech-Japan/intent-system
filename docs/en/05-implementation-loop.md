@@ -55,7 +55,7 @@ copy a long loop body from this document.
 
 ## Metadata / label safety
 
-- A child agent never applies `intent-target` (host-owned) or `intent-pr-created` (issue-side marker) to a PR
+- A child agent never manually applies workflow labels to a PR. For issue-to-PR `pr-created`, canonical `worker complete --kind issue --outcome pr-created --github-only --write` may apply target-repository `intent-target` to the PR; `intent-pr-created` remains an issue-side marker.
 - `linked_pr_synced: false` from `worker complete` is the expected child-cwd warning — record it and move on
 
 ## G733: contractual seat/host duty boundary ([ADR 0010](../adr/0010-seat-host-duty-route.md))
@@ -68,9 +68,19 @@ reports the result. The child path uses the target repository's GitHub facts
 and `intent-cli worker ... --github-only`; it does not need a host round trip
 for those steps.
 
+The canonical child completion is part of that seat-owned path. For an
+issue-to-PR `pr-created` outcome, `worker complete --kind issue --outcome
+pr-created --github-only --write` applies `intent-pr-created` to the source
+issue and `intent-target` to the target-repository PR. This is an
+intent-cli-owned target-repository transition, not raw `gh` label mutation.
+Host-state linkage/publication, queue synchronization, and closeout remain
+host duties; child-cwd completion reports `linked_pr_synced: false` for that
+follow-up.
+
 The host role owns host state: `.intent-cli/` queue-state, claims, runs,
 packets, metadata branches, host-repository Git refresh/push, and
-host-repository credentials/API operations. Execution-unit claim acquisition
+host-repository credentials/API operations and host-state linkage/publication.
+Execution-unit claim acquisition
 is a host duty and is not inferred from a lifecycle label or from a local
 file. The host role must return both of these canonical JSON results before
 the seat edits:
@@ -101,7 +111,7 @@ intent-cli notify report --domain <domain> --team <team> --from implementation -
 The seat still cannot read or mutate host `.intent-cli/`, queue-state,
 claims, runs, packets, metadata branches, or host Git; acquire/release/take
 over an execution-unit claim; use host-repository credentials or the
-host-repository GitHub API; or perform host publish, linkage, review, or
+host-repository GitHub API; or perform host-state publish, linkage, review, or
 closeout transitions. If a canonical host-aware preflight refuses because the
 seat cannot refresh host `FETCH_HEAD`, report the exact command and refusal as
 the host duty. Do not widen roots, create an improvised clone, or retry by

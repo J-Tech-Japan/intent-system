@@ -54,7 +54,7 @@
 
 ## metadata / label の安全境界
 
-- child agent は PR に `intent-target`（host 所有）や `intent-pr-created`（issue 側マーカー）を付けない
+- child agent は PR に workflow label を手動で付けません。issue-to-PR の `pr-created` では、canonical な `worker complete --kind issue --outcome pr-created --github-only --write` が target repository の PR に `intent-target` を付けることがあります。`intent-pr-created` は issue 側の marker のままです。
 - `worker complete` の `linked_pr_synced: false` は child-cwd で想定される警告 — 記録して先に進む
 
 ## G733: seat / host duty の契約上の境界（[ADR 0010](../adr/0010-seat-host-duty-route.md)）
@@ -67,9 +67,19 @@ test し、commit、push、`Closes #<issue>` を含む **ready-for-review** PR �
 `intent-cli worker ... --github-only` を使い、host への round trip を必要と
 しません。
 
+canonical な child completion も seat-owned path の一部です。issue-to-PR の
+`pr-created` では、`worker complete --kind issue --outcome pr-created
+--github-only --write` が source issue に `intent-pr-created` を付け、target
+repository の PR に `intent-target` を付けます。これは intent-cli が所有する
+target-repository transition であり、raw `gh` label mutation ではありません。
+host-state の linkage / publication、queue synchronization、closeout は host
+duty のままです。child-cwd completion はこの follow-up を
+`linked_pr_synced: false` として報告します。
+
 host role は host state を担当します。`.intent-cli` の queue-state、claims、
 runs、packet、metadata branch、host repository の Git refresh / push、host
-repository の credentials / API operation が対象です。execution-unit の
+repository の credentials / API operation と host-state の linkage / publication が
+対象です。execution-unit の
 claim acquisition は host duty であり、lifecycle label や local file から
 推測しません。seat が編集を始める前に host role は次の canonical JSON を
 返します:
@@ -101,7 +111,7 @@ intent-cli notify report --domain <domain> --team <team> --from implementation -
 seat は host の `.intent-cli/`、queue-state、claims、runs、packet、metadata
 branch、host Git を読んだり変更したりできません。execution-unit claim の
 acquire / release / takeover、host repository の credentials や host repository
-GitHub API の使用、host の publish、linkage、review、closeout transition も
+GitHub API の使用、host-state の publish、linkage、review、closeout transition も
 できません。seat から host-aware preflight を呼び、host `FETCH_HEAD` を refresh
 できないという refusal が返った場合は、正確な command と refusal を host duty
 として報告します。root を広げたり、即席の clone を作ったり、host repository に

@@ -132,6 +132,58 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.DoesNotContain("intent-pr-created", prWrite.AddLabels);
     }
 
+    [Fact]
+    public void Execute_G733_RenderedChildContractMatchesCanonicalTargetPrTransition()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var guideWriter = new StringWriter();
+        var guideExit = GuideWorkerIssueToPrCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--format", "json"],
+            guideWriter);
+
+        Assert.Equal(0, guideExit);
+        using var guideDocument = JsonDocument.Parse(guideWriter.ToString());
+        var prompt = guideDocument.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("may apply `intent-target` to the target-repository PR", prompt, StringComparison.Ordinal);
+        Assert.Contains("distinct from host-state linkage/publication", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not use raw GitHub label mutation", prompt, StringComparison.Ordinal);
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            [
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "525",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
+                "--github-only",
+                "--write",
+                "--format", "json",
+            ],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.GithubOnly);
+        Assert.True(result.ChildCwd);
+        Assert.True(result.PrTargetApplied);
+        Assert.False(result.LinkedPrSynced);
+
+        Assert.Contains(mutator.AppliedTransitions, transition =>
+            transition.Kind == "pr"
+            && transition.Number == 999
+            && transition.AddLabels.Contains("intent-target", StringComparer.Ordinal)
+            && !transition.AddLabels.Contains("intent-pr-created", StringComparer.Ordinal));
+    }
+
     // ── G283: PR review publication during issue-to-pr completion ─────
 
     [Fact]

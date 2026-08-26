@@ -100,7 +100,7 @@ Implementation steps:
 4. Implement only the requested change. Do not widen scope. Do not add unrequested refactors.
 5. Run the most relevant targeted tests. Report the command and the result. If broader validation is required by the repository contract or the touched area, run it too.
 6. Push the branch and create a ready-for-review PR with `gh pr create --title ""..."" --body ""..."" --repo <OWNER>/<REPO>`. The body must include `Closes #<n>`.
-7. Do not add `intent-target` or `intent-pr-created` to the PR.
+7. Do not use raw GitHub label mutation. The canonical child-cwd `intent-cli worker complete --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --outcome pr-created --pr <pr-n> --write` applies `intent-pr-created` to the source issue and may apply `intent-target` to the target-repository PR. That command-owned target-repository transition is allowed and is distinct from host-state linkage/publication, which remains host-owned. Never apply either label by hand, and never add `intent-pr-created` to the PR.
 8. From the child cwd, run `intent-cli worker result-summary --kind issue-to-pr --issue <n> --pr <pr-n> --repo <OWNER>/<REPO> --pr-draft false --format json`, then `intent-cli worker complete --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --outcome pr-created --pr <pr-n> --write --format json`. A child-cwd `linked_pr_synced: false` warning is host-owned follow-up, not permission to enter the host repo.
 
 Outcome classification:
@@ -115,7 +115,7 @@ Hard rules:
 - Use the issue body as the standalone contract. Do not read parent host packet files, `intents/rules/**`, local skill files, or copied prompt files to fill contract gaps.
 - Do not use the `gh-issue-to-pr` skill file or any local skill file that restates workflow.
 - {DispatcherSkillCarveOut.Sentence}
-- Do not add `intent-target` to the PR; it is host-owned.
+- Do not manually add `intent-target` to the PR. For issue-to-PR completion, only the canonical `worker complete --kind issue --outcome pr-created --github-only --write` transition may add target-repository `intent-target`; host-state linkage/publication remains host-owned.
 - Do not add `intent-pr-created` to the PR; it is an issue-side completion marker applied by `worker complete`.
 - All label transitions go through `intent-cli worker claim` / `intent-cli worker complete`. No manual `gh ... edit --add-label` / `--remove-label` fallback for workflow labels.
 - If a host-side completion or linkage step reports missing, contradictory, unreadable, or ambiguous durable state, report the exact canonical refusal to orchestration. Do not enter the host repo, hand-edit `AGENTS.md` / `CLAUDE.md`, or use PR-linkage recovery from the child seat.

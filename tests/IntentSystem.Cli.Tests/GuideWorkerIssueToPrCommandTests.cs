@@ -248,7 +248,10 @@ public sealed class GuideWorkerIssueToPrCommandTests
         Assert.Contains("gh pr create --title", prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("gh pr create --draft", prompt, StringComparison.Ordinal);
         Assert.Contains("intent-target", prompt, StringComparison.Ordinal);
-        Assert.Contains("Do not add `intent-target` to the PR", prompt, StringComparison.Ordinal);
+        Assert.Contains("canonical child-cwd `intent-cli worker complete", prompt, StringComparison.Ordinal);
+        Assert.Contains("may apply `intent-target` to the target-repository PR", prompt, StringComparison.Ordinal);
+        Assert.Contains("distinct from host-state linkage/publication", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not use raw GitHub label mutation", prompt, StringComparison.Ordinal);
     }
 
     [Fact]
