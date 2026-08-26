@@ -142,10 +142,18 @@ jq -n \
   )' > "${temporary_path}"
 mv "${temporary_path}" "${output_path}"
 
+checksum_name="$(basename "${output_path}")"
+checksum_directory="$(dirname "${output_path}")"
 if command -v shasum >/dev/null 2>&1; then
-  shasum -a 256 "${output_path}" > "${output_path}.sha256"
+  (
+    cd "${checksum_directory}"
+    shasum -a 256 "${checksum_name}"
+  ) > "${output_path}.sha256"
 else
-  sha256sum "${output_path}" > "${output_path}.sha256"
+  (
+    cd "${checksum_directory}"
+    sha256sum "${checksum_name}"
+  ) > "${output_path}.sha256"
 fi
 
 echo "G734 verification artifact: ${output_path}"

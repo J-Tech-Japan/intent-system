@@ -58,6 +58,23 @@ jobs:
             --run-id "${GITHUB_RUN_ID}" \
             --repository "${GITHUB_REPOSITORY}"
 
+      - name: Verify downloaded G734 artifact pair from a consumer directory
+        if: success()
+        run: |
+          consumer_directory="$(mktemp -d)"
+          cp \
+            .artifacts/g734-verification/g734-verification.json \
+            .artifacts/g734-verification/g734-verification.json.sha256 \
+            "${consumer_directory}/"
+          (
+            cd "${consumer_directory}"
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum --check g734-verification.json.sha256
+            else
+              shasum -a 256 -c g734-verification.json.sha256
+            fi
+          )
+
       - name: Upload G734 verification artifact
         if: always()
         uses: actions/upload-artifact@v4
