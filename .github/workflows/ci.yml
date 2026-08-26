@@ -48,11 +48,13 @@ jobs:
 
       - name: Emit G734 verification artifact
         if: success()
+        env:
+          G734_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           bash eng/emit-g734-verification.sh \
             --results-directory "${{ github.workspace }}/.artifacts/test-results" \
             --verification-directory "${{ github.workspace }}/.artifacts/g734-verification" \
-            --head-sha "${GITHUB_SHA}" \
+            --head-sha "${G734_HEAD_SHA}" \
             --run-id "${GITHUB_RUN_ID}" \
             --repository "${GITHUB_REPOSITORY}"
 
