@@ -596,6 +596,8 @@ First-call sequence (read-only; required before any mutation):
 3. `intent-cli guide commands list --format json` — `primary` vs `support` vs `advanced` (`run`) vs `experimental` classification.
 4. `intent-cli automation summary --domain {domainPlaceholder} --format json` — canonical label-driven contract and capability JSON for the parent intent domain.
 
+{ChildHostDutyBoundaryGuidance.RenderPromptBlock(domainPlaceholder)}
+
 Loop body (single wake; the operator drives subsequent wakes if any):
 1. Save the child worktree path: `CHILD_WORKTREE=""$PWD""`. Confirm it is a git worktree root. Stop with `wrong-worktree` if not.
 2. Resolve `<OWNER>/<REPO>` from the child cwd: `gh repo view --json nameWithOwner --jq .nameWithOwner` (fall back to `git remote get-url origin`).
@@ -616,7 +618,7 @@ Hard rules:
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
 - All label transitions go through installed `intent-cli automation` / `intent-cli worker` commands. No manual `gh ... edit --add-label` / `--remove-label` fallback for workflow labels.
-- Never apply `intent-target` from the child loop; it is host-owned.
+- {ChildHostDutyBoundaryGuidance.TargetRepositoryLabelContract}
 - Never apply `intent-pr-created` to a PR; it is an issue-side completion marker.
 - **PR draft state (G296)**: create child implementation/update PRs as **ready-for-review** (non-draft) by default. Do NOT pass `--draft` to `gh pr create` unless the operator explicitly asks for a draft. After opening the PR, pass the actual draft state into `worker result-summary --pr-draft true|false` so the host review loop can detect a draft PR before approval. If you must keep the PR draft (incomplete work, operator hold), do not transition the issue to ready-for-review states; mark the outcome accordingly and document the reason.
 - **PR closing reference is mandatory (G311)**: when opening a child implementation PR for an issue selected by `worker next-action`, the PR body MUST include a deterministic GitHub closing reference to the source issue — `Closes #<issue>`, `Fixes #<issue>`, or `Resolves #<issue>` (case-insensitive; `#N` form, not bare links such as `see #N`). `worker complete --kind issue --outcome pr-created --pr <n> --write` validates this and refuses to mark complete when the reference is missing, points at a different issue, or names multiple distinct issues. If the gate refuses, repair the PR body via `gh pr edit <pr> --body-file <path-to-new-body>` so the body ends with `Closes #<issue>`, then re-run `worker complete`. Do NOT use raw label mutation or `gh issue close` to bypass the gate. For `pr-comment-fix` repairs the PR body must continue to carry the original closing reference; do not strip it during a repair commit.
@@ -816,7 +818,7 @@ Hard rules:
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
 - All label transitions go through installed `intent-cli automation` / `intent-cli worker` commands. No manual `gh ... edit --add-label` / `--remove-label` fallback for workflow labels.
-- Never apply `intent-target` from the child loop; it is host-owned.
+- {ChildHostDutyBoundaryGuidance.TargetRepositoryLabelContract}
 - Never apply `intent-pr-created` to a PR; it is an issue-side completion marker.
 - **PR draft state (G296)**: create child implementation/update PRs as **ready-for-review** (non-draft) by default. Do NOT pass `--draft` to `gh pr create` unless the operator explicitly asks for a draft. After opening the PR, pass the actual draft state into `worker result-summary --pr-draft true|false` so the host review loop can detect a draft PR before approval. If you must keep the PR draft (incomplete work, operator hold), do not transition the issue to ready-for-review states; mark the outcome accordingly and document the reason.
 - **PR closing reference is mandatory (G311)**: when opening a child implementation PR for an issue selected by `worker next-action`, the PR body MUST include a deterministic GitHub closing reference to the source issue — `Closes #<issue>`, `Fixes #<issue>`, or `Resolves #<issue>` (case-insensitive; `#N` form, not bare links such as `see #N`). `worker complete --kind issue --outcome pr-created --pr <n> --write` validates this and refuses to mark complete when the reference is missing, points at a different issue, or names multiple distinct issues. If the gate refuses, repair the PR body via `gh pr edit <pr> --body-file <path-to-new-body>` so the body ends with `Closes #<issue>`, then re-run `worker complete`. Do NOT use raw label mutation or `gh issue close` to bypass the gate. For `pr-comment-fix` repairs the PR body must continue to carry the original closing reference; do not strip it during a repair commit.

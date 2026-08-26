@@ -273,7 +273,7 @@ Wake contract:
 Hard rules:
 - At most one PR review per wake; at most one issue cut per wake.
 - `intent-pr-created` is issue-only; never apply it to a PR.
-- `intent-target` is host-owned; the child loop never adds or removes it.
+- Raw/manual target-repository label mutation is forbidden, and host-state publication/linkage remains host-owned. The sole child exception is the installed canonical `worker complete --kind issue --outcome pr-created --github-only --write`, which may apply target-repository `intent-target` to the PR; `intent-pr-created` remains on the source issue and is never applied to the PR. For PR `repair-pushed`, canonical child completion changes only PR repair labels.
 - Stop on Hard Clarification rather than guessing when source-of-truth is ambiguous.
 
 Final report must include:
@@ -321,7 +321,7 @@ Wake contract:
 Hard rules:
 - At most one PR review per wake; at most one issue cut per wake.
 - `intent-pr-created` is issue-only; never apply it to a PR.
-- `intent-target` is host-owned; the child loop never adds or removes it.
+- Raw/manual target-repository label mutation is forbidden, and host-state publication/linkage remains host-owned. The sole child exception is the installed canonical `worker complete --kind issue --outcome pr-created --github-only --write`, which may apply target-repository `intent-target` to the PR; `intent-pr-created` remains on the source issue and is never applied to the PR. For PR `repair-pushed`, canonical child completion changes only PR repair labels.
 - Stop on Hard Clarification rather than guessing when source-of-truth is ambiguous.
 
 Final report must include:
@@ -381,7 +381,7 @@ Wake steps:
    - Claim with `intent-cli worker claim --kind issue --number <n> --write --format json`.
    - Follow the issue-to-PR workflow for the returned issue URL. Do not use the `gh-issue-to-pr` local skill.
    - Use the issue body as the standalone contract; do not read parent host packet files to fill gaps.
-   - Create at most one draft PR. Do not add `intent-target` or `intent-pr-created` to the PR.
+   - Create at most one draft PR. Do not manually add workflow labels: issue-to-PR canonical completion may apply target-repository `intent-target` to the PR, while `intent-pr-created` remains on the source issue.
    - Classify the outcome as one of: `pr-created`, `declined-contract-incomplete`, `clarification-required`, `already-resolved`, `failed`, `label-cleanup-required`.
    - From the parent host root run `intent-cli worker result-summary --kind issue-to-pr ...` then `intent-cli worker complete --kind issue --number <n> --outcome <outcome> --write --format json`.
 10. If `action` is `pr-comment-fix`:
@@ -393,7 +393,7 @@ Wake steps:
 
 Hard label rules:
 - Never put `intent-pr-created` on a PR.
-- Never add `intent-target` from this implementation loop unless `intent-cli` explicitly owns that transition.
+- Never manually add or remove `intent-target` from this implementation loop. Only canonical `worker complete --kind issue --outcome pr-created --github-only --write` may apply target-repository `intent-target`; host-state publication/linkage remains host-owned.
 - Do not manually invent label transitions. Use `intent-cli` claim/complete recommendations only.
 
 Final report must include:

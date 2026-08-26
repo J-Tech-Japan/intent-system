@@ -33,7 +33,7 @@ internal static class GuideRulesCommand
             Title = "Label ownership",
             Summary = new[]
             {
-                "`intent-target` is the host-owned publish boundary. The child loop never adds or removes it.",
+                ChildHostDutyBoundaryGuidance.TargetRepositoryLabelContract,
                 "`intent-pr-created` is an issue-side completion marker; never apply it to a PR.",
                 "`intent-issue-in-progress` and `intent-pr-update-in-progress` are exclusive work markers; only one item per lane at a time.",
                 "G717 precedence: the execution-unit claim registry is authoritative over lifecycle labels; when they disagree, follow the claim and repair the label shadow through intent-cli rather than failing closed on the label.",

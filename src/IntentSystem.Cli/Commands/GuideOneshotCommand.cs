@@ -343,7 +343,7 @@ Current baseline:
 - Do not manually reimplement label selection logic in the prompt.
 - Let `intent-cli worker next-action --repo <OWNER>/<REPO> --format json` select the single target.
 - Let `intent-cli worker result-summary` and `intent-cli worker complete --write` define completion/label actions where available.
-- The child worker must not apply or remove `intent-target`; that is host-owned.
+- Raw/manual target-repository label mutation is forbidden, and host-state publication/linkage remains host-owned. The sole child exception is the installed canonical `worker complete --kind issue --outcome pr-created --github-only --write`, which may apply target-repository `intent-target` to the PR; `intent-pr-created` remains on the source issue and is never applied to the PR. For PR `repair-pushed`, canonical child completion changes only PR repair labels.
 - `intent-pr-created` belongs to the source issue only; never apply it to a PR.
 
 Preflight:
@@ -383,7 +383,7 @@ For `issue-to-pr`:
 8. Run relevant focused validation.
 9. Push the branch and create a draft PR.
 10. Put `Closes #<issue>` in the PR body.
-11. Do not add `intent-target` to the PR from the child loop.
+11. Do not manually add or remove `intent-target` from the child loop. Only canonical `worker complete --kind issue --outcome pr-created --github-only --write` may apply target-repository `intent-target`; host-state publication/linkage remains host-owned.
 12. Do not add `intent-pr-created` to the PR.
 13. Classify the outcome as exactly one of: `pr-created`, `declined-contract-incomplete`, `clarification-required`, `already-resolved`, `failed`, or `label-cleanup-required`.
 14. Run `intent-cli worker result-summary --kind issue-to-pr --repo <OWNER>/<REPO> --issue <ISSUE_NUMBER> --pr <PR_NUMBER> --outcome <OUTCOME> --format json`.

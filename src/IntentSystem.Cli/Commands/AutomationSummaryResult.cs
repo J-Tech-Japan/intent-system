@@ -211,11 +211,11 @@ internal static class AutomationSummaryConstants
         "Stage 1: repair PRs labeled intent-pr-request-update and swap to intent-pr-rereview-ready",
         "Stage 2: implement intent-target issues, open draft PRs, and mark the linked Issue with intent-pr-created (PR publication/review eligibility is handled by PR-side intent-target and PR state labels; never apply intent-pr-created to the PR itself)",
         "Honor single-branch cap and HARD CLARIFICATION over branch cap",
-        "Never apply or remove intent-target from the child loop"
+        ChildHostDutyBoundaryGuidance.TargetRepositoryLabelContract
     ];
 
     public const string PublishBoundaryGuidance =
-        "intent-target marks the parent-durable publish boundary; only the parent automation may apply or remove it";
+        ChildHostDutyBoundaryGuidance.TargetRepositoryLabelContract;
 
     public const string WipCapGuidance =
         "Default child WIP cap is one in-flight branch per loop; when WIP is non-empty, defer new work until WIP drains";

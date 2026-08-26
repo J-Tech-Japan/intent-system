@@ -151,7 +151,7 @@ internal static class GuideModelCommand
                 "intent-cli must not launch Codex/Claude or any AI provider.",
                 "intent-cli must not replace operator decisions; canonical mutation requires explicit operator acceptance.",
                 "Routine collaboration must not require manually opening `intents/rules` files; agents call `intent-cli guide ...` instead.",
-                "`intent-target` is the host-owned publish boundary; the child loop never adds or removes it.",
+                ChildHostDutyBoundaryGuidance.TargetRepositoryLabelContract,
                 "`intent-pr-created` is an issue-side completion marker; never apply it to a PR.",
                 "When a lifecycle label disagrees with an execution-unit claim, the claim registry wins; publish-flow leaves the drafting claim held until the attributed drafter explicitly releases it for implementation."
             }

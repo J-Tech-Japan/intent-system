@@ -233,7 +233,7 @@ public sealed class GuideWorkerIssueToPrCommandTests
     }
 
     [Fact]
-    public void Execute_Json_PromptCoversDraftPrCreation()
+    public void Execute_Json_PromptCoversReadyForReviewPrCreation_G733()
     {
         using var writer = new StringWriter();
         var exitCode = GuideWorkerIssueToPrCommand.Execute(
@@ -244,10 +244,72 @@ public sealed class GuideWorkerIssueToPrCommandTests
         Assert.Equal(0, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
         var prompt = document.RootElement.GetProperty("prompt").GetString()!;
-        Assert.Contains("draft PR", prompt, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("gh pr create --draft", prompt, StringComparison.Ordinal);
+        Assert.Contains("ready-for-review PR", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("gh pr create --title", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("gh pr create --draft", prompt, StringComparison.Ordinal);
         Assert.Contains("intent-target", prompt, StringComparison.Ordinal);
-        Assert.Contains("Do not add `intent-target` to the PR", prompt, StringComparison.Ordinal);
+        Assert.Contains("canonical child-cwd `intent-cli worker complete", prompt, StringComparison.Ordinal);
+        Assert.Contains("may apply `intent-target` to the target-repository PR", prompt, StringComparison.Ordinal);
+        Assert.Contains("distinct from host-state linkage/publication", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not use raw GitHub label mutation", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_EmitsSeatHostBoundaryAndExactHostDutyRequest_G733()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkerIssueToPrCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        var boundary = root.GetProperty("seat_host_boundary");
+        var request = boundary.GetProperty("host_duty_request").GetString()!;
+        Assert.Contains("intent-cli notify report", request, StringComparison.Ordinal);
+        Assert.Contains("--from implementation --to orchestration", request, StringComparison.Ordinal);
+        Assert.Contains("--status question", request, StringComparison.Ordinal);
+        Assert.Contains("intent-cli claim acquire --scope execution-unit:<EU>", request, StringComparison.Ordinal);
+        Assert.Contains("intent-cli claim verify --scope execution-unit:<EU>", request, StringComparison.Ordinal);
+        Assert.Contains("--routing-root <host-routing-root> --report-root .", request, StringComparison.Ordinal);
+
+        var claimSafety = boundary.GetProperty("claim_safety").GetString()!;
+        Assert.Contains("push_succeeded=true", claimSafety, StringComparison.Ordinal);
+        Assert.Contains("passed=true", claimSafety, StringComparison.Ordinal);
+        Assert.Contains("compare-and-swap", claimSafety, StringComparison.Ordinal);
+        Assert.Contains("plain push", claimSafety, StringComparison.Ordinal);
+
+        var cannot = string.Join('\n', boundary.GetProperty("seat_cannot").EnumerateArray()
+            .Select(item => item.GetString()));
+        Assert.Contains("host-repository GitHub API", cannot, StringComparison.Ordinal);
+        Assert.Contains("acquire, release, or take over", cannot, StringComparison.Ordinal);
+
+        var verification = string.Join('\n', boundary.GetProperty("verification").EnumerateArray()
+            .Select(item => item.GetString()));
+        Assert.Contains("probe-should-fail", verification, StringComparison.Ordinal);
+        Assert.Contains("Operation not permitted", verification, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_RendersG733BoundaryAndReadyPrRoute()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkerIssueToPrCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("## Seat/host duty boundary (G733)", output, StringComparison.Ordinal);
+        Assert.Contains("### Exact host-duty request", output, StringComparison.Ordinal);
+        Assert.Contains("### Claim safety", output, StringComparison.Ordinal);
+        Assert.Contains("### Co-location rule", output, StringComparison.Ordinal);
+        Assert.Contains("remote-herdr", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli notify report", output, StringComparison.Ordinal);
+        Assert.Contains("ready-for-review PR", output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
