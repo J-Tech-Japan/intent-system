@@ -277,7 +277,18 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
             Assert.True(shrink.ExitCode == 0, shrinkOutput + shrinkError);
             using var shrinkJson = JsonDocument.Parse(shrinkOutput);
             var rootElement = shrinkJson.RootElement;
-            Assert.Equal("running", rootElement.GetProperty("supervisor_state").GetString());
+            var supervisorProcessState = supervisor.HasExited
+                ? $"exited:{supervisor.ExitCode}"
+                : "running";
+            var supervisorStdout = supervisorOutput?.IsCompleted == true
+                ? await supervisorOutput
+                : "<not-complete>";
+            var supervisorStderr = supervisorError?.IsCompleted == true
+                ? await supervisorError
+                : "<not-complete>";
+            Assert.True(
+                string.Equals(rootElement.GetProperty("supervisor_state").GetString(), "running", StringComparison.Ordinal),
+                $"supervisor_process={supervisorProcessState}; stdout={supervisorStdout}; stderr={supervisorStderr}; shrink={shrinkOutput}");
             Assert.True(rootElement.GetProperty("before_record_count").GetInt32() >= recordCount);
             Assert.Equal(rootElement.GetProperty("before_record_count").GetInt32(), rootElement.GetProperty("after_record_count").GetInt32());
             Assert.True(rootElement.GetProperty("after_bytes").GetInt64() < rootElement.GetProperty("before_bytes").GetInt64());
@@ -292,8 +303,8 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
             Console.WriteLine($"G734 live supervisor shrink: state=running; cycles={cycleCountBeforeShrink}->{cycleCountAfterShrink}; shrink={shrinkOutput.Trim()}");
             supervisor.Kill(entireProcessTree: true);
             await supervisor.WaitForExitAsync();
-            _ = await supervisorOutput;
-            _ = await supervisorError;
+            _ = await supervisorOutput!;
+            _ = await supervisorError!;
         }
         finally
         {
