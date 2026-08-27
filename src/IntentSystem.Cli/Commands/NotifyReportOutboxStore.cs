@@ -178,7 +178,18 @@ internal static class NotifyReportOutboxStore
             : $"legacy:{entry.TaskId}:{entry.ResultNonce ?? string.Empty}";
 
     public static string BuildCollectCommand(string routingRoot, NotifyReportOutboxEntry entry) =>
-        $"intent-cli notify collect --domain {entry.Domain} --team {entry.Team} --task-id {entry.TaskId} --write --routing-root {routingRoot}";
+        BuildCollectCommand(routingRoot, routingRoot, entry);
+
+    public static string BuildCollectCommand(string routingRoot, string reportRoot, NotifyReportOutboxEntry entry)
+    {
+        var reportRootArgument = string.Equals(
+            Path.GetFullPath(reportRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            Path.GetFullPath(routingRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            StringComparison.Ordinal)
+            ? string.Empty
+            : $" --report-root {reportRoot}";
+        return $"intent-cli notify collect --domain {entry.Domain} --team {entry.Team} --task-id {entry.TaskId} --write --routing-root {routingRoot}{reportRootArgument}";
+    }
 }
 
 internal sealed record NotifyReportOutboxEntry
