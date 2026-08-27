@@ -14,7 +14,9 @@ internal sealed record NotifyRecordedRole(
     string? Frontend,
     IReadOnlyList<string>? LaunchArguments = null,
     string? EnvelopeProfileReference = null,
-    AgentLaunchEnvelopeProfile? EnvelopeProfileOverride = null)
+    AgentLaunchEnvelopeProfile? EnvelopeProfileOverride = null,
+    string? Model = null,
+    string? ReasoningEffort = null)
 {
     public const string HerdrResident = "herdr";
     public const string ExternalResident = "external";
@@ -75,12 +77,73 @@ internal sealed record SessionLayerTopologyFinding(
     public bool IsInformational { get; init; }
 }
 
+internal sealed record SessionLayerTopologyDeclaredRole(
+    [property: JsonPropertyName("role")] string Role,
+    [property: JsonPropertyName("model")] string? Model,
+    [property: JsonPropertyName("reasoning_effort")] string? ReasoningEffort);
+
+internal static class SessionLayerTopologyDeclaredValueRules
+{
+    public const int MaxLength = 256;
+    public const string OperatorDeclarationSummary =
+        "Model and reasoning effort are operator declarations, not measurements.";
+
+    public static bool TryValidate(string? value, string field, out string error)
+    {
+        if (value is null)
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            error = $"{field} must be non-empty when supplied.";
+            return false;
+        }
+
+        if (value.Length > MaxLength)
+        {
+            error = $"{field} must be at most {MaxLength} characters when supplied.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    public static bool TryRead(
+        JsonElement role,
+        string property,
+        out string? value,
+        out string error)
+    {
+        value = null;
+        if (!role.TryGetProperty(property, out var element)
+            || element.ValueKind == JsonValueKind.Null)
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        if (element.ValueKind != JsonValueKind.String)
+        {
+            error = $"Topology field '{property}' must be a string or null when present.";
+            return false;
+        }
+
+        value = element.GetString();
+        return TryValidate(value, $"Topology field '{property}'", out error);
+    }
+}
+
 internal sealed record SessionLayerTopologyValidation
 {
     public required bool Valid { get; init; }
     public required string Team { get; init; }
     public required string SourcePath { get; init; }
     public required IReadOnlyList<SessionLayerTopologyFinding> Findings { get; init; }
+    public IReadOnlyList<SessionLayerTopologyDeclaredRole> RoleDeclarations { get; init; } = [];
     public NotifyHostStateDeclaration? HostState { get; init; }
     public IReadOnlyList<string> Warnings { get; init; } = [];
 }
@@ -289,6 +352,28 @@ internal static class NotifyRoleTopologyStore
                 }
 
                 var roleKind = ReadString(property.Value, "kind");
+                if (!SessionLayerTopologyDeclaredValueRules.TryRead(
+                        property.Value,
+                        "model",
+                        out var model,
+                        out var modelError))
+                {
+                    return Failure(
+                        "topology-invalid",
+                        $"Role '{property.Name}' has an invalid declared model identity: {modelError}");
+                }
+
+                if (!SessionLayerTopologyDeclaredValueRules.TryRead(
+                        property.Value,
+                        "reasoning_effort",
+                        out var reasoningEffort,
+                        out var reasoningEffortError))
+                {
+                    return Failure(
+                        "topology-invalid",
+                        $"Role '{property.Name}' has an invalid declared reasoning effort: {reasoningEffortError}");
+                }
+
                 if (profileReference is not null)
                 {
                     if (!envelopeProfiles.TryGetValue(profileReference, out var referencedProfile))
@@ -327,7 +412,9 @@ internal static class NotifyRoleTopologyStore
                     ReadString(property.Value, "frontend"),
                     ReadStringArray(property.Value, "launch_args"),
                     profileReference,
-                    profileOverride));
+                    profileOverride,
+                    model,
+                    reasoningEffort));
             }
 
             if (roles.Count == 0)
@@ -589,6 +676,8 @@ internal static class NotifyRoleTopologyStore
             }
         }
 
+        var roleDeclarations = new List<SessionLayerTopologyDeclaredRole>();
+
         if (!File.Exists(path))
         {
             var resolution = Resolve(routingRoot, domain, team);
@@ -656,6 +745,35 @@ internal static class NotifyRoleTopologyStore
                         $"Role '{property.Name}' is not an object."));
                     continue;
                 }
+
+                var declaredModel = (string?)null;
+                var declaredReasoningEffort = (string?)null;
+                if (!SessionLayerTopologyDeclaredValueRules.TryRead(
+                        property.Value,
+                        "model",
+                        out declaredModel,
+                        out var modelError))
+                {
+                    findings.Add(Finding(property.Name, "model", "topology-invalid", modelError));
+                }
+
+                if (!SessionLayerTopologyDeclaredValueRules.TryRead(
+                        property.Value,
+                        "reasoning_effort",
+                        out declaredReasoningEffort,
+                        out var reasoningEffortError))
+                {
+                    findings.Add(Finding(
+                        property.Name,
+                        "reasoning_effort",
+                        "topology-invalid",
+                        reasoningEffortError));
+                }
+
+                roleDeclarations.Add(new(
+                    property.Name,
+                    declaredModel,
+                    declaredReasoningEffort));
 
                 var resident = ReadString(property.Value, "resident");
                 var supportedResident = resident is NotifyRecordedRole.HerdrResident
@@ -772,7 +890,12 @@ internal static class NotifyRoleTopologyStore
                 $"Topology file '{path}' is unreadable: {exception.Message}"));
         }
 
-        return Validation(team, path, findings, hostState: discoveredHostState);
+        return Validation(
+            team,
+            path,
+            findings,
+            hostState: discoveredHostState,
+            roleDeclarations: roleDeclarations);
     }
 
     public static bool TryResolveReaderPath(
@@ -1270,7 +1393,8 @@ internal static class NotifyRoleTopologyStore
         string path,
         IReadOnlyList<SessionLayerTopologyFinding> findings,
         IReadOnlyList<string>? warnings = null,
-        NotifyHostStateDeclaration? hostState = null) => new()
+        NotifyHostStateDeclaration? hostState = null,
+        IReadOnlyList<SessionLayerTopologyDeclaredRole>? roleDeclarations = null) => new()
         {
             Valid = findings.All(finding => finding.IsInformational),
             Team = team,
@@ -1278,5 +1402,6 @@ internal static class NotifyRoleTopologyStore
             Findings = findings,
             HostState = hostState,
             Warnings = warnings ?? [],
+            RoleDeclarations = roleDeclarations ?? [],
         };
 }

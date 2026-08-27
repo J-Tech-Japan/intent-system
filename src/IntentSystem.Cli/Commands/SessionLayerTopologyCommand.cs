@@ -20,10 +20,12 @@ internal static class SessionLayerTopologyCommand
         "Usage: intent-cli session-layer topology record|record-host-state|record-profile|show|validate|move|update-kind|update-field|retire-legacy [options]";
     private const string RecordUsage =
         "Usage: intent-cli session-layer topology record --domain <name> --team <name> --role <name> --resident herdr "
-        + "--workspace-id <id> --pane-id <id> --cwd <path> [--kind <kind>] [--delivery-method inline|file-backed] [--dry-run|--write] "
+        + "--workspace-id <id> --pane-id <id> --cwd <path> [--kind <kind>] [--delivery-method inline|file-backed] "
+        + "[--model <text>] [--reasoning-effort <text>] [--dry-run|--write] "
         + "[--format markdown|json]\n"
         + "   or: intent-cli session-layer topology record --domain <name> --team <name> --role <name> --resident external "
-        + "--reader <routing-root-relative-path> [--frontend <name>] [--dry-run|--write] "
+        + "--reader <routing-root-relative-path> [--frontend <name>] [--model <text>] [--reasoning-effort <text>] "
+        + "[--dry-run|--write] "
         + "[--format markdown|json]\n"
         + "   Heartbeat coordination accepts recorded role 'orchestration' or the alias 'orchestrator'; existing "
         + "records under either name need no rename or migration.";
@@ -153,6 +155,7 @@ internal static class SessionLayerTopologyCommand
                 Team = team!,
                 RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
                 Findings = validation.Findings,
+                RoleDeclarations = validation.RoleDeclarations,
                 HostState = validation.HostState,
                 Summary = (validation.Valid
                 ? $"Recorded delivery topology for team '{team}' is valid."
@@ -161,6 +164,7 @@ internal static class SessionLayerTopologyCommand
                 + (informationalCount == 0
                     ? string.Empty
                     : $" {informationalCount} informational finding(s) do not affect valid.")
+                + $" {SessionLayerTopologyDeclaredValueRules.OperatorDeclarationSummary}"
                 + FormatWarnings(validation.Warnings),
         };
 
@@ -284,6 +288,8 @@ internal static class SessionLayerTopologyCommand
                 Cwd = record.Cwd,
                 Kind = record.Kind,
                 Frontend = record.Frontend,
+                Model = record.Model,
+                ReasoningEffort = record.ReasoningEffort,
             });
         }
 
@@ -307,6 +313,7 @@ internal static class SessionLayerTopologyCommand
             HostState = topology.HostState,
             Findings = [],
             Summary = $"Resolved {roles.Count} recorded delivery target(s) for team '{team}' without sending."
+                + $" {SessionLayerTopologyDeclaredValueRules.OperatorDeclarationSummary}"
                 + FormatWarnings(topologyResolution.Warnings),
         };
         EmitShow(writer, format, result);
@@ -741,6 +748,8 @@ internal static class SessionLayerTopologyCommand
         string? deliveryMethod = null;
         string? reader = null;
         string? frontend = null;
+        string? model = null;
+        string? reasoningEffort = null;
         var write = false;
         var format = FormatMarkdown;
 
@@ -782,6 +791,12 @@ internal static class SessionLayerTopologyCommand
                 case "--frontend":
                     if (!TryReadValue(args, ref index, option, out frontend, out error)) return false;
                     break;
+                case "--model":
+                    if (!TryReadValue(args, ref index, option, out model, out error)) return false;
+                    break;
+                case "--reasoning-effort":
+                    if (!TryReadValue(args, ref index, option, out reasoningEffort, out error)) return false;
+                    break;
                 case "--write":
                     write = true;
                     break;
@@ -809,6 +824,12 @@ internal static class SessionLayerTopologyCommand
             || string.IsNullOrWhiteSpace(role) || string.IsNullOrWhiteSpace(resident))
         {
             error = "--domain, --team, --role, and --resident are required.";
+            return false;
+        }
+
+        if (!SessionLayerTopologyDeclaredValueRules.TryValidate(model, "--model", out error)
+            || !SessionLayerTopologyDeclaredValueRules.TryValidate(reasoningEffort, "--reasoning-effort", out error))
+        {
             return false;
         }
 
@@ -877,6 +898,8 @@ internal static class SessionLayerTopologyCommand
             DeliveryMethod = deliveryMethod,
             Reader = reader,
             Frontend = frontend,
+            Model = model,
+            ReasoningEffort = reasoningEffort,
             Write = write,
             Format = format,
         };
@@ -1184,6 +1207,11 @@ internal static class SessionLayerTopologyCommand
             var severity = finding.IsInformational ? "informational; " : string.Empty;
             writer.WriteLine($"- {severity}role={finding.Role}; field={finding.Field}; cause={finding.Cause}; {finding.Message}");
         }
+        foreach (var declaration in result.RoleDeclarations)
+        {
+            writer.WriteLine($"- role={declaration.Role}; model={declaration.Model ?? "absent"}; "
+                + $"reasoning_effort={declaration.ReasoningEffort ?? "absent"};");
+        }
     }
 
     private static void EmitShow(TextWriter writer, string format, SessionLayerTopologyShowResult result)
@@ -1202,7 +1230,8 @@ internal static class SessionLayerTopologyCommand
         foreach (var role in result.Roles)
         {
             writer.WriteLine($"- {role.Role}: resident={role.Resident}; delivery_target={role.DeliveryTargetKind}:"
-                + $"{role.DeliveryTarget}");
+                + $"{role.DeliveryTarget}; model={role.Model ?? "absent"}; "
+                + $"reasoning_effort={role.ReasoningEffort ?? "absent"};");
         }
         foreach (var profile in result.EnvelopeProfiles)
         {
@@ -1245,6 +1274,7 @@ internal static class SessionLayerTopologyWriter
     private static readonly string[] KnownRoleFields =
     [
         "resident", "workspace_id", "pane_id", "cwd", "kind", "delivery_method", "reader", "frontend",
+        "model", "reasoning_effort",
     ];
 
     public static SessionLayerTopologyRecordResult Record(
@@ -1252,6 +1282,15 @@ internal static class SessionLayerTopologyWriter
         SessionLayerTopologyRecordRequest request)
     {
         var path = NotifyRoleTopologyStore.ResolvePath(routingRoot, request.Domain, request.Team);
+        if (!SessionLayerTopologyDeclaredValueRules.TryValidate(request.Model, "--model", out var declaredValueError)
+            || !SessionLayerTopologyDeclaredValueRules.TryValidate(
+                request.ReasoningEffort,
+                "--reasoning-effort",
+                out declaredValueError))
+        {
+            return Conflict(request, path, declaredValueError);
+        }
+
         if (string.Equals(request.Resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal)
             && !NotifyRoleTopologyStore.TryResolveReaderPath(
                 routingRoot,
@@ -2230,6 +2269,8 @@ internal static class SessionLayerTopologyWriter
         Add(role, "delivery_method", request.DeliveryMethod);
         Add(role, "reader", request.Reader);
         Add(role, "frontend", request.Frontend);
+        Add(role, "model", request.Model);
+        Add(role, "reasoning_effort", request.ReasoningEffort);
         return role;
     }
 
@@ -2472,6 +2513,8 @@ internal sealed record SessionLayerTopologyRecordRequest
     public string? DeliveryMethod { get; init; }
     public string? Reader { get; init; }
     public string? Frontend { get; init; }
+    public string? Model { get; init; }
+    public string? ReasoningEffort { get; init; }
     public required bool Write { get; init; }
     public required string Format { get; init; }
 }
@@ -2603,6 +2646,7 @@ internal sealed record SessionLayerTopologyValidationResult
     public required string Team { get; init; }
     public required string RecordPath { get; init; }
     public required IReadOnlyList<SessionLayerTopologyFinding> Findings { get; init; }
+    public IReadOnlyList<SessionLayerTopologyDeclaredRole> RoleDeclarations { get; init; } = [];
     public NotifyHostStateDeclaration? HostState { get; init; }
     public required string Summary { get; init; }
 }
@@ -2638,4 +2682,6 @@ internal sealed record SessionLayerTopologyShownRole
     public string? Cwd { get; init; }
     public string? Kind { get; init; }
     public string? Frontend { get; init; }
+    public string? Model { get; init; }
+    public string? ReasoningEffort { get; init; }
 }

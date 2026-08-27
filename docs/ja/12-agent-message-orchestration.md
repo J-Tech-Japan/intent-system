@@ -1347,9 +1347,9 @@ foreign-workspace-only name、ambiguous mapping は prompt / append なしで fa
 この artifact は手編集せず、canonical topology surface で記録・検査します。
 
 ```text
-intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
+intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] [--model <text>] [--reasoning-effort <text>] --write
 herdr pane rename <pane-id> <logical-role>
-intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
+intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] [--model <text>] [--reasoning-effort <text>] --write
 intent-cli session-layer topology update-kind --domain <domain> --team <team> --role <role> --current-kind <kind> --new-kind <kind> --confirm-update-kind --write
 intent-cli session-layer topology update-field --domain <domain> --team <team> --role <role> --field delivery_method --current <absent|inline|file-backed> --new <inline|file-backed> --confirm-update-field --write
 intent-cli session-layer topology retire-legacy --domain <domain> --team <team> --evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write
@@ -1359,6 +1359,23 @@ intent-cli guide topology-workspace-move --domain <domain> --team <team> --forma
 intent-cli session-layer topology move --domain <domain> --team <team> --workspace-id <new-workspace-id> --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... --dry-run --format json
 intent-cli session-layer topology move --domain <domain> --team <team> --workspace-id <new-workspace-id> --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... [--current-digest <digest>] --write --format json
 ```
+
+### 任意の operator-declared model identity と reasoning effort (G739)
+
+recorded role には任意の free-form field `model` と `reasoning_effort` を
+持たせられます。`topology record` の `--model <text>` と
+`--reasoning-effort <text>` で指定し、各 value は 256 文字までです。ただし
+model や effort の enumerated list は持ちません。これは operator declaration
+です。model と reasoning effort は operator declaration であり、measurement
+ではありません。intent-cli は running provider を検索せず、value を推測せず、
+古い record に backfill もしません。
+
+`topology show` と `topology validate` は全 role の指定済み value を表示します。
+省略した value は Markdown では `absent` と表示され、validation を失敗させません。
+両 field を持たない legacy record は valid のままで、同じ record を exact に再指定した
+場合は byte-compatible です。既存の exact-match idempotence、generic な conflict refusal、
+explicit な team-wide `move` semantics は変わりません。G684 の supervision drift envelope は
+引き続き model と reasoning effort を operator-choice の wish field として除外します。
 
 G697 は意図的な workspace rebuild の path を追加します。インストール済みの
 `guide topology-workspace-move` recipe は `guide review`、`guide next --role review`、
