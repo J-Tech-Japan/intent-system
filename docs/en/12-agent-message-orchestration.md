@@ -529,6 +529,28 @@ recovery for that finding. A declared bound below the configured interval is a
 structural false-alarm warning, emitted at supervise start and on each cycle,
 not a value the CLI silently corrects.
 
+### Delivered delegation with no observable start (G741)
+
+`notify supervise` emits `delegation-delivered-never-executed` only when a
+delegation's durable delivery evidence says `delivery_succeeded=true`, the
+recipient is still running but `agent_status=idle` on a later observation, and
+the configured `--delegation-execution-window-seconds` (default `300s`) has
+elapsed. The full conjunction also requires the canonical report for the task
+to be absent, every expected artifact source to be absent, and the durable
+target-entity transition source to be absent. A working/started seat, visible
+artifact, report, or target transition is a non-finding.
+
+The finding names `task_id`, seat, `delivered_at`, the window, and every
+checked source. It wakes the delegation's owner role through the recorded
+transport, but is observation-only: it sends no keys, answers no dialogs, does
+not prompt the recipient or mutate a seat, restart anything, or redispatch
+work.
+
+This is an observable-start proxy, not an inference about opaque in-seat thought.
+The child can only check recorded local artifact/event and continuation sources;
+unreadable evidence fails closed. Hosts that never emit this kind retain the
+existing supervision state and emission-policy JSON shape.
+
 **Report outbox (G653 — preview-through-1.x).** `notify report --write`
 persists the sender-side outbox entry before it attempts transport. The entry
 keeps the task id, result nonce, status, artifact, summary, and delivery

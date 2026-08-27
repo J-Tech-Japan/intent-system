@@ -66,6 +66,7 @@ internal static class NotifyCommand
         "Usage: intent-cli notify supervise --domain <d> --team <t> [--interval <seconds>] "
         + "[--repo <owner/repo>] [--owner-role <role>] [--bound <seconds>] "
         + "[--repeat-backoff-seconds <seconds>] [--debounce-consecutive-observations <count>] "
+        + "[--delegation-execution-window-seconds <seconds>; default 300] "
         + "[--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] "
         + "[--repair-silent-minutes <m>] [--auto-redispatch] [--event-mode] [--once] [--routing-root <host-root>] [--dry-run|--write] "
         + "[--herdr-executable <absolute-path>] [--bash-executable <absolute-path>] "
@@ -1097,7 +1098,8 @@ internal static class NotifyCommand
             options.BashExecutable ?? BashExecutableFactory?.Invoke() ?? NotifyTransportPaths.ResolveBashExecutable(),
             scopedPolicies: options.ScopedPolicies,
             repeatBackoffSeconds: options.RepeatBackoffSeconds,
-            debounceConsecutiveObservations: options.DebounceConsecutiveObservations);
+            debounceConsecutiveObservations: options.DebounceConsecutiveObservations,
+            delegationExecutionWindowSeconds: options.DelegationExecutionWindowSeconds);
         using var cancellation = new CancellationTokenSource();
         ConsoleCancelEventHandler? cancelHandler = null;
         if (!Console.IsOutputRedirected)
@@ -1564,6 +1566,25 @@ internal static class NotifyCommand
                 summary: "The canonical external-reader event append completed exactly once; pane transition observation does not apply.");
         }
 
+        string? deliveryEvidenceAdvisory = null;
+        if (pendingRecord is not null
+            && options.Write
+            && delivery.Resolved
+            && (delivery.Delivered || eventAppended))
+        {
+            var deliveredAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+            var deliveryWrite = NotifyDelegationDeliveryStore.Write(
+                options.RoutingRoot!,
+                pendingRecord,
+                deliveredAt);
+            if (!deliveryWrite.Written)
+            {
+                deliveryEvidenceAdvisory =
+                    $"Delivery succeeded for task '{pendingRecord.TaskId}', but durable delivery evidence could not be recorded: "
+                    + $"{deliveryWrite.Error} Supervision will fail closed for the delivered-but-never-executed finding.";
+            }
+        }
+        reportAdvisory = CombineAdvisories(reportAdvisory, deliveryEvidenceAdvisory);
         if (isReport
             && options.Write
             && reportPendingRecord is not null
@@ -2390,6 +2411,7 @@ internal static class NotifyCommand
         int? detectionBoundSeconds = null;
         int? repeatBackoffSeconds = null;
         int? debounceConsecutiveObservations = null;
+        int? delegationExecutionWindowSeconds = null;
         int? staleMinutes = null;
         int? claimedSilentMinutes = null;
         int? backlogIdleMinutes = null;
@@ -2453,6 +2475,15 @@ internal static class NotifyCommand
                         return false;
                     }
                     detectionBoundSeconds = parsedBound;
+                    break;
+                case "--delegation-execution-window-seconds":
+                    if (!ReadValue(args, ref index, argument, out var delegationWindowValue, out error)
+                        || !int.TryParse(delegationWindowValue, out var parsedDelegationWindow))
+                    {
+                        error = $"{argument} requires a whole-number seconds value.";
+                        return false;
+                    }
+                    delegationExecutionWindowSeconds = parsedDelegationWindow;
                     break;
                 case "--repeat-backoff-seconds":
                 case "--backoff-seconds":
@@ -2621,6 +2652,7 @@ internal static class NotifyCommand
             BashExecutable = bashExecutable,
             IntervalSeconds = intervalSeconds,
             DetectionBoundSeconds = detectionBoundSeconds,
+            DelegationExecutionWindowSeconds = delegationExecutionWindowSeconds,
             RepeatBackoffSeconds = repeatBackoffSeconds,
             DebounceConsecutiveObservations = debounceConsecutiveObservations,
             StaleMinutes = staleMinutes,
@@ -2732,6 +2764,14 @@ internal static class NotifyCommand
                 && (options.DetectionBoundSeconds < 1 || options.DetectionBoundSeconds > 86_400))
             {
                 error = "supervise --bound must be between 1 and 86400 seconds.";
+                return false;
+            }
+
+            if (options.DelegationExecutionWindowSeconds is not null
+                && (options.DelegationExecutionWindowSeconds < 1
+                    || options.DelegationExecutionWindowSeconds > NotifyMeasuredSupervisor.MaximumDelegationExecutionWindowSeconds))
+            {
+                error = $"supervise --delegation-execution-window-seconds must be between 1 and {NotifyMeasuredSupervisor.MaximumDelegationExecutionWindowSeconds} seconds.";
                 return false;
             }
 
@@ -2967,6 +3007,7 @@ internal sealed record NotifyOptions
     public string? BashExecutable { get; init; }
     public int? IntervalSeconds { get; init; }
     public int? DetectionBoundSeconds { get; init; }
+    public int? DelegationExecutionWindowSeconds { get; init; }
     public int? RepeatBackoffSeconds { get; init; }
     public int? DebounceConsecutiveObservations { get; init; }
     public int? StaleMinutes { get; init; }
