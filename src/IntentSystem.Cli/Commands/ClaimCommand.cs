@@ -30,6 +30,14 @@ internal static class ClaimCommand
     public static int ExecuteAcquire(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, ClaimOperation.Acquire);
 
+    internal static int ExecuteAcquire(
+        CliContext context,
+        string[] args,
+        TextWriter writer,
+        TextWriter warningWriter,
+        Action<string> deleteDirectory) =>
+        Execute(context, args, writer, ClaimOperation.Acquire, warningWriter, deleteDirectory);
+
     public static int ExecuteRelease(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, ClaimOperation.Release);
 
@@ -41,10 +49,20 @@ internal static class ClaimCommand
         string[] args,
         TextWriter writer,
         ClaimOperation operation)
+        => Execute(context, args, writer, operation, Console.Error, null);
+
+    private static int Execute(
+        CliContext context,
+        string[] args,
+        TextWriter writer,
+        ClaimOperation operation,
+        TextWriter warningWriter,
+        Action<string>? deleteDirectory)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(warningWriter);
 
         if (args.Length == 1 && args[0] == "--help")
         {
@@ -62,7 +80,7 @@ internal static class ClaimCommand
         ClaimTransactionResult result;
         try
         {
-            result = RunTransaction(context.RepoRoot, request!);
+            result = RunTransaction(context.RepoRoot, request!, warningWriter, deleteDirectory);
         }
         catch (HostStateGitFailureException exception)
         {

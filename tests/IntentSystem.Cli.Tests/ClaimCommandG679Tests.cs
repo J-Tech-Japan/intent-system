@@ -163,24 +163,23 @@ public sealed class ClaimCommandG679Tests : IDisposable
     public void PostCommitCleanupFailure_PreservesCommittedResultAndWarnsWithLeftoverPath_G738()
     {
         using var repos = new ClaimRepositories();
+        using var output = new StringWriter();
         using var warnings = new StringWriter();
         var deleteAttempts = 0;
         string? leftoverPath = null;
 
         try
         {
-            var result = ClaimCommand.RunTransaction(
-                repos.FirstClone,
-                new ClaimRequest(
-                    ClaimOperation.Acquire,
-                    "execution-unit:G738",
-                    "alice",
-                    "implementation",
-                    null,
-                    null,
-                    true,
-                    "json",
-                    ClaimCommand.DefaultMaxAttempts),
+            var exitCode = ClaimCommand.ExecuteAcquire(
+                Context(repos.FirstClone),
+                [
+                    "--scope", "execution-unit:G738",
+                    "--actor", "alice",
+                    "--team", "implementation",
+                    "--write",
+                    "--format", "json",
+                ],
+                output,
                 warnings,
                 path =>
                 {
@@ -189,9 +188,11 @@ public sealed class ClaimCommandG679Tests : IDisposable
                     throw new IOException("injected cleanup failure");
                 });
 
-            Assert.Equal("acquired", result.Status);
-            Assert.True(result.PushSucceeded);
-            Assert.NotNull(result.Commit);
+            Assert.Equal(0, exitCode);
+            using var emitted = JsonDocument.Parse(output.ToString());
+            Assert.Equal("acquired", emitted.RootElement.GetProperty("status").GetString());
+            Assert.True(emitted.RootElement.GetProperty("push_succeeded").GetBoolean());
+            Assert.False(string.IsNullOrWhiteSpace(emitted.RootElement.GetProperty("commit").GetString()));
             Assert.Equal(ClaimCommand.CleanupMaxAttempts, deleteAttempts);
             Assert.NotNull(leftoverPath);
             Assert.StartsWith(Path.GetTempPath(), leftoverPath!, StringComparison.OrdinalIgnoreCase);
