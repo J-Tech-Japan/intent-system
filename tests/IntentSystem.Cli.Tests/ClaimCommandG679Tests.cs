@@ -160,6 +160,116 @@ public sealed class ClaimCommandG679Tests : IDisposable
     }
 
     [Fact]
+    public void PostCommitCleanupFailure_PreservesCommittedResultAndWarnsWithLeftoverPath_G738()
+    {
+        using var repos = new ClaimRepositories();
+        using var warnings = new StringWriter();
+        var deleteAttempts = 0;
+        string? leftoverPath = null;
+
+        try
+        {
+            var result = ClaimCommand.RunTransaction(
+                repos.FirstClone,
+                new ClaimRequest(
+                    ClaimOperation.Acquire,
+                    "execution-unit:G738",
+                    "alice",
+                    "implementation",
+                    null,
+                    null,
+                    true,
+                    "json",
+                    ClaimCommand.DefaultMaxAttempts),
+                warnings,
+                path =>
+                {
+                    leftoverPath = path;
+                    deleteAttempts++;
+                    throw new IOException("injected cleanup failure");
+                });
+
+            Assert.Equal("acquired", result.Status);
+            Assert.True(result.PushSucceeded);
+            Assert.NotNull(result.Commit);
+            Assert.Equal(ClaimCommand.CleanupMaxAttempts, deleteAttempts);
+            Assert.NotNull(leftoverPath);
+            Assert.StartsWith(Path.GetTempPath(), leftoverPath!, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(leftoverPath, warnings.ToString(), StringComparison.Ordinal);
+            Assert.Contains("claim result and exit code are unchanged", warnings.ToString(), StringComparison.Ordinal);
+            Assert.Contains("OS temp root", warnings.ToString(), StringComparison.Ordinal);
+
+            var inspection = repos.CloneForInspection();
+            Assert.True(File.Exists(Path.Combine(
+                inspection, ClaimCommand.ClaimPath("execution-unit:G738"))));
+        }
+        finally
+        {
+            if (leftoverPath is not null && Directory.Exists(leftoverPath))
+            {
+                Directory.Delete(leftoverPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void PreCommitCleanupFailure_RemainsAFailure_G738()
+    {
+        using var repos = new ClaimRepositories();
+        var scope = "execution-unit:G738";
+        var acquired = ClaimCommand.RunTransaction(
+            repos.FirstClone,
+            new ClaimRequest(
+                ClaimOperation.Acquire,
+                scope,
+                "alice",
+                "implementation",
+                null,
+                null,
+                true,
+                "json",
+                ClaimCommand.DefaultMaxAttempts));
+        Assert.Equal("acquired", acquired.Status);
+
+        using var warnings = new StringWriter();
+        var deleteAttempts = 0;
+        string? leftoverPath = null;
+        try
+        {
+            var exception = Assert.Throws<IOException>(() => ClaimCommand.RunTransaction(
+                repos.SecondClone,
+                new ClaimRequest(
+                    ClaimOperation.Acquire,
+                    scope,
+                    "bob",
+                    "review",
+                    null,
+                    null,
+                    true,
+                    "json",
+                    ClaimCommand.DefaultMaxAttempts),
+                warnings,
+                path =>
+                {
+                    leftoverPath = path;
+                    deleteAttempts++;
+                    throw new IOException("injected pre-commit cleanup failure");
+                }));
+
+            Assert.Contains("before the claim state was committed", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(ClaimCommand.CleanupMaxAttempts, deleteAttempts);
+            Assert.Empty(warnings.ToString());
+        }
+        finally
+        {
+            if (leftoverPath is not null && Directory.Exists(leftoverPath))
+            {
+                Directory.Delete(leftoverPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void FreshInit_ClaimsAreNonUnionAfterBroadJsonlRule_G679()
     {
         using var temp = new TempDirectory("claim-attributes-");
