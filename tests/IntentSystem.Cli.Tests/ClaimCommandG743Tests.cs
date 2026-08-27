@@ -80,6 +80,8 @@ public sealed class ClaimCommandG743Tests
             repos.FirstClone, ClaimCommand.ClaimPath(scope).Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(blockedClaimPath);
         File.WriteAllText(Path.Combine(blockedClaimPath, "blocker"), "tracked directory blocker\n");
+        Run(repos.FirstClone, "git", "config", "user.name", "g743-fixture");
+        Run(repos.FirstClone, "git", "config", "user.email", "g743-fixture@example.invalid");
         Run(repos.FirstClone, "git", "add", "--", ClaimCommand.ClaimPath(scope));
         Run(repos.FirstClone, "git", "commit", "--quiet", "-m", "create claim path blocker");
         Run(repos.FirstClone, "git", "push", "--quiet", "origin", "main");
