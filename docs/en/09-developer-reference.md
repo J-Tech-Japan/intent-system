@@ -2670,6 +2670,37 @@ incomplete packet through publication. The tolerance is scoped to `clarify open`
 
 ---
 
+## Claim transaction teardown (G738)
+
+`claim acquire`, `claim release`, and `claim takeover` use a temporary clone
+under the OS temp root. The successful plain push of the claim state is the
+transaction boundary; cleanup of that temporary clone happens after the
+boundary.
+
+- Before the claim state is committed and pushed, a transaction or teardown
+  failure remains a command failure. Cleanup cannot turn an incomplete claim
+  into success.
+- After a successful push, cleanup is best-effort. A delete attempt is bounded
+  to 250 ms, up to three attempts are allowed for ordinary failures, and the
+  retry backoff is 50 ms. A timed-out attempt is not retried while its worker
+  may still be touching the directory. The worst-case added wait is therefore
+  850 ms (`3 × 250 ms + 2 × 50 ms`), stated by the implementation constants.
+- If cleanup still cannot remove the directory, the command writes a warning
+  to stderr naming the leftover path. The committed claim result on stdout and
+  the exit code are unchanged. The leftover remains under the OS temp root so
+  the operating system's reaper can clean it up later.
+
+The warning has this shape, with the actual temporary path substituted:
+
+```text
+warning: claim transaction committed successfully, but best-effort cleanup could not remove temporary directory '<path>' after 3 bounded attempt(s); the claim result and exit code are unchanged. The leftover path remains under the OS temp root.
+```
+
+This keeps the committed claim visible to the operator and to downstream
+claim-gated flows without backgrounding the claim or hand-writing its packet.
+
+---
+
 ## Version flow
 
 The repository version policy lives in `eng/version.json` — the single source of

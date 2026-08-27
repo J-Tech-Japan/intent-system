@@ -16,6 +16,9 @@ internal static class ClaimCommand
 {
     internal const string ClaimsDirectory = ".intent-cli/claims";
     internal const int DefaultMaxAttempts = 2;
+    internal const int CleanupMaxAttempts = 3;
+    internal static readonly TimeSpan CleanupAttemptTimeout = TimeSpan.FromMilliseconds(250);
+    internal static readonly TimeSpan CleanupRetryDelay = TimeSpan.FromMilliseconds(50);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -26,6 +29,14 @@ internal static class ClaimCommand
 
     public static int ExecuteAcquire(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, ClaimOperation.Acquire);
+
+    internal static int ExecuteAcquire(
+        CliContext context,
+        string[] args,
+        TextWriter writer,
+        TextWriter warningWriter,
+        Action<string> deleteDirectory) =>
+        Execute(context, args, writer, ClaimOperation.Acquire, warningWriter, deleteDirectory);
 
     public static int ExecuteRelease(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, ClaimOperation.Release);
@@ -38,10 +49,20 @@ internal static class ClaimCommand
         string[] args,
         TextWriter writer,
         ClaimOperation operation)
+        => Execute(context, args, writer, operation, Console.Error, null);
+
+    private static int Execute(
+        CliContext context,
+        string[] args,
+        TextWriter writer,
+        ClaimOperation operation,
+        TextWriter warningWriter,
+        Action<string>? deleteDirectory)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(warningWriter);
 
         if (args.Length == 1 && args[0] == "--help")
         {
@@ -59,7 +80,7 @@ internal static class ClaimCommand
         ClaimTransactionResult result;
         try
         {
-            result = RunTransaction(context.RepoRoot, request!);
+            result = RunTransaction(context.RepoRoot, request!, warningWriter, deleteDirectory);
         }
         catch (HostStateGitFailureException exception)
         {
@@ -81,8 +102,18 @@ internal static class ClaimCommand
         return result.Status is "acquired" or "released" or "taken-over" or "planned" ? 0 : 1;
     }
 
-    internal static ClaimTransactionResult RunTransaction(string repoRoot, ClaimRequest request)
+    internal static ClaimTransactionResult RunTransaction(string repoRoot, ClaimRequest request) =>
+        RunTransaction(repoRoot, request, Console.Error);
+
+    internal static ClaimTransactionResult RunTransaction(
+        string repoRoot,
+        ClaimRequest request,
+        TextWriter warningWriter,
+        Action<string>? deleteDirectory = null)
     {
+        ArgumentNullException.ThrowIfNull(warningWriter);
+        deleteDirectory ??= path => Directory.Delete(path, recursive: true);
+
         var origin = RunGit(repoRoot, ["remote", "get-url", "origin"]);
         EnsureSuccess(origin, "resolve origin");
         var branch = RunGit(repoRoot, ["branch", "--show-current"]);
@@ -112,6 +143,7 @@ internal static class ClaimCommand
         {
             var transactionRoot = Path.Combine(
                 Path.GetTempPath(), $"intent-cli-claim-{Guid.NewGuid():N}");
+            var committed = false;
             try
             {
                 var clone = RunGit(Path.GetTempPath(),
@@ -220,6 +252,10 @@ internal static class ClaimCommand
                 }
                 if (push.ExitCode == 0)
                 {
+                    // The plain push is the transaction boundary. Everything
+                    // after it, including local refresh and temporary clone
+                    // teardown, is best-effort and cannot change the result.
+                    committed = true;
                     var pushedHead = RunGit(transactionRoot, ["rev-parse", "HEAD"]);
                     EnsureSuccess(pushedHead, "resolve pushed claim commit");
                     var status = request.Operation switch
@@ -285,14 +321,128 @@ internal static class ClaimCommand
             }
             finally
             {
-                if (Directory.Exists(transactionRoot))
-                {
-                    Directory.Delete(transactionRoot, recursive: true);
-                }
+                CleanupTransactionRoot(transactionRoot, committed, warningWriter, deleteDirectory);
             }
         }
 
         throw new InvalidOperationException("claim transaction exhausted unexpectedly");
+    }
+
+    private static void CleanupTransactionRoot(
+        string transactionRoot,
+        bool committed,
+        TextWriter warningWriter,
+        Action<string> deleteDirectory)
+    {
+        if (!Directory.Exists(transactionRoot)) return;
+
+        Exception? lastFailure = null;
+        var attempts = 0;
+        var timedOut = false;
+        try
+        {
+            // At most 3 * 250 ms of bounded delete attempts plus 2 * 50 ms
+            // backoff delays are added. A timed-out delete is not retried
+            // while its bounded worker may still be touching the directory.
+            for (var attempt = 1; attempt <= CleanupMaxAttempts; attempt++)
+            {
+                attempts = attempt;
+                if (attempt > 1) Thread.Sleep(CleanupRetryDelay);
+
+                if (TryDeleteTransactionRoot(
+                        transactionRoot, deleteDirectory, out lastFailure, out timedOut))
+                {
+                    return;
+                }
+
+                if (timedOut) break;
+            }
+        }
+        catch (Exception exception)
+        {
+            lastFailure = exception;
+        }
+
+        if (committed)
+        {
+            var detail = lastFailure?.Message;
+            try
+            {
+                warningWriter.WriteLine(
+                    $"warning: claim transaction committed successfully, but best-effort cleanup "
+                    + $"could not remove temporary directory '{transactionRoot}' after {attempts} "
+                    + $"bounded attempt(s); the claim result and exit code are unchanged. "
+                    + $"The leftover path remains under the OS temp root."
+                    + (string.IsNullOrWhiteSpace(detail) ? string.Empty : $" Last error: {detail}"));
+            }
+            catch
+            {
+                // A broken warning sink must not cross the commit boundary
+                // and turn a successful claim into a failed command.
+            }
+            return;
+        }
+
+        throw new IOException(
+            $"Could not clean up claim transaction temporary directory '{transactionRoot}' before "
+            + "the claim state was committed.", lastFailure);
+    }
+
+    private static bool TryDeleteTransactionRoot(
+        string transactionRoot,
+        Action<string> deleteDirectory,
+        out Exception? failure,
+        out bool timedOut)
+    {
+        failure = null;
+        timedOut = false;
+
+        Task deletion;
+        try
+        {
+            deletion = Task.Run(() => deleteDirectory(transactionRoot));
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+            return false;
+        }
+
+        try
+        {
+            if (!deletion.Wait(CleanupAttemptTimeout))
+            {
+                ObserveFault(deletion);
+                timedOut = true;
+                failure = new TimeoutException(
+                    $"temporary directory deletion exceeded {CleanupAttemptTimeout.TotalMilliseconds:0} ms");
+                return false;
+            }
+
+            deletion.GetAwaiter().GetResult();
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+            return false;
+        }
+
+        if (Directory.Exists(transactionRoot))
+        {
+            failure = new IOException("temporary directory deletion returned without removing the directory");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static void ObserveFault(Task task)
+    {
+        _ = task.ContinueWith(
+            completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     internal static string ClaimPath(string scope)

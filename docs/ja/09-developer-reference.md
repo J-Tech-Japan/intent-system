@@ -2736,6 +2736,33 @@ strict な projection serializer は**変更していません**。publish-flow 
 
 ---
 
+## claim transaction の teardown (G738)
+
+`claim acquire`、`claim release`、`claim takeover` は OS の temp root 配下に一時 clone を
+作ります。claim state の plain push 成功が transaction boundary であり、その一時 clone の
+cleanup は boundary の後に実行されます。
+
+- claim state が commit され push される前は、transaction または teardown の failure は
+  command failure のままです。cleanup が未完了の claim を成功に変えることはありません。
+- push 成功後の cleanup は best-effort です。delete の 1 回ごとの待機は 250 ms に制限し、
+  通常の failure には最大 3 回まで試行し、retry 間には 50 ms の backoff を置きます。
+  timeout した試行は、worker が directory に触れている可能性がある間は retry しません。
+  最悪時の追加待機は 850 ms (`3 × 250 ms + 2 × 50 ms`) で、実装の定数にも明記しています。
+- cleanup で directory を削除できなかった場合、command は leftover path を含む warning を
+  stderr に出力します。commit 済み claim の stdout result と exit code は変わりません。
+  leftover は OS temp root 配下に残るため、OS の reaper が後で cleanup できます。
+
+warning は実際の一時 path を差し込むと次の形です:
+
+```text
+warning: claim transaction committed successfully, but best-effort cleanup could not remove temporary directory '<path>' after 3 bounded attempt(s); the claim result and exit code are unchanged. The leftover path remains under the OS temp root.
+```
+
+これにより、commit 済み claim は operator と downstream の claim-gated flow から見え続け、
+claim の background 実行や packet の手書きは不要です。
+
+---
+
 ## バージョンフロー
 
 リポジトリのバージョンポリシーは `eng/version.json` に記載されています。`stableVersion`
