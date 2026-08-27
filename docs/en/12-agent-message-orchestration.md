@@ -1579,9 +1579,9 @@ Write and inspect this artifact through the canonical topology surface, never
 by hand:
 
 ```text
-intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] --write
+intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] [--model <text>] [--reasoning-effort <text>] --write
 herdr pane rename <pane-id> <logical-role>
-intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] --write
+intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] [--model <text>] [--reasoning-effort <text>] --write
 intent-cli session-layer topology update-kind --domain <domain> --team <team> --role <role> --current-kind <kind> --new-kind <kind> --confirm-update-kind --write
 intent-cli session-layer topology update-field --domain <domain> --team <team> --role <role> --field delivery_method --current <absent|inline|file-backed> --new <inline|file-backed> --confirm-update-field --write
 intent-cli session-layer topology retire-legacy --domain <domain> --team <team> --evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write
@@ -1591,6 +1591,24 @@ intent-cli guide topology-workspace-move --domain <domain> --team <team> --forma
 intent-cli session-layer topology move --domain <domain> --team <team> --workspace-id <new-workspace-id> --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... --dry-run --format json
 intent-cli session-layer topology move --domain <domain> --team <team> --workspace-id <new-workspace-id> --pane-map <old-pane>=<new-pane> [--pane-map <old-pane>=<new-pane>]... [--current-digest <digest>] --write --format json
 ```
+
+### Optional operator-declared model identity and reasoning effort (G739)
+
+A recorded role may carry the optional free-form fields `model` and
+`reasoning_effort`. Supply them through `--model <text>` and
+`--reasoning-effort <text>` on `topology record`; each value is bounded to 256
+characters, but neither field has an enumerated model or effort list. This is
+an operator declaration: model and reasoning effort are operator declarations, not measurements.
+intent-cli does not query a running provider, infer a value,
+or backfill an old record.
+
+`topology show` and `topology validate` render supplied values for every role.
+An omitted value is rendered as `absent` in Markdown and is non-failing; a
+legacy record that omits both fields remains valid and byte-compatible when an
+exact record is repeated. The existing exact-match idempotence, generic
+conflict refusal, and explicit whole-team `move` semantics remain unchanged.
+The G684 supervision drift envelope still excludes model and reasoning effort
+as operator-choice wish fields.
 
 G697 adds the intentional workspace rebuild path. The installed
 `guide topology-workspace-move` recipe is reachable from `guide review`,

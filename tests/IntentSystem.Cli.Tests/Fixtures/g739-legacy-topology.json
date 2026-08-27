@@ -1,0 +1,15 @@
+{
+  "domain": "intent-cli",
+  "team": "g739-legacy",
+  "workspace_id": "wG739",
+  "roles": {
+    "implementation": {
+      "resident": "herdr",
+      "workspace_id": "wG739",
+      "pane_id": "wG739:p1",
+      "cwd": "/legacy-implementation",
+      "kind": "codex",
+      "delivery_method": "inline"
+    }
+  }
+}
