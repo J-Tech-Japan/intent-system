@@ -93,6 +93,9 @@ and preserves role membership, cwd, kind, delivery method, readers, profiles,
 and all other fields. It never queries herdr, discovers a workspace, creates
 panes, or repairs a per-role refusal. The writer holds a CAS lock and compares
 the topology digest before replacement; a stale `--current-digest` is refused.
+Supply one `--pane-map` pair per recorded pane; roles that share one recorded
+pane travel together under that pane's mapping, while mapping two different
+recorded panes to one new pane stays refused as genuinely ambiguous (G735).
 The existing per-role mismatch message points to this command as the
 sanctioned whole-team transition.
 

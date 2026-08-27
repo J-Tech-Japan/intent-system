@@ -86,8 +86,10 @@ move は、記録済み herdr role ごとに完全な old-to-new pane map を明
 workspace/pane id を一つの atomic operation で更新します。role membership、cwd、kind、delivery method、
 reader、profile、その他すべての field は維持します。herdr query、workspace の discover、pane の作成、
 per-role refusal の repair は行いません。writer は CAS lock を保持し、置換前に topology digest を比較します。
-stale な `--current-digest` は拒否されます。既存の per-role mismatch message は sanctioned な whole-team
-transition としてこの command を示します。
+stale な `--current-digest` は拒否されます。`--pane-map` は recorded pane ごとに一つ supply します。
+同一 recorded pane を共有する role はその pane の mapping と共に移動し (G735)、異なる recorded pane を
+同一 new pane に map する形は genuinely ambiguous として引き続き拒否されます。既存の per-role mismatch
+message は sanctioned な whole-team transition としてこの command を示します。
 
 ---
 

@@ -1367,7 +1367,11 @@ validate → notify preflight の完全な順序を表示します。move は he
 old-pane から new-pane への完全な map を必要とし、CAS lock を保持して topology digest を比較します。
 team と role の workspace/pane id だけを atomic に更新し、他の role field は維持します。herdr query、
 pane 作成、membership 変更、per-role conflict の repair は行いません。既存の refusal は sanctioned な
-whole-team transition としてこの move command を示します。
+whole-team transition としてこの move command を示します。G735 は pane-map の ambiguity 判定を old-pane 側
+に修正します。map は recorded pane を key とするので、同一 recorded pane を共有する複数の role はその pane
+の new pane へ共に移動し、異なる recorded pane が同一 new pane に潰れる map のみ genuinely ambiguous として
+拒否されます。したがって shared-pane の team も同じ move command で rebuild でき、per-role record の refusal
+は実際に機能する route を示します。
 
 agent kind は herdr が起動できる任意の kind です。Claude、Codex、Copilot、Cursor、OpenCode などは
 例であり、supported-set の制約ではありません。logical role の既定値は `implementation`、`review`、
