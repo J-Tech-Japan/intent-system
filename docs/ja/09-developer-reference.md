@@ -2970,91 +2970,91 @@ result は literal bytes の削減、追加した reference bytes、record の n
 `shrink-audit.jsonl` に明記します。`.intent-cli/runs/*.provider.jsonl` は別の provider-run state なので
 scope 外です。`--dry-run` なら manifest、JSONL、audit を書き込まずに測定済み plan だけを確認できます。
 
-### 次リリース準備(v0.24.1)
+### 次リリース準備(v0.25.0)
 
-**`v0.24.0` は出荷済み**(GitHub Release、NuGet、binary、npm)です。公開済みの
-release は [v0.24.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.24.0)
-に記録されています。この published GitHub Release とその tag が shipped evidence の
-authoritative source です。v0.24.0 の shipped real-install identity は
-`intent-cli 0.24.0-df472fe-G737` で、source revision
-`df472fe5663c1a8b3682959aab6fbbf93c4d76ef` から測定しました。
-この v0.24.0 line は installed 0.23.2 CLI と比較して測定しました。
-tracked な EN/JA の `release-notes-v0.24.0.md` はこの roll で変更せず、前回の
-prepare-only notes に由来する `PREPARED / NOT PUBLISHED` banner を保持します。この
-source-note inconsistency はこの roll より前から存在し、出荷済み v0.24.0 note の修正は
-scope 外です。後続の明示的な remediation で扱います。
+**v0.24.0 shipped evidence:** shipped baseline は
+intent-cli 0.24.0-df472fe-G737 で、source revision は
+df472fe5663c1a8b3682959aab6fbbf93c4d76ef です。tracked な EN/JA
+release-notes-v0.24.0.md は変更していません。前回 G740 roll の 0.24.1
+value は placeholder だけであり、その DRAFT stub はこの preparation で削除します。
+現在の note file は [release-notes-v0.25.0.md](release-notes-v0.25.0.md) です。
+v0.24.0 GitHub Release と tag が shipped evidence の authoritative source です。
+変更していない shipped-note file は `PREPARED / NOT PUBLISHED` banner を保持します。
+source-note inconsistency はこの roll より前から存在し、修正は scope 外であり、後続の explicitly scoped remediation で扱います。
+比較対象には installed 0.23.2 CLI を使いました。shipped-note check は checkout_freshness/provenance を記録します。
+Rolled policy: `stableVersion → 0.24.0`; `nextVersion → 0.25.0`。
+次の line の package identity は `JTechJapan.IntentSystem.Cli.0.25.0.nupkg` です。これは derived verification value で、release content ではありません。
+release-prep check は tag または Release を作成せず、package を publish せず、credentials を扱いません。
+host-only claim boundary は `release-prep:<owner/repo>:0.25.0` で、この child は host state を inspect しません。
+公開済みの [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0) とその tag は authoritative shipped evidence です。
+v0.23.0 の shipped artifact は GitHub Release、NuGet package、自己完結型バイナリです。ただし npm leg は registry に到達しなかったため、`0.23.0` は npm で利用できると扱ってはいけません。
+tracked な EN/JA の `release-notes-v0.23.0.md` files はこの shipped-artifact status を記録します。
 
-公開済みの `v0.23.2` release も authoritative shipped evidence ですが、tracked な EN/JA の
-`release-notes-v0.23.2.md` にはまだ `PREPARED / NOT PUBLISHED` banner が残っています。
-この source-note inconsistency はこの roll より前から存在し、出荷済み v0.23.2 note の修正は
-scope 外です。後続の明示的な remediation で扱います。child source tree には tracked な
-`release-notes-v0.23.1.md` がなく、この roll で出荷済み note を再作成・編集しません。
-公開済みの [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0)
-とその tag は authoritative shipped evidence です。v0.23.0 の shipped artifact は GitHub Release、
-NuGet package、自己完結型バイナリです。ただし npm leg は registry に到達しなかったため、
-`0.23.0` は npm で利用できると扱ってはいけません。tracked な EN/JA の
-`release-notes-v0.23.0.md` files はこの shipped-artifact status を記録します。
-[v0.24.1 DRAFT](release-notes-v0.24.1.md) が次の line の空の placeholder です。
-`0.24.1` は placeholder にすぎません。release-prep will replace the stub after
-next real release line の測定が完了し、この file は changelog ではありません。
 
-Rolled policy: `stableVersion → 0.24.0`; `nextVersion → 0.24.1`。
 
-次の line の package identity は `JTechJapan.IntentSystem.Cli.0.24.1.nupkg` です。
-これは導出された verification value であり、release content ではありません。
-
-**`v0.24.1` のリリース準備検証:**
-
-この post-release roll が変更するのは version policy、次の line の空の stub、両言語 mirror の readiness section、
-そして必要な release-note/version test pin だけです。tag または Release を作成せず、package を publish せず、
-credentials を扱わず、未リリースの placeholder line の feature notes を author しません。次の real release number は
-measurement に基づく release-prep の decision のままです。
-
-claims-enabled host では、release-prep operator がこれらの artifact を編集する前に current release-prep scope を acquire / verify します。
-この child PR は host-state command を実行しません:
+**v0.25.0 の reason と built identity:** 正確な prepared functional head は
+5c4af5d88ddcfa47335bad4df56ad3e40dae9140 です。その Release build は
+intent-cli 0.24.1-5c4af5d-G741 を表示し、installed intent-cli は
+intent-cli 0.24.0-df472fe-G737 を表示しました。増えた option は
+session-layer topology record --model <text>、
+session-layer topology record --reasoning-effort <text>、
+notify supervise --delegation-execution-window-seconds <seconds>
+(default 300) です。この測定した command-surface difference が
+stableVersion 0.24.0 / nextVersion 0.25.0 の監査可能な reason です。
 
 ```bash
-intent-cli claim acquire --scope release-prep:<owner/repo>:0.24.1 --actor <actor> --team <team> --write --format json
-intent-cli claim verify --scope release-prep:<owner/repo>:0.24.1 --team <team> --format json
-```
-
-```bash
-# 1. roll 済み policy と、内容のない両言語 DRAFT stub を確認。
-cat eng/version.json   # stableVersion 0.24.0 (published), nextVersion 0.24.1 (placeholder)
-test -f docs/en/release-notes-v0.24.1.md
-test -f docs/ja/release-notes-v0.24.1.md
-
-# 2. 次の line の表示バージョン形式を build して確認。
-dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
+intent-cli --version
+dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj --configuration Release --no-restore
 dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-#   期待する形: intent-cli 0.24.1-<sha>-G<unit>
-
-# 3. 同期済み checkout から installed G725 detector を read-only で実行。
-intent-cli automation stalled-work --domain intent-cli --repo J-Tech-Japan/intent-system --format json
-#   version-roll-required が silent であること、checkout commit、
-#   checkout_freshness/provenance statement を記録する。stale な checkout を evidence として扱わない。
-
-# 4. shipped-note check を正直に記録: source v0.24.0 note は未変更だが、
-#    PREPARED / NOT PUBLISHED banner を保持する。
-git diff --quiet -- docs/en/release-notes-v0.24.0.md docs/ja/release-notes-v0.24.0.md
-grep -n "PREPARED / NOT PUBLISHED" docs/en/release-notes-v0.24.0.md
-grep -n "PREPARED / NOT PUBLISHED" docs/ja/release-notes-v0.24.0.md
-gh release view v0.24.0 --repo J-Tech-Japan/intent-system
-
-# 5. focused な documentation/version guard、diff check、full Release suite を実行。
-dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release \
-  --filter "FullyQualifiedName~ReleaseNotesV0240DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~VersionSourcePolicyGuardTests|FullyQualifiedName~ReleaseNotesV0220DocsTests|FullyQualifiedName~ReleaseNotesV0230DocsTests|FullyQualifiedName~ReleaseNotesV0232DocsTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests"
-git diff --check
-dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release
 ```
 
-Targeted と full Release の test count は final PR head と一緒に report します。
-この post-release roll は [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
-**ステップ 5–7** に従います。**同一コミットに DRAFT note スタブ**(ステップ 5)、
-**「次リリース準備」section を ja/en 両ミラーで新しいラインへ更新**(ステップ 6)、
-そして **roll 後の child main CI green 確認**(ステップ 7)が完了条件です。既存の release tag、Release、package、workflow、
-shipped note file は変更しません。
+**First-parent proof:** `v0.24.0..5c4af5d88ddcfa47335bad4df56ad3e40dae9140`
+は `git rev-list --first-parent --reverse` と
+`git rev-list --first-parent --count` で測定し、commit は四つだけです。
 
+| first-parent commit | classification | release inventory |
+| --- | --- | --- |
+| f0a30f08de6281b34b6fd4a5e8732243ad176053 | G738 release unit; PR #1609 | included |
+| f0ea90fd3df65de3f1b95bd38f6f8c79b011d171 | G739 release unit; PR #1611 | included |
+| 8bcab9766412e3c946f3299274f969277135eb03 | G740 post-release version roll to the 0.24.1 placeholder; not a release unit | classified only |
+| 5c4af5d88ddcfa47335bad4df56ad3e40dae9140 | G741 release unit; PR #1614 | included |
+
+release inventory は G738、G739、G741 の三つだけです。G740 roll は
+分類表に残し、release unit には数えません。
+
+**Operator-observable outcomes:** G738 は commit 済み claim の teardown を
+best-effort かつ bounded にし、teardown で fail や hang せず Windows user が
+command を background にする必要をなくします。G739 は model と
+reasoning-effort の attribution を topology の show/validate から確認でき、
+absence は fail になりません。G741 は六条件が全て成立した
+delivered-but-never-observably-started delegation だけを finding として報告し、
+slow-but-started は finding にしません。classifier は observation-only で、
+六つの motivating incident を seat 名なしで記録します。
+closeout は **同一コミットに DRAFT note スタブ**(ステップ 5)、readiness section の **両ミラーで新しいラインへ更新**(ステップ 6)、そして **roll 後の child main CI green 確認**(ステップ 7) を保持します。
+これは prepare-only release-prep packet であり、次の real release number は measurement に基づく decision のままです。
+
+過去の release line から維持する readiness guard は ReleaseNotesV0180DocsTests、ReleaseNotesV0190DocsTests、ReleaseNotesV0170DocsTests です。
+この post-release roll は **ステップ 5–7** に従います。既存の release tag、Release、package、workflow、shipped note file は変更しません。
+child 側の report は host boundary を記録し、host state を inspect しません。
+
+
+**Release-prep verification:**
+
+```bash
+dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release --filter "FullyQualifiedName~ReleaseNotesV0250DocsTests|FullyQualifiedName~ReleaseNotesV0240DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~VersionSourcePolicyGuardTests|FullyQualifiedName~JapaneseTerminologyGuardG613Tests"
+dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release --filter "FullyQualifiedName~JapaneseTerminologyGuardG613Tests"
+dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release --filter "FullyQualifiedName~SessionLayerTopologyG739Tests|FullyQualifiedName~NotifySupervisionG741Tests"
+dotnet test IntentSystem.sln --no-restore -c Release --logger "console;verbosity=minimal"
+git diff --check
+```
+
+Targeted release-prep guard: 40 passed, 0 failed, 0 skipped (40 total)。
+Dedicated G613 JA terminology guard: 6 passed, 0 failed, 0 skipped (6 total)。
+Adjacent test: 14 passed, 0 failed, 0 skipped (14 total)。
+Full Release suite: 5261 passed, 0 failed, 1 skipped (5262 total)。
+`eng/version.json` は stableVersion 0.24.0 / nextVersion 0.25.0 のままにします。
+tag、GitHub Release、package publish、post-release roll、source runtime change は
+この preparation の範囲外です。
 ### 削除済みリリースタグ（`v0.3.3`）の再作成
 
 `v0.3.3` は早すぎる段階でタグ付けされ、タグは削除されました。**`v0.3.3` タグ/リリースの再作成は、
