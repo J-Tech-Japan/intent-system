@@ -144,6 +144,7 @@ internal static class ClaimCommand
             var transactionRoot = Path.Combine(
                 Path.GetTempPath(), $"intent-cli-claim-{Guid.NewGuid():N}");
             var committed = false;
+            Exception? transactionFailure = null;
             try
             {
                 var clone = RunGit(Path.GetTempPath(),
@@ -243,6 +244,9 @@ internal static class ClaimCommand
                     hostStateWrite: true);
                 CaptureRetry(ref lastGitWriteRetry, commit);
                 EnsureSuccess(commit, "commit claim transaction");
+                var transactionCommit = RunGit(transactionRoot, ["rev-parse", "HEAD"]);
+                EnsureSuccess(transactionCommit, "resolve claim transaction commit");
+                var transactionCommitSha = transactionCommit.StandardOutput.Trim();
 
                 var push = RunGit(transactionRoot, ["push", "origin", "HEAD"], hostStateWrite: true);
                 CaptureRetry(ref lastGitWriteRetry, push);
@@ -256,29 +260,22 @@ internal static class ClaimCommand
                     // after it, including local refresh and temporary clone
                     // teardown, is best-effort and cannot change the result.
                     committed = true;
-                    var pushedHead = RunGit(transactionRoot, ["rev-parse", "HEAD"]);
-                    EnsureSuccess(pushedHead, "resolve pushed claim commit");
                     var status = request.Operation switch
                     {
                         ClaimOperation.Acquire => "acquired",
                         ClaimOperation.Release => "released",
                         _ => "taken-over",
                     };
-                    // Keep the invoking clone on the pushed fact as well. The
-                    // ownership result remains true even if this best-effort
-                    // refresh is blocked by unrelated local workspace state;
-                    // the successful origin push is still authoritative.
-                    var localRefresh = RunGit(repoRoot, ["pull", "--ff-only", "origin", branchName], hostStateWrite: true);
-                    CaptureRetry(ref lastGitWriteRetry, localRefresh);
-                    var detail = localRefresh.ExitCode == 0
-                        ? "The plain push succeeded; this is the ownership transition fact."
-                        : "The plain push succeeded and is the ownership transition fact, but the invoking clone could not fast-forward: "
-                            + localRefresh.StandardError.Trim();
+                    var detail = RefreshInvokingClone(
+                        repoRoot,
+                        branchName,
+                        ref lastGitWriteRetry,
+                        "The plain push succeeded; this is the ownership transition fact.");
                     return new ClaimTransactionResult(
                         status, request.Scope, relativeClaimPath, true, attempt,
                         request.Operation == ClaimOperation.Release ? null : request.Actor,
                         request.Operation == ClaimOperation.Takeover ? current!.Actor : null,
-                        pushedHead.StandardOutput.Trim(),
+                        transactionCommitSha,
                         detail,
                         historyPath)
                     {
@@ -288,12 +285,50 @@ internal static class ClaimCommand
 
                 var fetch = RunGit(transactionRoot, ["fetch", "origin", branchName]);
                 EnsureSuccess(fetch, "inspect rejected claim push");
+                var remoteHead = RunGit(transactionRoot, ["rev-parse", $"origin/{branchName}"]);
+                var remoteCommitMatches = remoteHead.ExitCode == 0
+                    && string.Equals(remoteHead.StandardOutput.Trim(), transactionCommitSha, StringComparison.Ordinal);
+
                 var remoteClaim = RunGit(transactionRoot,
                     ["show", $"origin/{branchName}:{relativeClaimPath}"]);
                 if (remoteClaim.ExitCode == 0)
                 {
                     var holder = JsonSerializer.Deserialize<ClaimRecord>(remoteClaim.StandardOutput, JsonOptions)
                         ?? throw new InvalidOperationException("remote claim record was empty");
+                    if (remoteCommitMatches
+                        && request.Operation != ClaimOperation.Release
+                        && string.Equals(holder.Actor, request.Actor, StringComparison.Ordinal)
+                        && string.Equals(holder.Team, request.Team, StringComparison.Ordinal)
+                        && string.Equals(holder.BaseCommit, head.StandardOutput.Trim(), StringComparison.Ordinal))
+                    {
+                        // A receive-side failure can be reported after the
+                        // remote ref has advanced. The fetched commit and
+                        // resulting claim state are the durable fact, so
+                        // cleanup must see the committed boundary.
+                        committed = true;
+                        var status = request.Operation switch
+                        {
+                            ClaimOperation.Acquire => "acquired",
+                            ClaimOperation.Release => "released",
+                            _ => "taken-over",
+                        };
+                        var detail = RefreshInvokingClone(
+                            repoRoot,
+                            branchName,
+                            ref lastGitWriteRetry,
+                            "The remote branch contains the transaction commit after the push process returned a failure; verified remote state is the ownership transition fact.");
+                        return new ClaimTransactionResult(
+                            status, request.Scope, relativeClaimPath, true, attempt,
+                            request.Operation == ClaimOperation.Release ? null : request.Actor,
+                            request.Operation == ClaimOperation.Takeover ? current!.Actor : null,
+                            transactionCommitSha,
+                            detail,
+                            historyPath)
+                        {
+                            GitWriteRetry = lastGitWriteRetry,
+                        };
+                    }
+
                     var samePreexistingClaim = current is not null
                         && holder == current;
                     if (request.Operation == ClaimOperation.Acquire || !samePreexistingClaim)
@@ -304,6 +339,25 @@ internal static class ClaimCommand
                             GitWriteRetry = lastGitWriteRetry,
                         };
                     }
+                }
+
+                if (remoteCommitMatches
+                    && request.Operation == ClaimOperation.Release
+                    && remoteClaim.ExitCode != 0)
+                {
+                    committed = true;
+                    var status = "released";
+                    var detail = RefreshInvokingClone(
+                        repoRoot,
+                        branchName,
+                        ref lastGitWriteRetry,
+                        "The remote branch contains the transaction commit after the push process returned a failure; verified remote state is the ownership transition fact.");
+                    return new ClaimTransactionResult(
+                        status, request.Scope, relativeClaimPath, true, attempt,
+                        null, null, transactionCommitSha, detail, historyPath)
+                    {
+                        GitWriteRetry = lastGitWriteRetry,
+                    };
                 }
 
                 // Unrelated remote advance: discard this isolated workspace and
@@ -319,9 +373,31 @@ internal static class ClaimCommand
                     };
                 }
             }
+            catch (Exception exception)
+            {
+                transactionFailure = exception;
+                throw;
+            }
             finally
             {
-                CleanupTransactionRoot(transactionRoot, committed, warningWriter, deleteDirectory);
+                try
+                {
+                    CleanupTransactionRoot(transactionRoot, committed, warningWriter, deleteDirectory);
+                }
+                catch (Exception cleanupFailure) when (transactionFailure is not null)
+                {
+                    try
+                    {
+                        warningWriter.WriteLine(
+                            "warning: claim transaction failed before commit; the original transaction "
+                            + "failure is preserved. Cleanup also failed: " + cleanupFailure.Message);
+                    }
+                    catch
+                    {
+                        // A broken warning sink must not replace the original
+                        // pre-commit transaction failure.
+                    }
+                }
             }
         }
 
@@ -386,6 +462,33 @@ internal static class ClaimCommand
         throw new IOException(
             $"Could not clean up claim transaction temporary directory '{transactionRoot}' before "
             + "the claim state was committed.", lastFailure);
+    }
+
+    private static string RefreshInvokingClone(
+        string repoRoot,
+        string branchName,
+        ref HostStateGitRetryEvidence? lastGitWriteRetry,
+        string committedDetail)
+    {
+        try
+        {
+            var localRefresh = RunGit(
+                repoRoot,
+                ["pull", "--ff-only", "origin", branchName],
+                hostStateWrite: true);
+            CaptureRetry(ref lastGitWriteRetry, localRefresh);
+            return localRefresh.ExitCode == 0
+                ? committedDetail
+                : committedDetail
+                    + " The invoking clone could not fast-forward: "
+                    + localRefresh.StandardError.Trim();
+        }
+        catch (Exception exception)
+        {
+            return committedDetail
+                + " The invoking clone refresh could not run: "
+                + exception.Message;
+        }
     }
 
     private static bool TryDeleteTransactionRoot(
