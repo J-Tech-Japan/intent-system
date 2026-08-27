@@ -1696,6 +1696,7 @@ internal static class NotifyCommand
                     : delivery.Summary,
                 senderLocalReport,
                 eventAppended,
+                options.Write,
                 resolvedReportRoot,
                 options.RoutingRoot!),
             eventPath: delivery.ReaderPath,
@@ -1727,12 +1728,22 @@ internal static class NotifyCommand
         string summary,
         bool senderLocalReport,
         bool eventAppended,
+        bool write,
         string reportRoot,
-        string routingRoot) => senderLocalReport
-            ? eventAppended
-                ? $"{summary} Sender-local report handoff persisted under '{reportRoot}'; the host-root reader write completed exactly once. Host routing state at '{routingRoot}' remains for orchestration reconciliation."
-                : $"{summary} Sender-local report handoff persisted under '{reportRoot}'; no host-root write was required. Host routing state at '{routingRoot}' remains for orchestration reconciliation."
-            : summary;
+        string routingRoot)
+    {
+        if (!senderLocalReport)
+        {
+            return summary;
+        }
+
+        var handoffClause = eventAppended
+            ? $"Sender-local report handoff persisted under '{reportRoot}'; the host-root reader write completed exactly once."
+            : write
+                ? $"Sender-local report handoff persisted under '{reportRoot}'; no host-root write was required."
+                : $"Sender-local report handoff under '{reportRoot}' and the host-root reader write were both not attempted because this run is a dry-run.";
+        return $"{summary} {handoffClause} Host routing state at '{routingRoot}' remains for orchestration reconciliation.";
+    }
 
     private static bool PathsEqual(string left, string right) =>
         string.Equals(

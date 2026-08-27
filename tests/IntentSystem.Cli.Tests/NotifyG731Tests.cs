@@ -127,6 +127,38 @@ public sealed class NotifyG731Tests : IDisposable
         Assert.True(replay.GetProperty("already_converged").GetBoolean());
     }
 
+    [Fact]
+    public void DryRunSenderLocalReportAgainstExternalReaderStatesNoWriteAttempted_G731()
+    {
+        var runner = new FakeTransportRunner(workspace.HerdrAgents());
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        workspace.WriteTopology(externalOrchestration: true);
+        var (delegateExit, _) = workspace.Run(workspace.DelegateArgs("G731-dry-run", "g731-dry-run-nonce"));
+        Assert.Equal(0, delegateExit);
+        var readerPath = workspace.ExternalReaderPath;
+        var readerBefore = File.ReadAllText(readerPath);
+
+        string[] dryRunArgs =
+        [
+            "notify", "report", "--domain", Domain, "--team", Team,
+            "--from", "implementation", "--to", "orchestration", "--task-id", "G731-dry-run",
+            "--status", "completed", "--artifact", "https://example.test/pr/1731",
+            "--summary", "g731-dry-run-report",
+            "--routing-root", workspace.HostRoot, "--report-root", workspace.SeatRoot,
+            "--dry-run", "--format", "json",
+        ];
+        var (dryRunExit, dryRun) = workspace.Run(dryRunArgs);
+        Assert.True(dryRunExit == 0, dryRun.ToString());
+        var summary = dryRun.GetProperty("summary").GetString()!;
+        output.WriteLine($"[g731] dry-run summary: {summary}");
+        Assert.Contains("dry-run", summary, StringComparison.Ordinal);
+        Assert.Contains("were both not attempted", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("no host-root write was required", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("completed exactly once", summary, StringComparison.Ordinal);
+        Assert.Equal(readerBefore, File.ReadAllText(readerPath));
+        Assert.False(File.Exists(NotifyReportOutboxStore.ResolvePath(workspace.SeatRoot, Domain, Team)));
+    }
+
     private sealed class FakeTransportRunner(string agentResponse) : INotifyProcessRunner
     {
         public NotifyProcessResult Run(string fileName, IReadOnlyList<string> arguments)
