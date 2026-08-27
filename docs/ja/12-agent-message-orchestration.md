@@ -468,8 +468,29 @@ message を黙らせず、2 つの outcome を operator が整合できるよう
 
 **活動証拠 (G652 — 1.x を通じた preview)。** 実行中 process は作業の証拠ではありません。herdr では status が `agent_status`、`state_change_seq`、最後の状態変更時刻も示します。`working` には working agent と進行する活動が必要です。sequence baseline がまだない場合、status は `live-idle` を断定せず `activity-unknown` を返します。dispatch 後の状態変更時刻は cold-start の `working` の十分な証拠です。supervision は最初の baseline を live-idle finding なしで記録し、その後に変化しない live-idle recipient に report がなければ一度だけ表示して terminal の確認を remedy として示します。この finding のために terminal content を読んだり recovery に入ったりしません。declared bound が configured interval より小さい場合は、supervise start と各 cycle で structural false alarm warning を出し、CLI が黙って補正する値ではありません。
 
-**report outbox (G653 — 1.x を通じた preview)。** `notify report --write` は transport を試す前に sender-side outbox entry を保存します。entry は task id、result nonce、status、artifact、summary、delivery timestamp を保持し、delivery failure は完了した作業を失わず `undelivered` として残ります。supervision は entry と `notify collect` の remedy を表示するだけで自動送信しません。recipient-side terminal の `ORCH_RESULT` は人間向けの record のままで、intent-cli は terminal を `parse` しません。visible result に arrived report がないときは、recipient を `re-delegate` したり task を `redo` したりせず persisted outbox entry を `collect` します。collection は同じ task id の original report だけを一度送信し、already-delivered entry は拒否します。entry は dispatch generation（result nonce）単位なので、再委譲された task id も新しい report を運べ、unmatched report も message として継続します。undelivered の current generation に対する二回目の report は fail-closed で拒否し、正確な `notify collect` recovery command を示します。
+### delivery 済みだが observable start がない委譲 (G741)
 
+`notify supervise` は、永続的な delivery evidence が
+`delivery_succeeded=true`、recipient が後続 observation でも
+`agent_status=idle`、かつ `--delegation-execution-window-seconds`（default
+`300s`）経過である場合にだけ
+`delegation-delivered-never-executed` を出します。さらに full conjunction として、
+task の canonical report が absent、全 expected artifact source が absent、
+永続的な target-entity transition source が absent でなければなりません。
+seat が working/started、artifact・report・target transition が見える場合は
+non-finding です。
+
+finding には `task_id`、seat、`delivered_at`、使用した window、確認した
+全 source を記録し、delegation の owner role に recorded transport で通知します。
+ただし observation-only であり、key を送らず、dialog に答えず、recipient への再促し・
+再起動、seat の変更、work の再配分を行いません。
+
+これは observable start の proxy であり、seat 内部の opaque な thought を推測するものではありません。
+child が確認できるのは recorded local artifact/event と continuation sources だけで、
+unreadable evidence は fail closed です。この kind を出力しない host は既存の
+supervision state と emission-policy JSON shape を保持します。
+
+**report outbox (G653 — 1.x を通じた preview)。** `notify report --write` は transport を試す前に sender-side outbox entry を保存します。entry は task id、result nonce、status、artifact、summary、delivery timestamp を保持し、delivery failure は完了した作業を失わず `undelivered` として残ります。supervision は entry と `notify collect` の remedy を表示するだけで自動送信しません。recipient-side terminal の `ORCH_RESULT` は人間向けの record のままで、intent-cli は terminal を `parse` しません。visible result に arrived report がないときは、recipient を `re-delegate` したり task を `redo` したりせず persisted outbox entry を `collect` します。collection は同じ task id の original report だけを一度送信し、already-delivered entry は拒否します。entry は dispatch generation（result nonce）単位なので、再委譲された task id も新しい report を運べ、unmatched report も message として継続します。undelivered の current generation に対する二回目の report は fail-closed で拒否し、正確な `notify collect` recovery command を示します。
 新しい委譲を開始する前に、`notify delegate --write` は undelivered report entry がある task を拒否し、supervision finding と同じ `notify collect` command を示します。これにより finding の対象と collect できる entry は一致します。また、report が settled になった task id/result nonce の組も作業開始前に拒否し、fresh `--result-nonce` または新しい task id を要求します。outbox がない open generation は idempotent に再送できます。
 
 **sender-local report routing と executability/actionability 診断 (G719/G731 — preview-through-1.x)。** implementation seat には checkout/worktree 用の境界付き `--add-dir <role-work-root>` を 1 つだけ与え、`--add-dir <host-routing-root>` や MyIntentHost への write access は与えません。canonical report は `--routing-root <host-routing-root> --report-root .` を持ち、host root は read/transport の基準経路、role root は sender-local outbox の write root です。host routing root を実際には書けない seat でも local outbox を保存し、`report_storage_mode: sender-local-role-work-root` と `host_state_sync: deferred-to-orchestration` を示して、orchestration が `intent-cli notify reconcile --domain <d> --team <t> --task-id <id> --routing-root <host> --report-root <role-work-root> --write --format json` で host の pending/continuation state を整合します。host write の retry、hand-write transport、seat boundary の拡大はしません。

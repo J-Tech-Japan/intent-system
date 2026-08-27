@@ -16,6 +16,8 @@ namespace IntentSystem.Cli.Commands;
 internal sealed class NotifyMeasuredSupervisor
 {
     private const int FallbackAbsenceHeadroomSeconds = 60;
+    internal const int DefaultDelegationExecutionWindowSeconds = 300;
+    internal const int MaximumDelegationExecutionWindowSeconds = 86_400;
     private const string DesignRole = "design";
     private const string ObservationConflictKind = "observation-conflict";
 
@@ -48,6 +50,8 @@ internal sealed class NotifyMeasuredSupervisor
     private readonly int? configuredRepeatBackoffSeconds;
     private readonly int? configuredDebounceConsecutiveObservations;
     private readonly Func<DateTimeOffset, IReadOnlyList<NotifySupervisionObservation>>? observationProvider;
+    private readonly int delegationExecutionWindowSeconds;
+    private readonly Func<NotifyPendingDelegation, DateTimeOffset, NotifyDelegationExecutionEvidence>? delegationEvidenceProvider;
     private readonly object supervisionSync = new();
     private readonly object writerSync = new();
 
@@ -80,7 +84,9 @@ internal sealed class NotifyMeasuredSupervisor
         IReadOnlyList<NotifyScopedPromptPolicy>? scopedPolicies = null,
         int? repeatBackoffSeconds = null,
         int? debounceConsecutiveObservations = null,
-        Func<DateTimeOffset, IReadOnlyList<NotifySupervisionObservation>>? observationProvider = null)
+        Func<DateTimeOffset, IReadOnlyList<NotifySupervisionObservation>>? observationProvider = null,
+        int? delegationExecutionWindowSeconds = null,
+        Func<NotifyPendingDelegation, DateTimeOffset, NotifyDelegationExecutionEvidence>? delegationEvidenceProvider = null)
     {
         this.context = context;
         this.routingRoot = routingRoot;
@@ -111,6 +117,10 @@ internal sealed class NotifyMeasuredSupervisor
         this.configuredRepeatBackoffSeconds = repeatBackoffSeconds;
         this.configuredDebounceConsecutiveObservations = debounceConsecutiveObservations;
         this.observationProvider = observationProvider;
+        this.delegationExecutionWindowSeconds = delegationExecutionWindowSeconds is > 0
+            ? Math.Min(delegationExecutionWindowSeconds.Value, MaximumDelegationExecutionWindowSeconds)
+            : DefaultDelegationExecutionWindowSeconds;
+        this.delegationEvidenceProvider = delegationEvidenceProvider;
     }
 
     public NotifySupervisorPass RunOnce() => RunOnce("interval");
@@ -332,6 +342,13 @@ internal sealed class NotifyMeasuredSupervisor
                     ? SessionLayerMode.Agmsg
                     : pending.TransportMode!;
                 var activity = NotifyPendingLiveness.Probe(routingRoot, pending, transportMode, runner, herdrExecutable, agmsgScriptsDirectory, bashExecutable);
+                AddDelegationExecutionObservation(
+                    pending,
+                    activity,
+                    previousCycle,
+                    now,
+                    observations,
+                    warnings);
                 if (!activity.Resolved || activity.Running != true || activity.StateChangeSequence is not { } sequence)
                 {
                     continue;
@@ -1270,6 +1287,127 @@ internal sealed class NotifyMeasuredSupervisor
 
     private bool IsOwnerSubject(string? subjectRole) =>
         string.Equals(subjectRole, ownerRole, StringComparison.Ordinal);
+
+    private void AddDelegationExecutionObservation(
+        NotifyPendingDelegation pending,
+        NotifyPendingLivenessResult activity,
+        NotifySupervisionCycle? previousCycle,
+        DateTimeOffset now,
+        ICollection<NotifySupervisionObservation> observations,
+        ICollection<string> warnings)
+    {
+        if (!activity.Resolved
+            || activity.Running != true
+            || !string.Equals(activity.AgentStatus, "idle", StringComparison.Ordinal)
+            || activity.StateChangeSequence is not { } sequence
+            || pending.ReportArrived)
+        {
+            return;
+        }
+
+        var deliveryEvidence = NotifyDelegationDeliveryStore.Find(
+            routingRoot,
+            pending.Domain,
+            pending.Team,
+            pending.TaskId,
+            pending.ResultNonce);
+        if (!deliveryEvidence.Resolved)
+        {
+            warnings.Add($"delegation-delivery-evidence-unavailable: task '{pending.TaskId}': {deliveryEvidence.Error}");
+            return;
+        }
+
+        if (deliveryEvidence.Evidence is not { DeliverySucceeded: true, DeliveredAt: { } deliveredAt }
+            || now - deliveredAt < TimeSpan.FromSeconds(delegationExecutionWindowSeconds))
+        {
+            return;
+        }
+
+        var paneKey = pending.WorkspaceId is not null && pending.PaneId is not null
+            ? $"activity:{pending.WorkspaceId}:{pending.PaneId}"
+            : $"activity:{pending.RecipientIdentity}";
+        if (previousCycle?.LastObservedStateChangeSequences.ContainsKey(paneKey) != true)
+        {
+            return;
+        }
+
+        NotifyDelegationExecutionEvidence evidence;
+        try
+        {
+            evidence = delegationEvidenceProvider?.Invoke(pending, now)
+                ?? NotifyDelegationExecutionEvidence.Resolve(routingRoot, pending, deliveredAt);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            warnings.Add($"delegation-execution-evidence-unavailable: task '{pending.TaskId}': {exception.Message}");
+            return;
+        }
+
+        if (!evidence.IsResolved
+            || evidence.ExpectedArtifactPresent != false
+            || evidence.TargetEntityTransitionPresent != false)
+        {
+            if (!evidence.IsResolved)
+            {
+                warnings.Add($"delegation-execution-evidence-unavailable: task '{pending.TaskId}': "
+                    + (evidence.Error ?? "one or more evidence sources were unresolved; no finding was emitted."));
+            }
+
+            return;
+        }
+
+        var pendingPath = NotifyPendingDelegationStore.ResolvePath(routingRoot, pending.Domain, pending.Team);
+        var seat = string.IsNullOrWhiteSpace(pending.RecipientIdentity)
+            ? pending.RecipientRole
+            : pending.RecipientIdentity;
+        var window = delegationExecutionWindowSeconds.ToString(CultureInfo.InvariantCulture);
+        var activityObservation =
+            $"activity:{paneKey}: running={activity.Running}; agent_status={activity.AgentStatus}; "
+            + $"state_change_seq={sequence.ToString(CultureInfo.InvariantCulture)}; source={activity.Source}";
+        var checkedSources =
+            $"delivery-evidence:{deliveryEvidence.Path}; pending-store:{pendingPath}; {evidence.ArtifactSource}; {evidence.TargetEntitySource}";
+        var evidenceLines = new List<string>
+        {
+            $"task_id:{pending.TaskId}",
+            $"seat:{seat}",
+            $"delivered_at:{deliveredAt:O}",
+            $"window_seconds:{window}",
+            $"delivery_evidence:success; source={deliveryEvidence.Path}",
+            $"recipient_idle:true; source={activity.Source}; state_change_seq={sequence.ToString(CultureInfo.InvariantCulture)}",
+            $"canonical_report:absent; source={pendingPath}",
+            $"expected_artifact:absent; source={evidence.ArtifactSource}",
+            $"durable_target_entity_transition:absent; source={evidence.TargetEntitySource}",
+        };
+        evidenceLines.AddRange(evidence.ArtifactDetails);
+        evidenceLines.AddRange(evidence.TargetEntityDetails);
+
+        observations.Add(new NotifySupervisionObservation
+        {
+            Key = $"delegation-delivered-never-executed:{pending.TaskId}:{pending.ResultNonce ?? "legacy"}",
+            Kind = "delegation-delivered-never-executed",
+            OwnerRole = pending.DelegatingRole ?? ownerRole,
+            SubjectRole = pending.RecipientRole,
+            Source = "notify-pending-delegation.execution",
+            Summary = $"Delegation task '{pending.TaskId}' was delivered to seat '{seat}' at '{deliveredAt:O}', "
+                + $"but the recipient is idle after the configured {window}s execution-start window. "
+                + $"Canonical report absent, expected artifact absent, and durable target-entity transition absent. "
+                + $"Checked sources: {checkedSources}. This observation is observation-only; it sends no keys, "
+                + "answers no dialog, and restarts no seat; the finding routes to the delegation owner role.",
+            DetectableAt = deliveredAt.AddSeconds(delegationExecutionWindowSeconds),
+            WorkspaceId = pending.WorkspaceId,
+            PaneId = pending.PaneId,
+            Evidence = evidenceLines,
+            ConsultedObservations =
+            [
+                activityObservation,
+                $"delivery-evidence:success; source={deliveryEvidence.Path}; delivered_at={deliveredAt:O}",
+                $"delivery:task_id={pending.TaskId}; delivery_succeeded=true; delivered_at={deliveredAt:O}; source={deliveryEvidence.Path}",
+                $"canonical-report:absent; source={pendingPath}",
+                $"expected-artifact:absent; source={evidence.ArtifactSource}",
+                $"durable-target-entity-transition:absent; source={evidence.TargetEntitySource}",
+            ],
+        });
+    }
 
     private string ResolveWakeTarget(NotifySupervisionObservation observation) =>
         observation.Prompt?.AdjudicationTargetRole
