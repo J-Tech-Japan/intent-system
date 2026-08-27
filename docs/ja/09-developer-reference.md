@@ -2970,91 +2970,90 @@ result は literal bytes の削減、追加した reference bytes、record の n
 `shrink-audit.jsonl` に明記します。`.intent-cli/runs/*.provider.jsonl` は別の provider-run state なので
 scope 外です。`--dry-run` なら manifest、JSONL、audit を書き込まずに測定済み plan だけを確認できます。
 
-### 次リリース準備(v0.24.0)
+### 次リリース準備(v0.24.1)
 
-**`v0.23.2` は出荷済み**(GitHub Release、NuGet、binary、npm)です。公開済みの
-release は [v0.23.2 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.2)
+**`v0.24.0` は出荷済み**(GitHub Release、NuGet、binary、npm)です。公開済みの
+release は [v0.24.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.24.0)
 に記録されています。この published GitHub Release とその tag が shipped evidence の
-authoritative source ですが、tracked な EN/JA の `release-notes-v0.23.2.md` にはまだ
-`PREPARED / NOT PUBLISHED` banner が残っています。この source-note inconsistency はこの roll
-より前から存在し、出荷済み v0.23.2 note の修正は scope 外です。後続の明示的な remediation で
-扱います。child source tree には tracked な `release-notes-v0.23.1.md` がなく、この roll で
-出荷済み note を再作成・編集しません。
+authoritative source です。v0.24.0 の shipped real-install identity は
+`intent-cli 0.24.0-df472fe-G737` で、source revision
+`df472fe5663c1a8b3682959aab6fbbf93c4d76ef` から測定しました。
+この v0.24.0 line は installed 0.23.2 CLI と比較して測定しました。
+tracked な EN/JA の `release-notes-v0.24.0.md` はこの roll で変更せず、前回の
+prepare-only notes に由来する `PREPARED / NOT PUBLISHED` banner を保持します。この
+source-note inconsistency はこの roll より前から存在し、出荷済み v0.24.0 note の修正は
+scope 外です。後続の明示的な remediation で扱います。
+
+公開済みの `v0.23.2` release も authoritative shipped evidence ですが、tracked な EN/JA の
+`release-notes-v0.23.2.md` にはまだ `PREPARED / NOT PUBLISHED` banner が残っています。
+この source-note inconsistency はこの roll より前から存在し、出荷済み v0.23.2 note の修正は
+scope 外です。後続の明示的な remediation で扱います。child source tree には tracked な
+`release-notes-v0.23.1.md` がなく、この roll で出荷済み note を再作成・編集しません。
 公開済みの [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0)
 とその tag は authoritative shipped evidence です。v0.23.0 の shipped artifact は GitHub Release、
 NuGet package、自己完結型バイナリです。ただし npm leg は registry に到達しなかったため、
 `0.23.0` は npm で利用できると扱ってはいけません。tracked な EN/JA の
 `release-notes-v0.23.0.md` files はこの shipped-artifact status を記録します。
-[v0.24.0 prepare-only notes](release-notes-v0.24.0.md) が実質的な次の line です。不要になった
-v0.23.3 DRAFT stub は、競合する line を残さないため、この release-prep unit で削除しました。
+[v0.24.1 DRAFT](release-notes-v0.24.1.md) が次の line の空の placeholder です。
+`0.24.1` は placeholder にすぎません。release-prep will replace the stub after
+next real release line の測定が完了し、この file は changelog ではありません。
 
-post-release roll は feature content が入る前に `nextVersion` を `0.23.3` placeholder として記録しました。
-Release-prep は、測定した line に `notify supervise shrink` と
-`session-layer topology record-host-state` が追加され、installed 0.23.2 CLI には無いため、`0.24.0` に retarget します。
-六つの release unit と除外した G730 roll は v0.24.0 notes で account します。
+Rolled policy: `stableVersion → 0.24.0`; `nextVersion → 0.24.1`。
 
-Rolled policy: `stableVersion → 0.23.2`; `nextVersion → 0.24.0`。
-
-次の line の package identity は `JTechJapan.IntentSystem.Cli.0.24.0.nupkg` です。
+次の line の package identity は `JTechJapan.IntentSystem.Cli.0.24.1.nupkg` です。
 これは導出された verification value であり、release content ではありません。
 
-**`v0.24.0` のリリース準備検証:**
+**`v0.24.1` のリリース準備検証:**
 
-この prepare-only unit が変更するのは version policy、実質的な EN/JA v0.24.0 notes、この readiness section、
-release-note/version tests、そして superseded v0.23.3 stub の削除です。tag または Release を作成せず、package を publish せず、
-credentials を扱わず、post-release roll を実行しません。
-
-Functional prepared head はこの release-prep unit の外側です。正確な Release identity evidence の source revision は
-`a7d10026a9a4dd2693f464a5c5e34ce134b2c661`、そこから生成された display identity は
-`intent-cli 0.23.3-a7d1002-G734` です。この unit が policy を retarget する前の測定値であり、eventual v0.24.0 tag はこの documentation merge commit の後です。
+この post-release roll が変更するのは version policy、次の line の空の stub、両言語 mirror の readiness section、
+そして必要な release-note/version test pin だけです。tag または Release を作成せず、package を publish せず、
+credentials を扱わず、未リリースの placeholder line の feature notes を author しません。次の real release number は
+measurement に基づく release-prep の decision のままです。
 
 claims-enabled host では、release-prep operator がこれらの artifact を編集する前に current release-prep scope を acquire / verify します。
 この child PR は host-state command を実行しません:
 
 ```bash
-intent-cli claim acquire --scope release-prep:<owner/repo>:0.24.0 --actor <actor> --team <team> --write --format json
-intent-cli claim verify --scope release-prep:<owner/repo>:0.24.0 --team <team> --format json
+intent-cli claim acquire --scope release-prep:<owner/repo>:0.24.1 --actor <actor> --team <team> --write --format json
+intent-cli claim verify --scope release-prep:<owner/repo>:0.24.1 --team <team> --format json
 ```
 
 ```bash
-# 1. retarget 済み policy、実在する v0.24.0 notes、削除した stub を確認。
-cat eng/version.json   # stableVersion 0.23.2 (published), nextVersion 0.24.0 (next line)
-test -f docs/en/release-notes-v0.24.0.md
-test -f docs/ja/release-notes-v0.24.0.md
-test ! -e docs/en/release-notes-v0.23.3.md
-test ! -e docs/ja/release-notes-v0.23.3.md
+# 1. roll 済み policy と、内容のない両言語 DRAFT stub を確認。
+cat eng/version.json   # stableVersion 0.24.0 (published), nextVersion 0.24.1 (placeholder)
+test -f docs/en/release-notes-v0.24.1.md
+test -f docs/ja/release-notes-v0.24.1.md
 
-# 2. first-parent inventory と prepared functional identity を記録。
-git log --first-parent v0.23.2..main
-git rev-list --first-parent --count v0.23.2..main
+# 2. 次の line の表示バージョン形式を build して確認。
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-#   prepared functional head: a7d10026a9a4dd2693f464a5c5e34ce134b2c661
-#   identity from that revision: intent-cli 0.23.3-a7d1002-G734
+#   期待する形: intent-cli 0.24.1-<sha>-G<unit>
 
-# 3. installed 0.23.2 CLI を read-only で実行して freshness evidence を残す。
+# 3. 同期済み checkout から installed G725 detector を read-only で実行。
 intent-cli automation stalled-work --domain intent-cli --repo J-Tech-Japan/intent-system --format json
-#   silent verdict と checkout_freshness/provenance statement の両方を記録。
+#   version-roll-required が silent であること、checkout commit、
+#   checkout_freshness/provenance statement を記録する。stale な checkout を evidence として扱わない。
 
-# 4. shipped-note check を正直に記録: source v0.23.2 note は未変更だが、公開済み
-#    Release にもかかわらず PREPARED / NOT PUBLISHED banner が残る。
-git diff --quiet -- docs/en/release-notes-v0.23.2.md docs/ja/release-notes-v0.23.2.md
-grep -n "PREPARED / NOT PUBLISHED" docs/en/release-notes-v0.23.2.md
-grep -n "PREPARED / NOT PUBLISHED" docs/ja/release-notes-v0.23.2.md
-gh release view v0.23.2 --repo J-Tech-Japan/intent-system
+# 4. shipped-note check を正直に記録: source v0.24.0 note は未変更だが、
+#    PREPARED / NOT PUBLISHED banner を保持する。
+git diff --quiet -- docs/en/release-notes-v0.24.0.md docs/ja/release-notes-v0.24.0.md
+grep -n "PREPARED / NOT PUBLISHED" docs/en/release-notes-v0.24.0.md
+grep -n "PREPARED / NOT PUBLISHED" docs/ja/release-notes-v0.24.0.md
+gh release view v0.24.0 --repo J-Tech-Japan/intent-system
 
-# 5. targeted release-prep guard と full Release suite を実行。
+# 5. focused な documentation/version guard、diff check、full Release suite を実行。
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release \
   --filter "FullyQualifiedName~ReleaseNotesV0240DocsTests|FullyQualifiedName~ReleasePackageMetadataTests|FullyQualifiedName~VersionSourcePolicyGuardTests|FullyQualifiedName~ReleaseNotesV0220DocsTests|FullyQualifiedName~ReleaseNotesV0230DocsTests|FullyQualifiedName~ReleaseNotesV0232DocsTests|FullyQualifiedName~ReleaseNotesV0210DocsTests|FullyQualifiedName~ReleaseNotesV0190DocsTests|FullyQualifiedName~ReleaseNotesV0180DocsTests|FullyQualifiedName~ReleaseNotesV0170DocsTests|FullyQualifiedName~ReleaseNotesV061DocsTests"
 git diff --check
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj -c Release
 ```
 
-Targeted と full Release の test count は、final documentation edit 後の v0.24.0 notes に貼り付けます。
-この prepare-only unit は [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
+Targeted と full Release の test count は final PR head と一緒に report します。
+この post-release roll は [リリース後の version roll](#リリース後の-version-rollg554--必須即時) の
 **ステップ 5–7** に従います。**同一コミットに DRAFT note スタブ**(ステップ 5)、
 **「次リリース準備」section を ja/en 両ミラーで新しいラインへ更新**(ステップ 6)、
-そして **roll 後の child main CI green 確認**(ステップ 7)が完了条件です。既存の release tag、Release、package、workflow、post-release roll は変更しません。
+そして **roll 後の child main CI green 確認**(ステップ 7)が完了条件です。既存の release tag、Release、package、workflow、
+shipped note file は変更しません。
 
 ### 削除済みリリースタグ（`v0.3.3`）の再作成
 
