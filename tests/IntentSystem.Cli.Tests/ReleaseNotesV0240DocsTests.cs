@@ -169,14 +169,15 @@ public sealed class ReleaseNotesV0240DocsTests
     {
         var root = RepoVersionPolicySource.RepoRoot();
         var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.24.0", policy.StableVersion);
-        Assert.Equal("0.25.0", policy.NextVersion);
+        Assert.Equal("0.25.0", policy.StableVersion);
+        Assert.Equal("0.25.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.24.0.md")));
             Assert.False(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.24.1.md")));
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.25.0.md")));
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.25.1.md")));
 
             var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
             Assert.Contains("0.24.0", reference, StringComparison.Ordinal);
@@ -185,10 +186,10 @@ public sealed class ReleaseNotesV0240DocsTests
             Assert.Contains("release-notes-v0.25.0.md", reference, StringComparison.Ordinal);
             Assert.DoesNotContain("release-notes-v0.24.1.md", reference, StringComparison.Ordinal);
             Assert.Contains(
-                language == "en" ? "Next release readiness (v0.25.0)" : "次リリース準備(v0.25.0)",
+                language == "en" ? "Next release readiness (v0.25.1)" : "次リリース準備(v0.25.1)",
                 reference,
                 StringComparison.Ordinal);
-            Assert.Contains("intent-cli 0.24.0-df472fe-G737", reference, StringComparison.Ordinal);
+            Assert.Contains("intent-cli 0.25.0-74a1c72-G741", reference, StringComparison.Ordinal);
             Assert.Contains("ReleasePackageMetadataTests", reference, StringComparison.Ordinal);
             Assert.Contains("VersionSourcePolicyGuardTests", reference, StringComparison.Ordinal);
         }

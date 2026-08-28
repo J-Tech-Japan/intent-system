@@ -2728,7 +2728,7 @@ literal:
 ```
 
 The shape is written with placeholders on purpose: **read the actual values from
-`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0250)
+`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0251)
 for the line currently being cut. A worked example here would be a second copy
 of the version pair that goes stale on the next roll — the defect G557/G560
 exist to remove.
@@ -2934,37 +2934,42 @@ rotated by this command; the result and `shrink-audit.jsonl` say so explicitly.
 out of scope. Use `--dry-run` to inspect the measured plan without writing the
 manifest, JSONL files, or audit.
 
-### Next release readiness (v0.25.0)
+### Next release readiness (v0.25.1)
 
-**v0.24.0 shipped evidence:** the shipped baseline is
-intent-cli 0.24.0-df472fe-G737 from source revision
-df472fe5663c1a8b3682959aab6fbbf93c4d76ef. The tracked EN and JA
-release-notes-v0.24.0.md files are unchanged. The prior G740 roll's 0.24.1
-value was a placeholder only; its DRAFT stubs are removed by this preparation.
-The active note file is [release-notes-v0.25.0.md](release-notes-v0.25.0.md).
-The v0.24.0 GitHub Release and tag are authoritative shipped evidence.
-The untouched shipped-note files retain their `PREPARED / NOT PUBLISHED` banner.
+**v0.25.0 shipped evidence:** the shipped baseline is
+intent-cli 0.25.0-74a1c72-G741 from source revision
+74a1c722291a6a45a580221dcf8a9a8ad4e4d831. The tracked EN and JA
+release-notes-v0.25.0.md files are unchanged by this post-release roll.
+The prior v0.24.0 shipped-note files, release-notes-v0.24.0.md in both mirrors, remain historical evidence.
+The v0.25.1 line is a placeholder only; its DRAFT stubs are replaceable
+planning scaffolds and are not a changelog. Release-prep will replace them
+after measuring and deciding the next real release number.
+The active note file is [release-notes-v0.25.1.md](release-notes-v0.25.1.md).
+The v0.25.0 GitHub Release and tag are authoritative shipped evidence.
+The shipped-note files remain untouched by this post-release roll.
+The untouched shipped-note files retain their **PREPARED / NOT PUBLISHED** banner.
 The source-note inconsistency predates this roll; correcting it is out of scope and must be handled by a later explicitly scoped remediation.
-The comparison also used the installed 0.23.2 CLI. The shipped-note check records checkout_freshness/provenance.
-Rolled policy: `stableVersion → 0.24.0`; `nextVersion → 0.25.0`.
-The next-line package identity is `JTechJapan.IntentSystem.Cli.0.25.0.nupkg`; this is a derived verification value, not release content.
+The real-install verification reported intent-cli 0.25.0-74a1c72-G741; checkout freshness/provenance is recorded with this roll.
+The comparison also used the installed 0.23.2 CLI; the shipped-note check records checkout_freshness/provenance.
+Rolled policy: `stableVersion → 0.25.0`; `nextVersion → 0.25.1` (placeholder only).
+The next-line package identity is `JTechJapan.IntentSystem.Cli.0.25.1.nupkg`; this is a placeholder verification value, not a release decision.
 The release-prep check creates no tag or Release, publishes no package, and handles no credentials.
-The host-only claim boundary is `release-prep:<owner/repo>:0.25.0`; this child does not inspect host state.
+The host-only claim boundary is `release-prep:<owner/repo>:0.25.1`; this child does not inspect host state.
 The published [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0) and its tag are authoritative shipped evidence.
 The v0.23.0 shipped artifacts are the GitHub Release, NuGet package, and self-contained binaries; its npm leg never reached the registry, so `0.23.0` must not be treated as available from npm.
 The tracked EN and JA `release-notes-v0.23.0.md` files now state this shipped-artifact status.
 
 
 
-**Measured v0.25.0 reason and built identity:** the exact prepared functional
+**Previous v0.25.0 preparation evidence (retained for provenance):** the exact prepared functional
 head is 5c4af5d88ddcfa47335bad4df56ad3e40dae9140. Its Release build reports
 intent-cli 0.24.1-5c4af5d-G741; installed intent-cli reports
 intent-cli 0.24.0-df472fe-G737. The two new options are
 session-layer topology record --model <text>,
 session-layer topology record --reasoning-effort <text>, and
 notify supervise --delegation-execution-window-seconds <seconds>
-(default 300). That measured command-surface difference is the auditable
-reason for stableVersion 0.24.0 / nextVersion 0.25.0.
+(default 300). That measured command-surface difference was the auditable
+reason for the prior stableVersion 0.24.0 / nextVersion 0.25.0 preparation.
 
 ```bash
 intent-cli --version
@@ -2994,8 +2999,8 @@ non-failing. G741 reports a delivered-but-never-observably-started delegation
 only for the full six-part conjunction; slow-but-started work is not a finding,
 and the classifier is observation-only. Six motivating incidents are recorded
 without naming a seat.
-The closeout retains **DRAFT note stubs in the same commit** (step 5), the readiness section **refreshed to the new line in both language mirrors** (step 6), and the **post-roll green child-main CI check** before the roll counts as complete (step 7).
-This is the prepare-only release-prep packet; the next real release number remains a measurement decision.
+The preceding v0.25.0 preparation recorded **DRAFT note stubs in the same commit** (step 5), **refreshed to the new line in both language mirrors** (step 6), and required the **post-roll green child-main CI check** before the roll counts as complete (step 7).
+This post-release roll keeps the next real release number as a measurement decision; 0.25.1 is only a placeholder.
 
 The readiness guards retained from prior release lines are ReleaseNotesV0180DocsTests, ReleaseNotesV0190DocsTests, and ReleaseNotesV0170DocsTests.
 This post-release roll follows **steps 5–7** of the post-release version roll; existing release tags, Releases, packages, workflows, and shipped note files remain unchanged.
@@ -3014,11 +3019,12 @@ git diff --check
 
 Targeted release-prep guards: 40 passed, 0 failed, 0 skipped (40 total).
 Dedicated G613 JA terminology guard: 6 passed, 0 failed, 0 skipped (6 total).
-Adjacent tests: 14 passed, 0 failed, 0 skipped (14 total).
-Full Release suite: 5261 passed, 0 failed, 1 skipped (5262 total).
-`eng/version.json` must remain exactly stableVersion 0.24.0 and
-nextVersion 0.25.0. No tag, GitHub Release, package publish, post-release roll,
-or source runtime change belongs to this preparation.
+Adjacent release tests: 50 passed, 0 failed, 0 skipped (50 total).
+Full Release suite: 5268 passed, 0 failed, 1 skipped (5269 total).
+`eng/version.json` is now exactly stableVersion 0.25.0 and
+nextVersion 0.25.1. The 0.25.1 value is a placeholder only; release-prep
+must measure and decide the next real release number. No tag, GitHub Release,
+package publish, or source runtime change belongs to this post-release roll.
 ### Re-creating a deleted release tag (`v0.3.3`)
 
 `v0.3.3` was tagged too early and the tag was deleted. **Only re-create the
