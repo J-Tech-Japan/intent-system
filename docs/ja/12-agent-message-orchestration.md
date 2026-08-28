@@ -871,10 +871,10 @@ duplicate wake が出ることを確認しました。この attribution は tea
 長時間動作する supervisor の live history を、evidence を捨てずに bounded にするには
 `intent-cli notify supervise archive --domain <domain> --team <team>
 [--live-window-days <days>] --write --format json` を使います。既定の live window は
-7 日です。G744 の契機になった incident は 14 日で約 96,000 records を蓄積しました。
-そのため 1 週間なら同じ rate でも約半分だけが small file に残り、GitHub の 100 MB
-file limit に対して headroom を持ちます。team の cadence や retention に理由がある
-場合は positive な日数を設定できます。
+7 日です。観測された live file は 111.5 MB に達し、この incident は約 14 日間で約 96,000
+records を蓄積しました。そのため、同じ rate で既定の 7 日 live window を保つと、その観測 volume の
+約半分が live に残り、GitHub の 100 MB tracking limit を十分下回ります。team の cadence や retention に
+理由がある場合は positive な日数を設定できます。
 
 この command は UTC cutoff より古い cycle と prompt-audit record を
 `.intent-cli/supervision/<domain>/<team>/cycles.jsonl` から

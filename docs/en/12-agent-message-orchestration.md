@@ -1029,11 +1029,11 @@ recovery authority.
 A team with a long-running supervisor can bound the tracked live history without
 discarding evidence. Use `intent-cli notify supervise archive --domain <domain>
 --team <team> [--live-window-days <days>] --write --format json`. The default
-live window is 7 days. The incident that motivated G744 accumulated about 96,000
-records over 14 days; at the observed rate, keeping one week live leaves roughly
-half the records in the small file and comfortable headroom below GitHub's 100 MB
-file limit. The positive window is configurable when a team's cadence or retention
-needs justify a different value.
+live window is 7 days. The observed live file reached 111.5 MB while the incident
+accumulated approximately 96,000 records over approximately 14 days; therefore the
+default seven-day live window retains roughly half of that observed volume live and
+remains comfortably below GitHub's 100 MB tracking limit. The positive window is
+configurable when a team's cadence or retention needs justify a different value.
 
 The command moves cycle and prompt-audit records older than the UTC cutoff from
 `.intent-cli/supervision/<domain>/<team>/cycles.jsonl` into
