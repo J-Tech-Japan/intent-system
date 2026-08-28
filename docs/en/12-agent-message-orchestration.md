@@ -539,11 +539,14 @@ recipient is still running and its observed `agent_status` is one of `idle` or
 observed recipient state set is intentionally these two settled states: `idle`
 means the seat never started, while `done` means it completed a turn without
 producing the delegated work. `working` remains positive started-work evidence;
-other or unresolved states do not satisfy this finding. The full conjunction
-also requires the canonical report for the task to be absent, every expected
-artifact source to be absent, and the durable target-entity transition source
-to be absent. A working/started seat, visible artifact, report, or target
-transition is a non-finding.
+`blocked` is deliberately excluded because it represents an explicit impediment
+requiring its own handling and evidence, not proof that the delegation silently
+stopped without executing. `unknown` is deliberately excluded because an
+unobservable seat must never be claimed stopped. Other or unresolved states do
+not satisfy this finding. The full conjunction also requires the canonical
+report for the task to be absent, every expected artifact source to be absent,
+and the durable target-entity transition source to be absent. A working/started
+seat, visible artifact, report, or target transition is a non-finding.
 
 The finding names `task_id`, seat, `delivered_at`, the window, and every
 checked source. It wakes the delegation's owner role through the recorded

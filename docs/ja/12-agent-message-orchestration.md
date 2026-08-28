@@ -482,7 +482,10 @@ non-finding です。
 
 recipient activity の観測 state set は `idle` と `done` の 2 つです。`idle` は
 開始されなかった seat、`done` は turn を完了したが delegated work を生成しなかった
-seat を表します。`working` は開始済みの証拠のままであり、その他または解決できない
+seat を表します。`working` は開始済みの証拠のままです。`blocked` は明示的な
+impediment であり、専用の handling と evidence が必要で、delegation が実行されずに
+黙って停止した証拠ではないため、意図的に除外します。`unknown` も観測できない seat を
+停止したと決めつけてはいけないため、意図的に除外します。その他または解決できない
 state はこの finding の条件を満たしません。
 
 finding には `task_id`、seat、`delivered_at`、使用した window、確認した
