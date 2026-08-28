@@ -403,15 +403,64 @@ preserving existing file content:
 .intent-cli/**/*.jsonl merge=union
 ```
 
+The first pair gives append-only JSONL stores union-merge behaviour. Supervision
+cycle history is a separate directory-local CLI-owned rule, not a root-level
+repository ignore:
+
 ```gitignore
-.intent-cli/supervision/**/cycles.jsonl
-.intent-cli/supervision/**/stalls.jsonl
+# .intent-cli/supervision/.gitignore
+**/cycles.jsonl
+**/cycles-archive/
 ```
 
-The first pair gives append-only JSONL stores union-merge behaviour; the second
-keeps per-team supervision telemetry out of git. For an already initialised
-host, `intent init` prints these exact lines as guidance and changes neither
-`.gitattributes` nor `.gitignore`; migration is always an explicit operator act.
+Only cycle history is runtime-local. The per-team `stalls.jsonl`, `bound.json`,
+`emission-policy.json`, `evidence-definitions.json`, `pre-approval-policy.json`,
+and `shrink-audit.jsonl` remain trackable shared policy/manifest state. The
+former root-level entries `.intent-cli/supervision/**/cycles.jsonl` and
+`.intent-cli/supervision/**/stalls.jsonl` are legacy paths, not the current
+ownership policy; in particular, stalls must remain trackable.
+
+For an already initialised host, `intent init` does not migrate tracked data.
+Run the canonical named repair for the domain and team instead:
+
+```bash
+intent-cli notify supervise repair-cycle-history --domain <domain> --team <team> --write --format json
+```
+
+The repair adds the directory-local rule, removes only cycle-history paths from
+the git index while preserving the files on disk, and removes the obsolete
+root-level supervision rules. It reports preserved paths and leaves shared
+policy/manifest state trackable. Operators should use this command rather than
+hand-editing repository state. The repair does not change what supervision
+reads or writes.
+
+## Runtime-local supervision cycle history (G750 — preview-through-1.x)
+
+Supervision cycle history is CLI-owned runtime-local state because all readers
+are same-host readers and each cycle record includes the OS process id. A
+different checkout or host does not need to merge this per-process history as
+shared policy. This ownership boundary is intentionally narrower than “all
+supervision telemetry”: `stalls.jsonl`, `bound.json`, `emission-policy.json`,
+`evidence-definitions.json`, `pre-approval-policy.json`, and `shrink-audit.jsonl`
+remain shared, trackable, and reviewable.
+
+Fresh `intent init --write` creates `.intent-cli/supervision/.gitignore` with
+only `**/cycles.jsonl` and `**/cycles-archive/`. The CLI also maintains that
+file when it writes cycle history. The ignore does not change emission rate,
+event mode, archive semantics, or the supervision read/write contract. A host
+that already tracks cycle history uses the canonical
+`notify supervise repair-cycle-history` command above; it preserves every
+cycle file and repairs repository tracking without requiring a manual index
+operation.
+
+This is ownership repair, not compaction: G734 `notify supervise shrink` keeps
+all records while compacting existing state in place, whereas G750 only changes
+which cycle-history paths are CLI-owned runtime-local files. G751 remains the
+separate later unit for write-rate design and is not part of this change.
+
+> **Preview through 1.x (G750).** Directory-local cycle-history ownership and
+> its named repair command are post-freeze preview behavior outside the 1.0
+> compatibility promise.
 
 ## Canonical notify workflow
 

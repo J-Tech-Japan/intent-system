@@ -39,9 +39,12 @@ internal static class IntentInitCommand
 
     internal static readonly IReadOnlyList<string> SupervisionTelemetryGitIgnoreLines =
     [
-        ".intent-cli/supervision/**/cycles.jsonl",
-        ".intent-cli/supervision/**/stalls.jsonl",
+        // Retained as an empty compatibility surface for callers that rendered
+        // the former root-level G661 rules. Supervision ownership is now
+        // directory-local.
     ];
+
+    internal const string SupervisionLocalIgnoreRelativePath = ".intent-cli/supervision/.gitignore";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -112,7 +115,7 @@ internal static class IntentInitCommand
         if (freshHost)
         {
             planned.Add(".gitattributes");
-            planned.Add(".gitignore");
+            planned.Add(SupervisionLocalIgnoreRelativePath);
         }
 
         var written = new List<string>();
@@ -121,17 +124,41 @@ internal static class IntentInitCommand
         foreach (var relativePath in planned)
         {
             var absolutePath = ResolveHostPath(hostRepoRoot, relativePath);
-            if (freshHost && relativePath is ".gitattributes" or ".gitignore")
+            if (freshHost && relativePath == ".gitattributes")
             {
-                var requiredLines = relativePath == ".gitattributes"
-                    ? AppendOnlyGitAttributesLines
-                    : SupervisionTelemetryGitIgnoreLines;
+                var requiredLines = AppendOnlyGitAttributesLines;
                 if (!request.Write)
                 {
                     continue;
                 }
 
                 if (AppendMissingLines(absolutePath, requiredLines))
+                {
+                    written.Add(relativePath);
+                }
+                else
+                {
+                    existing.Add(relativePath);
+                }
+                continue;
+            }
+            if (freshHost && relativePath == SupervisionLocalIgnoreRelativePath)
+            {
+                if (!request.Write)
+                {
+                    continue;
+                }
+
+                var ignoreResult = NotifySupervisionStore.EnsureCycleHistoryIgnore(
+                    Path.Combine(hostRepoRoot, CliRuntimeContracts.DefaultSupervisionArtifactRoot),
+                    write: true);
+                if (ignoreResult.Error is not null)
+                {
+                    throw new InvalidOperationException(
+                        $"Could not create the supervision cycle-history ignore at '{ignoreResult.Path}': {ignoreResult.Error}");
+                }
+
+                if (ignoreResult.Applied)
                 {
                     written.Add(relativePath);
                 }
@@ -174,9 +201,12 @@ internal static class IntentInitCommand
             FreshHost = freshHost,
             GitAttributesLines = AppendOnlyGitAttributesLines,
             GitIgnoreLines = SupervisionTelemetryGitIgnoreLines,
+            SupervisionIgnorePath = ResolveHostPath(hostRepoRoot, SupervisionLocalIgnoreRelativePath),
+            SupervisionIgnoreLines = NotifySupervisionStore.CycleHistoryIgnoreLines,
             ExistingHostGuidance =
-                "Existing hosts are never auto-migrated. Add the exact .gitattributes and .gitignore lines "
-                + "reported by this command deliberately, then commit and push them if adopted.",
+                "Existing hosts are never auto-migrated by intent init. Run "
+                + "`intent-cli notify supervise repair-cycle-history --domain <domain> --team <team> --write --format json` "
+                + "as the canonical migration; it preserves cycle files and makes the shared policy state trackable.",
         };
     }
 
@@ -245,8 +275,8 @@ internal static class IntentInitCommand
         steps.Add($"Use `intent-cli interview record-answer --write` (chat-first) to durably record durable Q/A for '{domain}'.");
         steps.Add($"Use `intent-cli intent next-slice --domain {domain} --dry-run` to plan the first publishable slice.");
         steps.Add(freshHost
-            ? "Fresh-host git defaults include merge=union for append-only .intent-cli JSONL stores, then .intent-cli/claims/** -merge so claims never union-merge, plus ignores for supervision cycles/stalls telemetry. Commit and push those repo policy files with the host scaffold."
-            : "Existing host detected: no .gitattributes or .gitignore migration was performed. Add `.intent-cli/claims/** -merge` after broad union rules, together with the other exact reported lines, only through an explicit reviewed commit; intent-cli never auto-migrates them.");
+            ? "Fresh-host git defaults include merge=union for append-only .intent-cli JSONL stores, then .intent-cli/claims/** -merge so claims never union-merge. The directory-local .intent-cli/supervision/.gitignore ignores cycle history only; shared stalls and policy manifests remain trackable."
+            : "Existing host detected: no supervision migration was performed by intent init. Run `intent-cli notify supervise repair-cycle-history --domain <domain> --team <team> --write --format json` for the canonical cycle-history migration; intent-cli preserves the files and shared policy state.");
         steps.Add("Run this command from the parent host repository, never inside `.intent-cli/worktrees/**`.");
 
         return steps;
