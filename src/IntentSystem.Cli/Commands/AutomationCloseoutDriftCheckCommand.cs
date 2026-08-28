@@ -39,6 +39,10 @@ internal static class AutomationCloseoutDriftCheckCommand
     internal const string ReasonAmbiguousMapping = "ambiguous-pr-mapping";
     internal const string ReasonNoLinkedPr = "no-linked-pr";
     internal const string ReasonLookupFailed = "pr-lookup-failed";
+
+    /// <summary>G746: duplicate execution-unit queue entries block closeout until state-doctor reconciles them.</summary>
+    internal const string ReasonDuplicateQueueItem = "duplicate-queue-item";
+
     internal const string ReasonMissingClosingIssueLinkage = "missing-closing-issue-linkage";
     internal const string ReasonClosingIssueMismatch = "closing-issue-mismatch";
 
@@ -131,20 +135,54 @@ internal static class AutomationCloseoutDriftCheckCommand
             return 0;
         }
 
+        // ---- duplicate-queue-item (G746) ------------------------------------
+        // A duplicate unit is withheld from closeout evaluation. The canonical
+        // repair belongs to state-doctor, so closeout reports the unit and
+        // continues checking every non-duplicated unit.
+        var duplicateGroups = DuplicateQueueItemRules.Analyze(
+            queueState.Items
+                .Select((item, index) => DuplicateQueueItemRules.FromQueueItem(item, index))
+                .ToArray());
+        var duplicateUnits = duplicateGroups
+            .Select(group => group.ExecutionUnit)
+            .ToHashSet(StringComparer.Ordinal);
+        var records = new List<CloseoutDriftRecord>();
+        var warnings = new List<string>();
+
+        foreach (var group in duplicateGroups)
+        {
+            var competingEntries = DuplicateQueueItemRules.FormatCompetingEntries(group);
+            var resolution = group.Winner is null
+                ? "entries are incomparable or equivalent; state-doctor will fail closed"
+                : $"entry[{group.Winner.Index}] is strictly more informative; run state-doctor --write for the canonical repair";
+            records.Add(new CloseoutDriftRecord
+            {
+                ExecutionUnit = group.ExecutionUnit,
+                Result = ResultUnsafeStop,
+                ReasonCode = ReasonDuplicateQueueItem,
+                Explanation = $"queue-state contains {group.Entries.Count} entries for execution unit '{group.ExecutionUnit}'; closeout is withheld because {resolution}. Competing full entries:\n{competingEntries}",
+                LinkedPrNumber = null,
+                LinkedIssueNumber = null,
+                CompetingEntries = group.Entries.Select(entry => entry.FullEntryJson).ToArray(),
+            });
+        }
+
         // ── Pass 1 (G356): non-Completed items that have a linked_pr ───────
         var pass1Candidates = queueState.Items
             .Where(item => item.State != QueueItemState.Completed
+                && !duplicateUnits.Contains(item.ExecutionUnit)
                 && !string.IsNullOrWhiteSpace(item.LinkedPr))
             .ToList();
 
         // ── Pass 2 (G358): non-Completed items with linked_issue but no linked_pr ──
         var pass2Candidates = queueState.Items
             .Where(item => item.State != QueueItemState.Completed
+                && !duplicateUnits.Contains(item.ExecutionUnit)
                 && item.LinkedIssue?.Number is { } n and > 0
                 && string.IsNullOrWhiteSpace(item.LinkedPr))
             .ToList();
 
-        if (pass1Candidates.Count == 0 && pass2Candidates.Count == 0)
+        if (pass1Candidates.Count == 0 && pass2Candidates.Count == 0 && records.Count == 0)
         {
             var empty = new CloseoutDriftCheckResult
             {
@@ -185,8 +223,6 @@ internal static class AutomationCloseoutDriftCheckCommand
 
         var prLookup = PrLookupFactory?.Invoke() ?? new GhCliGitHubPrLookup();
         var issueLookup = IssueLookupFactory?.Invoke() ?? new GhCliGitHubIssueClosingPrLookup();
-        var records = new List<CloseoutDriftRecord>();
-        var warnings = new List<string>();
 
         // Items whose linked_pr URL couldn't be parsed → skipped.
         foreach (var item in itemsWithoutPrNumber)
@@ -751,6 +787,10 @@ internal sealed record CloseoutDriftRecord
 
     [JsonPropertyName("linked_issue_number")]
     public int? LinkedIssueNumber { get; init; }
+
+    [JsonPropertyName("competing_entries")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? CompetingEntries { get; init; }
 
     /// <summary>
     /// G358: for records where <c>linked_pr</c> was absent in queue-state and

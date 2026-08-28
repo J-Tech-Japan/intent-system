@@ -3081,3 +3081,25 @@ Full Release suite: 5268 passed, 0 failed, 1 skipped (5269 total)。
 
 両修正を含むコミットで green な CI 実行を得る前に再タグすると、元の失敗したリリースジョブが
 再現します。
+
+### G746: 重複 queue item は recoverable であり impossible ではない (duplicates are recoverable, not impossible)
+
+queue-state は順序付きリストですが、queue item の identity は
+`execution_unit` です。`automation closeout-drift-check` は GitHub lookup
+の前にこの identity ごとに entry をまとめます。重複しているすべての unit
+を `duplicate-queue-item` として報告し、両方の full competing entries を
+出力し、その unit の closeout だけを保留して、残りの drift check を継続
+します。Dictionary.Add による未処理例外で command が停止してはいけません。
+
+`automation state-doctor` も同じ finding を報告します。`--write` で削除
+できるのは、他のすべての entry より **strictly more informative** な entry
+が一つだけの場合に限ります。より進んだ lifecycle state、または相手にない
+`linked_pr`/`linked_issue` を持ち、保持する entry から情報を失わない場合です。
+byte-identical/equivalent または incomparable な entry は unsafe stop とし、
+unit 名と full competing entries を示して mutation を行いません。operator
+が competing fields を整理してから canonical command を再実行します。
+
+この修復により duplicate queue item は **recoverable であり、impossible
+ではありません**。queue-state を手編集してはいけません。対象は重複の報告と
+strict dominance による安全な整理だけであり、concurrent-write prevention、
+locking、CAS、queue schema の変更は別の作業です。
