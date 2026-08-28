@@ -159,7 +159,16 @@ internal static class AutomationStateDoctorCommand
         var warnings = new List<string>();
         if (string.Equals(mode, AutomationStateDoctorModes.Write, StringComparison.Ordinal))
         {
-            findings = ApplyHighConfidenceRepairs(hostContext, findings, warnings);
+            if (analysis.UnsafeFindings.Any(unsafeFinding =>
+                string.Equals(unsafeFinding.Kind, AutomationStateDoctorUnsafeKinds.DuplicateQueueItem, StringComparison.Ordinal)))
+            {
+                warnings.Add(
+                    "ambiguous duplicate-queue-item finding present; state-doctor --write is fail-closed and applied no repairs.");
+            }
+            else
+            {
+                findings = ApplyHighConfidenceRepairs(hostContext, findings, warnings);
+            }
         }
 
         var result = new AutomationStateDoctorResult
@@ -210,13 +219,73 @@ internal static class AutomationStateDoctorCommand
         }
 
         var items = queueState.Items.ToArray();
-        var appliedById = new Dictionary<string, AutomationStateDoctorFinding>(StringComparer.Ordinal);
+        var appliedById = new HashSet<string>(StringComparer.Ordinal);
         var appliedEvents = new List<RunEvent>();
+        var queueItemIndicesToRemove = new HashSet<int>();
         var mutated = false;
 
         foreach (var finding in highConfidence)
         {
-            var index = Array.FindIndex(items, item => string.Equals(item.ExecutionUnit, finding.ExecutionUnit, StringComparison.Ordinal));
+            if (string.Equals(finding.RepairKind, AutomationStateDoctorRepairKinds.DeduplicateQueueItem, StringComparison.Ordinal))
+            {
+                if (finding.QueueItemIndex is not int winnerIndex
+                    || finding.RemoveQueueItemIndices is not { Count: > 0 } requestedRemovalList
+                    || winnerIndex < 0
+                    || winnerIndex >= items.Length)
+                {
+                    warnings.Add($"invalid duplicate-queue-item repair metadata for '{finding.ExecutionUnit}'; skipped.");
+                    continue;
+                }
+
+                var duplicateGroup = DuplicateQueueItemRules.Analyze(
+                        items.Select((item, index) => DuplicateQueueItemRules.FromQueueItem(item, index)).ToArray())
+                    .SingleOrDefault(group => string.Equals(
+                        group.ExecutionUnit, finding.ExecutionUnit, StringComparison.Ordinal));
+                var requestedRemovals = requestedRemovalList.ToHashSet();
+                var actualRemovals = duplicateGroup?.Entries
+                    .Where(entry => entry.Index != duplicateGroup.Winner?.Index)
+                    .Select(entry => entry.Index)
+                    .ToHashSet()
+                    ?? [];
+                if (duplicateGroup?.Winner?.Index != winnerIndex
+                    || !requestedRemovals.SetEquals(actualRemovals))
+                {
+                    warnings.Add($"duplicate-queue-item repair for '{finding.ExecutionUnit}' no longer matches the current queue-state; skipped.");
+                    continue;
+                }
+
+                queueItemIndicesToRemove.UnionWith(requestedRemovals);
+                mutated = true;
+                appliedById.Add(FindingId(finding));
+                appliedEvents.Add(new RunEvent
+                {
+                    Ts = DateTimeOffset.UtcNow,
+                    ExecutionUnit = finding.ExecutionUnit,
+                    Event = RunEventName,
+                    By = "automation state-doctor (G746)",
+                    Reason = finding.Summary,
+                    Repo = finding.IssueRepo,
+                    Pr = finding.PrNumber,
+                });
+                continue;
+            }
+
+            int index;
+            if (finding.QueueItemIndex is int requestedIndex)
+            {
+                if (requestedIndex < 0
+                    || requestedIndex >= items.Length
+                    || !string.Equals(items[requestedIndex].ExecutionUnit, finding.ExecutionUnit, StringComparison.Ordinal))
+                {
+                    warnings.Add($"queue-state item index {requestedIndex} no longer identifies '{finding.ExecutionUnit}'; skipped {finding.Category}.");
+                    continue;
+                }
+                index = requestedIndex;
+            }
+            else
+            {
+                index = Array.FindIndex(items, item => string.Equals(item.ExecutionUnit, finding.ExecutionUnit, StringComparison.Ordinal));
+            }
             if (index < 0)
             {
                 warnings.Add($"queue-state has no item with execution_unit '{finding.ExecutionUnit}'; skipped {finding.Category}.");
@@ -264,7 +333,7 @@ internal static class AutomationStateDoctorCommand
 
             items[index] = updated;
             mutated = true;
-            appliedById[finding.ExecutionUnit + "|" + finding.Category] = finding;
+            appliedById.Add(FindingId(finding));
             appliedEvents.Add(new RunEvent
             {
                 Ts = DateTimeOffset.UtcNow,
@@ -283,7 +352,8 @@ internal static class AutomationStateDoctorCommand
         {
             try
             {
-                var updatedState = queueState with { Items = items, UpdatedAt = DateTimeOffset.UtcNow };
+                var updatedItems = items.Where((_, index) => !queueItemIndicesToRemove.Contains(index)).ToArray();
+                var updatedState = queueState with { Items = updatedItems, UpdatedAt = DateTimeOffset.UtcNow };
                 // G548: guarded write (no-item-loss + stale-base re-application).
                 QueueStatePersistence.Persist(queueStatePath, queueState, updatedState);
                 AppendRunEvents(context, appliedEvents);
@@ -296,9 +366,12 @@ internal static class AutomationStateDoctorCommand
         }
 
         return findings
-            .Select(f => appliedById.ContainsKey(f.ExecutionUnit + "|" + f.Category) ? f with { Applied = true } : f)
+            .Select(f => appliedById.Contains(FindingId(f)) ? f with { Applied = true } : f)
             .ToArray();
     }
+
+    private static string FindingId(AutomationStateDoctorFinding finding) =>
+        $"{finding.QueueItemIndex?.ToString(CultureInfo.InvariantCulture) ?? "*"}|{finding.ExecutionUnit}|{finding.Category}|{finding.RepairKind}";
 
     private static void AppendRunEvents(CliContext context, IReadOnlyList<RunEvent> events)
     {
@@ -343,7 +416,7 @@ internal static class AutomationStateDoctorCommand
         }
 
         return queueState.Items
-            .Select(item => new StateDoctorQueueItem
+            .Select((item, index) => new StateDoctorQueueItem
             {
                 ExecutionUnit = item.ExecutionUnit,
                 LinkedIssueRepo = item.LinkedIssue?.Repo,
@@ -351,6 +424,10 @@ internal static class AutomationStateDoctorCommand
                 LinkedIssueUrl = item.LinkedIssue?.Url,
                 LinkedPrUrl = item.LinkedPr,
                 Completed = item.State == QueueItemState.Completed,
+                SourceIndex = index,
+                State = item.State.ToString(),
+                FullEntryJson = DuplicateQueueItemRules.FromQueueItem(item, index).FullEntryJson,
+                ComparableFields = DuplicateQueueItemRules.GetComparableFields(item),
             })
             .ToArray();
     }

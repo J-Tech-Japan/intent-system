@@ -1,0 +1,19 @@
+{
+  "schema_version": "1",
+  "updated_at": "2026-08-28T03:44:15Z",
+  "items": [
+    {
+      "execution_unit": "G746-fixture",
+      "title": "duplicate-free fixture",
+      "state": "queued",
+      "dependencies": [],
+      "blocked_by": [],
+      "clarification_return_path": "",
+      "packet_paths": {
+        "implementation": "issues/G746-fixture/implementation.md",
+        "review_context": "issues/G746-fixture/review-context.md",
+        "yaml": "issues/G746-fixture/packet.yaml"
+      },
+      "linked_issue": null,
+      "linked_pr": null,
+      "worker_role": "coder",

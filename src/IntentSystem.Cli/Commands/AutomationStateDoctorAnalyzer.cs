@@ -32,6 +32,81 @@ internal static class AutomationStateDoctorAnalyzer
         var findings = new List<AutomationStateDoctorFinding>();
         var unsafeFindings = new List<AutomationStateDoctorUnsafe>();
 
+        // ---- duplicate-queue-item (G746) ------------------------------------
+        // Queue-state is an ordered list, but array order is not authority. A
+        // duplicate is repairable only when one complete entry strictly
+        // dominates every competing entry; otherwise all competing entries are
+        // retained in an unsafe finding and the command must not write.
+        var indexedQueueItems = queueItems
+            .Select((item, index) => item with
+            {
+                SourceIndex = item.SourceIndex >= 0 ? item.SourceIndex : index,
+            })
+            .ToArray();
+        var duplicateGroups = DuplicateQueueItemRules.Analyze(
+            indexedQueueItems
+                .Select((item, index) => DuplicateQueueItemRules.FromProjection(item, index))
+                .ToArray());
+        var duplicateGroupsByUnit = duplicateGroups.ToDictionary(
+            group => group.ExecutionUnit,
+            StringComparer.Ordinal);
+
+        foreach (var group in duplicateGroups)
+        {
+            var competingEntries = DuplicateQueueItemRules.FormatCompetingEntries(group);
+            if (group.Winner is { } winner)
+            {
+                findings.Add(new AutomationStateDoctorFinding
+                {
+                    Category = AutomationStateDoctorCategories.DuplicateQueueItem,
+                    ExecutionUnit = group.ExecutionUnit,
+                    RepairKind = AutomationStateDoctorRepairKinds.DeduplicateQueueItem,
+                    IssueNumber = null,
+                    IssueUrl = null,
+                    IssueRepo = null,
+                    PrNumber = null,
+                    PrUrl = null,
+                    QueueItemIndex = winner.Index,
+                    RemoveQueueItemIndices = group.Entries
+                        .Where(entry => entry.Index != winner.Index)
+                        .Select(entry => entry.Index)
+                        .ToArray(),
+                    Confidence = AutomationStateDoctorConfidence.High,
+                    Applied = false,
+                    Evidence =
+                    [
+                        $"entry[{winner.Index}] for '{group.ExecutionUnit}' strictly dominates the other duplicate entry or entries without losing competing information",
+                        $"state-doctor --write keeps entry[{winner.Index}] and removes only the less informative duplicate entry or entries",
+                        $"competing entries:\n{competingEntries}",
+                    ],
+                    Summary = $"Deduplicate queue-state entries for '{group.ExecutionUnit}' by keeping the strictly more informative entry[{winner.Index}].",
+                });
+            }
+            else
+            {
+                unsafeFindings.Add(new AutomationStateDoctorUnsafe
+                {
+                    Kind = AutomationStateDoctorUnsafeKinds.DuplicateQueueItem,
+                    ExecutionUnit = group.ExecutionUnit,
+                    IssueNumber = null,
+                    Reason = $"duplicate queue-state entries for execution unit '{group.ExecutionUnit}' are incomparable or equivalent; unsafe-stop — no mutation is allowed. Competing full entries:\n{competingEntries}",
+                    MissingEvidence =
+                    [
+                        "operator must provide a strictly more informative canonical entry or reconcile the competing fields before retrying state-doctor --write",
+                    ],
+                    CompetingEntries = group.Entries.Select(entry => entry.FullEntryJson).ToArray(),
+                });
+            }
+        }
+
+        // Analyze only one canonical entry for a dominated group. Ambiguous
+        // groups are omitted from ordinary drift checks because they already
+        // have a fail-closed duplicate finding.
+        var queueItemsForAnalysis = indexedQueueItems
+            .Where(item => !duplicateGroupsByUnit.TryGetValue(item.ExecutionUnit, out var group)
+                || group.Winner?.Index == item.SourceIndex)
+            .ToArray();
+
         // Index PRs by the issue numbers they close (only same-repo numbers are
         // supplied by the command projection). A given issue may be closed by
         // more than one PR — that is the ambiguous case.
@@ -110,7 +185,7 @@ internal static class AutomationStateDoctorAnalyzer
             .GroupBy(evidence => evidence.ExecutionUnit, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.Ordinal);
 
-        foreach (var queueItem in queueItems)
+        foreach (var queueItem in queueItemsForAnalysis)
         {
             var item = queueItem;
             var hasLinkedIssue = item.LinkedIssueNumber is int && SameRepo(item.LinkedIssueRepo, repo);
@@ -137,6 +212,7 @@ internal static class AutomationStateDoctorAnalyzer
                         IssueRepo = evidence.IssueRepo,
                         PrNumber = null,
                         PrUrl = null,
+                        QueueItemIndex = item.SourceIndex,
                         Confidence = AutomationStateDoctorConfidence.High,
                         Applied = false,
                         Evidence =
@@ -189,6 +265,7 @@ internal static class AutomationStateDoctorAnalyzer
                         IssueRepo = item.LinkedIssueRepo,
                         PrNumber = pr.Number,
                         PrUrl = pr.Url,
+                        QueueItemIndex = item.SourceIndex,
                         Confidence = AutomationStateDoctorConfidence.High,
                         Applied = false,
                         Evidence =
@@ -234,6 +311,7 @@ internal static class AutomationStateDoctorAnalyzer
                         IssueRepo = item.LinkedIssueRepo,
                         PrNumber = pr.Number,
                         PrUrl = pr.Url,
+                        QueueItemIndex = item.SourceIndex,
                         Confidence = AutomationStateDoctorConfidence.High,
                         Applied = false,
                         Evidence =
@@ -270,7 +348,7 @@ internal static class AutomationStateDoctorAnalyzer
         // are fully covered by the durable evidence already supplied.
         var duplicateAnalysis = DuplicateExecutionUnitIssueAnalyzer.Analyze(
             repo,
-            queueItems,
+            queueItemsForAnalysis,
             publishEvidence,
             pullRequests);
         findings.AddRange(duplicateAnalysis.Findings);

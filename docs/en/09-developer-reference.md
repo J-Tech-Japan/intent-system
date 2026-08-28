@@ -3039,3 +3039,26 @@ and the release CI test job is green:**
 
 Re-tagging before a green CI run on a commit that contains both fixes will
 reproduce the original failing release job.
+
+### G746: Duplicate queue items are recoverable, not impossible
+
+Queue-state is an ordered list, but `execution_unit` is the identity of a
+queue item. `automation closeout-drift-check` groups entries by that identity
+before looking up GitHub. It reports every duplicated unit as
+`duplicate-queue-item`, includes both full competing entries, withholds
+closeout for only that unit, and continues the remaining drift checks. A
+duplicate must never crash the command through a dictionary insertion.
+
+`automation state-doctor` reports the same finding. With `--write`, it removes
+duplicates only when one entry is **strictly more informative** than every
+competitor: it may have a more advanced lifecycle state, or carry a
+`linked_pr`/`linked_issue` that is absent from the other entry, while
+preserving every field from the entry kept. Byte-identical/equivalent entries
+and incomparable entries are unsafe stops: the finding names the unit, shows
+the full competing entries, and applies no mutation. The operator must
+reconcile those fields and rerun the canonical command.
+
+This makes duplicate queue items **recoverable, not impossible**. Do not hand
+edit queue-state. The repair is deliberately limited to duplicate reporting
+and strict-dominance reconciliation; concurrent-write prevention, locking,
+CAS, and queue-schema changes remain separate work.

@@ -108,6 +108,14 @@ internal sealed record AutomationStateDoctorFinding
     [JsonPropertyName("prUrl")]
     public string? PrUrlCamel => PrUrl;
 
+    [JsonPropertyName("queue_item_index")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? QueueItemIndex { get; init; }
+
+    [JsonPropertyName("remove_queue_item_indices")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<int>? RemoveQueueItemIndices { get; init; }
+
     [JsonPropertyName("confidence")]
     public required string Confidence { get; init; }
 
@@ -147,6 +155,10 @@ internal sealed record AutomationStateDoctorUnsafe
 
     [JsonPropertyName("missingEvidence")]
     public IReadOnlyList<string> MissingEvidenceCamel => MissingEvidence;
+
+    [JsonPropertyName("competing_entries")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? CompetingEntries { get; init; }
 }
 
 internal static class AutomationStateDoctorModes
@@ -176,6 +188,8 @@ internal static class AutomationStateDoctorCategories
     /// forward-only queue-state write contract.
     /// </summary>
     public const string DuplicateExecutionUnitIssue = "duplicate-execution-unit-issue-detected";
+
+    public const string DuplicateQueueItem = "duplicate-queue-item";
 }
 
 internal static class AutomationStateDoctorRepairKinds
@@ -185,6 +199,7 @@ internal static class AutomationStateDoctorRepairKinds
     public const string SetQueueLinkedPr = "queue-state-linked-pr";
     public const string SetQueueLinkedIssue = "queue-state-linked-issue";
     public const string MarkQueueCompleted = "queue-state-completed";
+    public const string DeduplicateQueueItem = "queue-state-deduplicate";
 }
 
 internal static class AutomationStateDoctorUnsafeKinds
@@ -194,6 +209,7 @@ internal static class AutomationStateDoctorUnsafeKinds
     public const string DuplicateIssueEvidence = "duplicate-issue-evidence";
     public const string AmbiguousPrLinkage = "ambiguous-pr-linkage";
     public const string AmbiguousPublishEvidence = "ambiguous-publish-evidence";
+    public const string DuplicateQueueItem = "duplicate-queue-item";
 
     /// <summary>
     /// G481: a single execution unit resolves to more than one GitHub issue and
@@ -234,6 +250,10 @@ internal sealed record StateDoctorQueueItem
     public string? LinkedIssueUrl { get; init; }
     public string? LinkedPrUrl { get; init; }
     public required bool Completed { get; init; }
+    public int SourceIndex { get; init; } = -1;
+    public string? State { get; init; }
+    public string? FullEntryJson { get; init; }
+    public IReadOnlyDictionary<string, string?>? ComparableFields { get; init; }
 }
 
 /// <summary>

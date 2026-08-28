@@ -1,5 +1,6 @@
 using IntentSystem.Clarify.Models;
 using IntentSystem.Clarify.Serialization;
+using IntentSystem.Supervisor;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -25,10 +26,10 @@ internal static class ClarifyListCommand
 
         try
         {
+            var queueItemsByExecutionUnit = QueueStateExecutionUnitIndex.BuildUnique(
+                queueState.Items,
+                "clarify list");
             var clarifications = DiscoverOpenClarifications(context.RepoRoot);
-            var queueItemsByExecutionUnit = queueState.Items.ToDictionary(
-                item => item.ExecutionUnit,
-                StringComparer.Ordinal);
 
             ClarifyListRenderer.Write(writer, clarifications, queueItemsByExecutionUnit);
             return 0;
