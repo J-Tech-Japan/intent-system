@@ -2709,6 +2709,24 @@ warning: claim transaction committed successfully, but best-effort cleanup could
 This keeps the committed claim visible to the operator and to downstream
 claim-gated flows without backgrounding the claim or hand-writing its packet.
 
+### Remote default-branch targeting (G747)
+
+Every claim transaction resolves the remote default branch from
+`git ls-remote --symref origin HEAD`. The transaction clone starts from that
+branch and pushes the transaction commit explicitly to
+`refs/heads/<resolved-default-branch>`. The invoking checkout current branch
+is never used as the claim target or advanced by the refresh. If the symref is
+missing, ambiguous, unsafe, or cannot be queried, the command fails closed; it
+never falls back to the current branch. Successful transaction results include
+the resolved `target_ref`.
+
+An acquire whose active record already has the same actor and team is an
+intentional no-op. Its result says that the scope is already held and that no
+claim commit was needed (`nothing to commit`). If teardown also fails, the
+warning is separate, names the leftover path, and cannot replace that primary
+no-op cause. With `--format json`, stdout contains exactly one JSON document;
+cleanup warnings go to stderr so stdout can be piped directly to a JSON parser.
+
 ---
 
 ## Version flow
