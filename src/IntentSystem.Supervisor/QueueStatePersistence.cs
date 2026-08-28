@@ -167,11 +167,17 @@ public static class QueueStatePersistence
 
         if (!File.Exists(queueStatePath))
         {
+            QueueStateExecutionUnitIndex.EnsureRawUnique(
+                outgoingRawText,
+                "QueueStatePersistence.PersistRawJson outgoing state");
             WriteText(queueStatePath, outgoingRawText);
             return QueueStatePersistResult.DirectWrite(null);
         }
 
         var onDiskRawText = File.ReadAllText(queueStatePath);
+        QueueStateExecutionUnitIndex.EnsureRawUnique(
+            onDiskRawText,
+            "QueueStatePersistence.PersistRawJson current on-disk state");
 
         if (!RawJsonMatches(onDiskRawText, baseRawText))
         {
@@ -195,6 +201,9 @@ public static class QueueStatePersistence
         // straight out of the JSON, never through the model, so a partial or
         // legacy queue file is checked exactly like any other instead of being
         // rejected by a contract this writer deliberately does not impose.
+        QueueStateExecutionUnitIndex.EnsureRawUnique(
+            outgoingRawText,
+            "QueueStatePersistence.PersistRawJson outgoing state");
         var removalAllowList = new HashSet<string>(expectedRemovals ?? Array.Empty<string>(), StringComparer.Ordinal);
         AssertNoUnrequestedRawLoss(onDiskRawText, outgoingRawText, removalAllowList, queueStatePath);
 
@@ -248,6 +257,8 @@ public static class QueueStatePersistence
         var baseItems = ReadItemsByUnit(baseRawText);
         var outgoingItems = ReadItemsByUnit(outgoingRawText);
 
+        // ReadItemsByUnit rejects duplicate execution_unit rows before this
+        // derived dictionary is built, so this index is safe by construction.
         var upserts = outgoingItems
             .Where(entry => !baseItems.TryGetValue(entry.Key, out var original)
                 || !string.Equals(original, entry.Value, StringComparison.Ordinal))
@@ -303,6 +314,8 @@ public static class QueueStatePersistence
 
     private static Dictionary<string, string> ReadItemsByUnit(string rawText)
     {
+        QueueStateExecutionUnitIndex.EnsureRawUnique(rawText, "QueueStatePersistence raw stale delta");
+
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
         using var document = System.Text.Json.JsonDocument.Parse(rawText);
         if (!document.RootElement.TryGetProperty("items", out var items)
@@ -417,6 +430,13 @@ public static class QueueStatePersistence
         ArgumentException.ThrowIfNullOrWhiteSpace(queueStatePath);
         ArgumentNullException.ThrowIfNull(baseState);
         ArgumentNullException.ThrowIfNull(outgoingState);
+        // A duplicate outgoing state is never an intentional persistence
+        // result. The state-doctor repair path supplies a unique outgoing
+        // state while the clean base may still contain the duplicates it is
+        // explicitly repairing.
+        QueueStateExecutionUnitIndex.EnsureUnique(
+            outgoingState.Items,
+            "QueueStatePersistence.Persist outgoing state");
 
         if (!skipHook)
         {
@@ -527,7 +547,12 @@ public static class QueueStatePersistence
         string queueStatePath)
     {
         var touched = new HashSet<string>(touchedUnits, StringComparer.Ordinal);
-        var finalByUnit = finalState.Items.ToDictionary(item => item.ExecutionUnit, StringComparer.Ordinal);
+        QueueStateExecutionUnitIndex.EnsureUnique(
+            onDiskState.Items,
+            "QueueStatePersistence.AssertItemScoped current on-disk state");
+        var finalByUnit = QueueStateExecutionUnitIndex.BuildUnique(
+            finalState.Items,
+            "QueueStatePersistence.AssertItemScoped final state");
 
         var collateral = new List<string>();
         foreach (var item in onDiskState.Items)
@@ -593,7 +618,15 @@ public sealed record QueueStateItemDelta
 
     public static QueueStateItemDelta Between(QueueState baseState, QueueState outgoingState)
     {
-        var baseByUnit = baseState.Items.ToDictionary(item => item.ExecutionUnit, StringComparer.Ordinal);
+        ArgumentNullException.ThrowIfNull(baseState);
+        ArgumentNullException.ThrowIfNull(outgoingState);
+
+        var baseByUnit = QueueStateExecutionUnitIndex.BuildUnique(
+            baseState.Items,
+            "QueueStateItemDelta.Between base state");
+        QueueStateExecutionUnitIndex.EnsureUnique(
+            outgoingState.Items,
+            "QueueStateItemDelta.Between outgoing state");
         var outgoingUnits = new HashSet<string>(
             outgoingState.Items.Select(item => item.ExecutionUnit), StringComparer.Ordinal);
 
@@ -620,7 +653,14 @@ public sealed record QueueStateItemDelta
     /// </summary>
     public QueueState ApplyTo(QueueState freshState, DateTimeOffset updatedAt)
     {
-        var upsertByUnit = Upserts.ToDictionary(item => item.ExecutionUnit, StringComparer.Ordinal);
+        ArgumentNullException.ThrowIfNull(freshState);
+
+        QueueStateExecutionUnitIndex.EnsureUnique(
+            freshState.Items,
+            "QueueStateItemDelta.ApplyTo fresh state");
+        var upsertByUnit = QueueStateExecutionUnitIndex.BuildUnique(
+            Upserts,
+            "QueueStateItemDelta.ApplyTo upserts");
         var removalSet = new HashSet<string>(Removals, StringComparer.Ordinal);
 
         var items = new List<QueueItem>();
@@ -677,6 +717,20 @@ public sealed record QueueStatePersistResult
         ReappliedOnFreshBase = true,
         ReappliedExecutionUnits = units,
     };
+}
+
+/// <summary>
+/// Raised when duplicate <c>execution_unit</c> rows make an index or stale
+/// re-application ambiguous. It is an <see cref="InvalidOperationException"/>
+/// so CLI entry points emit the canonical diagnostic and exit non-zero rather
+/// than surfacing the framework's duplicate-key <see cref="ArgumentException"/>.
+/// </summary>
+public sealed class QueueStateDuplicateExecutionUnitException : InvalidOperationException
+{
+    public QueueStateDuplicateExecutionUnitException(string message)
+        : base(message)
+    {
+    }
 }
 
 /// <summary>

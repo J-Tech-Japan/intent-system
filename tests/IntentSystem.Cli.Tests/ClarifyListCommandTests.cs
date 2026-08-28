@@ -94,6 +94,43 @@ public sealed class ClarifyListCommandTests
     }
 
     [Fact]
+    public void Execute_GivenDuplicateQueueItems_ReportsCanonicalFindingEvenWithoutOpenClarifications()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var source = CreateQueueState();
+        var duplicateState = source with
+        {
+            Items =
+            [
+                source.Items[0],
+                source.Items[0] with { Title = "[G22] duplicate queue row" },
+            ],
+        };
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(duplicateState));
+        var before = File.ReadAllText(queueStatePath);
+        using var writer = new StringWriter();
+
+        var exitCode = ClarifyListCommand.Execute(CreateContext(repoRoot), [], writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("duplicate-queue-item", output, StringComparison.Ordinal);
+        Assert.Contains("execution_unit entries", output, StringComparison.Ordinal);
+        Assert.Contains("'G22'", output, StringComparison.Ordinal);
+        Assert.Contains("entry[0]", output, StringComparison.Ordinal);
+        Assert.Contains("entry[1]", output, StringComparison.Ordinal);
+        Assert.Contains("state-doctor", output, StringComparison.Ordinal);
+        Assert.Contains("no mutation was performed", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("same key has already been added", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("ArgumentException", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("No open clarifications found.", output, StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllText(queueStatePath));
+    }
+
+    [Fact]
     public void Execute_GivenArguments_ReturnsExitCodeOne()
     {
         using var writer = new StringWriter();
