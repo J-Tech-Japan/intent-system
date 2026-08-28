@@ -116,15 +116,20 @@ internal static class ClaimCommand
 
         var origin = RunGit(repoRoot, ["remote", "get-url", "origin"]);
         EnsureSuccess(origin, "resolve origin");
-        var branch = RunGit(repoRoot, ["branch", "--show-current"]);
-        EnsureSuccess(branch, "resolve current branch");
+        var defaultBranchResult = RunGit(repoRoot, ["ls-remote", "--symref", "origin", "HEAD"]);
+        EnsureSuccess(defaultBranchResult, "resolve origin default branch");
         var remote = origin.StandardOutput.Trim();
-        var branchName = branch.StandardOutput.Trim();
-        if (remote.Length == 0 || branchName.Length == 0)
+        if (remote.Length == 0)
         {
-            throw new InvalidOperationException("claim requires an origin remote and a named current branch");
+            throw new InvalidOperationException("claim requires an origin remote");
         }
 
+        if (!TryParseRemoteDefaultBranch(defaultBranchResult.StandardOutput, out var defaultBranch))
+        {
+            throw new InvalidOperationException(
+                "Could not resolve origin default branch from its HEAD symref; refusing to "
+                + "fall back to the current branch.");
+        }
         if (!request.Write)
         {
             return new ClaimTransactionResult(
@@ -133,10 +138,12 @@ internal static class ClaimCommand
                 "Dry-run only. Re-run with --write; ownership exists only after a successful plain push.");
         }
 
+        var targetRef = $"refs/heads/{defaultBranch}";
+
         HostStateGitRetryEvidence? lastGitWriteRetry = null;
-        var hostPull = RunGit(repoRoot, ["pull", "--ff-only", "origin", branchName], hostStateWrite: true);
-        CaptureRetry(ref lastGitWriteRetry, hostPull);
-        EnsureSuccess(hostPull, "fast-forward host before claim transaction");
+        var hostFetch = RunGit(repoRoot, ["fetch", "--quiet", "origin", defaultBranch], hostStateWrite: true);
+        CaptureRetry(ref lastGitWriteRetry, hostFetch);
+        EnsureSuccess(hostFetch, "refresh origin default branch before claim transaction");
 
         ClaimRecord? lastObserved = null;
         for (var attempt = 1; attempt <= request.MaxAttempts; attempt++)
@@ -144,16 +151,17 @@ internal static class ClaimCommand
             var transactionRoot = Path.Combine(
                 Path.GetTempPath(), $"intent-cli-claim-{Guid.NewGuid():N}");
             var committed = false;
+            var tolerateCleanupFailure = false;
             Exception? transactionFailure = null;
             try
             {
                 var clone = RunGit(Path.GetTempPath(),
-                    ["clone", "--quiet", "--single-branch", "--branch", branchName, remote, transactionRoot]);
+                    ["clone", "--quiet", "--single-branch", "--branch", defaultBranch, remote, transactionRoot]);
                 EnsureSuccess(clone, "clone claim transaction workspace");
 
                 // The sequence is deliberately visible and invariant: ff-only
                 // pull, create/change, commit, then a non-forced push.
-                var pull = RunGit(transactionRoot, ["pull", "--ff-only", "origin", branchName], hostStateWrite: true);
+                var pull = RunGit(transactionRoot, ["pull", "--ff-only", "origin", defaultBranch], hostStateWrite: true);
                 CaptureRetry(ref lastGitWriteRetry, pull);
                 EnsureSuccess(pull, "fast-forward claim base");
 
@@ -162,6 +170,28 @@ internal static class ClaimCommand
                     transactionRoot, relativeClaimPath.Replace('/', Path.DirectorySeparatorChar));
                 var current = ReadClaim(absoluteClaimPath);
                 lastObserved = current;
+                if (request.Operation == ClaimOperation.Acquire
+                    && current is not null
+                    && string.Equals(current.Actor, request.Actor, StringComparison.Ordinal)
+                    && string.Equals(current.Team, request.Team, StringComparison.Ordinal))
+                {
+                    // An identically held acquire is an intentional no-op.
+                    // Its result must survive teardown, including an
+                    // injected cleanup failure, so operators can distinguish
+                    // "already held" from a broken pre-commit transaction.
+                    tolerateCleanupFailure = true;
+                    return Held(
+                        request,
+                        relativeClaimPath,
+                        attempt,
+                        current,
+                        $"Scope is already held by actor '{current.Actor}' on team '{current.Team}'; "
+                        + "no claim commit was needed (nothing to commit).") with
+                    {
+                        GitWriteRetry = lastGitWriteRetry,
+                        TargetRef = targetRef,
+                    };
+                }
 
                 if (request.Operation == ClaimOperation.Acquire && current is not null)
                 {
@@ -248,7 +278,10 @@ internal static class ClaimCommand
                 EnsureSuccess(transactionCommit, "resolve claim transaction commit");
                 var transactionCommitSha = transactionCommit.StandardOutput.Trim();
 
-                var push = RunGit(transactionRoot, ["push", "origin", "HEAD"], hostStateWrite: true);
+                var push = RunGit(
+                    transactionRoot,
+                    ["push", "origin", $"{transactionCommitSha}:{targetRef}"],
+                    hostStateWrite: true);
                 CaptureRetry(ref lastGitWriteRetry, push);
                 if (push.ExitCode != 0 && push.RetryEvidence is not null)
                 {
@@ -268,7 +301,7 @@ internal static class ClaimCommand
                     };
                     var detail = RefreshInvokingClone(
                         repoRoot,
-                        branchName,
+                        defaultBranch,
                         ref lastGitWriteRetry,
                         "The plain push succeeded; this is the ownership transition fact.");
                     return new ClaimTransactionResult(
@@ -280,17 +313,18 @@ internal static class ClaimCommand
                         historyPath)
                     {
                         GitWriteRetry = lastGitWriteRetry,
+                        TargetRef = targetRef,
                     };
                 }
 
-                var fetch = RunGit(transactionRoot, ["fetch", "origin", branchName]);
+                var fetch = RunGit(transactionRoot, ["fetch", "origin", defaultBranch]);
                 EnsureSuccess(fetch, "inspect rejected claim push");
-                var remoteHead = RunGit(transactionRoot, ["rev-parse", $"origin/{branchName}"]);
-                var remoteCommitMatches = remoteHead.ExitCode == 0
-                    && string.Equals(remoteHead.StandardOutput.Trim(), transactionCommitSha, StringComparison.Ordinal);
+                var remoteDefaultHead = RunGit(transactionRoot, ["rev-parse", $"origin/{defaultBranch}"]);
+                var remoteCommitMatches = remoteDefaultHead.ExitCode == 0
+                    && string.Equals(remoteDefaultHead.StandardOutput.Trim(), transactionCommitSha, StringComparison.Ordinal);
 
                 var remoteClaim = RunGit(transactionRoot,
-                    ["show", $"origin/{branchName}:{relativeClaimPath}"]);
+                    ["show", $"origin/{defaultBranch}:{relativeClaimPath}"]);
                 if (remoteClaim.ExitCode == 0)
                 {
                     var holder = JsonSerializer.Deserialize<ClaimRecord>(remoteClaim.StandardOutput, JsonOptions)
@@ -314,7 +348,7 @@ internal static class ClaimCommand
                         };
                         var detail = RefreshInvokingClone(
                             repoRoot,
-                            branchName,
+                            defaultBranch,
                             ref lastGitWriteRetry,
                             "The remote branch contains the transaction commit after the push process returned a failure; verified remote state is the ownership transition fact.");
                         return new ClaimTransactionResult(
@@ -326,6 +360,7 @@ internal static class ClaimCommand
                             historyPath)
                         {
                             GitWriteRetry = lastGitWriteRetry,
+                            TargetRef = targetRef,
                         };
                     }
 
@@ -349,7 +384,7 @@ internal static class ClaimCommand
                     var status = "released";
                     var detail = RefreshInvokingClone(
                         repoRoot,
-                        branchName,
+                        defaultBranch,
                         ref lastGitWriteRetry,
                         "The remote branch contains the transaction commit after the push process returned a failure; verified remote state is the ownership transition fact.");
                     return new ClaimTransactionResult(
@@ -357,6 +392,7 @@ internal static class ClaimCommand
                         null, null, transactionCommitSha, detail, historyPath)
                     {
                         GitWriteRetry = lastGitWriteRetry,
+                        TargetRef = targetRef,
                     };
                 }
 
@@ -382,7 +418,12 @@ internal static class ClaimCommand
             {
                 try
                 {
-                    CleanupTransactionRoot(transactionRoot, committed, warningWriter, deleteDirectory);
+                    CleanupTransactionRoot(
+                        transactionRoot,
+                        committed,
+                        tolerateCleanupFailure,
+                        warningWriter,
+                        deleteDirectory);
                 }
                 catch (Exception cleanupFailure) when (transactionFailure is not null)
                 {
@@ -407,6 +448,7 @@ internal static class ClaimCommand
     private static void CleanupTransactionRoot(
         string transactionRoot,
         bool committed,
+        bool tolerateCleanupFailure,
         TextWriter warningWriter,
         Action<string> deleteDirectory)
     {
@@ -439,6 +481,11 @@ internal static class ClaimCommand
             lastFailure = exception;
         }
 
+        if (tolerateCleanupFailure)
+        {
+            WriteNoOpCleanupWarning(warningWriter, transactionRoot, attempts, lastFailure);
+            return;
+        }
         if (committed)
         {
             var detail = lastFailure?.Message;
@@ -464,9 +511,31 @@ internal static class ClaimCommand
             + "the claim state was committed.", lastFailure);
     }
 
+    private static void WriteNoOpCleanupWarning(
+        TextWriter warningWriter,
+        string transactionRoot,
+        int attempts,
+        Exception? lastFailure)
+    {
+        var detail = lastFailure?.Message;
+        try
+        {
+            warningWriter.WriteLine(
+                $"warning: claim acquire found the scope already held; no claim commit was needed "
+                + $"(nothing to commit). Best-effort cleanup could not remove temporary directory "
+                + $"'{transactionRoot}' after {attempts} bounded attempt(s); the already-held claim "
+                + $"result and exit code are unchanged. The leftover path remains under the OS temp root."
+                + (string.IsNullOrWhiteSpace(detail) ? string.Empty : $" Last error: {detail}"));
+        }
+        catch
+        {
+            // A broken warning sink must not replace the already-held result.
+        }
+    }
+
     private static string RefreshInvokingClone(
         string repoRoot,
-        string branchName,
+        string defaultBranch,
         ref HostStateGitRetryEvidence? lastGitWriteRetry,
         string committedDetail)
     {
@@ -474,13 +543,13 @@ internal static class ClaimCommand
         {
             var localRefresh = RunGit(
                 repoRoot,
-                ["pull", "--ff-only", "origin", branchName],
+                ["fetch", "--quiet", "origin", defaultBranch],
                 hostStateWrite: true);
             CaptureRetry(ref lastGitWriteRetry, localRefresh);
             return localRefresh.ExitCode == 0
                 ? committedDetail
                 : committedDetail
-                    + " The invoking clone could not fast-forward: "
+                    + " The invoking clone could not refresh the origin default-branch tracking ref: "
                     + localRefresh.StandardError.Trim();
         }
         catch (Exception exception)
@@ -547,6 +616,79 @@ internal static class ClaimCommand
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
     }
+
+    internal static bool TryParseRemoteDefaultBranch(
+        string output,
+        out string defaultBranch)
+    {
+        defaultBranch = string.Empty;
+        string? branch = null;
+        string? headObject = null;
+
+        foreach (var rawLine in output.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            if (line.StartsWith("ref: refs/heads/", StringComparison.Ordinal)
+                && line.EndsWith("\tHEAD", StringComparison.Ordinal))
+            {
+                const string prefix = "ref: refs/heads/";
+                const string suffix = "\tHEAD";
+                var candidate = line[prefix.Length..(line.Length - suffix.Length)];
+                if (!IsSafeRemoteBranch(candidate)
+                    || (branch is not null
+                        && !string.Equals(branch, candidate, StringComparison.Ordinal)))
+                {
+                    return false;
+                }
+                branch = candidate;
+                continue;
+            }
+
+            var separator = line.IndexOf('\t');
+            if (separator > 0
+                && string.Equals(line[(separator + 1)..], "HEAD", StringComparison.Ordinal))
+            {
+                var candidate = line[..separator];
+                if (!IsHexObjectId(candidate)
+                    || (headObject is not null
+                        && !string.Equals(headObject, candidate, StringComparison.Ordinal)))
+                {
+                    return false;
+                }
+                headObject = candidate;
+            }
+        }
+
+        if (branch is null || headObject is null)
+        {
+            return false;
+        }
+
+        defaultBranch = branch;
+        return true;
+    }
+
+    private static bool IsSafeRemoteBranch(string value)
+    {
+        if (value.Length == 0
+            || value.StartsWith("-", StringComparison.Ordinal)
+            || value.StartsWith("/", StringComparison.Ordinal)
+            || value.EndsWith("/", StringComparison.Ordinal)
+            || value.EndsWith(".", StringComparison.Ordinal)
+            || value.Contains("..", StringComparison.Ordinal)
+            || value.Contains("//", StringComparison.Ordinal)
+            || value.Contains("@{", StringComparison.Ordinal)
+            || value.Any(c => char.IsControl(c) || char.IsWhiteSpace(c)
+                || c is '~' or '^' or ':' or '?' or '*' or '[' or '\\'))
+        {
+            return false;
+        }
+
+        return value.Split('/').All(segment => segment is not ("" or "." or ".."));
+    }
+
+    private static bool IsHexObjectId(string value) =>
+        value.Length is 40 or 64 && value.All(Uri.IsHexDigit);
 
     internal static string ClaimPath(string scope)
     {
@@ -812,6 +954,7 @@ internal static class ClaimCommand
         writer.WriteLine($"- scope: `{result.Scope}`");
         writer.WriteLine($"- claim_path: `{result.ClaimPath}`");
         writer.WriteLine($"- push_succeeded: {(result.PushSucceeded ? "true" : "false")}");
+        if (result.TargetRef is not null) writer.WriteLine($"- target_ref: `{result.TargetRef}`");
         if (result.Holder is not null) writer.WriteLine($"- holder: {result.Holder}");
         if (result.HolderTeam is not null) writer.WriteLine($"- holder_team: {result.HolderTeam}");
         if (result.DisplacedHolder is not null) writer.WriteLine($"- displaced_holder: {result.DisplacedHolder}");
@@ -878,6 +1021,10 @@ internal sealed record ClaimTransactionResult(
     [JsonPropertyName("holder_team")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? HolderTeam { get; init; }
+
+    [JsonPropertyName("target_ref")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TargetRef { get; init; }
 
     [JsonPropertyName("git_write_retry")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

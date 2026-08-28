@@ -2769,6 +2769,21 @@ warning: claim transaction committed successfully, but best-effort cleanup could
 これにより、commit 済み claim は operator と downstream の claim-gated flow から見え続け、
 claim の background 実行や packet の手書きは不要です。
 
+### remote の default branch を対象にする場合 (G747)
+
+すべての claim transaction は `git ls-remote --symref origin HEAD` から remote の
+`default branch` を解決します。transaction clone はその branch から始め、transaction
+commit を `refs/heads/<resolved-default-branch>` へ明示的に push します。呼び出し元
+checkout の current branch は claim の target にせず、refresh でも進めません。symref が
+無い、曖昧、安全に扱えない、または query できない場合は fail closed とし、current branch
+へは fallback しません。成功した transaction result には解決した `target_ref` が含まれます。
+
+active record の actor と team が同じ acquire は意図した no-op です。result は scope が
+すでに保持され、claim commit は不要 (`nothing to commit`) であることを示します。teardown
+も失敗した場合は leftover path を含む warning を別に出し、その no-op の主原因を置き換え
+ません。`--format json` の stdout は JSON 文書を 1 つだけ含み、cleanup warning は stderr
+へ出力されるため、stdout を直接 JSON parser に渡せます。
+
 ---
 
 ## バージョンフロー
