@@ -1024,6 +1024,44 @@ recovery authority.
 > behavior outside the 1.0 compatibility promise. They may change or be
 > withdrawn during 1.x and are formalised only by a later MAJOR release.
 
+### Live-window supervision history archives (G744 — preview-through-1.x)
+
+A team with a long-running supervisor can bound the tracked live history without
+discarding evidence. Use `intent-cli notify supervise archive --domain <domain>
+--team <team> [--live-window-days <days>] --write --format json`. The default
+live window is 7 days. The incident that motivated G744 accumulated about 96,000
+records over 14 days; at the observed rate, keeping one week live leaves roughly
+half the records in the small file and comfortable headroom below GitHub's 100 MB
+file limit. The positive window is configurable when a team's cadence or retention
+needs justify a different value.
+
+The command moves cycle and prompt-audit records older than the UTC cutoff from
+`.intent-cli/supervision/<domain>/<team>/cycles.jsonl` into
+`.intent-cli/supervision/<domain>/<team>/cycles-archive/YYYY-MM.jsonl`, where
+the filename is the UTC completion/timestamp month. Period names make an archive
+findable without opening every file. The existing supervision reader consumes
+all period archives plus the live file, so moving a record does not make
+history disappear. Records that cannot be safely classified remain in the live
+file; the operation has no discard option and reports `records_discarded=0`.
+
+This is live-safe while a supervisor is running. Archive and append use the same
+per-team `.supervision.lock`; the move stages and journals each replacement,
+publishes archives before replacing the live file, and never stops or restarts
+the supervisor. An append that races the boundary waits for the lock, then lands
+in the new live file exactly once. A directory whose records are already inside
+the window is left byte-identical: no archive directory or replacement is
+created.
+
+G744 is different from G734 `notify supervise shrink`. Shrink compacts the
+existing stalls and cycles in place, retains every record, and correctly reports
+`archived 0, discarded 0, rotated 0`; archive moves older cycle history to
+period-addressable files so the live file stays bounded. Run archive for the
+live-window move and shrink only for in-place compaction.
+
+> **Preview through 1.x (G744).** Live-window archive layout, its configurable
+> default, and the archive command are post-freeze preview behavior outside the
+> 1.0 compatibility promise. They may change or be withdrawn during 1.x.
+
 ### Escalation ladder and CI fallback (G657 — preview-through-1.x)
 
 The complete ladder is: seats do their assigned work; orchestration notices

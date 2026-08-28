@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -21,9 +22,14 @@ internal static class NotifySupervisionStore
     public const string EvidenceDefinitionsFileName = "evidence-definitions.json";
     public const string ShrinkAuditFileName = "shrink-audit.jsonl";
     public const string ShrinkTransactionFileName = "shrink-transaction.json";
+    public const string CycleArchiveDirectoryName = "cycles-archive";
+    public const string ArchiveTransactionFileName = "archive-transaction.json";
+    public const int DefaultLiveWindowDays = 7;
     private const string LockFileName = ".supervision.lock";
     private const string ShrinkTransactionSchema = "intent-cli.supervision-shrink-transaction/v1";
     private const string ShrinkTransactionStagePrefix = ".shrink-transaction-";
+    private const string ArchiveTransactionSchema = "intent-cli.supervision-archive-transaction/v1";
+    private const string ArchiveTransactionStagePrefix = ".archive-transaction-";
     internal const string EvidenceSchema = "intent-cli.supervision-evidence/v1";
     internal const string HerdrRegistrationEvidenceKey = "recorded-herdr-seat-registration";
     internal const string HerdrRegistrationDefinition =
@@ -45,6 +51,7 @@ internal static class NotifySupervisionStore
 
     internal static Func<string, string, NotifySupervisionWriteResult>? WriteOverride { get; set; }
     internal static Action<NotifySupervisionShrinkFaultPoint>? ShrinkFaultInjector { get; set; }
+    internal static Action<NotifySupervisionArchiveFaultPoint>? ArchiveFaultInjector { get; set; }
 
     public static string ResolveDirectory(string artifactRoot, string domain, string team)
     {
@@ -65,6 +72,18 @@ internal static class NotifySupervisionStore
 
     public static string ResolveCyclePath(string artifactRoot, string domain, string team) =>
         Path.Combine(ResolveDirectory(artifactRoot, domain, team), CycleFileName);
+
+    public static string ResolveCycleArchiveDirectoryPath(string artifactRoot, string domain, string team) =>
+        Path.Combine(ResolveDirectory(artifactRoot, domain, team), CycleArchiveDirectoryName);
+
+    public static string ResolveCycleArchivePath(
+        string artifactRoot,
+        string domain,
+        string team,
+        DateTimeOffset period) =>
+        Path.Combine(
+            ResolveCycleArchiveDirectoryPath(artifactRoot, domain, team),
+            GetCycleArchiveFileName(period));
 
     public static string ResolveStallPath(string artifactRoot, string domain, string team) =>
         Path.Combine(ResolveDirectory(artifactRoot, domain, team), StallFileName);
@@ -97,13 +116,17 @@ internal static class NotifySupervisionStore
                 using var directoryLock = Directory.Exists(directory)
                     ? AcquireDirectoryLock(directory, createDirectory: false)
                     : null;
+                if (File.Exists(Path.Combine(directory, ArchiveTransactionFileName)))
+                {
+                    RecoverPendingArchiveTransaction(directory);
+                }
                 var definitions = ReadEvidenceDefinitions(Path.Combine(directory, EvidenceDefinitionsFileName));
                 var bound = ReadBound(Path.Combine(directory, BoundFileName));
                 var emissionPolicy = ReadEmissionPolicy(Path.Combine(directory, EmissionPolicyFileName));
                 var installedSupervisor = ReadInstalledSupervisor(Path.Combine(directory, InstalledSupervisorFileName));
-                var cyclePath = Path.Combine(directory, CycleFileName);
-                var cycles = ReadCycles(cyclePath);
-                var promptAudits = ReadPromptAudits(cyclePath);
+                var cyclePaths = ResolveCycleHistoryPaths(directory);
+                var cycles = ReadCycles(cyclePaths);
+                var promptAudits = ReadPromptAudits(cyclePaths);
                 var stalls = ReadStalls(Path.Combine(directory, StallFileName), definitions);
                 return new NotifySupervisionReadResult
                 {
@@ -116,6 +139,7 @@ internal static class NotifySupervisionStore
                     LastIntervalCycle = cycles.LastOrDefault(cycle =>
                         string.IsNullOrWhiteSpace(cycle.Trigger)
                         || string.Equals(cycle.Trigger, "interval", StringComparison.Ordinal)),
+                    CycleHistory = cycles,
                     ActiveStalls = stalls.Where(item => item.ClearedAt is null)
                         .ToDictionary(item => item.Key, StringComparer.Ordinal),
                     StallHistory = stalls,
@@ -339,6 +363,7 @@ internal static class NotifySupervisionStore
             {
                 var directory = Path.GetDirectoryName(path)!;
                 using var directoryLock = AcquireDirectoryLock(directory, createDirectory: true);
+                RecoverPendingArchiveTransaction(directory);
                 RecoverPendingShrinkTransaction(directory);
                 var storedEntry = PrepareEventForStorage(entry, directory, ensureDefinitions: true);
                 var line = JsonSerializer.Serialize(storedEntry, JsonOptions) + Environment.NewLine;
@@ -389,58 +414,84 @@ internal static class NotifySupervisionStore
             ?? throw new InvalidDataException("The installed supervisor record was empty.");
     }
 
-    private static IReadOnlyList<NotifySupervisionCycle> ReadCycles(string path)
+    private static IReadOnlyList<NotifySupervisionCycle> ReadCycles(IEnumerable<string> paths)
     {
-        if (!File.Exists(path))
-        {
-            return [];
-        }
-
         var cycles = new List<NotifySupervisionCycle>();
-        foreach (var line in File.ReadLines(path))
+        foreach (var path in paths)
         {
-            if (string.IsNullOrWhiteSpace(line))
+            if (!File.Exists(path))
             {
                 continue;
             }
 
-            var entry = JsonSerializer.Deserialize<NotifySupervisionEvent>(line, JsonOptions)
-                ?? throw new InvalidDataException("A supervision cycle event was empty.");
-            if (!string.Equals(entry.Kind, "cycle", StringComparison.Ordinal) || entry.Cycle is null)
+            foreach (var line in File.ReadLines(path))
             {
-                continue;
-            }
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
 
-            cycles.Add(entry.Cycle);
+                var entry = JsonSerializer.Deserialize<NotifySupervisionEvent>(line, JsonOptions)
+                    ?? throw new InvalidDataException("A supervision cycle event was empty.");
+                if (!string.Equals(entry.Kind, "cycle", StringComparison.Ordinal) || entry.Cycle is null)
+                {
+                    continue;
+                }
+
+                cycles.Add(entry.Cycle);
+            }
         }
 
         return cycles.OrderBy(item => item.CompletedAt).ToArray();
     }
 
-    private static IReadOnlyList<NotifyPromptAudit> ReadPromptAudits(string path)
+    private static IReadOnlyList<NotifyPromptAudit> ReadPromptAudits(IEnumerable<string> paths)
     {
-        if (!File.Exists(path))
-        {
-            return [];
-        }
-
         var audits = new List<NotifyPromptAudit>();
-        foreach (var line in File.ReadLines(path))
+        foreach (var path in paths)
         {
-            if (string.IsNullOrWhiteSpace(line))
+            if (!File.Exists(path))
             {
                 continue;
             }
 
-            var entry = JsonSerializer.Deserialize<NotifySupervisionEvent>(line, JsonOptions)
-                ?? throw new InvalidDataException("A supervision prompt-audit event was empty.");
-            if (string.Equals(entry.Kind, "prompt-audit", StringComparison.Ordinal)
-                && entry.PromptAudit is not null)
+            foreach (var line in File.ReadLines(path))
             {
-                audits.Add(entry.PromptAudit);
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                var entry = JsonSerializer.Deserialize<NotifySupervisionEvent>(line, JsonOptions)
+                    ?? throw new InvalidDataException("A supervision prompt-audit event was empty.");
+                if (string.Equals(entry.Kind, "prompt-audit", StringComparison.Ordinal)
+                    && entry.PromptAudit is not null)
+                {
+                    audits.Add(entry.PromptAudit);
+                }
             }
         }
         return audits.OrderBy(item => item.Timestamp).ToArray();
+    }
+
+    private static IReadOnlyList<string> ResolveCycleHistoryPaths(string directory)
+    {
+        var paths = new List<string>();
+        var archiveDirectory = Path.Combine(directory, CycleArchiveDirectoryName);
+        if (Directory.Exists(archiveDirectory))
+        {
+            paths.AddRange(
+                Directory.EnumerateFiles(archiveDirectory, "*.jsonl", SearchOption.TopDirectoryOnly)
+                    .OrderBy(path => Path.GetFileName(path), StringComparer.Ordinal));
+        }
+
+        var livePath = Path.Combine(directory, CycleFileName);
+        if (File.Exists(livePath))
+        {
+            paths.Add(livePath);
+        }
+
+        return paths;
     }
 
     private static IReadOnlyList<NotifySupervisionStallRecord> ReadStalls(
@@ -644,6 +695,505 @@ internal static class NotifySupervisionStore
         changed = true;
         return JsonSerializer.Serialize(document, ManifestJsonOptions) + Environment.NewLine;
     }
+
+    internal static NotifySupervisionArchiveResult Archive(
+        string artifactRoot,
+        string domain,
+        string team,
+        bool write,
+        DateTimeOffset occurredAt,
+        int liveWindowDays)
+    {
+        string directory;
+        try
+        {
+            directory = ResolveDirectory(artifactRoot, domain, team);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            return NotifySupervisionArchiveResult.Failure(artifactRoot, liveWindowDays, exception.Message);
+        }
+
+        if (liveWindowDays <= 0)
+        {
+            return NotifySupervisionArchiveResult.Failure(
+                directory,
+                liveWindowDays,
+                "the live window must be greater than zero days.");
+        }
+
+        if (!Directory.Exists(directory) && !write)
+        {
+            return NotifySupervisionArchiveResult.Empty(directory, liveWindowDays);
+        }
+
+        lock (Sync)
+        {
+            try
+            {
+                using var directoryLock = AcquireDirectoryLock(directory, createDirectory: write);
+                var transactionPath = Path.Combine(directory, ArchiveTransactionFileName);
+                if (File.Exists(transactionPath))
+                {
+                    if (!write)
+                    {
+                        return NotifySupervisionArchiveResult.Failure(
+                            directory,
+                            liveWindowDays,
+                            "archive-recovery-pending: a prior archive transaction requires --write to recover safely.");
+                    }
+
+                    RecoverPendingArchiveTransaction(directory);
+                }
+
+                RecoverPendingShrinkTransaction(directory);
+                var cutoff = occurredAt.ToUniversalTime().Subtract(TimeSpan.FromDays(liveWindowDays));
+                var plan = PlanCycleArchive(directory, cutoff);
+                if (write && plan.WouldChange)
+                {
+                    ExecuteCycleArchiveTransaction(directory, plan);
+                }
+
+                return new NotifySupervisionArchiveResult
+                {
+                    Applied = write && plan.WouldChange,
+                    WouldChange = plan.WouldChange,
+                    Directory = directory,
+                    LivePath = plan.LivePath,
+                    ArchiveDirectory = plan.ArchiveDirectory,
+                    Cutoff = cutoff,
+                    LiveWindowDays = liveWindowDays,
+                    BeforeLiveBytes = plan.BeforeLiveBytes,
+                    AfterLiveBytes = plan.AfterLiveBytes,
+                    BeforeLiveRecordCount = plan.BeforeLiveRecordCount,
+                    AfterLiveRecordCount = plan.AfterLiveRecordCount,
+                    RecordsMoved = plan.RecordsMoved,
+                    RecordsRetained = plan.RecordsRetained,
+                    RecordsDiscarded = 0,
+                    Archives = plan.Archives,
+                    Error = null,
+                };
+            }
+            catch (Exception exception) when (exception is InvalidDataException or JsonException)
+            {
+                return NotifySupervisionArchiveResult.Failure(
+                    directory,
+                    liveWindowDays,
+                    $"archive-validation-failed: {exception.Message}");
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                    or UnauthorizedAccessException
+                    or ArgumentException)
+            {
+                return NotifySupervisionArchiveResult.Failure(directory, liveWindowDays, exception.Message);
+            }
+        }
+    }
+
+    private static NotifySupervisionArchivePlan PlanCycleArchive(
+        string directory,
+        DateTimeOffset cutoff)
+    {
+        var livePath = Path.Combine(directory, CycleFileName);
+        var archiveDirectory = Path.Combine(directory, CycleArchiveDirectoryName);
+        if (!File.Exists(livePath))
+        {
+            return NotifySupervisionArchivePlan.Empty(livePath, archiveDirectory);
+        }
+
+        var original = File.ReadAllText(livePath, Utf8NoBom);
+        var lines = SplitCycleLines(original, out var newline, out var trailingNewline);
+        var retained = new List<string>(lines.Count);
+        var grouped = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var beforeRecordCount = 0;
+        var recordsMoved = 0;
+
+        foreach (var line in lines)
+        {
+            if (!string.IsNullOrWhiteSpace(line))
+            {
+                beforeRecordCount++;
+            }
+
+            if (TryGetCycleArchiveTimestamp(line, out var timestamp)
+                && timestamp < cutoff)
+            {
+                var period = timestamp.ToString("yyyy-MM", CultureInfo.InvariantCulture);
+                if (!grouped.TryGetValue(period, out var periodLines))
+                {
+                    periodLines = [];
+                    grouped.Add(period, periodLines);
+                }
+
+                periodLines.Add(line);
+                recordsMoved++;
+            }
+            else
+            {
+                retained.Add(line);
+            }
+        }
+
+        var beforeBytes = new FileInfo(livePath).Length;
+        if (recordsMoved == 0)
+        {
+            return new NotifySupervisionArchivePlan
+            {
+                WouldChange = false,
+                LivePath = livePath,
+                ArchiveDirectory = archiveDirectory,
+                LiveContent = original,
+                BeforeLiveBytes = beforeBytes,
+                AfterLiveBytes = beforeBytes,
+                BeforeLiveRecordCount = beforeRecordCount,
+                AfterLiveRecordCount = beforeRecordCount,
+                RecordsMoved = 0,
+                RecordsRetained = beforeRecordCount,
+                Replacements = [],
+                Archives = [],
+            };
+        }
+
+        var liveContent = JoinCycleLines(retained, newline, trailingNewline);
+        var replacements = new List<NotifySupervisionArchiveReplacement>();
+        var archives = new List<NotifySupervisionArchiveFileMeasurement>();
+        foreach (var group in grouped.OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            var fileName = group.Key + ".jsonl";
+            var targetPath = Path.Combine(archiveDirectory, fileName);
+            var existingContent = File.Exists(targetPath)
+                ? File.ReadAllText(targetPath, Utf8NoBom)
+                : string.Empty;
+            var archiveContent = AppendArchiveLines(existingContent, group.Value, newline);
+            var beforeArchiveBytes = File.Exists(targetPath)
+                ? new FileInfo(targetPath).Length
+                : 0L;
+            var beforeArchiveRecords = CountNonBlankLines(
+                SplitCycleLines(existingContent, out _, out _));
+            archives.Add(new NotifySupervisionArchiveFileMeasurement
+            {
+                Period = group.Key,
+                Path = targetPath,
+                BeforeBytes = beforeArchiveBytes,
+                AfterBytes = Utf8NoBom.GetByteCount(archiveContent),
+                BeforeRecordCount = beforeArchiveRecords,
+                AfterRecordCount = beforeArchiveRecords + group.Value.Count,
+                MovedRecordCount = group.Value.Count,
+            });
+            replacements.Add(new NotifySupervisionArchiveReplacement
+            {
+                TargetName = $"{CycleArchiveDirectoryName}/{fileName}",
+                TargetPath = targetPath,
+                Content = archiveContent,
+            });
+        }
+
+        replacements.Add(new NotifySupervisionArchiveReplacement
+        {
+            TargetName = CycleFileName,
+            TargetPath = livePath,
+            Content = liveContent,
+        });
+
+        return new NotifySupervisionArchivePlan
+        {
+            WouldChange = true,
+            LivePath = livePath,
+            ArchiveDirectory = archiveDirectory,
+            LiveContent = liveContent,
+            BeforeLiveBytes = beforeBytes,
+            AfterLiveBytes = Utf8NoBom.GetByteCount(liveContent),
+            BeforeLiveRecordCount = beforeRecordCount,
+            AfterLiveRecordCount = CountNonBlankLines(retained),
+            RecordsMoved = recordsMoved,
+            RecordsRetained = CountNonBlankLines(retained),
+            Replacements = replacements,
+            Archives = archives,
+        };
+    }
+
+    private static List<string> SplitCycleLines(
+        string content,
+        out string newline,
+        out bool trailingNewline)
+    {
+        newline = content.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var lines = content.Split(["\r\n", "\n"], StringSplitOptions.None).ToList();
+        trailingNewline = lines.Count > 0 && lines[^1].Length == 0;
+        if (trailingNewline)
+        {
+            lines.RemoveAt(lines.Count - 1);
+        }
+
+        return lines;
+    }
+
+    private static string JoinCycleLines(
+        IReadOnlyList<string> lines,
+        string newline,
+        bool trailingNewline) =>
+        lines.Count == 0
+            ? string.Empty
+            : string.Join(newline, lines) + (trailingNewline ? newline : string.Empty);
+
+    private static string AppendArchiveLines(
+        string existing,
+        IReadOnlyList<string> additions,
+        string newline)
+    {
+        var builder = new StringBuilder(existing);
+        if (builder.Length > 0 && !existing.EndsWith(newline, StringComparison.Ordinal))
+        {
+            builder.Append(newline);
+        }
+
+        builder.Append(string.Join(newline, additions));
+        builder.Append(newline);
+        return builder.ToString();
+    }
+
+    private static bool TryGetCycleArchiveTimestamp(
+        string line,
+        out DateTimeOffset timestamp)
+    {
+        timestamp = default;
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return false;
+        }
+
+        try
+        {
+            var entry = JsonSerializer.Deserialize<NotifySupervisionEvent>(line, JsonOptions);
+            if (entry is null)
+            {
+                return false;
+            }
+
+            if (string.Equals(entry.Kind, "cycle", StringComparison.Ordinal)
+                && entry.Cycle is not null)
+            {
+                timestamp = entry.Cycle.CompletedAt.ToUniversalTime();
+                return true;
+            }
+
+            if (string.Equals(entry.Kind, "prompt-audit", StringComparison.Ordinal)
+                && entry.PromptAudit is not null)
+            {
+                timestamp = entry.PromptAudit.Timestamp.ToUniversalTime();
+                return true;
+            }
+        }
+        catch (JsonException)
+        {
+            // Preserve malformed or unknown lines in the live file. Archiving
+            // is fail-closed so this command never discards an unreadable line.
+        }
+
+        return false;
+    }
+
+    private static string GetCycleArchiveFileName(DateTimeOffset period) =>
+        period.ToUniversalTime().ToString("yyyy-MM", CultureInfo.InvariantCulture) + ".jsonl";
+
+    private static void ExecuteCycleArchiveTransaction(
+        string directory,
+        NotifySupervisionArchivePlan plan)
+    {
+        var transactionId = Guid.NewGuid().ToString("N");
+        var stageDirectoryName = ArchiveTransactionStagePrefix + transactionId;
+        var stageDirectory = Path.Combine(directory, stageDirectoryName);
+        Directory.CreateDirectory(stageDirectory);
+
+        var transactionFiles = new List<NotifySupervisionArchiveTransactionFile>(
+            plan.Replacements.Count);
+        for (var index = 0; index < plan.Replacements.Count; index++)
+        {
+            var replacement = plan.Replacements[index];
+            var stageName = $"replacement-{index}.jsonl";
+            var stagePath = ResolveArchiveStagePath(stageDirectory, stageName);
+            ReplaceAtomically(stagePath, replacement.Content);
+            transactionFiles.Add(new NotifySupervisionArchiveTransactionFile
+            {
+                TargetName = replacement.TargetName,
+                StageName = stageName,
+                BeforeSha256 = HashFileOrNull(replacement.TargetPath),
+                AfterSha256 = HashContent(replacement.Content),
+            });
+        }
+
+        var transaction = new NotifySupervisionArchiveTransaction
+        {
+            Schema = ArchiveTransactionSchema,
+            TransactionId = transactionId,
+            Phase = "prepared",
+            StageDirectory = stageDirectoryName,
+            Files = transactionFiles,
+        };
+        PersistArchiveTransaction(directory, transaction);
+        ArchiveFaultInjector?.Invoke(NotifySupervisionArchiveFaultPoint.BeforeReplacement);
+
+        foreach (var transactionFile in transaction.Files)
+        {
+            var targetPath = ResolveArchiveTransactionTargetPath(directory, transactionFile.TargetName);
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            var stagePath = ResolveArchiveStagePath(stageDirectory, transactionFile.StageName);
+            ReplaceAtomically(targetPath, File.ReadAllText(stagePath, Utf8NoBom));
+            transaction = transaction with { Phase = $"replaced:{transactionFile.TargetName}" };
+            PersistArchiveTransaction(directory, transaction);
+            ArchiveFaultInjector?.Invoke(ResolveArchiveFaultPoint(transactionFile.TargetName));
+        }
+
+        DeleteArchiveTransactionArtifacts(directory, transaction);
+    }
+
+    private static void RecoverPendingArchiveTransaction(string directory)
+    {
+        var transactionPath = Path.Combine(directory, ArchiveTransactionFileName);
+        if (!File.Exists(transactionPath))
+        {
+            return;
+        }
+
+        var transaction = JsonSerializer.Deserialize<NotifySupervisionArchiveTransaction>(
+            File.ReadAllText(transactionPath, Utf8NoBom),
+            JsonOptions)
+            ?? throw new InvalidDataException("archive-recovery-invalid: the transaction journal was empty.");
+        if (!string.Equals(transaction.Schema, ArchiveTransactionSchema, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"archive-recovery-invalid: unsupported transaction schema '{transaction.Schema}'.");
+        }
+
+        var stageDirectory = ResolveArchiveStageDirectory(directory, transaction.StageDirectory);
+        foreach (var transactionFile in transaction.Files)
+        {
+            var targetPath = ResolveArchiveTransactionTargetPath(directory, transactionFile.TargetName);
+            var currentHash = HashFileOrNull(targetPath);
+            if (string.Equals(currentHash, transactionFile.AfterSha256, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!string.Equals(currentHash, transactionFile.BeforeSha256, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"archive-recovery-aborted: target '{transactionFile.TargetName}' changed outside the transaction.");
+            }
+
+            var stagePath = ResolveArchiveStagePath(stageDirectory, transactionFile.StageName);
+            if (!File.Exists(stagePath))
+            {
+                throw new InvalidDataException(
+                    $"archive-recovery-invalid: staged replacement for '{transactionFile.TargetName}' is missing.");
+            }
+
+            var content = File.ReadAllText(stagePath, Utf8NoBom);
+            if (!string.Equals(HashContent(content), transactionFile.AfterSha256, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"archive-recovery-invalid: staged replacement for '{transactionFile.TargetName}' is corrupt.");
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            ReplaceAtomically(targetPath, content);
+            if (!string.Equals(HashFileOrNull(targetPath), transactionFile.AfterSha256, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"archive-recovery-aborted: recovered replacement for '{transactionFile.TargetName}' did not verify.");
+            }
+
+            transaction = transaction with { Phase = $"recovered:{transactionFile.TargetName}" };
+            PersistArchiveTransaction(directory, transaction);
+        }
+
+        DeleteArchiveTransactionArtifacts(directory, transaction);
+    }
+
+    private static void PersistArchiveTransaction(
+        string directory,
+        NotifySupervisionArchiveTransaction transaction) =>
+        ReplaceAtomically(
+            Path.Combine(directory, ArchiveTransactionFileName),
+            JsonSerializer.Serialize(transaction, JsonOptions) + Environment.NewLine);
+
+    private static string ResolveArchiveStageDirectory(
+        string directory,
+        string stageDirectoryName)
+    {
+        if (!stageDirectoryName.StartsWith(ArchiveTransactionStagePrefix, StringComparison.Ordinal)
+            || Path.GetFileName(stageDirectoryName) != stageDirectoryName)
+        {
+            throw new InvalidDataException("archive-recovery-invalid: the transaction stage directory is unsafe.");
+        }
+
+        return Path.Combine(directory, stageDirectoryName);
+    }
+
+    private static string ResolveArchiveStagePath(
+        string stageDirectory,
+        string stageName)
+    {
+        if (string.IsNullOrWhiteSpace(stageName)
+            || Path.GetFileName(stageName) != stageName
+            || stageName is "." or "..")
+        {
+            throw new InvalidDataException("archive-recovery-invalid: a transaction stage path is unsafe.");
+        }
+
+        return Path.Combine(stageDirectory, stageName);
+    }
+
+    private static string ResolveArchiveTransactionTargetPath(
+        string directory,
+        string targetName)
+    {
+        if (string.Equals(targetName, CycleFileName, StringComparison.Ordinal))
+        {
+            return Path.Combine(directory, CycleFileName);
+        }
+
+        var prefix = CycleArchiveDirectoryName + "/";
+        if (!targetName.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"archive-recovery-invalid: unsupported transaction target '{targetName}'.");
+        }
+
+        var fileName = targetName[prefix.Length..];
+        if (Path.GetFileName(fileName) != fileName
+            || !fileName.EndsWith(".jsonl", StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"archive-recovery-invalid: unsafe transaction target '{targetName}'.");
+        }
+
+        return Path.Combine(directory, CycleArchiveDirectoryName, fileName);
+    }
+
+    private static void DeleteArchiveTransactionArtifacts(
+        string directory,
+        NotifySupervisionArchiveTransaction transaction)
+    {
+        var stageDirectory = ResolveArchiveStageDirectory(directory, transaction.StageDirectory);
+        if (Directory.Exists(stageDirectory))
+        {
+            Directory.Delete(stageDirectory, recursive: true);
+        }
+
+        var transactionPath = Path.Combine(directory, ArchiveTransactionFileName);
+        if (File.Exists(transactionPath))
+        {
+            File.Delete(transactionPath);
+        }
+    }
+
+    private static NotifySupervisionArchiveFaultPoint ResolveArchiveFaultPoint(
+        string targetName) =>
+        string.Equals(targetName, CycleFileName, StringComparison.Ordinal)
+            ? NotifySupervisionArchiveFaultPoint.AfterLiveReplacement
+            : NotifySupervisionArchiveFaultPoint.AfterArchiveReplacement;
 
     internal static NotifySupervisionShrinkResult Shrink(
         string artifactRoot,
@@ -1296,12 +1846,16 @@ internal static class NotifySupervisionStore
         return count;
     }
 
+    private static int CountNonBlankLines(IEnumerable<string> lines) =>
+        lines.Count(line => !string.IsNullOrWhiteSpace(line));
+
     private static double? Average(long bytes, int records) =>
         records == 0 ? null : (double)bytes / records;
 
     private static NotifySupervisionReadResult Failure(string directory, string error) => new()
     {
         Resolved = false,
+        CycleHistory = [],
         Directory = directory,
         Error = error,
         ActiveStalls = new Dictionary<string, NotifySupervisionStallRecord>(StringComparer.Ordinal),
@@ -1318,6 +1872,142 @@ internal static class NotifySupervisionStore
             throw new ArgumentException($"Supervision {name} '{value}' is not a safe path segment.", name);
         }
     }
+}
+
+internal enum NotifySupervisionArchiveFaultPoint
+{
+    BeforeReplacement,
+    AfterArchiveReplacement,
+    AfterLiveReplacement,
+}
+
+internal sealed record NotifySupervisionArchiveReplacement
+{
+    public required string TargetName { get; init; }
+    public required string TargetPath { get; init; }
+    public required string Content { get; init; }
+}
+
+internal sealed record NotifySupervisionArchivePlan
+{
+    public required bool WouldChange { get; init; }
+    public required string LivePath { get; init; }
+    public required string ArchiveDirectory { get; init; }
+    public required string LiveContent { get; init; }
+    public required long BeforeLiveBytes { get; init; }
+    public required long AfterLiveBytes { get; init; }
+    public required int BeforeLiveRecordCount { get; init; }
+    public required int AfterLiveRecordCount { get; init; }
+    public required int RecordsMoved { get; init; }
+    public required int RecordsRetained { get; init; }
+    public required IReadOnlyList<NotifySupervisionArchiveReplacement> Replacements { get; init; }
+    public required IReadOnlyList<NotifySupervisionArchiveFileMeasurement> Archives { get; init; }
+
+    public static NotifySupervisionArchivePlan Empty(string livePath, string archiveDirectory) => new()
+    {
+        WouldChange = false,
+        LivePath = livePath,
+        ArchiveDirectory = archiveDirectory,
+        LiveContent = string.Empty,
+        BeforeLiveBytes = 0,
+        AfterLiveBytes = 0,
+        BeforeLiveRecordCount = 0,
+        AfterLiveRecordCount = 0,
+        RecordsMoved = 0,
+        RecordsRetained = 0,
+        Replacements = [],
+        Archives = [],
+    };
+}
+
+internal sealed record NotifySupervisionArchiveFileMeasurement
+{
+    public required string Period { get; init; }
+    public required string Path { get; init; }
+    public required long BeforeBytes { get; init; }
+    public required long AfterBytes { get; init; }
+    public required int BeforeRecordCount { get; init; }
+    public required int AfterRecordCount { get; init; }
+    public required int MovedRecordCount { get; init; }
+}
+
+internal sealed record NotifySupervisionArchiveTransaction
+{
+    [JsonPropertyName("schema")] public required string Schema { get; init; }
+    [JsonPropertyName("transaction_id")] public required string TransactionId { get; init; }
+    [JsonPropertyName("phase")] public required string Phase { get; init; }
+    [JsonPropertyName("stage_directory")] public required string StageDirectory { get; init; }
+    [JsonPropertyName("files")] public required IReadOnlyList<NotifySupervisionArchiveTransactionFile> Files { get; init; }
+}
+
+internal sealed record NotifySupervisionArchiveTransactionFile
+{
+    [JsonPropertyName("target")] public required string TargetName { get; init; }
+    [JsonPropertyName("stage")] public required string StageName { get; init; }
+    [JsonPropertyName("before_sha256")] public string? BeforeSha256 { get; init; }
+    [JsonPropertyName("after_sha256")] public required string AfterSha256 { get; init; }
+}
+
+internal sealed record NotifySupervisionArchiveResult
+{
+    public required bool Applied { get; init; }
+    public required bool WouldChange { get; init; }
+    public required string Directory { get; init; }
+    public required string LivePath { get; init; }
+    public required string ArchiveDirectory { get; init; }
+    public required DateTimeOffset Cutoff { get; init; }
+    public required int LiveWindowDays { get; init; }
+    public required long BeforeLiveBytes { get; init; }
+    public required long AfterLiveBytes { get; init; }
+    public required int BeforeLiveRecordCount { get; init; }
+    public required int AfterLiveRecordCount { get; init; }
+    public required int RecordsMoved { get; init; }
+    public required int RecordsRetained { get; init; }
+    public required int RecordsDiscarded { get; init; }
+    public required IReadOnlyList<NotifySupervisionArchiveFileMeasurement> Archives { get; init; }
+    public string? Error { get; init; }
+
+    public static NotifySupervisionArchiveResult Empty(string directory, int liveWindowDays) => new()
+    {
+        Applied = false,
+        WouldChange = false,
+        Directory = directory,
+        LivePath = Path.Combine(directory, NotifySupervisionStore.CycleFileName),
+        ArchiveDirectory = Path.Combine(directory, NotifySupervisionStore.CycleArchiveDirectoryName),
+        Cutoff = DateTimeOffset.MinValue,
+        LiveWindowDays = liveWindowDays,
+        BeforeLiveBytes = 0,
+        AfterLiveBytes = 0,
+        BeforeLiveRecordCount = 0,
+        AfterLiveRecordCount = 0,
+        RecordsMoved = 0,
+        RecordsRetained = 0,
+        RecordsDiscarded = 0,
+        Archives = [],
+    };
+
+    public static NotifySupervisionArchiveResult Failure(
+        string directory,
+        int liveWindowDays,
+        string error) => new()
+    {
+        Applied = false,
+        WouldChange = false,
+        Directory = directory,
+        LivePath = Path.Combine(directory, NotifySupervisionStore.CycleFileName),
+        ArchiveDirectory = Path.Combine(directory, NotifySupervisionStore.CycleArchiveDirectoryName),
+        Cutoff = DateTimeOffset.MinValue,
+        LiveWindowDays = liveWindowDays,
+        BeforeLiveBytes = 0,
+        AfterLiveBytes = 0,
+        BeforeLiveRecordCount = 0,
+        AfterLiveRecordCount = 0,
+        RecordsMoved = 0,
+        RecordsRetained = 0,
+        RecordsDiscarded = 0,
+        Archives = [],
+        Error = error,
+    };
 }
 
 internal enum NotifySupervisionShrinkFaultPoint
@@ -1778,6 +2468,7 @@ internal sealed record NotifySupervisionReadResult
     public NotifySupervisionEmissionPolicy? EmissionPolicy { get; init; }
     public NotifySupervisionInstalledSupervisor? InstalledSupervisor { get; init; }
     public NotifySupervisionCycle? LastCycle { get; init; }
+    public IReadOnlyList<NotifySupervisionCycle> CycleHistory { get; init; } = [];
     /// <summary>
     /// The only cycle identity a command-side adjudication may trust. It is
     /// derived from the latest recorded supervision cycle, never from a CLI
