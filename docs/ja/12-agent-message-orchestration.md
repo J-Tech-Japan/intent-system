@@ -866,6 +866,41 @@ duplicate wake が出ることを確認しました。この attribution は tea
 > compatibility promise の対象外です。1.x の間に変更または撤回でき、後続 MAJOR でのみ
 > 正式化します。
 
+### supervision history の live window archive (G744 — preview-through-1.x)
+
+長時間動作する supervisor の live history を、evidence を捨てずに bounded にするには
+`intent-cli notify supervise archive --domain <domain> --team <team>
+[--live-window-days <days>] --write --format json` を使います。既定の live window は
+7 日です。観測された live file は 111.5 MB に達し、この incident は約 14 日間で約 96,000
+records を蓄積しました。そのため、同じ rate で既定の 7 日 live window を保つと、その観測 volume の
+約半分が live に残り、GitHub の 100 MB tracking limit を十分下回ります。team の cadence や retention に
+理由がある場合は positive な日数を設定できます。
+
+この command は UTC cutoff より古い cycle と prompt-audit record を
+`.intent-cli/supervision/<domain>/<team>/cycles.jsonl` から
+`.intent-cli/supervision/<domain>/<team>/cycles-archive/YYYY-MM.jsonl` へ移します。
+file name は UTC の completion/timestamp month なので、すべての file を開かずに period を
+探せます。既存の supervision reader は period archive と live の両方を読み、移動後も
+history を捨てません。安全に分類できない line は live に残ります。この operation に
+discard option はなく、`records_discarded=0` を返します。
+
+これは supervisor の動作中にも live-safe です。archive と append は同じ team directory の
+`.supervision.lock` を使い、replacement を stage と journal に記録し、archive を live
+replacement より先に公開します。supervisor を停止/再起動しません。boundary と
+同時に来た append は lock 待ちの後に新しい live file へ 1 回だけ入り、lost も duplicate
+もありません。すでに全 record が window 内の directory は byte-identical のままで、
+archive directory や replacement は作成されません。
+
+G744 は G734 の `notify supervise shrink` とは別です。shrink は既存の stalls と cycles を
+in-place で圧縮し、全 record を保持して `archived 0, discarded 0, rotated 0` を
+正しく返します。archive は古い cycle history を period-addressable file へ移して
+live file を bounded にします。live-window の移動には archive を、in-place compaction
+だけには shrink を使ってください。
+
+> **1.x を通じた preview (G744)。** live-window archive の layout、設定可能な既定値、
+> archive command は post-freeze preview であり、1.0 compatibility promise の対象外です。
+> 1.x の間に変更または撤回できます。
+
 ### escalation ladder と CI fallback (G657 — preview-through-1.x)
 
 完全な ladder は次のとおりです。各 seat は割り当てられた作業を行い、orchestration は通常の stall を検知して

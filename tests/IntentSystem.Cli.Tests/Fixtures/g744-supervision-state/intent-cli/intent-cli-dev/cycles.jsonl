@@ -1,0 +1,2 @@
+{"kind":"cycle","cycle":{"cycle_id":"fixture-inside-1","started_at":"2026-08-27T11:59:00+00:00","completed_at":"2026-08-27T12:00:00+00:00","interval_seconds":300}}
+{"kind":"cycle","cycle":{"cycle_id":"fixture-inside-2","started_at":"2026-08-27T12:04:00+00:00","completed_at":"2026-08-27T12:05:00+00:00","interval_seconds":300}}
