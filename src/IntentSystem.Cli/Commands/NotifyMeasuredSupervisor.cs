@@ -20,6 +20,19 @@ internal sealed class NotifyMeasuredSupervisor
     internal const int MaximumDelegationExecutionWindowSeconds = 86_400;
     private const string DesignRole = "design";
     private const string ObservationConflictKind = "observation-conflict";
+    // G748: these are the two observed settled recipient states. A recipient
+    // that never started is reported as idle; one that completed a turn
+    // without producing the delegated work is reported as done. `blocked` is
+    // deliberately excluded because it is an explicit impediment requiring
+    // its own handling and evidence, not proof that delegation silently
+    // stopped without executing. `unknown` is deliberately excluded because
+    // an unobservable seat must never be claimed stopped.
+    private static readonly IReadOnlySet<string> DelegationExecutionRecipientStates =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            "idle",
+            "done",
+        };
 
     private readonly CliContext context;
     private readonly string routingRoot;
@@ -1298,7 +1311,8 @@ internal sealed class NotifyMeasuredSupervisor
     {
         if (!activity.Resolved
             || activity.Running != true
-            || !string.Equals(activity.AgentStatus, "idle", StringComparison.Ordinal)
+            || activity.AgentStatus is null
+            || !DelegationExecutionRecipientStates.Contains(activity.AgentStatus)
             || activity.StateChangeSequence is not { } sequence
             || pending.ReportArrived)
         {

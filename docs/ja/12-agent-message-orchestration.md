@@ -472,13 +472,21 @@ message を黙らせず、2 つの outcome を operator が整合できるよう
 
 `notify supervise` は、永続的な delivery evidence が
 `delivery_succeeded=true`、recipient が後続 observation でも
-`agent_status=idle`、かつ `--delegation-execution-window-seconds`（default
-`300s`）経過である場合にだけ
+`agent_status=idle` または `done`、かつ `--delegation-execution-window-seconds`
+（default `300s`）経過である場合にだけ
 `delegation-delivered-never-executed` を出します。さらに full conjunction として、
 task の canonical report が absent、全 expected artifact source が absent、
 永続的な target-entity transition source が absent でなければなりません。
 seat が working/started、artifact・report・target transition が見える場合は
 non-finding です。
+
+recipient activity の観測 state set は `idle` と `done` の 2 つです。`idle` は
+開始されなかった seat、`done` は turn を完了したが delegated work を生成しなかった
+seat を表します。`working` は開始済みの証拠のままです。`blocked` は明示的な
+impediment であり、専用の handling と evidence が必要で、delegation が実行されずに
+黙って停止した証拠ではないため、意図的に除外します。`unknown` も観測できない seat を
+停止したと決めつけてはいけないため、意図的に除外します。その他または解決できない
+state はこの finding の条件を満たしません。
 
 finding には `task_id`、seat、`delivered_at`、使用した window、確認した
 全 source を記録し、delegation の owner role に recorded transport で通知します。
