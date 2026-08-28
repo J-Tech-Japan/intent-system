@@ -2736,7 +2736,7 @@ strict な projection serializer は**変更していません**。publish-flow 
 
 ---
 
-## claim transaction の teardown (G738)
+## claim transaction の teardown (G738, G743)
 
 `claim acquire`、`claim release`、`claim takeover` は OS の temp root 配下に一時 clone を
 作ります。claim state の plain push 成功が transaction boundary であり、その一時 clone の
@@ -2744,6 +2744,14 @@ cleanup は boundary の後に実行されます。
 
 - claim state が commit され push される前は、transaction または teardown の failure は
   command failure のままです。cleanup が未完了の claim を成功に変えることはありません。
+  transaction 自体が boundary 前に失敗した場合は元の原因を保持し、finally の teardown failure
+  がその原因を隠すことはありません。
+- push process が nonzero を返しても remote ref が transaction を受理している場合があります。
+  command は `origin` を fetch し、transaction commit と結果の claim state を照合します。
+  完全一致だけを ownership fact として `acquired`、`released`、`taken-over` と
+  `push_succeeded: true` で報告します。それ以外は既存の rejected-push/retry path のままで、
+  claim を absent と誤報して duplicate acquire を誘発しません。
+
 - push 成功後の cleanup は best-effort です。delete の 1 回ごとの待機は 250 ms に制限し、
   通常の failure には最大 3 回まで試行し、retry 間には 50 ms の backoff を置きます。
   timeout した試行は、worker が directory に触れている可能性がある間は retry しません。

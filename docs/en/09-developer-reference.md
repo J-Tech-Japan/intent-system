@@ -2670,7 +2670,7 @@ incomplete packet through publication. The tolerance is scoped to `clarify open`
 
 ---
 
-## Claim transaction teardown (G738)
+## Claim transaction teardown (G738, G743)
 
 `claim acquire`, `claim release`, and `claim takeover` use a temporary clone
 under the OS temp root. The successful plain push of the claim state is the
@@ -2679,7 +2679,17 @@ boundary.
 
 - Before the claim state is committed and pushed, a transaction or teardown
   failure remains a command failure. Cleanup cannot turn an incomplete claim
-  into success.
+  into success. If the transaction itself fails before the boundary, its
+  original cause remains authoritative even when a teardown failure also
+  occurs in `finally`; the cleanup failure is reported separately and never
+  masks that cause.
+- A push process can return nonzero after the remote ref has accepted the
+  transaction. The command fetches `origin` and compares the transaction
+  commit and resulting claim state. Only an exact match is treated as the
+  committed ownership fact and reported as `acquired`, `released`, or
+  `taken-over` with `push_succeeded: true`; otherwise the existing rejected-
+  push/retry path remains in force. This prevents a durable claim from being
+  reported as absent and inviting a duplicate acquire.
 - After a successful push, cleanup is best-effort. A delete attempt is bounded
   to 250 ms, up to three attempts are allowed for ordinary failures, and the
   retry backoff is 50 ms. A timed-out attempt is not retried while its worker
