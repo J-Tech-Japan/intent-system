@@ -533,12 +533,17 @@ not a value the CLI silently corrects.
 
 `notify supervise` emits `delegation-delivered-never-executed` only when a
 delegation's durable delivery evidence says `delivery_succeeded=true`, the
-recipient is still running but `agent_status=idle` on a later observation, and
-the configured `--delegation-execution-window-seconds` (default `300s`) has
-elapsed. The full conjunction also requires the canonical report for the task
-to be absent, every expected artifact source to be absent, and the durable
-target-entity transition source to be absent. A working/started seat, visible
-artifact, report, or target transition is a non-finding.
+recipient is still running and its observed `agent_status` is one of `idle` or
+`done` on a later observation, and the configured
+`--delegation-execution-window-seconds` (default `300s`) has elapsed. The
+observed recipient state set is intentionally these two settled states: `idle`
+means the seat never started, while `done` means it completed a turn without
+producing the delegated work. `working` remains positive started-work evidence;
+other or unresolved states do not satisfy this finding. The full conjunction
+also requires the canonical report for the task to be absent, every expected
+artifact source to be absent, and the durable target-entity transition source
+to be absent. A working/started seat, visible artifact, report, or target
+transition is a non-finding.
 
 The finding names `task_id`, seat, `delivered_at`, the window, and every
 checked source. It wakes the delegation's owner role through the recorded
