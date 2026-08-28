@@ -2746,7 +2746,7 @@ literal:
 ```
 
 The shape is written with placeholders on purpose: **read the actual values from
-`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0251)
+`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0260)
 for the line currently being cut. A worked example here would be a second copy
 of the version pair that goes stale on the next roll — the defect G557/G560
 exist to remove.
@@ -2952,27 +2952,61 @@ rotated by this command; the result and `shrink-audit.jsonl` say so explicitly.
 out of scope. Use `--dry-run` to inspect the measured plan without writing the
 manifest, JSONL files, or audit.
 
-### Next release readiness (v0.25.1)
+### Next release readiness (v0.26.0)
+
+**PREPARED / NOT PUBLISHED.**
 
 **v0.25.0 shipped evidence:** the shipped baseline is
 intent-cli 0.25.0-74a1c72-G741 from source revision
 74a1c722291a6a45a580221dcf8a9a8ad4e4d831. The tracked EN and JA
-release-notes-v0.25.0.md files are unchanged by this post-release roll.
+release-notes-v0.25.0.md files remain unchanged by this preparation.
 The prior v0.24.0 shipped-note files, release-notes-v0.24.0.md in both mirrors, remain historical evidence.
-The v0.25.1 line is a placeholder only; its DRAFT stubs are replaceable
-planning scaffolds and are not a changelog. Release-prep will replace them
-after measuring and deciding the next real release number.
-The active note file is [release-notes-v0.25.1.md](release-notes-v0.25.1.md).
 The v0.25.0 GitHub Release and tag are authoritative shipped evidence.
-The shipped-note files remain untouched by this post-release roll.
-The untouched shipped-note files retain their **PREPARED / NOT PUBLISHED** banner.
 The source-note inconsistency predates this roll; correcting it is out of scope and must be handled by a later explicitly scoped remediation.
-The real-install verification reported intent-cli 0.25.0-74a1c72-G741; checkout freshness/provenance is recorded with this roll.
-The comparison also used the installed 0.23.2 CLI; the shipped-note check records checkout_freshness/provenance.
-Rolled policy: `stableVersion → 0.25.0`; `nextVersion → 0.25.1` (placeholder only).
-The next-line package identity is `JTechJapan.IntentSystem.Cli.0.25.1.nupkg`; this is a placeholder verification value, not a release decision.
-The release-prep check creates no tag or Release, publishes no package, and handles no credentials.
-The host-only claim boundary is `release-prep:<owner/repo>:0.25.1`; this child does not inspect host state.
+The comparison also used the installed 0.23.2 CLI; checkout_freshness/provenance is recorded with this preparation.
+The current policy is stableVersion 0.25.0 and nextVersion 0.26.0.
+Rolled policy: stableVersion → 0.25.0; nextVersion → 0.26.0.
+The next-line package identity is `JTechJapan.IntentSystem.Cli.0.26.0.nupkg`; this is a preparation value, not a publish action.
+The release-readiness gate remains separate from this prepare-only documentation update.
+
+This preparation sets `eng/version.json` to stableVersion `0.25.0` and
+nextVersion `0.26.0`. The former v0.25.1 DRAFT stubs were deleted; the active
+unpublished note is [release-notes-v0.26.0.md](release-notes-v0.26.0.md).
+The v0.26.0 line is prepare-only: no tag, GitHub Release, and no package is
+published; no post-release roll is performed here, and no real later release
+number is chosen.
+
+The exact prepared head measured by this child is
+a49ad93c36bd93d1ccc9317622d36fa01ea346b8. Its own Release build reports
+intent-cli 0.25.1-a49ad93-G748; the installed baseline reports
+intent-cli 0.25.0-74a1c72-G741. Installed `notify supervise archive` rejects
+`archive`; after the exact metadata-only policy update, the final Release
+identity is intent-cli 0.26.0-a49ad93-G748. The built usage exposes
+`notify supervise archive --domain <d>
+--team <t> [--live-window-days <days>] [--dry-run|--write] [--format markdown|json]`.
+Automation, claim, and worker help are byte-identical; notify differs only by
+this archive surface, and state-doctor/closeout-drift-check usages are
+byte-identical. This measured surface, not the version file, supports the minor bump.
+
+The first-parent range `v0.25.0..a49ad93c36bd93d1ccc9317622d36fa01ea346b8`
+contains exactly six commits. The release inventory is exactly G743, G744,
+G746, G747, and G748. G745's `b8f249e965cad2c3c2e19dda9dd99e726324485d`
+post-v0.25.0 roll is classified in the release-note table and is not a release unit.
+G743 and G747 finish/repair the claim-transaction contract shipped in v0.25.0;
+G748 repairs the G741 detector that fired zero times across sixteen qualifying
+incidents. The five entries describe operator-observable outcomes in the active
+v0.26.0 notes.
+
+Release-prep verification exact counts are recorded in the active note:
+Targeted release-prep docs/version guards: 40 passed, 0 failed, 0 skipped (40 total).
+Dedicated G613 JA terminology guard: 6 passed, 0 failed, 0 skipped (6 total).
+Adjacent release/readiness suite: 59 passed, 0 failed, 0 skipped (59 total).
+Full Release suite: 5305 passed, 0 failed, 1 skipped (5306 total). git diff --check: clean.
+This child consumed the supplied host claim because the
+child issue-preflight was canonical-unavailable only from sandbox denial while
+refreshing `.git/FETCH_HEAD`; it did not create, modify, or release a child
+execution-unit claim and did not enter the host repository.
+The host-only claim boundary is `release-prep:<owner/repo>:0.26.0`; this child does not inspect host state.
 The published [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0) and its tag are authoritative shipped evidence.
 The v0.23.0 shipped artifacts are the GitHub Release, NuGet package, and self-contained binaries; its npm leg never reached the registry, so `0.23.0` must not be treated as available from npm.
 The tracked EN and JA `release-notes-v0.23.0.md` files now state this shipped-artifact status.

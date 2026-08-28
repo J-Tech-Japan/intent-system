@@ -2993,27 +2993,61 @@ result は literal bytes の削減、追加した reference bytes、record の n
 `shrink-audit.jsonl` に明記します。`.intent-cli/runs/*.provider.jsonl` は別の provider-run state なので
 scope 外です。`--dry-run` なら manifest、JSONL、audit を書き込まずに測定済み plan だけを確認できます。
 
-### 次リリース準備(v0.25.1)
+### 次リリース準備(v0.26.0)
+
+**PREPARED / NOT PUBLISHED.**
 
 **v0.25.0 shipped evidence:** shipped baseline は
-intent-cli 0.25.0-74a1c72-G741 で、source revision は
+intent-cli 0.25.0-74a1c72-G741、source revision は
 74a1c722291a6a45a580221dcf8a9a8ad4e4d831 です。tracked な EN/JA
-release-notes-v0.25.0.md はこの post-release roll で変更していません。
+release-notes-v0.25.0.md はこの preparation で変更していません。
 前の v0.24.0 shipped-note file、release-notes-v0.24.0.md は両方の mirror にある historical evidence として残ります。
-v0.25.1 line は placeholder だけです。その DRAFT stub は replaceable
-planning scaffold で changelog ではありません。release-prep は測定して次の
-real release number を決めた後、この stub を replace します。
-現在の note file は [release-notes-v0.25.1.md](release-notes-v0.25.1.md) です。
-v0.25.0 GitHub Release と tag が shipped evidence の authoritative source です。
-shipped-note file はこの post-release roll で変更していません。
-変更していない shipped-note file は **PREPARED / NOT PUBLISHED** banner を保持します。
+v0.25.0 GitHub Release と tag は shipped evidence の authoritative source です。
 source-note inconsistency はこの roll より前から存在し、修正は scope 外であり、後続の explicitly scoped remediation で扱います。
-real-install verification は intent-cli 0.25.0-74a1c72-G741 を報告しました。checkout freshness/provenance はこの roll とともに記録します。
-比較対象には installed 0.23.2 CLI を使いました。shipped-note check は checkout_freshness/provenance を記録します。
-Rolled policy: `stableVersion → 0.25.0`; `nextVersion → 0.25.1` (placeholder only)。
-次の line の package identity は `JTechJapan.IntentSystem.Cli.0.25.1.nupkg` です。これは placeholder の verification value であり、release decision ではありません。
-release-prep check は tag または Release を作成せず、package を publish せず、credentials を扱いません。
-host-only claim boundary は `release-prep:<owner/repo>:0.25.1` で、この child は host state を inspect しません。
+比較対象には installed 0.23.2 CLI を使い、checkout_freshness/provenance をこの preparation とともに記録します。
+現在の policy は stableVersion 0.25.0 と nextVersion 0.26.0 です。
+Rolled policy: stableVersion → 0.25.0; nextVersion → 0.26.0。
+次の line の package identity は `JTechJapan.IntentSystem.Cli.0.26.0.nupkg` です。これは preparation の値であり、publish action ではありません。
+release-readiness gate はこの prepare-only documentation update とは別です。
+
+この preparation は `eng/version.json` を stableVersion `0.25.0`、
+nextVersion `0.26.0` にします。以前の v0.25.1 DRAFT stub は削除し、
+active な unpublished note は
+[release-notes-v0.26.0.md](release-notes-v0.26.0.md) です。v0.26.0 line は
+prepare-only で、ここでは tag または Release を作成せず、package を publish せず、
+post-release roll も実行せず、後続の real release number も決めません。
+
+この child が正確な prepared head
+`a49ad93c36bd93d1ccc9317622d36fa01ea346b8` を Release build して測定した
+identity は `intent-cli 0.25.1-a49ad93-G748`、installed baseline は
+`intent-cli 0.25.0-74a1c72-G741` でした。installed の
+`notify supervise archive` は `archive` を拒否しました。正確な metadata-only
+policy update 後の final Release identity は `intent-cli 0.26.0-a49ad93-G748` です。
+build した usage は
+`notify supervise archive --domain <d> --team <t> [--live-window-days <days>] [--dry-run|--write] [--format markdown|json]` を示します。
+`automation`、`claim`、`worker` の help は byte-identical で、notify の差は
+この archive surface だけです。state-doctor と closeout-drift-check の usage
+も byte-identical でした。minor bump の根拠はこの測定であり、version file から
+先に推測したものではありません。
+
+`v0.25.0..a49ad93c36bd93d1ccc9317622d36fa01ea346b8` の first-parent range は
+六つの commit です。release inventory は G743、G744、G746、G747、G748 の
+五つだけです。G745 の `b8f249e965cad2c3c2e19dda9dd99e726324485d`
+post-v0.25.0 roll は release-note table で分類し、release unit には数えません。
+G743 と G747 は v0.25.0 で shipped した claim-transaction contract を
+finish/repair し、G748 は sixteen 件の qualifying incident で zero 回だった
+G741 detector を repair しました。五つの outcome は active な v0.26.0 note に
+operator-observable として記録しています。
+
+Release-prep verification の正確な count は active note に記録しています:
+Targeted release-prep docs/version guard: 40 passed, 0 failed, 0 skipped (40 total)。
+Dedicated G613 JA terminology guard: 6 passed, 0 failed, 0 skipped (6 total)。
+Adjacent release/readiness suite: 59 passed, 0 failed, 0 skipped (59 total)。
+Full Release suite: 5305 passed, 0 failed, 1 skipped (5306 total)。git diff --check: clean。
+child issue-preflight が canonical-unavailable になったのは sandbox による
+`.git/FETCH_HEAD` refresh 拒否だけなので、supplied host claim を使用しました。
+child execution-unit claim は作成・変更・release せず、host repository に入りませんでした。
+host-only claim boundary は `release-prep:<owner/repo>:0.26.0` で、この child は host state を inspect しません。
 公開済みの [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0) とその tag は authoritative shipped evidence です。
 v0.23.0 の shipped artifact は GitHub Release、NuGet package、自己完結型バイナリです。ただし npm leg は registry に到達しなかったため、`0.23.0` は npm で利用できると扱ってはいけません。
 tracked な EN/JA の `release-notes-v0.23.0.md` files はこの shipped-artifact status を記録します。
