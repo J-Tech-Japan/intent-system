@@ -80,7 +80,11 @@ claim-transaction contract を finish、repair するものであり、新しい
   **Operator-observable outcome:** duplicate execution-unit queue row を
   closeout と state-doctor が crash せず報告します。strictly more-informative
   な duplicate だけを repair し、ambiguous な entry は competing information
-  を示して安全に停止します。
+  を示して安全に停止します。**Consumer report #1622:** duplicate
+  `execution_unit` row により `closeout-drift-check` が duplicate-key crash
+  しました。canonical command ではその state を recovery できず、reporter
+  は unblock のため `.intent-cli/queue-state.json` を手動編集しました。
+  新しい canonical finding/repair がその手動 recovery を置き換えます。
 - G747 — PR #1627; merge commit `7e7d16e4639f22530843b19f065b5a101cf1b0b4`。
   **Operator-observable outcome:** claim transaction は実際の pre-commit cause
   を保持し、metadata から解決した remote default branch を対象にし、cleanup

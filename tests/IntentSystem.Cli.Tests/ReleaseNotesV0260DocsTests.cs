@@ -146,6 +146,7 @@ public sealed class ReleaseNotesV0260DocsTests
         Assert.Contains("closeout", g746, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("state-doctor", g746, StringComparison.Ordinal);
         Assert.Contains("ambiguous", g746, StringComparison.OrdinalIgnoreCase);
+        AssertG746ConsumerRecoveryChain(g746, language);
 
         Assert.Contains("default branch", g747, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("JSON stdout", g747, StringComparison.Ordinal);
@@ -158,6 +159,29 @@ public sealed class ReleaseNotesV0260DocsTests
         Assert.Contains("sixteen qualifying incidents", g748, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("zero", g748, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("operator-observable", g748, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AssertG746ConsumerRecoveryChain(string entry, string language)
+    {
+        Assert.Contains("#1622", entry, StringComparison.Ordinal);
+        Assert.Contains("closeout-drift-check", entry, StringComparison.Ordinal);
+        Assert.Contains("duplicate-key", entry, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("crash", entry, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("canonical", entry, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(".intent-cli/queue-state.json", entry, StringComparison.Ordinal);
+
+        if (language == "en")
+        {
+            Assert.Contains("could not recover", entry, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("had to hand-edit", entry, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("replaces that manual recovery", entry, StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            Assert.Contains("recovery できず", entry, StringComparison.Ordinal);
+            Assert.Contains("手動編集", entry, StringComparison.Ordinal);
+            Assert.Contains("手動 recovery を置き換え", entry, StringComparison.Ordinal);
+        }
     }
 
     [Theory]

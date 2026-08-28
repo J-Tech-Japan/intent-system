@@ -82,7 +82,11 @@ before this repair.
   **Operator-observable outcome:** duplicate execution-unit queue rows are
   reported by closeout and state-doctor instead of crashing. Only strictly
   more-informative duplicates are repaired; ambiguous entries stop safely with
-  their competing information visible.
+  their competing information visible. **Consumer report #1622:** duplicate
+  `execution_unit` rows made `closeout-drift-check` crash with a duplicate-key
+  failure. Canonical commands could not recover that state, so the reporter
+  had to hand-edit `.intent-cli/queue-state.json` to unblock. The new canonical
+  finding/repair replaces that manual recovery.
 - G747 — PR #1627; merge commit `7e7d16e4639f22530843b19f065b5a101cf1b0b4`.
   **Operator-observable outcome:** claim transactions preserve the actual
   pre-commit cause, target the remote default branch resolved from metadata,
