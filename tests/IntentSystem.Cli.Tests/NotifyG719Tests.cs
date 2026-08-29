@@ -38,7 +38,7 @@ public sealed class NotifyG719Tests : IDisposable
         Assert.Equal(0, delegateExit);
         var generatedCommand = delegateResult.GetProperty("report_command").GetString()!;
         Assert.Contains(
-            $"--routing-root '{workspace.HostRoot}' --report-root .",
+            $"--routing-root '{workspace.HostRoot}' --report-root '{workspace.SeatRoot}'",
             generatedCommand,
             StringComparison.Ordinal);
 
@@ -47,7 +47,7 @@ public sealed class NotifyG719Tests : IDisposable
             generatedCommand,
             "https://example.test/pr/1560",
             "generated-sandbox-report-verified");
-        Assert.Contains("--report-root .", exactCommand, StringComparison.Ordinal);
+        Assert.Contains($"--report-root '{workspace.SeatRoot}'", exactCommand, StringComparison.Ordinal);
 
         var hostBefore = workspace.HostSnapshot();
         var originalHostRootMode = workspace.HostRootMode();
@@ -561,7 +561,7 @@ public sealed class NotifyG719Tests : IDisposable
                 roles = new Dictionary<string, object>
                 {
                     ["orchestration"] = orchestration,
-                    ["implementation"] = new { resident = NotifyRecordedRole.HerdrResident, workspace_id = "wG719", pane_id = "wG719:p2" },
+                    ["implementation"] = new { resident = NotifyRecordedRole.HerdrResident, workspace_id = "wG719", pane_id = "wG719:p2", cwd = SeatRoot },
                 },
             }));
 

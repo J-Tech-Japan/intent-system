@@ -484,7 +484,7 @@ intent-cli notify report --domain <domain> --team <team> --from <receiver-role> 
   --to <orchestrator-role> --task-id <task-id> \
   --status completed|blocked|question --artifact <artifact> \
   --summary <one-line-summary> --routing-root <host-routing-root> \
-  --report-root . --write --format json
+  --report-root <role-work-root> --write --format json
 
 # Route a design decision to the existing events.jsonl boundary.
 intent-cli notify escalate --domain <domain> --team <team> --from <sender-role> \
@@ -637,7 +637,7 @@ unrecognised identifier would silence unsolicited reports and answers to
 escalations—the messages whose information the recipient did not know to
 request.
 
-**Sender-local report routing and executability/actionability diagnostics (G719/G731 — preview-through-1.x).** An implementation seat receives exactly one bounded `--add-dir <role-work-root>` and is not granted `--add-dir <host-routing-root>` or host-root write access. Its canonical report carries `--routing-root <host-routing-root> --report-root .`: the host root remains read/transport authority and the role root is the writable sender-local outbox. A report on a seat that genuinely lacks the host routing root must persist its local outbox, identify `report_storage_mode: sender-local-role-work-root`, and identify `host_state_sync: deferred-to-orchestration`; orchestration reconciles host pending/continuation state with `intent-cli notify reconcile --domain <d> --team <t> --task-id <id> --routing-root <host> --report-root <role-work-root> --write --format json`. It must not retry a host write, hand-write transport, or widen the seat.
+**Sender-local report routing and executability/actionability diagnostics (G719/G731/G760 — preview-through-1.x).** An implementation seat receives exactly one bounded `--add-dir <role-work-root>` and is not granted `--add-dir <host-routing-root>` or host-root write access. Its task-envelope canonical report carries `--routing-root <host-routing-root> --report-root <role-work-root>`: at generation time, `<role-work-root>` is replaced with the recipient's recorded absolute topology `cwd` and shell-quoted. If no cwd is recorded, the envelope carries the explicit `<role-work-root>` substitution placeholder; it never emits a bare `.` that depends on the receiver's current directory. The host root remains read/transport authority and the role root is the writable sender-local outbox. A report on a seat that genuinely lacks the host routing root must persist its local outbox, identify `report_storage_mode: sender-local-role-work-root`, and identify `host_state_sync: deferred-to-orchestration`; orchestration reconciles host pending/continuation state with `intent-cli notify reconcile --domain <d> --team <t> --task-id <id> --routing-root <host> --report-root <role-work-root> --write --format json`. It must not retry a host write, hand-write transport, or widen the seat.
 
 G731 makes the delivery decision capability/outcome-based across both
 `notify report` and `notify collect`: differing report and routing roots are
@@ -1396,7 +1396,7 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --mode autop
 - **Role-derived roots.** Give every role one bounded `--add-dir <role-work-root>`
   for its checkout or worktree. A reviewer may additionally need `--add-dir
   <host-routing-root>` for an external-reader surface; an implementation seat
-  uses `--routing-root <host-routing-root> --report-root .` and must not receive
+  uses `--routing-root <host-routing-root> --report-root <role-work-root>` resolved from the recipient's absolute topology `cwd` (or the explicit `<role-work-root>` placeholder when absent) and must not receive
   host-root write access. Do not add unrelated developer-machine roots. Before
   delegation, the orchestrator compares workspace prerequisites with this
   recorded write envelope and prepares anything outside it under orchestrator
@@ -1445,7 +1445,7 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
 - **Role-derived roots.** Use one bounded `--add-dir <role-work-root>` for the
   role checkout/worktree. The implementation seat does not receive
   `--add-dir <host-routing-root>` or MyIntentHost write access: its canonical
-  report uses `--routing-root <host-routing-root> --report-root .`, with the
+  report uses `--routing-root <host-routing-root> --report-root <role-work-root>` resolved from the recipient's absolute topology `cwd` (or the explicit `<role-work-root>` placeholder when absent), with the
   host root as read/transport authority and the role root as the writable
   sender-local handoff. Add a host root only when another role's external
   reader explicitly requires it. The role-work-root is an ordinary-file
@@ -1496,7 +1496,7 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
 three additional facts: an expected action inside the recorded roots succeeds;
 the role reaches its canonical reporting surface; and a deliberately
 out-of-scope action is denied. For implementation, prove the report with
-`--routing-root <host-routing-root> --report-root .` and record the local outbox
+`--routing-root <host-routing-root> --report-root <role-work-root>` from the recipient's absolute topology `cwd` (or the explicit `<role-work-root>` placeholder when absent) and record the local outbox
 plus deferred host-state reconciliation without granting host-root write access.
 Capture that denial for review. A live pane or a successful allowed action alone
 is **not** READY. If a denial probe unexpectedly succeeds, first
