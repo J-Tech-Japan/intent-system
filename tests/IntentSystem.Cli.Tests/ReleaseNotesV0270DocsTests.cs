@@ -5,9 +5,8 @@ using IntentSystem.Cli.Infrastructure;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G753: v0.27.0 release-prep evidence is measured from the functional head,
-/// accounts for the post-release roll, and keeps the EN/JA operator narrative
-/// in lockstep.
+/// G753/G754: frozen v0.27.0 release-prep evidence remains in lockstep while
+/// the v0.27.1 post-release roll updates the current readiness mirrors.
 /// </summary>
 public sealed class ReleaseNotesV0270DocsTests
 {
@@ -170,12 +169,12 @@ public sealed class ReleaseNotesV0270DocsTests
     {
         var root = RepoVersionPolicySource.RepoRoot();
         Assert.Equal(
-            "{\n  \"stableVersion\": \"0.26.0\",\n  \"nextVersion\": \"0.27.0\"\n}\n",
+            "{\n  \"stableVersion\": \"0.27.0\",\n  \"nextVersion\": \"0.27.1\"\n}\n",
             File.ReadAllText(Path.Combine(root, "eng", "version.json")));
 
         var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.26.0", policy.StableVersion);
-        Assert.Equal("0.27.0", policy.NextVersion);
+        Assert.Equal("0.27.0", policy.StableVersion);
+        Assert.Equal("0.27.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
@@ -183,6 +182,7 @@ public sealed class ReleaseNotesV0270DocsTests
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.26.0.md")));
             Assert.False(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.26.1.md")));
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.27.0.md")));
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.27.1.md")));
         }
     }
 
@@ -197,8 +197,8 @@ public sealed class ReleaseNotesV0270DocsTests
 
         Assert.Contains(
             language == "en"
-                ? "### Next release readiness (v0.27.0)"
-                : "### 次リリース準備(v0.27.0)",
+                ? "### Next release readiness (v0.27.1)"
+                : "### 次リリース準備(v0.27.1)",
             reference,
             StringComparison.Ordinal);
         Assert.DoesNotContain(
@@ -209,6 +209,8 @@ public sealed class ReleaseNotesV0270DocsTests
             StringComparison.Ordinal);
         Assert.Contains(InstalledDisplayIdentity, reference, StringComparison.Ordinal);
         Assert.Contains("release-notes-v0.27.0.md", reference, StringComparison.Ordinal);
+        Assert.Contains("release-notes-v0.27.1.md", reference, StringComparison.Ordinal);
+        Assert.Contains("intent-cli 0.27.0-f43fbd1-G753", reference, StringComparison.Ordinal);
         Assert.Contains(PreparedFunctionalHead, reference, StringComparison.Ordinal);
         Assert.Contains("104 usages", reference, StringComparison.Ordinal);
         Assert.Contains("111.5MB", reference, StringComparison.Ordinal);

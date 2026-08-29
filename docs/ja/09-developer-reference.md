@@ -2993,7 +2993,101 @@ result は literal bytes の削減、追加した reference bytes、record の n
 `shrink-audit.jsonl` に明記します。`.intent-cli/runs/*.provider.jsonl` は別の provider-run state なので
 scope 外です。`--dry-run` なら manifest、JSONL、audit を書き込まずに測定済み plan だけを確認できます。
 
-### 次リリース準備(v0.27.0)
+### 次リリース準備(v0.27.1)
+
+**POST-RELEASE ROLL / PLACEHOLDER ONLY。**
+
+shipped stable line は `intent-cli 0.27.0-f43fbd1-G753`、source revision は
+`f43fbd19f6e0cb7fa284ccd2f89d2932f63ca330` です。tracked な EN/JA
+`release-notes-v0.27.0.md` は shipped evidence であり、この roll では
+byte-identical のままです。この roll 後の policy pair は次のとおりです:
+
+```json
+{
+  "stableVersion": "0.27.0",
+  "nextVersion": "0.27.1"
+}
+```
+
+`0.27.1` は replaceable placeholder だけで、次の real release number を
+決定したものではありません。EN/JA に `release-notes-v0.27.1.md` の DRAFT
+stub を追加します。それぞれの stub 自身が replaceable planning scaffold で
+changelog ではないと明記します。tag、GitHub Release、package publish、
+post-release roll、G725 detector の変更はこの作業に含めません。
+
+version-flow の pair は `stableVersion → 0.27.0` と
+`nextVersion → 0.27.1` です。対応する package artifact 名は
+`JTechJapan.IntentSystem.Cli.0.27.1.nupkg` ですが、placeholder の名前だけです。
+canonical release-prep coordination scope は
+`release-prep:<owner/repo>:0.27.1` です。plain policy の current value は
+stableVersion 0.27.0、nextVersion 0.27.1 です。v0.27.0 GitHub Release は
+shipped evidence の正式な根拠です:
+https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.27.0。この roll
+では tag、publish、GitHub Release の作成を行いません。
+
+過去の readiness audit との continuity のため、v0.23.0 GitHub Release と
+https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0、
+`release-notes-v0.23.0.md` は自己完結型バイナリを記録します。npm leg は
+registry に到達しなかったため、npm で利用できると扱ってはいけません。
+installed 0.23.2 CLI と `checkout_freshness/provenance` は historical evidence
+として残します。v0.27.0 release-note file は shipped-note evidence ですが、
+prepare-only の wording と authoritative な GitHub Release の間には
+source-note inconsistency があります。この source-note inconsistency はこの
+roll より前から存在し、この scope 外の点は後の explicitly scoped remediation
+で扱います。
+
+### この roll の G725 evidence boundary
+
+提供された pre-roll の host-root observation は target checkout
+`f43fbd19f6e0cb7fa284ccd2f89d2932f63ca330` に対して実行され、`stalled=true` と
+次の actionable item を返しました:
+
+```text
+kind=version-roll-required
+is_informational=false
+released_version=0.27.0
+expected_stable_version=0.27.0
+expected_next_version=0.27.1
+```
+
+この observation に使った host 側 metadata checkout は local revision
+`35c6d96a` が `origin/main` `209b1369` より stale だと warning を出しました。
+この provenance はそのまま記録し、fresh な synced-main measurement とは
+扱いません。この edit 前に同じ target checkout から available child run を
+実行した結果も上記の actionable `version-roll-required` item を返しました。
+同時に informational な stale-claim item と child queue-state file missing の
+warning も返しました。
+
+この child roll 後、checkout
+`f43fbd19f6e0cb7fa284ccd2f89d2932f63ca330` から実行した child run は
+`stalled=true` を返し、informational な G717、G719、G725 の `claim-stale` item
+だけを含み、`version-roll-required` item はなく、child queue state が見つからない
+warning も返しました。policy pair は正しいですが、この silence だけでは evidence ではなく、
+roll の証明にもなりません。valid な answer には、この PR merge 後に
+synced host-main checkout から同じ command を実行し、checkout commit と
+freshness/provenance を記録する必要があります。implementation seat は host
+repository に入りません。**HOST DUTY REQUEST:** merge 後、synced host-main
+target checkout から
+`intent-cli automation stalled-work --domain intent-cli --repo J-Tech-Japan/intent-system --format json`
+を実行し、関連する before/after の `items`、checkout commit、freshness/provenance
+を返してください。この child-side silence を proof として扱わないでください。
+
+host worker は #1640 を selected しましたが、issue-preflight は
+`.git/FETCH_HEAD` を読めないため `canonical-unavailable` を返しました。
+fresh child selector は local `execution-unit:G754` が unheld なので
+`next-action=wait` を返しました。これは既知の child/host registry
+contradiction であり、child が ownership を決めたものではありません。提供された
+host claim を正本として使い、この child は execution-unit claim を create、alter、
+release、verify せず、host repository に入りませんでした。
+
+shipped line の real-install evidence は `intent-cli 0.27.0-f43fbd1-G753` です。
+この roll で観測した child verification は、dedicated v0.27.1 guard が 4 passed、
+0 failed、0 skipped、adjacent release guard が 65 passed、0 failed、0 skipped、
+G613 が 6 passed、0 failed、0 skipped、Full Release suite が 5336 passed、0 failed、
+1 skipped (5337 total)、`git diff --check` は clean です。CI は push 後の別の
+check です。
+
+### 以前の v0.27.0 release-prep evidence (provenance)
 
 **RELEASE PREPARED / NOT PUBLISHED。**
 

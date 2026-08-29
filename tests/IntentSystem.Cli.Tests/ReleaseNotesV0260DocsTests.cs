@@ -5,9 +5,9 @@ using IntentSystem.Cli.Infrastructure;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G749/G753: the frozen v0.26.0 release-prep notes retain their measured
-/// evidence while the v0.27.0 preparation updates the current readiness
-/// mirrors in both languages.
+/// G749/G753/G754: the frozen v0.26.0 release-prep notes retain their measured
+/// evidence while the v0.27.1 post-release roll updates current readiness in
+/// both languages.
 /// </summary>
 public sealed class ReleaseNotesV0260DocsTests
 {
@@ -16,7 +16,7 @@ public sealed class ReleaseNotesV0260DocsTests
     private const string BuiltDisplayIdentity = "intent-cli 0.25.1-a49ad93-G748";
     private const string FinalBuiltDisplayIdentity = "intent-cli 0.26.0-a49ad93-G748";
     private const string InstalledDisplayIdentity = "intent-cli 0.25.0-74a1c72-G741";
-    private const string CurrentStableInstallDisplayIdentity = "intent-cli 0.26.0-93f07f8-G749";
+    private const string CurrentStableInstallDisplayIdentity = "intent-cli 0.27.0-f43fbd1-G753";
     private const string PreRollTargetCheckout = "bb9754859ac8055adbd504f294145b7494668c1a";
     private const string PrHead = "c73e12e6d08c6e7698f393c47c571f1320bedf90";
     private const string ArchiveUsage =
@@ -214,12 +214,12 @@ public sealed class ReleaseNotesV0260DocsTests
         var root = RepoVersionPolicySource.RepoRoot();
         var policyPath = Path.Combine(root, "eng", "version.json");
         Assert.Equal(
-            "{\n  \"stableVersion\": \"0.26.0\",\n  \"nextVersion\": \"0.27.0\"\n}\n",
+            "{\n  \"stableVersion\": \"0.27.0\",\n  \"nextVersion\": \"0.27.1\"\n}\n",
             File.ReadAllText(policyPath));
 
         var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.26.0", policy.StableVersion);
-        Assert.Equal("0.27.0", policy.NextVersion);
+        Assert.Equal("0.27.0", policy.StableVersion);
+        Assert.Equal("0.27.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
@@ -228,6 +228,7 @@ public sealed class ReleaseNotesV0260DocsTests
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.26.0.md")));
             Assert.False(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.26.1.md")));
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.27.0.md")));
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.27.1.md")));
         }
     }
 
@@ -252,7 +253,7 @@ public sealed class ReleaseNotesV0260DocsTests
         var readiness = ReadCurrentReadiness(language);
 
         Assert.Contains(
-            language == "en" ? "Next release readiness (v0.27.0)" : "次リリース準備(v0.27.0)",
+            language == "en" ? "Next release readiness (v0.27.1)" : "次リリース準備(v0.27.1)",
             readiness,
             StringComparison.Ordinal);
         Assert.Contains("0.25.0", readiness, StringComparison.Ordinal);
@@ -367,7 +368,7 @@ public sealed class ReleaseNotesV0260DocsTests
     {
         var content = File.ReadAllText(Path.Combine(
             RepoVersionPolicySource.RepoRoot(), "docs", language, "09-developer-reference.md"));
-        var heading = language == "en" ? "### Next release readiness (v0.27.0)" : "### 次リリース準備(v0.27.0)";
+        var heading = language == "en" ? "### Next release readiness (v0.27.1)" : "### 次リリース準備(v0.27.1)";
         var start = content.IndexOf(heading, StringComparison.Ordinal);
         Assert.True(start >= 0, $"Missing current readiness heading in {language}.");
         var end = content.IndexOf("**Previous v0.25.0 preparation evidence", start, StringComparison.Ordinal);
