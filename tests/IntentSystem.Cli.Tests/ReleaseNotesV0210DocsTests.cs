@@ -169,8 +169,8 @@ public sealed class ReleaseNotesV0210DocsTests
             Assert.Contains(language == "en" ? "UNRELEASED" : "未リリース", currentNotesCompact, StringComparison.OrdinalIgnoreCase);
             Assert.Contains(
                 language == "en"
-                    ? "release-prep packet authors the real content"
-                    : "release-prep パケットが author します",
+                    ? "release-prep packet will replace this placeholder"
+                    : "release-prep パケットが",
                 currentNotesCompact,
                 StringComparison.OrdinalIgnoreCase);
             Assert.Contains(

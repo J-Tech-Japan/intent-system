@@ -292,11 +292,11 @@ public sealed class ReleaseNotesV0220DocsTests
             compact,
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
-            "PREPARED / NOT PUBLISHED",
+            "POST-RELEASE ROLL / PLACEHOLDER ONLY",
             compact,
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
-            language == "en" ? "authoritative shipped evidence" : "shipped evidence の authoritative source",
+            language == "en" ? "authoritative shipped evidence" : "shipped evidence の正式な根拠",
             compact,
             StringComparison.OrdinalIgnoreCase);
         if (language == "en")
@@ -314,11 +314,11 @@ public sealed class ReleaseNotesV0220DocsTests
         Assert.Contains("installed 0.23.2 CLI", section, StringComparison.Ordinal);
         Assert.Contains("checkout_freshness/provenance", section, StringComparison.Ordinal);
         Assert.Contains(
-            language == "en" ? "no tag" : "tag または Release を作成せず",
+            language == "en" ? "no tag" : "tag、GitHub Release",
             compact,
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
-            language == "en" ? "no package" : "package を publish せず",
+            language == "en" ? "package publish" : "package publish",
             compact,
             StringComparison.OrdinalIgnoreCase);
     }

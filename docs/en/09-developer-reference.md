@@ -2746,7 +2746,7 @@ literal:
 ```
 
 The shape is written with placeholders on purpose: **read the actual values from
-`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0260)
+`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0261)
 for the line currently being cut. A worked example here would be a second copy
 of the version pair that goes stale on the next roll — the defect G557/G560
 exist to remove.
@@ -2952,31 +2952,32 @@ rotated by this command; the result and `shrink-audit.jsonl` say so explicitly.
 out of scope. Use `--dry-run` to inspect the measured plan without writing the
 manifest, JSONL files, or audit.
 
-### Next release readiness (v0.26.0)
+### Next release readiness (v0.26.1)
 
-**PREPARED / NOT PUBLISHED.**
+**POST-RELEASE ROLL / PLACEHOLDER ONLY.**
 
-**v0.25.0 shipped evidence:** the shipped baseline is
-intent-cli 0.25.0-74a1c72-G741 from source revision
-74a1c722291a6a45a580221dcf8a9a8ad4e4d831. The tracked EN and JA
-release-notes-v0.25.0.md files remain unchanged by this preparation.
+**v0.26.0 shipped evidence:** the shipped baseline is
+intent-cli 0.26.0-93f07f8-G749 from source revision
+93f07f892f6514bc561493339b11e36de0e36555. The tracked EN and JA
+release-notes-v0.26.0.md files remain unchanged by this post-release roll.
 The prior v0.24.0 shipped-note files, release-notes-v0.24.0.md in both mirrors, remain historical evidence.
-The v0.25.0 GitHub Release and tag are authoritative shipped evidence.
+The v0.26.0 GitHub Release and tag are authoritative shipped evidence.
+The real-install identity is `intent-cli 0.26.0-93f07f8-G749`.
 The source-note inconsistency predates this roll; correcting it is out of scope and must be handled by a later explicitly scoped remediation.
 The comparison also used the installed 0.23.2 CLI; checkout_freshness/provenance is recorded with this preparation.
-The current policy is stableVersion 0.25.0 and nextVersion 0.26.0.
-Rolled policy: stableVersion → 0.25.0; nextVersion → 0.26.0.
-The next-line package identity is `JTechJapan.IntentSystem.Cli.0.26.0.nupkg`; this is a preparation value, not a publish action.
-The release-readiness gate remains separate from this prepare-only documentation update.
+The current policy is stableVersion 0.26.0 and nextVersion 0.26.1.
+Rolled policy: stableVersion → 0.26.0; nextVersion → 0.26.1 (placeholder only).
+The next-line package identity is `JTechJapan.IntentSystem.Cli.0.26.1.nupkg`; this is a placeholder value, not a publish action.
+The release-readiness gate remains separate from this post-release roll.
 
-This preparation sets `eng/version.json` to stableVersion `0.25.0` and
-nextVersion `0.26.0`. The former v0.25.1 DRAFT stubs were deleted; the active
-unpublished note is [release-notes-v0.26.0.md](release-notes-v0.26.0.md).
-The v0.26.0 line is prepare-only: no tag, GitHub Release, and no package is
-published; no post-release roll is performed here, and no real later release
-number is chosen.
+This post-release roll sets `eng/version.json` to stableVersion `0.26.0` and
+nextVersion `0.26.1`. The shipped v0.26.0 note files remain untouched; the
+current placeholder is [release-notes-v0.26.1.md](release-notes-v0.26.1.md).
+The v0.26.1 DRAFT stubs are replaceable planning scaffolds, not a changelog;
+release-prep will replace them after measuring and deciding the next real
+release number. No tag, GitHub Release, or package publish is performed here.
 
-The exact prepared head measured by this child is
+The v0.26.0 preparation measured the exact prepared head
 a49ad93c36bd93d1ccc9317622d36fa01ea346b8. Its own Release build reports
 intent-cli 0.25.1-a49ad93-G748; the installed baseline reports
 intent-cli 0.25.0-74a1c72-G741. Installed `notify supervise archive` rejects
@@ -2995,9 +2996,9 @@ post-v0.25.0 roll is classified in the release-note table and is not a release u
 G743 and G747 finish/repair the claim-transaction contract shipped in v0.25.0;
 G748 repairs the G741 detector that fired zero times across sixteen qualifying
 incidents. The five entries describe operator-observable outcomes in the active
-v0.26.0 notes.
+shipped v0.26.0 notes.
 
-Release-prep verification exact counts are recorded in the active note:
+The v0.26.0 release-prep verification exact counts are recorded in its note:
 Targeted release-prep docs/version guards: 40 passed, 0 failed, 0 skipped (40 total).
 Dedicated G613 JA terminology guard: 6 passed, 0 failed, 0 skipped (6 total).
 Adjacent release/readiness suite: 59 passed, 0 failed, 0 skipped (59 total).
@@ -3006,7 +3007,15 @@ This child consumed the supplied host claim because the
 child issue-preflight was canonical-unavailable only from sandbox denial while
 refreshing `.git/FETCH_HEAD`; it did not create, modify, or release a child
 execution-unit claim and did not enter the host repository.
-The host-only claim boundary is `release-prep:<owner/repo>:0.26.0`; this child does not inspect host state.
+The host-only claim boundary is `release-prep:<owner/repo>:0.26.1`; this child does not inspect host state.
+The orchestration-seat preflight recorded `next-action=wait`,
+`classification=claim-unavailable`, and `actionable=false` because it could not
+open `.git/FETCH_HEAD` (`Operation not permitted`). The fresh child selector
+reported local holder none/unheld; the supplied host claim is authoritative and
+this child did not create, modify, release, or verify an execution-unit claim.
+G725 evidence boundary: the design's pre-change host-root run at synced product
+checkout `bb9754859ac8055adbd504f294145b7494668c1a` returned zero findings while
+this version roll was absent. That silence is non-evidence, not a green check.
 The published [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0) and its tag are authoritative shipped evidence.
 The v0.23.0 shipped artifacts are the GitHub Release, NuGet package, and self-contained binaries; its npm leg never reached the registry, so `0.23.0` must not be treated as available from npm.
 The tracked EN and JA `release-notes-v0.23.0.md` files now state this shipped-artifact status.
