@@ -434,7 +434,7 @@ intent-cli notify report --domain <domain> --team <team> --from <receiver-role> 
   --to <orchestrator-role> --task-id <task-id> \
   --status completed|blocked|question --artifact <artifact> \
   --summary <one-line-summary> --routing-root <host-routing-root> \
-  --report-root . --write --format json
+  --report-root <role-work-root> --write --format json
 
 # design decision を既存 events.jsonl boundary へ送る。
 intent-cli notify escalate --domain <domain> --team <team> --from <sender-role> \
@@ -541,7 +541,7 @@ supervision state と emission-policy JSON shape を保持します。
 **report outbox (G653 — 1.x を通じた preview)。** `notify report --write` は transport を試す前に sender-side outbox entry を保存します。entry は task id、result nonce、status、artifact、summary、delivery timestamp を保持し、delivery failure は完了した作業を失わず `undelivered` として残ります。supervision は entry と `notify collect` の remedy を表示するだけで自動送信しません。recipient-side terminal の `ORCH_RESULT` は人間向けの record のままで、intent-cli は terminal を `parse` しません。visible result に arrived report がないときは、recipient を `re-delegate` したり task を `redo` したりせず persisted outbox entry を `collect` します。collection は同じ task id の original report だけを一度送信し、already-delivered entry は拒否します。entry は dispatch generation（result nonce）単位なので、再委譲された task id も新しい report を運べ、unmatched report も message として継続します。undelivered の current generation に対する二回目の report は fail-closed で拒否し、正確な `notify collect` recovery command を示します。
 新しい委譲を開始する前に、`notify delegate --write` は undelivered report entry がある task を拒否し、supervision finding と同じ `notify collect` command を示します。これにより finding の対象と collect できる entry は一致します。また、report が settled になった task id/result nonce の組も作業開始前に拒否し、fresh `--result-nonce` または新しい task id を要求します。outbox がない open generation は idempotent に再送できます。
 
-**sender-local report routing と executability/actionability 診断 (G719/G731 — preview-through-1.x)。** implementation seat には checkout/worktree 用の境界付き `--add-dir <role-work-root>` を 1 つだけ与え、`--add-dir <host-routing-root>` や MyIntentHost への write access は与えません。canonical report は `--routing-root <host-routing-root> --report-root .` を持ち、host root は read/transport の基準経路、role root は sender-local outbox の write root です。host routing root を実際には書けない seat でも local outbox を保存し、`report_storage_mode: sender-local-role-work-root` と `host_state_sync: deferred-to-orchestration` を示して、orchestration が `intent-cli notify reconcile --domain <d> --team <t> --task-id <id> --routing-root <host> --report-root <role-work-root> --write --format json` で host の pending/continuation state を整合します。host write の retry、hand-write transport、seat boundary の拡大はしません。
+**sender-local report routing と executability/actionability 診断 (G719/G731/G760 — preview-through-1.x)。** implementation seat には checkout/worktree 用の境界付き `--add-dir <role-work-root>` を 1 つだけ与え、`--add-dir <host-routing-root>` や MyIntentHost への write access は与えません。task envelope の canonical report は `--routing-root <host-routing-root> --report-root <role-work-root>` を持ち、生成時に `<role-work-root>` を recipient の topology に記録された absolute `cwd` で置き換え、shell 用の引用符を付けます。cwd が記録されていない場合は明示的な `<role-work-root>` substitution placeholder を残し、receiver の current directory に依存する bare `.` は出しません。host root は read/transport の基準経路、role root は sender-local outbox の write root です。host routing root を実際には書けない seat でも local outbox を保存し、`report_storage_mode: sender-local-role-work-root` と `host_state_sync: deferred-to-orchestration` を示して、orchestration が `intent-cli notify reconcile --domain <d> --team <t> --task-id <id> --routing-root <host> --report-root <role-work-root> --write --format json` で host の pending/continuation state を整合します。host write の retry、hand-write transport、seat boundary の拡大はしません。
 
 G731 では delivery の判断を `notify report` と `notify collect` に共通化し、report root と routing root が異なるという事実だけでは拒否しません。両方の caller が現在の execution context で external-reader への append を試みます。host append が成功すれば root が異なっていても report は delivery 済みとなり、sender-local outbox は `delivered` に更新されます。一方、実際の I/O または access error が発生した場合だけ entry を `undelivered` のまま保持し、`report-routing-root-write-required` は未測定の sandbox 制約を断定せず、観測した失敗を示します。`notify collect --routing-root <host> --report-root <role-work-root>` が名前付きの delivery-level recovery command です。`notify reconcile` は append を再試行せず、undelivered entry には exact collect command を `recovery_command` と summary の両方で返します。
 
@@ -1034,7 +1034,7 @@ bounded readiness/report check を再実行します。再登録、kill、restar
 これは 1.x を通じた preview で、1.0 compatibility promise の対象外です。
 
 `notify delegate` は task id、expected artifact、fresh marker nonce、isolated child
-checkout から必要な transport-neutral `--routing-root` と sender-local `--report-root .` を含む完全な canonical report
+checkout から必要な transport-neutral `--routing-root` と、recipient の topology `cwd` から解決した absolute な sender-local `--report-root <role-work-root>`（cwd がない場合は明示的 placeholder）を含む完全な canonical report
 command を配信 task に埋め込みます。receiver は他のすべての作業後、その report
 command を final step として実行するため、herdr-only の完了が receiver pane に表示される
 だけで終わらず orchestration role を能動的に呼び起こします。herdr-only mode の source of truth は
@@ -1195,7 +1195,7 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --mode autop
 - **role-derived root。** 各 role には checkout または worktree 用の境界付き
   `--add-dir <role-work-root>` を 1 つ与えます。reviewer には canonical reporting surface
   である `intent-cli notify report` のため、さらに `--add-dir <host-routing-root>` が必要です。
-  implementation seat は `--routing-root <host-routing-root> --report-root .` を使い、host root を
+  implementation seat は recipient の absolute な topology `cwd` に解決した `--routing-root <host-routing-root> --report-root <role-work-root>`（cwd がない場合は明示的 placeholder）を使い、host root を
   read/transport の基準経路として扱い、host root write access や追加の `--add-dir` を受けません。
   developer-machine の無関係な root は追加しません。delegation の前に orchestrator は workspace
   prerequisite をこの記録済み write envelope と比較し、その外側にあるものを orchestrator の権限
@@ -1237,7 +1237,7 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
 ```
 
 - **role-derived root。** role の checkout/worktree には境界付きの
-  `--add-dir <role-work-root>` を 1 つ使います。implementation seat は `--routing-root <host-routing-root> --report-root .`
+  `--add-dir <role-work-root>` を 1 つ使います。implementation seat は recipient の absolute な topology `cwd` に解決した `--routing-root <host-routing-root> --report-root <role-work-root>`（cwd がない場合は明示的 placeholder）
   を使い、host root を read/transport の基準経路、role root を writable sender-local outbox として扱います。
   host root の write access や追加の `--add-dir` は与えません。external reader が明示的に必要な別 role だけが
   host root を追加できます。role-work-root は ordinary file root であり、repository metadata 全体への
@@ -1272,7 +1272,7 @@ herdr agent start <logical-role> --kind codex --pane <pane-id> -- --sandbox work
 
 **unattended READY branch。** 通常の G556 liveness check に加え、次の 3 点を証明します:
 記録済み root 内の期待される action が成功すること、role が canonical reporting surface
-（implementation なら `--routing-root <host-routing-root> --report-root .` の sender-local report、
+（implementation なら recipient の absolute な topology `cwd` に解決した `--routing-root <host-routing-root> --report-root <role-work-root>`（cwd がない場合は明示的 placeholder）の sender-local report、
 review なら host routing root 経由の `intent-cli notify report`）へ到達できること、意図的に
 out-of-scope にした action が拒否されることです。その拒否を review 用に記録します。live pane
 だけ、または許可済み action の成功だけでは **READY ではありません**。denial probe が予想に反して

@@ -187,6 +187,66 @@ public sealed class NotifyCommandG578Tests : IDisposable
     }
 
     [Fact]
+    public void Delegate_UsesAbsoluteShellQuotedRecipientTopologyCwdForReportRoot_G760()
+    {
+        workspace.SetMode(SessionLayerMode.HerdrOnly);
+        var recipientCwd = Path.Combine(workspace.RootPath, "recipient's-work-root");
+        workspace.SetImplementationCwd(recipientCwd);
+        NotifyCommand.ProcessRunnerFactory = SuccessfulRunner;
+
+        var (exitCode, result) = workspace.Run(DelegateArgs());
+
+        Assert.Equal(0, exitCode);
+        var command = ExtractReportCommand(result.GetProperty("payload").GetString()!);
+        var expectedReportRoot = ShellQuoteForTest(Path.GetFullPath(recipientCwd));
+        var expected = ExpectedParentReportCommand(workspace.RootPath)
+            .Replace("--report-root .", $"--report-root {expectedReportRoot}", StringComparison.Ordinal);
+
+        Assert.Equal(expected, command);
+        Assert.Contains($"--report-root {expectedReportRoot} --write", command, StringComparison.Ordinal);
+        Assert.DoesNotContain("--report-root .", command, StringComparison.Ordinal);
+        Assert.Contains($"--routing-root {ShellQuoteForTest(workspace.RootPath)}", command, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Delegate_UsesExplicitRoleWorkRootPlaceholderWhenRecipientCwdIsAbsent_G760()
+    {
+        workspace.SetMode(SessionLayerMode.HerdrOnly);
+        NotifyCommand.ProcessRunnerFactory = SuccessfulRunner;
+
+        var (exitCode, result) = workspace.Run(DelegateArgs());
+
+        Assert.Equal(0, exitCode);
+        var command = ExtractReportCommand(result.GetProperty("payload").GetString()!);
+
+        Assert.Contains("--report-root <role-work-root> --write", command, StringComparison.Ordinal);
+        Assert.DoesNotContain("--report-root .", command, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Delegate_ChangesOnlyReportRootInParentEnvelope_G760()
+    {
+        workspace.SetMode(SessionLayerMode.HerdrOnly);
+        var recipientCwd = Path.Combine(workspace.RootPath, "recipient-work-root");
+        workspace.SetImplementationCwd(recipientCwd);
+        NotifyCommand.ProcessRunnerFactory = SuccessfulRunner;
+
+        var (exitCode, result) = workspace.Run(DelegateArgs());
+
+        Assert.Equal(0, exitCode);
+        var payload = result.GetProperty("payload").GetString()!;
+        var parentCommand = ExpectedParentReportCommand(workspace.RootPath);
+        var expectedReportRoot = ShellQuoteForTest(Path.GetFullPath(recipientCwd));
+        var expectedCommand = parentCommand
+            .Replace("--report-root .", $"--report-root {expectedReportRoot}", StringComparison.Ordinal);
+        var expectedParentEnvelope = ExpectedParentEnvelope(workspace.RootPath);
+        var expectedEnvelope = expectedParentEnvelope
+            .Replace(parentCommand, expectedCommand, StringComparison.Ordinal);
+
+        Assert.Equal(expectedEnvelope, payload);
+    }
+
+    [Fact]
     public void UnrecordedMode_IsConfigurationIncompleteBeforeDefaultAgmsgTransport_G594()
     {
         var runner = SuccessfulRunner();
@@ -571,6 +631,42 @@ public sealed class NotifyCommandG578Tests : IDisposable
         "--write", "--format", "json",
     ];
 
+    private static string ExtractReportCommand(string payload)
+    {
+        const string prefix = "  canonical-report-command: ";
+        var line = payload.Split('\n').Single(line => line.StartsWith(prefix, StringComparison.Ordinal));
+        return line[prefix.Length..];
+    }
+
+    private static string ExpectedParentReportCommand(string routingRoot) =>
+        "intent-cli notify report --domain intent-cli --team intent-cli-dev --from implementation "
+        + "--to orchestration --task-id G578-demo --status <completed|blocked|question> "
+        + "--artifact <artifact> --summary <one-line-summary> "
+        + $"--routing-root {ShellQuoteForTest(routingRoot)} --report-root . --write --format json";
+
+    private static string ExpectedParentEnvelope(string routingRoot) =>
+        string.Join('\n',
+        [
+            "TASK G578-demo",
+            "role: implementation",
+            "objective: Implement the notification contract",
+            "inputs:",
+            "  - issue #1259",
+            "expected-artifacts:",
+            "  - draft PR URL",
+            "reporting-contract:",
+            "  task-id: G578-demo",
+            "  expected-artifact: draft PR URL",
+            $"  canonical-report-command: {ExpectedParentReportCommand(routingRoot)}",
+            "  required-final-step: Run canonical-report-command after all other work; never hand-write a transport invocation.",
+            "result-prefix: ORCH_RESULT",
+            "result-nonce: demo-nonce",
+            "completion-marker: When the artifact is ready, concatenate result-prefix, one space, result-nonce, one space, status, one space, and artifact; use completed, blocked, or question. Do not precompose the marker in this task block.",
+        ]);
+
+    private static string ShellQuoteForTest(string value) =>
+        $"'{value.Replace("'", "'\\''", StringComparison.Ordinal)}'";
+
     private sealed class FakeNotifyProcessRunner(
         Func<string, IReadOnlyList<string>, NotifyProcessResult> handler) : INotifyProcessRunner
     {
@@ -623,6 +719,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
         public string EventPath => Path.Combine(RootPath, ".intent-cli", "events", Domain, $"{Team}.jsonl");
         public CliContext Context { get; }
         private string? implementationDeliveryMethod;
+        private string? implementationCwd;
 
         private void WriteTopology()
         {
@@ -665,6 +762,12 @@ public sealed class NotifyCommandG578Tests : IDisposable
             WriteTopology();
         }
 
+        public void SetImplementationCwd(string? cwd)
+        {
+            implementationCwd = cwd;
+            WriteTopology();
+        }
+
         public void SeedPending(string taskId = "G578-demo", string recipientRole = "implementation")
         {
             var result = NotifyPendingDelegationStore.WriteDispatch(RootPath, new NotifyPendingDelegation
@@ -696,6 +799,10 @@ public sealed class NotifyCommandG578Tests : IDisposable
             if (implementationDeliveryMethod is not null)
             {
                 role["delivery_method"] = implementationDeliveryMethod;
+            }
+            if (implementationCwd is not null)
+            {
+                role["cwd"] = implementationCwd;
             }
 
             return role;

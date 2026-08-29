@@ -29,6 +29,8 @@ internal static class NotifyCommand
     private const string DispositionKindSuperseded = "superseded";
     private const string DispositionKindAppliedElsewhere = "applied-elsewhere";
 
+    private const string MissingRecipientWorkRootPlaceholder = "<role-work-root>";
+
     private const string DelegateUsage =
         "Usage: intent-cli notify delegate --domain <d> [--team <t>] --from <role> --to <role> --report-to <role> "
         + "--task-id <id> --objective <text> [--input <value>]... --expected-artifact <value> "
@@ -2420,11 +2422,28 @@ internal static class NotifyCommand
         return builder.ToString();
     }
 
-    private static string BuildReportCommand(NotifyOptions options) =>
-        $"intent-cli notify report --domain {options.Domain} --team {options.Team} --from {options.ToRole} "
+    private static string BuildReportCommand(NotifyOptions options)
+    {
+        var reportRoot = ResolveRecipientReportRoot(options);
+        return $"intent-cli notify report --domain {options.Domain} --team {options.Team} --from {options.ToRole} "
         + $"--to {options.ReportToRole} --task-id {options.TaskId} --status <completed|blocked|question> "
-        + $"--artifact <artifact> --summary <one-line-summary> --routing-root {ShellQuote(options.RoutingRoot!)} --report-root . "
+        + $"--artifact <artifact> --summary <one-line-summary> --routing-root {ShellQuote(options.RoutingRoot!)} --report-root {reportRoot} "
         + "--write --format json";
+    }
+
+    private static string ResolveRecipientReportRoot(NotifyOptions options)
+    {
+        var topology = NotifyRoleTopologyStore.Resolve(options.RoutingRoot!, options.Domain!, options.Team!);
+        var roleResolution = topology.Resolved && topology.Topology is { } teamTopology
+            ? NotifyRoleTopologyStore.ResolveRecordedRole(teamTopology, options.ToRole!)
+            : null;
+        var cwd = roleResolution?.Resolved == true
+            ? roleResolution.Record?.Cwd
+            : null;
+        return string.IsNullOrWhiteSpace(cwd)
+            ? MissingRecipientWorkRootPlaceholder
+            : ShellQuote(Path.GetFullPath(cwd));
+    }
 
     private static string? BuildReconciliationCommand(string operation, NotifyOptions options) =>
         (string.Equals(operation, OperationReport, StringComparison.Ordinal)
