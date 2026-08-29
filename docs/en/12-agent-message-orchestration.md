@@ -1028,15 +1028,29 @@ observations, liveness/bound evidence, or the first-cycle proof. Findings,
 wake routing, parking, emission policy, and observation-only discipline are
 unchanged.
 
-The child fixture measurement used a running event-mode supervisor with
-`interval=300` seconds and `bound=900` seconds, a deterministic idle wait
-return, and a 25 ms fixture re-arm delay. Before G751, a 2.010-second sample
-produced 75 raw records (`event-wait:74`, `interval:1`), or 134341.50
-records-per-hour. After G751, a 2.009-second sample produced 1 raw record
-(`interval:1`), or 1792.32 records-per-hour. These are independently measured
-running-fixture counts, not rates inferred from source or unit tests; the
-actual build commit is reported with the PR evidence. The 300-second interval
-and 900-second bound remain the declared cadence and safety contract.
+The before/after cadence comparison keeps startup arithmetic separate from a
+warmed steady-state window. The independent review reproduction on pre-fix
+`b525191a` ran the event-mode supervisor with the same `interval=300` seconds,
+`bound=900` seconds, deterministic idle wait, and 25 ms fixture re-arm. It
+observed 73 raw records in a 2.065-second wall window (`event-wait:72`,
+`interval:1`, including one startup interval), reported 127269.78
+records-per-hour, and is explicitly a startup-plus-two-second observation—not
+a steady-state rate. That measured result is retained as the honest pre-fix
+comparison; it is not used to predict durable-file growth.
+
+`interval_seconds=300 bound_seconds=900 sample_method=running-event-mode-supervisor window=startup-plus-two-second-wall-window raw_records=73 event-wait_records=72 startup_interval_records=1 wall_window_seconds=2.065 records-per-hour=127269.78 steady_state=false`
+
+The repaired focused regression runs the same event-mode supervisor and
+declared interval/bound with a deterministic controlled elapsed-time clock. It
+proves the first-cycle startup record separately, then advances the clock
+through twelve exact 300-second interval passes: the warmed window is 3600
+logical seconds, not a wall-time extrapolation. Its pinned evidence is:
+
+`interval_seconds=300 bound_seconds=900 sample_method=running-event-mode-supervisor-controlled-elapsed-time startup_first_cycle_records=1 warm_window_seconds=3600 warm_interval_records=12 event-wait_records=0 trigger_mix=interval:13 raw_records=13 records-per-hour=12.00`
+
+Thus the post-change steady-state result is 12 interval records per hour after
+startup. The 300-second interval and 900-second bound remain the declared
+cadence and safety contract.
 
 G751 changes event-mode persistence only. G699 duplicate-supervisor
 backoff/park, G744 archive, G750 ownership, findings, wake routing, parking,

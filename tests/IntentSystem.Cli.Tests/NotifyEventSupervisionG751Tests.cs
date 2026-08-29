@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
@@ -180,7 +179,7 @@ public sealed class NotifyEventSupervisionG751Tests : IDisposable
     }
 
     [Fact]
-    public void RunningEventModeSampleReportsRawCadenceAtTheDeclaredFloor_G751()
+    public void RunningEventModeSampleSeparatesStartupFromWarmCadenceAtTheDeclaredFloor_G751()
     {
         var context = CreateContext();
         RecordMode(context);
@@ -192,19 +191,34 @@ public sealed class NotifyEventSupervisionG751Tests : IDisposable
         var supervisor = CreateSupervisor(context, runner);
         using var cancellation = new CancellationTokenSource();
         using var writer = new StringWriter();
-        var sampleDuration = TimeSpan.FromSeconds(2);
+        const int declaredIntervalSeconds = 300;
+        const int declaredBoundSeconds = 900;
+        const int warmIntervalPasses = 12;
+        const int preFixRawRecords = 73;
+        const int preFixEventWaitRecords = 72;
+        const int preFixStartupIntervalRecords = 1;
+        const double preFixWallSeconds = 2.065;
+        const double preFixRecordsPerHour = 127269.78;
         var intervalDelayCalls = 0;
-        NotifySupervisionEventMonitor.Delay = (_, _) => Task.Delay(TimeSpan.FromMilliseconds(25));
-        NotifySupervisor.Delay = _ =>
+        DateTimeOffset? warmWindowStart = null;
+        NotifySupervisionEventMonitor.Delay = (_, token) =>
+            Task.Delay(TimeSpan.FromMilliseconds(1), token);
+        NotifySupervisor.Delay = delay =>
         {
+            if (intervalDelayCalls == warmIntervalPasses)
+            {
+                cancellation.Cancel();
+                return;
+            }
+
+            Assert.Equal(TimeSpan.FromSeconds(declaredIntervalSeconds), delay);
+            warmWindowStart ??= now;
+            now = now.Add(delay);
             intervalDelayCalls++;
-            Thread.Sleep(sampleDuration);
-            cancellation.Cancel();
+            Thread.Yield();
         };
 
-        var started = Stopwatch.GetTimestamp();
         var exitCode = supervisor.RunLoop(writer, cancellation.Token, once: false);
-        var elapsed = Stopwatch.GetElapsedTime(started);
         var state = NotifySupervisionStore.Read(
             context.ResolveSupervisionArtifactRootPath(), Domain, Team);
         var triggerCounts = state.CycleHistory
@@ -213,19 +227,39 @@ public sealed class NotifyEventSupervisionG751Tests : IDisposable
         var eventWaitCount = triggerCounts.GetValueOrDefault("event-wait");
         var intervalCount = triggerCounts.GetValueOrDefault("interval");
         var totalRecords = state.CycleHistory.Count;
-        var recordsPerHour = totalRecords / elapsed.TotalHours;
+        Assert.NotNull(warmWindowStart);
+        var warmWindowSeconds = (now - warmWindowStart!.Value).TotalSeconds;
+        const int startupIntervalRecords = 1;
+        var warmIntervalRecords = intervalCount - startupIntervalRecords;
+        var recordsPerHour = warmIntervalRecords / (warmWindowSeconds / 3600d);
         var triggerMix = string.Join(",", triggerCounts.OrderBy(pair => pair.Key)
             .Select(pair => $"{pair.Key}:{pair.Value}"));
 
         output.WriteLine(
-            $"G751 running cadence sample: build=child-fixture interval_seconds=300 bound_seconds=900 "
-            + $"duration_seconds={elapsed.TotalSeconds:F3} sample_method=running-event-mode-supervisor "
-            + $"trigger_mix={triggerMix} raw_records={totalRecords} records_per_hour={recordsPerHour:F2} "
+            $"G751 before measurement: build=b525191a independent_review_measurement "
+            + $"interval_seconds={declaredIntervalSeconds} bound_seconds={declaredBoundSeconds} "
+            + $"sample_method=running-event-mode-supervisor window=startup-plus-two-second-wall-window "
+            + $"raw_records={preFixRawRecords} event-wait_records={preFixEventWaitRecords} "
+            + $"startup_interval_records={preFixStartupIntervalRecords} wall_window_seconds={preFixWallSeconds:F3} "
+            + $"records-per-hour={preFixRecordsPerHour:F2} steady_state=false");
+        output.WriteLine(
+            $"G751 after measurement: build=child-fixture interval_seconds={declaredIntervalSeconds} "
+            + $"bound_seconds={declaredBoundSeconds} "
+            + "sample_method=running-event-mode-supervisor-controlled-elapsed-time "
+            + $"startup_first_cycle_records={startupIntervalRecords} warm_window_seconds={warmWindowSeconds:F0} "
+            + $"warm_interval_records={warmIntervalRecords} event-wait_records={eventWaitCount} "
+            + $"trigger_mix={triggerMix} raw_records={totalRecords} records-per-hour={recordsPerHour:F2} "
             + $"interval_delay_calls={intervalDelayCalls}");
 
         Assert.Equal(0, exitCode);
-        Assert.True(intervalCount >= 1);
+        Assert.Equal(1, startupIntervalRecords);
+        Assert.Equal(warmIntervalPasses, intervalDelayCalls);
+        Assert.Equal(warmIntervalPasses + startupIntervalRecords, intervalCount);
+        Assert.Equal(warmIntervalPasses, warmIntervalRecords);
+        Assert.Equal(3600d, warmWindowSeconds, precision: 6);
+        Assert.Equal(warmIntervalPasses + startupIntervalRecords, totalRecords);
         Assert.Equal(0, eventWaitCount);
+        Assert.Equal(12d, recordsPerHour, precision: 6);
     }
 
     [Fact]
@@ -239,11 +273,22 @@ public sealed class NotifyEventSupervisionG751Tests : IDisposable
         {
             Assert.Contains("G751", document, StringComparison.Ordinal);
             Assert.Contains("event-wait-no-observation", document, StringComparison.Ordinal);
-            Assert.Contains("300", document, StringComparison.Ordinal);
-            Assert.Contains("900", document, StringComparison.Ordinal);
-            Assert.Contains("records-per-hour", document, StringComparison.Ordinal);
-            Assert.Contains("interval", document, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("b525191a", document, StringComparison.Ordinal);
+            Assert.Contains("interval_seconds=300", document, StringComparison.Ordinal);
+            Assert.Contains("bound_seconds=900", document, StringComparison.Ordinal);
+            Assert.Contains("event-wait:72", document, StringComparison.Ordinal);
+            Assert.Contains("interval:1", document, StringComparison.Ordinal);
+            Assert.Contains("wall_window_seconds=2.065", document, StringComparison.Ordinal);
+            Assert.Contains("records-per-hour=127269.78", document, StringComparison.Ordinal);
+            Assert.Contains("sample_method=running-event-mode-supervisor-controlled-elapsed-time", document, StringComparison.Ordinal);
+            Assert.Contains("startup_first_cycle_records=1", document, StringComparison.Ordinal);
+            Assert.Contains("warm_window_seconds=3600", document, StringComparison.Ordinal);
+            Assert.Contains("warm_interval_records=12", document, StringComparison.Ordinal);
+            Assert.Contains("event-wait_records=0", document, StringComparison.Ordinal);
+            Assert.Contains("raw_records=13", document, StringComparison.Ordinal);
+            Assert.Contains("records-per-hour=12.00", document, StringComparison.Ordinal);
         }
+
     }
 
     private NotifyMeasuredSupervisor CreateSupervisor(CliContext context, EventRunner runner) => new(

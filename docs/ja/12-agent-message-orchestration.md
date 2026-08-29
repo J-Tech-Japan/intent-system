@@ -863,15 +863,27 @@ safety floor、genuine event observation、liveness/bound evidence、first-cycle
 を隠さないことは変わりません。finding、wake routing、parking、emission policy、
 observation-only discipline も変更しません。
 
-child fixture では `interval=300` 秒、`bound=900` 秒、deterministic な idle wait
-return、25 ms の fixture re-arm delay を指定した running event-mode supervisor を
-同じ方法で測りました。G751 前の 2.010 秒 sample は raw record 75 件
-（`event-wait:74`、`interval:1`）、`records-per-hour` は 134341.50 でした。
-G751 後の 2.009 秒 sample は raw record 1 件（`interval:1`）、
-`records-per-hour` は 1792.32 でした。これは source や unit test から推測した rate
-ではなく、running fixture の実測 count です。実際の build commit は PR evidence
-で示します。300 秒 interval と 900 秒 bound は declared cadence と safety contract
-として維持されます。
+before/after の cadence 比較では startup の算術と warmed steady-state window を
+分離します。pre-fix の `b525191a` に対する independent review reproduction は、同じ
+`interval=300` 秒、`bound=900` 秒、deterministic な idle wait、25 ms の fixture re-arm
+を使う running event-mode supervisor でした。2.065 秒の wall window で raw record は
+73 件（`event-wait:72`、`interval:1`、startup interval 1 件を含む）、
+`records-per-hour` は 127269.78 と実測されました。これは startup-plus-two-second の
+observation であり、steady-state rate ではありません。この値は正直な pre-fix
+比較として保持し、永続ファイルの増加予測には使いません。
+
+`interval_seconds=300 bound_seconds=900 sample_method=running-event-mode-supervisor window=startup-plus-two-second-wall-window raw_records=73 event-wait_records=72 startup_interval_records=1 wall_window_seconds=2.065 records-per-hour=127269.78 steady_state=false`
+
+修正後の focused regression は、同じ event-mode supervisor と declared interval/bound
+に deterministic controlled elapsed-time clock を注入して実行します。first-cycle の
+startup record を先に分離して証明し、その後 clock を 300 秒ずつ正確に 12 回進めます。
+warmed window は wall-time の外挿ではなく logical 3600 秒です。固定する evidence は
+次のとおりです。
+
+`interval_seconds=300 bound_seconds=900 sample_method=running-event-mode-supervisor-controlled-elapsed-time startup_first_cycle_records=1 warm_window_seconds=3600 warm_interval_records=12 event-wait_records=0 trigger_mix=interval:13 raw_records=13 records-per-hour=12.00`
+
+したがって修正後の steady-state は startup 後に interval record 12 件 / hour です。
+300 秒 interval と 900 秒 bound は declared cadence と safety contract として維持されます。
 
 G751 の変更は event-mode persistence だけです。G699 duplicate-supervisor の
 backoff/park、G744 archive、G750 ownership、finding、wake routing、parking、
