@@ -455,8 +455,9 @@ operation.
 
 This is ownership repair, not compaction: G734 `notify supervise shrink` keeps
 all records while compacting existing state in place, whereas G750 only changes
-which cycle-history paths are CLI-owned runtime-local files. G751 remains the
-separate later unit for write-rate design and is not part of this change.
+which cycle-history paths are CLI-owned runtime-local files. G751 is the
+separate event-mode persistence unit documented below; it does not change this
+ownership boundary.
 
 > **Preview through 1.x (G750).** Directory-local cycle-history ownership and
 > its named repair command are post-freeze preview behavior outside the 1.0
@@ -1005,6 +1006,55 @@ scheduler artifacts embed their invocation, so an installed interval-only
 artifact stays interval-only. Adoption requires running `notify supervise
 install ... --event-mode` again, inspecting the new artifact, and explicitly
 unregistering/re-registering it with the printed operator commands.
+
+### Event-mode record worthiness and measured cadence (G751 — preview-through-1.x)
+
+G751 separates a successful wait return from a record-worthy observation. A
+wait result is record-worthy when it observes a qualifying `working` to
+settled transition. A wait death, error, identity mismatch, or parse failure
+also remains record-worthy evidence and is still written as an `event-wait`
+cycle with `rearm_attempted: true`. Every periodic interval pass remains a
+recorded safety-floor cycle, including the first-cycle and continuity proof.
+
+A successful wait return with no qualifying observation—including repeated
+immediate returns while the recipient is already settled—is classified as
+`wait-returned-without-observation`. It is re-armed after the existing
+one-second delay and emits the forced `event-wait-no-observation` warning with
+the role, workspace, pane, returned status, and reason. It does not append a
+durable `event-wait` cycle. Repeated instant returns therefore remain visible
+to the operator without turning a no-observation wait into a durable-record
+hot loop; they cannot suppress the interval safety floor, genuine event
+observations, liveness/bound evidence, or the first-cycle proof. Findings,
+wake routing, parking, emission policy, and observation-only discipline are
+unchanged.
+
+The before/after cadence comparison keeps startup arithmetic separate from a
+warmed steady-state window. The independent review reproduction on pre-fix
+`b525191a` ran the event-mode supervisor with the same `interval=300` seconds,
+`bound=900` seconds, deterministic idle wait, and 25 ms fixture re-arm. It
+observed 73 raw records in a 2.065-second wall window (`event-wait:72`,
+`interval:1`, including one startup interval), reported 127269.78
+records-per-hour, and is explicitly a startup-plus-two-second observation—not
+a steady-state rate. That measured result is retained as the honest pre-fix
+comparison; it is not used to predict durable-file growth.
+
+`interval_seconds=300 bound_seconds=900 sample_method=running-event-mode-supervisor window=startup-plus-two-second-wall-window raw_records=73 event-wait_records=72 startup_interval_records=1 wall_window_seconds=2.065 records-per-hour=127269.78 steady_state=false`
+
+The repaired focused regression runs the same event-mode supervisor and
+declared interval/bound with a deterministic controlled elapsed-time clock. It
+proves the first-cycle startup record separately, then advances the clock
+through twelve exact 300-second interval passes: the warmed window is 3600
+logical seconds, not a wall-time extrapolation. Its pinned evidence is:
+
+`interval_seconds=300 bound_seconds=900 sample_method=running-event-mode-supervisor-controlled-elapsed-time startup_first_cycle_records=1 warm_window_seconds=3600 warm_interval_records=12 event-wait_records=0 trigger_mix=interval:13 raw_records=13 records-per-hour=12.00`
+
+Thus the post-change steady-state result is 12 interval records per hour after
+startup. The 300-second interval and 900-second bound remain the declared
+cadence and safety contract.
+
+G751 changes event-mode persistence only. G699 duplicate-supervisor
+backoff/park, G744 archive, G750 ownership, findings, wake routing, parking,
+emission policy, and observation-only behavior remain outside this unit.
 
 > **Preview through 1.x (G659).** Event waits, transition/wait records, and
 > event/interval de-duplication are post-freeze preview behavior. They make no

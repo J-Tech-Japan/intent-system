@@ -409,7 +409,7 @@ repository tracking を修復します。
 
 これは compaction ではありません。G734 の `notify supervise shrink` は全 record を保持したまま
 既存 state を in-place で圧縮しますが、G750 は cycle-history path の ownership だけを分けます。
-G751 は後続の write-rate design unit であり、この変更には含めません。
+G751 は下記の event-mode persistence の別 unit であり、この ownership 境界は変更しません。
 
 > **1.x を通じた preview (G750)。** directory-local cycle-history ownership と named repair command は
 > post-freeze preview であり、1.0 compatibility promise の対象外です。
@@ -842,6 +842,52 @@ G659 が hand-written transition watcher に取って代わるのは operator �
 invocation を埋め込むため、既存の interval-only artifact は interval-only のままです。adoption には
 `notify supervise install ... --event-mode` を再実行し、新しい artifact を確認して、表示された
 operator command で明示的に登録解除 / 再登録する必要があります。
+
+### event-mode の record-worthy 条件と実測 cadence (G751 — preview-through-1.x)
+
+G751 は successful な wait return と record-worthy な observation を分離します。
+`working` から settled への qualifying transition を観測した wait result は
+record-worthy です。wait の death、error、identity mismatch、parse failure も
+record-worthy evidence として残し、`rearm_attempted: true` の `event-wait` cycle
+として記録します。periodic interval pass は、first-cycle と continuity proof を
+含む safety floor として、毎回 cycle にします。
+
+qualifying observation のない successful wait return（recipient が既に settled の
+状態で repeated immediate return になる場合を含む）は
+`wait-returned-without-observation` に分類します。既存の 1 秒 delay 後に再設定し、
+role、workspace、pane、returned status、理由を含む forced
+`event-wait-no-observation` warning を operator に示しますが、永続的な
+`event-wait` cycle は `append` しません。この repeated instant return は silence
+にはならず、no-observation の永続記録 hot loop も作りません。interval の
+safety floor、genuine event observation、liveness/bound evidence、first-cycle proof
+を隠さないことは変わりません。finding、wake routing、parking、emission policy、
+observation-only discipline も変更しません。
+
+before/after の cadence 比較では startup の算術と warmed steady-state window を
+分離します。pre-fix の `b525191a` に対する independent review reproduction は、同じ
+`interval=300` 秒、`bound=900` 秒、deterministic な idle wait、25 ms の fixture re-arm
+を使う running event-mode supervisor でした。2.065 秒の wall window で raw record は
+73 件（`event-wait:72`、`interval:1`、startup interval 1 件を含む）、
+`records-per-hour` は 127269.78 と実測されました。これは startup-plus-two-second の
+observation であり、steady-state rate ではありません。この値は正直な pre-fix
+比較として保持し、永続ファイルの増加予測には使いません。
+
+`interval_seconds=300 bound_seconds=900 sample_method=running-event-mode-supervisor window=startup-plus-two-second-wall-window raw_records=73 event-wait_records=72 startup_interval_records=1 wall_window_seconds=2.065 records-per-hour=127269.78 steady_state=false`
+
+修正後の focused regression は、同じ event-mode supervisor と declared interval/bound
+に deterministic controlled elapsed-time clock を注入して実行します。first-cycle の
+startup record を先に分離して証明し、その後 clock を 300 秒ずつ正確に 12 回進めます。
+warmed window は wall-time の外挿ではなく logical 3600 秒です。固定する evidence は
+次のとおりです。
+
+`interval_seconds=300 bound_seconds=900 sample_method=running-event-mode-supervisor-controlled-elapsed-time startup_first_cycle_records=1 warm_window_seconds=3600 warm_interval_records=12 event-wait_records=0 trigger_mix=interval:13 raw_records=13 records-per-hour=12.00`
+
+したがって修正後の steady-state は startup 後に interval record 12 件 / hour です。
+300 秒 interval と 900 秒 bound は declared cadence と safety contract として維持されます。
+
+G751 の変更は event-mode persistence だけです。G699 duplicate-supervisor の
+backoff/park、G744 archive、G750 ownership、finding、wake routing、parking、
+emission policy、observation-only behavior はこの unit の scope 外です。
 
 > **1.x を通じた preview (G659)。** event wait、transition / wait record、event / interval de-dup は
 > post-freeze preview です。release decision は行わず、1.x の間に変更・撤回できます。
