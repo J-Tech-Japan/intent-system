@@ -724,19 +724,111 @@ public sealed class AgentMessageOrchestrationDocsTests
     [Fact]
     public void FileBackedPointerWordingAgreesAcrossRecipeAndMirrors_G759()
     {
-        const string wording = "Read and execute task envelope: <path>";
-        var en = ReadDoc("en");
-        var ja = ReadDoc("ja");
-        var recipe = AgentLaunchRecipeRegistry.Find("copilot")?.DeliveryMethod;
+        const string expectedWording = "Read and execute task envelope: <path>";
+        var root = Directory.CreateTempSubdirectory("notify-g759-agreement-").FullName;
+        try
+        {
+            const string domain = "intent-cli";
+            const string team = "intent-cli-dev";
+            const string taskId = "G759-agreement";
+            const string nonce = "agreement-nonce";
+            var topologyPath = NotifyRoleTopologyStore.ResolvePath(root, domain, team);
+            Directory.CreateDirectory(Path.GetDirectoryName(topologyPath)!);
+            File.WriteAllText(topologyPath, """
+                {
+                  "domain": "intent-cli",
+                  "team": "intent-cli-dev",
+                  "workspace_id": "wH",
+                  "roles": {
+                    "implementation": {
+                      "resident": "herdr",
+                      "kind": "copilot",
+                      "workspace_id": "wH",
+                      "pane_id": "wH:p2",
+                      "delivery_method": "file-backed"
+                    }
+                  }
+                }
+                """);
 
-        Assert.NotNull(recipe);
-        Assert.Contains(wording, recipe, StringComparison.Ordinal);
-        Assert.Contains(wording, en, StringComparison.Ordinal);
-        Assert.Contains(wording, ja, StringComparison.Ordinal);
-        Assert.DoesNotContain("Read task envelope: <path>", recipe, StringComparison.Ordinal);
-        Assert.DoesNotContain("Read task envelope: <path>", en, StringComparison.Ordinal);
-        Assert.DoesNotContain("Read task envelope: <path>", ja, StringComparison.Ordinal);
+            var options = new NotifyOptions
+            {
+                Domain = domain,
+                Team = team,
+                FromRole = "orchestration",
+                ToRole = "implementation",
+                ReportToRole = "orchestration",
+                TaskId = taskId,
+                ResultNonce = nonce,
+                RoutingRoot = root,
+                Inputs = [],
+                ExpectedArtifacts = ["PR"],
+                PreApprovalAcceptRules = [],
+                PreApprovalEscalateRules = [],
+                ScopedPolicies = [],
+                Format = "json",
+            };
+
+            var delivery = NotifyTaskEnvelopeDelivery.Resolve(options, "parent payload");
+            Assert.True(delivery.Resolved, delivery.Summary);
+            Assert.True(delivery.FileBacked, delivery.Summary);
+            var taskFile = NotifyTaskEnvelopeStore.ResolvePath(root, domain, team, taskId, nonce);
+            Assert.Equal(taskFile, delivery.TaskFile);
+            Assert.NotNull(delivery.Pointer);
+            Assert.Equal(delivery.Pointer, delivery.TransportPayload);
+
+            var emittedWording = NormalizeEmittedPointer(delivery.TransportPayload, taskFile);
+            var en = ReadDoc("en");
+            var ja = ReadDoc("ja");
+            var recipe = AgentLaunchRecipeRegistry.Find("copilot")?.DeliveryMethod;
+            Assert.NotNull(recipe);
+
+            var sites = new[]
+            {
+                emittedWording,
+                NormalizeEmbeddedWording(recipe!),
+                NormalizeEmbeddedWording(en),
+                NormalizeEmbeddedWording(ja),
+            };
+            Assert.True(AgreementMatches(sites));
+            Assert.Equal(expectedWording, emittedWording);
+            Assert.DoesNotContain("Read task envelope: <path>", recipe, StringComparison.Ordinal);
+            Assert.DoesNotContain("Read task envelope: <path>", en, StringComparison.Ordinal);
+            Assert.DoesNotContain("Read task envelope: <path>", ja, StringComparison.Ordinal);
+
+            for (var mutatedIndex = 0; mutatedIndex < sites.Length; mutatedIndex++)
+            {
+                var mutated = sites.ToArray();
+                mutated[mutatedIndex] = "Read task envelope: <path>";
+                Assert.False(AgreementMatches(mutated), $"one-site mutation {mutatedIndex} must fail");
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
+
+    private static string NormalizeEmittedPointer(string pointer, string taskFile)
+    {
+        const string prefix = "Read and execute task envelope: ";
+        Assert.StartsWith(prefix, pointer, StringComparison.Ordinal);
+        var path = pointer[prefix.Length..];
+        Assert.True(Path.IsPathRooted(path));
+        Assert.Equal(taskFile, path);
+        return prefix + "<path>";
+    }
+
+    private static string NormalizeEmbeddedWording(string surface)
+    {
+        const string prefix = "Read and execute task envelope: ";
+        Assert.Contains(prefix, surface, StringComparison.Ordinal);
+        return prefix + "<path>";
+    }
+
+    private static bool AgreementMatches(IReadOnlyList<string> sites) =>
+        sites.Count == 4
+        && sites.All(site => string.Equals(site, sites[0], StringComparison.Ordinal));
 
     private static string ReadDoc(string language)
     {

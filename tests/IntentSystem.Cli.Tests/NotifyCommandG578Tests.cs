@@ -128,6 +128,15 @@ public sealed class NotifyCommandG578Tests : IDisposable
         var payload = result.GetProperty("payload").GetString()!;
         Assert.Equal(payload, File.ReadAllText(taskFile));
         Assert.Equal(Encoding.UTF8.GetBytes(payload), File.ReadAllBytes(taskFile));
+        // This checked-in full-envelope oracle was captured from the parent
+        // invocation. Only the per-test temporary root is substituted.
+        var goldenPath = Path.Combine(
+            RepoVersionPolicySource.RepoRoot(),
+            "tests", "IntentSystem.Cli.Tests", "Fixtures", "G759",
+            "parent-file-backed-envelope.md");
+        var parentGolden = File.ReadAllText(goldenPath)
+            .Replace("<workspace-root>", workspace.RootPath, StringComparison.Ordinal);
+        Assert.Equal(Encoding.UTF8.GetBytes(parentGolden), File.ReadAllBytes(taskFile));
         Assert.Contains("G578-demo-demo-nonce.md", taskFile, StringComparison.Ordinal);
         Assert.Contains("TASK G578-demo", payload, StringComparison.Ordinal);
         Assert.Contains("result-nonce: demo-nonce", payload, StringComparison.Ordinal);
