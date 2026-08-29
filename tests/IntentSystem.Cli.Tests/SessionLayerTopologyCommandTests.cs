@@ -12,6 +12,33 @@ public sealed class SessionLayerTopologyCommandTests : IDisposable
     private const string Domain = "intent-cli";
     private const string Team = "g756-team";
     private const string WorkspaceId = "w-g756";
+    // Captured from the parent/pre-change 6ea81ac85e5fc104d5cd954766c916445f751183
+    // with the same healthy external-reader fixture. Keep the complete raw
+    // payload here so compatibility covers ordering, indentation, escaping,
+    // and the trailing newline—not only parsed JSON meaning.
+    private static readonly string ParentHealthyValidationJson = string.Join(
+        Environment.NewLine,
+        [
+            "{",
+            "  \"valid\": true,",
+            "  \"team\": \"g756-team\",",
+            "  \"record_path\": \".intent-cli/topology/intent-cli/g756-team.json\",",
+            "  \"findings\": [],",
+            "  \"role_declarations\": [",
+            "    {",
+            "      \"role\": \"design\"",
+            "    },",
+            "    {",
+            "      \"role\": \"orchestration\"",
+            "    }",
+            "  ],",
+            "  \"host_state\": {",
+            "    \"role\": \"orchestration\",",
+            "    \"envelope\": \"test-owned-host-state\"",
+            "  },",
+            "  \"summary\": \"Recorded delivery topology for team \\u0027g756-team\\u0027 is valid. Model and reasoning effort are operator declarations, not measurements.\"",
+            "}"
+        ]) + Environment.NewLine;
     private readonly string root = Directory.CreateTempSubdirectory("session-layer-topology-g756-").FullName;
 
     [Fact]
@@ -48,17 +75,20 @@ public sealed class SessionLayerTopologyCommandTests : IDisposable
         File.WriteAllText(ScopedEventPath, string.Empty);
         var before = File.ReadAllBytes(TopologyPath);
 
-        var (exitCode, result) = Run(
+        var (exitCode, raw) = RunRaw(
             "session-layer", "topology", "validate",
             "--domain", Domain,
             "--team", Team,
             "--format", "json");
+        using var document = JsonDocument.Parse(raw);
+        var result = document.RootElement.Clone();
 
         Assert.Equal(0, exitCode);
         Assert.True(result.GetProperty("valid").GetBoolean());
         Assert.DoesNotContain(
             result.GetProperty("findings").EnumerateArray(),
             item => item.GetProperty("cause").GetString() == "reader-path-divergence");
+        Assert.Equal(ParentHealthyValidationJson, raw);
         Assert.Equal(before, File.ReadAllBytes(TopologyPath));
     }
 
@@ -221,10 +251,16 @@ public sealed class SessionLayerTopologyCommandTests : IDisposable
 
     private (int ExitCode, JsonElement Result) Run(params string[] args)
     {
+        var (exitCode, raw) = RunRaw(args);
+        using var document = JsonDocument.Parse(raw);
+        return (exitCode, document.RootElement.Clone());
+    }
+
+    private (int ExitCode, string Raw) RunRaw(params string[] args)
+    {
         using var writer = new StringWriter();
         var exitCode = CommandRouter.Execute(args, CreateContext(), writer);
-        using var document = JsonDocument.Parse(writer.ToString());
-        return (exitCode, document.RootElement.Clone());
+        return (exitCode, writer.ToString());
     }
 
     private CliContext CreateContext() => new()
