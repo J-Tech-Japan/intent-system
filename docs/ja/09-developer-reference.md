@@ -2993,31 +2993,32 @@ result は literal bytes の削減、追加した reference bytes、record の n
 `shrink-audit.jsonl` に明記します。`.intent-cli/runs/*.provider.jsonl` は別の provider-run state なので
 scope 外です。`--dry-run` なら manifest、JSONL、audit を書き込まずに測定済み plan だけを確認できます。
 
-### 次リリース準備(v0.26.0)
+### 次リリース準備(v0.26.1)
 
-**PREPARED / NOT PUBLISHED.**
+**POST-RELEASE ROLL / PLACEHOLDER ONLY。**
 
-**v0.25.0 shipped evidence:** shipped baseline は
-intent-cli 0.25.0-74a1c72-G741、source revision は
-74a1c722291a6a45a580221dcf8a9a8ad4e4d831 です。tracked な EN/JA
-release-notes-v0.25.0.md はこの preparation で変更していません。
+**v0.26.0 shipped evidence:** shipped baseline は
+intent-cli 0.26.0-93f07f8-G749、source revision は
+93f07f892f6514bc561493339b11e36de0e36555 です。tracked な EN/JA
+release-notes-v0.26.0.md はこの post-release roll で変更していません。
 前の v0.24.0 shipped-note file、release-notes-v0.24.0.md は両方の mirror にある historical evidence として残ります。
-v0.25.0 GitHub Release と tag は shipped evidence の authoritative source です。
+v0.26.0 GitHub Release と tag は shipped evidence の正式な根拠です。
+real-install identity は `intent-cli 0.26.0-93f07f8-G749` です。
 source-note inconsistency はこの roll より前から存在し、修正は scope 外であり、後続の explicitly scoped remediation で扱います。
 比較対象には installed 0.23.2 CLI を使い、checkout_freshness/provenance をこの preparation とともに記録します。
-現在の policy は stableVersion 0.25.0 と nextVersion 0.26.0 です。
-Rolled policy: stableVersion → 0.25.0; nextVersion → 0.26.0。
-次の line の package identity は `JTechJapan.IntentSystem.Cli.0.26.0.nupkg` です。これは preparation の値であり、publish action ではありません。
-release-readiness gate はこの prepare-only documentation update とは別です。
+現在の policy は stableVersion 0.26.0 と nextVersion 0.26.1 です。
+Rolled policy: stableVersion → 0.26.0; nextVersion → 0.26.1 (placeholder only)。
+次の line の package identity は `JTechJapan.IntentSystem.Cli.0.26.1.nupkg` です。これは placeholder の値であり、publish action ではありません。
+release-readiness gate はこの post-release roll とは別です。
 
-この preparation は `eng/version.json` を stableVersion `0.25.0`、
-nextVersion `0.26.0` にします。以前の v0.25.1 DRAFT stub は削除し、
-active な unpublished note は
-[release-notes-v0.26.0.md](release-notes-v0.26.0.md) です。v0.26.0 line は
-prepare-only で、ここでは tag または Release を作成せず、package を publish せず、
-post-release roll も実行せず、後続の real release number も決めません。
+この post-release roll は `eng/version.json` を stableVersion `0.26.0`、
+nextVersion `0.26.1` にします。shipped v0.26.0 note file は変更せず、
+current placeholder は [release-notes-v0.26.1.md](release-notes-v0.26.1.md) です。
+v0.26.1 DRAFT stub は replaceable planning scaffold で changelog ではありません。
+release-prep は測定して次の real release number を決めた後、この stub を replace します。
+この roll では tag、GitHub Release、package publish、unreleased content の追加を行いません。
 
-この child が正確な prepared head
+v0.26.0 preparation でこの child が正確な prepared head
 `a49ad93c36bd93d1ccc9317622d36fa01ea346b8` を Release build して測定した
 identity は `intent-cli 0.25.1-a49ad93-G748`、installed baseline は
 `intent-cli 0.25.0-74a1c72-G741` でした。installed の
@@ -3036,10 +3037,10 @@ build した usage は
 post-v0.25.0 roll は release-note table で分類し、release unit には数えません。
 G743 と G747 は v0.25.0 で shipped した claim-transaction contract を
 finish/repair し、G748 は sixteen 件の qualifying incident で zero 回だった
-G741 detector を repair しました。五つの outcome は active な v0.26.0 note に
+G741 detector を repair しました。五つの outcome は shipped v0.26.0 note に
 operator-observable として記録しています。
 
-Release-prep verification の正確な count は active note に記録しています:
+v0.26.0 release-prep verification の正確な count はその note に記録しています:
 Targeted release-prep docs/version guard: 40 passed, 0 failed, 0 skipped (40 total)。
 Dedicated G613 JA terminology guard: 6 passed, 0 failed, 0 skipped (6 total)。
 Adjacent release/readiness suite: 59 passed, 0 failed, 0 skipped (59 total)。
@@ -3047,8 +3048,17 @@ Full Release suite: 5305 passed, 0 failed, 1 skipped (5306 total)。git diff --c
 child issue-preflight が canonical-unavailable になったのは sandbox による
 `.git/FETCH_HEAD` refresh 拒否だけなので、supplied host claim を使用しました。
 child execution-unit claim は作成・変更・release せず、host repository に入りませんでした。
-host-only claim boundary は `release-prep:<owner/repo>:0.26.0` で、この child は host state を inspect しません。
-公開済みの [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0) とその tag は authoritative shipped evidence です。
+host-only claim boundary は `release-prep:<owner/repo>:0.26.1` で、この child は host state を inspect しません。
+orchestration seat の preflight は `next-action=wait`、`classification=claim-unavailable`、`actionable=false` を記録しました。`.git/FETCH_HEAD` (`Operation not permitted`) を open できなかったためです。fresh child selector は local holder none/unheld と報告しました。supplied host claim が正式な根拠であり、この child は execution-unit claim を create、modify、release、verify していません。
+G725 evidence boundary: real host-root の pre-roll run は synced target checkout
+`bb9754859ac8055adbd504f294145b7494668c1a` で actionable な
+`version-roll-required` finding を 1 件返し、stableVersion `0.26.0` と
+nextVersion `0.26.1` を期待していました。PR-head child-clone run が
+`c73e12e6d08c6e7698f393c47c571f1320bedf90` で `version-roll-required` finding を
+0 件返したのは、origin/main `bb9754859ac8055adbd504f294145b7494668c1a` に対して
+checkout が stale で、queue state も missing と報告した状態だけです。この 0 件は
+non-evidence であり roll の証明ではありません。valid な post-merge answer には synced host-main measurement が必要です。この child は G725 を diagnose/fix していません。
+公開済みの [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0) とその tag は shipped evidence の正式な根拠です。
 v0.23.0 の shipped artifact は GitHub Release、NuGet package、自己完結型バイナリです。ただし npm leg は registry に到達しなかったため、`0.23.0` は npm で利用できると扱ってはいけません。
 tracked な EN/JA の `release-notes-v0.23.0.md` files はこの shipped-artifact status を記録します。
 

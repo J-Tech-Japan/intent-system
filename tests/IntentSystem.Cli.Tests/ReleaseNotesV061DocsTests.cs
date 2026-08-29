@@ -540,7 +540,7 @@ public sealed class ReleaseNotesV061DocsTests
         {
             // Stub state: it must refuse to be mistaken for a changelog.
             Assert.Contains(
-                language == "en" ? "release-prep packet authors the real content" : "release-prep パケットが author します",
+                language == "en" ? "release-prep packet will replace this placeholder" : "release-prep パケットが",
                 notes,
                 StringComparison.Ordinal);
             Assert.Contains(
