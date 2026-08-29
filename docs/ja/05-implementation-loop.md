@@ -150,6 +150,21 @@ routine request に限られます。
 record、validate、render された discovery の永続的な証拠は
 [G736 verification transcript](../g736-topology-host-state-verification.md) にあります。
 
+## G756: external role の effective reader を確認する
+
+`external` resident には topology に `reader` が記録されますが、legacy の
+flat path が記録され、domain-scoped な event delivery が別の file を使うことがあります。
+read-only の `session-layer topology show --domain <domain> --team <team> --format json` は、
+記録値の `reader` と、実際の読み取り先 `effective_reader` を両方表示します。
+後者は event read と同じ `NotifyEventWriter.TryResolveReadPath` で解決するため、
+この surface が別の fallback rule を推測することはありません。
+`session-layer topology validate` は値が異なると informational な
+`reader-path-divergence` finding を出し、両方の path と event が実際に使う path を示します。
+この差は delivery failure ではないため `valid: true` と exit code は変わりません。
+正しく記録された scoped path では finding はなく、custom path は verbatim のままで finding もありません。
+`herdr` resident には reader field も finding も追加されません。
+これは報告だけの変更であり、delivery、legacy upgrade の動作、topology record、記録値を自動で書き換えません。
+
 ## G724: multi-domain host の worker domain identity
 
 startup marker は display evidence であり、worker binding ではありません。host context の

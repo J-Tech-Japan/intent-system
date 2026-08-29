@@ -148,19 +148,34 @@ internal static class SessionLayerTopologyCommand
             validation = HerdrPaneLabelValidation.Apply(context.RepoRoot, domain!, team!, validation);
         }
 
-        var informationalCount = validation.Findings.Count(finding => finding.IsInformational);
+        var findings = validation.Findings.ToList();
+        if (validation.Valid)
+        {
+            var topologyResolution = NotifyRoleTopologyStore.Resolve(context.RepoRoot, domain!, team!);
+            if (topologyResolution.Resolved)
+            {
+                findings.AddRange(ResolveExternalReaderPaths(
+                    context.RepoRoot,
+                    domain!,
+                    team!,
+                    topologyResolution.Topology!).Findings);
+            }
+        }
+
+        var valid = validation.Valid && findings.All(finding => finding.IsInformational);
+        var informationalCount = findings.Count(finding => finding.IsInformational);
         var result = new SessionLayerTopologyValidationResult
         {
-            Valid = validation.Valid,
-                Team = team!,
-                RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
-                Findings = validation.Findings,
-                RoleDeclarations = validation.RoleDeclarations,
-                HostState = validation.HostState,
-                Summary = (validation.Valid
+            Valid = valid,
+            Team = team!,
+            RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
+            Findings = findings,
+            RoleDeclarations = validation.RoleDeclarations,
+            HostState = validation.HostState,
+            Summary = (valid
                 ? $"Recorded delivery topology for team '{team}' is valid."
                 : $"Recorded delivery topology for team '{team}' is invalid with "
-                    + $"{validation.Findings.Count} finding(s). No topology was changed.")
+                    + $"{findings.Count} finding(s). No topology was changed.")
                 + (informationalCount == 0
                     ? string.Empty
                     : $" {informationalCount} informational finding(s) do not affect valid.")
@@ -240,6 +255,35 @@ internal static class SessionLayerTopologyCommand
         }
 
         var topology = topologyResolution.Topology!;
+        var readerReport = ResolveExternalReaderPaths(context.RepoRoot, domain!, team!, topology);
+        var readerFailure = readerReport.Findings.FirstOrDefault(finding => !finding.IsInformational);
+        if (readerFailure is not null)
+        {
+            var invalid = new SessionLayerTopologyShowResult
+            {
+                Valid = false,
+                Team = team!,
+                WorkspaceId = topology.WorkspaceId,
+                RecordPath = NotifyRoleTopologyStore.RelativePathFor(domain!, team!),
+                Roles = [],
+                EnvelopeProfiles = topology.EnvelopeProfiles.Values
+                    .OrderBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
+                    .Select(profile => new SessionLayerTopologyShownProfile
+                    {
+                        Name = profile.Name,
+                        Kind = profile.Kind,
+                        Digest = profile.Digest,
+                        RecordedAt = profile.RecordedAt,
+                    })
+                    .ToArray(),
+                HostState = topology.HostState,
+                Findings = readerReport.Findings,
+                Summary = readerFailure.Message,
+            };
+            EmitShow(writer, format, invalid);
+            return 1;
+        }
+
         var roles = new List<SessionLayerTopologyShownRole>();
         foreach (var (role, record) in topology.Roles.OrderBy(entry => entry.Key, StringComparer.Ordinal))
         {
@@ -290,6 +334,10 @@ internal static class SessionLayerTopologyCommand
                 Frontend = record.Frontend,
                 Model = record.Model,
                 ReasoningEffort = record.ReasoningEffort,
+                Reader = record.Resident == NotifyRecordedRole.ExternalResident ? record.Reader : null,
+                EffectiveReader = readerReport.EffectivePaths.TryGetValue(role, out var effectiveReader)
+                    ? effectiveReader
+                    : null,
             });
         }
 
@@ -311,9 +359,12 @@ internal static class SessionLayerTopologyCommand
                 })
                 .ToArray(),
             HostState = topology.HostState,
-            Findings = [],
+            Findings = readerReport.Findings,
             Summary = $"Resolved {roles.Count} recorded delivery target(s) for team '{team}' without sending."
                 + $" {SessionLayerTopologyDeclaredValueRules.OperatorDeclarationSummary}"
+                + (readerReport.Findings.Count == 0
+                    ? string.Empty
+                    : $" {readerReport.Findings.Count} informational reader-path finding(s) do not affect valid.")
                 + FormatWarnings(topologyResolution.Warnings),
         };
         EmitShow(writer, format, result);
@@ -1187,6 +1238,105 @@ internal static class SessionLayerTopologyCommand
         return 1;
     }
 
+    private static ExternalReaderPathReport ResolveExternalReaderPaths(
+        string routingRoot,
+        string domain,
+        string team,
+        NotifyTeamTopology topology)
+    {
+        var effectivePaths = new Dictionary<string, string>(StringComparer.Ordinal);
+        var findings = new List<SessionLayerTopologyFinding>();
+
+        foreach (var (role, record) in topology.Roles)
+        {
+            if (!string.Equals(record.Resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!NotifyRoleTopologyStore.TryResolveReaderPath(
+                    routingRoot,
+                    record.Reader,
+                    out var recordedReaderPath,
+                    out var recordedReaderError))
+            {
+                findings.Add(new SessionLayerTopologyFinding(
+                    role,
+                    "reader",
+                    "reader-resolution-failed",
+                    $"External role '{role}' could not normalize its recorded reader "
+                    + $"'{record.Reader ?? "<missing>"}': {recordedReaderError}"));
+                continue;
+            }
+
+            if (!NotifyEventWriter.TryResolveReadPath(
+                    routingRoot,
+                    domain,
+                    team,
+                    recordedReaderPath,
+                    out var effectiveReader,
+                    out var readerError))
+            {
+                findings.Add(new SessionLayerTopologyFinding(
+                    role,
+                    "reader",
+                    "reader-resolution-failed",
+                    $"External role '{role}' could not resolve its effective reader from recorded reader "
+                    + $"'{record.Reader ?? "<missing>"}': {readerError}"));
+                continue;
+            }
+
+            effectivePaths[role] = effectiveReader;
+            if (AreEquivalentReaderPaths(routingRoot, record.Reader, effectiveReader))
+            {
+                continue;
+            }
+
+            findings.Add(new SessionLayerTopologyFinding(
+                role,
+                "reader",
+                "reader-path-divergence",
+                $"External role '{role}' records reader '{record.Reader}', but events are delivered to and "
+                + $"read from effective reader '{effectiveReader}'. Update the recorded topology only through "
+                + "an explicit operator decision; this advisory does not change delivery or validity.")
+            {
+                IsInformational = true,
+            });
+        }
+
+        return new ExternalReaderPathReport(effectivePaths, findings);
+    }
+
+    private static bool AreEquivalentReaderPaths(
+        string routingRoot,
+        string? recordedReader,
+        string effectiveReader)
+    {
+        if (recordedReader is null)
+        {
+            return false;
+        }
+
+        // Only NotifyEventWriter.TryResolveReadPath chooses the effective
+        // reader. These full paths normalize the two already-selected values
+        // solely to compare a relative recorded value with an absolute result.
+        var recordedFullPath = NormalizeReaderPath(routingRoot, recordedReader);
+        var effectiveFullPath = NormalizeReaderPath(routingRoot, effectiveReader);
+        return string.Equals(
+            recordedFullPath,
+            effectiveFullPath,
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    }
+
+    private static string NormalizeReaderPath(string routingRoot, string path) =>
+        Path.GetFullPath(Path.IsPathRooted(path)
+            ? path
+            : Path.Combine(routingRoot, path.Replace('/', Path.DirectorySeparatorChar)));
+
+    private sealed record ExternalReaderPathReport(
+        IReadOnlyDictionary<string, string> EffectivePaths,
+        IReadOnlyList<SessionLayerTopologyFinding> Findings);
+
     private static void EmitValidation(
         TextWriter writer,
         string format,
@@ -1229,9 +1379,12 @@ internal static class SessionLayerTopologyCommand
         writer.WriteLine(result.Summary);
         foreach (var role in result.Roles)
         {
+            var readerDetails = role.Reader is null
+                ? string.Empty
+                : $" reader={role.Reader}; effective_reader={role.EffectiveReader};";
             writer.WriteLine($"- {role.Role}: resident={role.Resident}; delivery_target={role.DeliveryTargetKind}:"
                 + $"{role.DeliveryTarget}; model={role.Model ?? "absent"}; "
-                + $"reasoning_effort={role.ReasoningEffort ?? "absent"};");
+                + $"reasoning_effort={role.ReasoningEffort ?? "absent"};{readerDetails}");
         }
         foreach (var profile in result.EnvelopeProfiles)
         {
@@ -2684,4 +2837,6 @@ internal sealed record SessionLayerTopologyShownRole
     public string? Frontend { get; init; }
     public string? Model { get; init; }
     public string? ReasoningEffort { get; init; }
+    public string? Reader { get; init; }
+    public string? EffectiveReader { get; init; }
 }
