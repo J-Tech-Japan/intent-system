@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -40,8 +41,12 @@ internal static class NotifyCommand
         + "[--routing-root <host-root>] [--report-root <role-work-root>] [--dry-run|--write] [--format markdown|json]";
 
     private const string CollectUsage =
-        "Usage: intent-cli notify collect --domain <d> --team <t> --task-id <id> "
+        "Usage: intent-cli notify collect --domain <d> --team <t> (--task-id <id> | --role <role> "
+        + "[--since <cursor>] [--wait --timeout-ms <milliseconds>]) "
         + "[--routing-root <host-root>] [--report-root <role-work-root>] [--dry-run|--write] [--format markdown|json]";
+
+    private const int MaximumRoleCollectTimeoutMilliseconds = 300_000;
+    private const int RoleCollectPollMilliseconds = 25;
 
     private const string ReconcileUsage =
         "Usage: intent-cli notify reconcile --domain <d> --team <t> --task-id <id> "
@@ -460,6 +465,11 @@ internal static class NotifyCommand
         string routingRoot,
         string reportRoot)
     {
+        if (options.Role is not null)
+        {
+            return ExecuteRoleCollect(writer, options, routingRoot);
+        }
+
         var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
         var outbox = pending.Resolved && pending.Record is not null
             ? NotifyReportOutboxStore.Find(reportRoot, options.Domain!, options.Team!, options.TaskId!, pending.Record.ResultNonce)
@@ -531,6 +541,415 @@ internal static class NotifyCommand
             existingOutbox: outbox.Entry,
             reportRoot: reportRoot);
     }
+
+    private static int ExecuteRoleCollect(
+        TextWriter writer,
+        NotifyOptions options,
+        string routingRoot)
+    {
+        var topology = NotifyRoleTopologyStore.Resolve(routingRoot, options.Domain!, options.Team!);
+        if (!topology.Resolved || topology.Topology is not { } teamTopology)
+        {
+            EmitRoleCollect(writer, options.Format, RoleCollectFailure(
+                options,
+                null,
+                topology.Cause ?? "topology-unavailable",
+                topology.Summary));
+            return 1;
+        }
+
+        var roleResolution = NotifyRoleTopologyStore.ResolveRecordedRole(teamTopology, options.Role!);
+        if (!roleResolution.Resolved || roleResolution.Record is not { } recordedRole)
+        {
+            EmitRoleCollect(writer, options.Format, RoleCollectFailure(
+                options,
+                null,
+                roleResolution.Cause ?? "unknown-role",
+                roleResolution.Summary));
+            return 1;
+        }
+
+        if (!string.Equals(recordedRole.Resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal))
+        {
+            EmitRoleCollect(writer, options.Format, RoleCollectFailure(
+                options,
+                null,
+                "role-reader-unavailable",
+                $"Logical role '{options.Role}' is resident in herdr and has no external reader. "
+                + "Role-scoped collect is available only for a role with a recorded external reader."));
+            return 1;
+        }
+
+        if (!NotifyRoleTopologyStore.TryResolveReaderPath(
+                routingRoot,
+                recordedRole.Reader,
+                out var recordedReaderPath,
+                out var recordedReaderError))
+        {
+            EmitRoleCollect(writer, options.Format, RoleCollectFailure(
+                options,
+                null,
+                "reader-unavailable",
+                $"External logical role '{options.Role}' has no usable recorded reader: {recordedReaderError}"));
+            return 1;
+        }
+
+        // The topology record is only the declared input. The effective path,
+        // including scoped-versus-legacy compatibility, belongs to the same
+        // resolver used by the writer and every other reader. Re-resolving on
+        // each bounded wait pass also observes a canonical file appearing
+        // after a previously missing reader.
+        var readerPath = string.Empty;
+        var stopwatch = options.Wait ? System.Diagnostics.Stopwatch.StartNew() : null;
+        while (true)
+        {
+            if (!NotifyEventWriter.TryResolveReadPath(
+                    routingRoot,
+                    options.Domain!,
+                    options.Team!,
+                    recordedReaderPath,
+                    out readerPath,
+                    out var readerError))
+            {
+                EmitRoleCollect(writer, options.Format, RoleCollectFailure(
+                    options,
+                    null,
+                    "reader-unavailable",
+                    $"Could not resolve the effective reader for external logical role '{options.Role}': {readerError}"));
+                return 1;
+            }
+
+            var read = ReadRoleCollectSnapshot(readerPath, recordedReaderPath, options.Since);
+            if (!read.Succeeded)
+            {
+                EmitRoleCollect(writer, options.Format, RoleCollectFailure(
+                    options,
+                    readerPath,
+                    read.Cause!,
+                    read.Summary!));
+                return 1;
+            }
+
+            if (read.Events.Count > 0)
+            {
+                EmitRoleCollect(writer, options.Format, RoleCollectSuccess(
+                    options,
+                    readerPath,
+                    read,
+                    outcome: "events",
+                    cause: null,
+                    timedOut: false,
+                    summary: $"Collected {read.Events.Count} event(s) for external logical role '{options.Role}' from the effective reader."));
+                return 0;
+            }
+
+            if (!options.Wait)
+            {
+                EmitRoleCollect(writer, options.Format, RoleCollectSuccess(
+                    options,
+                    readerPath,
+                    read,
+                    outcome: "no-events",
+                    cause: "no-events",
+                    timedOut: false,
+                    summary: File.Exists(readerPath)
+                        ? $"No events are available for external logical role '{options.Role}' after the supplied cursor; the read was non-blocking."
+                        : $"The effective reader '{readerPath}' does not exist yet; treating it as no-events for external logical role '{options.Role}'."));
+                return 0;
+            }
+
+            var elapsedMilliseconds = stopwatch!.ElapsedMilliseconds;
+            var remainingMilliseconds = options.TimeoutMilliseconds!.Value - elapsedMilliseconds;
+            if (remainingMilliseconds <= 0)
+            {
+                EmitRoleCollect(writer, options.Format, RoleCollectSuccess(
+                    options,
+                    readerPath,
+                    read,
+                    outcome: "no-new-events",
+                    cause: "no-new-events",
+                    timedOut: true,
+                    summary: $"No new events arrived for external logical role '{options.Role}' before the bounded {options.TimeoutMilliseconds.Value}ms wait expired."));
+                return 0;
+            }
+
+            // A synchronous bounded poll keeps the command single-process and
+            // leaves no watcher, timer, or background task after return.
+            Thread.Sleep((int)Math.Min(RoleCollectPollMilliseconds, remainingMilliseconds));
+        }
+    }
+
+    private static NotifyRoleCollectResult RoleCollectSuccess(
+        NotifyOptions options,
+        string readerPath,
+        NotifyRoleCollectReadResult read,
+        string outcome,
+        string? cause,
+        bool timedOut,
+        string summary) => new()
+        {
+            Operation = OperationCollect,
+            RoutingRoot = options.RoutingRoot!,
+            Domain = options.Domain!,
+            Team = options.Team!,
+            Role = options.Role!,
+            ReaderPath = readerPath,
+            CommandMode = options.Write ? "write" : "dry-run",
+            Cursor = options.Since,
+            NextCursor = read.NextCursor,
+            Events = read.Events,
+            Outcome = outcome,
+            Wait = options.Wait,
+            TimedOut = timedOut,
+            Cause = cause,
+            Summary = summary,
+        };
+
+    private static NotifyRoleCollectResult RoleCollectFailure(
+        NotifyOptions options,
+        string? readerPath,
+        string cause,
+        string summary) => new()
+        {
+            Operation = OperationCollect,
+            RoutingRoot = options.RoutingRoot ?? string.Empty,
+            Domain = options.Domain,
+            Team = options.Team,
+            Role = options.Role,
+            ReaderPath = readerPath,
+            CommandMode = options.Write ? "write" : "dry-run",
+            Cursor = options.Since,
+            NextCursor = string.Empty,
+            Events = [],
+            Outcome = "error",
+            Wait = options.Wait,
+            TimedOut = false,
+            Cause = cause,
+            Summary = summary,
+        };
+
+    private static void EmitRoleCollect(TextWriter writer, string format, NotifyRoleCollectResult result)
+    {
+        if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+        {
+            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            return;
+        }
+
+        writer.WriteLine($"# notify collect — {result.Role ?? "<role>"}");
+        writer.WriteLine();
+        writer.WriteLine($"- command mode: {result.CommandMode}");
+        if (result.ReaderPath is not null)
+        {
+            writer.WriteLine($"- effective reader: `{result.ReaderPath}`");
+        }
+        if (result.Cursor is not null)
+        {
+            writer.WriteLine($"- cursor: `{result.Cursor}`");
+        }
+        writer.WriteLine($"- next cursor: `{result.NextCursor}`");
+        writer.WriteLine($"- outcome: {result.Outcome}");
+        writer.WriteLine($"- wait: {result.Wait.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"- timed out: {result.TimedOut.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"- events: {result.Events.Count}");
+        if (result.Cause is not null)
+        {
+            writer.WriteLine($"- cause: {result.Cause}");
+        }
+        writer.WriteLine();
+        writer.WriteLine(result.Summary);
+    }
+
+    private static NotifyRoleCollectReadResult ReadRoleCollectSnapshot(
+        string readerPath,
+        string cursorReaderPath,
+        string? suppliedCursor)
+    {
+        byte[] bytes;
+        try
+        {
+            using var stream = new FileStream(
+                readerPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+            bytes = buffer.ToArray();
+        }
+        catch (FileNotFoundException)
+        {
+            bytes = [];
+        }
+        catch (DirectoryNotFoundException)
+        {
+            bytes = [];
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return NotifyRoleCollectReadResult.Failure(
+                "reader-unreadable",
+                $"The effective reader '{readerPath}' could not be read: {exception.Message}");
+        }
+
+        var completeEnd = CompleteLineEnd(bytes);
+        var startOffset = 0;
+        if (suppliedCursor is not null)
+        {
+            if (!TryDecodeRoleCollectCursor(suppliedCursor, out var cursor, out var cursorError)
+                || cursor is null)
+            {
+                return NotifyRoleCollectReadResult.Failure(
+                    "cursor-unhonourable",
+                    $"The supplied --since cursor is unhonourable: {cursorError} refusing to reset or skip events.");
+            }
+
+            if (cursor.Version != 1
+                || !string.Equals(cursor.ReaderDigest, Digest(cursorReaderPath), StringComparison.Ordinal)
+                || cursor.ByteOffset < 0
+                || cursor.ByteOffset > bytes.Length
+                || cursor.ByteOffset > int.MaxValue
+                || cursor.ByteOffset > 0 && bytes[cursor.ByteOffset - 1] != (byte)'\n'
+                || cursor.CompleteLineCount != CountCompleteLines(bytes, (int)cursor.ByteOffset)
+                || !string.Equals(
+                    cursor.PrefixDigest,
+                    Digest(bytes.AsSpan(0, (int)cursor.ByteOffset)),
+                    StringComparison.Ordinal))
+            {
+                return NotifyRoleCollectReadResult.Failure(
+                    "cursor-unhonourable",
+                    "The supplied --since cursor no longer identifies an intact complete-line position in the same effective reader; refusing to reset or skip events.");
+            }
+
+            startOffset = (int)cursor.ByteOffset;
+        }
+
+        var events = new List<NotifyDesignEvent>();
+        var position = startOffset;
+        while (position < completeEnd)
+        {
+            var lineStart = position;
+            while (position < completeEnd && bytes[position] != (byte)'\n')
+            {
+                position++;
+            }
+
+            var lineLength = position - lineStart;
+            if (lineLength > 0 && bytes[lineStart + lineLength - 1] == (byte)'\r')
+            {
+                lineLength--;
+            }
+
+            if (lineLength == 0)
+            {
+                return NotifyRoleCollectReadResult.Failure(
+                    "reader-invalid",
+                    $"The effective reader '{readerPath}' contains an empty JSONL record; refusing to guess its cursor position.");
+            }
+
+            try
+            {
+                var designEvent = JsonSerializer.Deserialize<NotifyDesignEvent>(
+                    bytes.AsSpan(lineStart, lineLength));
+                if (designEvent is null)
+                {
+                    throw new JsonException("record deserialized to null");
+                }
+
+                events.Add(designEvent);
+            }
+            catch (Exception exception) when (exception is JsonException or NotSupportedException)
+            {
+                return NotifyRoleCollectReadResult.Failure(
+                    "reader-invalid",
+                    $"The effective reader '{readerPath}' contains an invalid JSONL record at byte {lineStart}: {exception.Message}");
+            }
+
+            position++;
+        }
+
+        return new NotifyRoleCollectReadResult
+        {
+            Succeeded = true,
+            Events = events,
+            NextCursor = EncodeRoleCollectCursor(cursorReaderPath, bytes, completeEnd),
+        };
+    }
+
+    private static int CompleteLineEnd(byte[] bytes)
+    {
+        if (bytes.Length == 0 || bytes[^1] == (byte)'\n')
+        {
+            return bytes.Length;
+        }
+
+        var lastNewline = Array.LastIndexOf(bytes, (byte)'\n');
+        return lastNewline < 0 ? 0 : lastNewline + 1;
+    }
+
+    private static int CountCompleteLines(byte[] bytes, int end)
+    {
+        var count = 0;
+        for (var index = 0; index < end; index++)
+        {
+            if (bytes[index] == (byte)'\n')
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static string EncodeRoleCollectCursor(string readerPath, byte[] bytes, int byteOffset)
+    {
+        var cursor = new NotifyRoleCollectCursor
+        {
+            Version = 1,
+            ReaderDigest = Digest(readerPath),
+            ByteOffset = byteOffset,
+            CompleteLineCount = CountCompleteLines(bytes, byteOffset),
+            PrefixDigest = Digest(bytes.AsSpan(0, byteOffset)),
+        };
+        var json = JsonSerializer.SerializeToUtf8Bytes(cursor);
+        return Convert.ToBase64String(json)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
+
+    private static bool TryDecodeRoleCollectCursor(
+        string value,
+        out NotifyRoleCollectCursor? cursor,
+        out string error)
+    {
+        cursor = null;
+        error = "the cursor is not a valid opaque cursor token.";
+        try
+        {
+            var encoded = value.Replace('-', '+')
+                .Replace('_', '/');
+            encoded = encoded.PadRight(encoded.Length + ((4 - encoded.Length % 4) % 4), '=');
+            var json = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+            cursor = JsonSerializer.Deserialize<NotifyRoleCollectCursor>(json);
+            if (cursor is null)
+            {
+                return false;
+            }
+
+            error = string.Empty;
+            return true;
+        }
+        catch (Exception exception) when (exception is FormatException or JsonException or NotSupportedException)
+        {
+            error = exception.Message;
+            return false;
+        }
+    }
+
+    private static string Digest(string value) => Digest(Encoding.UTF8.GetBytes(value));
+
+    private static string Digest(ReadOnlySpan<byte> value) => Convert.ToHexString(SHA256.HashData(value));
 
     private static int ExecuteReconcile(
         TextWriter writer,
@@ -2397,6 +2816,8 @@ internal static class NotifyCommand
         string? toRole = null;
         string? reportToRole = null;
         string? taskId = null;
+        string? role = null;
+        string? since = null;
         string? objective = null;
         string? resultNonce = null;
         string? status = null;
@@ -2422,6 +2843,7 @@ internal static class NotifyCommand
         int? claimedSilentMinutes = null;
         int? backlogIdleMinutes = null;
         int? repairSilentMinutes = null;
+        int? timeoutMilliseconds = null;
         var inputs = new List<string>();
         var expectedArtifacts = new List<string>();
         var preApprovalAcceptRules = new List<NotifyPreApprovalRule>();
@@ -2431,6 +2853,7 @@ internal static class NotifyCommand
         var autoRedispatch = false;
         var once = false;
         var eventMode = false;
+        var wait = false;
         var format = FormatMarkdown;
         error = string.Empty;
 
@@ -2445,6 +2868,8 @@ internal static class NotifyCommand
                 case "--to": if (!ReadValue(args, ref index, argument, out toRole, out error)) return false; break;
                 case "--report-to": if (!ReadValue(args, ref index, argument, out reportToRole, out error)) return false; break;
                 case "--task-id": if (!ReadValue(args, ref index, argument, out taskId, out error)) return false; break;
+                case "--role": if (!ReadValue(args, ref index, argument, out role, out error)) return false; break;
+                case "--since": if (!ReadValue(args, ref index, argument, out since, out error)) return false; break;
                 case "--objective": if (!ReadValue(args, ref index, argument, out objective, out error)) return false; break;
                 case "--result-nonce": if (!ReadValue(args, ref index, argument, out resultNonce, out error)) return false; break;
                 case "--status": if (!ReadValue(args, ref index, argument, out status, out error)) return false; break;
@@ -2547,6 +2972,15 @@ internal static class NotifyCommand
                     }
                     repairSilentMinutes = parsedRepair;
                     break;
+                case "--timeout-ms":
+                    if (!ReadValue(args, ref index, argument, out var timeoutValue, out error)
+                        || !int.TryParse(timeoutValue, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedTimeout))
+                    {
+                        error = "--timeout-ms requires a whole-number milliseconds value.";
+                        return false;
+                    }
+                    timeoutMilliseconds = parsedTimeout;
+                    break;
                 case "--pre-approve":
                     if (!ReadValue(args, ref index, argument, out var acceptRuleValue, out error)
                         || !NotifyPreApprovalPolicyStore.TryParseRule(acceptRuleValue!, out var acceptRule))
@@ -2616,6 +3050,7 @@ internal static class NotifyCommand
                 case "--auto-redispatch": autoRedispatch = true; break;
                 case "--once": once = true; break;
                 case "--event-mode": eventMode = true; break;
+                case "--wait": wait = true; break;
                 case "--format":
                     if (!ReadValue(args, ref index, argument, out format, out error)) return false;
                     if (format is not FormatJson and not FormatMarkdown)
@@ -2638,6 +3073,8 @@ internal static class NotifyCommand
             ToRole = toRole,
             ReportToRole = reportToRole,
             TaskId = taskId,
+            Role = role,
+            Since = since,
             Objective = objective,
             Inputs = inputs,
             ExpectedArtifacts = expectedArtifacts,
@@ -2665,6 +3102,7 @@ internal static class NotifyCommand
             ClaimedSilentMinutes = claimedSilentMinutes,
             BacklogIdleMinutes = backlogIdleMinutes,
             RepairSilentMinutes = repairSilentMinutes,
+            TimeoutMilliseconds = timeoutMilliseconds,
             PreApprovalAcceptRules = preApprovalAcceptRules,
             PreApprovalEscalateRules = preApprovalEscalateRules,
             ScopedPolicies = scopedPolicies,
@@ -2672,6 +3110,7 @@ internal static class NotifyCommand
             AutoRedispatch = autoRedispatch,
             Once = once,
             EventMode = eventMode,
+            Wait = wait,
             Format = format,
         };
 
@@ -2684,7 +3123,9 @@ internal static class NotifyCommand
         var requiredIdentity = string.Equals(operation, OperationStatus, StringComparison.Ordinal)
             ? new[] { ("--task-id", options.TaskId) }
             : string.Equals(operation, OperationCollect, StringComparison.Ordinal)
-                ? new[] { ("--domain", options.Domain), ("--team", options.Team), ("--task-id", options.TaskId) }
+                ? options.Role is not null
+                    ? new[] { ("--domain", options.Domain), ("--team", options.Team), ("--role", options.Role) }
+                    : new[] { ("--domain", options.Domain), ("--team", options.Team), ("--task-id", options.TaskId) }
             : string.Equals(operation, OperationReconcile, StringComparison.Ordinal)
                 ? new[] { ("--domain", options.Domain), ("--team", options.Team), ("--task-id", options.TaskId) }
             : string.Equals(operation, OperationSupervise, StringComparison.Ordinal)
@@ -2712,6 +3153,16 @@ internal static class NotifyCommand
         if (options.Team is not null
             && !NotifyEventWriter.TryValidateTeam(options.Team, out error))
         {
+            return false;
+        }
+
+        if (!string.Equals(operation, OperationCollect, StringComparison.Ordinal)
+            && (options.Role is not null
+                || options.Since is not null
+                || options.Wait
+                || options.TimeoutMilliseconds is not null))
+        {
+            error = "--role, --since, --wait, and --timeout-ms are supported only by notify collect.";
             return false;
         }
 
@@ -2879,10 +3330,54 @@ internal static class NotifyCommand
         }
         else if (string.Equals(operation, OperationCollect, StringComparison.Ordinal))
         {
+            if ((options.TaskId is null) == (options.Role is null))
+            {
+                error = "collect requires exactly one of --task-id or --role.";
+                return false;
+            }
+
             if (options.FromRole is not null || options.ToRole is not null || options.Status is not null
                 || options.Artifact is not null || options.Summary is not null)
             {
-                error = "collect reads the persisted outbox entry; it accepts only domain, team, task-id, routing-root, write/dry-run, and format.";
+                error = options.Role is not null
+                    ? "role-scoped collect accepts only domain, team, role, since, wait, timeout-ms, routing-root, write/dry-run, and format."
+                    : "collect reads the persisted outbox entry; it accepts only domain, team, task-id, routing-root, write/dry-run, and format.";
+                return false;
+            }
+
+            if (options.Role is null
+                && (options.Since is not null || options.Wait || options.TimeoutMilliseconds is not null))
+            {
+                error = "--since, --wait, and --timeout-ms are supported only with role-scoped collect (--role).";
+                return false;
+            }
+
+            if (options.Role is not null)
+            {
+                if (options.Wait && options.TimeoutMilliseconds is null)
+                {
+                    error = "role-scoped collect --wait requires --timeout-ms with a bounded duration.";
+                    return false;
+                }
+
+                if (!options.Wait && options.TimeoutMilliseconds is not null)
+                {
+                    error = "role-scoped collect --timeout-ms requires --wait.";
+                    return false;
+                }
+
+                if (options.TimeoutMilliseconds is not null
+                    && (options.TimeoutMilliseconds < 1
+                        || options.TimeoutMilliseconds > MaximumRoleCollectTimeoutMilliseconds))
+                {
+                    error = $"role-scoped collect --timeout-ms must be between 1 and {MaximumRoleCollectTimeoutMilliseconds} milliseconds.";
+                    return false;
+                }
+            }
+
+            if (options.Role is not null && options.TaskId is not null)
+            {
+                error = "collect requires exactly one of --task-id or --role; do not supply both.";
                 return false;
             }
         }
@@ -2993,6 +3488,8 @@ internal sealed record NotifyOptions
     public string? ToRole { get; init; }
     public string? ReportToRole { get; init; }
     public string? TaskId { get; init; }
+    public string? Role { get; init; }
+    public string? Since { get; init; }
     public string? Objective { get; init; }
     public required IReadOnlyList<string> Inputs { get; init; }
     public required IReadOnlyList<string> ExpectedArtifacts { get; init; }
@@ -3020,12 +3517,14 @@ internal sealed record NotifyOptions
     public int? ClaimedSilentMinutes { get; init; }
     public int? BacklogIdleMinutes { get; init; }
     public int? RepairSilentMinutes { get; init; }
+    public int? TimeoutMilliseconds { get; init; }
     public required IReadOnlyList<NotifyPreApprovalRule> PreApprovalAcceptRules { get; init; }
     public required IReadOnlyList<NotifyPreApprovalRule> PreApprovalEscalateRules { get; init; }
     public required IReadOnlyList<NotifyScopedPromptPolicy> ScopedPolicies { get; init; }
     public bool AutoRedispatch { get; init; }
     public bool Once { get; init; }
     public bool EventMode { get; init; }
+    public bool Wait { get; init; }
     public bool Write { get; init; }
     public required string Format { get; init; }
 }
@@ -3077,6 +3576,51 @@ internal sealed record NotifyResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ContinuationChainId => ContinuationChain?.ChainId;
     [JsonPropertyName("summary")] public required string Summary { get; init; }
+}
+
+internal sealed record NotifyRoleCollectResult
+{
+    [JsonPropertyName("operation")] public required string Operation { get; init; }
+    [JsonPropertyName("routing_root")] public required string RoutingRoot { get; init; }
+    [JsonPropertyName("domain")] public string? Domain { get; init; }
+    [JsonPropertyName("team")] public string? Team { get; init; }
+    [JsonPropertyName("role")] public string? Role { get; init; }
+    [JsonPropertyName("reader_path")] public string? ReaderPath { get; init; }
+    [JsonPropertyName("command_mode")] public required string CommandMode { get; init; }
+    [JsonPropertyName("cursor")] public string? Cursor { get; init; }
+    [JsonPropertyName("next_cursor")] public required string NextCursor { get; init; }
+    [JsonPropertyName("events")] public required IReadOnlyList<NotifyDesignEvent> Events { get; init; }
+    [JsonPropertyName("outcome")] public required string Outcome { get; init; }
+    [JsonPropertyName("wait")] public bool Wait { get; init; }
+    [JsonPropertyName("timed_out")] public bool TimedOut { get; init; }
+    [JsonPropertyName("cause")] public string? Cause { get; init; }
+    [JsonPropertyName("summary")] public required string Summary { get; init; }
+}
+
+internal sealed record NotifyRoleCollectReadResult
+{
+    public required bool Succeeded { get; init; }
+    public IReadOnlyList<NotifyDesignEvent> Events { get; init; } = [];
+    public required string NextCursor { get; init; }
+    public string? Cause { get; init; }
+    public string? Summary { get; init; }
+
+    public static NotifyRoleCollectReadResult Failure(string cause, string summary) => new()
+    {
+        Succeeded = false,
+        NextCursor = string.Empty,
+        Cause = cause,
+        Summary = summary,
+    };
+}
+
+internal sealed record NotifyRoleCollectCursor
+{
+    [JsonPropertyName("version")] public int Version { get; init; }
+    [JsonPropertyName("reader_digest")] public string ReaderDigest { get; init; } = string.Empty;
+    [JsonPropertyName("byte_offset")] public long ByteOffset { get; init; }
+    [JsonPropertyName("complete_line_count")] public int CompleteLineCount { get; init; }
+    [JsonPropertyName("prefix_digest")] public string PrefixDigest { get; init; } = string.Empty;
 }
 
 internal sealed record NotifyReconciliationResult

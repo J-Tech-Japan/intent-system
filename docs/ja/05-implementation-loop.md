@@ -52,6 +52,32 @@
 - 作業の選択は `intent-cli worker next-action` のみ。1 wake で最大 1 アクション
 - label 遷移はすべて `intent-cli worker` 経由 — raw `gh ... --add-label` は使わない
 
+## G757: external role の cursor-based receive
+
+external-resident の role は、まだ task id を知らなくても durable event を
+受信できます。role-scoped read mode を使います:
+
+```text
+intent-cli notify collect --domain <domain> --team <team> --role <role> \
+  [--since <opaque-cursor>] [--wait --timeout-ms <milliseconds>] --format json
+```
+
+role には記録済みの external reader が必要です。command は reader を
+`NotifyEventWriter.TryResolveReadPath` だけで解決するため、scoped reader と
+legacy reader の互換性は一つの resolver に集約されます。`--wait` がない場合は
+一回だけ即時 read を行い、`--wait` を付ける場合は bounded な
+`--timeout-ms` が必須です。bound 到達時は non-error exit とともに
+`cause: "no-new-events"` を返します。reader file がまだない場合は error ではなく
+`cause: "no-events"` です。
+
+cursor は opaque で caller が所有します。CLI は acknowledgement や read position を
+保存しません。結果の `next_cursor` を次の call に渡すと、event の loss や重複なしに
+再開できます。cursor が同じ reader の intact な位置を指せなくなった場合は
+`cursor-unhonourable` という明示的な result を返し、先頭への reset や末尾への skip
+を行いません。既存の `--task-id` collection の path と result shape は変更しません。
+role collection は短命な command であり、終了後に watcher、timer、process、その他の
+receive state を残しません。
+
 ## metadata / label の安全境界
 
 - child agent は PR に workflow label を手動で付けません。issue-to-PR の `pr-created` では、canonical な `worker complete --kind issue --outcome pr-created --github-only --write` が target repository の PR に `intent-target` を付けることがあります。`intent-pr-created` は issue 側の marker のままです。

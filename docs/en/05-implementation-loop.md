@@ -53,6 +53,32 @@ copy a long loop body from this document.
 - Select work only via `intent-cli worker next-action`; process at most one action per wake
 - All label transitions go through `intent-cli worker` — never raw `gh ... --add-label`
 
+## G757: external-role cursor-based receive
+
+An external-resident role can receive a durable event without already knowing
+the task id. Use the role-scoped read mode:
+
+```text
+intent-cli notify collect --domain <domain> --team <team> --role <role> \
+  [--since <opaque-cursor>] [--wait --timeout-ms <milliseconds>] --format json
+```
+
+The role must have a recorded external reader. The command resolves that
+reader through `NotifyEventWriter.TryResolveReadPath`, so scoped-versus-legacy
+reader compatibility stays in one place. It performs one immediate read unless
+`--wait` is supplied; `--wait` always requires a bounded `--timeout-ms` and
+returns `cause: "no-new-events"` with a non-error exit when the bound expires.
+A missing reader file is `cause: "no-events"`, not an error.
+
+The cursor is opaque and caller-owned: the CLI stores no acknowledgement or
+read position. Pass the returned `next_cursor` to the next call to resume
+without loss or duplication. If the cursor no longer identifies an intact
+position in the same reader, the command returns the explicit
+`cursor-unhonourable` result and never resets to the beginning or skips to the
+end. The existing `--task-id` collection path and result shape remain
+unchanged. Role collection is a short-lived command; it leaves no watcher,
+timer, process, or other receive state behind.
+
 ## Metadata / label safety
 
 - A child agent never manually applies workflow labels to a PR. For issue-to-PR `pr-created`, canonical `worker complete --kind issue --outcome pr-created --github-only --write` may apply target-repository `intent-target` to the PR; `intent-pr-created` remains an issue-side marker.
