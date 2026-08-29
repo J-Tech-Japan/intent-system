@@ -245,7 +245,7 @@ internal static class AgentLaunchRecipeRegistry
                 DeliveryMethod =
                     "Declare `delivery_method: file-backed` for a paste-sensitive herdr seat. `notify` writes the "
                     + "unchanged envelope to durable host `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` before "
-                    + "sending one line, `Read task envelope: <path>`. Declare `inline` to opt in explicitly; an absent "
+                    + "sending one line, `Read and execute task envelope: <path>`. Declare `inline` to opt in explicitly; an absent "
                     + "declaration preserves existing inline delivery.",
                 PostStartInteraction = new OrchestratorPostStartInteraction
                 {

@@ -1417,7 +1417,7 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --mode autop
   existing record declares `delivery_method: file-backed` through the
   registry-limited topology field update: `notify` writes the unchanged envelope under
   host `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` before sending
-  the pane one line, `Read task envelope: <path>`. Declare `inline` explicitly
+  the pane one line, `Read and execute task envelope: <path>`. Declare `inline` explicitly
   when desired; an absent declaration preserves existing inline delivery.
 - **Post-start interaction (G636, preview-through-1.x).** At the first task,
   Copilot 1.0.78 presents `1. Enable all permissions (recommended)` /
@@ -1973,7 +1973,7 @@ use `topology update-field` with `--field delivery_method --current absent --new
 file-backed` and explicit confirmation; use the same path with the recorded
 current value for a later allowed change. `notify` writes the unchanged envelope to an addressable durable task
 file under `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` before it
-sends the pane the single-line `Read task envelope: <path>` pointer. The file is
+sends the pane the single-line `Read and execute task envelope: <path>` pointer. The file is
 not deleted, so a restarted recipient can read the same task. Declare `inline`
 only to choose it explicitly: without a declaration, the established inline
 delivery remains byte-identical.

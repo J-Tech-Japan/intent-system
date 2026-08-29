@@ -119,7 +119,7 @@ internal sealed record NotifyTaskEnvelopeDelivery
 
         var taskFile = NotifyTaskEnvelopeStore.ResolvePath(
             options.RoutingRoot!, options.Domain!, options.Team!, options.TaskId!, options.ResultNonce!);
-        var pointer = $"Read task envelope: {taskFile}";
+        var pointer = $"Read and execute task envelope: {taskFile}";
         return new NotifyTaskEnvelopeDelivery
         {
             Resolved = true,

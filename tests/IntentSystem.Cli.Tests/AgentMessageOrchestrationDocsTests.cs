@@ -1,3 +1,5 @@
+using IntentSystem.Cli.Commands;
+
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
@@ -139,7 +141,7 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("`review-context.md`", en, StringComparison.Ordinal);
         Assert.Contains("842 characters over 14 lines", en, StringComparison.Ordinal);
         Assert.Contains("G619 owns the transport-layer remedy", en, StringComparison.Ordinal);
-        Assert.Contains("Read task envelope: <path>", en, StringComparison.Ordinal);
+        Assert.Contains("Read and execute task envelope: <path>", en, StringComparison.Ordinal);
         Assert.Contains("absent declaration preserves existing inline delivery", en, StringComparison.Ordinal);
         Assert.Contains("never refuses or truncates", en, StringComparison.Ordinal);
         Assert.Contains("broken bracketed-paste", en, StringComparison.Ordinal);
@@ -147,7 +149,7 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("committed canonical な `review-context.md`", ja, StringComparison.Ordinal);
         Assert.Contains("842 文字・14 行", ja, StringComparison.Ordinal);
         Assert.Contains("transport-layer の remedy は G619 が担当", ja, StringComparison.Ordinal);
-        Assert.Contains("Read task envelope: <path>", ja, StringComparison.Ordinal);
+        Assert.Contains("Read and execute task envelope: <path>", ja, StringComparison.Ordinal);
         Assert.Contains("宣言がなければ既存の inline delivery をそのまま維持", ja, StringComparison.Ordinal);
         Assert.Contains("refuse も truncate もしません", ja, StringComparison.Ordinal);
         Assert.Contains("broken bracketed-paste state", ja, StringComparison.Ordinal);
@@ -718,6 +720,115 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("`--permission-mode`", ja, StringComparison.Ordinal);
         Assert.Contains("shift+tab のような modifier chord は忠実に届きません", ja, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void FileBackedPointerWordingAgreesAcrossRecipeAndMirrors_G759()
+    {
+        const string expectedWording = "Read and execute task envelope: <path>";
+        var root = Directory.CreateTempSubdirectory("notify-g759-agreement-").FullName;
+        try
+        {
+            const string domain = "intent-cli";
+            const string team = "intent-cli-dev";
+            const string taskId = "G759-agreement";
+            const string nonce = "agreement-nonce";
+            var topologyPath = NotifyRoleTopologyStore.ResolvePath(root, domain, team);
+            Directory.CreateDirectory(Path.GetDirectoryName(topologyPath)!);
+            File.WriteAllText(topologyPath, """
+                {
+                  "domain": "intent-cli",
+                  "team": "intent-cli-dev",
+                  "workspace_id": "wH",
+                  "roles": {
+                    "implementation": {
+                      "resident": "herdr",
+                      "kind": "copilot",
+                      "workspace_id": "wH",
+                      "pane_id": "wH:p2",
+                      "delivery_method": "file-backed"
+                    }
+                  }
+                }
+                """);
+
+            var options = new NotifyOptions
+            {
+                Domain = domain,
+                Team = team,
+                FromRole = "orchestration",
+                ToRole = "implementation",
+                ReportToRole = "orchestration",
+                TaskId = taskId,
+                ResultNonce = nonce,
+                RoutingRoot = root,
+                Inputs = [],
+                ExpectedArtifacts = ["PR"],
+                PreApprovalAcceptRules = [],
+                PreApprovalEscalateRules = [],
+                ScopedPolicies = [],
+                Format = "json",
+            };
+
+            var delivery = NotifyTaskEnvelopeDelivery.Resolve(options, "parent payload");
+            Assert.True(delivery.Resolved, delivery.Summary);
+            Assert.True(delivery.FileBacked, delivery.Summary);
+            var taskFile = NotifyTaskEnvelopeStore.ResolvePath(root, domain, team, taskId, nonce);
+            Assert.Equal(taskFile, delivery.TaskFile);
+            Assert.NotNull(delivery.Pointer);
+            Assert.Equal(delivery.Pointer, delivery.TransportPayload);
+
+            var emittedWording = NormalizeEmittedPointer(delivery.TransportPayload, taskFile);
+            var en = ReadDoc("en");
+            var ja = ReadDoc("ja");
+            var recipe = AgentLaunchRecipeRegistry.Find("copilot")?.DeliveryMethod;
+            Assert.NotNull(recipe);
+
+            var sites = new[]
+            {
+                emittedWording,
+                NormalizeEmbeddedWording(recipe!),
+                NormalizeEmbeddedWording(en),
+                NormalizeEmbeddedWording(ja),
+            };
+            Assert.True(AgreementMatches(sites));
+            Assert.Equal(expectedWording, emittedWording);
+            Assert.DoesNotContain("Read task envelope: <path>", recipe, StringComparison.Ordinal);
+            Assert.DoesNotContain("Read task envelope: <path>", en, StringComparison.Ordinal);
+            Assert.DoesNotContain("Read task envelope: <path>", ja, StringComparison.Ordinal);
+
+            for (var mutatedIndex = 0; mutatedIndex < sites.Length; mutatedIndex++)
+            {
+                var mutated = sites.ToArray();
+                mutated[mutatedIndex] = "Read task envelope: <path>";
+                Assert.False(AgreementMatches(mutated), $"one-site mutation {mutatedIndex} must fail");
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static string NormalizeEmittedPointer(string pointer, string taskFile)
+    {
+        const string prefix = "Read and execute task envelope: ";
+        Assert.StartsWith(prefix, pointer, StringComparison.Ordinal);
+        var path = pointer[prefix.Length..];
+        Assert.True(Path.IsPathRooted(path));
+        Assert.Equal(taskFile, path);
+        return prefix + "<path>";
+    }
+
+    private static string NormalizeEmbeddedWording(string surface)
+    {
+        const string prefix = "Read and execute task envelope: ";
+        Assert.Contains(prefix, surface, StringComparison.Ordinal);
+        return prefix + "<path>";
+    }
+
+    private static bool AgreementMatches(IReadOnlyList<string> sites) =>
+        sites.Count == 4
+        && sites.All(site => string.Equals(site, sites[0], StringComparison.Ordinal));
 
     private static string ReadDoc(string language)
     {
