@@ -1,3 +1,5 @@
+using IntentSystem.Cli.Commands;
+
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
@@ -139,7 +141,7 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("`review-context.md`", en, StringComparison.Ordinal);
         Assert.Contains("842 characters over 14 lines", en, StringComparison.Ordinal);
         Assert.Contains("G619 owns the transport-layer remedy", en, StringComparison.Ordinal);
-        Assert.Contains("Read task envelope: <path>", en, StringComparison.Ordinal);
+        Assert.Contains("Read and execute task envelope: <path>", en, StringComparison.Ordinal);
         Assert.Contains("absent declaration preserves existing inline delivery", en, StringComparison.Ordinal);
         Assert.Contains("never refuses or truncates", en, StringComparison.Ordinal);
         Assert.Contains("broken bracketed-paste", en, StringComparison.Ordinal);
@@ -147,7 +149,7 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("committed canonical な `review-context.md`", ja, StringComparison.Ordinal);
         Assert.Contains("842 文字・14 行", ja, StringComparison.Ordinal);
         Assert.Contains("transport-layer の remedy は G619 が担当", ja, StringComparison.Ordinal);
-        Assert.Contains("Read task envelope: <path>", ja, StringComparison.Ordinal);
+        Assert.Contains("Read and execute task envelope: <path>", ja, StringComparison.Ordinal);
         Assert.Contains("宣言がなければ既存の inline delivery をそのまま維持", ja, StringComparison.Ordinal);
         Assert.Contains("refuse も truncate もしません", ja, StringComparison.Ordinal);
         Assert.Contains("broken bracketed-paste state", ja, StringComparison.Ordinal);
@@ -717,6 +719,23 @@ public sealed class AgentMessageOrchestrationDocsTests
         Assert.Contains("shift+tab are not delivered faithfully", en, StringComparison.Ordinal);
         Assert.Contains("`--permission-mode`", ja, StringComparison.Ordinal);
         Assert.Contains("shift+tab のような modifier chord は忠実に届きません", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FileBackedPointerWordingAgreesAcrossRecipeAndMirrors_G759()
+    {
+        const string wording = "Read and execute task envelope: <path>";
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+        var recipe = AgentLaunchRecipeRegistry.Find("copilot")?.DeliveryMethod;
+
+        Assert.NotNull(recipe);
+        Assert.Contains(wording, recipe, StringComparison.Ordinal);
+        Assert.Contains(wording, en, StringComparison.Ordinal);
+        Assert.Contains(wording, ja, StringComparison.Ordinal);
+        Assert.DoesNotContain("Read task envelope: <path>", recipe, StringComparison.Ordinal);
+        Assert.DoesNotContain("Read task envelope: <path>", en, StringComparison.Ordinal);
+        Assert.DoesNotContain("Read task envelope: <path>", ja, StringComparison.Ordinal);
     }
 
     private static string ReadDoc(string language)

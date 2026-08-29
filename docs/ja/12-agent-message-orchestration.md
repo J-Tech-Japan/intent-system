@@ -1214,7 +1214,7 @@ herdr agent start <logical-role> --kind copilot --pane <pane-id> -- --mode autop
 - **task-envelope delivery method。** existing record を持つ paste-sensitive な herdr seat では、
   registry-limited topology field update で `delivery_method: file-backed` を宣言します。`notify` は unchanged な envelope を host の
   `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` に書いてから、pane には
-  `Read task envelope: <path>` という 1 行だけを送ります。明示的に選ぶなら `inline` を宣言します。
+  `Read and execute task envelope: <path>` という 1 行だけを送ります。明示的に選ぶなら `inline` を宣言します。
   宣言がなければ既存の inline delivery をそのまま維持します。
 - **post-start interaction (G636, preview-through-1.x)。** 最初の task で Copilot 1.0.78 は
   `1. Enable all permissions (recommended)` / `2. Continue with limited permissions` /
@@ -1689,7 +1689,7 @@ wedge を防ぐものではありません。transport-layer の remedy は G619
 `topology update-field` を使います。後から許可された値を変更するときも、記録済みの現在値を指定して
 同じ経路を使います。`notify` は変更しない envelope をアドレス可能で永続的な
 `.intent-cli/tasks/<domain>/<team>/<task-id>-<nonce>.md` に書いてから、pane へ
-`Read task envelope: <path>` という 1 行のポインターを送ります。file は削除しないため、再起動
+`Read and execute task envelope: <path>` という 1 行のポインターを送ります。file は削除しないため、再起動
 した recipient も同じ task を読み直せます。明示的に選ぶ場合だけ `inline` を宣言し、宣言がなければ
 確立済みの inline delivery は byte-identical のままです。
 

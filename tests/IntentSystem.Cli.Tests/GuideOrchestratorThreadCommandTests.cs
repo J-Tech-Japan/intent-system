@@ -2077,7 +2077,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("842 characters over 14 lines", output, StringComparison.Ordinal);
         Assert.Contains("G619 owns the transport-layer remedy", output, StringComparison.Ordinal);
         Assert.Contains("delivery_method: file-backed", output, StringComparison.Ordinal);
-        Assert.Contains("Read task envelope: <path>", output, StringComparison.Ordinal);
+        Assert.Contains("Read and execute task envelope: <path>", output, StringComparison.Ordinal);
         Assert.Contains("Preview through 1.x (G636)", output, StringComparison.Ordinal);
         Assert.Contains("post-start interaction", output, StringComparison.Ordinal);
         Assert.Contains("Copilot 1.0.78 presents", output, StringComparison.Ordinal);

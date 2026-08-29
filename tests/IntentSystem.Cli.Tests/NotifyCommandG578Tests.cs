@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
@@ -124,11 +125,15 @@ public sealed class NotifyCommandG578Tests : IDisposable
         var taskFile = result.GetProperty("task_file").GetString()!;
         var pointer = result.GetProperty("delivery_pointer").GetString()!;
         Assert.True(File.Exists(taskFile));
-        Assert.Equal(result.GetProperty("payload").GetString(), File.ReadAllText(taskFile));
+        var payload = result.GetProperty("payload").GetString()!;
+        Assert.Equal(payload, File.ReadAllText(taskFile));
+        Assert.Equal(Encoding.UTF8.GetBytes(payload), File.ReadAllBytes(taskFile));
         Assert.Contains("G578-demo-demo-nonce.md", taskFile, StringComparison.Ordinal);
-        Assert.Contains("TASK G578-demo", File.ReadAllText(taskFile), StringComparison.Ordinal);
-        Assert.Contains("result-nonce: demo-nonce", File.ReadAllText(taskFile), StringComparison.Ordinal);
-        Assert.StartsWith("Read task envelope: ", pointer, StringComparison.Ordinal);
+        Assert.Contains("TASK G578-demo", payload, StringComparison.Ordinal);
+        Assert.Contains("result-nonce: demo-nonce", payload, StringComparison.Ordinal);
+        Assert.True(Path.IsPathRooted(taskFile));
+        Assert.Equal("Read and execute task envelope: " + taskFile, pointer);
+        Assert.StartsWith("Read and execute task envelope: ", pointer, StringComparison.Ordinal);
         Assert.DoesNotContain('\n', pointer);
         Assert.DoesNotContain('\r', pointer);
         var prompt = Assert.Single(runner.Calls, call =>
