@@ -130,13 +130,12 @@ public sealed class NotifyCommandG578Tests : IDisposable
         Assert.Equal(Encoding.UTF8.GetBytes(payload), File.ReadAllBytes(taskFile));
         // This checked-in full-envelope oracle was captured from the parent
         // invocation. Only the per-test temporary root is substituted.
-        var goldenPath = Path.Combine(
-            RepoVersionPolicySource.RepoRoot(),
-            "tests", "IntentSystem.Cli.Tests", "Fixtures", "G759",
-            "parent-file-backed-envelope.md");
-        var parentGolden = File.ReadAllText(goldenPath)
-            .Replace("<workspace-root>", workspace.RootPath, StringComparison.Ordinal);
-        Assert.Equal(Encoding.UTF8.GetBytes(parentGolden), File.ReadAllBytes(taskFile));
+        var parentGolden = LoadParentEnvelope(workspace.RootPath);
+        var expectedEnvelope = parentGolden.Replace(
+            "--report-root . --write --format json",
+            "--report-root <role-work-root> --write --format json",
+            StringComparison.Ordinal);
+        Assert.Equal(Encoding.UTF8.GetBytes(expectedEnvelope), File.ReadAllBytes(taskFile));
         Assert.Contains("G578-demo-demo-nonce.md", taskFile, StringComparison.Ordinal);
         Assert.Contains("TASK G578-demo", payload, StringComparison.Ordinal);
         Assert.Contains("result-nonce: demo-nonce", payload, StringComparison.Ordinal);
@@ -239,11 +238,13 @@ public sealed class NotifyCommandG578Tests : IDisposable
         var expectedReportRoot = ShellQuoteForTest(Path.GetFullPath(recipientCwd));
         var expectedCommand = parentCommand
             .Replace("--report-root .", $"--report-root {expectedReportRoot}", StringComparison.Ordinal);
-        var expectedParentEnvelope = ExpectedParentEnvelope(workspace.RootPath);
-        var expectedEnvelope = expectedParentEnvelope
-            .Replace(parentCommand, expectedCommand, StringComparison.Ordinal);
+        var parentEnvelope = LoadParentEnvelope(workspace.RootPath);
+        var expectedEnvelope = parentEnvelope.Replace(
+            "--report-root . --write --format json",
+            $"--report-root {expectedReportRoot} --write --format json",
+            StringComparison.Ordinal);
 
-        Assert.Equal(expectedEnvelope, payload);
+        Assert.Equal(Encoding.UTF8.GetBytes(expectedEnvelope), Encoding.UTF8.GetBytes(payload));
     }
 
     [Fact]
@@ -644,25 +645,12 @@ public sealed class NotifyCommandG578Tests : IDisposable
         + "--artifact <artifact> --summary <one-line-summary> "
         + $"--routing-root {ShellQuoteForTest(routingRoot)} --report-root . --write --format json";
 
-    private static string ExpectedParentEnvelope(string routingRoot) =>
-        string.Join('\n',
-        [
-            "TASK G578-demo",
-            "role: implementation",
-            "objective: Implement the notification contract",
-            "inputs:",
-            "  - issue #1259",
-            "expected-artifacts:",
-            "  - draft PR URL",
-            "reporting-contract:",
-            "  task-id: G578-demo",
-            "  expected-artifact: draft PR URL",
-            $"  canonical-report-command: {ExpectedParentReportCommand(routingRoot)}",
-            "  required-final-step: Run canonical-report-command after all other work; never hand-write a transport invocation.",
-            "result-prefix: ORCH_RESULT",
-            "result-nonce: demo-nonce",
-            "completion-marker: When the artifact is ready, concatenate result-prefix, one space, result-nonce, one space, status, one space, and artifact; use completed, blocked, or question. Do not precompose the marker in this task block.",
-        ]);
+    private static string LoadParentEnvelope(string routingRoot) =>
+        File.ReadAllText(Path.Combine(
+                RepoVersionPolicySource.RepoRoot(),
+                "tests", "IntentSystem.Cli.Tests", "Fixtures", "G759",
+                "parent-file-backed-envelope.md"))
+            .Replace("<workspace-root>", routingRoot, StringComparison.Ordinal);
 
     private static string ShellQuoteForTest(string value) =>
         $"'{value.Replace("'", "'\\''", StringComparison.Ordinal)}'";
