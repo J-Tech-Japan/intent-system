@@ -24,6 +24,12 @@ internal static class NotifySupervisionStore
     public const string ShrinkTransactionFileName = "shrink-transaction.json";
     public const string CycleArchiveDirectoryName = "cycles-archive";
     public const string ArchiveTransactionFileName = "archive-transaction.json";
+    public const string LocalIgnoreFileName = ".gitignore";
+    public static readonly IReadOnlyList<string> CycleHistoryIgnoreLines =
+    [
+        "**/cycles.jsonl",
+        "**/cycles-archive/",
+    ];
     public const int DefaultLiveWindowDays = 7;
     private const string LockFileName = ".supervision.lock";
     private const string ShrinkTransactionSchema = "intent-cli.supervision-shrink-transaction/v1";
@@ -72,6 +78,9 @@ internal static class NotifySupervisionStore
 
     public static string ResolveCyclePath(string artifactRoot, string domain, string team) =>
         Path.Combine(ResolveDirectory(artifactRoot, domain, team), CycleFileName);
+
+    public static string ResolveCycleHistoryIgnorePath(string artifactRoot) =>
+        Path.Combine(Path.GetFullPath(artifactRoot), LocalIgnoreFileName);
 
     public static string ResolveCycleArchiveDirectoryPath(string artifactRoot, string domain, string team) =>
         Path.Combine(ResolveDirectory(artifactRoot, domain, team), CycleArchiveDirectoryName);
@@ -293,7 +302,7 @@ internal static class NotifySupervisionStore
         {
             Kind = "cycle",
             Cycle = cycle,
-        });
+        }, ensureCycleHistoryIgnore: true);
     }
 
     public static NotifySupervisionWriteResult RecordPromptAudit(
@@ -310,7 +319,7 @@ internal static class NotifySupervisionStore
         {
             Kind = "prompt-audit",
             PromptAudit = audit,
-        });
+        }, ensureCycleHistoryIgnore: true);
     }
 
     public static NotifySupervisionWriteResult OpenStall(
@@ -349,7 +358,72 @@ internal static class NotifySupervisionStore
         });
     }
 
-    private static NotifySupervisionWriteResult Append(string path, NotifySupervisionEvent entry)
+    internal static NotifySupervisionIgnoreResult EnsureCycleHistoryIgnore(
+        string artifactRoot,
+        bool write)
+    {
+        string ignorePath;
+        try
+        {
+            ignorePath = ResolveCycleHistoryIgnorePath(artifactRoot);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            return NotifySupervisionIgnoreResult.Failure(artifactRoot, exception.Message);
+        }
+
+        lock (Sync)
+        {
+            try
+            {
+                var existingText = File.Exists(ignorePath)
+                    ? File.ReadAllText(ignorePath, Utf8NoBom)
+                    : string.Empty;
+                var existingLines = existingText
+                    .Replace("\r\n", "\n", StringComparison.Ordinal)
+                    .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(line => line.Trim())
+                    .ToHashSet(StringComparer.Ordinal);
+                var missing = CycleHistoryIgnoreLines
+                    .Where(line => !existingLines.Contains(line))
+                    .ToArray();
+                if (missing.Length == 0 || !write)
+                {
+                    return new NotifySupervisionIgnoreResult(
+                        Applied: false,
+                        WouldChange: missing.Length > 0,
+                        ignorePath,
+                        MissingLines: missing,
+                        Error: null);
+                }
+
+                var directory = Path.GetDirectoryName(ignorePath)!;
+                Directory.CreateDirectory(directory);
+                var prefix = existingText.Length == 0 || existingText.EndsWith('\n')
+                    ? string.Empty
+                    : Environment.NewLine;
+                File.AppendAllText(
+                    ignorePath,
+                    prefix + string.Join(Environment.NewLine, missing) + Environment.NewLine,
+                    Utf8NoBom);
+                return new NotifySupervisionIgnoreResult(
+                    Applied: true,
+                    WouldChange: true,
+                    ignorePath,
+                    MissingLines: [],
+                    Error: null);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return NotifySupervisionIgnoreResult.Failure(ignorePath, exception.Message);
+            }
+        }
+    }
+
+    private static NotifySupervisionWriteResult Append(
+        string path,
+        NotifySupervisionEvent entry,
+        bool ensureCycleHistoryIgnore = false)
     {
         if (WriteOverride is { } writeOverride)
         {
@@ -362,6 +436,22 @@ internal static class NotifySupervisionStore
             try
             {
                 var directory = Path.GetDirectoryName(path)!;
+                if (ensureCycleHistoryIgnore && IsInsideGitRepository(directory))
+                {
+                    var supervisionRoot = ResolveSupervisionRoot(directory);
+                    if (supervisionRoot is not null)
+                    {
+                        var ignoreResult = EnsureCycleHistoryIgnore(supervisionRoot, write: true);
+                        if (ignoreResult.Error is not null)
+                        {
+                            return new NotifySupervisionWriteResult(
+                                Applied: false,
+                                AlreadyConverged: false,
+                                Path: path,
+                                Error: ignoreResult.Error);
+                        }
+                    }
+                }
                 using var directoryLock = AcquireDirectoryLock(directory, createDirectory: true);
                 RecoverPendingArchiveTransaction(directory);
                 RecoverPendingShrinkTransaction(directory);
@@ -379,6 +469,30 @@ internal static class NotifySupervisionStore
                 return new NotifySupervisionWriteResult(false, false, path, exception.Message);
             }
         }
+    }
+
+    private static string? ResolveSupervisionRoot(string teamDirectory)
+    {
+        var team = new DirectoryInfo(teamDirectory);
+        var domain = team.Parent;
+        return domain?.Parent?.FullName;
+    }
+
+    private static bool IsInsideGitRepository(string path)
+    {
+        var current = new DirectoryInfo(Path.GetFullPath(path));
+        while (current is not null)
+        {
+            var gitPath = Path.Combine(current.FullName, ".git");
+            if (Directory.Exists(gitPath) || File.Exists(gitPath))
+            {
+                return true;
+            }
+
+            current = current.Parent;
+        }
+
+        return false;
     }
 
     private static NotifySupervisionBound? ReadBound(string path)
@@ -720,6 +834,15 @@ internal static class NotifySupervisionStore
                 directory,
                 liveWindowDays,
                 "the live window must be greater than zero days.");
+        }
+
+        if (write)
+        {
+            var ignore = EnsureCycleHistoryIgnore(artifactRoot, write: true);
+            if (ignore.Error is not null)
+            {
+                return NotifySupervisionArchiveResult.Failure(directory, liveWindowDays, ignore.Error);
+            }
         }
 
         if (!Directory.Exists(directory) && !write)
@@ -1217,6 +1340,15 @@ internal static class NotifySupervisionStore
         if (!Directory.Exists(directory) && !write)
         {
             return NotifySupervisionShrinkResult.Empty(directory, write);
+        }
+
+        if (write)
+        {
+            var ignore = EnsureCycleHistoryIgnore(artifactRoot, write: true);
+            if (ignore.Error is not null)
+            {
+                return NotifySupervisionShrinkResult.Failure(directory, ignore.Error);
+            }
         }
 
         lock (Sync)
@@ -2487,6 +2619,17 @@ internal sealed record NotifySupervisionWriteResult(
     bool AlreadyConverged,
     string Path,
     string? Error);
+
+internal sealed record NotifySupervisionIgnoreResult(
+    bool Applied,
+    bool WouldChange,
+    string Path,
+    IReadOnlyList<string> MissingLines,
+    string? Error)
+{
+    public static NotifySupervisionIgnoreResult Failure(string path, string error) =>
+        new(false, false, path, [], error);
+}
 
 internal sealed record NotifySupervisionEvent
 {

@@ -33,11 +33,17 @@ internal static class IntentInitRenderer
         {
             writer.WriteLine($"  - `{line}`");
         }
-        writer.WriteLine("- `.gitignore` exact lines:");
+        writer.WriteLine("- legacy root `.gitignore` supervision lines: none (ownership is directory-local):");
         foreach (var line in result.GitIgnoreLines)
         {
             writer.WriteLine($"  - `{line}`");
         }
+        writer.WriteLine($"- directory-local supervision ignore `{result.SupervisionIgnorePath}` exact lines:");
+        foreach (var line in result.SupervisionIgnoreLines)
+        {
+            writer.WriteLine($"  - `{line}`");
+        }
+        writer.WriteLine("- supervision ignore scope: cycle history only; stalls and policy/manifest state remain trackable.");
         writer.WriteLine($"- existing-host rule: {result.ExistingHostGuidance}");
 
         writer.WriteLine();

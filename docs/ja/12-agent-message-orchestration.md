@@ -364,15 +364,55 @@ guide_reachability:
 .intent-cli/**/*.jsonl merge=union
 ```
 
+前者は append-only JSONL store に union merge を適用します。supervision の cycle history は
+
+root-level repository ignore ではなく、CLI が所有する directory-local rule です。
+
 ```gitignore
-.intent-cli/supervision/**/cycles.jsonl
-.intent-cli/supervision/**/stalls.jsonl
+# .intent-cli/supervision/.gitignore
+**/cycles.jsonl
+**/cycles-archive/
 ```
 
-前者は append-only JSONL store に union merge を適用し、後者は team ごとの supervision telemetry を
-git の対象外にします。初期化済みの host に対して `intent init` はこの正確な行を guidance として
-表示するだけで、`.gitattributes` と `.gitignore` を変更しません。migration は常に operator が明示的に
-行います。
+runtime-local なのは cycle history だけです。team ごとの `stalls.jsonl`、`bound.json`、
+`emission-policy.json`、`evidence-definitions.json`、`pre-approval-policy.json`、
+`shrink-audit.jsonl` は shared な policy/manifest state として trackable のままです。
+以前の root-level entry `.intent-cli/supervision/**/cycles.jsonl` と
+`.intent-cli/supervision/**/stalls.jsonl` は legacy path であり、現在の ownership policy ではありません。
+特に stalls は trackable に残します。
+
+すでに初期化済みで cycle history を追跡している host は `intent init` だけでは移行しません。
+domain と team を指定して、次の canonical repair を実行します。
+
+```bash
+intent-cli notify supervise repair-cycle-history --domain <domain> --team <team> --write --format json
+```
+
+この repair は directory-local rule を追加し、cycle-history path だけを index から外しながら
+file を disk 上に保持し、obsolete な root-level supervision rule を除去します。preserved path と
+shared policy/manifest state が trackable であることを結果に表示します。operator は repository state を
+手編集せず、この named command を使います。supervision が何を read/write するかは変更しません。
+
+## runtime-local supervision cycle history (G750 — preview-through-1.x)
+
+supervision cycle history は CLI-owned runtime-local state です。すべての reader は同じ host 上の
+consumer であり、各 cycle record には OS process id が含まれるため、別 checkout と共有して merge
+する policy state ではありません。この境界は “all supervision telemetry” より狭く、`stalls.jsonl`、
+`bound.json`、`emission-policy.json`、`evidence-definitions.json`、`pre-approval-policy.json`、
+`shrink-audit.jsonl` は shared、trackable、reviewable なままです。
+
+fresh host の `intent init --write` は `.intent-cli/supervision/.gitignore` を作り、`**/cycles.jsonl`
+と `**/cycles-archive/` だけを記載します。CLI は cycle history を書くときもこの file を維持します。
+この ignore は emission rate、event mode、archive semantics、supervision の read/write contract を変更
+しません。既存 host では上記の `notify supervise repair-cycle-history` が全 cycle file を保持したまま
+repository tracking を修復します。
+
+これは compaction ではありません。G734 の `notify supervise shrink` は全 record を保持したまま
+既存 state を in-place で圧縮しますが、G750 は cycle-history path の ownership だけを分けます。
+G751 は後続の write-rate design unit であり、この変更には含めません。
+
+> **1.x を通じた preview (G750)。** directory-local cycle-history ownership と named repair command は
+> post-freeze preview であり、1.0 compatibility promise の対象外です。
 
 ## canonical notify workflow
 

@@ -24,5 +24,9 @@ internal sealed record IntentInitResult
 
     public required IReadOnlyList<string> GitIgnoreLines { get; init; }
 
+    public required string SupervisionIgnorePath { get; init; }
+
+    public required IReadOnlyList<string> SupervisionIgnoreLines { get; init; }
+
     public required string ExistingHostGuidance { get; init; }
 }
