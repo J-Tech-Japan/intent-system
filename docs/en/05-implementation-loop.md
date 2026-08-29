@@ -180,6 +180,23 @@ existing prohibition is limited to undeclared or ad-hoc routine requests.
 Durable emitted record, validation, and rendered-discovery evidence is in
 [the G736 verification transcript](../g736-topology-host-state-verification.md).
 
+## G756: inspect an external role's effective reader
+
+An `external` resident has a recorded `reader`, but that value can be a
+legacy flat path while domain-scoped event delivery uses another file. The
+read-only `session-layer topology show --domain <domain> --team <team>
+--format json` surface now reports both `reader` (the recorded value) and
+`effective_reader`. The latter comes from the same
+`NotifyEventWriter.TryResolveReadPath` used for event reads, so this surface
+does not invent a second fallback rule. `session-layer topology validate` emits
+the informational `reader-path-divergence` finding when the values differ; it
+names both paths and the path events actually use, while `valid: true` and the
+exit code remain unchanged. A correctly recorded scoped path produces no
+finding. A custom path remains verbatim and produces no finding, and a
+`herdr` resident receives neither reader field nor finding. This is reporting
+only: delivery, legacy upgrade behavior, topology records, and the recorded
+value are not rewritten automatically.
+
 ## G724: worker domain identity on a multi-domain host
 
 The startup marker is display evidence, not a worker binding. In host context,
