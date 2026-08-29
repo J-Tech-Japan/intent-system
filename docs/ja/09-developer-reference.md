@@ -3050,7 +3050,14 @@ child issue-preflight が canonical-unavailable になったのは sandbox に�
 child execution-unit claim は作成・変更・release せず、host repository に入りませんでした。
 host-only claim boundary は `release-prep:<owner/repo>:0.26.1` で、この child は host state を inspect しません。
 orchestration seat の preflight は `next-action=wait`、`classification=claim-unavailable`、`actionable=false` を記録しました。`.git/FETCH_HEAD` (`Operation not permitted`) を open できなかったためです。fresh child selector は local holder none/unheld と報告しました。supplied host claim が正式な根拠であり、この child は execution-unit claim を create、modify、release、verify していません。
-G725 evidence boundary: design の pre-change host-root run は synced product checkout `bb9754859ac8055adbd504f294145b7494668c1a` で zero findings でしたが、version roll は欠けていました。この silence は non-evidence であり green check ではありません。この child は G725 を diagnose/fix せず、post-merge host-root synced-main measurement は host duty です。
+G725 evidence boundary: real host-root の pre-roll run は synced target checkout
+`bb9754859ac8055adbd504f294145b7494668c1a` で actionable な
+`version-roll-required` finding を 1 件返し、stableVersion `0.26.0` と
+nextVersion `0.26.1` を期待していました。PR-head child-clone run が
+`c73e12e6d08c6e7698f393c47c571f1320bedf90` で `version-roll-required` finding を
+0 件返したのは、origin/main `bb9754859ac8055adbd504f294145b7494668c1a` に対して
+checkout が stale で、queue state も missing と報告した状態だけです。この 0 件は
+non-evidence であり roll の証明ではありません。valid な post-merge answer には synced host-main measurement が必要です。この child は G725 を diagnose/fix していません。
 公開済みの [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0) とその tag は shipped evidence の正式な根拠です。
 v0.23.0 の shipped artifact は GitHub Release、NuGet package、自己完結型バイナリです。ただし npm leg は registry に到達しなかったため、`0.23.0` は npm で利用できると扱ってはいけません。
 tracked な EN/JA の `release-notes-v0.23.0.md` files はこの shipped-artifact status を記録します。

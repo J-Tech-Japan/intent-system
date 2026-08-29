@@ -17,6 +17,8 @@ public sealed class ReleaseNotesV0260DocsTests
     private const string FinalBuiltDisplayIdentity = "intent-cli 0.26.0-a49ad93-G748";
     private const string InstalledDisplayIdentity = "intent-cli 0.25.0-74a1c72-G741";
     private const string CurrentStableInstallDisplayIdentity = "intent-cli 0.26.0-93f07f8-G749";
+    private const string PreRollTargetCheckout = "bb9754859ac8055adbd504f294145b7494668c1a";
+    private const string PrHead = "c73e12e6d08c6e7698f393c47c571f1320bedf90";
     private const string ArchiveUsage =
         "notify supervise archive --domain <d> --team <t> [--live-window-days <days>] [--dry-run|--write] [--format markdown|json]";
 
@@ -262,11 +264,43 @@ public sealed class ReleaseNotesV0260DocsTests
             language == "en" ? "not a changelog" : "changelog ではありません",
             readiness,
             StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("bb9754859ac8055adbd504f294145b7494668c1a", readiness, StringComparison.Ordinal);
         Assert.Contains(
-            language == "en" ? "silence is non-evidence" : "silence は non-evidence",
+            language == "en" ? "returned one actionable" : "actionable な",
+            readiness,
+            StringComparison.Ordinal);
+        Assert.Contains("`version-roll-required` finding", readiness, StringComparison.Ordinal);
+        Assert.Contains(language == "en" ? "finding, expecting" : "1 件返し、stableVersion", readiness, StringComparison.Ordinal);
+        Assert.Contains("stableVersion `0.26.0`", readiness, StringComparison.Ordinal);
+        Assert.Contains("nextVersion `0.26.1`", readiness, StringComparison.Ordinal);
+        Assert.Contains(PreRollTargetCheckout, readiness, StringComparison.Ordinal);
+        Assert.Contains(PrHead, readiness, StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en"
+                ? "returned zero `version-roll-required` findings only"
+                : "0 件返したのは",
+            readiness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en"
+                ? "origin/main `bb9754859ac8055adbd504f294145b7494668c1a`"
+                : "origin/main `bb9754859ac8055adbd504f294145b7494668c1a` に対して",
+            readiness,
+            StringComparison.Ordinal);
+        var normalizedEvidence = Regex.Replace(readiness, @"\s+", " ");
+        Assert.Contains(
+            language == "en" ? "missing queue state" : "queue state も missing",
+            normalizedEvidence,
+            StringComparison.Ordinal);
+        Assert.Contains("non-evidence", readiness, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            language == "en" ? "does not prove the roll" : "roll の証明ではありません",
             readiness,
             StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            language == "en" ? "A valid post-merge" : "valid な post-merge answer",
+            readiness,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("synced host-main measurement", readiness, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(PreparedHead, readiness, StringComparison.Ordinal);
         Assert.Contains(BuiltDisplayIdentity, readiness, StringComparison.Ordinal);
         Assert.Contains(FinalBuiltDisplayIdentity, readiness, StringComparison.Ordinal);

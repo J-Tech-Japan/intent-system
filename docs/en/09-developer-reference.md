@@ -3013,9 +3013,15 @@ The orchestration-seat preflight recorded `next-action=wait`,
 open `.git/FETCH_HEAD` (`Operation not permitted`). The fresh child selector
 reported local holder none/unheld; the supplied host claim is authoritative and
 this child did not create, modify, release, or verify an execution-unit claim.
-G725 evidence boundary: the design's pre-change host-root run at synced product
-checkout `bb9754859ac8055adbd504f294145b7494668c1a` returned zero findings while
-this version roll was absent. That silence is non-evidence, not a green check.
+G725 evidence boundary: the real host-root pre-roll run against synced target
+checkout `bb9754859ac8055adbd504f294145b7494668c1a` returned one actionable
+`version-roll-required` finding, expecting stableVersion `0.26.0` and nextVersion
+`0.26.1`. The PR-head child-clone run at `c73e12e6d08c6e7698f393c47c571f1320bedf90`
+returned zero `version-roll-required` findings only while reporting stale checkout
+versus origin/main `bb9754859ac8055adbd504f294145b7494668c1a` and missing queue
+state. That zero is non-evidence and does not prove the roll. A valid post-merge
+answer requires a synced host-main measurement. This child did not diagnose or
+fix G725.
 The published [v0.23.0 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0) and its tag are authoritative shipped evidence.
 The v0.23.0 shipped artifacts are the GitHub Release, NuGet package, and self-contained binaries; its npm leg never reached the registry, so `0.23.0` must not be treated as available from npm.
 The tracked EN and JA `release-notes-v0.23.0.md` files now state this shipped-artifact status.
