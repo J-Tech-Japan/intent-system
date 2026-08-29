@@ -337,6 +337,119 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
+    public void Capture_IdenticalRemoteTipRemainsCurrentUsingLocalContainment_G758()
+    {
+        using var fixture = new FreshnessCheckoutFixture();
+        const string localHead = "identical-tip";
+        const string remoteHead = "identical-tip";
+        var runner = CreateContainmentRunner(localHead, remoteHead);
+
+        var observation = CheckoutFreshnessProbe.Capture(fixture.CheckoutPath, runner);
+
+        Assert.NotNull(observation);
+        Assert.Equal(CheckoutFreshnessProbe.Current, observation!.Status);
+        Assert.Equal(string.Empty, observation.Warning);
+        AssertContainmentGitSequence(runner, localHead, remoteHead);
+    }
+
+    [Fact]
+    public void Analyze_AheadContainingRemoteTipRemainsCurrentAndSilent_G758()
+    {
+        using var fixture = new FreshnessCheckoutFixture();
+        const string localHead = "ahead-head";
+        const string remoteHead = "base-head";
+        var runner = CreateContainmentRunner(localHead, remoteHead);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+        AutomationStalledWorkCommand.GitCommandRunnerFactory = () => runner;
+
+        var result = AutomationStalledWorkCommand.Analyze(
+            fixture.Context,
+            "intent-cli",
+            "J-Tech-Japan/intent-system",
+            staleMinutes: 60);
+
+        Assert.Null(result.CheckoutFreshness);
+        Assert.DoesNotContain(result.Warnings, warning =>
+            warning.Contains("checkout freshness", StringComparison.Ordinal));
+        AssertContainmentGitSequence(runner, localHead, remoteHead);
+    }
+
+    [Fact]
+    public void Capture_GenuinelyBehindRemoteTipRemainsStaleWithActionableWarning_G758()
+    {
+        using var fixture = new FreshnessCheckoutFixture();
+        const string localHead = "behind-head";
+        const string remoteHead = "newer-tip";
+        var runner = CreateContainmentRunner(localHead, remoteHead, ancestryExitCode: 1);
+
+        var observation = CheckoutFreshnessProbe.Capture(fixture.CheckoutPath, runner);
+
+        Assert.NotNull(observation);
+        Assert.Equal(CheckoutFreshnessProbe.Stale, observation!.Status);
+        Assert.Equal(
+            "checkout freshness: stale; this answer was computed from local HEAD behind-head "
+            + "but origin/main is newer-tip. Sync the checkout and re-run the report; "
+            + "this command is read-only and does not fetch, pull, reset, or sync.",
+            observation.Warning);
+        AssertContainmentGitSequence(runner, localHead, remoteHead);
+    }
+
+    [Fact]
+    public void Capture_DetachedHeadAtRemoteTipRemainsCurrentAndSilent_G758()
+    {
+        using var fixture = new FreshnessCheckoutFixture();
+        fixture.DetachAtTip();
+        const string localHead = "detached-tip";
+        const string remoteHead = "detached-tip";
+        var runner = CreateContainmentRunner(localHead, remoteHead);
+
+        var observation = CheckoutFreshnessProbe.Capture(fixture.CheckoutPath, runner);
+
+        Assert.NotNull(observation);
+        Assert.Equal(CheckoutFreshnessProbe.Current, observation!.Status);
+        Assert.Equal(string.Empty, observation.Warning);
+        AssertContainmentGitSequence(runner, localHead, remoteHead);
+    }
+
+    [Fact]
+    public void Capture_AbsentRemoteTipObjectIsStaleWithoutAncestryMutation_G758()
+    {
+        using var fixture = new FreshnessCheckoutFixture();
+        const string localHead = "local-head";
+        const string remoteHead = "missing-tip";
+        var runner = CreateContainmentRunner(localHead, remoteHead, objectExitCode: 128);
+
+        var observation = CheckoutFreshnessProbe.Capture(fixture.CheckoutPath, runner);
+
+        Assert.NotNull(observation);
+        Assert.Equal(CheckoutFreshnessProbe.Stale, observation!.Status);
+        Assert.Contains("checkout freshness: stale", observation.Warning, StringComparison.Ordinal);
+        Assert.Equal(
+            [
+                "rev-parse HEAD",
+                "ls-remote --symref origin HEAD",
+                $"cat-file -e {remoteHead}^{{commit}}",
+            ],
+            runner.Calls.Select(call => string.Join(' ', call.Arguments)));
+    }
+
+    [Fact]
+    public void Capture_UsesOnlyTheReadOnlyContainmentGitSequence_G758()
+    {
+        using var fixture = new FreshnessCheckoutFixture();
+        const string localHead = "ahead-head";
+        const string remoteHead = "base-head";
+        var runner = CreateContainmentRunner(localHead, remoteHead);
+
+        _ = CheckoutFreshnessProbe.Capture(fixture.CheckoutPath, runner);
+
+        AssertContainmentGitSequence(runner, localHead, remoteHead);
+        Assert.DoesNotContain(runner.Calls, call =>
+            call.Arguments.Any(argument =>
+                argument is "fetch" or "pull" or "reset" or "sync"));
+    }
+
+    [Fact]
     public void Execute_DispositionSettledDelegationLeavesSupervisionAndStalledWorkOpenPopulation_G671()
     {
         using var workspace = new StalledWorkWorkspace();
@@ -4107,6 +4220,65 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         public IReadOnlyList<GitHubAutomationReleaseCandidate> ListPublishedReleases(string repo) => releases;
     }
 
+    private static RecordingGitRunner CreateContainmentRunner(
+        string localHead,
+        string remoteHead,
+        int objectExitCode = 0,
+        int ancestryExitCode = 0)
+    {
+        var runner = new RecordingGitRunner
+        {
+            Responses = new Dictionary<string, GitRemoteCommandResult>(StringComparer.Ordinal)
+            {
+                ["rev-parse HEAD"] = new GitRemoteCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = $"{localHead}\n",
+                    StdErr = string.Empty,
+                },
+                ["ls-remote --symref origin HEAD"] = new GitRemoteCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = $"ref: refs/heads/main\tHEAD\n{remoteHead}\tHEAD\n",
+                    StdErr = string.Empty,
+                },
+                [$"cat-file -e {remoteHead}^{{commit}}"] = new GitRemoteCommandResult
+                {
+                    ExitCode = objectExitCode,
+                    StdOut = string.Empty,
+                    StdErr = objectExitCode == 0 ? string.Empty : "missing object\n",
+                },
+            },
+        };
+
+        if (objectExitCode == 0)
+        {
+            runner.Responses[$"merge-base --is-ancestor {remoteHead} HEAD"] = new GitRemoteCommandResult
+            {
+                ExitCode = ancestryExitCode,
+                StdOut = string.Empty,
+                StdErr = ancestryExitCode == 0 ? string.Empty : "not an ancestor\n",
+            };
+        }
+
+        return runner;
+    }
+
+    private static void AssertContainmentGitSequence(
+        RecordingGitRunner runner,
+        string localHead,
+        string remoteHead)
+    {
+        Assert.Equal(
+            [
+                "rev-parse HEAD",
+                "ls-remote --symref origin HEAD",
+                $"cat-file -e {remoteHead}^{{commit}}",
+                $"merge-base --is-ancestor {remoteHead} HEAD",
+            ],
+            runner.Calls.Select(call => string.Join(' ', call.Arguments)));
+    }
+
     private sealed class RecordingGitRunner : IGitRemoteCommandRunner
     {
         public Dictionary<string, GitRemoteCommandResult> Responses { get; init; } = new(StringComparer.Ordinal);
@@ -4189,6 +4361,8 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         public string RunGit(params string[] arguments) => RunGit(CheckoutPath, arguments);
 
         public void SetOrigin(string url) => RunGit(CheckoutPath, "remote", "set-url", "origin", url);
+
+        public void DetachAtTip() => RunGit(CheckoutPath, "checkout", "--detach", "HEAD");
 
         public void WritePacketDomain(string executionUnit, string domain)
         {

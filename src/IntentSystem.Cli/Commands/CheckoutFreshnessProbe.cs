@@ -101,7 +101,85 @@ internal static class CheckoutFreshnessProbe
                 "the origin response did not identify a default branch and HEAD");
         }
 
-        if (string.Equals(localHead, remoteHead, StringComparison.OrdinalIgnoreCase))
+        return DetermineContainment(repoRoot, runner, localHead, defaultBranch, remoteHead);
+    }
+
+    private static CheckoutFreshnessObservation DetermineContainment(
+        string repoRoot,
+        IGitRemoteCommandRunner runner,
+        string localHead,
+        string defaultBranch,
+        string remoteHead)
+    {
+        GitRemoteCommandResult remoteTipObject;
+        try
+        {
+            // A remote tip that is not already in the local object store cannot
+            // be reachable from HEAD. Treat that absence as a real stale
+            // result without fetching or otherwise mutating the checkout.
+            remoteTipObject = runner.Run(
+                repoRoot,
+                ["cat-file", "-e", $"{remoteHead}^{{commit}}"]);
+        }
+        catch (Exception exception) when (IsProbeFailure(exception))
+        {
+            return UnknownObservation(
+                localHead,
+                defaultBranch,
+                remoteHead,
+                $"the origin default branch tip could not be checked locally ({exception.Message})");
+        }
+
+        if (remoteTipObject.TimedOut)
+        {
+            return UnknownObservation(
+                localHead,
+                defaultBranch,
+                remoteHead,
+                FirstNonEmpty(
+                    remoteTipObject.StdErr,
+                    $"git cat-file -e {remoteHead}^{{commit}} timed out after {DefaultTimeout.TotalSeconds:0.###} seconds"));
+        }
+
+        if (remoteTipObject.ExitCode != 0)
+        {
+            return new CheckoutFreshnessObservation
+            {
+                Status = Stale,
+                LocalHead = localHead,
+                DefaultBranch = defaultBranch,
+                RemoteHead = remoteHead,
+            };
+        }
+
+        GitRemoteCommandResult ancestry;
+        try
+        {
+            ancestry = runner.Run(
+                repoRoot,
+                ["merge-base", "--is-ancestor", remoteHead, "HEAD"]);
+        }
+        catch (Exception exception) when (IsProbeFailure(exception))
+        {
+            return UnknownObservation(
+                localHead,
+                defaultBranch,
+                remoteHead,
+                $"the origin default branch tip could not be compared locally ({exception.Message})");
+        }
+
+        if (ancestry.TimedOut)
+        {
+            return UnknownObservation(
+                localHead,
+                defaultBranch,
+                remoteHead,
+                FirstNonEmpty(
+                    ancestry.StdErr,
+                    $"git merge-base --is-ancestor {remoteHead} HEAD timed out after {DefaultTimeout.TotalSeconds:0.###} seconds"));
+        }
+
+        if (ancestry.ExitCode == 0)
         {
             return new CheckoutFreshnessObservation
             {
@@ -112,6 +190,17 @@ internal static class CheckoutFreshnessProbe
             };
         }
 
+        if (ancestry.ExitCode != 1)
+        {
+            return UnknownObservation(
+                localHead,
+                defaultBranch,
+                remoteHead,
+                FirstNonEmpty(
+                    ancestry.StdErr,
+                    "the origin default branch tip could not be compared locally"));
+        }
+
         return new CheckoutFreshnessObservation
         {
             Status = Stale,
@@ -120,7 +209,6 @@ internal static class CheckoutFreshnessProbe
             RemoteHead = remoteHead,
         };
     }
-
     private static CheckoutFreshnessObservation UnknownObservation(
         string? localHead,
         string? defaultBranch,
