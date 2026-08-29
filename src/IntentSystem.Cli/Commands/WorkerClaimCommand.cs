@@ -193,15 +193,15 @@ internal static class WorkerClaimCommand
         }
 
         var store = ClaimOwnershipVerifier.ProbeStore(context.RepoRoot);
-        if (!store.StoreConfigured)
-        {
-            return null;
-        }
         if (!store.Available)
         {
             return ClaimOwnershipVerifier.Unavailable(
                 $"execution-unit:issue-{number}",
                 $"claim verification refused issue #{number}: fresh canonical Git evidence is unavailable ({store.Detail}).");
+        }
+        if (!store.StoreConfigured)
+        {
+            return null;
         }
 
         try

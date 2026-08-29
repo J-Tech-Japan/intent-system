@@ -184,27 +184,27 @@ internal static class ClaimOwnershipVerifier
             return ReadLocalEvidence(repoRoot, scope);
         }
 
-        var branch = RunGit(repoRoot, ["branch", "--show-current"]);
-        if (branch.ExitCode != 0 || string.IsNullOrWhiteSpace(branch.StandardOutput))
+        ClaimRemoteDefaultBranch canonicalBranch;
+        try
         {
-            return CanonicalClaimEvidence.Unavailable("the current Git checkout has no named branch");
+            canonicalBranch = ClaimCommand.ResolveRemoteDefaultBranch(repoRoot);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            return CanonicalClaimEvidence.Unavailable(
+                string.IsNullOrWhiteSpace(exception.Message)
+                    ? "resolving origin default branch failed"
+                    : exception.Message);
         }
 
-        var origin = RunGit(repoRoot, ["remote", "get-url", "origin"]);
-        if (origin.ExitCode != 0 || string.IsNullOrWhiteSpace(origin.StandardOutput))
-        {
-            return CanonicalClaimEvidence.Unavailable("the current Git checkout has no origin remote");
-        }
-
-        var branchName = branch.StandardOutput.Trim();
-        var remoteRef = $"refs/remotes/origin/{branchName}";
+        var remoteRef = $"refs/remotes/origin/{canonicalBranch.Name}";
         var fetch = RunGit(repoRoot,
-            ["fetch", "--quiet", "origin", $"+refs/heads/{branchName}:{remoteRef}"]);
+            ["fetch", "--quiet", "origin", $"+refs/heads/{canonicalBranch.Name}:{remoteRef}"]);
         if (fetch.ExitCode != 0)
         {
             return CanonicalClaimEvidence.Unavailable(
                 string.IsNullOrWhiteSpace(fetch.StandardError)
-                    ? "fetching the current branch from origin failed"
+                    ? "fetching the canonical default branch from origin failed"
                     : fetch.StandardError.Trim());
         }
 

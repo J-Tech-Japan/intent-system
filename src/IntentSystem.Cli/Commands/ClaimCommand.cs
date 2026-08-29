@@ -114,22 +114,9 @@ internal static class ClaimCommand
         ArgumentNullException.ThrowIfNull(warningWriter);
         deleteDirectory ??= path => Directory.Delete(path, recursive: true);
 
-        var origin = RunGit(repoRoot, ["remote", "get-url", "origin"]);
-        EnsureSuccess(origin, "resolve origin");
-        var defaultBranchResult = RunGit(repoRoot, ["ls-remote", "--symref", "origin", "HEAD"]);
-        EnsureSuccess(defaultBranchResult, "resolve origin default branch");
-        var remote = origin.StandardOutput.Trim();
-        if (remote.Length == 0)
-        {
-            throw new InvalidOperationException("claim requires an origin remote");
-        }
-
-        if (!TryParseRemoteDefaultBranch(defaultBranchResult.StandardOutput, out var defaultBranch))
-        {
-            throw new InvalidOperationException(
-                "Could not resolve origin default branch from its HEAD symref; refusing to "
-                + "fall back to the current branch.");
-        }
+        var canonicalBranch = ResolveRemoteDefaultBranch(repoRoot);
+        var remote = canonicalBranch.Remote;
+        var defaultBranch = canonicalBranch.Name;
         if (!request.Write)
         {
             return new ClaimTransactionResult(
@@ -668,6 +655,33 @@ internal static class ClaimCommand
         return true;
     }
 
+    /// <summary>
+    /// Resolve the one canonical remote branch used by both claim writes and
+    /// claim reads. The caller must fail closed when this metadata is absent
+    /// or unsafe; no caller may substitute its current checkout branch.
+    /// </summary>
+    internal static ClaimRemoteDefaultBranch ResolveRemoteDefaultBranch(string repoRoot)
+    {
+        var origin = RunGit(repoRoot, ["remote", "get-url", "origin"]);
+        EnsureSuccess(origin, "resolve origin");
+        var defaultBranchResult = RunGit(repoRoot, ["ls-remote", "--symref", "origin", "HEAD"]);
+        EnsureSuccess(defaultBranchResult, "resolve origin default branch");
+        var remote = origin.StandardOutput.Trim();
+        if (remote.Length == 0)
+        {
+            throw new InvalidOperationException("claim requires an origin remote");
+        }
+
+        if (!TryParseRemoteDefaultBranch(defaultBranchResult.StandardOutput, out var defaultBranch))
+        {
+            throw new InvalidOperationException(
+                "Could not resolve origin default branch from its HEAD symref; refusing to "
+                + "fall back to the current branch.");
+        }
+
+        return new ClaimRemoteDefaultBranch(remote, defaultBranch);
+    }
+
     private static bool IsSafeRemoteBranch(string value)
     {
         if (value.Length == 0
@@ -968,6 +982,8 @@ internal static class ClaimCommand
         writer.WriteLine($"- detail: {result.Detail}");
     }
 }
+
+internal sealed record ClaimRemoteDefaultBranch(string Remote, string Name);
 
 internal enum ClaimOperation { Acquire, Release, Takeover }
 

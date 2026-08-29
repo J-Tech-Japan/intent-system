@@ -201,11 +201,13 @@ existing host は自動 migrate しません。最後の specific line は broad
 ### Preview: claim-aware start surface (G680)
 
 packet draft、queue seed/publish-flow、worker next-action、release-prep は同じ
-`claim verify` judgment を使います。Git worktree では verifier が current branch を最初に
-fetch し、fresh な `origin` ref の claims tree を読みます。local absence や stale local record を
-ownership / no-store の証拠にはせず、fresh canonical Git evidence を確立できなければ fail closed
-します。canonical に claims store が存在しない host だけは legacy single-team output を
-byte-identical に維持します。store が設定されている場合、invoking team が matching scope を
+`claim verify` judgment を使います。Git worktree では verifier が claim acquire と同じ
+remote-default-branch resolver を使って origin の canonical branch を解決し、そこを fetch して
+fresh な `origin` ref の claims tree を読みます。読む checkout の current branch、local absence、
+stale local record は ownership / no-store の証拠ではありません。detached checkout でも同じ
+canonical answer を返します。default branch を解決または fetch できなければ
+`canonical-unavailable` で fail closed します。canonical に claims store が存在しない host
+だけは legacy single-team output を byte-identical に維持します。store が設定されている場合、invoking team が matching scope を
 保持している必要があります。unheld / other-team の拒否は scope、holder、holder team を
 名指します。next-slice は同じ judgment を recommendation mode で使い、unheld と own-team
 unit は candidate のまま、claimed-elsewhere unit は holder evidence 付きで除外します。

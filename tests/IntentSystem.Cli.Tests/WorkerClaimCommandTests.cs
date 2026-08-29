@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using IntentSystem.Cli;
@@ -184,6 +185,42 @@ public sealed class WorkerClaimCommandTests : IDisposable
         Assert.False(result.Proceed);
         Assert.Contains(result.Errors, error =>
             error.StartsWith(WorkerClaimCompleteConstants.ErrorCodes.ClaimRegistryRefused, StringComparison.Ordinal));
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_IssueWithCanonicalUnavailable_RefusesBeforeNoStoreBypassWithoutLabelMutation_G755Repair()
+    {
+        using var workspace = new WorkerClaimWorkspace();
+        InitializeBrokenOrigin(workspace.RootPath);
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target" },
+        };
+        WorkerClaimCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerClaimCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "1642",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(2, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerClaimResult>(writer.ToString())!;
+        Assert.False(result.Proceed);
+        Assert.False(result.Applied);
+        Assert.Empty(result.AddLabels);
+        Assert.Empty(result.RemoveLabels);
+        Assert.Contains(result.Errors, error =>
+            error.StartsWith(WorkerClaimCompleteConstants.ErrorCodes.ClaimRegistryRefused, StringComparison.Ordinal)
+            && error.Contains("canonical Git evidence is unavailable", StringComparison.Ordinal));
         Assert.Empty(mutator.AppliedTransitions);
     }
 
@@ -576,6 +613,34 @@ public sealed class WorkerClaimCommandTests : IDisposable
         }
         throw new FileNotFoundException(
             $"Could not locate source file {fileName} from {directory}");
+    }
+
+    private static void InitializeBrokenOrigin(string repoRoot)
+    {
+        RunGit(repoRoot, "init", "--quiet");
+        RunGit(repoRoot, "remote", "add", "origin", Path.Combine(repoRoot, "missing-origin.git"));
+    }
+
+    private static void RunGit(string workingDirectory, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo);
+        Assert.NotNull(process);
+        var standardError = process!.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(process.ExitCode == 0, standardError);
     }
 
     internal sealed class FakeMutator : IGitHubLabelMutator
