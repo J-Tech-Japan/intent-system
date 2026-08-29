@@ -3072,6 +3072,15 @@ target checkout から
 を実行し、関連する before/after の `items`、checkout commit、freshness/provenance
 を返してください。この child-side silence を proof として扱わないでください。
 
+最終 post-change child run は committed checkout
+`a21c1f2334d0a81412fa1f9b49e0b8320e39de91` で実行しました。同じく
+`stalled=true` ですが、informational な G717、G719、G725 の `claim-stale` item
+だけで、`version-roll-required` item はありませんでした。freshness warning は
+local HEAD `a21c1f2` が `origin/main`
+`f43fbd19f6e0cb7fa284ccd2f89d2932f63ca330` より stale だと示し、child queue-state
+warning も残りました。これは child evidence であり、synced host-root proof では
+ありません。
+
 host worker は #1640 を selected しましたが、issue-preflight は
 `.git/FETCH_HEAD` を読めないため `canonical-unavailable` を返しました。
 fresh child selector は local `execution-unit:G754` が unheld なので

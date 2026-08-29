@@ -13,6 +13,7 @@ public sealed class ReleaseNotesV0271DocsTests
 {
     private const string ShippedIdentity = "intent-cli 0.27.0-f43fbd1-G753";
     private const string ShippedHead = "f43fbd19f6e0cb7fa284ccd2f89d2932f63ca330";
+    private const string PostRollChildHead = "a21c1f2334d0a81412fa1f9b49e0b8320e39de91";
     private const string StaleHostCheckout = "35c6d96a";
     private const string HostOriginMain = "209b1369";
 
@@ -80,6 +81,7 @@ public sealed class ReleaseNotesV0271DocsTests
         Assert.Contains("stalled=true", readiness, StringComparison.Ordinal);
         Assert.Contains(StaleHostCheckout, readiness, StringComparison.Ordinal);
         Assert.Contains(HostOriginMain, readiness, StringComparison.Ordinal);
+        Assert.Contains(PostRollChildHead, readiness, StringComparison.Ordinal);
         Assert.Contains("next-action=wait", readiness, StringComparison.Ordinal);
         Assert.Contains("execution-unit:G754", readiness, StringComparison.Ordinal);
         Assert.Contains("unheld", readiness, StringComparison.Ordinal);

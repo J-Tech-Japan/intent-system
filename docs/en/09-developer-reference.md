@@ -3029,6 +3029,14 @@ from a synced host-main target checkout and return the relevant before/after
 `items` entries, checkout commit, and freshness/provenance; do not treat this
 child-side silence as proof.
 
+The final post-change child run at committed checkout
+`a21c1f2334d0a81412fa1f9b49e0b8320e39de91` returned the same non-actionable
+result: `stalled=true` only for informational G717, G719, and G725
+`claim-stale` items, with no `version-roll-required` item. Its freshness
+warning reported local HEAD `a21c1f2` stale versus `origin/main`
+`f43fbd19f6e0cb7fa284ccd2f89d2932f63ca330`, and its child queue-state warning
+remained. This is child evidence, not a synced host-root proof.
+
 The host worker selected #1640 while issue-preflight reported
 `canonical-unavailable` because `.git/FETCH_HEAD` was unreadable. The fresh
 child selector separately returned `next-action=wait` because local
