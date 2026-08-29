@@ -2993,7 +2993,119 @@ result は literal bytes の削減、追加した reference bytes、record の n
 `shrink-audit.jsonl` に明記します。`.intent-cli/runs/*.provider.jsonl` は別の provider-run state なので
 scope 外です。`--dry-run` なら manifest、JSONL、audit を書き込まずに測定済み plan だけを確認できます。
 
-### 次リリース準備(v0.26.1)
+### 次リリース準備(v0.27.0)
+
+**RELEASE PREPARED / NOT PUBLISHED。**
+
+shipped stable line は intent-cli 0.26.0-93f07f8-G749、source revision は
+93f07f892f6514bc561493339b11e36de0e36555 です。tracked な EN/JA
+release-notes-v0.26.0.md はこの preparation で変更していません。
+v0.26.0 の GitHub Release と tag が shipped evidence です。
+real-install identity は `intent-cli 0.26.0-93f07f8-G749` です。
+
+過去の readiness audit との互換性のため、この current block には shipped-artifact
+evidence も残します。v0.26.0 GitHub Release は shipped evidence の正式な根拠です。
+v0.23.0 GitHub Release
+https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0 と
+release-notes-v0.23.0.md は自己完結型バイナリを記録しています。npm leg は
+registry に到達しなかったため、npm で利用できると扱ってはいけません。
+prior roll の evidence は POST-RELEASE ROLL / PLACEHOLDER ONLY です。
+source-note inconsistency はこの roll より前から存在し、scope 外であり、後の
+explicitly scoped remediation で扱います。installed 0.23.2 CLI と
+checkout_freshness/provenance も記録しています。
+
+version-flow guard のため、stableVersion 0.26.0 と nextVersion 0.27.0 が
+policy pair です。stableVersion → 0.26.0 と nextVersion → 0.27.0 が監査した
+transition で、JTechJapan.IntentSystem.Cli.0.27.0.nupkg は package artifact
+名だけです。canonical release-prep coordination scope は
+release-prep:<owner/repo>:0.27.0 です。tag、GitHub Release、package publish
+という post-release action は行いません。
+現在の policy は stableVersion `0.26.0`、nextVersion `0.27.0` です。
+この preparation は両方の mirror に
+[release-notes-v0.27.0.md](release-notes-v0.27.0.md) を追加し、以前の
+v0.26.1 DRAFT placeholder stub を削除します。v0.26.1 は post-v0.25.0
+roll が置いた placeholder だけで、選ばれた release ではありません。
+tag、GitHub Release、package publish、post-release roll、G725 の
+diagnosis/fix はこの PR の範囲外です。
+
+正確な prepared functional head は
+`bb9754859ac8055adbd504f294145b7494668c1a` です。この revision を clean
+Release build した identity は `intent-cli 0.26.0-bb97548-G751`、
+installed baseline は `intent-cli 0.26.0-93f07f8-G749` でした。version
+file から先に推測せず、この build を version decision の根拠にします。
+
+programmatic sweep は 32 個すべての command group の help と、各 direct
+subcommand の help を呼び出しました。installed CLI は group descriptor
+32 + direct-help usage 71 = **103 usages**、Release build は 32 + 72 =
+**104 usages** でした。増えたのは
+`notify supervise repair-cycle-history` の一つだけで、removal はありません。
+installed の `notify supervise repair-cycle-history` は
+`invalid-notification: Unknown argument 'repair-cycle-history'.` を返し、
+prepared usage は
+`notify supervise repair-cycle-history --domain <d> --team <t> [--dry-run|--write]
+[--format markdown|json]` です。`automation`、`claim`、`worker` の help、
+および `state-doctor` と `closeout-drift-check` の usage は
+byte-identical でした。この測定した operator surface が minor bump の
+監査可能な reason です。
+
+release inventory は operator が観測できる outcome を持つ、次の二つの
+unit だけです。
+
+- G750 — PR #1634; merge commit `b525191a24e361419b03f77e15e659110a22c395`。
+  **Operator-observable outcome:** supervision cycle history を git に
+  持たなくなり、100MB の cycle-history file で push が block された host
+  も push できます。すでに tracking 中の host には
+  `notify supervise repair-cycle-history` という supported migration が
+  あり、file は preserve され、delete されません。
+- G751 — PR #1635; merge commit `bb9754859ac8055adbd504f294145b7494668c1a`。
+  **Operator-observable outcome:** observation のない成功した event-mode
+  wait は永続 cycle record を作らず、genuine observation と interval
+  safety-floor record は永続のままです。そのため running supervisor
+  の write rate は空の wait ごとの event-wait record ではなく、宣言した
+  one-record-per-interval に settle します。
+
+正確な first-parent range は
+`v0.26.0..086344540d70a052555502971fa968aff6a252ac` で、`git rev-list
+--first-parent --reverse` と `git rev-list --first-parent --count` により
+3 commits でした。
+
+| first-parent commit | classification | release inventory |
+| --- | --- | --- |
+| b525191a24e361419b03f77e15e659110a22c395 | G750 release unit; PR #1634 | included |
+| bb9754859ac8055adbd504f294145b7494668c1a | G751 release unit; PR #1635 | included |
+| 086344540d70a052555502971fa968aff6a252ac | G752 post-v0.26.0 version roll to the 0.26.1 placeholder; not a release unit | classified only |
+
+G752 は classification table に残し、release unit として数えません。
+release inventory は G750、G751 の二つだけです。v0.26.0 の G744 entry は
+live file を bounded にしただけで write volume を減らしませんでした。
+v0.26.0 に upgrade して history growth が止まると期待した operator は、
+この release の G751 までその outcome を得られませんでした。これは二つの
+release にまたがる一つの三-unit problem です。G744 は live history を
+bounded にし、G750 は runtime-local cycle history を git から外し、
+non-deleting migration を用意し、G751 は write rate を減らしました。
+
+測定値は形容ではなく source を付けた measurement です。G750 の記録では
+`cycles.jsonl` は GitHub の 100MB tracking limit で 111.5MB に達しました。
+G751 は no-observation change 前を 3.6 records/second、後を 12.00/hour
+と測定しました。最初の値は git blockage を、後の二つは running
+supervisor の before/after write rate を示します。
+
+host worker の next-action は #1638 を selected しましたが、issue-preflight
+は `canonical-unavailable` で、`.git/FETCH_HEAD` を読めませんでした。
+fresh child worker selector は別に `next-action=wait`、local execution-unit
+G753 の holder none/unheld を返しました。これは既知の child/host registry
+contradiction であり、child が ownership を決めたものではありません。
+supplied host claim を正本として使用し、child execution-unit claim
+を create、alter、release、verify せず、host repository に入りませんでした。
+
+release-prep の verification は v0.27.0 notes と PR report に記録します。
+focused release/doc/version guard: 14 passed, 0 failed, 0 skipped (14 total)。
+adjacent release/readiness guard: 51 passed, 0 failed, 0 skipped (51 total)。
+dedicated G613 JA terminology guard: 6 passed, 0 failed, 0 skipped (6 total)。
+Full Release suite: 5332 passed, 0 failed, 1 skipped (5333 total)。`git diff --check` は
+clean です。tracked な v0.26.0 EN/JA shipped-note は byte-identical のままです。
+
+### 以前の v0.26.1 post-release roll evidence (provenance)
 
 **POST-RELEASE ROLL / PLACEHOLDER ONLY。**
 
@@ -3013,7 +3125,7 @@ release-readiness gate はこの post-release roll とは別です。
 
 この post-release roll は `eng/version.json` を stableVersion `0.26.0`、
 nextVersion `0.26.1` にします。shipped v0.26.0 note file は変更せず、
-current placeholder は [release-notes-v0.26.1.md](release-notes-v0.26.1.md) です。
+former placeholder file release-notes-v0.26.1.md は current preparation で削除しました。
 v0.26.1 DRAFT stub は replaceable planning scaffold で changelog ではありません。
 release-prep は測定して次の real release number を決めた後、この stub を replace します。
 この roll では tag、GitHub Release、package publish、unreleased content の追加を行いません。
