@@ -1969,6 +1969,27 @@ internal sealed class NotifyMeasuredSupervisor
 
     internal void RecordWaitEvent(TextWriter writer, NotifySupervisionWaitEvent waitEvent)
     {
+        // A successful wait without a qualifying transition is operator-visible
+        // evidence, not a cycle-worthy observation. Keep the warning forced so
+        // repeated instant returns cannot disappear while interval cycles continue.
+        if (string.Equals(
+                waitEvent.Outcome,
+                NotifySupervisionEventMonitor.NoObservationOutcome,
+                StringComparison.Ordinal))
+        {
+            EmitPass(writer, new NotifySupervisorPass
+            {
+                Actions = [],
+                Warnings =
+                [
+                    $"event-wait-no-observation: role '{waitEvent.Role}' workspace '{waitEvent.WorkspaceId}' pane "
+                    + $"'{waitEvent.PaneId}' returned without a qualifying observation; no durable event-wait cycle "
+                    + $"was written; the interval safety floor remains active. Wait was re-armed: {waitEvent.Detail}",
+                ],
+            }, force: true);
+            return;
+        }
+
         lock (supervisionSync)
         {
             var state = NotifySupervisionStore.Read(

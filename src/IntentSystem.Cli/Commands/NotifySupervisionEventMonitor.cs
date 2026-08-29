@@ -11,6 +11,7 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal sealed class NotifySupervisionEventMonitor
 {
+    internal const string NoObservationOutcome = "wait-returned-without-observation";
     internal static Func<TimeSpan, CancellationToken, Task> Delay { get; set; } = Task.Delay;
     private static readonly TimeSpan RearmDelay = TimeSpan.FromSeconds(1);
     private static readonly string[] SettledStatuses = ["done", "blocked", "idle"];
@@ -151,8 +152,11 @@ internal sealed class NotifySupervisionEventMonitor
                 }
                 else
                 {
-                    RecordMonitorFailure(role, workspaceId, paneId,
-                        $"herdr agent wait returned unexpected status '{observed.AgentStatus ?? "<unknown>"}'.");
+                    // A successful return outside the expected direction is
+                    // a no-observation, not a failed wait. Keep re-arming so
+                    // the interval loop remains the independent safety floor.
+                    RecordMonitorNoObservation(role, workspaceId, paneId,
+                        $"herdr agent wait returned status '{observed.AgentStatus ?? "<unknown>"}' without a qualifying state transition while waiting for {(waitForSettled ? "a settled status" : "working")}.");
                     await Delay(RearmDelay, cancellationToken).ConfigureAwait(false);
                 }
             }
@@ -175,6 +179,18 @@ internal sealed class NotifySupervisionEventMonitor
             WorkspaceId = workspaceId,
             PaneId = paneId,
             Outcome = "wait-died-or-errored",
+            Detail = detail,
+            ObservedAt = (NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+            RearmAttempted = true,
+        });
+
+    private void RecordMonitorNoObservation(string role, string workspaceId, string paneId, string detail) =>
+        waitEventObserved(new NotifySupervisionWaitEvent
+        {
+            Role = role,
+            WorkspaceId = workspaceId,
+            PaneId = paneId,
+            Outcome = NoObservationOutcome,
             Detail = detail,
             ObservedAt = (NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
             RearmAttempted = true,
