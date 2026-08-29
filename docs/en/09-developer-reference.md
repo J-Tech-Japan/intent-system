@@ -2746,7 +2746,7 @@ literal:
 ```
 
 The shape is written with placeholders on purpose: **read the actual values from
-`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0261)
+`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0270)
 for the line currently being cut. A worked example here would be a second copy
 of the version pair that goes stale on the next roll — the defect G557/G560
 exist to remove.
@@ -2952,7 +2952,115 @@ rotated by this command; the result and `shrink-audit.jsonl` say so explicitly.
 out of scope. Use `--dry-run` to inspect the measured plan without writing the
 manifest, JSONL files, or audit.
 
-### Next release readiness (v0.26.1)
+### Next release readiness (v0.27.0)
+
+**RELEASE PREPARED / NOT PUBLISHED.**
+
+The shipped stable line is
+intent-cli 0.26.0-93f07f8-G749 from source revision
+93f07f892f6514bc561493339b11e36de0e36555. The tracked EN and JA
+release-notes-v0.26.0.md files remain unchanged by this preparation. The
+v0.26.0 GitHub Release and tag are the shipped evidence.
+The real-install identity is `intent-cli 0.26.0-93f07f8-G749`.
+
+For compatibility with the historical readiness audit, this current block also
+retains the shipped-artifact evidence. The v0.26.0 GitHub Release is
+authoritative shipped evidence. The v0.23.0 GitHub Release
+https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0 and
+release-notes-v0.23.0.md record self-contained binaries. The npm leg never
+reached the registry and must not be treated as available from npm.
+The prior roll evidence is POST-RELEASE ROLL / PLACEHOLDER ONLY; its
+source-note inconsistency predates this roll and is out of scope and must be
+handled by a later explicitly scoped remediation. It records the installed 0.23.2 CLI
+and checkout_freshness/provenance.
+
+For the version-flow guard, stableVersion 0.26.0 and nextVersion 0.27.0 are
+the policy pair; stableVersion → 0.26.0 and nextVersion → 0.27.0 are the
+audited transition, and JTechJapan.IntentSystem.Cli.0.27.0.nupkg is the
+package artifact name only. The canonical release-prep coordination scope is
+release-prep:<owner/repo>:0.27.0.
+The current policy is stableVersion `0.26.0` and nextVersion `0.27.0`. This
+preparation adds [release-notes-v0.27.0.md](release-notes-v0.27.0.md) in both
+language mirrors and deletes the former v0.26.1 DRAFT placeholder stubs. The
+v0.26.1 value was only a post-v0.25.0 roll placeholder; it was never a chosen
+release. No tag, GitHub Release, package publish, post-release roll, or G725
+diagnosis/fix is performed here.
+
+The exact prepared functional head is
+`bb9754859ac8055adbd504f294145b7494668c1a`. A clean Release build of that
+revision reports `intent-cli 0.26.0-bb97548-G751`; the installed baseline
+reports `intent-cli 0.26.0-93f07f8-G749`. The version decision is based on that
+build, not an inference from `eng/version.json`.
+
+A programmatic sweep invoked group help for all 32 command groups and help for
+every direct subcommand. It counted 32 group descriptors plus 71 direct-help
+usage lines in the installed CLI (103 usages), and 32 plus 72 in the Release
+build (104 usages). The only addition is
+`notify supervise repair-cycle-history`; there was no removal. Installed
+`notify supervise repair-cycle-history` returns `invalid-notification: Unknown
+argument 'repair-cycle-history'.`. The prepared usage is
+`notify supervise repair-cycle-history --domain <d> --team <t> [--dry-run|--write]
+[--format markdown|json]`. Automation, claim, and worker help are
+byte-identical, as are the `state-doctor` and `closeout-drift-check` usages.
+This measured operator surface is the auditable reason for the minor bump.
+
+The release inventory contains exactly two units, and each names an outcome an
+operator can observe:
+
+- G750 — PR #1634; merge commit `b525191a24e361419b03f77e15e659110a22c395`.
+  **Operator-observable outcome:** supervision cycle history is no longer
+  carried in git, so a host blocked by a 100MB cycle-history file can push
+  again. A host that already tracks the file has the supported
+  `notify supervise repair-cycle-history` migration; it preserves the file and
+  does not delete it.
+- G751 — PR #1635; merge commit `bb9754859ac8055adbd504f294145b7494668c1a`.
+  **Operator-observable outcome:** a successful event-mode wait with no
+  observation no longer creates a durable cycle record, while genuine
+  observations and interval safety-floor records remain durable. The running
+  supervisor therefore settles at the declared one-record-per-interval rate
+  instead of writing an event-wait record for every empty wait.
+
+The exact first-parent range `v0.26.0..086344540d70a052555502971fa968aff6a252ac`
+contains three commits, measured with
+`git rev-list --first-parent --reverse` and
+`git rev-list --first-parent --count`:
+
+| first-parent commit | classification | release inventory |
+| --- | --- | --- |
+| b525191a24e361419b03f77e15e659110a22c395 | G750 release unit; PR #1634 | included |
+| bb9754859ac8055adbd504f294145b7494668c1a | G751 release unit; PR #1635 | included |
+| 086344540d70a052555502971fa968aff6a252ac | G752 post-v0.26.0 version roll to the 0.26.1 placeholder; not a release unit | classified only |
+
+G752 remains in the classification table and is not silently dropped or
+counted as a release unit. The prior v0.26.0 G744 entry bounded only the live
+file; it did not reduce write volume. An operator who upgraded to v0.26.0
+expecting history growth to stop did not get that outcome until G751 in this
+release. These are one three-unit problem across two releases: G744 bounded
+live history, G750 removed runtime-local cycle history from git and supplied a
+non-deleting migration, and G751 reduced the write rate.
+
+The measured values are attributed measurements, not adjectives: G750 recorded
+`cycles.jsonl` at 111.5MB at GitHub's 100MB tracking limit; G751 measured
+3.6 records/second before the no-observation change and 12.00/hour after it.
+The first value explains the git blockage; the latter two describe the running
+supervisor's before/after write rate.
+
+The host worker next-action selected #1638 while its issue-preflight reported
+`canonical-unavailable` because `.git/FETCH_HEAD` was unreadable. The fresh
+child worker selector separately returned `next-action=wait` with local
+execution-unit G753 holder none/unheld. This is the known child/host registry
+contradiction, not an ownership decision by the child. This implementation
+consumed the supplied host claim for G753 and did not create, alter, release,
+or verify a child execution-unit claim or enter the host repository.
+
+Release-prep verification is recorded in the v0.27.0 notes and PR report.
+Focused release/doc/version guards: 14 passed, 0 failed, 0 skipped (14 total).
+Adjacent release/readiness guards: 51 passed, 0 failed, 0 skipped (51 total).
+Dedicated G613 JA terminology guard: 6 passed, 0 failed, 0 skipped (6 total).
+Full Release suite: 5332 passed, 0 failed, 1 skipped (5333 total). `git diff --check`
+is clean. The tracked v0.26.0 EN/JA shipped-note files remain byte-identical.
+
+### Previous v0.26.1 post-release roll evidence (retained for provenance)
 
 **POST-RELEASE ROLL / PLACEHOLDER ONLY.**
 
@@ -2972,7 +3080,7 @@ The release-readiness gate remains separate from this post-release roll.
 
 This post-release roll sets `eng/version.json` to stableVersion `0.26.0` and
 nextVersion `0.26.1`. The shipped v0.26.0 note files remain untouched; the
-current placeholder is [release-notes-v0.26.1.md](release-notes-v0.26.1.md).
+the former placeholder file release-notes-v0.26.1.md is deleted by the current preparation.
 The v0.26.1 DRAFT stubs are replaceable planning scaffolds, not a changelog;
 release-prep will replace them after measuring and deciding the next real
 release number. No tag, GitHub Release, or package publish is performed here.

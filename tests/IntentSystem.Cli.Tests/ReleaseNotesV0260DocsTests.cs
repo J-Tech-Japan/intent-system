@@ -5,9 +5,9 @@ using IntentSystem.Cli.Infrastructure;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G749/G752: the frozen v0.26.0 release-prep notes retain their measured
-/// evidence while the post-release roll pins the current v0.26.1 placeholder
-/// and readiness mirrors in both languages.
+/// G749/G753: the frozen v0.26.0 release-prep notes retain their measured
+/// evidence while the v0.27.0 preparation updates the current readiness
+/// mirrors in both languages.
 /// </summary>
 public sealed class ReleaseNotesV0260DocsTests
 {
@@ -214,19 +214,20 @@ public sealed class ReleaseNotesV0260DocsTests
         var root = RepoVersionPolicySource.RepoRoot();
         var policyPath = Path.Combine(root, "eng", "version.json");
         Assert.Equal(
-            "{\n  \"stableVersion\": \"0.26.0\",\n  \"nextVersion\": \"0.26.1\"\n}\n",
+            "{\n  \"stableVersion\": \"0.26.0\",\n  \"nextVersion\": \"0.27.0\"\n}\n",
             File.ReadAllText(policyPath));
 
         var policy = RepoVersionPolicySource.Read();
         Assert.Equal("0.26.0", policy.StableVersion);
-        Assert.Equal("0.26.1", policy.NextVersion);
+        Assert.Equal("0.27.0", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.25.0.md")));
             Assert.False(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.25.1.md")));
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.26.0.md")));
-            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.26.1.md")));
+            Assert.False(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.26.1.md")));
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.27.0.md")));
         }
     }
 
@@ -246,12 +247,12 @@ public sealed class ReleaseNotesV0260DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void ReadinessMirrorsCurrentPostReleasePlaceholder(string language)
+    public void ReadinessMirrorsCurrentPreparedReleaseLine(string language)
     {
         var readiness = ReadCurrentReadiness(language);
 
         Assert.Contains(
-            language == "en" ? "Next release readiness (v0.26.1)" : "次リリース準備(v0.26.1)",
+            language == "en" ? "Next release readiness (v0.27.0)" : "次リリース準備(v0.27.0)",
             readiness,
             StringComparison.Ordinal);
         Assert.Contains("0.25.0", readiness, StringComparison.Ordinal);
@@ -307,6 +308,7 @@ public sealed class ReleaseNotesV0260DocsTests
         Assert.Contains(InstalledDisplayIdentity, readiness, StringComparison.Ordinal);
         Assert.Contains("release-notes-v0.26.0.md", readiness, StringComparison.Ordinal);
         Assert.Contains("release-notes-v0.26.1.md", readiness, StringComparison.Ordinal);
+        Assert.Contains("release-notes-v0.27.0.md", readiness, StringComparison.Ordinal);
         Assert.DoesNotContain("release-notes-v0.25.1.md", readiness, StringComparison.Ordinal);
         Assert.Contains("byte-identical", readiness, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("G743", readiness, StringComparison.Ordinal);
@@ -319,20 +321,22 @@ public sealed class ReleaseNotesV0260DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void CurrentPlaceholderStubsDescribeTheirOwnReplaceableRole(string language)
+    public void FormerPlaceholderIsDeletedAndCurrentNotesArePrepared(string language)
     {
         var root = RepoVersionPolicySource.RepoRoot();
-        var stub = File.ReadAllText(Path.Combine(
-            root, "docs", language, "release-notes-v0.26.1.md"));
+        Assert.False(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.26.1.md")));
+        var notes = File.ReadAllText(Path.Combine(
+            root, "docs", language, "release-notes-v0.27.0.md"));
 
-        Assert.Contains("0.26.1", stub, StringComparison.Ordinal);
-        Assert.Contains("DRAFT", stub, StringComparison.Ordinal);
-        Assert.Contains("replaceable", stub, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("0.27.0", notes, StringComparison.Ordinal);
+        Assert.Contains("PREPARED / NOT PUBLISHED", notes, StringComparison.Ordinal);
         Assert.Contains(
-            language == "en" ? "not a changelog" : "changelog ではありません",
-            stub,
+            language == "en" ? "no tag" : "tag",
+            notes,
             StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("G743", stub, StringComparison.Ordinal);
+        Assert.Contains("package publish", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GitHub Release", notes, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("G743", notes, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -363,7 +367,7 @@ public sealed class ReleaseNotesV0260DocsTests
     {
         var content = File.ReadAllText(Path.Combine(
             RepoVersionPolicySource.RepoRoot(), "docs", language, "09-developer-reference.md"));
-        var heading = language == "en" ? "### Next release readiness (v0.26.1)" : "### 次リリース準備(v0.26.1)";
+        var heading = language == "en" ? "### Next release readiness (v0.27.0)" : "### 次リリース準備(v0.27.0)";
         var start = content.IndexOf(heading, StringComparison.Ordinal);
         Assert.True(start >= 0, $"Missing current readiness heading in {language}.");
         var end = content.IndexOf("**Previous v0.25.0 preparation evidence", start, StringComparison.Ordinal);
