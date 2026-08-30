@@ -741,6 +741,8 @@ internal static class SessionLayerFragments
             Operative("- Classify each open PR's CI: pending = wait using the named mode-specific CI re-check producer (no message); green = delegate review/closeout; red = repair or escalate by ownership; stuck = escalate."),
             Scaffold(" "),
             Descriptive("Pending CI is normal progress, not a reason to message the operator.")),
+        Fragment(S4, Operative("- G764 REQUEST-UPDATE WAKE RULE: applying `intent-pr-request-update` alone does not wake a loopless receiver.")),
+        Fragment(S4, Operative("- Pair that transition with the implementation repair delegation in THIS SAME WAKE; do not leave the receiver waiting for a label change or an unscheduled future wake.")),
         Fragment(S4, Operative("- Detect stale blockers and no-reply receivers: a delegation with no accepted/progress reply within the expected window, or a thread stuck off the official workflow.")),
         Fragment(S4, Operative("- On a no-reply receiver past the threshold (default 30m), run the SAFE stale-thread health check: send one non-destructive status-request, check read-only intent-cli/GitHub facts, keep watching if there is progress, treat waiting-permission as an operator notice (never auto-clear), and only after repeated no-reply with no progress send one idempotent re-entry or escalate.")),
         Fragment(
@@ -1804,6 +1806,8 @@ internal static class SessionLayerFragments
             Operative("Classify each open PR's CI: pending = wait using the named mode-specific CI re-check producer (no message); green = delegate review/closeout; red = repair or escalate by ownership; stuck = escalate."),
             Scaffold(" "),
             Descriptive("Pending CI is normal progress, not a reason to message the operator.")),
+        Fragment("scheduling", Operative("G764 REQUEST-UPDATE WAKE RULE: applying `intent-pr-request-update` alone does not wake a loopless receiver.")),
+        Fragment("scheduling", Operative("Pair that transition with the implementation repair delegation in THIS SAME WAKE; do not leave the receiver waiting for a label change or an unscheduled future wake.")),
         Fragment("scheduling", Operative("Detect stale blockers and no-reply receivers: a delegation with no accepted/progress reply within the expected window, or a thread stuck off the official workflow.")),
         Fragment("scheduling", Operative("On a no-reply receiver past the threshold (default 30m), run the SAFE stale-thread health check: send one non-destructive status-request, check read-only intent-cli/GitHub facts, keep watching if there is progress, treat waiting-permission as an operator notice (never auto-clear), and only after repeated no-reply with no progress send one idempotent re-entry or escalate.")),
         Fragment(
