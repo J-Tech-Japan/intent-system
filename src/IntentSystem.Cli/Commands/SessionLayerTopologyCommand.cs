@@ -46,6 +46,13 @@ internal static class SessionLayerTopologyCommand
         "Usage: intent-cli session-layer topology update-field --domain <name> --team <name> --role <name> "
         + "--field delivery_method --current <value|absent> --new <value> --confirm-update-field "
         + "[--dry-run|--write] [--format json]";
+    private const string UpdateResidenceUsage =
+        "Usage: intent-cli session-layer topology update-residence --domain <name> --team <name> --role <name> "
+        + "--current-resident herdr|external --new-resident herdr|external "
+        + "[--workspace-id <id> --pane-id <id> --cwd <path> | --reader <routing-root-relative-path>] "
+        + "[--frontend <name>] [--kind <kind>] [--delivery-method inline|file-backed] "
+        + "[--model <text>] [--reasoning-effort <text>] --confirm-update-residence "
+        + "[--dry-run|--write] --format json";
     private const string RetireLegacyUsage =
         "Usage: intent-cli session-layer topology retire-legacy --domain <name> --team <name> "
         + "--evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write [--format json]";
@@ -80,6 +87,7 @@ internal static class SessionLayerTopologyCommand
             writer.WriteLine(MoveUsage);
             writer.WriteLine(UpdateKindUsage);
             writer.WriteLine(UpdateFieldUsage);
+            writer.WriteLine(UpdateResidenceUsage);
             writer.WriteLine(RetireLegacyUsage);
             writer.WriteLine(RecordProfileUsage);
             return args.Length == 0 ? 1 : 0;
@@ -115,6 +123,7 @@ internal static class SessionLayerTopologyCommand
             "move" => ExecuteMove(context, args[1..], writer),
             "update-kind" => ExecuteUpdateKind(context, args[1..], writer),
             "update-field" => ExecuteUpdateField(context, args[1..], writer),
+            "update-residence" => ExecuteUpdateResidence(context, args[1..], writer),
             "retire-legacy" => ExecuteRetireLegacy(context, args[1..], writer),
             _ => UnknownSubcommand(args[0], writer),
         };
@@ -498,6 +507,26 @@ internal static class SessionLayerTopologyCommand
         return result.Conflict ? 1 : 0;
     }
 
+    internal static int ExecuteUpdateResidence(CliContext context, string[] args, TextWriter writer)
+    {
+        if (IsHelp(args))
+        {
+            writer.WriteLine(UpdateResidenceUsage);
+            return 0;
+        }
+
+        if (!TryParseUpdateResidenceArguments(args, out var request, out var error))
+        {
+            writer.WriteLine(error);
+            writer.WriteLine(UpdateResidenceUsage);
+            return 1;
+        }
+
+        var result = SessionLayerTopologyWriter.UpdateResidence(context.RepoRoot, request!);
+        WriteJson(writer, result);
+        return result.Conflict ? 1 : 0;
+    }
+
     internal static int ExecuteRetireLegacy(CliContext context, string[] args, TextWriter writer)
     {
         if (IsHelp(args))
@@ -695,6 +724,165 @@ internal static class SessionLayerTopologyCommand
         // A dry-run is an explicit non-mutating request, irrespective of flag order.
         var write = requestedWrite && !requestedDryRun;
         request = new(values["--domain"], values["--team"], values["--role"], values["--field"], values["--current"], values["--new"], write);
+        return true;
+    }
+
+    private static bool TryParseUpdateResidenceArguments(
+        string[] args,
+        out SessionLayerTopologyResidenceUpdateRequest? request,
+        out string error)
+    {
+        request = null;
+        error = string.Empty;
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        var confirm = false;
+        var requestedWrite = false;
+        var requestedDryRun = false;
+        var format = string.Empty;
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            var option = args[index];
+            switch (option)
+            {
+                case "--confirm-update-residence":
+                    confirm = true;
+                    break;
+                case "--write":
+                    requestedWrite = true;
+                    break;
+                case "--dry-run":
+                    requestedDryRun = true;
+                    break;
+                case "--format":
+                    if (!TryReadValue(args, ref index, option, out var requestedFormat, out error)
+                        || !string.Equals(requestedFormat, FormatJson, StringComparison.Ordinal))
+                    {
+                        error = string.IsNullOrEmpty(error)
+                            ? "update-residence supports only '--format json'."
+                            : error;
+                        return false;
+                    }
+                    format = requestedFormat!;
+                    break;
+                case "--domain" or "--team" or "--role" or "--current-resident" or "--new-resident"
+                    or "--workspace-id" or "--pane-id" or "--cwd" or "--kind" or "--delivery-method"
+                    or "--reader" or "--frontend" or "--model" or "--reasoning-effort":
+                    if (!TryReadValue(args, ref index, option, out var value, out error))
+                    {
+                        return false;
+                    }
+                    values[option] = value!;
+                    break;
+                default:
+                    error = $"Unknown argument '{option}'.";
+                    return false;
+            }
+        }
+
+        var required = new[] { "--domain", "--team", "--role", "--current-resident", "--new-resident" };
+        if (!confirm || (!requestedWrite && !requestedDryRun)
+            || !string.Equals(format, FormatJson, StringComparison.Ordinal)
+            || required.Any(name => !values.TryGetValue(name, out var value) || string.IsNullOrWhiteSpace(value)))
+        {
+            error = "--domain, --team, --role, --current-resident, --new-resident, "
+                + "--confirm-update-residence, --format json, and either --write or --dry-run are required.";
+            return false;
+        }
+
+        var currentResidence = values["--current-resident"];
+        var newResidence = values["--new-resident"];
+        if (currentResidence is not (NotifyRecordedRole.HerdrResident or NotifyRecordedRole.ExternalResident)
+            || newResidence is not (NotifyRecordedRole.HerdrResident or NotifyRecordedRole.ExternalResident))
+        {
+            error = "--current-resident and --new-resident must each be 'herdr' or 'external'.";
+            return false;
+        }
+
+        if (string.Equals(currentResidence, newResidence, StringComparison.Ordinal))
+        {
+            error = "--current-resident and --new-resident must name different residences.";
+            return false;
+        }
+
+        if (!SessionLayerTopologyDeclaredValueRules.TryValidate(
+                values.GetValueOrDefault("--model"),
+                "--model",
+                out error)
+            || !SessionLayerTopologyDeclaredValueRules.TryValidate(
+                values.GetValueOrDefault("--reasoning-effort"),
+                "--reasoning-effort",
+                out error))
+        {
+            return false;
+        }
+
+        if (string.Equals(newResidence, NotifyRecordedRole.HerdrResident, StringComparison.Ordinal))
+        {
+            if (!values.TryGetValue("--workspace-id", out var workspaceId) || string.IsNullOrWhiteSpace(workspaceId)
+                || !values.TryGetValue("--pane-id", out var paneId) || string.IsNullOrWhiteSpace(paneId)
+                || !values.TryGetValue("--cwd", out var cwd) || string.IsNullOrWhiteSpace(cwd))
+            {
+                error = "A herdr destination requires --workspace-id, --pane-id, and --cwd.";
+                return false;
+            }
+
+            if (values.ContainsKey("--reader") || values.ContainsKey("--frontend"))
+            {
+                error = "A herdr destination does not accept --reader or --frontend.";
+                return false;
+            }
+
+            if (values.TryGetValue("--delivery-method", out var deliveryMethod)
+                && deliveryMethod is not ("inline" or "file-backed"))
+            {
+                error = "--delivery-method must be inline or file-backed when supplied.";
+                return false;
+            }
+
+            var paneWorkspace = WorkspaceFromPane(paneId!);
+            if (paneWorkspace is not null
+                && !string.Equals(paneWorkspace, workspaceId, StringComparison.Ordinal))
+            {
+                error = $"--pane-id '{paneId}' belongs to workspace '{paneWorkspace}', not --workspace-id "
+                    + $"'{workspaceId}'. Refusing a cross-workspace mapping.";
+                return false;
+            }
+        }
+        else
+        {
+            if (!values.TryGetValue("--reader", out var reader) || string.IsNullOrWhiteSpace(reader))
+            {
+                error = "An external destination requires --reader.";
+                return false;
+            }
+
+            if (values.ContainsKey("--workspace-id") || values.ContainsKey("--pane-id")
+                || values.ContainsKey("--cwd") || values.ContainsKey("--kind")
+                || values.ContainsKey("--delivery-method"))
+            {
+                error = "An external destination does not accept --workspace-id, --pane-id, --cwd, --kind, "
+                    + "or --delivery-method.";
+                return false;
+            }
+        }
+
+        request = new SessionLayerTopologyResidenceUpdateRequest(
+            values["--domain"],
+            values["--team"],
+            values["--role"],
+            currentResidence,
+            newResidence,
+            values.GetValueOrDefault("--workspace-id"),
+            values.GetValueOrDefault("--pane-id"),
+            values.GetValueOrDefault("--cwd"),
+            values.GetValueOrDefault("--kind"),
+            values.GetValueOrDefault("--delivery-method"),
+            values.GetValueOrDefault("--reader"),
+            values.GetValueOrDefault("--frontend"),
+            values.GetValueOrDefault("--model"),
+            values.GetValueOrDefault("--reasoning-effort"),
+            requestedWrite && !requestedDryRun);
         return true;
     }
 
@@ -2266,6 +2454,183 @@ internal static class SessionLayerTopologyWriter
         }
     }
 
+    public static SessionLayerTopologyResidenceUpdateResult UpdateResidence(
+        string routingRoot,
+        SessionLayerTopologyResidenceUpdateRequest request)
+    {
+        var mode = request.Write ? "write" : "dry-run";
+        var path = NotifyRoleTopologyStore.ResolvePath(routingRoot, request.Domain, request.Team);
+        FileStream? casLock = null;
+        string? currentDigest = null;
+        try
+        {
+            if (request.Write)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                casLock = AcquireCasLock(path);
+                EnsureLocalIgnore(routingRoot);
+            }
+
+            if (!File.Exists(path))
+            {
+                return ResidenceConflict(request,
+                    $"Topology record '{path}' is absent; refusing to update an unrecorded role.");
+            }
+
+            var originalBytes = File.ReadAllBytes(path);
+            currentDigest = ComputeTopologyDigest(originalBytes);
+            var validation = NotifyRoleTopologyStore.Validate(routingRoot, request.Domain, request.Team);
+            if (!validation.Valid)
+            {
+                return ResidenceConflict(request,
+                    "Topology record is invalid; refusing update-residence. "
+                    + string.Join(" ", validation.Findings.Select(finding => finding.Message)));
+            }
+
+            var root = JsonNode.Parse(originalBytes) as JsonObject
+                ?? throw new JsonException("the root is not an object");
+            var teamError = string.Empty;
+            var rolesError = string.Empty;
+            if (!TrySelectTeamForWrite(root, request.Team, out var team, out teamError)
+                || !TrySelectRolesForWrite(team!, out var roles, out rolesError)
+                || !roles!.TryGetPropertyValue(request.Role, out var roleNode)
+                || roleNode is not JsonObject role)
+            {
+                return ResidenceConflict(request,
+                    teamError.Length == 0 ? rolesError : teamError);
+            }
+
+            var actualResidence = ReadString(role, "resident");
+            if (!string.Equals(actualResidence, request.CurrentResidence, StringComparison.Ordinal))
+            {
+                return ResidenceConflict(request,
+                    $"Role '{request.Role}' records residence '{actualResidence ?? "missing"}', not stated current "
+                    + $"residence '{request.CurrentResidence}'. Refusing update-residence.");
+            }
+
+            if (request.NewResidence is not (NotifyRecordedRole.HerdrResident or NotifyRecordedRole.ExternalResident))
+            {
+                return ResidenceConflict(request,
+                    $"New residence '{request.NewResidence}' is unsupported; refusing update-residence.");
+            }
+
+            if (!SessionLayerTopologyDeclaredValueRules.TryValidate(request.Model, "--model", out var declaredError)
+                || !SessionLayerTopologyDeclaredValueRules.TryValidate(
+                    request.ReasoningEffort,
+                    "--reasoning-effort",
+                    out declaredError))
+            {
+                return ResidenceConflict(request, declaredError);
+            }
+
+            if (string.Equals(request.NewResidence, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal)
+                && !NotifyRoleTopologyStore.TryResolveReaderPath(
+                    routingRoot,
+                    request.Reader,
+                    out _,
+                    out var readerError))
+            {
+                return ResidenceConflict(request,
+                    $"External role '{request.Role}' field 'reader' is unsafe: {readerError}");
+            }
+
+            var before = root.DeepClone();
+            role["resident"] = request.NewResidence;
+            if (string.Equals(request.NewResidence, NotifyRecordedRole.HerdrResident, StringComparison.Ordinal))
+            {
+                role.Remove("reader");
+                role.Remove("frontend");
+                role["workspace_id"] = request.WorkspaceId;
+                role["pane_id"] = request.PaneId;
+                role["cwd"] = request.Cwd;
+                if (request.Kind is not null)
+                {
+                    role["kind"] = request.Kind;
+                }
+                if (request.DeliveryMethod is not null)
+                {
+                    role["delivery_method"] = request.DeliveryMethod;
+                }
+                SetTeamWorkspace(team!, request.WorkspaceId!);
+            }
+            else
+            {
+                role.Remove("workspace_id");
+                role.Remove("pane_id");
+                role.Remove("cwd");
+                role.Remove("kind");
+                role.Remove("delivery_method");
+                role["reader"] = request.Reader;
+                if (request.Frontend is not null)
+                {
+                    role["frontend"] = request.Frontend;
+                }
+                else
+                {
+                    role.Remove("frontend");
+                }
+            }
+
+            if (request.Model is not null)
+            {
+                role["model"] = request.Model;
+            }
+            if (request.ReasoningEffort is not null)
+            {
+                role["reasoning_effort"] = request.ReasoningEffort;
+            }
+
+            var after = root.DeepClone();
+            var changed = !JsonNode.DeepEquals(before, after);
+            if (request.Write && changed)
+            {
+                // The lock serializes canonical writers. The second digest
+                // read is the compare step for edits made by non-cooperating
+                // writers while this transition was being prepared.
+                var beforeWriteDigest = ComputeTopologyDigest(File.ReadAllBytes(path));
+                if (!string.Equals(beforeWriteDigest, currentDigest, StringComparison.OrdinalIgnoreCase))
+                {
+                    return ResidenceConflict(request,
+                        $"Topology update-residence lost its CAS: current digest is '{beforeWriteDigest}', "
+                        + $"not the snapshot digest '{currentDigest}'. Refusing to overwrite a concurrently changed record.");
+                }
+
+                WriteAtomically(path, root.ToJsonString(FileJsonOptions) + Environment.NewLine);
+            }
+
+            return new SessionLayerTopologyResidenceUpdateResult
+            {
+                Team = request.Team,
+                Role = request.Role,
+                CurrentResident = request.CurrentResidence,
+                NewResident = request.NewResidence,
+                Mode = mode,
+                Applied = request.Write && changed,
+                Changed = changed,
+                Conflict = false,
+                Summary = request.Write
+                    ? $"Updated recorded role '{request.Role}' in team '{request.Team}' from residence "
+                        + $"'{request.CurrentResidence}' to '{request.NewResidence}'."
+                    : $"Dry-run: would update recorded role '{request.Role}' in team '{request.Team}' from residence "
+                        + $"'{request.CurrentResidence}' to '{request.NewResidence}'.",
+            };
+        }
+        catch (IOException exception)
+        {
+            return ResidenceConflict(request,
+                $"Topology update-residence could not acquire its CAS lock or read/write the record: {exception.Message}");
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or JsonException)
+        {
+            return ResidenceConflict(request,
+                $"Topology update-residence could not read the record: {exception.Message}");
+        }
+        finally
+        {
+            casLock?.Dispose();
+        }
+    }
+
     public static SessionLayerTopologyLegacyRetireResult RetireLegacy(string routingRoot, SessionLayerTopologyLegacyRetireRequest request)
     {
         var legacyPath = NotifyRoleTopologyStore.ResolvePath(routingRoot);
@@ -2564,6 +2929,21 @@ internal static class SessionLayerTopologyWriter
         WriteAtomically(path, content);
     }
 
+    private static SessionLayerTopologyResidenceUpdateResult ResidenceConflict(
+        SessionLayerTopologyResidenceUpdateRequest request,
+        string summary) => new()
+        {
+            Team = request.Team,
+            Role = request.Role,
+            CurrentResident = request.CurrentResidence,
+            NewResident = request.NewResidence,
+            Mode = request.Write ? "write" : "dry-run",
+            Applied = false,
+            Changed = false,
+            Conflict = true,
+            Summary = summary,
+        };
+
     private static SessionLayerTopologyMoveResult MoveConflict(
         SessionLayerTopologyMoveRequest request,
         string path,
@@ -2773,6 +3153,36 @@ internal sealed record SessionLayerTopologyProfileRecordResult
     public required bool AlreadyRecorded { get; init; }
     public required bool Conflict { get; init; }
     public required string Digest { get; init; }
+    public required string Summary { get; init; }
+}
+
+internal sealed record SessionLayerTopologyResidenceUpdateRequest(
+    string Domain,
+    string Team,
+    string Role,
+    string CurrentResidence,
+    string NewResidence,
+    string? WorkspaceId,
+    string? PaneId,
+    string? Cwd,
+    string? Kind,
+    string? DeliveryMethod,
+    string? Reader,
+    string? Frontend,
+    string? Model,
+    string? ReasoningEffort,
+    bool Write);
+
+internal sealed record SessionLayerTopologyResidenceUpdateResult
+{
+    public required string Team { get; init; }
+    public required string Role { get; init; }
+    public required string CurrentResident { get; init; }
+    public required string NewResident { get; init; }
+    public required string Mode { get; init; }
+    public required bool Applied { get; init; }
+    public required bool Changed { get; init; }
+    public required bool Conflict { get; init; }
     public required string Summary { get; init; }
 }
 

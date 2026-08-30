@@ -1795,7 +1795,7 @@ form a recovery dead end.
 Agent kind is whatever herdr can start: Claude, Codex, Copilot, Cursor, OpenCode,
 and others are examples, not a supported-set restriction. Logical role defaults
 are `implementation`, `review`, `interview`, and `clarify`; existing explicit
-role mappings, including legacy product-named mappings, remain valid. The three
+role mappings, including legacy product-named mappings, remain valid. The four
 update/retire mutation commands emit JSON and support only `--format json`. For `update-kind`,
 an explicit `--dry-run` takes precedence over `--write` in either flag order and
 never writes.
@@ -1840,6 +1840,32 @@ The registry initially permits only `delivery_method`, so an unknown or dotted
 name is refused rather than becoming an arbitrary JSON-path editor. The command
 changes only that field. It does not relax `record`: re-recording a different
 shape still refuses its conflict and has no force flag.
+
+#### Guarded residence transition (G761)
+
+When the human answer from `guide bootstrap` changes whether a role has an
+inbound application monitor, use the explicit residence transition instead of
+editing the topology file:
+
+```text
+intent-cli session-layer topology update-residence --domain <domain> --team <team> --role <role> --current-resident <herdr|external> --new-resident <herdr|external> [destination fields] --confirm-update-residence --write --format json
+```
+
+The human answer from `guide bootstrap` controls residence. intent-cli never
+infers it or supplies a default. The command asserts the recorded current
+resident, requires the new resident and explicit confirmation, and uses the
+same guarded compare-and-swap shape as the other topology writers. Use
+`--dry-run` for the guarded preview; it does not write the record.
+
+The destination has the same shape as `topology record`: `herdr` requires
+`--workspace-id`, `--pane-id`, and `--cwd`, and rejects `--reader` and
+`--frontend`; `external` requires `--reader` and rejects workspace, pane, cwd,
+kind, and delivery-method fields. Fields owned only by the old residence are
+removed, so a transitioned role has no stranded reader or pane fields. The
+existing `record` conflict refusal remains fail-closed and has no
+`--force`/`--replace` bypass. Delivery resolution is unchanged: herdr still
+resolves to its recorded pane and external still resolves to its recorded
+reader.
 
 #### Visible, generated mode markers
 

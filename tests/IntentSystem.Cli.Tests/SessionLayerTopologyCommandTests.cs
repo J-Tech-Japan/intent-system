@@ -191,6 +191,272 @@ public sealed class SessionLayerTopologyCommandTests : IDisposable
         Assert.Contains("custom", content, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void UpdateResidence_ExternalToHerdr_RemovesExternalOnlyFields_G761()
+    {
+        WriteTopology(".intent-cli/events/g756-team.jsonl");
+
+        var (exitCode, result) = Run(
+            "session-layer", "topology", "update-residence",
+            "--domain", Domain,
+            "--team", Team,
+            "--role", "design",
+            "--current-resident", "external",
+            "--new-resident", "herdr",
+            "--workspace-id", WorkspaceId,
+            "--pane-id", $"{WorkspaceId}:p2",
+            "--cwd", "/new-design",
+            "--kind", "codex",
+            "--delivery-method", "inline",
+            "--confirm-update-residence",
+            "--write",
+            "--format", "json");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("external", result.GetProperty("current_resident").GetString());
+        Assert.Equal("herdr", result.GetProperty("new_resident").GetString());
+        Assert.True(result.GetProperty("applied").GetBoolean());
+
+        var role = ReadRole("design");
+        Assert.Equal("herdr", role.GetProperty("resident").GetString());
+        Assert.Equal(WorkspaceId, role.GetProperty("workspace_id").GetString());
+        Assert.Equal($"{WorkspaceId}:p2", role.GetProperty("pane_id").GetString());
+        Assert.Equal("/new-design", role.GetProperty("cwd").GetString());
+        Assert.False(role.TryGetProperty("reader", out _));
+        Assert.False(role.TryGetProperty("frontend", out _));
+    }
+
+    [Fact]
+    public void UpdateResidence_HerdrToExternal_RemovesHerdrOnlyFields_G761()
+    {
+        WriteHerdrDesignTopology();
+
+        var (exitCode, result) = Run(
+            "session-layer", "topology", "update-residence",
+            "--domain", Domain,
+            "--team", Team,
+            "--role", "design",
+            "--current-resident", "herdr",
+            "--new-resident", "external",
+            "--reader", ".intent-cli/events/new-design.jsonl",
+            "--frontend", "design-web",
+            "--confirm-update-residence",
+            "--write",
+            "--format", "json");
+
+        Assert.Equal(0, exitCode);
+        Assert.True(result.GetProperty("applied").GetBoolean());
+
+        var role = ReadRole("design");
+        Assert.Equal("external", role.GetProperty("resident").GetString());
+        Assert.Equal(".intent-cli/events/new-design.jsonl", role.GetProperty("reader").GetString());
+        Assert.Equal("design-web", role.GetProperty("frontend").GetString());
+        Assert.False(role.TryGetProperty("workspace_id", out _));
+        Assert.False(role.TryGetProperty("pane_id", out _));
+        Assert.False(role.TryGetProperty("cwd", out _));
+        Assert.False(role.TryGetProperty("kind", out _));
+        Assert.False(role.TryGetProperty("delivery_method", out _));
+    }
+
+    [Fact]
+    public void UpdateResidence_DryRun_IsByteIdentical_G761()
+    {
+        WriteTopology(".intent-cli/events/g756-team.jsonl");
+        var before = File.ReadAllBytes(TopologyPath);
+
+        var (exitCode, result) = Run(
+            "session-layer", "topology", "update-residence",
+            "--domain", Domain,
+            "--team", Team,
+            "--role", "design",
+            "--current-resident", "external",
+            "--new-resident", "herdr",
+            "--workspace-id", WorkspaceId,
+            "--pane-id", $"{WorkspaceId}:p2",
+            "--cwd", "/new-design",
+            "--confirm-update-residence",
+            "--dry-run",
+            "--format", "json");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("dry-run", result.GetProperty("mode").GetString());
+        Assert.False(result.GetProperty("applied").GetBoolean());
+        Assert.True(result.GetProperty("changed").GetBoolean());
+        Assert.Equal(before, File.ReadAllBytes(TopologyPath));
+    }
+
+    [Fact]
+    public void UpdateResidence_WrongCurrent_RefusesWithoutMutation_G761()
+    {
+        WriteTopology(".intent-cli/events/g756-team.jsonl");
+        var before = File.ReadAllBytes(TopologyPath);
+
+        var (exitCode, raw) = RunRaw(
+            "session-layer", "topology", "update-residence",
+            "--domain", Domain,
+            "--team", Team,
+            "--role", "design",
+            "--current-resident", "herdr",
+            "--new-resident", "external",
+            "--reader", ".intent-cli/events/new-design.jsonl",
+            "--confirm-update-residence",
+            "--write",
+            "--format", "json");
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(raw);
+        Assert.True(document.RootElement.GetProperty("conflict").GetBoolean());
+        Assert.Contains("not stated current residence", raw, StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllBytes(TopologyPath));
+    }
+
+    [Fact]
+    public void UpdateResidence_MissingConfirmation_RefusesWithoutMutation_G761()
+    {
+        WriteTopology(".intent-cli/events/g756-team.jsonl");
+        var before = File.ReadAllBytes(TopologyPath);
+
+        var (exitCode, raw) = RunRaw(
+            "session-layer", "topology", "update-residence",
+            "--domain", Domain,
+            "--team", Team,
+            "--role", "design",
+            "--current-resident", "external",
+            "--new-resident", "herdr",
+            "--workspace-id", WorkspaceId,
+            "--pane-id", $"{WorkspaceId}:p2",
+            "--cwd", "/new-design",
+            "--write",
+            "--format", "json");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--confirm-update-residence", raw, StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllBytes(TopologyPath));
+    }
+
+    [Fact]
+    public void UpdateResidence_EnforcesDestinationRequiredFields_G761()
+    {
+        WriteTopology(".intent-cli/events/g756-team.jsonl");
+        var beforeExternal = File.ReadAllBytes(TopologyPath);
+
+        var (herdrExit, herdrRaw) = RunRaw(
+            "session-layer", "topology", "update-residence",
+            "--domain", Domain,
+            "--team", Team,
+            "--role", "design",
+            "--current-resident", "external",
+            "--new-resident", "herdr",
+            "--workspace-id", WorkspaceId,
+            "--pane-id", $"{WorkspaceId}:p2",
+            "--confirm-update-residence",
+            "--write",
+            "--format", "json");
+
+        Assert.Equal(1, herdrExit);
+        Assert.Contains("requires --workspace-id, --pane-id, and --cwd", herdrRaw, StringComparison.Ordinal);
+        Assert.Equal(beforeExternal, File.ReadAllBytes(TopologyPath));
+
+        WriteHerdrDesignTopology();
+        var beforeHerdr = File.ReadAllBytes(TopologyPath);
+        var (externalExit, externalRaw) = RunRaw(
+            "session-layer", "topology", "update-residence",
+            "--domain", Domain,
+            "--team", Team,
+            "--role", "design",
+            "--current-resident", "herdr",
+            "--new-resident", "external",
+            "--confirm-update-residence",
+            "--write",
+            "--format", "json");
+
+        Assert.Equal(1, externalExit);
+        Assert.Contains("requires --reader", externalRaw, StringComparison.Ordinal);
+        Assert.Equal(beforeHerdr, File.ReadAllBytes(TopologyPath));
+    }
+
+    [Fact]
+    public void UpdateResidence_RejectsDestinationForbiddenFields_G761()
+    {
+        WriteTopology(".intent-cli/events/g756-team.jsonl");
+        var beforeExternal = File.ReadAllBytes(TopologyPath);
+        var (herdrExit, herdrRaw) = RunRaw(
+            "session-layer", "topology", "update-residence",
+            "--domain", Domain,
+            "--team", Team,
+            "--role", "design",
+            "--current-resident", "external",
+            "--new-resident", "herdr",
+            "--workspace-id", WorkspaceId,
+            "--pane-id", $"{WorkspaceId}:p2",
+            "--cwd", "/new-design",
+            "--reader", ".intent-cli/events/old.jsonl",
+            "--confirm-update-residence",
+            "--write",
+            "--format", "json");
+
+        Assert.Equal(1, herdrExit);
+        Assert.Contains("does not accept --reader or --frontend", herdrRaw, StringComparison.Ordinal);
+        Assert.Equal(beforeExternal, File.ReadAllBytes(TopologyPath));
+
+        WriteHerdrDesignTopology();
+        var beforeHerdr = File.ReadAllBytes(TopologyPath);
+        var (externalExit, externalRaw) = RunRaw(
+            "session-layer", "topology", "update-residence",
+            "--domain", Domain,
+            "--team", Team,
+            "--role", "design",
+            "--current-resident", "herdr",
+            "--new-resident", "external",
+            "--reader", ".intent-cli/events/new-design.jsonl",
+            "--workspace-id", WorkspaceId,
+            "--confirm-update-residence",
+            "--write",
+            "--format", "json");
+
+        Assert.Equal(1, externalExit);
+        Assert.Contains("does not accept --workspace-id, --pane-id, --cwd", externalRaw, StringComparison.Ordinal);
+        Assert.Equal(beforeHerdr, File.ReadAllBytes(TopologyPath));
+    }
+
+    [Theory]
+    [InlineData("en", "the human answer from `guide bootstrap`")]
+    [InlineData("ja", "`guide bootstrap` の human answer")]
+    public void DocumentationMirrors_DescribeHumanControlledResidenceTransition_G761(string language, string wording)
+    {
+        var path = Path.Combine(RepoVersionPolicySource.RepoRoot(), "docs", language, "12-agent-message-orchestration.md");
+        var content = File.ReadAllText(path);
+
+        Assert.Contains("topology update-residence", content, StringComparison.Ordinal);
+        Assert.Contains("--current-resident", content, StringComparison.Ordinal);
+        Assert.Contains("--new-resident", content, StringComparison.Ordinal);
+        Assert.Contains("--confirm-update-residence", content, StringComparison.Ordinal);
+        Assert.Contains(wording, content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Record_StillRefusesConflictingShapeWithoutBypass_G761()
+    {
+        WriteTopology(".intent-cli/events/g756-team.jsonl");
+        var before = File.ReadAllBytes(TopologyPath);
+
+        var (exitCode, raw) = RunRaw(
+            "session-layer", "topology", "record",
+            "--domain", Domain,
+            "--team", Team,
+            "--role", "design",
+            "--resident", "external",
+            "--reader", ".intent-cli/events/new-design.jsonl",
+            "--write",
+            "--format", "json");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Refusing to silently repair or replace it", raw, StringComparison.Ordinal);
+        Assert.DoesNotContain("--force", raw, StringComparison.Ordinal);
+        Assert.DoesNotContain("--replace", raw, StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllBytes(TopologyPath));
+    }
+
     private void WriteTopology(string recordedReader)
     {
         var topology = new JsonObject
@@ -232,6 +498,43 @@ public sealed class SessionLayerTopologyCommandTests : IDisposable
             },
         };
         WriteTopologyJson(topology);
+    }
+
+    private void WriteHerdrDesignTopology()
+    {
+        var topology = new JsonObject
+        {
+            ["domain"] = Domain,
+            ["team"] = Team,
+            ["workspace_id"] = WorkspaceId,
+            ["roles"] = new JsonObject
+            {
+                ["design"] = new JsonObject
+                {
+                    ["resident"] = "herdr",
+                    ["workspace_id"] = WorkspaceId,
+                    ["pane_id"] = $"{WorkspaceId}:p1",
+                    ["cwd"] = "/old-design",
+                    ["kind"] = "codex",
+                    ["delivery_method"] = "inline",
+                    ["model"] = "declared-model",
+                    ["reasoning_effort"] = "high",
+                },
+                ["orchestration"] = HerdrRole(),
+            },
+            ["host_state"] = new JsonObject
+            {
+                ["role"] = "orchestration",
+                ["envelope"] = "test-owned-host-state",
+            },
+        };
+        WriteTopologyJson(topology);
+    }
+
+    private JsonElement ReadRole(string role)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(TopologyPath));
+        return document.RootElement.GetProperty("roles").GetProperty(role).Clone();
     }
 
     private static JsonObject HerdrRole() => new()
