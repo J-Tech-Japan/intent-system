@@ -1184,7 +1184,8 @@ internal static class SessionLayerTopologyWriter
                     + $"'{request.Role}' requested '{request.WorkspaceId}'. Refusing to repair the conflict. "
                     + "For an operator-approved whole-team rebuild, use `intent-cli session-layer topology move "
                     + "--domain <domain> --team <team> --workspace-id <new-workspace-id> --pane-map "
-                    + "<old-pane>=<new-pane> --write`.");
+                    + "<old-pane>=<new-pane> --write`. Pass one --pane-map per recorded old pane: several roles "
+                    + "that share one recorded old pane travel together under that single mapping.");
             }
 
             if (string.IsNullOrWhiteSpace(recordedWorkspace))
@@ -1339,7 +1340,7 @@ internal static class SessionLayerTopologyWriter
             }
 
             var recordedPanes = new HashSet<string>(StringComparer.Ordinal);
-            var mappedPanes = new HashSet<string>(StringComparer.Ordinal);
+            var mappedPanes = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var (roleName, roleNode) in roles!.OrderBy(entry => entry.Key, StringComparer.Ordinal))
             {
                 if (roleNode is not JsonObject role)
@@ -1377,14 +1378,18 @@ internal static class SessionLayerTopologyWriter
                         + "refusing a partial workspace move.");
                 }
 
-                if (!mappedPanes.Add(newPane))
+                if (!mappedPanes.TryGetValue(newPane, out var mappedFromOldPane))
+                {
+                    mappedPanes[newPane] = oldPane;
+                }
+                else if (!string.Equals(mappedFromOldPane, oldPane, StringComparison.Ordinal))
                 {
                     return MoveConflict(
                         request,
                         path,
                         currentDigest,
-                        $"--pane-map maps more than one recorded role to new pane '{newPane}'; refusing an "
-                        + "ambiguous workspace move.");
+                        $"--pane-map maps two different recorded old panes ('{mappedFromOldPane}' and '{oldPane}') "
+                        + $"to new pane '{newPane}'; refusing an ambiguous workspace move.");
                 }
 
                 var paneWorkspace = WorkspaceFromPane(newPane);
