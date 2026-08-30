@@ -1542,7 +1542,7 @@ refusal は動作する whole-team move command を示すため、二つの surf
 agent kind は herdr が起動できる任意の kind です。Claude、Codex、Copilot、Cursor、OpenCode などは
 例であり、supported-set の制約ではありません。logical role の既定値は `implementation`、`review`、
 `interview`、`clarify` です。legacy の product 名を含め、既存の明示的な role mapping はそのまま
-有効です。3 つの update/retire mutation command は JSON を出力し、`--format json` だけをサポートします。
+有効です。4 つの update/retire mutation command は JSON を出力し、`--format json` だけをサポートします。
 `update-kind` では明示した `--dry-run` が flag の順序にかかわらず `--write` より優先され、決して
 書き込みません。
 
@@ -1575,6 +1575,27 @@ herdr query を行いません。mapping が存在するか herdr-only が必要
 unknown または dotted name は任意の JSON path を編集できないよう拒否されます。この command が
 変更するのはその field だけです。`record` の conflict refusal は緩和されず、異なる shape の re-record は
 引き続き拒否され、force flag もありません。
+
+#### Guarded residence transition (G761)
+
+`guide bootstrap` の human answer が role の inbound application monitor の有無を変える場合は、topology file を
+直接編集せず、明示的な residence transition を使います。
+
+```text
+intent-cli session-layer topology update-residence --domain <domain> --team <team> --role <role> --current-resident <herdr|external> --new-resident <herdr|external> [destination fields] --confirm-update-residence --write --format json
+```
+
+`guide bootstrap` の human answer が residence を決めます。intent-cli は residence を推測せず、default も
+補いません。command は記録済みの current resident を確認し、新しい resident と explicit confirmation を
+要求し、他の topology writer と同じ guarded compare-and-swap の形を使います。guarded preview には
+`--dry-run` を指定し、record は書き換えません。
+
+destination の形は `topology record` と同じです。`herdr` は `--workspace-id`、`--pane-id`、`--cwd` が必要で、
+`--reader` と `--frontend` を拒否します。`external` は `--reader` が必要で、workspace、pane、cwd、kind、
+delivery-method field を拒否します。旧 residence だけに属する field は削除するため、transition 後に reader や
+pane field が stranded になることはありません。既存の `record` conflict refusal は fail-closed のままで、
+`--force`/`--replace` の bypass はありません。delivery resolution も変わらず、herdr は記録済み pane、external は
+記録済み reader に解決されます。
 
 #### 可視な生成済み mode marker
 
