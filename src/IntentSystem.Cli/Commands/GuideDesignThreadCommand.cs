@@ -79,6 +79,8 @@ internal static class GuideDesignThreadCommand
     internal static DesignThreadGuideResult BuildResult(string? domain, string? team, string? routingRoot)
     {
         var root = string.IsNullOrWhiteSpace(routingRoot) ? "<routing-root>" : routingRoot!;
+        var domainArg = string.IsNullOrWhiteSpace(domain) ? "<domain>" : domain.Trim();
+        var teamArg = string.IsNullOrWhiteSpace(team) ? "<team>" : team.Trim();
         return new DesignThreadGuideResult
         {
             Process = "design-thread-operating-contract",
@@ -93,6 +95,12 @@ internal static class GuideDesignThreadCommand
                 Command = CommandName,
                 Catalog = "intent-cli guide commands list --format json",
                 Advisor = "intent-cli guide next --format json",
+                ExternalReader = new DesignThreadExternalReader
+                {
+                    Command = $"intent-cli notify collect --domain {domainArg} --team {teamArg} --role design --since <cursor> --wait --timeout-ms <timeout-ms> --format json",
+                    CursorRule = "The caller holds the opaque cursor: omit `--since` for the first receive; the next cursor is returned in each result, and the caller supplies that returned cursor in the next call.",
+                    WaitRule = "A bounded wait is required: use `--wait` with a finite `--timeout-ms <timeout-ms>`; never use an unbounded wait.",
+                },
             },
             WakeRule = new DesignThreadWakeRule { ValidOutcomes = ValidWakeOutcomes, NotOutcomes = InvalidWakeOutcomes },
             Provenance = new DesignThreadProvenance
@@ -190,6 +198,11 @@ internal static class GuideDesignThreadCommand
         writer.WriteLine($"- command: `{result.Reachability.Command}`");
         writer.WriteLine($"- catalog: `{result.Reachability.Catalog}`");
         writer.WriteLine($"- design-role advisor: `{result.Reachability.Advisor}` names this guide.");
+        writer.WriteLine();
+        writer.WriteLine("## External-resident design receive");
+        writer.WriteLine($"- canonical receive: `{result.Reachability.ExternalReader.Command}`");
+        writer.WriteLine($"- cursor: {result.Reachability.ExternalReader.CursorRule}");
+        writer.WriteLine($"- wait: {result.Reachability.ExternalReader.WaitRule}");
         WriteList(writer, "## 1. Four-outcome wake rule", result.WakeRule.ValidOutcomes);
         WriteList(writer, "### Not outcomes", result.WakeRule.NotOutcomes);
         writer.WriteLine("## 2. Provenance vocabulary");
@@ -320,7 +333,19 @@ internal sealed record DesignThreadGuideResult
     public required IReadOnlyList<string> NegativeInvariants { get; init; }
 }
 
-internal sealed record DesignThreadReachability { public required string Command { get; init; } public required string Catalog { get; init; } public required string Advisor { get; init; } }
+internal sealed record DesignThreadReachability
+{
+    public required string Command { get; init; }
+    public required string Catalog { get; init; }
+    public required string Advisor { get; init; }
+    public required DesignThreadExternalReader ExternalReader { get; init; }
+}
+internal sealed record DesignThreadExternalReader
+{
+    public required string Command { get; init; }
+    public required string CursorRule { get; init; }
+    public required string WaitRule { get; init; }
+}
 internal sealed record DesignThreadWakeRule { public required IReadOnlyList<string> ValidOutcomes { get; init; } public required IReadOnlyList<string> NotOutcomes { get; init; } }
 internal sealed record DesignThreadProvenance { public required IReadOnlyList<string> Vocabulary { get; init; } public required string ExecutionUnitRule { get; init; } public required IReadOnlyList<string> ExternalOriginFields { get; init; } }
 internal sealed record DesignThreadApproval { public required string ReadOnlyRule { get; init; } public required string MergeRule { get; init; } public required IReadOnlyList<string> MergeTransaction { get; init; } public required IReadOnlyList<string> ExplicitAcceptanceStillRequired { get; init; } }
