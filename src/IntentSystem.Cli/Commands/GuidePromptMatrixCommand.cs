@@ -598,6 +598,8 @@ First-call sequence (read-only; required before any mutation):
 
 {ChildHostDutyBoundaryGuidance.RenderPromptBlock(domainPlaceholder)}
 
+Herdr-resident receiver rule (G764): A herdr-resident receiver without a scheduler wakes by delegation, not by label change. Applying `intent-pr-request-update` alone does not wake the receiver; pair the transition with its implementation repair delegation in the same orchestrator wake. Receivers remain loopless and do not acquire a timer here.
+
 Loop body (single wake; the operator drives subsequent wakes if any):
 1. Save the child worktree path: `CHILD_WORKTREE=""$PWD""`. Confirm it is a git worktree root. Stop with `wrong-worktree` if not.
 2. Resolve `<OWNER>/<REPO>` from the child cwd: `gh repo view --json nameWithOwner --jq .nameWithOwner` (fall back to `git remote get-url origin`).

@@ -1871,6 +1871,39 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_RequestUpdateRequiresSameWakeDelegationForLooplessReceiver_G764()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+        var scheduling = SectionFrom(output, "## Scheduled orchestrator cadence");
+
+        Assert.Contains(
+            "applying `intent-pr-request-update` alone does not wake a loopless receiver",
+            scheduling,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Pair that transition with the implementation repair delegation in THIS SAME WAKE",
+            scheduling,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ImplementationLoop_RendersDelegationAsHerdrWake_G764()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkflowTaskImplementationLoopCommand.Execute(
+            CreateContext(),
+            ["--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains(
+            "A herdr-resident receiver without a scheduler wakes by delegation, not by label change",
+            output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_Json_ReceiverPrompts_ContainRequiredReportStep()
     {
         using var writer = new StringWriter();
