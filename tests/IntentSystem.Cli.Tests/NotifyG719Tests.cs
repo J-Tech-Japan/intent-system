@@ -187,6 +187,87 @@ public sealed class NotifyG719Tests : IDisposable
     }
 
     [Fact]
+    public void HostRecoversUndeliveredSenderLocalReportWithNamedCollectCommand_G731()
+    {
+        RequireUnixNonRoot();
+        var runner = new FakeTransportRunner(workspace.HerdrAgents());
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        workspace.WriteTopology(externalOrchestration: true);
+        var (delegateExit, delegateResult) = workspace.Run(workspace.DelegateArgs("G731-recovery", "g731-recovery-nonce"));
+        Assert.Equal(0, delegateExit);
+        var readerPath = workspace.ExternalReaderPath;
+        var readerBefore = File.ReadAllText(readerPath);
+        var generatedCommand = delegateResult.GetProperty("report_command").GetString()!;
+        var exactCommand = workspace.MaterializeReportCommand(
+            generatedCommand,
+            "https://example.test/pr/1585",
+            "g731-undelivered-sender-local-report");
+
+        workspace.MakeHostReadOnly();
+        string recoverCommand;
+        try
+        {
+            var reportProcess = workspace.RunExactCommand(exactCommand);
+            Assert.True(reportProcess.ExitCode == 1, reportProcess.StandardOutput + reportProcess.StandardError);
+            using var reportDocument = JsonDocument.Parse(reportProcess.StandardOutput);
+            var reportResult = reportDocument.RootElement;
+            var reportSummary = reportResult.GetProperty("summary").GetString()!;
+            Assert.Equal("report-routing-root-write-required", reportResult.GetProperty("cause").GetString());
+            Assert.Contains("intent-cli notify collect", reportSummary, StringComparison.Ordinal);
+            Assert.Equal(readerBefore, File.ReadAllText(readerPath));
+            var undelivered = NotifyReportOutboxStore.Find(
+                workspace.SeatRoot,
+                Domain,
+                Team,
+                "G731-recovery",
+                "g731-recovery-nonce");
+            Assert.True(undelivered.Resolved);
+            Assert.Equal("undelivered", undelivered.Entry!.DeliveryState);
+            Assert.Equal("report-routing-root-write-required", undelivered.Entry.DeliveryError);
+
+            var (reconcileExit, reconcileResult) = workspace.RunHost(
+            [
+                "notify", "reconcile", "--domain", Domain, "--team", Team, "--task-id", "G731-recovery",
+                "--routing-root", workspace.HostRoot, "--report-root", workspace.SeatRoot, "--dry-run", "--format", "json",
+            ]);
+            Assert.Equal(1, reconcileExit);
+            Assert.Equal("sender-local-report-not-delivered", reconcileResult.GetProperty("cause").GetString());
+            Assert.Contains("intent-cli notify collect", reconcileResult.GetProperty("summary").GetString(), StringComparison.Ordinal);
+
+            recoverCommand = $"intent-cli notify collect --domain {Domain} --team {Team} --task-id G731-recovery "
+                + $"--routing-root {SplitWorkspace.QuoteForShellPath(workspace.HostRoot)} --report-root {SplitWorkspace.QuoteForShellPath(workspace.SeatRoot)} --write --format json";
+        }
+        finally
+        {
+            workspace.MakeHostWritable();
+        }
+
+        var recoveryProcess = workspace.RunExactCommand(recoverCommand);
+        Assert.True(recoveryProcess.ExitCode == 0, recoveryProcess.StandardOutput + recoveryProcess.StandardError);
+        using var recoveryDocument = JsonDocument.Parse(recoveryProcess.StandardOutput);
+        var recoveryResult = recoveryDocument.RootElement;
+        Assert.True(recoveryResult.GetProperty("delivered").GetBoolean());
+        Assert.True(recoveryResult.GetProperty("event_appended").GetBoolean());
+        Assert.Contains("Write probe", recoveryResult.GetProperty("summary").GetString(), StringComparison.Ordinal);
+
+        var readerAfter = File.ReadAllText(readerPath);
+        Assert.NotEqual(readerBefore, readerAfter);
+        Assert.Contains("G731-recovery", readerAfter, StringComparison.Ordinal);
+        var recovered = NotifyReportOutboxStore.Find(
+            workspace.SeatRoot,
+            Domain,
+            Team,
+            "G731-recovery",
+            "g731-recovery-nonce");
+        Assert.True(recovered.Resolved);
+        Assert.Equal("delivered", recovered.Entry!.DeliveryState);
+        var pending = NotifyPendingDelegationStore.Find(workspace.HostRoot, Domain, Team, "G731-recovery");
+        Assert.True(pending.Resolved);
+        Assert.True(pending.Record!.ReportArrived);
+        Assert.True(File.Exists(ContinuationChainStore.ResolvePath(workspace.HostRoot, Domain, Team)));
+    }
+
+    [Fact]
     public void RegistrationLossNamesMissingAgentSessionAndTheBoundedOperatorAct_G719()
     {
         var record = new NotifyPendingDelegation
@@ -536,6 +617,8 @@ public sealed class NotifyG719Tests : IDisposable
 
         private static string QuoteForShell(string value) =>
             $"'{value.Replace("'", "'\\''", StringComparison.Ordinal)}'";
+
+        public static string QuoteForShellPath(string value) => QuoteForShell(value);
 
         public string HostSnapshot()
         {
