@@ -13,6 +13,12 @@ namespace IntentSystem.Cli.Tests;
 /// </summary>
 public sealed class GuideOrchestratorThreadCommandTests
 {
+    // Captured from the parent/pre-G764 rendered scheduling section at
+    // 5a6e850412beb5cd515991b3486022e457726f6a. Keep the list marker and
+    // sentence so the rendered cap is guarded byte-for-byte, not by a token.
+    private const string G524ParentRenderedCapLine =
+        "- The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER (implementation, review) — NOT at-most-one-message overall (G524): this wake's actions may include a publish plus its same-wake delegation, one repair message per stalled receiver, one operator escalation, and handling any pending receiver reports, all together.";
+
     [Fact]
     public void Execute_Markdown_SeparatesTimerLoopFromOrchestratorMode_AndForbidsMixedTimers()
     {
@@ -1825,6 +1831,22 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("NOT at-most-one-message", output, StringComparison.Ordinal);
         Assert.DoesNotContain("Send AT MOST ONE message this wake", output, StringComparison.Ordinal);
         Assert.DoesNotContain("Decide the single action for this wake", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_G524PerWakeCapRemainsByteIdenticalToParent_G764()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+        var scheduling = SectionFrom(output, "## Scheduled orchestrator cadence");
+
+        var renderedCap = scheduling
+            .Split('\n')
+            .Where(line => line.Contains("The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER", StringComparison.Ordinal))
+            .Select(line => line.TrimEnd('\r'))
+            .ToArray();
+
+        Assert.Single(renderedCap);
+        Assert.Equal(G524ParentRenderedCapLine, renderedCap[0]);
     }
 
     [Fact]
