@@ -2763,7 +2763,7 @@ literal:
 ```
 
 The shape is written with placeholders on purpose: **read the actual values from
-`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0271)
+`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0281)
 for the line currently being cut. A worked example here would be a second copy
 of the version pair that goes stale on the next roll — the defect G557/G560
 exist to remove.
@@ -2969,107 +2969,85 @@ rotated by this command; the result and `shrink-audit.jsonl` say so explicitly.
 out of scope. Use `--dry-run` to inspect the measured plan without writing the
 manifest, JSONL files, or audit.
 
-### Next release readiness (v0.27.1)
+### Next release readiness (v0.28.1)
 
-**POST-RELEASE ROLL / PLACEHOLDER ONLY.**
+**RELEASE PREPARED / NOT PUBLISHED.**
 
-The shipped stable line is `intent-cli 0.27.0-f43fbd1-G753`, from source
-revision `f43fbd19f6e0cb7fa284ccd2f89d2932f63ca330`. The tracked EN and JA
-`release-notes-v0.27.0.md` files are shipped evidence and remain byte-identical
-in this roll. The current policy after this roll is:
+This child measured the v0.28.0 preparation from exact head
+`565530e5c965d55335790c9446ef0686988d14c8`. The tagged v0.27.0 Release build
+identity is `intent-cli 0.27.0-f43fbd1-G753`; the prepared Release build
+identity is `intent-cli 0.28.0-565530e-G769`. The separately installed child
+baseline was `intent-cli 0.27.1-5d553b7-G756` and is environment evidence only.
+The prepared files are `release-notes-v0.28.0.md` and the
+`release-notes-v0.28.1.md` DRAFT stub.
+
+The policy after this preparation is:
 
 ```json
 {
-  "stableVersion": "0.27.0",
-  "nextVersion": "0.27.1"
+  "stableVersion": "0.28.0",
+  "nextVersion": "0.28.1"
 }
 ```
 
-The `0.27.1` value is a replaceable placeholder only; it is not a decision
-about the next real release number. This roll adds the EN and JA
-`release-notes-v0.27.1.md` DRAFT stubs. Each stub is explicitly a replaceable
-planning scaffold and not a changelog. No tag, GitHub Release, package publish,
-post-release roll, or G725 detector change is part of this work.
+This is stableVersion 0.28.0 and nextVersion 0.28.1. The next-line package
+artifact is `JTechJapan.IntentSystem.Cli.0.28.1.nupkg`.
+`0.28.1` is a replaceable development placeholder, not a choice of the next
+real release number. The EN and JA v0.28.0 notes are prepared evidence; the EN
+and JA v0.28.1 files are DRAFT planning scaffolds and not changelogs. No tag,
+GitHub Release, package publish, post-release roll, or product-source change is
+part of this preparation.
 
-The version-flow pair is `stableVersion → 0.27.0` and
-`nextVersion → 0.27.1`; the corresponding package artifact name is
-`JTechJapan.IntentSystem.Cli.0.27.1.nupkg`, a placeholder name only. The
-canonical release-prep coordination scope is
-`release-prep:<owner/repo>:0.27.1`. In plain policy terms, stableVersion
-0.27.0 and nextVersion 0.27.1 are the current values. The v0.27.0 GitHub Release
-is authoritative shipped evidence:
-https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.27.0. This roll
-does not tag, publish, or create a GitHub Release.
+#### Measured command-surface difference
 
-For continuity with the historical readiness audit, the v0.23.0 GitHub Release
-https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0 and
-`release-notes-v0.23.0.md` record self-contained binaries; the npm leg never
-reached the registry and must not be treated as available from npm. The
-installed 0.23.2 CLI and `checkout_freshness/provenance` remain historical
-evidence. The v0.27.0 release-note files are still the shipped-note evidence;
-their prepare-only wording is a source-note inconsistency with the authoritative
-GitHub Release; that source-note inconsistency predates this roll. It is out of
-scope and must be handled by a later explicitly scoped remediation.
+The independent sweep invoked every direct help under all 32 command groups.
+The tagged v0.27.0 build measured 32 group descriptors plus 72 direct-help
+usage lines (**104 usages**); this prepared Release build measured 32 plus 74
+(**106 usages**). The two new command routes are `claim stranded` and
+`notify supervise liveness`; there was no removal. Unchanged `automation`, `worker`,
+`state-doctor`, and `closeout-drift-check` usages remain byte-identical.
 
-### G725 evidence boundary for this roll
+#### Exact 18-unit release inventory
 
-The supplied pre-roll host-root observation ran against target checkout
-`f43fbd19f6e0cb7fa284ccd2f89d2932f63ca330` and returned `stalled=true` with one
-actionable item:
+The exact first-parent range is
+`v0.27.0..565530e5c965d55335790c9446ef0686988d14c8`; the git count is **18**.
+The v0.28.0 notes contain all 18 full SHAs and the operator-observable outcome
+for every unit G754 through G771.
 
-```text
-kind=version-roll-required
-is_informational=false
-released_version=0.27.0
-expected_stable_version=0.27.0
-expected_next_version=0.27.1
-```
+#### Truthful supervision-history chain
 
-The host metadata checkout used for that observation warned that its local
-revision `35c6d96a` was stale versus `origin/main` `209b1369`; that provenance
-is retained and is not presented as a fresh synced-main measurement. The
-available child run before this edit, from the same target checkout, also
-returned the actionable `version-roll-required` item above; it additionally
-reported informational stale-claim items and a missing child queue-state file.
+G768 stops new corruption but does not repair existing damage: the real host
+still has **9 unreadable records**. G771 makes deletion failure harmless but
+leaves the **250 ms × 3** cleanup bound unchanged and does not make deletion
+more reliable; real deletion remains about **1.8 s**. These are measured
+limitations. Issues **#1679** and **#1662** are closed by G771 and G765/G770;
+**#1661** was already fixed.
 
-After this child roll, the observed child run from checkout
-`f43fbd19f6e0cb7fa284ccd2f89d2932f63ca330` returned `stalled=true`, with only
-informational `claim-stale` items for G717, G719, and G725, no
-`version-roll-required` item, and a warning that child queue state was not
-found. The policy pair is now correct, but that silence is non-evidence by
-itself and does not prove the roll: a valid answer
-requires the same command from a synced host-main checkout after this PR
-merges, with the checkout commit and provenance recorded. The implementation
-seat cannot enter the host repository. **HOST DUTY REQUEST:** after merge, run
-`intent-cli automation stalled-work --domain intent-cli --repo J-Tech-Japan/intent-system --format json`
-from a synced host-main target checkout and return the relevant before/after
-`items` entries, checkout commit, and freshness/provenance; do not treat this
-child-side silence as proof.
+#### Child/host claim boundary
 
-The final post-change child run at committed checkout
-`a21c1f2334d0a81412fa1f9b49e0b8320e39de91` returned the same non-actionable
-result: `stalled=true` only for informational G717, G719, and G725
-`claim-stale` items, with no `version-roll-required` item. Its freshness
-warning reported local HEAD `a21c1f2` stale versus `origin/main`
-`f43fbd19f6e0cb7fa284ccd2f89d2932f63ca330`, and its child queue-state warning
-remained. This is child evidence, not a synced host-root proof.
-
-The host worker selected #1640 while issue-preflight reported
-`canonical-unavailable` because `.git/FETCH_HEAD` was unreadable. The fresh
-child selector separately returned `next-action=wait` because local
-`execution-unit:G754` was unheld. This is the known child/host registry
-contradiction, not a child ownership decision. The supplied host claim is the
-authority; this child did not create, alter, release, or verify an
+The supplied host authority is the execution-unit:G772 claim for actor
+`implementation`, team `intent-cli-dev`, recorded on authoritative origin/main
+at `.intent-cli/claims/e453a278b2a332575522e30a76dd02a0c8f0ec8f035171497e01bc6dc23478ef.json`.
+The child worker returned `next-action=wait` for #1683 because its local holder
+was none/unheld. Child issue-preflight returned `actionable=false`,
+`classification=missing-target-declaration`, because the issue uses `Target Repo
+/ Path / Part` instead of the installed check's exact `Target paths:` declaration.
+The host-side preflight was `canonical-unavailable` because the host worktree
+could not open `.git/FETCH_HEAD`. This is the known child/host registry and
+preflight contradiction. The supplied
+host claim is authority; this child did not create, alter, release, or verify an
 execution-unit claim and did not enter the host repository.
+The host-only claim boundary is `release-prep:<owner/repo>:0.28.1`; this child
+does not inspect host state.
 
-The shipped `intent-cli 0.27.0-f43fbd1-G753` identity is the real-install
-evidence for the stable line. Observed child verification for this roll is:
-the dedicated v0.27.1 guard 4 passed, 0 failed, 0 skipped; adjacent release
-guards 65 passed, 0 failed, 0 skipped; G613 6 passed, 0 failed, 0 skipped;
-the full Release suite 5336 passed, 0 failed, 1 skipped (5337 total); and
-`git diff --check` is clean. CI is a separate post-push check.
+#### Prepare-only verification
 
-### Previous v0.27.0 release-prep evidence (retained for provenance)
+Focused release/doc/version, adjacent release, G613, Full Release,
+`git diff --check`, and CI evidence are recorded in the v0.28.0 notes and PR
+after the final run. The final Release line is `Failed: 0, Passed: 5445,
+Skipped: 1, Total: 5446`; `git diff --check` is clean. Shipped earlier note files
+are not modified by this preparation.
+### Retired v0.27.0 release-prep evidence (retained in history only)
 
 **RELEASE PREPARED / NOT PUBLISHED.**
 
@@ -3096,9 +3074,10 @@ the policy pair; stableVersion → 0.26.0 and nextVersion → 0.27.0 are the
 audited transition, and JTechJapan.IntentSystem.Cli.0.27.0.nupkg is the
 package artifact name only. The canonical release-prep coordination scope is
 release-prep:<owner/repo>:0.27.0.
-The current policy is stableVersion `0.26.0` and nextVersion `0.27.0`. This
-preparation adds [release-notes-v0.27.0.md](release-notes-v0.27.0.md) in both
-language mirrors and deletes the former v0.26.1 DRAFT placeholder stubs. The
+The historical policy was stableVersion `0.26.0` and nextVersion `0.27.0`.
+The v0.27.0 note mirrors were retired by the v0.28.0 preparation; historical
+content remains in git history, not as tracked note files. The former v0.26.1
+DRAFT placeholder stubs were deleted by that preparation. The
 v0.26.1 value was only a post-v0.25.0 roll placeholder; it was never a chosen
 release. No tag, GitHub Release, package publish, post-release roll, or G725
 diagnosis/fix is performed here.

@@ -3009,110 +3009,83 @@ result は literal bytes の削減、追加した reference bytes、record の n
 `shrink-audit.jsonl` に明記します。`.intent-cli/runs/*.provider.jsonl` は別の provider-run state なので
 scope 外です。`--dry-run` なら manifest、JSONL、audit を書き込まずに測定済み plan だけを確認できます。
 
-### 次リリース準備(v0.27.1)
+### 次リリース準備(v0.28.1)
 
-**POST-RELEASE ROLL / PLACEHOLDER ONLY。**
+**RELEASE PREPARED / NOT PUBLISHED。**
 
-shipped stable line は `intent-cli 0.27.0-f43fbd1-G753`、source revision は
-`f43fbd19f6e0cb7fa284ccd2f89d2932f63ca330` です。tracked な EN/JA
-`release-notes-v0.27.0.md` は shipped evidence であり、この roll では
-byte-identical のままです。この roll 後の policy pair は次のとおりです:
+この child は exact head `565530e5c965d55335790c9446ef0686988d14c8` から
+v0.28.0 preparation を測定しました。tagged v0.27.0 Release build identity は
+`intent-cli 0.27.0-f43fbd1-G753`、prepared Release build identity は
+`intent-cli 0.28.0-565530e-G769` です。child で別に観測した installed baseline は
+`intent-cli 0.27.1-5d553b7-G756` で、environment evidence としてだけ記録します。
+prepared files は `release-notes-v0.28.0.md` と
+`release-notes-v0.28.1.md` の DRAFT stub です。
+
+この preparation 後の policy は次のとおりです:
 
 ```json
 {
-  "stableVersion": "0.27.0",
-  "nextVersion": "0.27.1"
+  "stableVersion": "0.28.0",
+  "nextVersion": "0.28.1"
 }
 ```
 
-`0.27.1` は replaceable placeholder だけで、次の real release number を
-決定したものではありません。EN/JA に `release-notes-v0.27.1.md` の DRAFT
-stub を追加します。それぞれの stub 自身が replaceable planning scaffold で
-changelog ではないと明記します。tag、GitHub Release、package publish、
-post-release roll、G725 detector の変更はこの作業に含めません。
+この policy は stableVersion 0.28.0 と nextVersion 0.28.1 です。次の line の
+package artifact は `JTechJapan.IntentSystem.Cli.0.28.1.nupkg` です。
+`0.28.1` は replaceable development placeholder であり、次の real release number
+を選んだものではありません。EN/JA v0.28.0 notes は preparation evidence、EN/JA
+v0.28.1 files は DRAFT の planning scaffold で changelog ではありません。tag、
+GitHub Release、package publish、post-release roll、product-source change は行いません。
 
-version-flow の pair は `stableVersion → 0.27.0` と
-`nextVersion → 0.27.1` です。対応する package artifact 名は
-`JTechJapan.IntentSystem.Cli.0.27.1.nupkg` ですが、placeholder の名前だけです。
-canonical release-prep coordination scope は
-`release-prep:<owner/repo>:0.27.1` です。plain policy の current value は
-stableVersion 0.27.0、nextVersion 0.27.1 です。v0.27.0 GitHub Release は
-shipped evidence の正式な根拠です:
-https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.27.0。この roll
-では tag、publish、GitHub Release の作成を行いません。
+#### 測定した command-surface difference
 
-過去の readiness audit との continuity のため、v0.23.0 GitHub Release と
-https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.23.0、
-`release-notes-v0.23.0.md` は自己完結型バイナリを記録します。npm leg は
-registry に到達しなかったため、npm で利用できると扱ってはいけません。
-installed 0.23.2 CLI と `checkout_freshness/provenance` は historical evidence
-として残します。v0.27.0 release-note file は shipped-note evidence ですが、
-prepare-only の wording と authoritative な GitHub Release の間には
-source-note inconsistency があります。この source-note inconsistency はこの
-roll より前から存在し、この scope 外の点は後の explicitly scoped remediation
-で扱います。
+32 個すべての command group と各 direct subcommand の help を独立に sweep しました。
+tagged v0.27.0 build は group descriptor 32 + direct-help usage 72 = **104 usages**、
+prepared Release build は 32 + 74 = **106 usages** でした。新しい command route は
+`claim stranded` と `notify supervise liveness` の二つで、removal はありません。変更されていない
+`automation`、`worker`、`state-doctor`、`closeout-drift-check` の usage は
+byte-identical です。
 
-### この roll の G725 evidence boundary
+#### 正確に 18 units の release inventory
 
-提供された pre-roll の host-root observation は target checkout
-`f43fbd19f6e0cb7fa284ccd2f89d2932f63ca330` に対して実行され、`stalled=true` と
-次の actionable item を返しました:
+first-parent range は正確に
+`v0.27.0..565530e5c965d55335790c9446ef0686988d14c8`、git count は **18** です。
+完全な 18 SHA と各 operator-observable outcome は v0.28.0 notes に記載しています。
+対象は G754 から G771 までで、各 merge commit は notes の表に残しています。
 
-```text
-kind=version-roll-required
-is_informational=false
-released_version=0.27.0
-expected_stable_version=0.27.0
-expected_next_version=0.27.1
-```
+#### supervision-history の truthful chain
 
-この observation に使った host 側 metadata checkout は local revision
-`35c6d96a` が `origin/main` `209b1369` より stale だと warning を出しました。
-この provenance はそのまま記録し、fresh な synced-main measurement とは
-扱いません。この edit 前に同じ target checkout から available child run を
-実行した結果も上記の actionable `version-roll-required` item を返しました。
-同時に informational な stale-claim item と child queue-state file missing の
-warning も返しました。
+G768 は新しい corruption を止めますが既存 damage は repair しません。real host には
+今も **9 unreadable records** があります。G771 は deletion failure を harmless に
+しますが **250 ms × 3** cleanup bound を変えず、deletion を reliable にもしません。
+real deletion は約 **1.8 s** のままです。これは測定した limitation です。
+Issue **#1679** と **#1662** は G771 と G765/G770 で closed、**#1661** はこの
+range より前に fixed でした。各 entry は operator-observable outcome です。
 
-この child roll 後、checkout
-`f43fbd19f6e0cb7fa284ccd2f89d2932f63ca330` から実行した child run は
-`stalled=true` を返し、informational な G717、G719、G725 の `claim-stale` item
-だけを含み、`version-roll-required` item はなく、child queue state が見つからない
-warning も返しました。policy pair は正しいですが、この silence だけでは evidence ではなく、
-roll の証明にもなりません。valid な answer には、この PR merge 後に
-synced host-main checkout から同じ command を実行し、checkout commit と
-freshness/provenance を記録する必要があります。implementation seat は host
-repository に入りません。**HOST DUTY REQUEST:** merge 後、synced host-main
-target checkout から
-`intent-cli automation stalled-work --domain intent-cli --repo J-Tech-Japan/intent-system --format json`
-を実行し、関連する before/after の `items`、checkout commit、freshness/provenance
-を返してください。この child-side silence を proof として扱わないでください。
+#### child/host claim boundary
 
-最終 post-change child run は committed checkout
-`a21c1f2334d0a81412fa1f9b49e0b8320e39de91` で実行しました。同じく
-`stalled=true` ですが、informational な G717、G719、G725 の `claim-stale` item
-だけで、`version-roll-required` item はありませんでした。freshness warning は
-local HEAD `a21c1f2` が `origin/main`
-`f43fbd19f6e0cb7fa284ccd2f89d2932f63ca330` より stale だと示し、child queue-state
-warning も残りました。これは child evidence であり、synced host-root proof では
-ありません。
+supplied host claim は execution-unit:G772、actor `implementation`、team
+`intent-cli-dev` の claim で、authoritative origin/main 上の
+`.intent-cli/claims/e453a278b2a332575522e30a76dd02a0c8f0ec8f035171497e01bc6dc23478ef.json`
+に記録されています。child worker は #1683 に対して local holder none/unheld のため
+`next-action=wait` を返しました。child issue-preflight は
+`actionable=false`、`classification=missing-target-declaration` でした。issue の
+`Target Repo / Path / Part` が、installed check の exact `Target paths:` declaration
+ではないためです。これは既知の child/host registry と preflight の contradiction
+です。host-side preflight は host worktree が `.git/FETCH_HEAD` を開けず
+`canonical-unavailable` でした。これは既知の child/host registry と preflight の
+contradiction です。supplied host claim を正式な根拠として使いました。
+host-only の claim boundary は `release-prep:<owner/repo>:0.28.1` で、この child は
+host state を inspect せず、execution-unit claim を create、alter、release、verify
+せず host repository に入りませんでした。
 
-host worker は #1640 を selected しましたが、issue-preflight は
-`.git/FETCH_HEAD` を読めないため `canonical-unavailable` を返しました。
-fresh child selector は local `execution-unit:G754` が unheld なので
-`next-action=wait` を返しました。これは既知の child/host registry
-contradiction であり、child が ownership を決めたものではありません。提供された
-host claim を正本として使い、この child は execution-unit claim を create、alter、
-release、verify せず、host repository に入りませんでした。
+#### Prepare-only verification
 
-shipped line の real-install evidence は `intent-cli 0.27.0-f43fbd1-G753` です。
-この roll で観測した child verification は、dedicated v0.27.1 guard が 4 passed、
-0 failed、0 skipped、adjacent release guard が 65 passed、0 failed、0 skipped、
-G613 が 6 passed、0 failed、0 skipped、Full Release suite が 5336 passed、0 failed、
-1 skipped (5337 total)、`git diff --check` は clean です。CI は push 後の別の
-check です。
-
-### 以前の v0.27.0 release-prep evidence (provenance)
+focused release/doc/version、adjacent release、G613、Full Release、`git diff --check`、
+CI の evidence は final run 後に v0.28.0 notes と PR に記録します。Final Release line は
+`Failed: 0, Passed: 5445, Skipped: 1, Total: 5446`、`git diff --check` は clean でした。
+以前の note file はこの preparation で変更しません。
+### retired v0.27.0 release-prep evidence (history のみ)
 
 **RELEASE PREPARED / NOT PUBLISHED。**
 
@@ -3139,10 +3112,10 @@ transition で、JTechJapan.IntentSystem.Cli.0.27.0.nupkg は package artifact
 名だけです。canonical release-prep coordination scope は
 release-prep:<owner/repo>:0.27.0 です。tag、GitHub Release、package publish
 という post-release action は行いません。
-現在の policy は stableVersion `0.26.0`、nextVersion `0.27.0` です。
-この preparation は両方の mirror に
-[release-notes-v0.27.0.md](release-notes-v0.27.0.md) を追加し、以前の
-v0.26.1 DRAFT placeholder stub を削除します。v0.26.1 は post-v0.25.0
+歴史上の policy は stableVersion `0.26.0`、nextVersion `0.27.0` でした。
+v0.27.0 note mirror は v0.28.0 preparation で retired となり、過去の本文は
+git history にだけ残ります。以前の v0.26.1 DRAFT placeholder stub は削除されました。
+v0.26.1 は post-v0.25.0
 roll が置いた placeholder だけで、選ばれた release ではありません。
 tag、GitHub Release、package publish、post-release roll、G725 の
 diagnosis/fix はこの PR の範囲外です。

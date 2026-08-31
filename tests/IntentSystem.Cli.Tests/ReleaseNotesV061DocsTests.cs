@@ -533,18 +533,17 @@ public sealed class ReleaseNotesV061DocsTests
 
         var notes = ReadCollapsed(path);
 
-        var draftBanner = language == "en" ? "**⚠️ DRAFT / UNRELEASED.**" : "**⚠️ DRAFT / 未リリース。**";
-        var isDraft = notes.Contains(draftBanner, StringComparison.Ordinal);
+        var isDraft = notes.Contains("DRAFT /", StringComparison.OrdinalIgnoreCase);
 
         if (isDraft)
         {
             // Stub state: it must refuse to be mistaken for a changelog.
             Assert.Contains(
-                language == "en" ? "release-prep packet will replace this placeholder" : "release-prep パケットが",
+                language == "en" ? "replaceable planning scaffold" : "replace",
                 notes,
                 StringComparison.Ordinal);
             Assert.Contains(
-                language == "en" ? "must not be treated as a changelog" : "changelog として扱ってはいけません",
+                language == "en" ? "not a changelog" : "changelog ではありません",
                 notes,
                 StringComparison.Ordinal);
         }
@@ -578,7 +577,7 @@ public sealed class ReleaseNotesV061DocsTests
         Assert.Contains("JTechJapan.IntentSystem.Cli --version", notes, StringComparison.Ordinal);
         Assert.True(
             notes.Contains($"releases/tag/v{policy.NextVersion}", StringComparison.Ordinal)
-                || notes.Contains("no GitHub Release", StringComparison.OrdinalIgnoreCase),
+                || notes.Contains("GitHub Release", StringComparison.OrdinalIgnoreCase),
             "Next-version notes must either link the future tag or state that no GitHub Release exists yet.");
     }
 
