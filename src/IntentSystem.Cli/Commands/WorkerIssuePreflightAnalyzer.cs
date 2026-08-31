@@ -57,6 +57,7 @@ internal static class WorkerIssuePreflightAnalyzer
         {
             StoreConfigured: true,
             Status: ClaimOwnershipVerification.StatusCanonicalUnavailable
+                or ClaimOwnershipVerification.StatusMetadataBranchOnly
                 or ClaimOwnershipVerification.StatusInvalid
         };
         var claimDisagreement = hasInProgressLabel && claimIsUnheld;

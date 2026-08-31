@@ -183,6 +183,7 @@ internal static class WorkerClaimAnalyzer
             || claim.Status == ClaimOwnershipVerification.StatusHeldByOtherTeam
             || claim.Status == ClaimOwnershipVerification.StatusTeamRequired
             || claim.Status == ClaimOwnershipVerification.StatusCanonicalUnavailable
+            || claim.Status == ClaimOwnershipVerification.StatusMetadataBranchOnly
             || claim.Status == ClaimOwnershipVerification.StatusInvalid);
 
     /// <summary>
