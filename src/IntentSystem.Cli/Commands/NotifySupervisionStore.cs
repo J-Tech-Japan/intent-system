@@ -134,9 +134,14 @@ internal static class NotifySupervisionStore
                 var emissionPolicy = ReadEmissionPolicy(Path.Combine(directory, EmissionPolicyFileName));
                 var installedSupervisor = ReadInstalledSupervisor(Path.Combine(directory, InstalledSupervisorFileName));
                 var cyclePaths = ResolveCycleHistoryPaths(directory);
-                var cycles = ReadCycles(cyclePaths);
-                var promptAudits = ReadPromptAudits(cyclePaths);
-                var stalls = ReadStalls(Path.Combine(directory, StallFileName), definitions);
+                var unreadableRecords = new List<NotifySupervisionUnreadableRecord>();
+                var cycles = ReadCycles(cyclePaths, directory, unreadableRecords);
+                var promptAudits = ReadPromptAudits(cyclePaths, directory, unreadableRecords);
+                var stalls = ReadStalls(
+                    Path.Combine(directory, StallFileName),
+                    directory,
+                    definitions,
+                    unreadableRecords);
                 return new NotifySupervisionReadResult
                 {
                     Resolved = true,
@@ -153,6 +158,10 @@ internal static class NotifySupervisionStore
                         .ToDictionary(item => item.Key, StringComparer.Ordinal),
                     StallHistory = stalls,
                     PromptAudits = promptAudits,
+                    UnreadableRecords = unreadableRecords
+                        .OrderBy(item => item.File, StringComparer.Ordinal)
+                        .ThenBy(item => item.Line)
+                        .ToArray(),
                 };
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
@@ -528,7 +537,10 @@ internal static class NotifySupervisionStore
             ?? throw new InvalidDataException("The installed supervisor record was empty.");
     }
 
-    private static IReadOnlyList<NotifySupervisionCycle> ReadCycles(IEnumerable<string> paths)
+    private static IReadOnlyList<NotifySupervisionCycle> ReadCycles(
+        IEnumerable<string> paths,
+        string directory,
+        ICollection<NotifySupervisionUnreadableRecord> unreadableRecords)
     {
         var cycles = new List<NotifySupervisionCycle>();
         foreach (var path in paths)
@@ -538,17 +550,41 @@ internal static class NotifySupervisionStore
                 continue;
             }
 
+            var lineNumber = 0;
             foreach (var line in File.ReadLines(path))
             {
+                lineNumber++;
                 if (string.IsNullOrWhiteSpace(line))
                 {
                     continue;
                 }
 
-                var entry = JsonSerializer.Deserialize<NotifySupervisionEvent>(line, JsonOptions)
-                    ?? throw new InvalidDataException("A supervision cycle event was empty.");
-                if (!string.Equals(entry.Kind, "cycle", StringComparison.Ordinal) || entry.Cycle is null)
+                if (!TryReadEvent(
+                        path,
+                        directory,
+                        lineNumber,
+                        "cycles",
+                        line,
+                        unreadableRecords,
+                        out var entry))
                 {
+                    continue;
+                }
+
+                if (!string.Equals(entry!.Kind, "cycle", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (entry.Cycle is null)
+                {
+                    AddUnreadableRecord(
+                        path,
+                        directory,
+                        lineNumber,
+                        "cycles",
+                        "missing-cycle-payload",
+                        unreadableRecords);
                     continue;
                 }
 
@@ -559,7 +595,10 @@ internal static class NotifySupervisionStore
         return cycles.OrderBy(item => item.CompletedAt).ToArray();
     }
 
-    private static IReadOnlyList<NotifyPromptAudit> ReadPromptAudits(IEnumerable<string> paths)
+    private static IReadOnlyList<NotifyPromptAudit> ReadPromptAudits(
+        IEnumerable<string> paths,
+        string directory,
+        ICollection<NotifySupervisionUnreadableRecord> unreadableRecords)
     {
         var audits = new List<NotifyPromptAudit>();
         foreach (var path in paths)
@@ -569,20 +608,45 @@ internal static class NotifySupervisionStore
                 continue;
             }
 
+            var lineNumber = 0;
             foreach (var line in File.ReadLines(path))
             {
+                lineNumber++;
                 if (string.IsNullOrWhiteSpace(line))
                 {
                     continue;
                 }
 
-                var entry = JsonSerializer.Deserialize<NotifySupervisionEvent>(line, JsonOptions)
-                    ?? throw new InvalidDataException("A supervision prompt-audit event was empty.");
-                if (string.Equals(entry.Kind, "prompt-audit", StringComparison.Ordinal)
-                    && entry.PromptAudit is not null)
+                if (!TryReadEvent(
+                        path,
+                        directory,
+                        lineNumber,
+                        "prompt-audits",
+                        line,
+                        unreadableRecords,
+                        out var entry))
                 {
-                    audits.Add(entry.PromptAudit);
+                    continue;
                 }
+
+                if (!string.Equals(entry!.Kind, "prompt-audit", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (entry.PromptAudit is null)
+                {
+                    AddUnreadableRecord(
+                        path,
+                        directory,
+                        lineNumber,
+                        "prompt-audits",
+                        "missing-prompt-audit-payload",
+                        unreadableRecords);
+                    continue;
+                }
+
+                audits.Add(entry.PromptAudit);
             }
         }
         return audits.OrderBy(item => item.Timestamp).ToArray();
@@ -610,7 +674,9 @@ internal static class NotifySupervisionStore
 
     private static IReadOnlyList<NotifySupervisionStallRecord> ReadStalls(
         string path,
-        IReadOnlyDictionary<string, string> definitions)
+        string directory,
+        IReadOnlyDictionary<string, string> definitions,
+        ICollection<NotifySupervisionUnreadableRecord> unreadableRecords)
     {
         if (!File.Exists(path))
         {
@@ -619,25 +685,64 @@ internal static class NotifySupervisionStore
 
         var current = new Dictionary<string, NotifySupervisionStallRecord>(StringComparer.Ordinal);
         var history = new List<NotifySupervisionStallRecord>();
+        var lineNumber = 0;
         foreach (var line in File.ReadLines(path))
         {
+            lineNumber++;
             if (string.IsNullOrWhiteSpace(line))
             {
                 continue;
             }
 
-            var entry = JsonSerializer.Deserialize<NotifySupervisionEvent>(line, JsonOptions)
-                ?? throw new InvalidDataException("A supervision stall event was empty.");
-            if (string.Equals(entry.Kind, "open", StringComparison.Ordinal) && entry.Stall is not null)
+            if (!TryReadEvent(
+                    path,
+                    directory,
+                    lineNumber,
+                    "stalls",
+                    line,
+                    unreadableRecords,
+                    out var entry))
             {
+                continue;
+            }
+
+            if (string.Equals(entry!.Kind, "open", StringComparison.Ordinal))
+            {
+                if (entry.Stall is null)
+                {
+                    AddUnreadableRecord(
+                        path,
+                        directory,
+                        lineNumber,
+                        "stalls",
+                        "missing-stall-payload",
+                        unreadableRecords);
+                    continue;
+                }
+
                 current[entry.Stall.Key] = ResolveStoredStall(entry.Stall, definitions);
                 continue;
             }
 
-            if (string.Equals(entry.Kind, "clear", StringComparison.Ordinal)
-                && entry.Key is not null
-                && current.Remove(entry.Key, out var open))
+            if (string.Equals(entry.Kind, "clear", StringComparison.Ordinal))
             {
+                if (entry.Key is null)
+                {
+                    AddUnreadableRecord(
+                        path,
+                        directory,
+                        lineNumber,
+                        "stalls",
+                        "missing-stall-key",
+                        unreadableRecords);
+                    continue;
+                }
+
+                if (!current.Remove(entry.Key, out var open))
+                {
+                    continue;
+                }
+
                 var cleared = open with
                 {
                     ClearedAt = entry.ClearedAt,
@@ -654,6 +759,88 @@ internal static class NotifySupervisionStore
             .OrderBy(item => item.SurfacedAt)
             .ThenBy(item => item.Key, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static bool TryReadEvent(
+        string path,
+        string directory,
+        int lineNumber,
+        string component,
+        string line,
+        ICollection<NotifySupervisionUnreadableRecord> unreadableRecords,
+        out NotifySupervisionEvent? entry)
+    {
+        try
+        {
+            entry = JsonSerializer.Deserialize<NotifySupervisionEvent>(line, JsonOptions);
+            if (entry is null)
+            {
+                AddUnreadableRecord(
+                    path,
+                    directory,
+                    lineNumber,
+                    component,
+                    "empty-event",
+                    unreadableRecords);
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(entry.Kind))
+            {
+                AddUnreadableRecord(
+                    path,
+                    directory,
+                    lineNumber,
+                    component,
+                    "missing-event-kind",
+                    unreadableRecords);
+                entry = null;
+                return false;
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            // Match shrink's degrade-and-report shape: preserve the rest of
+            // the append-only file and expose the exact unreadable line.
+            entry = null;
+            AddUnreadableRecord(
+                path,
+                directory,
+                lineNumber,
+                component,
+                "invalid-json",
+                unreadableRecords);
+            return false;
+        }
+    }
+
+    private static void AddUnreadableRecord(
+        string path,
+        string directory,
+        int lineNumber,
+        string component,
+        string reason,
+        ICollection<NotifySupervisionUnreadableRecord> unreadableRecords)
+    {
+        var file = Path.GetRelativePath(directory, path)
+            .Replace(Path.DirectorySeparatorChar, '/')
+            .Replace(Path.AltDirectorySeparatorChar, '/');
+        if (unreadableRecords.Any(item =>
+                item.File == file
+                && item.Line == lineNumber))
+        {
+            return;
+        }
+
+        unreadableRecords.Add(new NotifySupervisionUnreadableRecord
+        {
+            Component = component,
+            File = file,
+            Line = lineNumber,
+            Reason = reason,
+        });
     }
 
     private static IReadOnlyDictionary<string, string> ReadEvidenceDefinitions(string path)
@@ -2611,7 +2798,16 @@ internal sealed record NotifySupervisionReadResult
     public required IReadOnlyDictionary<string, NotifySupervisionStallRecord> ActiveStalls { get; init; }
     public required IReadOnlyList<NotifySupervisionStallRecord> StallHistory { get; init; }
     public required IReadOnlyList<NotifyPromptAudit> PromptAudits { get; init; }
+    public IReadOnlyList<NotifySupervisionUnreadableRecord> UnreadableRecords { get; init; } = [];
     public string? Error { get; init; }
+}
+
+internal sealed record NotifySupervisionUnreadableRecord
+{
+    [JsonPropertyName("component")] public required string Component { get; init; }
+    [JsonPropertyName("file")] public required string File { get; init; }
+    [JsonPropertyName("line")] public required int Line { get; init; }
+    [JsonPropertyName("reason")] public required string Reason { get; init; }
 }
 
 internal sealed record NotifySupervisionWriteResult(

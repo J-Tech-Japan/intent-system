@@ -1025,6 +1025,35 @@ registration; registration remains the operator's explicit action.
 > change to interval, bound, cycle, shrink, archive, or repair semantics is
 > introduced.
 
+### Record-by-record supervision history reads (G767 — preview-through-1.x)
+
+Supervision history is read one non-blank JSONL record at a time. A malformed
+line in `cycles.jsonl`, `stalls.jsonl`, or the prompt-audit records does not
+make the whole team directory unreadable: valid records remain available and
+the read result carries deterministic corruption evidence with the component,
+relative file, one-based line number, and reason. The liveness JSON always
+includes `unreadable_record_count`; a non-zero count also includes
+`unreadable_records`, and its human-readable summary says that the reading is
+partial. A successful command returns exit code 0 and omits the failure-only
+`success` field; a clean directory therefore reports zero without a
+partial-reading statement.
+
+If every cycle line is malformed, liveness has no readable cycle and does not
+report supervision as healthy. Its non-zero unreadable count and file/line
+evidence still distinguish that state from a genuinely empty history. This is
+the same degrade-and-report shape used by the sanctioned shrink reader: the
+reader preserves evidence and names the damaged input rather than silently
+turning corruption into absence. The measured incident was 9 malformed lines
+from 5 incidents in 663,959 lines (0.0014%); this slice changes how readers
+report that evidence, not how fragments were written or how appends are
+ordered. It does not repair existing files or claim to prevent future
+corruption.
+
+The reader remains read-only and does not run a supervisor or an OS lifecycle
+command. `stalls.jsonl` and prompt-audit records receive the same per-record
+treatment as cycles, so a damaged secondary history cannot silently erase the
+rest of the team's supervision answer.
+
 ### Event-driven supervision (G659 — preview-through-1.x)
 
 Add `--event-mode` to the one standing `notify supervise` invocation to opt in.
