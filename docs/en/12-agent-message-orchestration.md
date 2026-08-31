@@ -1019,6 +1019,15 @@ over-bound supervisor even when no supervisor process is alive. The evidence
 state is not a claim that a scheduler job is loaded or that the CLI performed
 registration; registration remains the operator's explicit action.
 
+When `--routing-root <host-root>` is supplied, liveness resolves the supervision
+store beneath that absolute root rather than the caller's current working
+directory, and reports the same absolute root in `routing_root`. The explicit
+JSON `supervision_state` distinguishes `not-found` (the resolved store is not
+present) from `empty-history` (the store exists but has no history) and
+`recorded` (history or corruption evidence is present), so a mistyped root is
+not reported as a dead supervisor. Omitting `--routing-root` preserves the
+existing current-directory resolution and payload behavior.
+
 > **Preview through 1.x (G765).** Persistence is operator-declared and
 > recorded, reconciliation names the keep/remove distinction, and liveness is
 > a read-only observer. No lifecycle execution, automatic re-arming, or
