@@ -819,6 +819,46 @@ G699 の記録済み repeat-backoff と parked state を通じて
 terminal content を読みません。また supervisor の kill、stop、elect、rank は
 自動実行しません。
 
+### operator が宣言する persistence と supervision から独立した liveness (G765 — preview-through-1.x)
+
+operator は、login をまたいで保持する意図を scheduler artifact に
+`--persistence persistent` で宣言できます。
+
+```bash
+intent-cli notify supervise install --domain <domain> --team <team> \
+  --repo <owner/repo> --owner-role <logical-role> --bound <seconds> \
+  --interval <seconds> --persistence persistent --write --format json
+```
+
+この declaration は artifact metadata として記録されます。これは隠れた
+registration ではありません。install は引き続き artifact の authoring と
+first cycle の proof だけを行い、表示された platform registration command の
+実行は operator が担当します。reconcile は metadata がある artifact を
+**declared persistent として保持**し、宣言のない login-persistent artifact を
+**legacy として削除可能**と明示します。`reconcile --write` が削除するのは後者だけです。
+`--persistence` を省略すれば、従来の session-only artifact の bytes と cleanup
+behavior は変わりません。
+
+absence は supervisor 自身から独立した read-only surface で確認できます。
+
+```bash
+intent-cli notify supervise liveness --domain <domain> --team <team> --format json
+```
+
+これは last completed cycle、declared bound、elapsed age、そして永続的な
+installation evidence が scheduler job を loaded と示すかを報告します。command
+は persisted state と artifact metadata だけを読み、supervisor を実行せず、
+`launchctl`、`systemctl`、その他の OS lifecycle command を実行しません。そのため
+supervisor process が存在しない場合でも、design または orchestration thread が
+missing / bound 超過の supervisor を報告できます。scheduler load の答えは明示的に
+永続インストールの記録であり、CLI が registration を実行したという意味では
+ありません。
+
+> **1.x を通じた preview (G765)。** persistence は operator が宣言して記録し、
+> reconcile は keep/remove の違いを明示し、liveness は read-only observer です。
+> lifecycle の実行、automatic re-arming、interval / bound / cycle / shrink / archive /
+> repair semantics の変更はありません。
+
 ### event-driven supervision (G659 — preview-through-1.x)
 
 1 つの standing `notify supervise` invocation に `--event-mode` を追加して有効化します。

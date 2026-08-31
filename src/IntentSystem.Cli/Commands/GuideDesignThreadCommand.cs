@@ -160,7 +160,7 @@ internal static class GuideDesignThreadCommand
             Monitoring = new DesignThreadMonitoring
             {
                 Separation = "Supervision runs outside the design conversation and is consulted at most once per design wake.",
-                ResidualDesignCheck = "At low frequency, design checks the last completed supervision-cycle record. Compare its age with the declared supervision-liveness bound; do not use a conversational heartbeat.",
+                ResidualDesignCheck = "At low frequency, design runs the read-only `intent-cli notify supervise liveness --domain <domain> --team <team> --format json` surface. It reports the last completed supervision cycle, declared bound, elapsed age, and scheduler-load evidence without running or depending on the supervisor; compare the age with the declared supervision-liveness bound and do not use a conversational heartbeat.",
                 BoundRule = "The declared detection bound must be greater than the configured wake interval plus scheduling jitter.",
                 GuideRefreshRule = "Re-read installed guides after a CLI version change or session-layer configuration change, not on every wake.",
                 DeploymentRule = $"A design seat whose agent kind has no inbound app monitor must be a recorded resident herdr seat with cwd `{root}`, where persistent AGENTS rules apply. A kind with an inbound app monitor may use that external reader. This is a deployment rule, not a recommendation.",
