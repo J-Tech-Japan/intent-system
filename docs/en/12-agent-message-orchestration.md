@@ -1599,7 +1599,11 @@ complete inspect → dry-run preview → explicit write → validate → notify
 preflight sequence. The move requires a complete operator-supplied old-pane to
 new-pane map for herdr roles, holds a CAS lock, compares the topology digest,
 and atomically updates the team and role workspace/pane ids while preserving
-all other role fields. It never queries herdr, creates panes, changes
+all other role fields. Several roles recorded on one old pane may map to one
+new pane — the roles travel with their pane, so the map is not ambiguous (no
+longer refused after G735); only a map that sends two or more different old
+panes to one new pane (a pane no role occupies) remains refused as
+ambiguous. It never queries herdr, creates panes, changes
 membership, or repairs a per-role conflict; that refusal names this move
 command as its sanctioned whole-team transition.
 

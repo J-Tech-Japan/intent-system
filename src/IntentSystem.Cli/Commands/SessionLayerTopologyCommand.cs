@@ -1339,7 +1339,7 @@ internal static class SessionLayerTopologyWriter
             }
 
             var recordedPanes = new HashSet<string>(StringComparer.Ordinal);
-            var mappedPanes = new HashSet<string>(StringComparer.Ordinal);
+            var newPaneOwners = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var (roleName, roleNode) in roles!.OrderBy(entry => entry.Key, StringComparer.Ordinal))
             {
                 if (roleNode is not JsonObject role)
@@ -1377,7 +1377,12 @@ internal static class SessionLayerTopologyWriter
                         + "refusing a partial workspace move.");
                 }
 
-                if (!mappedPanes.Add(newPane))
+                // G735: several roles recorded on the SAME old pane travel
+                // together, so a shared old-pane -> new-pane pair is not
+                // ambiguous. Only a new pane that two or more DIFFERENT old
+                // panes map to (a pane no role occupies) stays refused.
+                if (newPaneOwners.TryGetValue(newPane, out var owner)
+                    && !string.Equals(owner, oldPane, StringComparison.Ordinal))
                 {
                     return MoveConflict(
                         request,
@@ -1386,6 +1391,8 @@ internal static class SessionLayerTopologyWriter
                         $"--pane-map maps more than one recorded role to new pane '{newPane}'; refusing an "
                         + "ambiguous workspace move.");
                 }
+
+                newPaneOwners[newPane] = oldPane;
 
                 var paneWorkspace = WorkspaceFromPane(newPane);
                 if (paneWorkspace is not null
