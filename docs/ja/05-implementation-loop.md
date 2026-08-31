@@ -254,6 +254,21 @@ canonical answer を返します。default branch を解決または fetch で�
 unit は candidate のまま、claimed-elsewhere unit は holder evidence 付きで除外します。
 これにより start が拒否する作業を recommendation が促しません。
 
+### Preview: canonical branch が空で metadata branch のみに claim がある場合 (G766)
+
+`not-configured` は、どの branch にも claims store がない host のために予約します。
+設定済み metadata branch に active claim record が残っていれば、canonical branch に
+現在 claim tree がなくても、その host が claims を導入済みである証拠です。この場合
+verifier は `metadata-branch-only` を返して、まだ存在しない scope を含む全ての scope を
+fail closed にします。metadata branch の record から ownership は読みません。result に
+holder / holder team はなく、stranded record は明示的な G763 migration path を使うまで
+unheld のままです。
+
+これにより、claims をまだ導入していない host の byte-compatible な挙動を保ちながら、
+canonical branch が空であることだけを理由に claims-gated command が全て pass することを
+防ぎます。設定済み metadata branch に active record がないだけなら claims store とは判定せず、
+そこに active record があることを確認できた場合だけ legacy answer を変更します。
+
 番号は claim-then-draft です。scaffold 前に `execution-unit:<N>` を claim し、N に負けたら
 fast-forward、次番号を再計算し、その番号を exactly once retry します。GitHub lifecycle label
 は visible な defence in depth のままで acquisition fact ではありません。review/closeout gate と

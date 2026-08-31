@@ -268,6 +268,21 @@ uses that same judgment in recommendation mode: unheld and own-team units
 remain candidates, while claimed-elsewhere units are excluded with holder
 evidence, so it never urges what start will refuse.
 
+### Preview: canonical-empty hosts with metadata-branch claims (G766)
+
+`not-configured` is reserved for a host with no claims store anywhere. A configured
+metadata branch that still carries active claim records proves that the host has
+adopted claims, even when the canonical branch currently has no claim tree. In that
+state the verifier returns `metadata-branch-only` and fails closed for every scope,
+including a scope that never existed. It does not read ownership from the metadata
+branch: the result has no holder or holder team, and a stranded record remains
+unheld until the explicit G763 migration path is used.
+
+This keeps the genuinely unadopted host byte-compatible while preventing the empty
+canonical branch from making every claims-gated command pass. A configured metadata
+branch with no active records does not by itself create a claims store; the reader
+only changes the legacy answer when it can verify active records there.
+
 Numbering is claim-then-draft. Claim `execution-unit:<N>` before scaffolding;
 after losing N, fast-forward, recompute, and retry the next number exactly once.
 The GitHub lifecycle label remains visible defence in depth but is not the

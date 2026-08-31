@@ -305,5 +305,6 @@ internal static class WorkerNextActionAnalyzer
             || claim.Status == ClaimOwnershipVerification.StatusHeldByOtherTeam
             || claim.Status == ClaimOwnershipVerification.StatusTeamRequired
             || claim.Status == ClaimOwnershipVerification.StatusCanonicalUnavailable
+            || claim.Status == ClaimOwnershipVerification.StatusMetadataBranchOnly
             || claim.Status == ClaimOwnershipVerification.StatusInvalid);
 }

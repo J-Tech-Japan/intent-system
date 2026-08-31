@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using IntentSystem.Cli.Infrastructure;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -63,6 +64,17 @@ internal static class ClaimOwnershipVerifier
                 Holder: null,
                 HolderTeam: null,
                 Detail: "No claims store is configured; legacy single-team behavior applies unchanged.");
+        }
+
+        if (evidence.MetadataBranchOnly)
+        {
+            return Refused(
+                ClaimOwnershipVerification.StatusMetadataBranchOnly,
+                scope,
+                invokingTeam,
+                null,
+                null,
+                evidence.Detail);
         }
 
         if (evidence.RecordJson is null)
@@ -228,6 +240,23 @@ internal static class ClaimOwnershipVerifier
         var storeConfigured = claimPaths.Length > 0;
         if (!storeConfigured)
         {
+            // G766: an empty canonical claims tree is not enough to infer that
+            // the host never adopted claims. A configured metadata branch is
+            // an additional read-only adoption signal, but it never supplies
+            // ownership for ordinary verification.
+            var metadataConfiguration = ReadConfiguredMetadataBranch(repoRoot);
+            if (metadataConfiguration.Error is not null)
+            {
+                return CanonicalClaimEvidence.Unavailable(metadataConfiguration.Error);
+            }
+
+            var metadataBranch = metadataConfiguration.Branch;
+            if (metadataBranch is not null
+                && !string.Equals(metadataBranch, canonicalBranch.Name, StringComparison.Ordinal))
+            {
+                return ReadMetadataBranchEvidence(repoRoot, metadataBranch);
+            }
+
             return CanonicalClaimEvidence.NoStore;
         }
 
@@ -246,8 +275,102 @@ internal static class ClaimOwnershipVerifier
                     : show.StandardError.Trim());
         }
 
-        return new CanonicalClaimEvidence(true, true, show.StandardOutput, "fresh origin record");
+        return new CanonicalClaimEvidence(true, true, false, show.StandardOutput, "fresh origin record");
     }
+
+    private static CanonicalClaimEvidence ReadMetadataBranchEvidence(
+        string repoRoot,
+        string metadataBranch)
+    {
+        if (!IsSafeRemoteBranch(metadataBranch))
+        {
+            return CanonicalClaimEvidence.Unavailable(
+                $"configured metadata branch '{metadataBranch}' is not a safe remote branch name");
+        }
+
+        var remoteRef = $"refs/remotes/origin/{metadataBranch}";
+        var fetch = RunGit(repoRoot,
+            ["fetch", "--quiet", "origin", $"+refs/heads/{metadataBranch}:{remoteRef}"]);
+        if (fetch.ExitCode != 0)
+        {
+            return CanonicalClaimEvidence.Unavailable(
+                string.IsNullOrWhiteSpace(fetch.StandardError)
+                    ? $"fetching configured metadata branch '{metadataBranch}' failed"
+                    : fetch.StandardError.Trim());
+        }
+
+        var tree = RunGit(repoRoot,
+            ["ls-tree", "-r", "--name-only", remoteRef, "--", ClaimCommand.ClaimsDirectory]);
+        if (tree.ExitCode != 0)
+        {
+            return CanonicalClaimEvidence.Unavailable(
+                string.IsNullOrWhiteSpace(tree.StandardError)
+                    ? $"reading configured metadata branch '{metadataBranch}' claims tree failed"
+                    : tree.StandardError.Trim());
+        }
+
+        var claimCount = tree.StandardOutput
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Count(IsActiveClaimPath);
+        return claimCount == 0
+            ? CanonicalClaimEvidence.NoStore
+            : CanonicalClaimEvidence.MetadataOnly(
+                metadataBranch,
+                claimCount);
+    }
+
+    private static (string? Branch, string? Error) ReadConfiguredMetadataBranch(string repoRoot)
+    {
+        var configPath = CliRuntimeContracts.GetConfigPath(repoRoot);
+        if (!File.Exists(configPath)) return (null, null);
+
+        try
+        {
+            var project = CliConfigLoader.LoadFromFile(configPath).Project;
+            foreach (var candidate in new[]
+            {
+                project.MetadataSourceBranch,
+                project.MetadataBranch,
+                project.MetadataWriteBranch,
+            })
+            {
+                if (!string.IsNullOrWhiteSpace(candidate)) return (candidate.Trim(), null);
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidOperationException or FormatException)
+        {
+            return (
+                null,
+                string.IsNullOrWhiteSpace(exception.Message)
+                    ? "reading configured metadata-branch settings failed"
+                    : $"reading configured metadata-branch settings failed: {exception.Message}");
+        }
+
+        return (null, null);
+    }
+
+    private static bool IsActiveClaimPath(string path)
+    {
+        var prefix = ClaimCommand.ClaimsDirectory + "/";
+        if (!path.StartsWith(prefix, StringComparison.Ordinal)) return false;
+        var file = path[prefix.Length..];
+        return file.EndsWith(".json", StringComparison.Ordinal)
+            && !file.Contains('/', StringComparison.Ordinal);
+    }
+
+    private static bool IsSafeRemoteBranch(string value) =>
+        value.Length > 0
+        && !value.StartsWith("-", StringComparison.Ordinal)
+        && !value.StartsWith("/", StringComparison.Ordinal)
+        && !value.EndsWith("/", StringComparison.Ordinal)
+        && !value.EndsWith(".", StringComparison.Ordinal)
+        && !value.Contains("..", StringComparison.Ordinal)
+        && !value.Contains("//", StringComparison.Ordinal)
+        && !value.Contains("@{", StringComparison.Ordinal)
+        && !value.Any(c => char.IsControl(c) || char.IsWhiteSpace(c)
+            || c is '~' or '^' or ':' or '?' or '*' or '[' or '\\')
+        && value.Split('/').All(segment => segment is not ("" or "." or ".."));
 
     private static CanonicalClaimEvidence ReadLocalEvidence(string repoRoot, string scope)
     {
@@ -260,7 +383,7 @@ internal static class ClaimOwnershipVerifier
         if (!File.Exists(claimPath)) return CanonicalClaimEvidence.Unheld;
         try
         {
-            return new CanonicalClaimEvidence(true, true, File.ReadAllText(claimPath), "local fixture record");
+            return new CanonicalClaimEvidence(true, true, false, File.ReadAllText(claimPath), "local fixture record");
         }
         catch (IOException exception)
         {
@@ -317,15 +440,23 @@ internal static class ClaimOwnershipVerifier
     private sealed record CanonicalClaimEvidence(
         bool Available,
         bool StoreConfigured,
+        bool MetadataBranchOnly,
         string? RecordJson,
         string Detail)
     {
         public static CanonicalClaimEvidence NoStore { get; } =
-            new(true, false, null, "canonical claims store absent");
+            new(true, false, false, null, "canonical claims store absent");
         public static CanonicalClaimEvidence Unheld { get; } =
-            new(true, true, null, "canonical scope unheld");
+            new(true, true, false, null, "canonical scope unheld");
         public static CanonicalClaimEvidence Unavailable(string detail) =>
-            new(false, false, null, detail);
+            new(false, false, false, null, detail);
+        public static CanonicalClaimEvidence MetadataOnly(string metadataBranch, int claimCount) =>
+            new(
+                true,
+                true,
+                true,
+                null,
+                $"Claims store is configured on metadata branch '{metadataBranch}' with {claimCount} active record(s), but the canonical branch has no claim records; refusing to treat every scope as unconfigured.");
     }
 
     private sealed record GitResult(int ExitCode, string StandardOutput, string StandardError);
@@ -439,4 +570,5 @@ internal sealed record ClaimOwnershipVerification(
     public const string StatusTeamRequired = "team-required";
     public const string StatusInvalid = "invalid";
     public const string StatusCanonicalUnavailable = "canonical-unavailable";
+    public const string StatusMetadataBranchOnly = "metadata-branch-only";
 }
