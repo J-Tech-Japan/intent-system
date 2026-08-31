@@ -273,6 +273,49 @@ after losing N, fast-forward, recompute, and retry the next number exactly once.
 The GitHub lifecycle label remains visible defence in depth but is not the
 acquisition fact. Review/closeout gates and `worker complete` are unchanged.
 
+### Preview: stranded metadata-branch claim recovery (G763)
+
+Some older same-repository hosts wrote active claim files to a configured
+metadata branch before the canonical-branch rule was settled. Ordinary
+`claim verify` remains canonical-only: a record that exists only on that
+metadata branch is unheld until an operator explicitly migrates it. Acquire and
+verify never migrate records as a side effect.
+
+Use the read-only report to name every active claim present on the configured
+metadata branch but absent from the resolved origin default branch, including
+both remote refs:
+
+```bash
+intent-cli claim stranded --format json
+```
+
+For a deliberate recovery, the operator must name the configured old branch and
+the resolver's current canonical branch, provide actor/team attribution, and
+confirm the operation. Preview first, then repeat with `--write`:
+
+```bash
+intent-cli claim stranded migrate \
+  --current-metadata-branch <metadata-branch> \
+  --new-canonical-branch <resolved-default-branch> \
+  --actor <operator> --team <team> \
+  --confirm-migrate-stranded --dry-run --format json
+
+intent-cli claim stranded migrate \
+  --current-metadata-branch <metadata-branch> \
+  --new-canonical-branch <resolved-default-branch> \
+  --actor <operator> --team <team> \
+  --confirm-migrate-stranded --write --format json
+```
+
+The command refuses if either named branch does not match configuration or the
+remote default resolver. A dry run writes no canonical commit. A write copies
+only active records absent from canonical through the existing pull/commit/plain
+push claim transaction with push-CAS and never force-pushes or rewrites the
+metadata branch. If canonical already has the same claim path with different
+content, the report names the conflict and leaves the canonical record
+unchanged for the operator to decide. A host with no configured metadata branch
+keeps the legacy no-store behavior.
+
 ### Preview: bounded host-state Git lock retry (G700)
 
 The sanctioned `claim` transaction is the only surface covered by this retry

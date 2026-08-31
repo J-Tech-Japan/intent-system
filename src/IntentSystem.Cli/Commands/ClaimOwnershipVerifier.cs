@@ -177,6 +177,9 @@ internal static class ClaimOwnershipVerifier
     /// </summary>
     private static CanonicalClaimEvidence ReadCanonicalEvidence(string repoRoot, string scope)
     {
+        // G763: ordinary verification is deliberately canonical-only. The
+        // explicit `claim stranded` surface is the only claim command that
+        // reads a configured metadata branch for migration diagnostics.
         var inside = RunGit(repoRoot, ["rev-parse", "--is-inside-work-tree"]);
         if (inside.ExitCode != 0
             || !string.Equals(inside.StandardOutput.Trim(), "true", StringComparison.Ordinal))
