@@ -857,6 +857,14 @@ orchestration thread が missing / bound 超過の supervisor を報告できま
 CLI が registration を実行したという意味ではなく、registration は operator の明示的な
 action のままです。
 
+`--routing-root <host-root>` を指定した場合、liveness は caller の
+current working directory ではなく、その absolute root 配下の supervision store を読み、
+同じ absolute root を `routing_root` に返します。JSON の `supervision_state` は、解決した
+store が存在しない `not-found`、store は存在するが history が空の `empty-history`、history
+または corruption evidence がある `recorded` を区別します。これにより誤った root を
+dead supervisor として報告しません。`--routing-root` を省略した場合は、従来の current
+directory に基づく解決と payload behavior を維持します。
+
 > **1.x を通じた preview (G765)。** persistence は operator が宣言して記録し、
 > reconcile は keep/remove の違いを明示し、liveness は read-only observer です。
 > lifecycle の実行、automatic re-arming、interval / bound / cycle / shrink / archive /

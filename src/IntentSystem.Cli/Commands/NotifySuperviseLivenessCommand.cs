@@ -44,11 +44,15 @@ internal static class NotifySuperviseLivenessCommand
             return 1;
         }
 
+        string routingRoot;
         string artifactRoot;
+        var hasExplicitRoutingRoot = options.RoutingRoot is not null;
         try
         {
-            _ = Path.GetFullPath(options.RoutingRoot ?? context.RepoRoot);
-            artifactRoot = context.ResolveSupervisionArtifactRootPath();
+            routingRoot = Path.GetFullPath(options.RoutingRoot ?? context.RepoRoot);
+            artifactRoot = hasExplicitRoutingRoot
+                ? ResolveSupervisionArtifactRootPath(context, routingRoot)
+                : context.ResolveSupervisionArtifactRootPath();
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
         {
@@ -63,6 +67,9 @@ internal static class NotifySuperviseLivenessCommand
             return 1;
         }
 
+        var supervisionState = hasExplicitRoutingRoot
+            ? DetermineSupervisionState(state)
+            : null;
         var now = (NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var lastCycle = state.LastIntervalCycle ?? state.LastCycle;
         var elapsedSeconds = lastCycle is { } cycle
@@ -92,10 +99,11 @@ internal static class NotifySuperviseLivenessCommand
         var result = new NotifySuperviseLivenessResult
         {
             Operation = "supervise-liveness",
-            RoutingRoot = Path.GetFullPath(options.RoutingRoot ?? context.RepoRoot),
+            RoutingRoot = routingRoot,
             Domain = options.Domain,
             Team = options.Team,
             CommandMode = "read-only",
+            SupervisionState = supervisionState,
             LastCompletedCycleAt = lastCycle?.CompletedAt,
             DeclaredBoundSeconds = boundSeconds,
             ElapsedSeconds = elapsedSeconds,
@@ -114,7 +122,9 @@ internal static class NotifySuperviseLivenessCommand
                 boundSeconds,
                 elapsedSeconds,
                 schedulerInstallationEvidence,
-                state.UnreadableRecords),
+                state.UnreadableRecords,
+                supervisionState,
+                state.Directory),
         };
 
         Emit(writer, result, options.Format);
@@ -126,14 +136,21 @@ internal static class NotifySuperviseLivenessCommand
         int? boundSeconds,
         long? elapsedSeconds,
         string schedulerInstallationEvidence,
-        IReadOnlyList<NotifySupervisionUnreadableRecord> unreadableRecords)
+        IReadOnlyList<NotifySupervisionUnreadableRecord> unreadableRecords,
+        string? supervisionState,
+        string supervisionDirectory)
     {
-        var cycleSummary = lastCycle is null
-            ? "No completed supervision cycle is recorded; no supervisor process is required to produce this answer."
-            : $"The last completed supervision cycle was {elapsedSeconds}s ago."
-                + (boundSeconds is { } bound
-                    ? $" The declared detection bound is {bound}s."
-                    : " No detection bound was declared.");
+        var cycleSummary = supervisionState switch
+        {
+            "not-found" => $"No supervision state was found at '{supervisionDirectory}'; no supervisor process is required to produce this answer.",
+            "empty-history" => "The supervision store exists but its history is empty; no supervisor process is required to produce this answer.",
+            _ => lastCycle is null
+                ? "No completed supervision cycle is recorded; no supervisor process is required to produce this answer."
+                : $"The last completed supervision cycle was {elapsedSeconds}s ago."
+                    + (boundSeconds is { } bound
+                        ? $" The declared detection bound is {bound}s."
+                        : " No detection bound was declared."),
+        };
         var absenceSummary = lastCycle is null || boundSeconds is { } declared && elapsedSeconds is { } elapsed && elapsed > declared
             ? " Supervision is absent or beyond its declared bound."
             : " Supervision liveness is within the available evidence.";
@@ -145,6 +162,14 @@ internal static class NotifySuperviseLivenessCommand
             ? " No readable cycle is available, so liveness is not reported as healthy."
             : string.Empty;
         return $"Read-only liveness: {cycleSummary}{absenceSummary}{noReadableCycleSummary}{corruptionSummary} Scheduler live state=unknown; durable installation evidence={schedulerInstallationEvidence}; the supervisor was not run.";
+    }
+
+    private static string ResolveSupervisionArtifactRootPath(CliContext context, string routingRoot)
+    {
+        var configuredRoot = context.Config.Supervision.ArtifactRoot;
+        return Path.IsPathRooted(configuredRoot)
+            ? Path.GetFullPath(configuredRoot)
+            : Path.GetFullPath(Path.Combine(routingRoot, configuredRoot));
     }
 
     private static void EmitFailure(TextWriter writer, string error, string format)
@@ -165,6 +190,11 @@ internal static class NotifySuperviseLivenessCommand
         writer.WriteLine($"supervise-liveness-failed: {error}");
     }
 
+    private static string DetermineSupervisionState(NotifySupervisionReadResult state) =>
+        !Directory.Exists(state.Directory)
+            ? "not-found"
+            : state.CycleHistory.Count == 0 && state.StallHistory.Count == 0 && state.PromptAudits.Count == 0 && state.UnreadableRecords.Count == 0 ? "empty-history" : "recorded";
+
     private static void Emit(TextWriter writer, NotifySuperviseLivenessResult result, string format)
     {
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -177,6 +207,10 @@ internal static class NotifySuperviseLivenessCommand
         writer.WriteLine();
         writer.WriteLine($"- domain/team: {result.Domain}/{result.Team}");
         writer.WriteLine($"- command mode: {result.CommandMode}");
+        if (result.SupervisionState is { } supervisionState)
+        {
+            writer.WriteLine($"- supervision state: {supervisionState}");
+        }
         writer.WriteLine($"- last completed cycle: {result.LastCompletedCycleAt?.ToString("O") ?? "<none>"}");
         writer.WriteLine($"- declared bound: {result.DeclaredBoundSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unrecorded>"}s");
         writer.WriteLine($"- elapsed: {result.ElapsedSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unknown>"}s");
@@ -293,6 +327,7 @@ internal sealed record NotifySuperviseLivenessResult
     [JsonPropertyName("domain")] public required string Domain { get; init; }
     [JsonPropertyName("team")] public required string Team { get; init; }
     [JsonPropertyName("command_mode")] public required string CommandMode { get; init; }
+    [JsonPropertyName("supervision_state")] public string? SupervisionState { get; init; }
     [JsonPropertyName("last_completed_cycle_at")] public DateTimeOffset? LastCompletedCycleAt { get; init; }
     [JsonPropertyName("declared_bound_seconds")] public int? DeclaredBoundSeconds { get; init; }
     [JsonPropertyName("elapsed_seconds")] public long? ElapsedSeconds { get; init; }

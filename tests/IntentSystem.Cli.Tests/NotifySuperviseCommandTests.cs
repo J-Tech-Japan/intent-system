@@ -168,6 +168,63 @@ public sealed class NotifySuperviseCommandTests : IDisposable
     }
 
     [Fact]
+    public void Liveness_ExplicitRoutingRootIsIndependentOfWorkingDirectory_G769()
+    {
+        var routingRoot = Path.Combine(root, "routing-root");
+        var firstWorkingDirectory = Path.Combine(root, "working-directory-a");
+        var secondWorkingDirectory = Path.Combine(root, "working-directory-b");
+        WriteCycle(
+            ArtifactRoot(routingRoot),
+            "routing-root-cycle",
+            now.AddHours(-3));
+        WriteCycle(
+            ArtifactRoot(firstWorkingDirectory),
+            "wrong-working-directory-a",
+            now.AddHours(-1));
+        WriteCycle(
+            ArtifactRoot(secondWorkingDirectory),
+            "wrong-working-directory-b",
+            now.AddHours(-2));
+
+        var first = RunLiveness(firstWorkingDirectory, routingRoot);
+        var second = RunLiveness(secondWorkingDirectory, routingRoot);
+
+        Assert.Equal(0, first.ExitCode);
+        Assert.Equal(0, second.ExitCode);
+        Assert.Equal(first.Payload, second.Payload);
+        using var document = JsonDocument.Parse(first.Payload);
+        var result = document.RootElement;
+        Assert.Equal(Path.GetFullPath(routingRoot), result.GetProperty("routing_root").GetString());
+        Assert.Equal(10_800, result.GetProperty("elapsed_seconds").GetInt64());
+        Assert.Equal("recorded", result.GetProperty("supervision_state").GetString());
+    }
+
+    [Fact]
+    public void Liveness_ExplicitRoutingRootDistinguishesNotFoundFromEmptyHistory_G769()
+    {
+        var workingDirectory = Path.Combine(root, "working-directory");
+        var missingRoot = Path.Combine(root, "missing-root");
+        var emptyRoot = Path.Combine(root, "empty-root");
+        Directory.CreateDirectory(Path.Combine(ArtifactRoot(emptyRoot), Domain, Team));
+
+        var missing = RunLiveness(workingDirectory, missingRoot);
+        var empty = RunLiveness(workingDirectory, emptyRoot);
+
+        Assert.Equal(0, missing.ExitCode);
+        Assert.Equal(0, empty.ExitCode);
+        using var missingDocument = JsonDocument.Parse(missing.Payload);
+        using var emptyDocument = JsonDocument.Parse(empty.Payload);
+        var missingResult = missingDocument.RootElement;
+        var emptyResult = emptyDocument.RootElement;
+        Assert.Equal("not-found", missingResult.GetProperty("supervision_state").GetString());
+        Assert.Equal("empty-history", emptyResult.GetProperty("supervision_state").GetString());
+        Assert.NotEqual(missing.Payload, empty.Payload);
+        Assert.Contains("No supervision state was found", missingResult.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("No completed supervision cycle", missingResult.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("the supervision store exists but its history is empty", emptyResult.GetProperty("summary").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Liveness_DoesNotClaimAnUnregisteredArtifactIsLoaded()
     {
         var artifact = CreateArtifact("authored-but-unregistered", "authored but never registered");
@@ -222,6 +279,11 @@ public sealed class NotifySuperviseCommandTests : IDisposable
         Assert.Contains("launchctl", document, StringComparison.Ordinal);
         Assert.Contains("scheduler_installation_evidence", document, StringComparison.Ordinal);
         Assert.Contains("scheduler_live_state", document, StringComparison.Ordinal);
+        Assert.Contains("--routing-root <host-root>", document, StringComparison.Ordinal);
+        Assert.Contains("supervision_state", document, StringComparison.Ordinal);
+        Assert.Contains("not-found", document, StringComparison.Ordinal);
+        Assert.Contains("empty-history", document, StringComparison.Ordinal);
+        Assert.Contains("recorded", document, StringComparison.Ordinal);
         if (language == "en")
         {
             Assert.Contains("does not execute", document, StringComparison.OrdinalIgnoreCase);
@@ -242,6 +304,34 @@ public sealed class NotifySuperviseCommandTests : IDisposable
         Assert.Contains("notify supervise liveness", residual, StringComparison.Ordinal);
         Assert.Contains("read-only", residual, StringComparison.OrdinalIgnoreCase);
     }
+
+    private (int ExitCode, string Payload) RunLiveness(string repoRoot, string? routingRoot = null)
+    {
+        using var writer = new StringWriter();
+        string[] args = routingRoot is null
+            ? ["liveness", "--domain", Domain, "--team", Team, "--format", "json"]
+            : ["liveness", "--domain", Domain, "--team", Team, "--routing-root", routingRoot, "--format", "json"];
+        var exitCode = NotifyCommand.ExecuteSupervise(CreateContext(repoRoot), args, writer);
+        return (exitCode, writer.ToString());
+    }
+
+    private void WriteCycle(string artifactRoot, string cycleId, DateTimeOffset completedAt)
+    {
+        var path = NotifySupervisionStore.ResolveCyclePath(artifactRoot, Domain, Team);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        Assert.True(NotifySupervisionStore.RecordCycle(
+            path,
+            new NotifySupervisionCycle
+            {
+                CycleId = cycleId,
+                StartedAt = completedAt.AddSeconds(-1),
+                CompletedAt = completedAt,
+                IntervalSeconds = 300,
+            },
+            write: true).Applied);
+    }
+
+    private static string ArtifactRoot(string repoRoot) => Path.Combine(repoRoot, ".intent-cli", "supervision");
 
     private string NotifySupervisionArtifactRoot() => Path.Combine(root, ".intent-cli", "supervision");
 
@@ -281,9 +371,9 @@ public sealed class NotifySuperviseCommandTests : IDisposable
         ObservedAt = now.AddSeconds(1),
     };
 
-    private CliContext CreateContext() => new()
+    private CliContext CreateContext(string? repoRoot = null) => new()
     {
-        RepoRoot = root,
+        RepoRoot = repoRoot ?? root,
         Config = new CliConfig
         {
             Project = new ProjectConfig
