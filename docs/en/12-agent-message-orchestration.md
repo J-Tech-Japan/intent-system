@@ -1007,14 +1007,17 @@ surface:
 intent-cli notify supervise liveness --domain <domain> --team <team> --format json
 ```
 
-It reports the last completed cycle, declared bound, elapsed age, and whether
-durable installation evidence says the scheduler job is loaded. The command
-reads persisted state and artifact metadata only: it does not run the
+It reports the last completed cycle, declared bound, elapsed age, and an
+explicitly non-live installation-evidence state. The JSON field
+`scheduler_installation_evidence` is `installation-artifact-present` when the
+installed first-cycle record and its artifact path are present, otherwise it
+is `unknown`; `scheduler_live_state` is always `unknown` on this path. The
+command reads persisted state and artifact metadata only: it does not run the
 supervisor and executes no `launchctl`, `systemctl`, or other OS lifecycle
 command. This allows a design or orchestration thread to report a missing or
-over-bound supervisor even when no supervisor process is alive. The scheduler
-load answer is explicitly durable installation evidence, not a claim that the
-CLI performed registration.
+over-bound supervisor even when no supervisor process is alive. The evidence
+state is not a claim that a scheduler job is loaded or that the CLI performed
+registration; registration remains the operator's explicit action.
 
 > **Preview through 1.x (G765).** Persistence is operator-declared and
 > recorded, reconciliation names the keep/remove distinction, and liveness is

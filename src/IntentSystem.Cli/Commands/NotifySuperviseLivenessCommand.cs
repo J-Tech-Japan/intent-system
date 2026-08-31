@@ -79,10 +79,15 @@ internal static class NotifySuperviseLivenessCommand
             NotifySuperviseArtifactInventory.UserProfileDirectoryFactory());
         var installedArtifactPresent = state.InstalledSupervisor is { ArtifactPath: { } path }
             && File.Exists(path);
-        var schedulerJobLoaded = state.InstalledSupervisor is not null && installedArtifactPresent;
-        var schedulerEvidence = schedulerJobLoaded
-            ? "installed first-cycle record and scheduler artifact are both present; no OS lifecycle query was executed"
-            : "no installed first-cycle record with a present scheduler artifact; no OS lifecycle query was executed";
+        // A first-cycle record plus an artifact proves only durable installation
+        // evidence. Registration is an explicit operator action outside this
+        // read-only command, so the live scheduler state is never inferred.
+        var schedulerInstallationEvidence = installedArtifactPresent
+            ? "installation-artifact-present"
+            : "unknown";
+        var schedulerEvidenceDetail = installedArtifactPresent
+            ? "installed first-cycle record and scheduler artifact are both present; this is non-live durable installation evidence only; scheduler live state is unknown because no OS lifecycle query was executed"
+            : "durable installation evidence is unavailable; scheduler live state is unknown because no OS lifecycle query was executed";
 
         var result = new NotifySuperviseLivenessResult
         {
@@ -95,11 +100,12 @@ internal static class NotifySuperviseLivenessCommand
             DeclaredBoundSeconds = boundSeconds,
             ElapsedSeconds = elapsedSeconds,
             AbsentSinceLastCycle = absentSinceLastCycle,
-            SchedulerJobLoaded = schedulerJobLoaded,
-            SchedulerJobEvidence = schedulerEvidence,
+            SchedulerInstallationEvidence = schedulerInstallationEvidence,
+            SchedulerLiveState = "unknown",
+            SchedulerEvidenceDetail = schedulerEvidenceDetail,
             SchedulerArtifactPaths = artifacts,
             CommandsExecuted = "none (persisted supervision state and artifact metadata only)",
-            Summary = BuildSummary(lastCycle, boundSeconds, elapsedSeconds, schedulerJobLoaded),
+            Summary = BuildSummary(lastCycle, boundSeconds, elapsedSeconds, schedulerInstallationEvidence),
         };
 
         Emit(writer, result, options.Format);
@@ -110,7 +116,7 @@ internal static class NotifySuperviseLivenessCommand
         NotifySupervisionCycle? lastCycle,
         int? boundSeconds,
         long? elapsedSeconds,
-        bool schedulerJobLoaded)
+        string schedulerInstallationEvidence)
     {
         var cycleSummary = lastCycle is null
             ? "No completed supervision cycle is recorded; no supervisor process is required to produce this answer."
@@ -121,7 +127,7 @@ internal static class NotifySuperviseLivenessCommand
         var absenceSummary = lastCycle is null || boundSeconds is { } declared && elapsedSeconds is { } elapsed && elapsed > declared
             ? " Supervision is absent or beyond its declared bound."
             : " Supervision liveness is within the available evidence.";
-        return $"Read-only liveness: {cycleSummary}{absenceSummary} Scheduler job loaded={schedulerJobLoaded.ToString().ToLowerInvariant()} based on durable installation evidence; the supervisor was not run.";
+        return $"Read-only liveness: {cycleSummary}{absenceSummary} Scheduler live state=unknown; durable installation evidence={schedulerInstallationEvidence}; the supervisor was not run.";
     }
 
     private static void EmitFailure(TextWriter writer, string error, string format)
@@ -158,8 +164,9 @@ internal static class NotifySuperviseLivenessCommand
         writer.WriteLine($"- declared bound: {result.DeclaredBoundSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unrecorded>"}s");
         writer.WriteLine($"- elapsed: {result.ElapsedSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unknown>"}s");
         writer.WriteLine($"- absent since last cycle: {result.AbsentSinceLastCycle.ToString().ToLowerInvariant()}");
-        writer.WriteLine($"- scheduler job loaded: {result.SchedulerJobLoaded.ToString().ToLowerInvariant()}");
-        writer.WriteLine($"- scheduler evidence: {result.SchedulerJobEvidence}");
+        writer.WriteLine($"- scheduler live state: {result.SchedulerLiveState}");
+        writer.WriteLine($"- scheduler installation evidence: {result.SchedulerInstallationEvidence}");
+        writer.WriteLine($"- scheduler evidence detail: {result.SchedulerEvidenceDetail}");
         writer.WriteLine($"- commands executed: {result.CommandsExecuted}");
         writer.WriteLine();
         writer.WriteLine(result.Summary);
@@ -265,8 +272,9 @@ internal sealed record NotifySuperviseLivenessResult
     [JsonPropertyName("declared_bound_seconds")] public int? DeclaredBoundSeconds { get; init; }
     [JsonPropertyName("elapsed_seconds")] public long? ElapsedSeconds { get; init; }
     [JsonPropertyName("absent_since_last_cycle")] public required bool AbsentSinceLastCycle { get; init; }
-    [JsonPropertyName("scheduler_job_loaded")] public required bool SchedulerJobLoaded { get; init; }
-    [JsonPropertyName("scheduler_job_evidence")] public required string SchedulerJobEvidence { get; init; }
+    [JsonPropertyName("scheduler_installation_evidence")] public required string SchedulerInstallationEvidence { get; init; }
+    [JsonPropertyName("scheduler_live_state")] public required string SchedulerLiveState { get; init; }
+    [JsonPropertyName("scheduler_evidence_detail")] public required string SchedulerEvidenceDetail { get; init; }
     [JsonPropertyName("scheduler_artifact_paths")] public required IReadOnlyList<string> SchedulerArtifactPaths { get; init; }
     [JsonPropertyName("commands_executed")] public required string CommandsExecuted { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }

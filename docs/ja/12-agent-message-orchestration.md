@@ -845,14 +845,17 @@ absence は supervisor 自身から独立した read-only surface で確認で�
 intent-cli notify supervise liveness --domain <domain> --team <team> --format json
 ```
 
-これは last completed cycle、declared bound、elapsed age、そして永続的な
-installation evidence が scheduler job を loaded と示すかを報告します。command
-は persisted state と artifact metadata だけを読み、supervisor を実行せず、
-`launchctl`、`systemctl`、その他の OS lifecycle command を実行しません。そのため
-supervisor process が存在しない場合でも、design または orchestration thread が
-missing / bound 超過の supervisor を報告できます。scheduler load の答えは明示的に
-永続インストールの記録であり、CLI が registration を実行したという意味では
-ありません。
+これは last completed cycle、declared bound、elapsed age、そして明示的に
+non-live な installation evidence の状態を報告します。JSON の
+`scheduler_installation_evidence` は installed first-cycle record と artifact path
+が存在するとき `installation-artifact-present`、それ以外は `unknown` です。この path の
+`scheduler_live_state` は常に `unknown` で、scheduler job が現在 loaded かを示す
+boolean ではありません。command は persisted state と artifact metadata だけを読み、
+supervisor を実行せず、`launchctl`、`systemctl`、その他の OS lifecycle command を
+実行しません。そのため supervisor process が存在しない場合でも、design または
+orchestration thread が missing / bound 超過の supervisor を報告できます。これは
+CLI が registration を実行したという意味ではなく、registration は operator の明示的な
+action のままです。
 
 > **1.x を通じた preview (G765)。** persistence は operator が宣言して記録し、
 > reconcile は keep/remove の違いを明示し、liveness は read-only observer です。

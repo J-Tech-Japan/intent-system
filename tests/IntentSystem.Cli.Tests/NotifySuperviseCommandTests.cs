@@ -140,7 +140,8 @@ public sealed class NotifySuperviseCommandTests : IDisposable
         Assert.Equal(900, result.GetProperty("declared_bound_seconds").GetInt32());
         Assert.Equal(10_800, result.GetProperty("elapsed_seconds").GetInt64());
         Assert.True(result.GetProperty("absent_since_last_cycle").GetBoolean());
-        Assert.False(result.GetProperty("scheduler_job_loaded").GetBoolean());
+        Assert.Equal("unknown", result.GetProperty("scheduler_installation_evidence").GetString());
+        Assert.Equal("unknown", result.GetProperty("scheduler_live_state").GetString());
         Assert.Equal("read-only", result.GetProperty("command_mode").GetString());
     }
 
@@ -159,10 +160,53 @@ public sealed class NotifySuperviseCommandTests : IDisposable
         Assert.Equal(0, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
         var result = document.RootElement;
-        Assert.False(result.GetProperty("scheduler_job_loaded").GetBoolean());
+        Assert.Equal("unknown", result.GetProperty("scheduler_installation_evidence").GetString());
+        Assert.Equal("unknown", result.GetProperty("scheduler_live_state").GetString());
         Assert.Contains("no supervisor process", result.GetProperty("summary").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("launchctl", result.GetProperty("commands_executed").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("systemctl", result.GetProperty("commands_executed").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Liveness_DoesNotClaimAnUnregisteredArtifactIsLoaded()
+    {
+        var artifact = CreateArtifact("authored-but-unregistered", "authored but never registered");
+        var installedRecord = NotifySupervisionStore.RecordInstalledSupervisor(
+            NotifySupervisionArtifactRoot(),
+            new NotifySupervisionInstalledSupervisor
+            {
+                Domain = Domain,
+                Team = Team,
+                Label = Label,
+                ArtifactPath = artifact,
+                Writer = VerifiedFirstCycle().Writer!,
+                StartupBoundSeconds = 900,
+                RecordedAt = now,
+            },
+            write: true);
+        Assert.True(installedRecord.Applied);
+
+        var processRunnerInvoked = false;
+        NotifyCommand.ProcessRunnerFactory = () =>
+        {
+            processRunnerInvoked = true;
+            throw new InvalidOperationException("unregistered-artifact regression must not query a scheduler");
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = NotifyCommand.ExecuteSupervise(
+            CreateContext(),
+            ["liveness", "--domain", Domain, "--team", Team, "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.False(processRunnerInvoked);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var result = document.RootElement;
+        Assert.Equal("installation-artifact-present", result.GetProperty("scheduler_installation_evidence").GetString());
+        Assert.Equal("unknown", result.GetProperty("scheduler_live_state").GetString());
+        Assert.DoesNotContain("scheduler_job_loaded", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("scheduler live state=unknown", result.GetProperty("summary").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
@@ -176,6 +220,8 @@ public sealed class NotifySuperviseCommandTests : IDisposable
         Assert.Contains("--persistence persistent", document, StringComparison.Ordinal);
         Assert.Contains("notify supervise liveness", document, StringComparison.Ordinal);
         Assert.Contains("launchctl", document, StringComparison.Ordinal);
+        Assert.Contains("scheduler_installation_evidence", document, StringComparison.Ordinal);
+        Assert.Contains("scheduler_live_state", document, StringComparison.Ordinal);
         if (language == "en")
         {
             Assert.Contains("does not execute", document, StringComparison.OrdinalIgnoreCase);
