@@ -870,6 +870,35 @@ internal static class ClaimCommand
                     ["push", "origin", $"{transactionCommitSha}:refs/heads/{request.NewCanonicalBranch}"],
                     hostStateWrite: true);
                 CaptureRetry(ref lastGitWriteRetry, push);
+                if (push.ExitCode != 0
+                    && TryConfirmStrandedMigrationReceipt(
+                        transactionRoot,
+                        request.NewCanonicalBranch,
+                        transactionCommitSha,
+                        scan.Stranded))
+                {
+                    // The receive-side process may report failure after the
+                    // remote accepted this migration transaction. The remote
+                    // ref and every migrated record are the durable facts, so
+                    // do not retry and turn a committed migration into clean.
+                    committed = true;
+                    return new ClaimStrandedMigrationResult(
+                        scan.Conflicts.Count == 0 ? "migrated" : "migrated-with-conflicts",
+                        scan.MetadataBranch,
+                        scan.CanonicalBranch,
+                        scan.MetadataRef,
+                        scan.CanonicalRef,
+                        scan.Stranded,
+                        scan.Conflicts,
+                        true,
+                        transactionCommitSha,
+                        "The remote branch contains the transaction commit after the push process returned a failure; "
+                        + "verified remote state is the ownership transition fact. The metadata branch remains unchanged.",
+                        $"refs/heads/{request.NewCanonicalBranch}")
+                    {
+                        GitWriteRetry = lastGitWriteRetry,
+                    };
+                }
                 if (push.ExitCode != 0 && push.RetryEvidence is not null)
                 {
                     throw new HostStateGitFailureException("push stranded-claim migration", push.RetryEvidence);
@@ -949,6 +978,40 @@ internal static class ClaimCommand
         }
 
         throw new InvalidOperationException("stranded-claim migration exhausted unexpectedly");
+    }
+
+    private static bool TryConfirmStrandedMigrationReceipt(
+        string transactionRoot,
+        string canonicalBranch,
+        string transactionCommitSha,
+        IReadOnlyList<ClaimStrandedEntry> migrated)
+    {
+        // Match the G743 transaction receipt sequence: refresh the remote
+        // tracking ref, confirm the exact transaction commit, then read every
+        // migrated claim path from that received commit. A clean retry is not
+        // sufficient evidence because it can hide a successful remote push.
+        var fetch = RunGit(transactionRoot, ["fetch", "origin", canonicalBranch]);
+        EnsureSuccess(fetch, "inspect rejected stranded-claim migration push");
+        var remoteDefaultHead = RunGit(transactionRoot, ["rev-parse", $"origin/{canonicalBranch}"]);
+        if (remoteDefaultHead.ExitCode != 0
+            || !string.Equals(remoteDefaultHead.StandardOutput.Trim(), transactionCommitSha, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        foreach (var entry in migrated)
+        {
+            var remoteClaim = RunGit(
+                transactionRoot,
+                ["show", $"origin/{canonicalBranch}:{entry.ClaimPath}"]);
+            if (remoteClaim.ExitCode != 0
+                || !string.Equals(remoteClaim.StandardOutput, entry.RawJson, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static ClaimStrandedScan ReadStrandedClaims(

@@ -6,6 +6,7 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection(AutomationStalledWorkSharedStateCollection.Name)]
 public sealed class ClaimCommandG763Tests
 {
     [Fact]
@@ -139,6 +140,35 @@ public sealed class ClaimCommandG763Tests
     }
 
     [Fact]
+    public void StrandedMigration_RemoteReceiptAfterNonzeroPushReportsCommittedSuccess_G763()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var stranded = Record("execution-unit:G763-remote-receipt", "alice", "implementation");
+        using var repos = new ClaimRepositories(
+            [Record("execution-unit:G763-canonical-baseline", "canonical", "implementation")], [stranded]);
+        var expectedRaw = repos.ReadFile("main-metadata", ClaimCommand.ClaimPath(stranded.Scope));
+        using var output = new StringWriter();
+
+        using (new GitPushFailureShim())
+        {
+            var exit = ClaimCommand.ExecuteStranded(
+                Context(repos.FirstClone), MigrationArguments(write: true, includeConfirmation: true), output);
+
+            Assert.True(exit == 0, $"expected committed migration success; exit_code={exit}; result={output}");
+        }
+
+        using var result = JsonDocument.Parse(output.ToString());
+        Assert.Equal("migrated", result.RootElement.GetProperty("status").GetString());
+        Assert.True(result.RootElement.GetProperty("push_succeeded").GetBoolean());
+        var commit = result.RootElement.GetProperty("commit").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(commit));
+        Assert.Contains("remote branch contains the transaction commit", result.RootElement.GetProperty("detail").GetString()!, StringComparison.Ordinal);
+        Assert.Equal(commit, repos.ReadRef("main"));
+        Assert.Equal(expectedRaw, repos.ReadFile("main", ClaimCommand.ClaimPath(stranded.Scope)));
+    }
+
+    [Fact]
     public void StrandedMigration_ReportsCanonicalConflictAndDoesNotOverwriteIt_G763()
     {
         var canonical = Record("execution-unit:G763-conflict", "alice", "implementation", "canonical");
@@ -253,6 +283,40 @@ public sealed class ClaimCommandG763Tests
 
     private static string Serialize(ClaimRecord record) =>
         JsonSerializer.Serialize(record, new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine;
+
+    private sealed class GitPushFailureShim : IDisposable
+    {
+        private readonly string originalPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        private readonly string root = Directory.CreateTempSubdirectory("claim-git-shim-g763-").FullName;
+
+        public GitPushFailureShim()
+        {
+            var wrapper = Path.Combine(root, "git");
+            File.WriteAllText(
+                wrapper,
+                "#!/bin/sh\n"
+                + "if [ \"${1:-}\" = \"push\" ]; then\n"
+                + "  /usr/bin/git \"$@\"\n"
+                + "  status=$?\n"
+                + "  if [ \"$status\" -eq 0 ]; then exit 77; fi\n"
+                + "  exit \"$status\"\n"
+                + "fi\n"
+                + "exec /usr/bin/git \"$@\"\n");
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    wrapper,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+            Environment.SetEnvironmentVariable("PATH", root + Path.PathSeparator + originalPath);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
 
     private static void WriteRecords(string repo, IEnumerable<ClaimRecord> records)
     {
