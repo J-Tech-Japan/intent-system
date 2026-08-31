@@ -67,9 +67,7 @@ internal static class NotifySuperviseLivenessCommand
             return 1;
         }
 
-        var supervisionState = hasExplicitRoutingRoot
-            ? DetermineSupervisionState(state)
-            : null;
+        var supervisionState = DetermineSupervisionState(state);
         var now = (NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var lastCycle = state.LastIntervalCycle ?? state.LastCycle;
         var elapsedSeconds = lastCycle is { } cycle
@@ -137,7 +135,7 @@ internal static class NotifySuperviseLivenessCommand
         long? elapsedSeconds,
         string schedulerInstallationEvidence,
         IReadOnlyList<NotifySupervisionUnreadableRecord> unreadableRecords,
-        string? supervisionState,
+        string supervisionState,
         string supervisionDirectory)
     {
         var cycleSummary = supervisionState switch
@@ -207,10 +205,7 @@ internal static class NotifySuperviseLivenessCommand
         writer.WriteLine();
         writer.WriteLine($"- domain/team: {result.Domain}/{result.Team}");
         writer.WriteLine($"- command mode: {result.CommandMode}");
-        if (result.SupervisionState is { } supervisionState)
-        {
-            writer.WriteLine($"- supervision state: {supervisionState}");
-        }
+        writer.WriteLine($"- supervision state: {result.SupervisionState}");
         writer.WriteLine($"- last completed cycle: {result.LastCompletedCycleAt?.ToString("O") ?? "<none>"}");
         writer.WriteLine($"- declared bound: {result.DeclaredBoundSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unrecorded>"}s");
         writer.WriteLine($"- elapsed: {result.ElapsedSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unknown>"}s");
@@ -327,7 +322,7 @@ internal sealed record NotifySuperviseLivenessResult
     [JsonPropertyName("domain")] public required string Domain { get; init; }
     [JsonPropertyName("team")] public required string Team { get; init; }
     [JsonPropertyName("command_mode")] public required string CommandMode { get; init; }
-    [JsonPropertyName("supervision_state")] public string? SupervisionState { get; init; }
+    [JsonPropertyName("supervision_state")] public required string SupervisionState { get; init; }
     [JsonPropertyName("last_completed_cycle_at")] public DateTimeOffset? LastCompletedCycleAt { get; init; }
     [JsonPropertyName("declared_bound_seconds")] public int? DeclaredBoundSeconds { get; init; }
     [JsonPropertyName("elapsed_seconds")] public long? ElapsedSeconds { get; init; }

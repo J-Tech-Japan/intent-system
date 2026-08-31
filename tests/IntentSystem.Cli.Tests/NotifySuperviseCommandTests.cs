@@ -225,6 +225,54 @@ public sealed class NotifySuperviseCommandTests : IDisposable
     }
 
     [Fact]
+    public void Liveness_NoFlagDistinguishesNotFoundFromEmptyHistory_G770()
+    {
+        var missingRoot = Path.Combine(root, "no-flag-missing-root");
+        var emptyRoot = Path.Combine(root, "no-flag-empty-root");
+        Directory.CreateDirectory(Path.Combine(ArtifactRoot(emptyRoot), Domain, Team));
+
+        var missing = RunLiveness(missingRoot);
+        var empty = RunLiveness(emptyRoot);
+
+        Assert.Equal(0, missing.ExitCode);
+        Assert.Equal(0, empty.ExitCode);
+        using var missingDocument = JsonDocument.Parse(missing.Payload);
+        using var emptyDocument = JsonDocument.Parse(empty.Payload);
+        var missingResult = missingDocument.RootElement;
+        var emptyResult = emptyDocument.RootElement;
+        Assert.Equal("not-found", missingResult.GetProperty("supervision_state").GetString());
+        Assert.Equal("empty-history", emptyResult.GetProperty("supervision_state").GetString());
+        Assert.NotEqual(missing.Payload, empty.Payload);
+        Assert.DoesNotContain("No completed supervision cycle", missingResult.GetProperty("summary").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Liveness_NoFlagReportsStateAndPreservesWorkingDirectoryResolution_G770()
+    {
+        var workingDirectory = Path.Combine(root, "no-flag-recorded-root");
+        var wrongWorkingDirectory = Path.Combine(root, "no-flag-wrong-root");
+        WriteCycle(ArtifactRoot(workingDirectory), "no-flag-cycle", now.AddHours(-3));
+
+        var noFlag = RunLiveness(workingDirectory);
+        var explicitRoot = RunLiveness(wrongWorkingDirectory, workingDirectory);
+
+        Assert.Equal(0, noFlag.ExitCode);
+        Assert.Equal(0, explicitRoot.ExitCode);
+        using var noFlagDocument = JsonDocument.Parse(noFlag.Payload);
+        using var explicitDocument = JsonDocument.Parse(explicitRoot.Payload);
+        var noFlagResult = noFlagDocument.RootElement;
+        var explicitResult = explicitDocument.RootElement;
+        Assert.Contains("supervision_state", noFlagResult.EnumerateObject().Select(property => property.Name));
+        Assert.Contains("supervision_state", explicitResult.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(Path.GetFullPath(workingDirectory), noFlagResult.GetProperty("routing_root").GetString());
+        Assert.Equal(0, noFlagResult.GetProperty("unreadable_record_count").GetInt32());
+        Assert.Equal("recorded", noFlagResult.GetProperty("supervision_state").GetString());
+        Assert.Equal("recorded", explicitResult.GetProperty("supervision_state").GetString());
+        Assert.Equal(noFlagResult.GetProperty("routing_root").GetString(), explicitResult.GetProperty("routing_root").GetString());
+        Assert.Equal(noFlagResult.GetProperty("unreadable_record_count").GetInt32(), explicitResult.GetProperty("unreadable_record_count").GetInt32());
+    }
+
+    [Fact]
     public void Liveness_DoesNotClaimAnUnregisteredArtifactIsLoaded()
     {
         var artifact = CreateArtifact("authored-but-unregistered", "authored but never registered");
@@ -284,12 +332,15 @@ public sealed class NotifySuperviseCommandTests : IDisposable
         Assert.Contains("not-found", document, StringComparison.Ordinal);
         Assert.Contains("empty-history", document, StringComparison.Ordinal);
         Assert.Contains("recorded", document, StringComparison.Ordinal);
+        Assert.Contains("--routing-root <host-root> --format json", document, StringComparison.Ordinal);
         if (language == "en")
         {
+            Assert.Contains("Every successful liveness response", document, StringComparison.Ordinal);
             Assert.Contains("does not execute", document, StringComparison.OrdinalIgnoreCase);
         }
         else
         {
+            Assert.Contains("すべての成功した liveness 応答", document, StringComparison.Ordinal);
             Assert.Contains("実行しません", document, StringComparison.Ordinal);
         }
     }
@@ -303,6 +354,7 @@ public sealed class NotifySuperviseCommandTests : IDisposable
         var residual = document.RootElement.GetProperty("monitoring").GetProperty("residual_design_check").GetString();
         Assert.Contains("notify supervise liveness", residual, StringComparison.Ordinal);
         Assert.Contains("read-only", residual, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("--routing-root <host-root>", residual, StringComparison.Ordinal);
     }
 
     private (int ExitCode, string Payload) RunLiveness(string repoRoot, string? routingRoot = null)

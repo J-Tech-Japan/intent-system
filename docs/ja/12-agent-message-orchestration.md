@@ -862,8 +862,12 @@ current working directory ではなく、その absolute root 配下の supervis
 同じ absolute root を `routing_root` に返します。JSON の `supervision_state` は、解決した
 store が存在しない `not-found`、store は存在するが history が空の `empty-history`、history
 または corruption evidence がある `recorded` を区別します。これにより誤った root を
-dead supervisor として報告しません。`--routing-root` を省略した場合は、従来の current
-directory に基づく解決と payload behavior を維持します。
+dead supervisor として報告しません。すべての成功した liveness 応答は、`--routing-root` の有無にかかわらず `supervision_state` を含みます。
+`--routing-root` を省略した場合も、従来の current directory に基づく root 解決を維持します。
+値は `not-found`、`empty-history`、`recorded` のいずれかで、`not-found` の no-flag 応答は
+dead supervisor と誤解させる文言を返しません。`guide design-thread` の residual check は
+`intent-cli notify supervise liveness --domain <domain> --team <team> --routing-root <host-root> --format json`
+を指定します。これにより documented invocation と安全な invocation が一致します。
 
 > **1.x を通じた preview (G765)。** persistence は operator が宣言して記録し、
 > reconcile は keep/remove の違いを明示し、liveness は read-only observer です。
