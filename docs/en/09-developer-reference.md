@@ -2727,6 +2727,23 @@ warning is separate, names the leftover path, and cannot replace that primary
 no-op cause. With `--format json`, stdout contains exactly one JSON document;
 cleanup warnings go to stderr so stdout can be piped directly to a JSON parser.
 
+## Claim transaction teardown on every outcome (G771)
+
+Cleanup is best-effort on every claim outcome. An acquire, release, takeover,
+already-held result, not-held result, holder mismatch, or retry outcome keeps its
+original status, detail, ownership fields, and exit code even when temporary-root
+cleanup also fails. The cleanup warning is separate, names the leftover path, and
+never turns a pre-commit failure into a success or hides its original cause.
+
+Each transaction creates an exclusive lease beside its temporary root. A later
+write command ensures stale transaction roots are swept with a bounded best-effort pass
+(`intent-cli-claim-*`) after a five-minute age grace period. It examines at most
+32 candidates within a 250 ms sweep budget; an active or unreadable lease is
+protected and is never removed. A stale-root delete failure is warning evidence,
+not a claim result or exit-code change. This recovers abandoned roots while
+protecting a live concurrent transaction, and does not alter the existing
+250 ms per-attempt, three-attempt cleanup contract.
+
 ---
 
 ## Version flow

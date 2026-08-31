@@ -19,6 +19,11 @@ internal static class ClaimCommand
     internal const int CleanupMaxAttempts = 3;
     internal static readonly TimeSpan CleanupAttemptTimeout = TimeSpan.FromMilliseconds(250);
     internal static readonly TimeSpan CleanupRetryDelay = TimeSpan.FromMilliseconds(50);
+    private const string TransactionRootPrefix = "intent-cli-claim-";
+    private const string TransactionLeaseSuffix = ".lease";
+    private const int StaleTransactionRootSweepMaxCandidates = 32;
+    private static readonly TimeSpan StaleTransactionRootMinimumAge = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan StaleTransactionRootSweepBudget = TimeSpan.FromMilliseconds(250);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -149,6 +154,8 @@ internal static class ClaimCommand
                 null, null, null,
                 "Dry-run only. Re-run with --write; ownership exists only after a successful plain push.");
         }
+        SweepStaleTransactionRoots(warningWriter, deleteDirectory);
+
 
         var targetRef = $"refs/heads/{defaultBranch}";
 
@@ -161,7 +168,8 @@ internal static class ClaimCommand
         for (var attempt = 1; attempt <= request.MaxAttempts; attempt++)
         {
             var transactionRoot = Path.Combine(
-                Path.GetTempPath(), $"intent-cli-claim-{Guid.NewGuid():N}");
+                Path.GetTempPath(), $"{TransactionRootPrefix}{Guid.NewGuid():N}");
+            using var transactionLease = ClaimTransactionLease.Create(transactionRoot);
             var committed = false;
             var tolerateCleanupFailure = false;
             Exception? transactionFailure = null;
@@ -435,7 +443,8 @@ internal static class ClaimCommand
                         committed,
                         tolerateCleanupFailure,
                         warningWriter,
-                        deleteDirectory);
+                        deleteDirectory,
+                        transactionFailure);
                 }
                 catch (Exception cleanupFailure) when (transactionFailure is not null)
                 {
@@ -794,11 +803,14 @@ internal static class ClaimCommand
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(canonicalBranch);
 
+        SweepStaleTransactionRoots(Console.Error, path => Directory.Delete(path, recursive: true));
+
         HostStateGitRetryEvidence? lastGitWriteRetry = null;
         for (var attempt = 1; attempt <= request.MaxAttempts; attempt++)
         {
             var transactionRoot = Path.Combine(
                 Path.GetTempPath(), $"intent-cli-claim-migration-{Guid.NewGuid():N}");
+            using var transactionLease = ClaimTransactionLease.Create(transactionRoot);
             var committed = false;
             Exception? transactionFailure = null;
             try
@@ -956,8 +968,9 @@ internal static class ClaimCommand
                         transactionRoot,
                         committed,
                         tolerateCleanupFailure: false,
-                        Console.Error,
-                        path => Directory.Delete(path, recursive: true));
+                        warningWriter: Console.Error,
+                        deleteDirectory: path => Directory.Delete(path, recursive: true),
+                        transactionFailure: transactionFailure);
                 }
                 catch (Exception cleanupFailure) when (transactionFailure is not null)
                 {
@@ -1228,12 +1241,182 @@ internal static class ClaimCommand
         writer.WriteLine(
             "Usage: intent-cli claim stranded migrate --current-metadata-branch <branch> --new-canonical-branch <branch> --actor <actor> --team <team> --confirm-migrate-stranded --dry-run|--write --format json|markdown");
 
+    private static void SweepStaleTransactionRoots(
+        TextWriter warningWriter,
+        Action<string> deleteDirectory)
+    {
+        var tempRoot = Path.GetTempPath();
+        string[] candidates;
+        try
+        {
+            candidates = Directory.EnumerateDirectories(
+                    tempRoot,
+                    $"{TransactionRootPrefix}*",
+                    SearchOption.TopDirectoryOnly)
+                .Take(StaleTransactionRootSweepMaxCandidates)
+                .ToArray();
+        }
+        catch (Exception exception)
+        {
+            WriteStaleTransactionSweepWarning(warningWriter, tempRoot, exception.Message);
+            return;
+        }
+
+        var staleBefore = DateTime.UtcNow - StaleTransactionRootMinimumAge;
+        var stopwatch = Stopwatch.StartNew();
+        foreach (var candidate in candidates)
+        {
+            if (stopwatch.Elapsed >= StaleTransactionRootSweepBudget) break;
+
+            try
+            {
+                if (!Directory.Exists(candidate)
+                    || Directory.GetLastWriteTimeUtc(candidate) > staleBefore
+                    || IsLiveTransactionRoot(candidate))
+                {
+                    continue;
+                }
+
+                var remaining = StaleTransactionRootSweepBudget - stopwatch.Elapsed;
+                if (remaining <= TimeSpan.Zero) break;
+
+                if (!TryDeleteTransactionRoot(
+                        candidate,
+                        deleteDirectory,
+                        out var failure,
+                        out _,
+                        remaining))
+                {
+                    WriteStaleTransactionSweepWarning(
+                        warningWriter,
+                        candidate,
+                        failure?.Message ?? "delete did not complete");
+                }
+                else
+                {
+                    TryDeleteTransactionLeaseFile(candidate);
+                }
+            }
+            catch (Exception exception)
+            {
+                WriteStaleTransactionSweepWarning(warningWriter, candidate, exception.Message);
+            }
+        }
+    }
+
+    private static bool IsLiveTransactionRoot(string transactionRoot)
+    {
+        var leasePath = TransactionLeasePath(transactionRoot);
+        if (!File.Exists(leasePath)) return false;
+
+        try
+        {
+            using var probe = new FileStream(
+                leasePath,
+                FileMode.Open,
+                FileAccess.ReadWrite,
+                FileShare.None);
+            return false;
+        }
+        catch
+        {
+            // An unreadable or locked lease is protected. The sweep must fail
+            // closed rather than risk deleting a live transaction workspace.
+            return true;
+        }
+    }
+
+    private static void WriteStaleTransactionSweepWarning(
+        TextWriter warningWriter,
+        string path,
+        string reason)
+    {
+        try
+        {
+            warningWriter.WriteLine(
+                $"warning: stale claim transaction root '{path}' could not be swept: {reason}");
+        }
+        catch
+        {
+            // A broken warning sink must not change the claim result.
+        }
+    }
+
+    private static string TransactionLeasePath(string transactionRoot) =>
+        transactionRoot + TransactionLeaseSuffix;
+
+    private static void TryDeleteTransactionLeaseFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch
+        {
+            // A leftover lease marker is swept with its stale transaction root.
+        }
+    }
+
+    private sealed class ClaimTransactionLease : IDisposable
+    {
+        private readonly string path;
+        private FileStream? stream;
+
+        private ClaimTransactionLease(string path, FileStream stream)
+        {
+            this.path = path;
+            this.stream = stream;
+        }
+
+        public static ClaimTransactionLease Create(string transactionRoot)
+        {
+            var path = TransactionLeasePath(transactionRoot);
+            FileStream? stream = null;
+            try
+            {
+                stream = new FileStream(
+                    path,
+                    FileMode.CreateNew,
+                    FileAccess.ReadWrite,
+                    FileShare.None);
+                stream.WriteByte(1);
+                stream.Flush(flushToDisk: true);
+                return new ClaimTransactionLease(path, stream);
+            }
+            catch
+            {
+                stream?.Dispose();
+                TryDeleteTransactionLeaseFile(path);
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            var current = Interlocked.Exchange(ref stream, null);
+            try
+            {
+                current?.Dispose();
+            }
+            catch
+            {
+                // Lease teardown is best-effort and must never mask the
+                // transaction result at the using boundary.
+            }
+            finally
+            {
+                TryDeleteTransactionLeaseFile(path);
+            }
+        }
+    }
+
     private static void CleanupTransactionRoot(
         string transactionRoot,
         bool committed,
         bool tolerateCleanupFailure,
         TextWriter warningWriter,
-        Action<string> deleteDirectory)
+        Action<string> deleteDirectory,
+        Exception? transactionFailure = null)
     {
         if (!Directory.Exists(transactionRoot)) return;
 
@@ -1289,9 +1472,31 @@ internal static class ClaimCommand
             return;
         }
 
-        throw new IOException(
-            $"Could not clean up claim transaction temporary directory '{transactionRoot}' before "
-            + "the claim state was committed.", lastFailure);
+        try
+        {
+            var cleanupDetail = lastFailure?.Message ?? "unknown cleanup failure";
+            if (transactionFailure is not null)
+            {
+                warningWriter.WriteLine(
+                    $"warning: claim transaction failed before commit; the original transaction "
+                    + $"failure is preserved. Best-effort cleanup could not remove temporary "
+                    + $"directory '{transactionRoot}' after {attempts} bounded attempt(s); "
+                    + $"cleanup also failed: {cleanupDetail}. The leftover "
+                    + "path remains under the OS temp root.");
+            }
+            else
+            {
+                warningWriter.WriteLine(
+                    $"warning: claim transaction did not commit; best-effort cleanup could not "
+                    + $"remove temporary directory '{transactionRoot}' after {attempts} bounded "
+                    + "attempt(s); the claim result and exit code are unchanged. The leftover "
+                    + "path remains under the OS temp root.");
+            }
+        }
+        catch
+        {
+            // A broken warning sink must not replace the original transaction
+        }
     }
 
     private static void WriteNoOpCleanupWarning(
@@ -1347,7 +1552,8 @@ internal static class ClaimCommand
         string transactionRoot,
         Action<string> deleteDirectory,
         out Exception? failure,
-        out bool timedOut)
+        out bool timedOut,
+        TimeSpan? timeout = null)
     {
         failure = null;
         timedOut = false;
@@ -1365,12 +1571,13 @@ internal static class ClaimCommand
 
         try
         {
-            if (!deletion.Wait(CleanupAttemptTimeout))
+            var boundedTimeout = timeout ?? CleanupAttemptTimeout;
+            if (!deletion.Wait(boundedTimeout))
             {
                 ObserveFault(deletion);
                 timedOut = true;
                 failure = new TimeoutException(
-                    $"temporary directory deletion exceeded {CleanupAttemptTimeout.TotalMilliseconds:0} ms");
+                    $"temporary directory deletion exceeded {boundedTimeout.TotalMilliseconds:0} ms");
                 return false;
             }
 

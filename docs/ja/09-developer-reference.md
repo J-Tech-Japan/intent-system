@@ -2784,6 +2784,22 @@ active record の actor と team が同じ acquire は意図した no-op です�
 ません。`--format json` の stdout は JSON 文書を 1 つだけ含み、cleanup warning は stderr
 へ出力されるため、stdout を直接 JSON parser に渡せます。
 
+## すべての claim outcome に対する transaction teardown (G771)
+
+Cleanup はすべての claim outcome で best-effort です。acquire、release、takeover、
+already-held、not-held、holder mismatch、retry の各 result は、一時 root の cleanup
+も失敗した場合でも元の status、detail、ownership fields、exit code を保持します。
+cleanup warning は別の evidence として leftover path を示し、pre-commit failure を
+success に変えず、元の原因も隠しません。
+
+各 transaction は一時 root の横に exclusive lease を作ります。後続の write command は
+5 分の age grace period 後に、`intent-cli-claim-*` に一致する stale transaction root を
+bounded に best-effort sweep します。候補は最大 32 件、sweep budget は 250 ms です。
+active または読めない lease は保護し、削除しません。stale transaction root の delete
+failure は warning evidence であり、claim result や exit code を変更しません。これにより
+放置された root を回収しながら live な concurrent transaction を保護し、既存の 250 ms
+per-attempt、3 回の cleanup contract は変更しません。
+
 ---
 
 ## バージョンフロー
