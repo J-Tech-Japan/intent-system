@@ -12,7 +12,8 @@ public sealed class ReleaseNotesV0280DocsTests
 {
     private const string PreparedHead =
         "565530e5c965d55335790c9446ef0686988d14c8";
-    private const string PreparedIdentity = "intent-cli 0.28.0-565530e-G769";
+    private const string NormalCleanIdentity = "intent-cli 0.27.1-565530e-G769";
+    private const string PreparedReleaseIdentity = "intent-cli 0.28.0-565530e-G769";
     private const string TaggedIdentity = "intent-cli 0.27.0-f43fbd1-G753";
     private const string InstalledIdentity = "intent-cli 0.27.1-5d553b7-G756";
 
@@ -55,10 +56,24 @@ public sealed class ReleaseNotesV0280DocsTests
         {
             var entry = FindEntry(notes, unit.Unit);
             Assert.NotEmpty(entry);
-            Assert.Contains($"PR {unit.Pr};", entry, StringComparison.Ordinal);
+            Assert.Contains($"PR {unit.Pr} / issue {unit.Issue};", entry, StringComparison.Ordinal);
             Assert.Contains($"merge commit `{unit.Merge}`", entry, StringComparison.Ordinal);
             Assert.Contains("Operator-observable outcome", entry, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    [Fact]
+    public void EnglishAndJapaneseNotesHaveIdenticalUnitIssueAndMergeInventory()
+    {
+        var expected = Units
+            .Select(unit => (unit.Unit, unit.Pr, unit.Issue, unit.Merge))
+            .ToArray();
+        var english = ParseInventory(ReadNotes("en"));
+        var japanese = ParseInventory(ReadNotes("ja"));
+
+        Assert.Equal(expected, english);
+        Assert.Equal(expected, japanese);
+        Assert.Equal(english, japanese);
     }
 
     [Theory]
@@ -90,9 +105,17 @@ public sealed class ReleaseNotesV0280DocsTests
         var notes = ReadNotes(language);
 
         Assert.Contains(PreparedHead, notes, StringComparison.Ordinal);
-        Assert.Contains(PreparedIdentity, notes, StringComparison.Ordinal);
+        Assert.Contains(NormalCleanIdentity, notes, StringComparison.Ordinal);
+        Assert.Contains(PreparedReleaseIdentity, notes, StringComparison.Ordinal);
         Assert.Contains(TaggedIdentity, notes, StringComparison.Ordinal);
         Assert.Contains(InstalledIdentity, notes, StringComparison.Ordinal);
+        Assert.Contains("release.yml", notes, StringComparison.Ordinal);
+        Assert.Contains("v0.28.0", notes, StringComparison.Ordinal);
+        Assert.Contains("VERSION", notes, StringComparison.Ordinal);
+        Assert.Contains("RAW", notes, StringComparison.Ordinal);
+        Assert.Contains("eng/version.json", notes, StringComparison.Ordinal);
+        Assert.Contains("local builds", notes, StringComparison.Ordinal);
+        Assert.Contains("dry runs", notes, StringComparison.Ordinal);
         Assert.Contains("104 usages", notes, StringComparison.Ordinal);
         Assert.Contains("106 usages", notes, StringComparison.Ordinal);
         Assert.Contains("claim stranded", notes, StringComparison.Ordinal);
@@ -171,7 +194,7 @@ public sealed class ReleaseNotesV0280DocsTests
         Assert.Contains("0.28.0", reference, StringComparison.Ordinal);
         Assert.Contains("0.28.1", reference, StringComparison.Ordinal);
         Assert.Contains("replaceable", reference, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(PreparedIdentity, reference, StringComparison.Ordinal);
+        Assert.Contains(PreparedReleaseIdentity, reference, StringComparison.Ordinal);
         Assert.Contains(TaggedIdentity, reference, StringComparison.Ordinal);
         Assert.Contains(InstalledIdentity, reference, StringComparison.Ordinal);
         Assert.Contains("104 usages", reference, StringComparison.Ordinal);
@@ -223,6 +246,17 @@ public sealed class ReleaseNotesV0280DocsTests
             $@"(?ms)^- {Regex.Escape(unit)} —.*?(?=^- |^## |\z)");
         return match.Success ? match.Value : string.Empty;
     }
+
+    private static IReadOnlyList<(string Unit, string Pr, string Issue, string Merge)> ParseInventory(string notes) =>
+        Regex.Matches(
+                notes,
+                @"(?ms)^- (G\d+) — PR (#\d+) / issue (#\d+); merge commit `([0-9a-f]{40})`.*?(?=^- |^## |\z)")
+            .Select(match => (
+                match.Groups[1].Value,
+                match.Groups[2].Value,
+                match.Groups[3].Value,
+                match.Groups[4].Value))
+            .ToArray();
 
     private static string ReadNotes(string language) => File.ReadAllText(Path.Combine(
         RepoVersionPolicySource.RepoRoot(), "docs", language, "release-notes-v0.28.0.md"));
