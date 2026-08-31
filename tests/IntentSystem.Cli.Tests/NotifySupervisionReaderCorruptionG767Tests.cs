@@ -121,7 +121,7 @@ public sealed class NotifySupervisionReaderCorruptionG767Tests : IDisposable
         AssertCleanPayloadMatchesParentOracle(emptyPayload, emptyRoot);
         Assert.True(empty.GetProperty("absent_since_last_cycle").GetBoolean());
         Assert.True(corrupt.GetProperty("absent_since_last_cycle").GetBoolean());
-        Assert.Contains("No completed supervision cycle", empty.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("No supervision state was found", empty.GetProperty("summary").GetString(), StringComparison.Ordinal);
         Assert.Contains("No completed supervision cycle", corrupt.GetProperty("summary").GetString(), StringComparison.Ordinal);
         Assert.Contains("No readable cycle", corrupt.GetProperty("summary").GetString(), StringComparison.Ordinal);
         Assert.False(empty.TryGetProperty("success", out _));
@@ -288,6 +288,7 @@ public sealed class NotifySupervisionReaderCorruptionG767Tests : IDisposable
             .EnumerateObject()
             .Select(property => (property.Name, RawValue: property.Value.GetRawText()))
             .ToArray();
+        var expectedDirectory = Path.GetFullPath(Path.Combine(repoRoot, ".intent-cli", "supervision", Domain, Team));
         var expected = new[]
         {
             ("operation", JsonSerializer.Serialize("supervise-liveness")),
@@ -295,6 +296,10 @@ public sealed class NotifySupervisionReaderCorruptionG767Tests : IDisposable
             ("domain", JsonSerializer.Serialize(Domain)),
             ("team", JsonSerializer.Serialize(Team)),
             ("command_mode", JsonSerializer.Serialize("read-only")),
+            // G770 authorizes this exact clean-payload addition so the
+            // no-flag path exposes the same state distinction as G769's
+            // explicit-root path.
+            ("supervision_state", JsonSerializer.Serialize("not-found")),
             ("absent_since_last_cycle", "true"),
             ("scheduler_installation_evidence", JsonSerializer.Serialize("unknown")),
             ("scheduler_live_state", JsonSerializer.Serialize("unknown")),
@@ -303,11 +308,11 @@ public sealed class NotifySupervisionReaderCorruptionG767Tests : IDisposable
             ("scheduler_artifact_paths", "[]"),
             ("commands_executed", JsonSerializer.Serialize(
                 "none (persisted supervision state and artifact metadata only)")),
-            // The only authorized delta from the parent clean payload is this
+            // The authorized G767 delta from the parent clean payload is this
             // corruption counter, which must remain zero for a clean store.
             ("unreadable_record_count", "0"),
             ("summary", JsonSerializer.Serialize(
-                "Read-only liveness: No completed supervision cycle is recorded; no supervisor process is required to produce this answer. Supervision is absent or beyond its declared bound. Scheduler live state=unknown; durable installation evidence=unknown; the supervisor was not run.")),
+                $"Read-only liveness: No supervision state was found at '{expectedDirectory}'; no supervisor process is required to produce this answer. Supervision is absent or beyond its declared bound. Scheduler live state=unknown; durable installation evidence=unknown; the supervisor was not run.")),
         };
 
         Assert.Equal(expected, actual);

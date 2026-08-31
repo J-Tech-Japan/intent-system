@@ -1025,8 +1025,12 @@ directory, and reports the same absolute root in `routing_root`. The explicit
 JSON `supervision_state` distinguishes `not-found` (the resolved store is not
 present) from `empty-history` (the store exists but has no history) and
 `recorded` (history or corruption evidence is present), so a mistyped root is
-not reported as a dead supervisor. Omitting `--routing-root` preserves the
-existing current-directory resolution and payload behavior.
+not reported as a dead supervisor. Every successful liveness response, including
+the no-flag invocation, includes `supervision_state` with one of these values.
+Omitting `--routing-root` preserves the existing current-directory root
+resolution. The `guide design-thread` residual check prescribes
+`intent-cli notify supervise liveness --domain <domain> --team <team> --routing-root <host-root> --format json`,
+so the documented invocation and the safe invocation agree.
 
 > **Preview through 1.x (G765).** Persistence is operator-declared and
 > recorded, reconciliation names the keep/remove distinction, and liveness is
