@@ -259,6 +259,44 @@ fast-forward、次番号を再計算し、その番号を exactly once retry し
 は visible な defence in depth のままで acquisition fact ではありません。review/closeout gate と
 `worker complete` は変更しません。
 
+### Preview: metadata branch に取り残された claim の recovery (G763)
+
+同一 repository の古い host では、canonical branch のルールが確定する前に active claim file を
+設定済み metadata branch へ書いていた場合があります。通常の `claim verify` は canonical-only のままです。
+metadata branch にだけ存在する record は、operator が明示的に migrate するまで unheld です。
+acquire と verify が副作用で migrate することはありません。
+
+read-only report で、設定済み metadata branch にはあるが解決済み origin default branch にない全ての
+active claim を、両方の remote ref とともに確認します。
+
+```bash
+intent-cli claim stranded --format json
+```
+
+明示的な recovery では、設定済みの旧 branch と resolver が現在返す canonical branch、actor/team の
+attribution を指定し、確認を明示します。最初に preview し、その後 `--write` で再実行します。
+
+```bash
+intent-cli claim stranded migrate \
+  --current-metadata-branch <metadata-branch> \
+  --new-canonical-branch <resolved-default-branch> \
+  --actor <operator> --team <team> \
+  --confirm-migrate-stranded --dry-run --format json
+
+intent-cli claim stranded migrate \
+  --current-metadata-branch <metadata-branch> \
+  --new-canonical-branch <resolved-default-branch> \
+  --actor <operator> --team <team> \
+  --confirm-migrate-stranded --write --format json
+```
+
+指定した branch が設定値または remote default resolver の結果と一致しなければ拒否します。dry run は
+canonical commit を書きません。write は canonical にない active record だけを既存の
+pull/commit/plain push claim transaction（push-CAS、force-push なし）でコピーし、metadata branch は
+書き換えません。canonical に同じ claim path で異なる内容が既にある場合は conflict を report し、
+operator の判断まで canonical record を変更しません。metadata branch が設定されていない host は、
+従来の no-store behavior を維持します。
+
 ### Preview: host-state Git の bounded index.lock retry (G700)
 
 sanctioned な `claim` transaction だけがこの retry policy の対象です。

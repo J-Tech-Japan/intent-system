@@ -44,6 +44,31 @@ internal static class ClaimCommand
     public static int ExecuteTakeover(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, ClaimOperation.Takeover);
 
+    /// <summary>
+    /// G763: report active claim records that an older metadata-branch writer
+    /// left outside the canonical remote branch, or deliberately migrate those
+    /// records through the same plain-push transaction used by claim writes.
+    /// Normal claim acquire/verify never calls this surface implicitly.
+    /// </summary>
+    public static int ExecuteStranded(CliContext context, string[] args, TextWriter writer)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentNullException.ThrowIfNull(writer);
+
+        if (args.Length > 0 && string.Equals(args[0], "migrate", StringComparison.Ordinal))
+        {
+            return ExecuteStrandedMigration(context, args[1..], writer);
+        }
+
+        if (args.Length > 0 && string.Equals(args[0], "list", StringComparison.Ordinal))
+        {
+            args = args[1..];
+        }
+
+        return ExecuteStrandedReport(context, args, writer);
+    }
+
     private static int Execute(
         CliContext context,
         string[] args,
@@ -432,6 +457,714 @@ internal static class ClaimCommand
         throw new InvalidOperationException("claim transaction exhausted unexpectedly");
     }
 
+    private static int ExecuteStrandedReport(
+        CliContext context,
+        string[] args,
+        TextWriter writer)
+    {
+        var format = "json";
+        for (var index = 0; index < args.Length; index++)
+        {
+            switch (args[index])
+            {
+                case "--help":
+                    WriteStrandedReportHelp(writer);
+                    return 0;
+                case "--format":
+                    if (++index >= args.Length)
+                    {
+                        writer.WriteLine("--format requires a value.");
+                        return 1;
+                    }
+                    format = args[index];
+                    break;
+                default:
+                    writer.WriteLine($"Unknown argument '{args[index]}'.");
+                    WriteStrandedReportHelp(writer);
+                    return 1;
+            }
+        }
+
+        if (format is not ("json" or "markdown"))
+        {
+            writer.WriteLine("--format must be json or markdown.");
+            return 1;
+        }
+
+        var metadataBranch = ResolveConfiguredMetadataBranch(context);
+        if (string.IsNullOrWhiteSpace(metadataBranch))
+        {
+            WriteStrandedReport(
+                writer,
+                format,
+                new ClaimStrandedReportResult(
+                    "not-configured",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    Array.Empty<ClaimStrandedEntry>(),
+                    Array.Empty<string>(),
+                    "No metadata branch is configured; no stranded-claim report is needed."));
+            return 0;
+        }
+
+        try
+        {
+            var canonicalBranch = ResolveRemoteDefaultBranch(context.RepoRoot);
+            var scan = ReadStrandedClaims(context.RepoRoot, metadataBranch, canonicalBranch);
+            WriteStrandedReport(
+                writer,
+                format,
+                new ClaimStrandedReportResult(
+                    scan.Stranded.Count == 0
+                        ? (scan.Conflicts.Count == 0 ? "clean" : "conflict")
+                        : (scan.Conflicts.Count == 0 ? "stranded" : "stranded-with-conflicts"),
+                    scan.MetadataBranch,
+                    scan.CanonicalBranch,
+                    scan.MetadataRef,
+                    scan.CanonicalRef,
+                    scan.Stranded,
+                    scan.Conflicts
+                        .Select(item =>
+                            $"canonical record already exists for {item.Scope}; migration leaves it unchanged")
+                        .ToArray(),
+                    scan.Stranded.Count == 0
+                        ? "No active claim exists on the configured metadata branch without a canonical counterpart."
+                        : $"Found {scan.Stranded.Count} active claim record(s) on the metadata branch that are absent from the canonical branch."));
+            return 0;
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            WriteStrandedReport(
+                writer,
+                format,
+                new ClaimStrandedReportResult(
+                    "unavailable",
+                    metadataBranch,
+                    string.Empty,
+                    RemoteTrackingRef(metadataBranch),
+                    string.Empty,
+                    Array.Empty<ClaimStrandedEntry>(),
+                    Array.Empty<string>(),
+                    exception.Message));
+            return 1;
+        }
+    }
+
+    private static int ExecuteStrandedMigration(
+        CliContext context,
+        string[] args,
+        TextWriter writer)
+    {
+        string? currentMetadataBranch = null;
+        string? newCanonicalBranch = null;
+        string? actor = null;
+        string? team = null;
+        var format = "json";
+        var confirm = false;
+        bool? write = null;
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            string? NextValue(string option)
+            {
+                if (++index >= args.Length || string.IsNullOrWhiteSpace(args[index]))
+                {
+                    writer.WriteLine($"{option} requires a value.");
+                    return null;
+                }
+                return args[index];
+            }
+
+            switch (args[index])
+            {
+                case "--help":
+                    WriteStrandedMigrationHelp(writer);
+                    return 0;
+                case "--current-metadata-branch":
+                    currentMetadataBranch = NextValue("--current-metadata-branch");
+                    if (currentMetadataBranch is null) return 1;
+                    break;
+                case "--new-canonical-branch":
+                    newCanonicalBranch = NextValue("--new-canonical-branch");
+                    if (newCanonicalBranch is null) return 1;
+                    break;
+                case "--actor":
+                    actor = NextValue("--actor");
+                    if (actor is null) return 1;
+                    break;
+                case "--team":
+                    team = NextValue("--team");
+                    if (team is null) return 1;
+                    break;
+                case "--format":
+                    var formatValue = NextValue("--format");
+                    if (formatValue is null) return 1;
+                    format = formatValue;
+                    break;
+                case "--confirm-migrate-stranded":
+                    confirm = true;
+                    break;
+                case "--dry-run":
+                    if (write is not null)
+                    {
+                        writer.WriteLine("--dry-run and --write are mutually exclusive.");
+                        return 1;
+                    }
+                    write = false;
+                    break;
+                case "--write":
+                    if (write is not null)
+                    {
+                        writer.WriteLine("--dry-run and --write are mutually exclusive.");
+                        return 1;
+                    }
+                    write = true;
+                    break;
+                default:
+                    writer.WriteLine($"Unknown argument '{args[index]}'.");
+                    WriteStrandedMigrationHelp(writer);
+                    return 1;
+            }
+        }
+
+        if (format is not ("json" or "markdown"))
+        {
+            writer.WriteLine("--format must be json or markdown.");
+            return 1;
+        }
+
+        var missing = new List<string>();
+        if (string.IsNullOrWhiteSpace(currentMetadataBranch)) missing.Add("--current-metadata-branch");
+        if (string.IsNullOrWhiteSpace(newCanonicalBranch)) missing.Add("--new-canonical-branch");
+        if (string.IsNullOrWhiteSpace(actor)) missing.Add("--actor");
+        if (string.IsNullOrWhiteSpace(team)) missing.Add("--team");
+        if (write is null) missing.Add("--dry-run or --write");
+        if (!confirm) missing.Add("--confirm-migrate-stranded");
+        if (missing.Count > 0)
+        {
+            writer.WriteLine("Missing required migration arguments: " + string.Join(", ", missing));
+            WriteStrandedMigrationHelp(writer);
+            return 1;
+        }
+
+        if (!IsSafeRemoteBranch(currentMetadataBranch!) || !IsSafeRemoteBranch(newCanonicalBranch!))
+        {
+            writer.WriteLine("Metadata and canonical branch names must be safe remote branch names.");
+            return 1;
+        }
+
+        var configuredMetadataBranch = ResolveConfiguredMetadataBranch(context);
+        ClaimRemoteDefaultBranch canonicalBranch;
+        try
+        {
+            canonicalBranch = ResolveRemoteDefaultBranch(context.RepoRoot);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            WriteStrandedMigration(
+                writer,
+                format,
+                new ClaimStrandedMigrationResult(
+                    "canonical-unavailable",
+                    currentMetadataBranch!,
+                    newCanonicalBranch!,
+                    RemoteTrackingRef(currentMetadataBranch!),
+                    string.Empty,
+                    Array.Empty<ClaimStrandedEntry>(),
+                    Array.Empty<ClaimStrandedEntry>(),
+                    false,
+                    null,
+                    exception.Message,
+                    null));
+            return 1;
+        }
+
+        if (!string.Equals(currentMetadataBranch, configuredMetadataBranch, StringComparison.Ordinal))
+        {
+            WriteStrandedMigration(
+                writer,
+                format,
+                new ClaimStrandedMigrationResult(
+                    "refused",
+                    currentMetadataBranch!,
+                    canonicalBranch.Name,
+                    RemoteTrackingRef(currentMetadataBranch!),
+                    RemoteTrackingRef(canonicalBranch.Name),
+                    Array.Empty<ClaimStrandedEntry>(),
+                    Array.Empty<ClaimStrandedEntry>(),
+                    false,
+                    null,
+                    $"--current-metadata-branch must match the configured metadata branch '{configuredMetadataBranch}'.",
+                    null));
+            return 1;
+        }
+
+        if (!string.Equals(newCanonicalBranch, canonicalBranch.Name, StringComparison.Ordinal))
+        {
+            WriteStrandedMigration(
+                writer,
+                format,
+                new ClaimStrandedMigrationResult(
+                    "refused",
+                    currentMetadataBranch!,
+                    newCanonicalBranch!,
+                    RemoteTrackingRef(currentMetadataBranch!),
+                    RemoteTrackingRef(canonicalBranch.Name),
+                    Array.Empty<ClaimStrandedEntry>(),
+                    Array.Empty<ClaimStrandedEntry>(),
+                    false,
+                    null,
+                    $"--new-canonical-branch must match the resolved origin default branch '{canonicalBranch.Name}'.",
+                    null));
+            return 1;
+        }
+
+        try
+        {
+            var request = new ClaimStrandedMigrationRequest(
+                currentMetadataBranch!,
+                newCanonicalBranch!,
+                actor!.Trim(),
+                team!.Trim(),
+                write.GetValueOrDefault(),
+                ClaimCommand.DefaultMaxAttempts);
+
+            ClaimStrandedMigrationResult result;
+            if (!request.Write)
+            {
+                var scan = ReadStrandedClaims(context.RepoRoot, currentMetadataBranch!, canonicalBranch);
+                result = new ClaimStrandedMigrationResult(
+                    scan.Stranded.Count == 0
+                        ? (scan.Conflicts.Count == 0 ? "clean" : "conflict")
+                        : "planned",
+                    scan.MetadataBranch,
+                    scan.CanonicalBranch,
+                    scan.MetadataRef,
+                    scan.CanonicalRef,
+                    scan.Stranded,
+                    scan.Conflicts,
+                    false,
+                    null,
+                    scan.Stranded.Count == 0
+                        ? "Dry-run found no canonical migration to apply."
+                        : $"Dry-run would copy {scan.Stranded.Count} stranded active claim record(s) to the canonical branch; the metadata branch is not rewritten.",
+                    $"refs/heads/{canonicalBranch.Name}");
+            }
+            else
+            {
+                result = RunTransaction(context.RepoRoot, request, canonicalBranch);
+            }
+
+            WriteStrandedMigration(writer, format, result);
+            return result.Status is "planned" or "clean" or "migrated" or "migrated-with-conflicts" ? 0 : 1;
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            WriteStrandedMigration(
+                writer,
+                format,
+                new ClaimStrandedMigrationResult(
+                    "error",
+                    currentMetadataBranch!,
+                    newCanonicalBranch!,
+                    RemoteTrackingRef(currentMetadataBranch!),
+                    RemoteTrackingRef(newCanonicalBranch!),
+                    Array.Empty<ClaimStrandedEntry>(),
+                    Array.Empty<ClaimStrandedEntry>(),
+                    false,
+                    null,
+                    exception.Message,
+                    null));
+            return 1;
+        }
+    }
+
+    /// <summary>
+    /// G763: the migration is a claim transaction with a plain push to the
+    /// canonical branch. A non-fast-forward push never overwrites a newer
+    /// canonical record; the bounded retry simply re-reads both branches.
+    /// </summary>
+    internal static ClaimStrandedMigrationResult RunTransaction(
+        string repoRoot,
+        ClaimStrandedMigrationRequest request,
+        ClaimRemoteDefaultBranch canonicalBranch)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(canonicalBranch);
+
+        HostStateGitRetryEvidence? lastGitWriteRetry = null;
+        for (var attempt = 1; attempt <= request.MaxAttempts; attempt++)
+        {
+            var transactionRoot = Path.Combine(
+                Path.GetTempPath(), $"intent-cli-claim-migration-{Guid.NewGuid():N}");
+            var committed = false;
+            Exception? transactionFailure = null;
+            try
+            {
+                var clone = RunGit(Path.GetTempPath(),
+                    ["clone", "--quiet", "--single-branch", "--branch", request.NewCanonicalBranch,
+                     canonicalBranch.Remote, transactionRoot]);
+                EnsureSuccess(clone, "clone stranded-claim migration workspace");
+
+                var pull = RunGit(
+                    transactionRoot,
+                    ["pull", "--ff-only", "origin", request.NewCanonicalBranch],
+                    hostStateWrite: true);
+                CaptureRetry(ref lastGitWriteRetry, pull);
+                EnsureSuccess(pull, "fast-forward stranded-claim migration base");
+
+                var scan = ReadStrandedClaims(transactionRoot, request.CurrentMetadataBranch, canonicalBranch);
+                if (scan.Stranded.Count == 0)
+                {
+                    return new ClaimStrandedMigrationResult(
+                        scan.Conflicts.Count == 0 ? "clean" : "conflict",
+                        scan.MetadataBranch,
+                        scan.CanonicalBranch,
+                        scan.MetadataRef,
+                        scan.CanonicalRef,
+                        Array.Empty<ClaimStrandedEntry>(),
+                        scan.Conflicts,
+                        false,
+                        null,
+                        scan.Conflicts.Count == 0
+                            ? "No stranded active claim records require migration."
+                            : "Canonical records already exist for the competing scope(s); no record was overwritten.",
+                        $"refs/heads/{request.NewCanonicalBranch}")
+                    {
+                        GitWriteRetry = lastGitWriteRetry,
+                    };
+                }
+
+                foreach (var entry in scan.Stranded)
+                {
+                    var absolute = Path.Combine(
+                        transactionRoot,
+                        entry.ClaimPath.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(absolute)!);
+                    File.WriteAllText(absolute, entry.RawJson);
+                }
+
+                var add = RunGit(
+                    transactionRoot,
+                    ["add", "--", .. scan.Stranded.Select(entry => entry.ClaimPath)],
+                    hostStateWrite: true);
+                CaptureRetry(ref lastGitWriteRetry, add);
+                EnsureSuccess(add, "stage stranded-claim migration");
+
+                var commit = RunGit(
+                    transactionRoot,
+                    ["-c", $"user.name={request.Actor}", "-c", $"user.email={SafeEmail(request.Actor)}",
+                     "commit", "--quiet", "-m",
+                     $"claim: migrate stranded records from {request.CurrentMetadataBranch}"],
+                    hostStateWrite: true);
+                CaptureRetry(ref lastGitWriteRetry, commit);
+                EnsureSuccess(commit, "commit stranded-claim migration");
+                var transactionCommit = RunGit(transactionRoot, ["rev-parse", "HEAD"]);
+                EnsureSuccess(transactionCommit, "resolve stranded-claim migration commit");
+                var transactionCommitSha = transactionCommit.StandardOutput.Trim();
+
+                var push = RunGit(
+                    transactionRoot,
+                    ["push", "origin", $"{transactionCommitSha}:refs/heads/{request.NewCanonicalBranch}"],
+                    hostStateWrite: true);
+                CaptureRetry(ref lastGitWriteRetry, push);
+                if (push.ExitCode != 0 && push.RetryEvidence is not null)
+                {
+                    throw new HostStateGitFailureException("push stranded-claim migration", push.RetryEvidence);
+                }
+                if (push.ExitCode == 0)
+                {
+                    // The plain push is the migration transaction boundary.
+                    committed = true;
+                    return new ClaimStrandedMigrationResult(
+                        scan.Conflicts.Count == 0 ? "migrated" : "migrated-with-conflicts",
+                        scan.MetadataBranch,
+                        scan.CanonicalBranch,
+                        scan.MetadataRef,
+                        scan.CanonicalRef,
+                        scan.Stranded,
+                        scan.Conflicts,
+                        true,
+                        transactionCommitSha,
+                        $"Migrated {scan.Stranded.Count} stranded active claim record(s) to the canonical branch; the metadata branch remains unchanged.",
+                        $"refs/heads/{request.NewCanonicalBranch}")
+                    {
+                        GitWriteRetry = lastGitWriteRetry,
+                    };
+                }
+
+                if (attempt == request.MaxAttempts)
+                {
+                    return new ClaimStrandedMigrationResult(
+                        "retry-exhausted",
+                        scan.MetadataBranch,
+                        scan.CanonicalBranch,
+                        scan.MetadataRef,
+                        scan.CanonicalRef,
+                        scan.Stranded,
+                        scan.Conflicts,
+                        false,
+                        null,
+                        $"Migration push was rejected after {attempt} bounded attempt(s); no force push was attempted.",
+                        $"refs/heads/{request.NewCanonicalBranch}")
+                    {
+                        GitWriteRetry = lastGitWriteRetry,
+                    };
+                }
+            }
+            catch (Exception exception)
+            {
+                transactionFailure = exception;
+                throw;
+            }
+            finally
+            {
+                try
+                {
+                    CleanupTransactionRoot(
+                        transactionRoot,
+                        committed,
+                        tolerateCleanupFailure: false,
+                        Console.Error,
+                        path => Directory.Delete(path, recursive: true));
+                }
+                catch (Exception cleanupFailure) when (transactionFailure is not null)
+                {
+                    try
+                    {
+                        Console.Error.WriteLine(
+                            "warning: stranded-claim migration failed before commit; the original "
+                            + "migration failure is preserved. Cleanup also failed: "
+                            + cleanupFailure.Message);
+                    }
+                    catch
+                    {
+                        // A broken warning sink must not replace the original
+                        // pre-commit migration failure.
+                    }
+                }
+            }
+        }
+
+        throw new InvalidOperationException("stranded-claim migration exhausted unexpectedly");
+    }
+
+    private static ClaimStrandedScan ReadStrandedClaims(
+        string repoRoot,
+        string metadataBranch,
+        ClaimRemoteDefaultBranch canonicalBranch)
+    {
+        var metadata = ReadRemoteClaims(repoRoot, metadataBranch);
+        var canonical = ReadRemoteClaims(repoRoot, canonicalBranch.Name);
+        var stranded = metadata.Records
+            .Where(pair => !canonical.Records.ContainsKey(pair.Key))
+            .Select(pair => ToStrandedEntry(
+                pair.Key,
+                pair.Value,
+                metadata.RemoteRef,
+                canonical.RemoteRef))
+            .OrderBy(entry => entry.Scope, StringComparer.Ordinal)
+            .ToArray();
+        var conflicts = metadata.Records
+            .Where(pair => canonical.Records.ContainsKey(pair.Key)
+                && !string.Equals(pair.Value.RawJson, canonical.Records[pair.Key].RawJson, StringComparison.Ordinal))
+            .Select(pair => ToStrandedEntry(
+                pair.Key,
+                pair.Value,
+                metadata.RemoteRef,
+                canonical.RemoteRef))
+            .OrderBy(entry => entry.Scope, StringComparer.Ordinal)
+            .ToArray();
+
+        return new ClaimStrandedScan(
+            metadataBranch,
+            canonicalBranch.Name,
+            metadata.RemoteRef,
+            canonical.RemoteRef,
+            stranded,
+            conflicts);
+    }
+
+    private static ClaimBranchSnapshot ReadRemoteClaims(string repoRoot, string branch)
+    {
+        if (!IsSafeRemoteBranch(branch))
+        {
+            throw new InvalidOperationException($"Unsafe remote branch name '{branch}'.");
+        }
+
+        var remoteRef = RemoteTrackingRef(branch);
+        var fetch = RunGit(
+            repoRoot,
+            ["fetch", "--quiet", "origin", $"+refs/heads/{branch}:{remoteRef}"]);
+        EnsureSuccess(fetch, $"fetch remote claim branch '{branch}'");
+
+        var tree = RunGit(repoRoot, ["ls-tree", "-r", "--name-only", remoteRef, "--", ClaimsDirectory]);
+        EnsureSuccess(tree, $"read claims tree from remote branch '{branch}'");
+
+        var records = new Dictionary<string, ClaimBranchRecord>(StringComparer.Ordinal);
+        foreach (var path in tree.StandardOutput
+                     .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                     .Where(IsActiveClaimPath))
+        {
+            var show = RunGit(repoRoot, ["show", $"{remoteRef}:{path}"]);
+            EnsureSuccess(show, $"read claim record '{path}' from remote branch '{branch}'");
+            ClaimRecord record;
+            try
+            {
+                record = JsonSerializer.Deserialize<ClaimRecord>(show.StandardOutput, JsonOptions)
+                    ?? throw new InvalidOperationException("claim record was empty");
+            }
+            catch (JsonException exception)
+            {
+                throw new InvalidOperationException(
+                    $"claim record '{path}' from remote branch '{branch}' is invalid: {exception.Message}");
+            }
+
+            // The scope itself is authoritative inside the record. Validate
+            // it before exposing the record so malformed metadata fails closed.
+            if (!ClaimCommand.TryValidateScope(record.Scope, out var scopeError))
+            {
+                throw new InvalidOperationException(
+                    $"claim record '{path}' has an invalid scope: {scopeError}");
+            }
+            if (!string.Equals(path, ClaimPath(record.Scope), StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"claim record '{path}' does not match the hashed path for scope '{record.Scope}'.");
+            }
+
+            records[path] = new ClaimBranchRecord(path, show.StandardOutput, record);
+        }
+
+        return new ClaimBranchSnapshot(branch, remoteRef, records);
+    }
+
+    private static bool IsActiveClaimPath(string path)
+    {
+        var prefix = ClaimsDirectory + "/";
+        if (!path.StartsWith(prefix, StringComparison.Ordinal)) return false;
+        var file = path[prefix.Length..];
+        return file.EndsWith(".json", StringComparison.Ordinal)
+            && !file.Contains('/', StringComparison.Ordinal);
+    }
+
+    private static ClaimStrandedEntry ToStrandedEntry(
+        string path,
+        ClaimBranchRecord source,
+        string metadataRef,
+        string canonicalRef) =>
+        new(
+            source.Record.Scope,
+            path,
+            source.Record.Actor,
+            source.Record.Team,
+            source.Record.ClaimedAt,
+            source.Record.BaseCommit,
+            metadataRef,
+            canonicalRef,
+            source.RawJson);
+
+    private static string ResolveConfiguredMetadataBranch(CliContext context)
+    {
+        var project = context.Config.Project;
+        foreach (var candidate in new[]
+        {
+            project.MetadataSourceBranch,
+            project.MetadataBranch,
+            project.MetadataWriteBranch,
+        })
+        {
+            if (!string.IsNullOrWhiteSpace(candidate)) return candidate.Trim();
+        }
+
+        return string.Empty;
+    }
+
+    private static string RemoteTrackingRef(string branch) => $"refs/remotes/origin/{branch}";
+
+    private static void WriteStrandedReport(
+        TextWriter writer,
+        string format,
+        ClaimStrandedReportResult result)
+    {
+        if (format == "json")
+        {
+            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            return;
+        }
+
+        writer.WriteLine("# Stranded claim report (G763)");
+        writer.WriteLine();
+        writer.WriteLine($"- status: {result.Status}");
+        writer.WriteLine($"- metadata_branch: {result.MetadataBranch ?? "(none)"}");
+        writer.WriteLine($"- canonical_branch: {result.CanonicalBranch ?? "(none)"}");
+        writer.WriteLine($"- metadata_ref: {result.MetadataRef ?? "(none)"}");
+        writer.WriteLine($"- canonical_ref: {result.CanonicalRef ?? "(none)"}");
+        writer.WriteLine($"- detail: {result.Detail}");
+        writer.WriteLine();
+        writer.WriteLine("## Stranded active records");
+        if (result.Items.Count == 0)
+        {
+            writer.WriteLine("- (none)");
+        }
+        else
+        {
+            foreach (var item in result.Items)
+            {
+                writer.WriteLine(
+                    $"- {item.Scope} — actor={item.Actor}, team={item.Team}, "
+                    + $"metadata_ref={item.MetadataRef}, canonical_ref={item.CanonicalRef}");
+            }
+        }
+
+        if (result.Warnings.Count > 0)
+        {
+            writer.WriteLine();
+            writer.WriteLine("## Warnings");
+            foreach (var warning in result.Warnings) writer.WriteLine($"- {warning}");
+        }
+    }
+
+    private static void WriteStrandedMigration(
+        TextWriter writer,
+        string format,
+        ClaimStrandedMigrationResult result)
+    {
+        if (format == "json")
+        {
+            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            return;
+        }
+
+        writer.WriteLine("# Stranded claim migration (G763)");
+        writer.WriteLine();
+        writer.WriteLine($"- status: {result.Status}");
+        writer.WriteLine($"- current_metadata_branch: {result.CurrentMetadataBranch}");
+        writer.WriteLine($"- new_canonical_branch: {result.NewCanonicalBranch}");
+        writer.WriteLine($"- metadata_ref: {result.MetadataRef}");
+        writer.WriteLine($"- canonical_ref: {result.CanonicalRef}");
+        writer.WriteLine($"- push_succeeded: {result.PushSucceeded.ToString().ToLowerInvariant()}");
+        if (result.TargetRef is not null) writer.WriteLine($"- target_ref: {result.TargetRef}");
+        if (result.Commit is not null) writer.WriteLine($"- commit: {result.Commit}");
+        writer.WriteLine($"- detail: {result.Detail}");
+        writer.WriteLine($"- migrated_count: {result.Migrated.Count}");
+        writer.WriteLine($"- conflict_count: {result.Conflicts.Count}");
+        foreach (var conflict in result.Conflicts)
+        {
+            writer.WriteLine($"- conflict: {conflict.Scope} (canonical record left unchanged)");
+        }
+    }
+
+    private static void WriteStrandedReportHelp(TextWriter writer) =>
+        writer.WriteLine(
+            "Usage: intent-cli claim stranded [list] [--format json|markdown] (reports metadata-branch records absent from canonical branch)");
+
+    private static void WriteStrandedMigrationHelp(TextWriter writer) =>
+        writer.WriteLine(
+            "Usage: intent-cli claim stranded migrate --current-metadata-branch <branch> --new-canonical-branch <branch> --actor <actor> --team <team> --confirm-migrate-stranded --dry-run|--write --format json|markdown");
+
     private static void CleanupTransactionRoot(
         string transactionRoot,
         bool committed,
@@ -762,9 +1495,11 @@ internal static class ClaimCommand
         File.WriteAllText(path, JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine);
     }
 
-    private static string SafeEmail(ClaimRequest request)
+    private static string SafeEmail(ClaimRequest request) => SafeEmail(request.Actor);
+
+    private static string SafeEmail(string actor)
     {
-        var local = new string(request.Actor.Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
+        var local = new string(actor.Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
         return $"{(local.Length == 0 ? "intent-cli" : local)}@claims.invalid";
     }
 
@@ -1018,6 +1753,71 @@ internal sealed record ClaimHistoryRecord(
     [property: JsonPropertyName("displaced_team")] string DisplacedTeam,
     [property: JsonPropertyName("displaced_claimed_at")] DateTimeOffset DisplacedClaimedAt,
     [property: JsonPropertyName("base_commit")] string BaseCommit);
+
+internal sealed record ClaimBranchRecord(
+    string Path,
+    string RawJson,
+    ClaimRecord Record);
+
+internal sealed record ClaimBranchSnapshot(
+    string Branch,
+    string RemoteRef,
+    IReadOnlyDictionary<string, ClaimBranchRecord> Records);
+
+internal sealed record ClaimStrandedScan(
+    string MetadataBranch,
+    string CanonicalBranch,
+    string MetadataRef,
+    string CanonicalRef,
+    IReadOnlyList<ClaimStrandedEntry> Stranded,
+    IReadOnlyList<ClaimStrandedEntry> Conflicts);
+
+internal sealed record ClaimStrandedEntry(
+    [property: JsonPropertyName("scope")] string Scope,
+    [property: JsonPropertyName("claim_path")] string ClaimPath,
+    [property: JsonPropertyName("actor")] string Actor,
+    [property: JsonPropertyName("team")] string Team,
+    [property: JsonPropertyName("claimed_at")] DateTimeOffset ClaimedAt,
+    [property: JsonPropertyName("base_commit")] string BaseCommit,
+    [property: JsonPropertyName("metadata_ref")] string MetadataRef,
+    [property: JsonPropertyName("canonical_ref")] string CanonicalRef,
+    [property: JsonIgnore] string RawJson);
+
+internal sealed record ClaimStrandedReportResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("metadata_branch")] string MetadataBranch,
+    [property: JsonPropertyName("canonical_branch")] string CanonicalBranch,
+    [property: JsonPropertyName("metadata_ref")] string MetadataRef,
+    [property: JsonPropertyName("canonical_ref")] string CanonicalRef,
+    [property: JsonPropertyName("items")] IReadOnlyList<ClaimStrandedEntry> Items,
+    [property: JsonPropertyName("warnings")] IReadOnlyList<string> Warnings,
+    [property: JsonPropertyName("detail")] string Detail);
+
+internal sealed record ClaimStrandedMigrationRequest(
+    string CurrentMetadataBranch,
+    string NewCanonicalBranch,
+    string Actor,
+    string Team,
+    bool Write,
+    int MaxAttempts);
+
+internal sealed record ClaimStrandedMigrationResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("current_metadata_branch")] string CurrentMetadataBranch,
+    [property: JsonPropertyName("new_canonical_branch")] string NewCanonicalBranch,
+    [property: JsonPropertyName("metadata_ref")] string MetadataRef,
+    [property: JsonPropertyName("canonical_ref")] string CanonicalRef,
+    [property: JsonPropertyName("migrated")] IReadOnlyList<ClaimStrandedEntry> Migrated,
+    [property: JsonPropertyName("conflicts")] IReadOnlyList<ClaimStrandedEntry> Conflicts,
+    [property: JsonPropertyName("push_succeeded")] bool PushSucceeded,
+    [property: JsonPropertyName("commit")] string? Commit,
+    [property: JsonPropertyName("detail")] string Detail,
+    [property: JsonPropertyName("target_ref")] string? TargetRef)
+{
+    [JsonPropertyName("git_write_retry")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public HostStateGitRetryEvidence? GitWriteRetry { get; init; }
+}
 
 internal sealed record ClaimTransactionResult(
     [property: JsonPropertyName("status")] string Status,
