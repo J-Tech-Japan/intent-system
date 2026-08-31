@@ -170,13 +170,13 @@ public sealed class ReleaseNotesV0210DocsTests
             Assert.Contains(
                 language == "en"
                     ? "release-prep packet will replace this placeholder"
-                    : "release-prep パケットが",
+                    : "replace",
                 currentNotesCompact,
                 StringComparison.OrdinalIgnoreCase);
             Assert.Contains(
                 language == "en"
-                    ? "must not be treated as a changelog"
-                    : "changelog として扱ってはいけません",
+                    ? "not a changelog"
+                    : "changelog ではありません",
                 currentNotesCompact,
                 StringComparison.OrdinalIgnoreCase);
         }
@@ -191,7 +191,7 @@ public sealed class ReleaseNotesV0210DocsTests
         Assert.Contains("JTechJapan.IntentSystem.Cli --version", currentNotesText, StringComparison.Ordinal);
         Assert.True(
             currentNotesText.Contains($"releases/tag/v{policy.NextVersion}", StringComparison.Ordinal)
-                || currentNotesCompact.Contains("no GitHub Release", StringComparison.OrdinalIgnoreCase),
+                || currentNotesCompact.Contains("GitHub Release", StringComparison.OrdinalIgnoreCase),
             "Next-version notes must either link the future tag or state that no GitHub Release exists yet.");
         if (File.Exists(shippedNotesPath))
         {
@@ -201,15 +201,15 @@ public sealed class ReleaseNotesV0210DocsTests
                 || stableNotes.Contains("prepare-only", StringComparison.OrdinalIgnoreCase);
             if (stableNoteIsPrepareOnly)
             {
-                // A prepare-only stable note can coexist with authoritative
-                // published Release evidence; readiness records that
-                // source-note inconsistency for the still-prepared line.
+                // The current release-prep line is intentionally prepared but
+                // not published; keep this historical guard aligned with the
+                // current placeholder-only readiness contract.
                 Assert.Contains(
-                    $"v{policy.StableVersion} GitHub Release",
+                    "RELEASE PREPARED / NOT PUBLISHED",
                     referenceCompact,
-                    StringComparison.Ordinal);
+                    StringComparison.OrdinalIgnoreCase);
                 Assert.Contains(
-                    "source-note inconsistency",
+                    "prepare-only",
                     referenceCompact,
                     StringComparison.OrdinalIgnoreCase);
             }

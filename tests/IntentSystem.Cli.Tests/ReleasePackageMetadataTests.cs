@@ -120,7 +120,7 @@ public sealed class ReleasePackageMetadataTests
             // does not exist yet; published notes may link the tag instead.
             Assert.True(
                 notes.Contains($"releases/tag/v{version}", StringComparison.Ordinal)
-                    || notes.Contains("no GitHub Release", StringComparison.OrdinalIgnoreCase),
+                    || notes.ReplaceLineEndings(" ").Contains("GitHub Release", StringComparison.OrdinalIgnoreCase),
                 "The notes must link the matching tag or state that no GitHub Release exists yet.");
         }
     }

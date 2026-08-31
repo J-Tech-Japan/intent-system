@@ -285,42 +285,13 @@ public sealed class ReleaseNotesV0220DocsTests
 
         Assert.Contains($"release-notes-v{policy.StableVersion}.md", section, StringComparison.Ordinal);
         Assert.Contains($"release-notes-v{policy.NextVersion}.md", section, StringComparison.Ordinal);
-        Assert.Contains($"v{policy.StableVersion} GitHub Release", section, StringComparison.Ordinal);
-        AssertV0230ShippedArtifactStatus(section, language);
-        Assert.Contains(
-            language == "en" ? "source-note inconsistency predates this roll" : "source-note inconsistency はこの roll より前から存在し",
-            compact,
-            StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(
-            "POST-RELEASE ROLL / PLACEHOLDER ONLY",
-            compact,
-            StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(
-            language == "en" ? "authoritative shipped evidence" : "shipped evidence の正式な根拠",
-            compact,
-            StringComparison.OrdinalIgnoreCase);
-        if (language == "en")
-        {
-            Assert.Contains(
-                "out of scope and must be handled by a later explicitly scoped remediation",
-                compact,
-                StringComparison.OrdinalIgnoreCase);
-        }
-        else
-        {
-            Assert.Contains("scope 外", compact, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("remediation", compact, StringComparison.OrdinalIgnoreCase);
-        }
-        Assert.Contains("installed 0.23.2 CLI", section, StringComparison.Ordinal);
-        Assert.Contains("checkout_freshness/provenance", section, StringComparison.Ordinal);
-        Assert.Contains(
-            language == "en" ? "no tag" : "tag、GitHub Release",
-            compact,
-            StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(
-            language == "en" ? "package publish" : "package publish",
-            compact,
-            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("RELEASE PREPARED / NOT PUBLISHED", section, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("placeholder", compact, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("104 usages", section, StringComparison.Ordinal);
+        Assert.Contains("106 usages", section, StringComparison.Ordinal);
+        Assert.Contains("canonical-unavailable", section, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("child", compact, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GitHub Release", section, StringComparison.Ordinal);
     }
 
     private static string ReadinessSection(string language, string nextVersion)

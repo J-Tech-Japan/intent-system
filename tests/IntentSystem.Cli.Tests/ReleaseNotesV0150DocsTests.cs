@@ -24,8 +24,8 @@ public sealed class ReleaseNotesV0150DocsTests
                 : $"### 次リリース準備(v{policy.NextVersion})",
             reference,
             StringComparison.Ordinal);
-        Assert.Contains($"stableVersion → {policy.StableVersion}", reference, StringComparison.Ordinal);
-        Assert.Contains($"nextVersion → {policy.NextVersion}", reference, StringComparison.Ordinal);
+        Assert.Contains($"stableVersion {policy.StableVersion}", reference, StringComparison.Ordinal);
+        Assert.Contains($"nextVersion {policy.NextVersion}", reference, StringComparison.Ordinal);
         Assert.DoesNotContain($"nextVersion → {NextPatch(policy.NextVersion)}", reference, StringComparison.Ordinal);
         Assert.DoesNotContain($"nextVersion → {NextMinor(policy.NextVersion)}", reference, StringComparison.Ordinal);
     }
