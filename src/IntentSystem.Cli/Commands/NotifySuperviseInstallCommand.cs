@@ -21,6 +21,7 @@ internal static class NotifySuperviseInstallCommand
         "Usage: intent-cli notify supervise install --domain <d> --team <t> --repo <owner/repo> "
         + "--owner-role <role> --bound <seconds> --interval <seconds> "
         + "[--startup-bound <seconds>; default 30] "
+        + "[--persistence persistent] "
         + "[--event-mode] [--platform macos|windows|linux] [--output <path>] [--routing-root <host-root>] "
         + "[--dry-run|--write] [--format markdown|json]";
 
@@ -130,7 +131,8 @@ internal static class NotifySuperviseInstallCommand
             runtime.RecordedPath,
             routingRoot,
             standardOutPath,
-            standardErrorPath);
+            standardErrorPath,
+            options.PersistenceIntent);
         var (registrationCommand, unregistrationCommand) = BuildOperatorCommands(options.Platform, label, artifactPath);
         var crossAuthored = !string.Equals(options.Platform, CurrentPlatform(), StringComparison.Ordinal);
         var unresolvedBinaries = runtime.Binaries
@@ -241,7 +243,10 @@ internal static class NotifySuperviseInstallCommand
             Label = label,
             ArtifactPath = artifactPath,
             ArtifactWritten = options.Write,
-            Lifetime = "current GUI session only; no LaunchAgents login auto-load and no reboot persistence",
+            Lifetime = options.PersistenceIntent is null
+                ? "current GUI session only; no LaunchAgents login auto-load and no reboot persistence"
+                : "operator-declared persistent intent; registration remains an explicit operator action and intent-cli executes no OS lifecycle command",
+            PersistenceIntent = options.PersistenceIntent,
             LegacyArtifactsRemoved = legacyArtifactsRemoved,
             VerificationStatus = verificationStatus,
             StartupBoundSeconds = options.StartupBoundSeconds,
@@ -264,8 +269,8 @@ internal static class NotifySuperviseInstallCommand
             RuntimeBinaries = runtime.Binaries,
             UnresolvedBinaries = unresolvedBinaries,
             Summary = options.Write
-                ? $"Emitted and first-cycle-verified the {options.Platform} supervisor artifact with event mode {(options.EventMode ? "enabled" : "disabled")} for the current GUI session only; no LaunchAgents login auto-load or reboot persistence is configured. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. First-cycle evidence is recorded at '{NotifySupervisionStore.ResolveInstalledSupervisorPath(context.ResolveSupervisionArtifactRootPath(), options.Domain, options.Team)}'. Legacy login-persistent artifacts removed: {legacyArtifactsRemoved.Length}. Install emitted the artifact but did not execute lifecycle registration; use 'intent-cli notify supervise reconcile --write' for explicit unload/removal."
-                : $"Previewed the {options.Platform} supervisor artifact path and operator lifecycle commands without writing, probing, or executing anything. Lifetime is current GUI session only; no LaunchAgents login auto-load or reboot persistence is configured. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. A write requires bounded first-cycle proof and records failure log paths.",
+                ? $"Emitted and first-cycle-verified the {options.Platform} supervisor artifact with event mode {(options.EventMode ? "enabled" : "disabled")} for {(options.PersistenceIntent is null ? "the current GUI session only; no LaunchAgents login auto-load or reboot persistence is configured" : "operator-declared persistent intent; the operator still owns explicit registration and intent-cli executes no OS lifecycle command")}. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. First-cycle evidence is recorded at '{NotifySupervisionStore.ResolveInstalledSupervisorPath(context.ResolveSupervisionArtifactRootPath(), options.Domain, options.Team)}'. Legacy login-persistent artifacts removed: {legacyArtifactsRemoved.Length}. Install emitted the artifact but did not execute lifecycle registration; use 'intent-cli notify supervise reconcile --write' for explicit unload/removal."
+                : $"Previewed the {options.Platform} supervisor artifact path and operator lifecycle commands without writing, probing, or executing anything. Lifetime is {(options.PersistenceIntent is null ? "current GUI session only; no LaunchAgents login auto-load or reboot persistence is configured" : "operator-declared persistent intent; registration remains an explicit operator action")}. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. A write requires bounded first-cycle proof and records failure log paths.",
         };
         Emit(writer, options.Format, result);
         return 0;
@@ -391,19 +396,46 @@ internal static class NotifySuperviseInstallCommand
         string recordedPath,
         string routingRoot,
         string standardOutPath,
-        string standardErrorPath) => platform switch
+        string standardErrorPath,
+        string? persistenceIntent)
     {
-        MacOs => BuildLaunchdArtifact(
-            label,
-            intentCliExecutable,
-            arguments,
-            recordedPath,
-            routingRoot,
-            standardOutPath,
-            standardErrorPath),
-        Windows => BuildTaskSchedulerArtifact(label, intentCliExecutable, arguments, recordedPath),
-        _ => BuildSystemdArtifact(label, intentCliExecutable, arguments, recordedPath),
-    };
+        var artifact = platform switch
+        {
+            MacOs => BuildLaunchdArtifact(
+                label,
+                intentCliExecutable,
+                arguments,
+                recordedPath,
+                routingRoot,
+                standardOutPath,
+                standardErrorPath),
+            Windows => BuildTaskSchedulerArtifact(label, intentCliExecutable, arguments, recordedPath),
+            _ => BuildSystemdArtifact(label, intentCliExecutable, arguments, recordedPath),
+        };
+
+        if (persistenceIntent is null)
+        {
+            return artifact;
+        }
+
+        if (platform == Linux)
+        {
+            return "# " + NotifySuperviseArtifactInventory.PersistenceMarker + Environment.NewLine + artifact;
+        }
+
+        // Keep the XML declaration first so the Windows task and macOS plist
+        // remain valid documents while carrying the same declaration marker.
+        var firstLineBreak = artifact.IndexOf('\n');
+        if (firstLineBreak < 0)
+        {
+            return "<!-- " + NotifySuperviseArtifactInventory.PersistenceMarker + " -->" + Environment.NewLine + artifact;
+        }
+
+        var lineEnding = firstLineBreak > 0 && artifact[firstLineBreak - 1] == '\r' ? "\r\n" : "\n";
+        return artifact.Insert(
+            firstLineBreak + 1,
+            "<!-- " + NotifySuperviseArtifactInventory.PersistenceMarker + " -->" + lineEnding);
+    }
 
     private static string BuildLaunchdArtifact(
         string label,
@@ -560,6 +592,7 @@ RestartSec=30
         string? routingRoot = null;
         string? output = null;
         string? platform = null;
+        string? persistenceIntent = null;
         int? bound = null;
         int? interval = null;
         int? startupBound = null;
@@ -580,6 +613,15 @@ RestartSec=30
                 case "--routing-root": if (!ReadValue(args, ref index, argument, out routingRoot, out error)) return Fail(out options); break;
                 case "--output": if (!ReadValue(args, ref index, argument, out output, out error)) return Fail(out options); break;
                 case "--platform": if (!ReadValue(args, ref index, argument, out platform, out error)) return Fail(out options); break;
+                case "--persistence":
+                    if (!ReadValue(args, ref index, argument, out var persistence, out error)) return Fail(out options);
+                    if (!string.Equals(persistence, "persistent", StringComparison.Ordinal))
+                    {
+                        error = "--persistence accepts only 'persistent'; omit it for the legacy session-only behavior.";
+                        return Fail(out options);
+                    }
+                    persistenceIntent = "persistent";
+                    break;
                 case "--bound":
                     if (!ReadPositiveInt(args, ref index, argument, 86_400, out bound, out error)) return Fail(out options);
                     break;
@@ -637,6 +679,7 @@ RestartSec=30
             RoutingRoot = routingRoot, Output = output, Platform = platform,
             Write = write, Format = format!,
             EventMode = eventMode,
+            PersistenceIntent = persistenceIntent,
         };
         return true;
     }
@@ -766,6 +809,7 @@ RestartSec=30
         public string? Output { get; init; }
         public required bool Write { get; init; }
         public bool EventMode { get; init; }
+        public string? PersistenceIntent { get; init; }
         public required string Format { get; init; }
     }
 
@@ -793,6 +837,9 @@ RestartSec=30
         [JsonPropertyName("artifact_path")] public required string ArtifactPath { get; init; }
         [JsonPropertyName("artifact_written")] public required bool ArtifactWritten { get; init; }
         [JsonPropertyName("lifetime")] public required string Lifetime { get; init; }
+        [JsonPropertyName("persistence_intent")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? PersistenceIntent { get; init; }
         [JsonPropertyName("legacy_artifacts_removed")] public required IReadOnlyList<string> LegacyArtifactsRemoved { get; init; }
         [JsonPropertyName("verification_status")] public required string VerificationStatus { get; init; }
         [JsonPropertyName("startup_bound_seconds")] public required int StartupBoundSeconds { get; init; }

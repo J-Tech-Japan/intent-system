@@ -76,6 +76,12 @@ internal static class NotifySuperviseReconcileCommand
             artifactRoot,
             scope,
             NotifySuperviseArtifactInventory.UserProfileDirectoryFactory());
+        var persistentArtifacts = artifactsBefore
+            .Where(NotifySuperviseArtifactInventory.HasDeclaredPersistence)
+            .ToArray();
+        var removableArtifacts = artifactsBefore
+            .Where(path => !NotifySuperviseArtifactInventory.HasDeclaredPersistence(path))
+            .ToArray();
 
         if (!string.Equals(options.Platform, MacOs, StringComparison.Ordinal)
             || !MacOsDetector())
@@ -137,7 +143,7 @@ internal static class NotifySuperviseReconcileCommand
                 }
             }
 
-            foreach (var artifact in artifactsBefore)
+            foreach (var artifact in removableArtifacts)
             {
                 try
                 {
@@ -163,8 +169,11 @@ internal static class NotifySuperviseReconcileCommand
             artifactRoot,
             scope,
             NotifySuperviseArtifactInventory.UserProfileDirectoryFactory());
+        var remainingRemovableArtifacts = artifactsAfter
+            .Where(path => !NotifySuperviseArtifactInventory.HasDeclaredPersistence(path))
+            .ToArray();
         var success = errors.Count == 0
-            && (!options.Write || (loadedAfter.Count == 0 && artifactsAfter.Count == 0));
+            && (!options.Write || (loadedAfter.Count == 0 && remainingRemovableArtifacts.Length == 0));
         var result = new ReconcileResult
         {
             Operation = "supervise-" + operation,
@@ -179,12 +188,13 @@ internal static class NotifySuperviseReconcileCommand
             Unloaded = unloaded,
             WouldUnload = options.Write ? [] : loadedBefore,
             ArtifactsBefore = artifactsBefore,
-            RemovedArtifacts = options.Write ? artifactsBefore.Where(path => !File.Exists(path)).ToArray() : [],
-            WouldRemoveArtifacts = options.Write ? [] : artifactsBefore,
+            RemovedArtifacts = options.Write ? removableArtifacts.Where(path => !File.Exists(path)).ToArray() : [],
+            WouldRemoveArtifacts = options.Write ? [] : removableArtifacts,
             LoadedAfter = loadedAfter,
             ArtifactsAfter = artifactsAfter,
+            KeptPersistentArtifacts = persistentArtifacts.Length == 0 ? null : persistentArtifacts,
             Errors = errors,
-            Summary = BuildSummary(operation, options.Write, loadedBefore, unloaded, artifactsBefore, artifactsAfter, errors),
+            Summary = BuildSummary(operation, options.Write, loadedBefore, unloaded, removableArtifacts, artifactsAfter, persistentArtifacts, errors),
         };
         Emit(writer, result, options.Format);
         return success ? 0 : 1;
@@ -256,8 +266,9 @@ internal static class NotifySuperviseReconcileCommand
         bool write,
         IReadOnlyList<string> loadedBefore,
         IReadOnlyList<string> unloaded,
-        IReadOnlyList<string> artifactsBefore,
+        IReadOnlyList<string> removableArtifactsBefore,
         IReadOnlyList<string> artifactsAfter,
+        IReadOnlyList<string> persistentArtifacts,
         IReadOnlyList<string> errors)
     {
         if (errors.Count > 0)
@@ -267,10 +278,15 @@ internal static class NotifySuperviseReconcileCommand
 
         if (!write)
         {
-            return $"Dry-run found {loadedBefore.Count} loaded supervise job(s) and {artifactsBefore.Count} artifact(s); no launchctl or filesystem mutation was performed. Use --write to unload and remove them.";
+            return persistentArtifacts.Count == 0
+                ? $"Dry-run found {loadedBefore.Count} loaded supervise job(s) and {removableArtifactsBefore.Count} artifact(s); no launchctl or filesystem mutation was performed. Use --write to unload and remove them."
+                : $"Dry-run found {loadedBefore.Count} loaded supervise job(s); kept declared persistent artifact(s): {string.Join(", ", persistentArtifacts)}; legacy artifact(s) eligible for removal: {removableArtifactsBefore.Count}. No launchctl or filesystem mutation was performed. Use --write to unload and remove only legacy artifacts.";
         }
 
-        return $"{operation} unloaded {unloaded.Count} supervise job(s) and removed {artifactsBefore.Count - artifactsAfter.Count} artifact(s). Remaining loaded jobs: {loadedBefore.Count - unloaded.Count}; remaining artifacts: {artifactsAfter.Count}.";
+        var removedCount = removableArtifactsBefore.Count - artifactsAfter.Count(path => !persistentArtifacts.Contains(path, StringComparer.Ordinal));
+        return persistentArtifacts.Count == 0
+            ? $"{operation} unloaded {unloaded.Count} supervise job(s) and removed {removedCount} artifact(s). Remaining loaded jobs: {loadedBefore.Count - unloaded.Count}; remaining artifacts: {artifactsAfter.Count}."
+            : $"{operation} unloaded {unloaded.Count} supervise job(s), removed {removedCount} legacy artifact(s), and kept declared persistent artifact(s): {string.Join(", ", persistentArtifacts)}. Remaining loaded jobs: {loadedBefore.Count - unloaded.Count}; remaining artifacts: {artifactsAfter.Count}.";
     }
 
     private static string CurrentPlatform() =>
@@ -414,6 +430,10 @@ internal static class NotifySuperviseReconcileCommand
         writer.WriteLine($"- loaded before: {string.Join(", ", result.LoadedBefore.DefaultIfEmpty("none"))}");
         writer.WriteLine($"- unloaded: {string.Join(", ", result.Unloaded.DefaultIfEmpty("none"))}");
         writer.WriteLine($"- removed artifacts: {string.Join(", ", result.RemovedArtifacts.DefaultIfEmpty("none"))}");
+        if (result.KeptPersistentArtifacts is { Count: > 0 })
+        {
+            writer.WriteLine($"- kept declared persistent artifacts: {string.Join(", ", result.KeptPersistentArtifacts)}");
+        }
         writer.WriteLine($"- loaded after: {string.Join(", ", result.LoadedAfter.DefaultIfEmpty("none"))}");
         writer.WriteLine($"- artifacts after: {string.Join(", ", result.ArtifactsAfter.DefaultIfEmpty("none"))}");
         if (result.Errors.Count > 0)
@@ -454,6 +474,9 @@ internal static class NotifySuperviseReconcileCommand
         [JsonPropertyName("would_remove_artifacts")] public required IReadOnlyList<string> WouldRemoveArtifacts { get; init; }
         [JsonPropertyName("artifacts_after")] public required IReadOnlyList<string> ArtifactsAfter { get; init; }
         [JsonPropertyName("loaded_after")] public required IReadOnlyList<string> LoadedAfter { get; init; }
+        [JsonPropertyName("kept_persistent_artifacts")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public IReadOnlyList<string>? KeptPersistentArtifacts { get; init; }
         [JsonPropertyName("errors")] public required IReadOnlyList<string> Errors { get; init; }
         [JsonPropertyName("summary")] public required string Summary { get; init; }
     }
@@ -462,6 +485,7 @@ internal static class NotifySuperviseReconcileCommand
 internal static class NotifySuperviseArtifactInventory
 {
     private const string LabelPrefix = "intent-cli.supervise.";
+    internal const string PersistenceMarker = "intent-cli persistence-intent: persistent";
 
     internal static Func<string> UserProfileDirectoryFactory { get; set; } =
         () => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -526,6 +550,7 @@ internal static class NotifySuperviseArtifactInventory
                     "intent-cli.supervise.*.plist",
                     SearchOption.TopDirectoryOnly)
                 .Where(path => IsManagedArtifact(path, label))
+                .Where(path => !HasDeclaredPersistence(path))
                 .Distinct(StringComparer.Ordinal)
                 .Order(StringComparer.Ordinal)
                 .ToArray();
@@ -554,6 +579,21 @@ internal static class NotifySuperviseArtifactInventory
         }
 
         return removed;
+    }
+
+    public static bool HasDeclaredPersistence(string path)
+    {
+        try
+        {
+            return File.Exists(path)
+                && File.ReadAllText(path).Contains(PersistenceMarker, StringComparison.Ordinal);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // An unreadable declaration is not evidence of persistence. The
+            // existing fail-closed cleanup behavior remains authoritative.
+            return false;
+        }
     }
 
     private static bool IsManagedArtifact(string path, string? label)

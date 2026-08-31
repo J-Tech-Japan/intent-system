@@ -979,6 +979,52 @@ G676 writer identity that differs from the installed identity is emitted as
 `duplicate-supervisor` through G699's recorded repeat-backoff and parked state.
 The finding uses cycle writer identity only: it reads no terminal content and
 never kills, stops, elects, or ranks a supervisor.
+
+### Declared persistence and independent supervision liveness (G765 — preview-through-1.x)
+
+The operator may declare that an emitted scheduler artifact is intended to
+persist across login with `--persistence persistent`:
+
+```bash
+intent-cli notify supervise install --domain <domain> --team <team> \
+  --repo <owner/repo> --owner-role <logical-role> --bound <seconds> \
+  --interval <seconds> --persistence persistent --write --format json
+```
+
+The declaration is written as artifact metadata. It is intent, not a hidden
+registration: install still only authors the artifact and proves its first
+cycle; the operator owns the printed platform registration command. During
+reconciliation, an artifact with that metadata is reported as **declared
+persistent and kept**, while an undeclared login-persistent artifact is
+reported as **legacy and removable**. `reconcile --write` removes only the
+latter. Omitting `--persistence` preserves the existing session-only artifact
+bytes and cleanup behavior.
+
+Absence is observable independently of the supervisor through the read-only
+surface:
+
+```bash
+intent-cli notify supervise liveness --domain <domain> --team <team> --format json
+```
+
+It reports the last completed cycle, declared bound, elapsed age, and an
+explicitly non-live installation-evidence state. The JSON field
+`scheduler_installation_evidence` is `installation-artifact-present` when the
+installed first-cycle record and its artifact path are present, otherwise it
+is `unknown`; `scheduler_live_state` is always `unknown` on this path. The
+command reads persisted state and artifact metadata only: it does not run the
+supervisor and executes no `launchctl`, `systemctl`, or other OS lifecycle
+command. This allows a design or orchestration thread to report a missing or
+over-bound supervisor even when no supervisor process is alive. The evidence
+state is not a claim that a scheduler job is loaded or that the CLI performed
+registration; registration remains the operator's explicit action.
+
+> **Preview through 1.x (G765).** Persistence is operator-declared and
+> recorded, reconciliation names the keep/remove distinction, and liveness is
+> a read-only observer. No lifecycle execution, automatic re-arming, or
+> change to interval, bound, cycle, shrink, archive, or repair semantics is
+> introduced.
+
 ### Event-driven supervision (G659 — preview-through-1.x)
 
 Add `--event-mode` to the one standing `notify supervise` invocation to opt in.

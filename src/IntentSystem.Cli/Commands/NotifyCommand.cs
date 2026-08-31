@@ -80,6 +80,7 @@ internal static class NotifyCommand
         + "[--pre-approve <agent-kind>:<prompt-class>]... [--pre-escalate <agent-kind>:<prompt-class>]... "
         + "[--shell-policy <json>]... "
         + "[--format markdown|json]\n"
+        + NotifySuperviseLivenessCommand.Usage + "\n"
         + "Event mode: --event-mode keeps the blocking per-seat herdr wait inside this supervisor process and re-arms it after failure. It is the implementation of the normative SECOND wake source from herdr pane.agent_status_changed, alongside the independent interval safety floor; it does not change outcome or label behavior.\n"
         + NotifySuperviseShrinkCommand.Usage + "\n"
         + NotifySuperviseArchiveCommand.Usage + "\n"
@@ -143,6 +144,8 @@ internal static class NotifyCommand
 
         return args[0] switch
         {
+            NotifySuperviseLivenessCommand.Operation =>
+                NotifySuperviseLivenessCommand.Execute(context, args[1..], writer),
             NotifySuperviseArchiveCommand.Operation =>
                 NotifySuperviseArchiveCommand.Execute(context, args[1..], writer),
             NotifySuperviseShrinkCommand.Operation =>
