@@ -1054,6 +1054,23 @@ command. `stalls.jsonl` and prompt-audit records receive the same per-record
 treatment as cycles, so a damaged secondary history cannot silently erase the
 rest of the team's supervision answer.
 
+### Atomic per-record supervision history appends (G768 — preview-through-1.x)
+
+Supervision history writes encode each cycle, stall, and prompt-audit JSONL
+record as one UTF-8 append operation. The existing per-team
+`.supervision.lock` still coordinates cooperating writers and recovery, while
+the OS append primitive also protects record boundaries when another writer
+does not take that directory lock.
+
+The append is one complete record with no change to JSONL field order, line
+encoding, or the serial writer output. This preserves every record in the
+locked-versus-uncooperative-writer case without changing what supervision
+reads or writes. It does not repair existing corruption or claim to prevent
+fragments created by other I/O mechanisms.
+
+> **Preview through 1.x (G768).** This is an append-integrity guarantee only;
+> it does not add supervisor killing, stopping, ranking, election, or leasing.
+
 ### Event-driven supervision (G659 — preview-through-1.x)
 
 Add `--event-mode` to the one standing `notify supervise` invocation to opt in.

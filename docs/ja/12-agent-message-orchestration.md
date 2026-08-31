@@ -887,6 +887,21 @@ reader は read-only のままで、supervisor や OS lifecycle command を実�
 `stalls.jsonl` と prompt-audit record にも cycles と同じ record 単位の扱いを適用するため、
 secondary history の damage が team の supervision answer の残りを黙って消すことはありません。
 
+### supervision history の record 単位 append (G768 — preview-through-1.x)
+
+supervision history の cycle、stall、prompt-audit は、1 つの UTF-8 append 操作で
+完全な JSONL record として書き込みます。既存の team 単位の
+`.supervision.lock` は協調する writer と recovery の調整に使い続けますが、別の writer が
+その directory lock を取得しない場合も OS の append primitive が record の境界を守ります。
+
+1 回の append に含めるのは完全な record であり、JSONL の field 順、line encoding、単独 writer
+の出力は変えません。したがって lock に協調する writer と協調しない writer が同時に書く場合も
+record を失いません。supervision が読むものや書くものは変わらず、既存の corruption を修復したり、
+他の I/O mechanism が作る fragment を防ぐと主張したりもしません。
+
+> **1.x を通じた preview (G768)。** これは append integrity の保証だけです。supervisor の
+> kill、stop、rank、election、lease は追加しません。
+
 ### event-driven supervision (G659 — preview-through-1.x)
 
 1 つの standing `notify supervise` invocation に `--event-mode` を追加して有効化します。

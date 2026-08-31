@@ -57,12 +57,13 @@ public sealed class NotifySupervisionStoreConcurrencyTests : IDisposable
                 .Where(record => record is not null)
                 .Select(record => record!.Id)
                 .ToHashSet(StringComparer.Ordinal);
+            var parseableCount = result.Records.Count(record => record is not null);
             Assert.True(
-                result.Records.Count == expectedCount
+                parseableCount == expectedCount
                     && result.UnreadableLineCount == 0
                     && actualIds.SetEquals(result.ExpectedIds),
-                $"G768 measured {result.Records.Count} parseable records in {result.TotalNonBlankLineCount} "
-                    + $"nonblank lines; expected {expectedCount}; loss={expectedCount - result.Records.Count}; "
+                $"G768 measured {parseableCount} parseable records in {result.TotalNonBlankLineCount} "
+                    + $"nonblank lines; expected {expectedCount}; loss={expectedCount - parseableCount}; "
                     + $"unreadable_lines={result.UnreadableLineCount}; missing="
                     + string.Join(",", result.ExpectedIds.Except(actualIds, StringComparer.Ordinal).OrderBy(id => id)));
             Assert.Equal(
@@ -74,6 +75,21 @@ public sealed class NotifySupervisionStoreConcurrencyTests : IDisposable
                 result.Records.Count(record => record is not null
                     && record.Id.Contains("-unlocked-", StringComparison.Ordinal)));
         }
+    }
+
+    [Fact]
+    public void SerialCycleBytesRemainParentCompatible_G768()
+    {
+        var path = Path.Combine(root, "serial", "cycles.jsonl");
+        var result = NotifySupervisionStore.RecordCycle(
+            path,
+            CreateEntry(SupervisionRecordKind.Cycle, "serial-cycle-000").Cycle!,
+            write: true);
+
+        Assert.True(result.Applied, result.Error);
+        var actual = Convert.ToBase64String(File.ReadAllBytes(path));
+        const string parentBytesBase64 = "eyJraW5kIjoiY3ljbGUiLCJjeWNsZSI6eyJjeWNsZV9pZCI6InNlcmlhbC1jeWNsZS0wMDAiLCJzdGFydGVkX2F0IjoiMjAyNi0wOC0zMVQwNDowMDowMCswMDowMCIsImNvbXBsZXRlZF9hdCI6IjIwMjYtMDgtMzFUMDQ6MDA6MDErMDA6MDAiLCJ0cmlnZ2VyIjoiaW50ZXJ2YWwiLCJpbnRlcnZhbF9zZWNvbmRzIjozMDAsImFic2VudF9zaW5jZV9sYXN0X2N5Y2xlIjpmYWxzZSwiYm91bmRfYmVsb3dfaW50ZXJ2YWwiOmZhbHNlLCJsYXN0X29ic2VydmVkX3N0YXRlX2NoYW5nZV9zZXF1ZW5jZXMiOnt9LCJsYXN0X29ic2VydmVkX3N0YXRlX2NoYW5nZV90aW1lcyI6e30sImxhc3Rfb2JzZXJ2ZWRfYWdlbnRfc3RhdHVzZXMiOnt9LCJsYXN0X29ic2VydmVkX2FnZW50X3N0YXR1c19jb25zZWN1dGl2ZV9jb3VudHMiOnt9LCJsYXN0X29ic2VydmVkX2FnZW50X3N0YXR1c19ydW5fZnJvbSI6e30sInRyYW5zaXRpb25zIjpbXSwid2FpdF9ldmVudHMiOltdfX0K";
+        Assert.Equal(parentBytesBase64, actual);
     }
 
     [Fact]
@@ -258,16 +274,9 @@ public sealed class NotifySupervisionStoreConcurrencyTests : IDisposable
 
     private static void WriteWithoutDirectoryLock(string path, NotifySupervisionEvent entry)
     {
-        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine);
-        using var stream = new FileStream(
+        AtomicAppendWriter.Append(
             path,
-            FileMode.Append,
-            FileAccess.Write,
-            FileShare.ReadWrite,
-            bufferSize: 4096,
-            options: FileOptions.WriteThrough);
-        stream.Write(bytes, 0, bytes.Length);
-        stream.Flush(flushToDisk: true);
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine));
     }
 
     private static ParsedRecord? ParseRecord(string line)
@@ -343,5 +352,7 @@ public sealed class NotifySupervisionStoreConcurrencyTests : IDisposable
 
     private sealed record ConcurrentWriteResult(
         IReadOnlySet<string> ExpectedIds,
-        IReadOnlyList<ParsedRecord> Records);
+        IReadOnlyList<ParsedRecord?> Records,
+        int TotalNonBlankLineCount,
+        int UnreadableLineCount);
 }

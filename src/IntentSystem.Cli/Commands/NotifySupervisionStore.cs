@@ -466,7 +466,7 @@ internal static class NotifySupervisionStore
                 RecoverPendingShrinkTransaction(directory);
                 var storedEntry = PrepareEventForStorage(entry, directory, ensureDefinitions: true);
                 var line = JsonSerializer.Serialize(storedEntry, JsonOptions) + Environment.NewLine;
-                File.AppendAllText(path, line, Utf8NoBom);
+                AtomicAppendWriter.Append(path, Utf8NoBom.GetBytes(line));
                 return new NotifySupervisionWriteResult(true, false, path, null);
             }
             catch (Exception exception) when (
