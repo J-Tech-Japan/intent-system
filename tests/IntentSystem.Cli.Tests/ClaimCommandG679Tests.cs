@@ -237,7 +237,7 @@ public sealed class ClaimCommandG679Tests : IDisposable
         string? leftoverPath = null;
         try
         {
-            var exception = Assert.Throws<IOException>(() => ClaimCommand.RunTransaction(
+            var result = ClaimCommand.RunTransaction(
                 repos.SecondClone,
                 new ClaimRequest(
                     ClaimOperation.Acquire,
@@ -255,11 +255,16 @@ public sealed class ClaimCommandG679Tests : IDisposable
                     leftoverPath = path;
                     deleteAttempts++;
                     throw new IOException("injected pre-commit cleanup failure");
-                }));
+                });
 
-            Assert.Contains("before the claim state was committed", exception.Message, StringComparison.Ordinal);
+            Assert.Equal("held", result.Status);
+            Assert.False(result.PushSucceeded);
+            Assert.Equal("alice", result.Holder);
+            Assert.Equal("implementation", result.HolderTeam);
             Assert.Equal(ClaimCommand.CleanupMaxAttempts, deleteAttempts);
-            Assert.Empty(warnings.ToString());
+            Assert.NotNull(leftoverPath);
+            Assert.Contains(leftoverPath!, warnings.ToString(), StringComparison.Ordinal);
+            Assert.Contains("claim result and exit code are unchanged", warnings.ToString(), StringComparison.Ordinal);
         }
         finally
         {
