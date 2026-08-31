@@ -871,8 +871,8 @@ line があっても team directory 全体を unreadable にはしません。�
 deterministic な corruption evidence を出します。liveness JSON には常に
 `unreadable_record_count` を含め、0 より大きい場合は `unreadable_records` も含めます。
 human-readable summary には reading が partial であることを明示します。成功した
-command は `success: true` を返します。したがって clean な directory は count=0 で、
-partial-reading statement を出しません。
+command は終了コード 0 を返し、失敗応答専用の `success` field は含めません。したがって
+clean な directory は count=0 で、partial-reading statement を出しません。
 
 cycle line がすべて malformed の場合は readable cycle がないため、supervision を
 healthy とは報告しません。それでも non-zero の unreadable count と file/line evidence

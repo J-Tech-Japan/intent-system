@@ -56,7 +56,7 @@ public sealed class NotifySupervisionReaderCorruptionG767Tests : IDisposable
         Assert.Equal(0, exitCode);
         using var document = JsonDocument.Parse(payload);
         var result = document.RootElement;
-        Assert.True(result.GetProperty("success").GetBoolean());
+        Assert.False(result.TryGetProperty("success", out _));
         Assert.Equal(1, result.GetProperty("unreadable_record_count").GetInt32());
         var evidence = Assert.Single(result.GetProperty("unreadable_records").EnumerateArray());
         Assert.Equal("cycles.jsonl", evidence.GetProperty("file").GetString());
@@ -94,6 +94,7 @@ public sealed class NotifySupervisionReaderCorruptionG767Tests : IDisposable
         Assert.Equal(1, corrupt.GetProperty("unreadable_record_count").GetInt32());
         Assert.True(corrupt.TryGetProperty("unreadable_records", out _));
         Assert.Contains("partial reading", corrupt.GetProperty("summary").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.False(corrupt.TryGetProperty("success", out _));
         Assert.NotEqual(
             clean.GetProperty("unreadable_record_count").GetInt32(),
             corrupt.GetProperty("unreadable_record_count").GetInt32());
@@ -117,11 +118,14 @@ public sealed class NotifySupervisionReaderCorruptionG767Tests : IDisposable
         using var corruptDocument = JsonDocument.Parse(corruptPayload);
         var empty = emptyDocument.RootElement;
         var corrupt = corruptDocument.RootElement;
+        AssertCleanPayloadMatchesParentOracle(emptyPayload, emptyRoot);
         Assert.True(empty.GetProperty("absent_since_last_cycle").GetBoolean());
         Assert.True(corrupt.GetProperty("absent_since_last_cycle").GetBoolean());
         Assert.Contains("No completed supervision cycle", empty.GetProperty("summary").GetString(), StringComparison.Ordinal);
         Assert.Contains("No completed supervision cycle", corrupt.GetProperty("summary").GetString(), StringComparison.Ordinal);
         Assert.Contains("No readable cycle", corrupt.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.False(empty.TryGetProperty("success", out _));
+        Assert.False(corrupt.TryGetProperty("success", out _));
         Assert.Equal(0, empty.GetProperty("unreadable_record_count").GetInt32());
         Assert.Equal(1, corrupt.GetProperty("unreadable_record_count").GetInt32());
         Assert.NotEqual(
@@ -205,6 +209,32 @@ public sealed class NotifySupervisionReaderCorruptionG767Tests : IDisposable
         Assert.Contains("663,959", document, StringComparison.Ordinal);
         Assert.Contains("0.0014%", document, StringComparison.Ordinal);
         Assert.Contains("fragment", document, StringComparison.OrdinalIgnoreCase);
+        if (language == "en")
+        {
+            Assert.Contains("omits the failure-only", document, StringComparison.Ordinal);
+            Assert.Contains("`success` field", document, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains("失敗応答専用の `success` field は含めません", document, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void FailedResponseRetainsFailureOnlySuccessFalse_G767()
+    {
+        using var writer = new StringWriter();
+        var exitCode = NotifyCommand.ExecuteSupervise(
+            CreateContext(root),
+            [
+                "liveness", "--domain", Domain, "--team", Team,
+                "--routing-root", "\0", "--format", "json",
+            ],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.False(document.RootElement.GetProperty("success").GetBoolean());
     }
 
     private (int ExitCode, string Payload) RunLiveness(string repoRoot)
@@ -250,4 +280,37 @@ public sealed class NotifySupervisionReaderCorruptionG767Tests : IDisposable
             },
         },
     };
+
+    private static void AssertCleanPayloadMatchesParentOracle(string payload, string repoRoot)
+    {
+        using var document = JsonDocument.Parse(payload);
+        var actual = document.RootElement
+            .EnumerateObject()
+            .Select(property => (property.Name, RawValue: property.Value.GetRawText()))
+            .ToArray();
+        var expected = new[]
+        {
+            ("operation", JsonSerializer.Serialize("supervise-liveness")),
+            ("routing_root", JsonSerializer.Serialize(Path.GetFullPath(repoRoot))),
+            ("domain", JsonSerializer.Serialize(Domain)),
+            ("team", JsonSerializer.Serialize(Team)),
+            ("command_mode", JsonSerializer.Serialize("read-only")),
+            ("absent_since_last_cycle", "true"),
+            ("scheduler_installation_evidence", JsonSerializer.Serialize("unknown")),
+            ("scheduler_live_state", JsonSerializer.Serialize("unknown")),
+            ("scheduler_evidence_detail", JsonSerializer.Serialize(
+                "durable installation evidence is unavailable; scheduler live state is unknown because no OS lifecycle query was executed")),
+            ("scheduler_artifact_paths", "[]"),
+            ("commands_executed", JsonSerializer.Serialize(
+                "none (persisted supervision state and artifact metadata only)")),
+            // The only authorized delta from the parent clean payload is this
+            // corruption counter, which must remain zero for a clean store.
+            ("unreadable_record_count", "0"),
+            ("summary", JsonSerializer.Serialize(
+                "Read-only liveness: No completed supervision cycle is recorded; no supervisor process is required to produce this answer. Supervision is absent or beyond its declared bound. Scheduler live state=unknown; durable installation evidence=unknown; the supervisor was not run.")),
+        };
+
+        Assert.Equal(expected, actual);
+        Assert.False(document.RootElement.TryGetProperty("success", out _));
+    }
 }

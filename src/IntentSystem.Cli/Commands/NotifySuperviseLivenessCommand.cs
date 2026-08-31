@@ -96,7 +96,6 @@ internal static class NotifySuperviseLivenessCommand
             Domain = options.Domain,
             Team = options.Team,
             CommandMode = "read-only",
-            Success = true,
             LastCompletedCycleAt = lastCycle?.CompletedAt,
             DeclaredBoundSeconds = boundSeconds,
             ElapsedSeconds = elapsedSeconds,
@@ -294,7 +293,6 @@ internal sealed record NotifySuperviseLivenessResult
     [JsonPropertyName("domain")] public required string Domain { get; init; }
     [JsonPropertyName("team")] public required string Team { get; init; }
     [JsonPropertyName("command_mode")] public required string CommandMode { get; init; }
-    [JsonPropertyName("success")] public required bool Success { get; init; }
     [JsonPropertyName("last_completed_cycle_at")] public DateTimeOffset? LastCompletedCycleAt { get; init; }
     [JsonPropertyName("declared_bound_seconds")] public int? DeclaredBoundSeconds { get; init; }
     [JsonPropertyName("elapsed_seconds")] public long? ElapsedSeconds { get; init; }

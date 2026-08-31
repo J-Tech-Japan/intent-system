@@ -1034,8 +1034,9 @@ the read result carries deterministic corruption evidence with the component,
 relative file, one-based line number, and reason. The liveness JSON always
 includes `unreadable_record_count`; a non-zero count also includes
 `unreadable_records`, and its human-readable summary says that the reading is
-partial. A successful command reports `success: true`; a clean directory
-therefore reports zero without a partial-reading statement.
+partial. A successful command returns exit code 0 and omits the failure-only
+`success` field; a clean directory therefore reports zero without a
+partial-reading statement.
 
 If every cycle line is malformed, liveness has no readable cycle and does not
 report supervision as healthy. Its non-zero unreadable count and file/line
