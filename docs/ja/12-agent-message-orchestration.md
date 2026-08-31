@@ -862,6 +862,31 @@ action のままです。
 > lifecycle の実行、automatic re-arming、interval / bound / cycle / shrink / archive /
 > repair semantics の変更はありません。
 
+### supervision history の record 単位 read と corruption evidence (G767 — preview-through-1.x)
+
+supervision history は、空白でない JSONL record を 1 行ずつ読み取ります。
+`cycles.jsonl`、`stalls.jsonl`、prompt-audit record のどれかに malformed な
+line があっても team directory 全体を unreadable にはしません。読める record は
+残し、読み取り結果には component、relative file、1-based line number、reason を持つ
+deterministic な corruption evidence を出します。liveness JSON には常に
+`unreadable_record_count` を含め、0 より大きい場合は `unreadable_records` も含めます。
+human-readable summary には reading が partial であることを明示します。成功した
+command は `success: true` を返します。したがって clean な directory は count=0 で、
+partial-reading statement を出しません。
+
+cycle line がすべて malformed の場合は readable cycle がないため、supervision を
+healthy とは報告しません。それでも non-zero の unreadable count と file/line evidence
+によって、本当に empty な history と区別できます。これは sanctioned な shrink reader
+と同じ degrade-and-report の形です。corruption を absence に黙って変換せず、読める
+evidence を保持して damaged input を示します。測定された incident は 663,959 行中
+5 incident、9 malformed line（0.0014%）でした。この unit が変えるのは reader の
+evidence の示し方だけであり、fragment がどう書かれたかや append order は調査・修正
+しません。既存 file を修復せず、将来の corruption を防ぐとも主張しません。
+
+reader は read-only のままで、supervisor や OS lifecycle command を実行しません。
+`stalls.jsonl` と prompt-audit record にも cycles と同じ record 単位の扱いを適用するため、
+secondary history の damage が team の supervision answer の残りを黙って消すことはありません。
+
 ### event-driven supervision (G659 — preview-through-1.x)
 
 1 つの standing `notify supervise` invocation に `--event-mode` を追加して有効化します。

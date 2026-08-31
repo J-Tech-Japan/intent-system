@@ -96,6 +96,7 @@ internal static class NotifySuperviseLivenessCommand
             Domain = options.Domain,
             Team = options.Team,
             CommandMode = "read-only",
+            Success = true,
             LastCompletedCycleAt = lastCycle?.CompletedAt,
             DeclaredBoundSeconds = boundSeconds,
             ElapsedSeconds = elapsedSeconds,
@@ -105,7 +106,16 @@ internal static class NotifySuperviseLivenessCommand
             SchedulerEvidenceDetail = schedulerEvidenceDetail,
             SchedulerArtifactPaths = artifacts,
             CommandsExecuted = "none (persisted supervision state and artifact metadata only)",
-            Summary = BuildSummary(lastCycle, boundSeconds, elapsedSeconds, schedulerInstallationEvidence),
+            UnreadableRecordCount = state.UnreadableRecords.Count,
+            UnreadableRecords = state.UnreadableRecords.Count == 0
+                ? null
+                : state.UnreadableRecords,
+            Summary = BuildSummary(
+                lastCycle,
+                boundSeconds,
+                elapsedSeconds,
+                schedulerInstallationEvidence,
+                state.UnreadableRecords),
         };
 
         Emit(writer, result, options.Format);
@@ -116,7 +126,8 @@ internal static class NotifySuperviseLivenessCommand
         NotifySupervisionCycle? lastCycle,
         int? boundSeconds,
         long? elapsedSeconds,
-        string schedulerInstallationEvidence)
+        string schedulerInstallationEvidence,
+        IReadOnlyList<NotifySupervisionUnreadableRecord> unreadableRecords)
     {
         var cycleSummary = lastCycle is null
             ? "No completed supervision cycle is recorded; no supervisor process is required to produce this answer."
@@ -127,7 +138,14 @@ internal static class NotifySuperviseLivenessCommand
         var absenceSummary = lastCycle is null || boundSeconds is { } declared && elapsedSeconds is { } elapsed && elapsed > declared
             ? " Supervision is absent or beyond its declared bound."
             : " Supervision liveness is within the available evidence.";
-        return $"Read-only liveness: {cycleSummary}{absenceSummary} Scheduler live state=unknown; durable installation evidence={schedulerInstallationEvidence}; the supervisor was not run.";
+        var corruptionSummary = unreadableRecords.Count == 0
+            ? string.Empty
+            : $" Partial reading: {unreadableRecords.Count} unreadable supervision record(s) were skipped and surfaced as corruption evidence in {string.Join(", ", unreadableRecords.Select(item => $"{item.File} line {item.Line}"))}.";
+        var noReadableCycleSummary = lastCycle is null
+            && unreadableRecords.Any(item => item.Component is "cycles" or "prompt-audits")
+            ? " No readable cycle is available, so liveness is not reported as healthy."
+            : string.Empty;
+        return $"Read-only liveness: {cycleSummary}{absenceSummary}{noReadableCycleSummary}{corruptionSummary} Scheduler live state=unknown; durable installation evidence={schedulerInstallationEvidence}; the supervisor was not run.";
     }
 
     private static void EmitFailure(TextWriter writer, string error, string format)
@@ -167,6 +185,14 @@ internal static class NotifySuperviseLivenessCommand
         writer.WriteLine($"- scheduler live state: {result.SchedulerLiveState}");
         writer.WriteLine($"- scheduler installation evidence: {result.SchedulerInstallationEvidence}");
         writer.WriteLine($"- scheduler evidence detail: {result.SchedulerEvidenceDetail}");
+        writer.WriteLine($"- unreadable record count: {result.UnreadableRecordCount}");
+        if (result.UnreadableRecords is { } unreadableRecords)
+        {
+            foreach (var unreadable in unreadableRecords)
+            {
+                writer.WriteLine($"- unreadable record: {unreadable.File} line {unreadable.Line} ({unreadable.Reason})");
+            }
+        }
         writer.WriteLine($"- commands executed: {result.CommandsExecuted}");
         writer.WriteLine();
         writer.WriteLine(result.Summary);
@@ -268,6 +294,7 @@ internal sealed record NotifySuperviseLivenessResult
     [JsonPropertyName("domain")] public required string Domain { get; init; }
     [JsonPropertyName("team")] public required string Team { get; init; }
     [JsonPropertyName("command_mode")] public required string CommandMode { get; init; }
+    [JsonPropertyName("success")] public required bool Success { get; init; }
     [JsonPropertyName("last_completed_cycle_at")] public DateTimeOffset? LastCompletedCycleAt { get; init; }
     [JsonPropertyName("declared_bound_seconds")] public int? DeclaredBoundSeconds { get; init; }
     [JsonPropertyName("elapsed_seconds")] public long? ElapsedSeconds { get; init; }
@@ -277,5 +304,7 @@ internal sealed record NotifySuperviseLivenessResult
     [JsonPropertyName("scheduler_evidence_detail")] public required string SchedulerEvidenceDetail { get; init; }
     [JsonPropertyName("scheduler_artifact_paths")] public required IReadOnlyList<string> SchedulerArtifactPaths { get; init; }
     [JsonPropertyName("commands_executed")] public required string CommandsExecuted { get; init; }
+    [JsonPropertyName("unreadable_record_count")] public required int UnreadableRecordCount { get; init; }
+    [JsonPropertyName("unreadable_records")] public IReadOnlyList<NotifySupervisionUnreadableRecord>? UnreadableRecords { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
 }
