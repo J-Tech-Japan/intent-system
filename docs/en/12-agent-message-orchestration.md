@@ -229,6 +229,31 @@ role. Its wording is the same in `agmsg` and `herdr-only`, with or without a
 named team. Re-read installed guides after a CLI version or session-layer
 configuration change, not on every wake.
 
+### Packet-authoring self-check (G774)
+
+Before publishing a packet, the design seat performs this guidance-only check;
+it adds no semantic lint to `packet draft`.
+
+- **Per-criterion satisfiability.** Verify every criterion can be satisfied
+  under the packet's own constraints.
+- **Negative-criterion scoping.** Check every negative criterion against every
+  positive one. Scope the negative with a limiting word that names the one
+  thing it protects.
+- **Request-update condition.** Request an update before publication when a
+  criterion conflicts with a required positive criterion, a negative lacks a
+  limiting word, or the requested evidence is unobtainable under the packet's
+  own constraints.
+- **Discriminating pair.** Name at least one named discriminating pair: a
+  compliant case and a near case that proves the scoped rule catches the
+  intended difference.
+
+Recognition examples are G765 AC4/AC6 (unobtainable evidence: live scheduler
+state versus the no-OS-lifecycle-query boundary), G767 AC1/AC6 (status versus
+the full clean-payload oracle), and G769 AC3/AC4 (a broad negative forbids the
+needed change). Apply the G770 resolution rule: scope the negative with a
+limiting word naming exactly what it protects — for example, `root resolution`
+— instead of broadening it to forbid the needed change.
+
 ### Role-contract precedence (G672 — preview-through-1.x)
 
 When `guide next` or `guide onboarding` is invoked with `--role`, the role's
