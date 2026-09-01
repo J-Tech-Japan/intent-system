@@ -992,6 +992,13 @@ intent-cli notify supervise repair-unreadable --domain <domain> --team <team> \
   [--routing-root <host-root>] [--dry-run|--write] [--format markdown|json]
 ```
 
+描画される `intent-cli guide design-thread` の liveness の案内は、liveness が 0 以外の
+`unreadable_record_count` を報告したときだけ、この操作を示します。まず
+`intent-cli notify supervise repair-unreadable` を `--dry-run` で実行して証拠を確認し、
+その後に限って二番目の操作として `--write` を使います。quarantine は読めない行を証拠として
+原文のバイト列のまま保存し、内容を再構成しないという境界を繰り返し示します。これは自動修復でも
+読み取り時の修復でもありません。
+
 default は `--dry-run` です。relative file、1-based line number、G767 の reason、source line の
 byte length をすべて列挙し、store 全体を byte-identical のまま残します。clean store は両 mode で
 strict no-op です。live file、quarantine sidecar、audit の作成・置換はなく、結果は completed repair

@@ -131,14 +131,14 @@ public sealed class GuideDesignThreadG654Tests
         var fields = root.EnumerateObject().ToArray();
 
         var g774BaselineFields = fields
-            .Where(field => field.Name != "external_residence_operating_contract")
+            .Where(field => field.Name is not "external_residence_operating_contract" and not "unreadable_repair_response")
             .ToArray();
         Assert.Equal(G774BaselinePayloadFieldNames, g774BaselineFields.Select(field => field.Name));
         var g774BaselineOracle = ComputePayloadOracle(g774BaselineFields);
         Assert.True(
             string.Equals(G774BaselinePayloadOracleHash, g774BaselineOracle, StringComparison.Ordinal),
             $"G774 baseline payload oracle changed. Expected '{G774BaselinePayloadOracleHash}', actual '{g774BaselineOracle}'.");
-        var parentPayloadOracle = ComputePayloadOracle(fields.Where(field => field.Name is not "packet_authoring_check" and not "external_residence_operating_contract"));
+        var parentPayloadOracle = ComputePayloadOracle(fields.Where(field => field.Name is not "packet_authoring_check" and not "external_residence_operating_contract" and not "unreadable_repair_response"));
         Assert.True(
             string.Equals(ParentPayloadOracleHash, parentPayloadOracle, StringComparison.Ordinal),
             $"G654 parent payload oracle changed. Expected '{ParentPayloadOracleHash}', actual '{parentPayloadOracle}'.");
@@ -183,10 +183,13 @@ public sealed class GuideDesignThreadG654Tests
         var root = document.RootElement;
         var fields = root.EnumerateObject().ToArray();
 
+        var g775BaselineFields = fields
+            .Where(field => field.Name != "unreadable_repair_response")
+            .ToArray();
         Assert.Equal(
             G774BaselinePayloadFieldNames.Append("external_residence_operating_contract"),
-            fields.Select(field => field.Name));
-        var g774BaselineOracle = ComputePayloadOracle(fields.Where(field => field.Name != "external_residence_operating_contract"));
+            g775BaselineFields.Select(field => field.Name));
+        var g774BaselineOracle = ComputePayloadOracle(g775BaselineFields.Where(field => field.Name != "external_residence_operating_contract"));
         Assert.True(
             string.Equals(G774BaselinePayloadOracleHash, g774BaselineOracle, StringComparison.Ordinal),
             $"G774 baseline payload oracle changed. Expected '{G774BaselinePayloadOracleHash}', actual '{g774BaselineOracle}'.");

@@ -205,6 +205,7 @@ internal static class GuideDesignThreadCommand
                 OrcaWorkedExample = "Non-normative Orca example: bind the design coordinator terminal before reading with `orca orchestration run-use --id <run-id>`, then use the blocking check `orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json`. Orca is only a courtesy wake receiver alongside canonical `intent-cli notify`; intent-cli neither launches nor manages Orca.",
                 ResidenceTransition = $"A herdr↔external residence change is a different operation from an external-to-external frontend relabel: `intent-cli session-layer topology update-residence --domain {domainArg} --team {teamArg} --role design --current-resident <herdr|external> --new-resident <herdr|external> [destination fields] --confirm-update-residence --write --format json`.",
             },
+            UnreadableRepairResponse = "When liveness reports a non-zero `unreadable_record_count`, the sanctioned response is `intent-cli notify supervise repair-unreadable`: run `--dry-run` first, inspect the evidence, and use `--write` only second; it is never automatic and never performed on read. The repair quarantines unreadable lines verbatim as evidence and makes no reconstruction claim.",
         };
     }
 
@@ -272,6 +273,7 @@ internal static class GuideDesignThreadCommand
         foreach (var item in result.TeamAndDutySplit.DesignEscalations) writer.WriteLine($"  - {item}");
         writer.WriteLine($"- {result.Monitoring.Separation}");
         writer.WriteLine($"- {result.Monitoring.ResidualDesignCheck}");
+        writer.WriteLine($"- **unreadable-record response (G777):** {result.UnreadableRepairResponse}");
         writer.WriteLine($"- {result.Monitoring.BoundRule}");
         writer.WriteLine($"- {result.Monitoring.GuideRefreshRule}");
         writer.WriteLine($"- {result.Monitoring.DeploymentRule}");
@@ -376,6 +378,7 @@ internal sealed record DesignThreadGuideResult
     public required IReadOnlyList<string> NegativeInvariants { get; init; }
     public required DesignThreadPacketAuthoringCheck PacketAuthoringCheck { get; init; }
     public required DesignThreadExternalResidenceOperatingContract ExternalResidenceOperatingContract { get; init; }
+    public required string UnreadableRepairResponse { get; init; }
 }
 
 internal sealed record DesignThreadReachability
