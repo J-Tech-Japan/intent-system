@@ -1743,8 +1743,14 @@ internal static class NotifyCommand
         var reportCommand = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? BuildReportCommand(options)
             : null;
+        var recipientWakeCommand = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+            ? ResolveDeclaredCourtesyWakeCommand(options, options.ToRole!, options.Objective!)
+            : null;
+        var reportWakeCommand = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+            ? ResolveDeclaredCourtesyWakeCommand(options, options.ReportToRole!, "<one-line-summary>")
+            : null;
         var payload = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
-            ? BuildDelegatePayload(options, reportCommand!)
+            ? BuildDelegatePayload(options, reportCommand!, reportWakeCommand)
             : BuildReportPayload(options);
         NotifyPendingDelegation? reportPendingRecord = null;
         if (isReport)
@@ -2155,7 +2161,8 @@ internal static class NotifyCommand
             pendingRecordPath: pendingRecordPath,
             advisory: reportAdvisory,
             outboxEntryPath: outboxEntryPath,
-            continuationChain: continuationChain));
+            continuationChain: continuationChain,
+            courtesyWakeCommand: recipientWakeCommand));
         return 0;
     }
 
@@ -2401,7 +2408,10 @@ internal static class NotifyCommand
         return 0;
     }
 
-    private static string BuildDelegatePayload(NotifyOptions options, string reportCommand)
+    private static string BuildDelegatePayload(
+        NotifyOptions options,
+        string reportCommand,
+        string? reportWakeCommand)
     {
         var builder = new StringBuilder();
         builder.AppendLine($"TASK {options.TaskId}");
@@ -2421,7 +2431,17 @@ internal static class NotifyCommand
         builder.AppendLine($"  task-id: {options.TaskId}");
         builder.AppendLine($"  expected-artifact: {string.Join("; ", options.ExpectedArtifacts)}");
         builder.AppendLine($"  canonical-report-command: {reportCommand}");
-        builder.AppendLine("  required-final-step: Run canonical-report-command after all other work; never hand-write a transport invocation.");
+        if (reportWakeCommand is null)
+        {
+            // G776: the undeclared installed base retains every original byte,
+            // including this strict no-hand-written-transport instruction.
+            builder.AppendLine("  required-final-step: Run canonical-report-command after all other work; never hand-write a transport invocation.");
+        }
+        else
+        {
+            builder.AppendLine($"  courtesy-wake-command: {reportWakeCommand}");
+            builder.AppendLine("  required-final-step: Run canonical-report-command after all other work; after it succeeds, send the rendered courtesy-wake-command as a courtesy-only signal. It never substitutes for the durable canonical record. Do not hand-write any other transport invocation.");
+        }
         builder.AppendLine("result-prefix: ORCH_RESULT");
         builder.AppendLine($"result-nonce: {options.ResultNonce}");
         builder.Append("completion-marker: When the artifact is ready, concatenate result-prefix, one space, result-nonce, one space, status, one space, and artifact; use completed, blocked, or question. Do not precompose the marker in this task block.");
@@ -2449,6 +2469,35 @@ internal static class NotifyCommand
         return string.IsNullOrWhiteSpace(cwd)
             ? MissingRecipientWorkRootPlaceholder
             : ShellQuote(Path.GetFullPath(cwd));
+    }
+
+    /// <summary>
+    /// G776: reads an operator-declared external wake template only so it can
+    /// be rendered into the caller-facing contract. It deliberately does not
+    /// participate in delivery resolution and never reaches a process runner.
+    /// </summary>
+    private static string? ResolveDeclaredCourtesyWakeCommand(
+        NotifyOptions options,
+        string role,
+        string summary)
+    {
+        var topology = NotifyRoleTopologyStore.Resolve(options.RoutingRoot!, options.Domain!, options.Team!);
+        var roleResolution = topology.Resolved && topology.Topology is { } teamTopology
+            ? NotifyRoleTopologyStore.ResolveRecordedRole(teamTopology, role)
+            : null;
+        var record = roleResolution?.Resolved == true
+            ? roleResolution.Record
+            : null;
+        if (record is null
+            || !string.Equals(record.Resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal)
+            || record.WakeCommand is null)
+        {
+            return null;
+        }
+
+        return record.WakeCommand
+            .Replace("{task_id}", options.TaskId!, StringComparison.Ordinal)
+            .Replace("{summary}", summary, StringComparison.Ordinal);
     }
 
     private static string? BuildReconciliationCommand(string operation, NotifyOptions options) =>
@@ -2519,7 +2568,8 @@ internal static class NotifyCommand
         string? advisory = null,
         string? outboxEntryPath = null,
         string? deliveryBasis = null,
-        ContinuationChainRecord? continuationChain = null) => new()
+        ContinuationChainRecord? continuationChain = null,
+        string? courtesyWakeCommand = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot!,
@@ -2557,6 +2607,7 @@ internal static class NotifyCommand
             Cause = null,
             Payload = payload,
             ReportCommand = reportCommand,
+            CourtesyWakeCommand = courtesyWakeCommand,
             ReconciliationCommand = BuildReconciliationCommand(operation, options),
             ContinuationChain = continuationChain,
             Summary = summary,
@@ -2720,6 +2771,11 @@ internal static class NotifyCommand
         if (result.ReportCommand is not null)
         {
             writer.WriteLine($"- report command: `{result.ReportCommand}`");
+        }
+        if (result.CourtesyWakeCommand is not null)
+        {
+            writer.WriteLine($"- courtesy wake command: `{result.CourtesyWakeCommand}`");
+            writer.WriteLine($"- courtesy wake instruction: {result.CourtesyWakeInstruction}");
         }
         if (result.ReconciliationCommand is not null)
         {
@@ -3592,6 +3648,14 @@ internal sealed record NotifyResult
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("payload")] public string? Payload { get; init; }
     [JsonPropertyName("report_command")] public string? ReportCommand { get; init; }
+    [JsonPropertyName("courtesy_wake_command")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CourtesyWakeCommand { get; init; }
+    [JsonPropertyName("courtesy_wake_instruction")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CourtesyWakeInstruction => CourtesyWakeCommand is null
+        ? null
+        : "After the canonical notify write succeeds, send this declared command as a courtesy-only wake; it never substitutes for the durable canonical record.";
     [JsonPropertyName("reconciliation_command")] public string? ReconciliationCommand { get; init; }
     [JsonPropertyName("continuation_chain")] public ContinuationChainRecord? ContinuationChain { get; init; }
     [JsonPropertyName("completion_signal_id")]

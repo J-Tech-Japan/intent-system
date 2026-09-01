@@ -290,6 +290,16 @@ intent-cli notify collect --domain <domain> --team <team> --role design --since 
 the durable record. A wake channel is a courtesy-only signal; dual-send is the
 practiced form.
 
+**Declare the courtesy wake explicitly (G776).** Only an operator may add a
+literal, one-line `--wake-command` template to an `external` topology record.
+The record and `session-layer topology show` preserve the declaration verbatim.
+At render time, `notify delegate` substitutes `{task_id}` and `{summary}` only;
+unknown placeholders such as `{foo}` remain literal. The canonical notify write
+always comes first. The resulting one-line wake is courtesy-only and never
+substitutes for the durable record. `intent-cli` renders this operator-supplied
+text only: it never executes, validates by shelling out, health-checks, launches,
+or manages the command.
+
 > **Non-normative Orca worked example.** A design operator may bind the
 > coordinator terminal before reading, then perform Orca's bounded blocking
 > check:
@@ -301,6 +311,13 @@ practiced form.
 >
 > Orca is only a courtesy wake receiver beside canonical `intent-cli notify`;
 > intent-cli neither launches nor manages Orca.
+>
+> An external design seat may also declare its durable run-addressed courtesy
+> wake template (not a routing input):
+>
+> ```text
+> orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}
+> ```
 
 ### Role-contract precedence (G672 — preview-through-1.x)
 

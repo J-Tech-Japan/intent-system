@@ -1,0 +1,66 @@
+{
+  "operation": "delegate",
+  "routing_root": "<workspace-root>",
+  "domain": "intent-cli",
+  "team": "g776-team",
+  "mode": "herdr-only",
+  "mode_source": "recorded",
+  "command_mode": "write",
+  "from_role": "orchestration",
+  "to_role": "implementation",
+  "task_id": "G776-task",
+  "delivered": true,
+  "event_appended": false,
+  "session_layer_preflight": {
+    "verdict": "ready",
+    "ready": true,
+    "expected_team_declared": true,
+    "cross_domain_teams_elided": [],
+    "scopes": [
+      {
+        "domain": "intent-cli",
+        "team": "g776-team",
+        "verdict": "ready",
+        "ready": true,
+        "mode": "herdr-only",
+        "mode_source": "recorded",
+        "topology_mode": "herdr-only",
+        "findings": [
+          {
+            "team": "g776-team",
+            "role": "\u003Cmarker\u003E",
+            "field": "marker",
+            "cause": "marker-not-generated",
+            "message": "No managed marker has been generated for team \u0027g776-team\u0027 in domain \u0027intent-cli\u0027. This is informational; generate it with \u0060intent-cli session-layer marker generate --domain intent-cli --team g776-team --file \u003CAGENTS.md|CLAUDE.md\u003E --write\u0060.",
+            "recorded_mode": "herdr-only"
+          }
+        ],
+        "summary": "Passive session-layer structure is ready for team \u0027g776-team\u0027 in recorded mode \u0027herdr-only\u0027. Only that recorded transport may be probed; active receiver readiness is reported separately."
+      }
+    ],
+    "passive_phase": {
+      "status": "ready",
+      "checked": true,
+      "contacted_receiver": false,
+      "summary": "Session-layer passive preflight passed for 1 named team scope(s)."
+    },
+    "active_phase": {
+      "status": "observed",
+      "checked": true,
+      "contacted_receiver": true,
+      "summary": "Bounded herdr prompt-wait observed the settled recipient enter unattended work; a second bounded agent wait then observed its fresh settled acknowledgement state."
+    },
+    "summary": "Session-layer passive preflight passed for 1 named team scope(s)."
+  },
+  "receiver_state_outcome": "idle-transitions",
+  "working_transition": "observed",
+  "settle_outcome": "observed",
+  "resend_permitted": false,
+  "delivery_method": "file-backed",
+  "task_file": "<workspace-root>/.intent-cli/tasks/intent-cli/g776-team/G776-task-g776-nonce.md",
+  "delivery_pointer": "Read and execute task envelope: <workspace-root>/.intent-cli/tasks/intent-cli/g776-team/G776-task-g776-nonce.md",
+  "pending_record_path": "<workspace-root>/.intent-cli/notify/intent-cli/g776-team/pending.jsonl",
+  "payload": "TASK G776-task\nrole: implementation\nobjective: Implement wake contract\ninputs:\n  - issue #1689\nexpected-artifacts:\n  - ready PR\nreporting-contract:\n  task-id: G776-task\n  expected-artifact: ready PR\n  canonical-report-command: intent-cli notify report --domain intent-cli --team g776-team --from implementation --to orchestration --task-id G776-task --status \u003Ccompleted|blocked|question\u003E --artifact \u003Cartifact\u003E --summary \u003Cone-line-summary\u003E --routing-root \u0027<workspace-root>\u0027 --report-root \u003Crole-work-root\u003E --write --format json\n  required-final-step: Run canonical-report-command after all other work; never hand-write a transport invocation.\nresult-prefix: ORCH_RESULT\nresult-nonce: g776-nonce\ncompletion-marker: When the artifact is ready, concatenate result-prefix, one space, result-nonce, one space, status, one space, and artifact; use completed, blocked, or question. Do not precompose the marker in this task block.",
+  "report_command": "intent-cli notify report --domain intent-cli --team g776-team --from implementation --to orchestration --task-id G776-task --status \u003Ccompleted|blocked|question\u003E --artifact \u003Cartifact\u003E --summary \u003Cone-line-summary\u003E --routing-root \u0027<workspace-root>\u0027 --report-root \u003Crole-work-root\u003E --write --format json",
+  "summary": "Delivered notification to herdr logical role \u0027implementation\u0027 in team \u0027g776-team\u0027 workspace \u0027w-g776\u0027 at recorded pane \u0027w-g776:p2\u0027 after a bounded observed unattended working transition and fresh settled acknowledgement."
+}

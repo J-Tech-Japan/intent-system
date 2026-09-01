@@ -24,7 +24,7 @@ internal static class SessionLayerTopologyCommand
         + "[--model <text>] [--reasoning-effort <text>] [--dry-run|--write] "
         + "[--format markdown|json]\n"
         + "   or: intent-cli session-layer topology record --domain <name> --team <name> --role <name> --resident external "
-        + "--reader <routing-root-relative-path> [--frontend <name>] [--model <text>] [--reasoning-effort <text>] "
+        + "--reader <routing-root-relative-path> [--frontend <name>] [--wake-command <literal-template>] [--model <text>] [--reasoning-effort <text>] "
         + "[--dry-run|--write] "
         + "[--format markdown|json]\n"
         + "   Heartbeat coordination accepts recorded role 'orchestration' or the alias 'orchestrator'; existing "
@@ -347,6 +347,7 @@ internal static class SessionLayerTopologyCommand
                 EffectiveReader = readerReport.EffectivePaths.TryGetValue(role, out var effectiveReader)
                     ? effectiveReader
                     : null,
+                WakeCommand = record.Resident == NotifyRecordedRole.ExternalResident ? record.WakeCommand : null,
             });
         }
 
@@ -987,6 +988,7 @@ internal static class SessionLayerTopologyCommand
         string? deliveryMethod = null;
         string? reader = null;
         string? frontend = null;
+        string? wakeCommand = null;
         string? model = null;
         string? reasoningEffort = null;
         var write = false;
@@ -1030,6 +1032,9 @@ internal static class SessionLayerTopologyCommand
                 case "--frontend":
                     if (!TryReadValue(args, ref index, option, out frontend, out error)) return false;
                     break;
+                case "--wake-command":
+                    if (!TryReadValue(args, ref index, option, out wakeCommand, out error)) return false;
+                    break;
                 case "--model":
                     if (!TryReadValue(args, ref index, option, out model, out error)) return false;
                     break;
@@ -1067,7 +1072,8 @@ internal static class SessionLayerTopologyCommand
         }
 
         if (!SessionLayerTopologyDeclaredValueRules.TryValidate(model, "--model", out error)
-            || !SessionLayerTopologyDeclaredValueRules.TryValidate(reasoningEffort, "--reasoning-effort", out error))
+            || !SessionLayerTopologyDeclaredValueRules.TryValidate(reasoningEffort, "--reasoning-effort", out error)
+            || !SessionLayerTopologyWakeCommandRules.TryValidate(wakeCommand, "--wake-command", out error))
         {
             return false;
         }
@@ -1088,9 +1094,9 @@ internal static class SessionLayerTopologyCommand
                 return false;
             }
 
-            if (reader is not null || frontend is not null)
+            if (reader is not null || frontend is not null || wakeCommand is not null)
             {
-                error = "A herdr resident does not accept --reader or --frontend.";
+                error = "A herdr resident does not accept --reader, --frontend, or --wake-command.";
                 return false;
             }
 
@@ -1137,6 +1143,7 @@ internal static class SessionLayerTopologyCommand
             DeliveryMethod = deliveryMethod,
             Reader = reader,
             Frontend = frontend,
+            WakeCommand = wakeCommand,
             Model = model,
             ReasoningEffort = reasoningEffort,
             Write = write,
@@ -1570,9 +1577,12 @@ internal static class SessionLayerTopologyCommand
             var readerDetails = role.Reader is null
                 ? string.Empty
                 : $" reader={role.Reader}; effective_reader={role.EffectiveReader};";
+            var wakeDetails = role.WakeCommand is null
+                ? string.Empty
+                : $" wake_command={role.WakeCommand};";
             writer.WriteLine($"- {role.Role}: resident={role.Resident}; delivery_target={role.DeliveryTargetKind}:"
                 + $"{role.DeliveryTarget}; model={role.Model ?? "absent"}; "
-                + $"reasoning_effort={role.ReasoningEffort ?? "absent"};{readerDetails}");
+                + $"reasoning_effort={role.ReasoningEffort ?? "absent"};{readerDetails}{wakeDetails}");
         }
         foreach (var profile in result.EnvelopeProfiles)
         {
@@ -1615,7 +1625,7 @@ internal static class SessionLayerTopologyWriter
     private static readonly string[] KnownRoleFields =
     [
         "resident", "workspace_id", "pane_id", "cwd", "kind", "delivery_method", "reader", "frontend",
-        "model", "reasoning_effort",
+        "wake_command", "model", "reasoning_effort",
     ];
 
     public static SessionLayerTopologyRecordResult Record(
@@ -1627,9 +1637,22 @@ internal static class SessionLayerTopologyWriter
             || !SessionLayerTopologyDeclaredValueRules.TryValidate(
                 request.ReasoningEffort,
                 "--reasoning-effort",
+                out declaredValueError)
+            || !SessionLayerTopologyWakeCommandRules.TryValidate(
+                request.WakeCommand,
+                "--wake-command",
                 out declaredValueError))
         {
             return Conflict(request, path, declaredValueError);
+        }
+
+        if (request.WakeCommand is not null
+            && !string.Equals(request.Resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal))
+        {
+            return Conflict(
+                request,
+                path,
+                "Only an external resident may declare --wake-command.");
         }
 
         if (string.Equals(request.Resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal)
@@ -2787,6 +2810,7 @@ internal static class SessionLayerTopologyWriter
         Add(role, "delivery_method", request.DeliveryMethod);
         Add(role, "reader", request.Reader);
         Add(role, "frontend", request.Frontend);
+        Add(role, "wake_command", request.WakeCommand);
         Add(role, "model", request.Model);
         Add(role, "reasoning_effort", request.ReasoningEffort);
         return role;
@@ -3046,6 +3070,7 @@ internal sealed record SessionLayerTopologyRecordRequest
     public string? DeliveryMethod { get; init; }
     public string? Reader { get; init; }
     public string? Frontend { get; init; }
+    public string? WakeCommand { get; init; }
     public string? Model { get; init; }
     public string? ReasoningEffort { get; init; }
     public required bool Write { get; init; }
@@ -3249,4 +3274,5 @@ internal sealed record SessionLayerTopologyShownRole
     public string? ReasoningEffort { get; init; }
     public string? Reader { get; init; }
     public string? EffectiveReader { get; init; }
+    public string? WakeCommand { get; init; }
 }

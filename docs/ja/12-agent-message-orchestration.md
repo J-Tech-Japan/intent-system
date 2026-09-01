@@ -260,6 +260,15 @@ intent-cli notify collect --domain <domain> --team <team> --role design --since 
 **loop を確立してから dual-send。** canonical な `intent-cli notify` は永続的な record
 です。wake channel は `courtesy-only` の signal であり、`dual-send` が実践する形です。
 
+**courtesy wake を明示的に宣言（G776）。** `external` topology record に literal な
+一行の `--wake-command` template を追加できるのは operator だけです。record と
+`session-layer topology show` は宣言をそのまま保持して表示します。render 時にだけ
+`notify delegate` が `{task_id}` と `{summary}` を置換し、`{foo}` のような未知の
+placeholder は literal のまま残します。canonical notify write が必ず先であり、得られる
+一行の wake は `courtesy-only` で、永続的な record の代わりにはなりません。intent-cli は
+operator が渡した text を render するだけで、shell を起動して実行・検証・`health-check` を
+行ったり、command を起動・管理したりしません。
+
 > **非規範的な Orca の例。** design operator は読む前に coordinator terminal を接続し、
 > Orca の bounded blocking check を実行できます。
 >
@@ -270,6 +279,13 @@ intent-cli notify collect --domain <domain> --team <team> --role design --since 
 >
 > Orca は canonical な `intent-cli notify` に添える courtesy wake receiver だけです。
 > intent-cli は Orca を起動も管理もしません。
+>
+> external design seat は永続的な run address 向けの courtesy wake template も
+> 宣言できます（routing input ではありません）。
+>
+> ```text
+> orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}
+> ```
 
 ### role contract の precedence（G672 — preview-through-1.x）
 
