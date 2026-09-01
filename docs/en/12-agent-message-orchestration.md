@@ -1167,6 +1167,12 @@ intent-cli notify supervise repair-unreadable --domain <domain> --team <team> \
   [--routing-root <host-root>] [--dry-run|--write] [--format markdown|json]
 ```
 
+The rendered `intent-cli guide design-thread` liveness guidance points a seat to
+this command only when liveness reports a non-zero `unreadable_record_count`:
+run `intent-cli notify supervise repair-unreadable` with `--dry-run` first,
+inspect the evidence, and use `--write` only second. It repeats the boundary
+that quarantine preserves unreadable lines verbatim as evidence and makes no reconstruction claim; it is never automatic and never performed on read.
+
 `--dry-run` is the default. It lists every unreadable record with its relative
 file, one-based line number, G767 reason, and source-line byte length, while
 leaving the whole store byte-identical. A clean store is a strict no-op in
