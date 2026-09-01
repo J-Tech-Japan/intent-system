@@ -180,6 +180,21 @@ internal static class GuideDesignThreadCommand
                 "No canonical identity inferred from prose, transport state, or an unaccepted candidate.",
                 "No publication, contract, priority, release, destructive, permission, security, or credential decision is silently broadened.",
             },
+            PacketAuthoringCheck = new DesignThreadPacketAuthoringCheck
+            {
+                BeforePublish = "Before publishing any packet, perform this authoring self-check; it is guidance for the design seat and does not add semantic lint to `packet draft`.",
+                PerCriterionSatisfiability = "Per-criterion satisfiability: verify every criterion can be satisfied under the packet's own constraints.",
+                NegativeCriterionScoping = "Negative-criterion scoping: check every negative criterion against every positive criterion, and scope the negative with a limiting word that names the one thing it protects.",
+                RequestUpdateCondition = "Request an update before publication if any criterion conflicts with a required positive criterion, if a negative is not scoped with a limiting word, or if the requested evidence is unobtainable under the packet's own constraints.",
+                DiscriminatingPair = "Name at least one named discriminating pair: a compliant case and a near case that proves the scoped rule catches the intended difference.",
+                RecognitionExamples = new[]
+                {
+                    "G765 AC4/AC6 — unobtainable evidence: a live scheduler-state requirement conflicts with a no-OS-lifecycle-query boundary.",
+                    "G767 AC1/AC6 — status versus oracle: a success-status interpretation conflicts with the full clean-payload oracle.",
+                    "G769 AC3/AC4 — broad negative forbids the needed change: cwd independence needs a routing-root behavior that an unscoped negative would prohibit.",
+                },
+                G770ResolutionRule = "G770 resolution rule: scope the negative with a limiting word naming exactly what it protects — for example, `root resolution` — rather than broadening it to forbid the required change.",
+            },
         };
     }
 
@@ -254,6 +269,15 @@ internal static class GuideDesignThreadCommand
         writer.WriteLine("## 7. Outcome-shaped reporting");
         writer.WriteLine($"- {result.Reporting.Rule}");
         writer.WriteLine($"- {result.Reporting.HumanActionRule}");
+        writer.WriteLine();
+        writer.WriteLine("## 8. Packet-authoring self-check (G774)");
+        writer.WriteLine($"- **before publish:** {result.PacketAuthoringCheck.BeforePublish}");
+        writer.WriteLine($"- **per-criterion satisfiability:** {result.PacketAuthoringCheck.PerCriterionSatisfiability}");
+        writer.WriteLine($"- **negative-criterion scoping:** {result.PacketAuthoringCheck.NegativeCriterionScoping}");
+        writer.WriteLine($"- **request-update condition:** {result.PacketAuthoringCheck.RequestUpdateCondition}");
+        writer.WriteLine($"- **discriminating pair:** {result.PacketAuthoringCheck.DiscriminatingPair}");
+        foreach (var example in result.PacketAuthoringCheck.RecognitionExamples) writer.WriteLine($"- **recognition example:** {example}");
+        writer.WriteLine($"- **G770 resolution:** {result.PacketAuthoringCheck.G770ResolutionRule}");
         WriteList(writer, "## Negative invariants", result.NegativeInvariants);
     }
 
@@ -331,6 +355,7 @@ internal sealed record DesignThreadGuideResult
     public required DesignThreadMonitoring Monitoring { get; init; }
     public required DesignThreadReporting Reporting { get; init; }
     public required IReadOnlyList<string> NegativeInvariants { get; init; }
+    public required DesignThreadPacketAuthoringCheck PacketAuthoringCheck { get; init; }
 }
 
 internal sealed record DesignThreadReachability
@@ -363,3 +388,13 @@ internal sealed record DesignThreadObservationBoundary
 internal sealed record DesignThreadTeamAndDutySplit { public required string Formula { get; init; } public required string MonitoringRule { get; init; } public required string OrchestrationOwnership { get; init; } public required string DesignMode { get; init; } public required IReadOnlyList<string> DesignEscalations { get; init; } }
 internal sealed record DesignThreadMonitoring { public required string Separation { get; init; } public required string ResidualDesignCheck { get; init; } public required string BoundRule { get; init; } public required string GuideRefreshRule { get; init; } public required string DeploymentRule { get; init; } }
 internal sealed record DesignThreadReporting { public required string Rule { get; init; } public required string HumanActionRule { get; init; } }
+internal sealed record DesignThreadPacketAuthoringCheck
+{
+    public required string BeforePublish { get; init; }
+    public required string PerCriterionSatisfiability { get; init; }
+    public required string NegativeCriterionScoping { get; init; }
+    public required string RequestUpdateCondition { get; init; }
+    public required string DiscriminatingPair { get; init; }
+    public required IReadOnlyList<string> RecognitionExamples { get; init; }
+    public required string G770ResolutionRule { get; init; }
+}

@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
@@ -7,6 +9,36 @@ namespace IntentSystem.Cli.Tests;
 
 public sealed class GuideDesignThreadG654Tests
 {
+    private static readonly string[] ParentPayloadFieldNames =
+    [
+        "process",
+        "preview_status",
+        "agent_kind_neutral",
+        "session_layer_rule",
+        "domain",
+        "team",
+        "routing_root",
+        "reachability",
+        "wake_rule",
+        "provenance",
+        "approval",
+        "dialog_answering_rule",
+        "residual_approval",
+        "merge_authority",
+        "delegation_verification",
+        "observation_boundary",
+        "team_and_duty_split",
+        "monitoring",
+        "reporting",
+        "negative_invariants",
+    ];
+
+    // G774 captures every parent field name and raw JSON value in rendered
+    // order. Only the separately asserted packet_authoring_check block may
+    // differ; changing any parent value, nesting, or field order changes this
+    // oracle rather than weakening a full-payload assertion.
+    private const string ParentPayloadOracleHash = "c43e27f362c39d9c737fc2269b1979bdf8ad9b7ecb07f3dd0491ba1325d0c54f";
+
     [Theory]
     [InlineData("agmsg", false)]
     [InlineData("agmsg", true)]
@@ -79,6 +111,70 @@ public sealed class GuideDesignThreadG654Tests
     }
 
     [Fact]
+    public void Json_PacketAuthoringCheckIsTheOnlyAdditivePayloadDelta_G774()
+    {
+        using var writer = new StringWriter();
+        Assert.Equal(
+            0,
+            GuideDesignThreadCommand.Execute(
+                CreateContext(),
+                ["--domain", "intent-cli", "--team", "intent-cli-dev", "--routing-root", "/g774-parent", "--format", "json"],
+                writer));
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        var fields = root.EnumerateObject().ToArray();
+
+        Assert.Equal(
+            ParentPayloadFieldNames.Append("packet_authoring_check"),
+            fields.Select(field => field.Name));
+        var parentPayloadOracle = ComputePayloadOracle(fields.Where(field => field.Name != "packet_authoring_check"));
+        Assert.True(
+            string.Equals(ParentPayloadOracleHash, parentPayloadOracle, StringComparison.Ordinal),
+            $"Parent payload oracle changed. Expected '{ParentPayloadOracleHash}', actual '{parentPayloadOracle}'.");
+
+        var check = root.GetProperty("packet_authoring_check");
+        Assert.Equal(
+            new[]
+            {
+                "before_publish",
+                "per_criterion_satisfiability",
+                "negative_criterion_scoping",
+                "request_update_condition",
+                "discriminating_pair",
+                "recognition_examples",
+                "g770_resolution_rule",
+            },
+            check.EnumerateObject().Select(field => field.Name));
+        Assert.Contains("packet's own constraints", check.GetProperty("per_criterion_satisfiability").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("every negative criterion", check.GetProperty("negative_criterion_scoping").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("limiting word", check.GetProperty("negative_criterion_scoping").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("Request an update", check.GetProperty("request_update_condition").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("named discriminating pair", check.GetProperty("discriminating_pair").GetString()!, StringComparison.Ordinal);
+
+        var examples = Join(check.GetProperty("recognition_examples"));
+        Assert.Contains("G765 AC4/AC6", examples, StringComparison.Ordinal);
+        Assert.Contains("G767 AC1/AC6", examples, StringComparison.Ordinal);
+        Assert.Contains("G769 AC3/AC4", examples, StringComparison.Ordinal);
+        Assert.Contains("root resolution", check.GetProperty("g770_resolution_rule").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Markdown_RendersPacketAuthoringCheckWithAllRecognitionExamples_G774()
+    {
+        using var writer = new StringWriter();
+        Assert.Equal(0, GuideDesignThreadCommand.Execute(CreateContext(), [], writer));
+        var output = writer.ToString();
+
+        Assert.Contains("## 8. Packet-authoring self-check (G774)", output, StringComparison.Ordinal);
+        Assert.Contains("per-criterion satisfiability", output, StringComparison.Ordinal);
+        Assert.Contains("limiting word", output, StringComparison.Ordinal);
+        Assert.Contains("Request an update", output, StringComparison.Ordinal);
+        Assert.Contains("named discriminating pair", output, StringComparison.Ordinal);
+        foreach (var recognitionExample in new[] { "G765 AC4/AC6", "G767 AC1/AC6", "G769 AC3/AC4", "root resolution" })
+            Assert.Contains(recognitionExample, output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Markdown_IsAgentKindNeutral_AndContainsNoNormativeProviderNames()
     {
         using var writer = new StringWriter();
@@ -131,7 +227,38 @@ public sealed class GuideDesignThreadG654Tests
         }
     }
 
+    [Fact]
+    public void EnglishAndJapaneseDocs_SemanticallyMirrorPacketAuthoringCheck_G774()
+    {
+        var en = ReadRepoFile("docs/en/12-agent-message-orchestration.md");
+        var ja = ReadRepoFile("docs/ja/12-agent-message-orchestration.md");
+
+        foreach (var recognitionExample in new[] { "G765 AC4/AC6", "G767 AC1/AC6", "G769 AC3/AC4", "root resolution" })
+        {
+            Assert.Contains(recognitionExample, en, StringComparison.Ordinal);
+            Assert.Contains(recognitionExample, ja, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("per-criterion satisfiability", en, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("limiting word", en, StringComparison.Ordinal);
+        Assert.Contains("request an update", en, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("discriminating pair", en, StringComparison.Ordinal);
+
+        Assert.Contains("criterion ごとの充足可能性", ja, StringComparison.Ordinal);
+        Assert.Contains("限定語", ja, StringComparison.Ordinal);
+        Assert.Contains("更新を要求", ja, StringComparison.Ordinal);
+        Assert.Contains("判別対", ja, StringComparison.Ordinal);
+    }
+
     private static string Join(JsonElement array) => string.Join('\n', array.EnumerateArray().Select(item => item.GetString()));
+
+    private static string ComputePayloadOracle(IEnumerable<JsonProperty> fields)
+    {
+        var payload = string.Join(
+            "\u001E",
+            fields.Select(field => field.Name + "\u001F" + field.Value.GetRawText()));
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
+    }
 
     private static CliContext CreateContext() => new()
     {

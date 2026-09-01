@@ -204,6 +204,27 @@ agent kind に依存しない contract は `intent-cli guide design-thread` で�
 内容は `agmsg` / `herdr-only` と team 指定の有無で変わりません。guide を再読するのは
 CLI version または session-layer configuration が変わったときで、wake ごとではありません。
 
+### packet authoring の事前自己点検（G774）
+
+`packet` を公開する前に、設計担当者はこの guidance-only の点検を行います。これは
+`packet draft` に semantic lint を追加しません。
+
+- **criterion ごとの充足可能性。** 各 criterion が、その packet 自身の制約の下で満たせることを
+  確認します。
+- **negative criterion の限定。** 各 negative criterion を各 positive criterion と照合します。
+  negative は、保護する一つの対象を名前で示す限定語で範囲を絞ります。
+- **更新を要求する条件。** criterion が必要な positive criterion と衝突するとき、negative に
+  限定語がないとき、または packet 自身の制約の下で必要な evidence を取得できないときは、
+  公開前に更新を要求します。
+- **判別対。** 少なくとも一つの名前付き判別対、すなわち適合する事例と、限定した rule が意図した
+  差を捕捉することを示す近接事例を示します。
+
+認識例は G765 AC4/AC6（取得不能な evidence: live scheduler state と no-OS-lifecycle-query
+boundary の衝突）、G767 AC1/AC6（status と full clean-payload oracle の衝突）、G769 AC3/AC4
+（広すぎる negative が必要な変更を禁じる形）です。G770 の解決則は、negative を
+必要な変更まで禁じるほど広げず、保護する対象を正確に名前で示す限定語、たとえば
+`root resolution`、で範囲を絞ることです。
+
 ### role contract の precedence（G672 — preview-through-1.x）
 
 `guide next` または `guide onboarding` を `--role` 付きで呼ぶと、contract を持つ role の
