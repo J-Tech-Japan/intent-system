@@ -14,7 +14,7 @@ public sealed class ReleaseNotesV0250DocsTests
         "5c4af5d88ddcfa47335bad4df56ad3e40dae9140";
     private const string BuiltDisplayIdentity = "intent-cli 0.24.1-5c4af5d-G741";
     private const string InstalledDisplayIdentity = "intent-cli 0.24.0-df472fe-G737";
-    private const string CurrentStableInstallDisplayIdentity = "intent-cli 0.28.0-565530e-G769";
+    private const string CurrentStableInstallDisplayIdentity = "intent-cli 0.29.0-65e02d8-G772";
 
     private static readonly (string Unit, string Pr, string Merge)[] Units =
     [
@@ -165,8 +165,8 @@ public sealed class ReleaseNotesV0250DocsTests
         var root = RepoVersionPolicySource.RepoRoot();
         var policy = RepoVersionPolicySource.Read();
 
-        Assert.Equal("0.28.0", policy.StableVersion);
-        Assert.Equal("0.28.1", policy.NextVersion);
+        Assert.Equal("0.29.0", policy.StableVersion);
+        Assert.Equal("0.29.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
@@ -179,6 +179,8 @@ public sealed class ReleaseNotesV0250DocsTests
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.27.1.md")));
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.28.0.md")));
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.28.1.md")));
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.29.0.md")));
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.29.1.md")));
         }
     }
 
@@ -191,13 +193,15 @@ public sealed class ReleaseNotesV0250DocsTests
             RepoVersionPolicySource.RepoRoot(), "docs", language, "09-developer-reference.md"));
 
         Assert.Contains(
-            language == "en" ? "Next release readiness (v0.28.1)" : "次リリース準備(v0.28.1)",
+            language == "en" ? "Next release readiness (v0.29.1)" : "次リリース準備(v0.29.1)",
             reference,
             StringComparison.Ordinal);
         Assert.Contains(CurrentStableInstallDisplayIdentity, reference, StringComparison.Ordinal);
         Assert.Contains("release-notes-v0.26.0.md", reference, StringComparison.Ordinal);
         Assert.Contains("release-notes-v0.28.0.md", reference, StringComparison.Ordinal);
         Assert.Contains("release-notes-v0.28.1.md", reference, StringComparison.Ordinal);
+        Assert.Contains("release-notes-v0.29.0.md", reference, StringComparison.Ordinal);
+        Assert.Contains("release-notes-v0.29.1.md", reference, StringComparison.Ordinal);
         Assert.DoesNotContain("release-notes-v0.27.0.md", reference, StringComparison.Ordinal);
         Assert.DoesNotContain("release-notes-v0.24.1.md", reference, StringComparison.Ordinal);
         Assert.Contains("ReleaseNotesV0250DocsTests", reference, StringComparison.Ordinal);

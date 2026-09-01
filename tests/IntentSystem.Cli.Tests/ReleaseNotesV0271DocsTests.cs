@@ -18,12 +18,12 @@ public sealed class ReleaseNotesV0271DocsTests
         var policyPath = Path.Combine(root, "eng", "version.json");
 
         Assert.Equal(
-            "{\n  \"stableVersion\": \"0.28.0\",\n  \"nextVersion\": \"0.28.1\"\n}\n",
+            "{\n  \"stableVersion\": \"0.29.0\",\n  \"nextVersion\": \"0.29.1\"\n}\n",
             File.ReadAllText(policyPath));
 
         var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.28.0", policy.StableVersion);
-        Assert.Equal("0.28.1", policy.NextVersion);
+        Assert.Equal("0.29.0", policy.StableVersion);
+        Assert.Equal("0.29.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
@@ -34,6 +34,8 @@ public sealed class ReleaseNotesV0271DocsTests
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.27.1.md")));
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.28.0.md")));
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.28.1.md")));
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.29.0.md")));
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.29.1.md")));
             Assert.DoesNotContain("- G", stub, StringComparison.Ordinal);
 
             if (language == "en")
@@ -88,8 +90,8 @@ public sealed class ReleaseNotesV0271DocsTests
         var content = File.ReadAllText(Path.Combine(
             RepoVersionPolicySource.RepoRoot(), "docs", language, "09-developer-reference.md"));
         var heading = language == "en"
-            ? "### Next release readiness (v0.28.1)"
-            : "### 次リリース準備(v0.28.1)";
+            ? "### Previous v0.28.0 release-prep evidence (retained in history only)"
+            : "### previous v0.28.0 release-prep evidence (history のみ)";
         var endHeading = language == "en"
             ? "### Retired v0.27.0 release-prep evidence (retained in history only)"
             : "### retired v0.27.0 release-prep evidence (history のみ)";

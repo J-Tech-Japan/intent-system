@@ -3009,7 +3009,56 @@ result は literal bytes の削減、追加した reference bytes、record の n
 `shrink-audit.jsonl` に明記します。`.intent-cli/runs/*.provider.jsonl` は別の provider-run state なので
 scope 外です。`--dry-run` なら manifest、JSONL、audit を書き込まずに測定済み plan だけを確認できます。
 
-### 次リリース準備(v0.28.1)
+### 次リリース準備(v0.29.1)
+
+**RELEASE PREPARED / NOT PUBLISHED。**
+
+G778 は exact named base
+`65e02d86d5e9e415d1fe934b0d5e8bad87af9ccf` から v0.29.0 preparation を測定しました。
+normal clean Release build は `intent-cli 0.28.1-65e02d8-G772` を返します。これは
+旧 `nextVersion` placeholder identity であり、v0.29.0 ではありません。同じ base を
+explicit `-p:Version=0.29.0` で build すると
+`intent-cli 0.29.0-65e02d8-G772` を返します。published v0.29.0 は `release.yml` の
+release tag `RAW` から `VERSION` を導出し、`eng/version.json` は local builds と
+dry runs だけを管理します。
+
+prepared files は `release-notes-v0.29.0.md` と
+`release-notes-v0.29.1.md` の DRAFT stub です。current policy は次のとおりです:
+
+```json
+{
+  "stableVersion": "0.29.0",
+  "nextVersion": "0.29.1"
+}
+```
+
+`0.29.1` は replaceable development placeholder であり、次の real release number
+ではありません。tag、GitHub Release、package publish、workflow change、product source
+change はこの prepare-only slice に含みません。
+
+active package-policy evidence は `stableVersion 0.29.0`、`nextVersion 0.29.1`、local
+candidate `JTechJapan.IntentSystem.Cli.0.29.1.nupkg` です。
+host-only release-prep claim boundary は `release-prep:<owner/repo>:0.29.1` です。この child
+release-prep は事前に確認済みの所有情報を使い、host state を inspect/mutate しません。
+
+tagged v0.28.0 CLI は `invalid-notification: Unknown argument
+'repair-unreadable'.` を返し、named base は `notify supervise repair-unreadable` を
+render します。この一つの command-route addition が minor-bump evidence です。
+v0.28.0 の rule は option-level addition を数えません。G776 の `--wake-command` は
+二つ目の command route ではないことを明示します。
+
+v0.29.0 notes は G773–G777 の exact first-parent range、五つすべての
+unit/PR/issue/merge tuple、operator-observable outcome を記録します。EN/JA tuple parity
+は `ReleaseNotesV0290DocsTests` が直接比較し、one-field mirror mutation は fail
+しなければなりません。同じ guard は次の truthfulness boundary を pin します:
+repair-unreadable は unreadable line を verbatim に quarantine し reconstruction を
+claim せず、automatic でも read 時でもないこと、undeclared wake-channel team の bytes
+は zero changed bytes であること、観測した 9-record transaction `6279ad14` は path
+evidence で fleet-cleanliness claim ではないことです。`ReleasePackageMetadataTests`、
+`VersionSourcePolicyGuardTests`、`JapaneseTerminologyGuardG613Tests` は release-policy、
+source、terminology guard のままです。
+
+### previous v0.28.0 release-prep evidence (history のみ)
 
 **RELEASE PREPARED / NOT PUBLISHED。**
 

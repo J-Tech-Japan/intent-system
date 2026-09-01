@@ -287,11 +287,18 @@ public sealed class ReleaseNotesV0220DocsTests
         Assert.Contains($"release-notes-v{policy.NextVersion}.md", section, StringComparison.Ordinal);
         Assert.Contains("RELEASE PREPARED / NOT PUBLISHED", section, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("placeholder", compact, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("104 usages", section, StringComparison.Ordinal);
-        Assert.Contains("106 usages", section, StringComparison.Ordinal);
-        Assert.Contains("canonical-unavailable", section, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("child", compact, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("repair-unreadable", section, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("--wake-command", section, StringComparison.Ordinal);
+        Assert.Contains("option-level", section, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("GitHub Release", section, StringComparison.Ordinal);
+
+        // Keep the v0.28 measured command-surface evidence frozen with the
+        // released v0.28 notes instead of copying historical counts into each
+        // later active readiness section.
+        var historicNotes = File.ReadAllText(Path.Combine(
+            RepoVersionPolicySource.RepoRoot(), "docs", language, "release-notes-v0.28.0.md"));
+        Assert.Contains("104 usages", historicNotes, StringComparison.Ordinal);
+        Assert.Contains("106 usages", historicNotes, StringComparison.Ordinal);
     }
 
     private static string ReadinessSection(string language, string nextVersion)
