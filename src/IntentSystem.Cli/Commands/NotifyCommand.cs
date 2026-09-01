@@ -85,6 +85,7 @@ internal static class NotifyCommand
         + NotifySuperviseShrinkCommand.Usage + "\n"
         + NotifySuperviseArchiveCommand.Usage + "\n"
         + NotifySuperviseRepairCycleHistoryCommand.Usage + "\n"
+        + NotifySuperviseRepairUnreadableCommand.Usage + "\n"
         + NotifySuperviseInstallCommand.Usage + "\n"
         + NotifySuperviseReconcileCommand.Usage;
 
@@ -152,6 +153,8 @@ internal static class NotifyCommand
                 NotifySuperviseShrinkCommand.Execute(context, args[1..], writer),
             NotifySuperviseRepairCycleHistoryCommand.Operation =>
                 NotifySuperviseRepairCycleHistoryCommand.Execute(context, args[1..], writer),
+            NotifySuperviseRepairUnreadableCommand.Operation =>
+                NotifySuperviseRepairUnreadableCommand.Execute(context, args[1..], writer),
             NotifySuperviseInstallCommand.Operation =>
                 NotifySuperviseInstallCommand.Execute(context, args[1..], writer),
             NotifySuperviseReconcileCommand.ReconcileOperation =>

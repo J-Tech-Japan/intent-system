@@ -162,7 +162,7 @@ internal static class NotifySuperviseLivenessCommand
         return $"Read-only liveness: {cycleSummary}{absenceSummary}{noReadableCycleSummary}{corruptionSummary} Scheduler live state=unknown; durable installation evidence={schedulerInstallationEvidence}; the supervisor was not run.";
     }
 
-    private static string ResolveSupervisionArtifactRootPath(CliContext context, string routingRoot)
+    internal static string ResolveSupervisionArtifactRootPath(CliContext context, string routingRoot)
     {
         var configuredRoot = context.Config.Supervision.ArtifactRoot;
         return Path.IsPathRooted(configuredRoot)
