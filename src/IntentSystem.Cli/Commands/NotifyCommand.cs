@@ -611,7 +611,7 @@ internal static class NotifyCommand
                 ReportDeliveryState = report.DeliveryState,
                 PendingRecordPath = pending.Path,
                 Cause = "sender-local-report-not-delivered",
-                Summary = $"Sender-local report for task '{options.TaskId}' is '{report.DeliveryState}', not delivered; the local handoff remains available for its delivery-level recovery path.",
+                Summary = $"Sender-local report for task '{options.TaskId}' is '{report.DeliveryState}', not delivered; reconcile only consumes delivered entries. Recover this entry with '{NotifyReportOutboxStore.BuildCollectCommand(routingRoot, report)}' run from a context that can write the reader path, then re-run this reconcile.",
             });
             return 1;
         }
@@ -1288,6 +1288,7 @@ internal static class NotifyCommand
     {
         var isReport = string.Equals(operation, OperationReport, StringComparison.Ordinal)
             || string.Equals(operation, OperationCollect, StringComparison.Ordinal);
+        var isCollect = string.Equals(operation, OperationCollect, StringComparison.Ordinal);
         var resolvedReportRoot = reportRoot ?? options.ReportRoot ?? options.RoutingRoot!;
         var senderLocalReport = isReport && !PathsEqual(resolvedReportRoot, options.RoutingRoot!);
         if (senderLocalReport)
@@ -1501,7 +1502,19 @@ internal static class NotifyCommand
             return 1;
         }
 
-        if (delivery.ReaderPath is not null && senderLocalReport && options.Write)
+        // The refusal is decided empirically: attempt the append on the exact
+        // reader path (the same path the handoff writes) and report what was
+        // observed. Two differing roots is not evidence of a sandbox, and the
+        // host running the documented recovery differs its roots by design.
+        var readerWriteDenied = false;
+        var probeError = string.Empty;
+        if (delivery.ReaderPath is not null && isReport && senderLocalReport && options.Write && !isCollect
+            && !TryProbeReaderWrite(delivery.ReaderPath, out probeError))
+        {
+            readerWriteDenied = true;
+        }
+
+        if (readerWriteDenied)
         {
             if (reportOutbox is not null)
             {
@@ -1516,7 +1529,7 @@ internal static class NotifyCommand
                 options,
                 resolution.Mode,
                 "report-routing-root-write-required",
-                $"Report delivery resolved an external reader at '{delivery.ReaderPath}', which is under the host routing root and cannot be written from this sandboxed seat. Provision the recipient through herdr/agmsg or route a narrowly writable reader root; the sender-local report handoff is retained at '{outboxEntryPath}'. This is a delegation-level routing fault, not an implementation-seat stall.",
+                $"An append to the external reader at '{delivery.ReaderPath}' was attempted in this execution context and was denied by the operating system: {probeError} The write was measured, not inferred. Repair write access to that path (or provision the recipient through herdr/agmsg, or route a narrowly writable reader root); the sender-local report handoff is retained at '{outboxEntryPath}'. Run 'intent-cli notify collect' from a context that can write the reader path to recover this entry.",
                 payload,
                 reportCommand,
                 modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
@@ -1725,6 +1738,26 @@ internal static class NotifyCommand
             ? $"{summary} Sender-local report handoff persisted under '{reportRoot}'; no host-root write was required. Host routing state at '{routingRoot}' remains for orchestration reconciliation."
             : summary;
 
+    /// Attempts the write the external-reader handoff would perform and
+    /// reports what was actually observed, instead of inferring a sandbox
+    /// constraint from whether two roots differ. The probe opens the exact
+    /// reader path for append (write-only, no bytes) so a permitted probe
+    /// leaves the events file byte-identical.
+    private static bool TryProbeReaderWrite(string readerPath, out string observedError)
+    {
+        try
+        {
+            using var stream = new FileStream(readerPath, FileMode.Append, FileAccess.Write, FileShare.Read);
+            observedError = string.Empty;
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            observedError = exception.Message;
+            return false;
+        }
+    }
+
     private static bool PathsEqual(string left, string right) =>
         string.Equals(
             Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
@@ -1744,20 +1777,25 @@ internal static class NotifyCommand
             ? "deferred-to-orchestration"
             : null;
 
-    private static NotifyDesignEvent BuildReaderEvent(string operation, NotifyOptions options) => new()
+    private static NotifyDesignEvent BuildReaderEvent(string operation, NotifyOptions options)
     {
-        Timestamp = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
-        Team = options.Team!,
-        Kind = ReaderEventKind(operation, options.Status),
-        Unit = options.TaskId!,
-        Summary = NotifyEventWriter.NormalizeSummary(
-            string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
-                ? options.Objective!
-                : options.Summary!),
-        Artifact = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
-            ? options.Inputs.FirstOrDefault() ?? options.ExpectedArtifacts[0]
-            : options.Artifact!,
-    };
+        // A recovered entry carries its original handoff summary; the collect
+        // options may only hold the task id, so prefer the persisted entry.
+        var summary = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+            ? options.Objective!
+            : string.IsNullOrWhiteSpace(options.Summary) ? options.TaskId! : options.Summary!;
+        return new NotifyDesignEvent
+        {
+            Timestamp = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+            Team = options.Team!,
+            Kind = ReaderEventKind(operation, options.Status),
+            Unit = options.TaskId!,
+            Summary = NotifyEventWriter.NormalizeSummary(summary),
+            Artifact = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+                ? options.Inputs.FirstOrDefault() ?? options.ExpectedArtifacts[0]
+                : options.Artifact!,
+        };
+    }
 
     private static NotifyPendingDelegation BuildPendingDelegation(
         NotifyOptions options,
@@ -3314,6 +3352,10 @@ internal static class NotifyEventWriter
         using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         writer.Write(line);
         writer.Write('\n');
+        // Flush through to the file before the handle closes so the append is
+        // observable to any reader in the same process immediately.
+        writer.Flush();
+        stream.Flush(flushToDisk: true);
     }
 
     public static string NormalizeSummary(string summary) =>
