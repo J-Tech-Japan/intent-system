@@ -899,6 +899,36 @@ reader は read-only のままで、supervisor や OS lifecycle command を実�
 `stalls.jsonl` と prompt-audit record にも cycles と同じ record 単位の扱いを適用するため、
 secondary history の damage が team の supervision answer の残りを黙って消すことはありません。
 
+### unreadable record を evidence として隔離する repair (G773 — preview-through-1.x)
+
+G773 は、G767 reader がすでに名前付きで示した既存 damage に対する唯一の明示的 write path を
+追加します。
+
+```bash
+intent-cli notify supervise repair-unreadable --domain <domain> --team <team> \
+  [--routing-root <host-root>] [--dry-run|--write] [--format markdown|json]
+```
+
+default は `--dry-run` です。relative file、1-based line number、G767 の reason、source line の
+byte length をすべて列挙し、store 全体を byte-identical のまま残します。clean store は両 mode で
+strict no-op です。live file、quarantine sidecar、audit の作成・置換はなく、結果は completed repair
+ではなく明示的に `nothing-to-repair` になります。
+
+`--write` では supervision directory lock を取得して再走査し、各 target live file を atomic rename
+する直前に length を再確認します。読めない byte range は同じ directory の file ごとの
+`.unreadable.jsonl` quarantine sidecar へ、順序を保った **verbatim** の bytes としてコピーし、その後
+live file を元の readable bytes だけに置換します。live replacement の直前に concurrent growth を
+検出した場合は、実際に変化した file を示して安全に失敗し、その live file は置換しません。completed
+write run ごとに、file count、line number、timestamp、writer identity を含む 1 つの parsable な
+G768 atomic audit record を追記します。
+
+quarantine sidecar は history ではなく evidence です。reader は live/archive read set に戻しません。
+したがって existing all-corrupt file は repair 後に `not-found` や health ではなく `empty-history` となり、
+次の liveness は unreadable record を 0 件と報告します。archive history にも同じ file 単位の
+quarantine rule を適用するため、G744 の archive window を変更せず、shrink/archive に corruption repair を
+させません。この command は evidence を保存しますが、damaged record がかつて何を述べたかを
+**reconstruct** しません。また read 時に repair することもありません。
+
 ### supervision history の record 単位 append (G768 — preview-through-1.x)
 
 supervision history の cycle、stall、prompt-audit は、1 つの UTF-8 append 操作で

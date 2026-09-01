@@ -1067,6 +1067,42 @@ command. `stalls.jsonl` and prompt-audit records receive the same per-record
 treatment as cycles, so a damaged secondary history cannot silently erase the
 rest of the team's supervision answer.
 
+### Evidence-preserving unreadable-record repair (G773 — preview-through-1.x)
+
+G773 adds the one explicit write path for damage already named by the G767
+reader:
+
+```bash
+intent-cli notify supervise repair-unreadable --domain <domain> --team <team> \
+  [--routing-root <host-root>] [--dry-run|--write] [--format markdown|json]
+```
+
+`--dry-run` is the default. It lists every unreadable record with its relative
+file, one-based line number, G767 reason, and source-line byte length, while
+leaving the whole store byte-identical. A clean store is a strict no-op in
+both modes: no live file, quarantine sidecar, or audit is created or replaced,
+and the result is explicitly `nothing-to-repair` rather than a completed
+repair.
+
+With `--write`, the command takes the supervision directory lock, rescans,
+and checks each target live-file length immediately before its atomic rename.
+It copies the exact unreadable byte ranges **verbatim and in order** to a
+per-file `.unreadable.jsonl` quarantine sidecar in the same directory, then
+replaces the live file with exactly its original readable bytes. Before a
+live replacement, concurrent growth makes the operation fail closed with the
+real changed-file cause; the changed live file is not replaced. One parsable
+G768 atomic audit record is appended for each completed write run with the
+file counts, line numbers, timestamp, and writer identity.
+
+Quarantine sidecars are evidence, not history: readers do not return them to
+the live/archive read set. Thus a repaired all-corrupt existing file becomes
+`empty-history` rather than `not-found` or health, and subsequent liveness
+reports zero unreadable records. Archive history follows the same per-file
+quarantine rule, so repair neither changes G744's archive window nor asks
+shrink/archive to repair corruption. This command preserves evidence; it does
+**not reconstruct** what a damaged record once said, and it never repairs on
+read.
+
 ### Atomic per-record supervision history appends (G768 — preview-through-1.x)
 
 Supervision history writes encode each cycle, stall, and prompt-audit JSONL

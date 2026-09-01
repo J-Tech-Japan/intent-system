@@ -22,6 +22,8 @@ internal static class NotifySupervisionStore
     public const string EvidenceDefinitionsFileName = "evidence-definitions.json";
     public const string ShrinkAuditFileName = "shrink-audit.jsonl";
     public const string ShrinkTransactionFileName = "shrink-transaction.json";
+    public const string RepairUnreadableAuditFileName = "repair-unreadable-audit.jsonl";
+    public const string RepairUnreadableTransactionFileName = "repair-unreadable-transaction.json";
     public const string CycleArchiveDirectoryName = "cycles-archive";
     public const string ArchiveTransactionFileName = "archive-transaction.json";
     public const string LocalIgnoreFileName = ".gitignore";
@@ -36,6 +38,9 @@ internal static class NotifySupervisionStore
     private const string ShrinkTransactionStagePrefix = ".shrink-transaction-";
     private const string ArchiveTransactionSchema = "intent-cli.supervision-archive-transaction/v1";
     private const string ArchiveTransactionStagePrefix = ".archive-transaction-";
+    private const string RepairUnreadableAuditSchema = "intent-cli.supervision-repair-unreadable/v1";
+    private const string RepairUnreadableTransactionSchema = "intent-cli.supervision-repair-unreadable-transaction/v1";
+    private const string RepairUnreadableTransactionStagePrefix = ".repair-unreadable-transaction-";
     internal const string EvidenceSchema = "intent-cli.supervision-evidence/v1";
     internal const string HerdrRegistrationEvidenceKey = "recorded-herdr-seat-registration";
     internal const string HerdrRegistrationDefinition =
@@ -58,6 +63,8 @@ internal static class NotifySupervisionStore
     internal static Func<string, string, NotifySupervisionWriteResult>? WriteOverride { get; set; }
     internal static Action<NotifySupervisionShrinkFaultPoint>? ShrinkFaultInjector { get; set; }
     internal static Action<NotifySupervisionArchiveFaultPoint>? ArchiveFaultInjector { get; set; }
+    internal static Action? RepairUnreadableBeforeLengthRecheck { get; set; }
+    internal static Action<NotifySupervisionRepairUnreadableFaultPoint>? RepairUnreadableFaultInjector { get; set; }
 
     public static string ResolveDirectory(string artifactRoot, string domain, string team)
     {
@@ -660,6 +667,7 @@ internal static class NotifySupervisionStore
         {
             paths.AddRange(
                 Directory.EnumerateFiles(archiveDirectory, "*.jsonl", SearchOption.TopDirectoryOnly)
+                    .Where(path => !IsUnreadableQuarantinePath(path))
                     .OrderBy(path => Path.GetFileName(path), StringComparer.Ordinal));
         }
 
@@ -671,6 +679,9 @@ internal static class NotifySupervisionStore
 
         return paths;
     }
+
+    private static bool IsUnreadableQuarantinePath(string path) =>
+        Path.GetFileName(path).EndsWith(".unreadable.jsonl", StringComparison.Ordinal);
 
     private static IReadOnlyList<NotifySupervisionStallRecord> ReadStalls(
         string path,
@@ -770,34 +781,48 @@ internal static class NotifySupervisionStore
         ICollection<NotifySupervisionUnreadableRecord> unreadableRecords,
         out NotifySupervisionEvent? entry)
     {
+        if (TryParseSupervisionEvent(line, out entry, out var reason))
+        {
+            return true;
+        }
+
+        AddUnreadableRecord(
+            path,
+            directory,
+            lineNumber,
+            component,
+            reason!,
+            unreadableRecords);
+        return false;
+    }
+
+    /// <summary>
+    /// G767's single record-level tolerance model. Readers and G773's
+    /// explicit repair scan both use this parser so a line is never named
+    /// unreadable by one surface and silently kept by the other.
+    /// </summary>
+    private static bool TryParseSupervisionEvent(
+        string line,
+        out NotifySupervisionEvent? entry,
+        out string? reason)
+    {
         try
         {
             entry = JsonSerializer.Deserialize<NotifySupervisionEvent>(line, JsonOptions);
             if (entry is null)
             {
-                AddUnreadableRecord(
-                    path,
-                    directory,
-                    lineNumber,
-                    component,
-                    "empty-event",
-                    unreadableRecords);
+                reason = "empty-event";
                 return false;
             }
 
             if (string.IsNullOrWhiteSpace(entry.Kind))
             {
-                AddUnreadableRecord(
-                    path,
-                    directory,
-                    lineNumber,
-                    component,
-                    "missing-event-kind",
-                    unreadableRecords);
                 entry = null;
+                reason = "missing-event-kind";
                 return false;
             }
 
+            reason = null;
             return true;
         }
         catch (JsonException)
@@ -805,13 +830,7 @@ internal static class NotifySupervisionStore
             // Match shrink's degrade-and-report shape: preserve the rest of
             // the append-only file and expose the exact unreadable line.
             entry = null;
-            AddUnreadableRecord(
-                path,
-                directory,
-                lineNumber,
-                component,
-                "invalid-json",
-                unreadableRecords);
+            reason = "invalid-json";
             return false;
         }
     }
@@ -1098,6 +1117,764 @@ internal static class NotifySupervisionStore
             {
                 return NotifySupervisionArchiveResult.Failure(directory, liveWindowDays, exception.Message);
             }
+        }
+    }
+
+    /// <summary>
+    /// G773's explicit, evidence-preserving repair. The normal readers remain
+    /// read-only and continue to name corruption; only this route moves the
+    /// exact unreadable byte ranges out of their read paths.
+    /// </summary>
+    internal static NotifySupervisionRepairUnreadableResult RepairUnreadable(
+        string artifactRoot,
+        string domain,
+        string team,
+        bool write,
+        DateTimeOffset occurredAt,
+        NotifySupervisionWriterIdentity writer)
+    {
+        string directory;
+        try
+        {
+            directory = ResolveDirectory(artifactRoot, domain, team);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            return NotifySupervisionRepairUnreadableResult.Failure(artifactRoot, exception.Message);
+        }
+
+        if (!Directory.Exists(directory))
+        {
+            return NotifySupervisionRepairUnreadableResult.Empty(directory);
+        }
+
+        try
+        {
+            // A clean store must remain a strict no-op, including in write
+            // mode. Scan before opening the lock so an otherwise untouched
+            // directory never gains a lock, sidecar, audit, or replacement.
+            var transactionPath = Path.Combine(directory, RepairUnreadableTransactionFileName);
+            var initialPlans = PlanUnreadableRepairs(directory);
+            if (!write)
+            {
+                if (File.Exists(transactionPath))
+                {
+                    return NotifySupervisionRepairUnreadableResult.Failure(
+                        directory,
+                        "repair-unreadable-recovery-pending: a prior repair transaction requires --write to recover safely.");
+                }
+
+                return NotifySupervisionRepairUnreadableResult.FromPlans(
+                    directory: directory,
+                    applied: false,
+                    plans: initialPlans,
+                    audit: null,
+                    error: null);
+            }
+
+            if (initialPlans.Count == 0 && !File.Exists(transactionPath))
+            {
+                return NotifySupervisionRepairUnreadableResult.FromPlans(
+                    directory: directory,
+                    applied: false,
+                    plans: initialPlans,
+                    audit: null,
+                    error: null);
+            }
+
+            lock (Sync)
+            {
+                using var directoryLock = AcquireDirectoryLock(directory, createDirectory: false);
+                var transaction = ReadRepairUnreadableTransaction(directory);
+                if (transaction is null)
+                {
+                    var plans = PlanUnreadableRepairs(directory);
+                    if (plans.Count == 0)
+                    {
+                        return NotifySupervisionRepairUnreadableResult.FromPlans(
+                            directory: directory,
+                            applied: false,
+                            plans: plans,
+                            audit: null,
+                            error: null);
+                    }
+
+                    // The G768 directory lock coordinates current writers, but a
+                    // pre-G768 writer can append without it. The immediate length
+                    // check below is therefore a separate fail-closed boundary.
+                    RepairUnreadableBeforeLengthRecheck?.Invoke();
+
+                    foreach (var plan in plans)
+                    {
+                        if (!HasExpectedFileLength(plan.LivePath, plan.BeforeLiveBytes)
+                            || !string.Equals(
+                                HashFileOrNull(plan.LivePath),
+                                plan.BeforeLiveSha256,
+                                StringComparison.Ordinal))
+                        {
+                            return NotifySupervisionRepairUnreadableResult.FromPlans(
+                                directory: directory,
+                                applied: false,
+                                plans: plans,
+                                audit: null,
+                                error: BuildConcurrentGrowthError(plan));
+                        }
+
+                        if (!HasExpectedOptionalFileLength(
+                                plan.QuarantinePath,
+                                plan.QuarantineExisted,
+                                plan.BeforeQuarantineBytes)
+                            || !string.Equals(
+                                HashFileOrNull(plan.QuarantinePath),
+                                plan.BeforeQuarantineSha256,
+                                StringComparison.Ordinal))
+                        {
+                            return NotifySupervisionRepairUnreadableResult.FromPlans(
+                                directory: directory,
+                                applied: false,
+                                plans: plans,
+                                audit: null,
+                                error: $"repair-unreadable-quarantine-changed: '{plan.RelativeQuarantinePath}' changed while the repair was prepared; no live file was replaced.");
+                        }
+                    }
+
+                    transaction = PrepareRepairUnreadableTransaction(
+                        directory,
+                        plans,
+                        occurredAt,
+                        writer);
+                }
+
+                var audit = ExecuteRepairUnreadableTransaction(directory, transaction);
+                return NotifySupervisionRepairUnreadableResult.FromTransaction(
+                    directory,
+                    transaction,
+                    audit);
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or ArgumentException
+                or JsonException
+                or InvalidDataException)
+        {
+            return NotifySupervisionRepairUnreadableResult.Failure(directory, exception.Message);
+        }
+    }
+
+    private static IReadOnlyList<NotifySupervisionUnreadableRepairPlan> PlanUnreadableRepairs(
+        string directory)
+    {
+        var plans = new List<NotifySupervisionUnreadableRepairPlan>();
+        foreach (var cyclePath in ResolveCycleHistoryPaths(directory))
+        {
+            var plan = PlanUnreadableRepairFile(cyclePath, directory, "cycles");
+            if (plan is not null)
+            {
+                plans.Add(plan);
+            }
+        }
+
+        var stallsPath = Path.Combine(directory, StallFileName);
+        if (File.Exists(stallsPath))
+        {
+            var plan = PlanUnreadableRepairFile(stallsPath, directory, "stalls");
+            if (plan is not null)
+            {
+                plans.Add(plan);
+            }
+        }
+
+        return plans
+            .OrderBy(plan => plan.RelativePath, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static NotifySupervisionUnreadableRepairPlan? PlanUnreadableRepairFile(
+        string path,
+        string directory,
+        string component)
+    {
+        var original = File.ReadAllBytes(path);
+        var readable = new List<byte[]>();
+        var removed = new List<byte[]>();
+        var records = new List<NotifySupervisionRepairUnreadableRecord>();
+        var relativePath = GetRelativeSupervisionPath(directory, path);
+
+        foreach (var line in EnumerateJsonlLines(original))
+        {
+            var text = Utf8NoBom.GetString(line.ContentBytes);
+            if (string.IsNullOrWhiteSpace(text)
+                || !TryDescribeUnreadableRepairLine(component, text, out var reason))
+            {
+                readable.Add(line.FullBytes);
+                continue;
+            }
+
+            records.Add(new NotifySupervisionRepairUnreadableRecord
+            {
+                Component = component,
+                File = relativePath,
+                Line = line.Line,
+                Reason = reason!,
+                ByteLength = line.ContentBytes.Length,
+            });
+            removed.Add(line.FullBytes);
+        }
+
+        if (records.Count == 0)
+        {
+            return null;
+        }
+
+        var quarantinePath = ResolveUnreadableQuarantinePath(path);
+        return new NotifySupervisionUnreadableRepairPlan
+        {
+            LivePath = path,
+            RelativePath = relativePath,
+            QuarantinePath = quarantinePath,
+            RelativeQuarantinePath = GetRelativeSupervisionPath(directory, quarantinePath),
+            BeforeLiveBytes = original.LongLength,
+            BeforeLiveSha256 = HashBytes(original),
+            ReadableBytes = ConcatBytes(readable),
+            RemovedBytes = ConcatBytes(removed),
+            QuarantineExisted = File.Exists(quarantinePath),
+            BeforeQuarantineBytes = File.Exists(quarantinePath)
+                ? new FileInfo(quarantinePath).Length
+                : 0,
+            BeforeQuarantineSha256 = File.Exists(quarantinePath)
+                ? HashFileOrNull(quarantinePath)
+                : null,
+            ExistingQuarantineBytes = File.Exists(quarantinePath)
+                ? File.ReadAllBytes(quarantinePath)
+                : [],
+            UnreadableRecords = records,
+        };
+    }
+
+    private static bool TryDescribeUnreadableRepairLine(
+        string component,
+        string line,
+        out string? reason)
+    {
+        if (!TryParseSupervisionEvent(line, out var entry, out reason))
+        {
+            return true;
+        }
+
+        if (string.Equals(component, "cycles", StringComparison.Ordinal))
+        {
+            if (string.Equals(entry!.Kind, "cycle", StringComparison.Ordinal)
+                && entry.Cycle is null)
+            {
+                reason = "missing-cycle-payload";
+                return true;
+            }
+
+            if (string.Equals(entry.Kind, "prompt-audit", StringComparison.Ordinal)
+                && entry.PromptAudit is null)
+            {
+                reason = "missing-prompt-audit-payload";
+                return true;
+            }
+        }
+        else if (string.Equals(component, "stalls", StringComparison.Ordinal))
+        {
+            if (string.Equals(entry!.Kind, "open", StringComparison.Ordinal)
+                && entry.Stall is null)
+            {
+                reason = "missing-stall-payload";
+                return true;
+            }
+
+            if (string.Equals(entry.Kind, "clear", StringComparison.Ordinal)
+                && entry.Key is null)
+            {
+                reason = "missing-stall-key";
+                return true;
+            }
+        }
+
+        reason = null;
+        return false;
+    }
+
+    private static IEnumerable<NotifySupervisionRawLine> EnumerateJsonlLines(byte[] content)
+    {
+        var start = 0;
+        var lineNumber = 1;
+        while (start < content.Length)
+        {
+            var contentEnd = start;
+            while (contentEnd < content.Length && content[contentEnd] is not (byte)'\r' and not (byte)'\n')
+            {
+                contentEnd++;
+            }
+
+            var end = contentEnd;
+            if (end < content.Length && content[end] == (byte)'\r')
+            {
+                end++;
+                if (end < content.Length && content[end] == (byte)'\n')
+                {
+                    end++;
+                }
+            }
+            else if (end < content.Length && content[end] == (byte)'\n')
+            {
+                end++;
+            }
+
+            yield return new NotifySupervisionRawLine
+            {
+                Line = lineNumber++,
+                ContentBytes = content[start..contentEnd],
+                FullBytes = content[start..end],
+            };
+            start = end;
+        }
+    }
+
+    private static string ResolveUnreadableQuarantinePath(string path) =>
+        Path.Combine(
+            Path.GetDirectoryName(path)!,
+            Path.GetFileNameWithoutExtension(path) + ".unreadable.jsonl");
+
+    private static string GetRelativeSupervisionPath(string directory, string path) =>
+        Path.GetRelativePath(directory, path)
+            .Replace(Path.DirectorySeparatorChar, '/')
+            .Replace(Path.AltDirectorySeparatorChar, '/');
+
+    private static bool HasExpectedFileLength(string path, long expectedLength) =>
+        File.Exists(path) && new FileInfo(path).Length == expectedLength;
+
+    private static bool HasExpectedOptionalFileLength(
+        string path,
+        bool expectedExists,
+        long expectedLength) =>
+        File.Exists(path) == expectedExists
+        && (!expectedExists || new FileInfo(path).Length == expectedLength);
+
+    private static string BuildConcurrentGrowthError(NotifySupervisionUnreadableRepairPlan plan)
+    {
+        var observedLength = File.Exists(plan.LivePath)
+            ? new FileInfo(plan.LivePath).Length.ToString(CultureInfo.InvariantCulture)
+            : "<missing>";
+        return $"repair-unreadable-race-detected: live file '{plan.RelativePath}' changed after scan from {plan.BeforeLiveBytes.ToString(CultureInfo.InvariantCulture)} bytes to {observedLength}; no live file was replaced.";
+    }
+
+    private static byte[] ConcatBytes(IEnumerable<byte[]> parts)
+    {
+        var materialized = parts.ToArray();
+        var total = checked(materialized.Sum(part => part.Length));
+        var content = new byte[total];
+        var offset = 0;
+        foreach (var part in materialized)
+        {
+            Buffer.BlockCopy(part, 0, content, offset, part.Length);
+            offset += part.Length;
+        }
+
+        return content;
+    }
+
+    private static byte[] ConcatBytes(byte[] first, byte[] second) => ConcatBytes([first, second]);
+
+    private static void AppendRepairUnreadableAudit(
+        string directory,
+        NotifySupervisionRepairUnreadableAudit audit)
+    {
+        var auditPath = Path.Combine(directory, RepairUnreadableAuditFileName);
+        AtomicAppendWriter.Append(
+            auditPath,
+            Utf8NoBom.GetBytes(JsonSerializer.Serialize(audit, JsonOptions) + Environment.NewLine));
+    }
+
+    private static NotifySupervisionRepairUnreadableTransaction PrepareRepairUnreadableTransaction(
+        string directory,
+        IReadOnlyList<NotifySupervisionUnreadableRepairPlan> plans,
+        DateTimeOffset occurredAt,
+        NotifySupervisionWriterIdentity writer)
+    {
+        var transactionId = Guid.NewGuid().ToString("N");
+        var stageDirectoryName = RepairUnreadableTransactionStagePrefix + transactionId;
+        var stageDirectory = Path.Combine(directory, stageDirectoryName);
+        Directory.CreateDirectory(stageDirectory);
+
+        try
+        {
+            var transactionFiles = new List<NotifySupervisionRepairUnreadableTransactionFile>();
+            foreach (var plan in plans)
+            {
+                StageRepairUnreadableReplacement(
+                    plan.QuarantinePath,
+                    plan.RelativeQuarantinePath,
+                    ConcatBytes(plan.ExistingQuarantineBytes, plan.RemovedBytes),
+                    plan.BeforeQuarantineSha256,
+                    plan.BeforeQuarantineBytes,
+                    isLive: false);
+                StageRepairUnreadableReplacement(
+                    plan.LivePath,
+                    plan.RelativePath,
+                    plan.ReadableBytes,
+                    plan.BeforeLiveSha256,
+                    plan.BeforeLiveBytes,
+                    isLive: true);
+            }
+
+            var audit = BuildRepairUnreadableAudit(plans, transactionId, occurredAt, writer);
+            var transaction = new NotifySupervisionRepairUnreadableTransaction
+            {
+                Schema = RepairUnreadableTransactionSchema,
+                TransactionId = transactionId,
+                Phase = "prepared",
+                StageDirectory = stageDirectoryName,
+                Files = transactionFiles,
+                Plans = plans.Select(plan => new NotifySupervisionRepairUnreadableTransactionPlan
+                {
+                    RelativePath = plan.RelativePath,
+                    RelativeQuarantinePath = plan.RelativeQuarantinePath,
+                    BeforeLiveBytes = plan.BeforeLiveBytes,
+                    AfterLiveBytes = plan.ReadableBytes.LongLength,
+                    QuarantinedBytes = plan.RemovedBytes.LongLength,
+                    UnreadableRecords = plan.UnreadableRecords,
+                }).ToArray(),
+                Audit = audit,
+            };
+            PersistRepairUnreadableTransaction(directory, transaction);
+            return transaction;
+
+            void StageRepairUnreadableReplacement(
+                string targetPath,
+                string targetName,
+                byte[] replacement,
+                string? beforeSha256,
+                long beforeBytes,
+                bool isLive)
+            {
+                if (!string.Equals(HashFileOrNull(targetPath), beforeSha256, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        $"repair-unreadable-transaction-conflict: target '{targetName}' changed before transaction publication.");
+                }
+
+                var stageName = $"replacement-{transactionFiles.Count:D4}.jsonl";
+                var stagePath = ResolveRepairUnreadableStagePath(stageDirectory, stageName);
+                ReplaceBytesAtomically(stagePath, replacement);
+                transactionFiles.Add(new NotifySupervisionRepairUnreadableTransactionFile
+                {
+                    TargetName = targetName,
+                    StageName = stageName,
+                    BeforeSha256 = beforeSha256,
+                    AfterSha256 = HashBytes(replacement),
+                    BeforeBytes = beforeBytes,
+                    IsLive = isLive,
+                });
+            }
+        }
+        catch
+        {
+            TryDeleteRepairUnreadableStageDirectory(stageDirectory);
+            throw;
+        }
+    }
+
+    private static NotifySupervisionRepairUnreadableAudit ExecuteRepairUnreadableTransaction(
+        string directory,
+        NotifySupervisionRepairUnreadableTransaction transaction)
+    {
+        var stageDirectory = ResolveRepairUnreadableStageDirectory(directory, transaction);
+        if (RepairUnreadableAuditContainsTransaction(directory, transaction.TransactionId))
+        {
+            TryDeleteRepairUnreadableTransactionArtifacts(directory, transaction);
+            return transaction.Audit;
+        }
+
+        foreach (var transactionFile in transaction.Files)
+        {
+            var targetPath = ResolveRepairUnreadableTransactionTargetPath(directory, transactionFile.TargetName);
+            var currentHash = HashFileOrNull(targetPath);
+            if (string.Equals(currentHash, transactionFile.AfterSha256, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!string.Equals(currentHash, transactionFile.BeforeSha256, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"repair-unreadable-transaction-conflict: target '{transactionFile.TargetName}' changed outside the pending transaction.");
+            }
+
+            var stagePath = ResolveRepairUnreadableStagePath(stageDirectory, transactionFile.StageName);
+            if (!File.Exists(stagePath))
+            {
+                throw new InvalidDataException(
+                    $"repair-unreadable-transaction-invalid: staged replacement for '{transactionFile.TargetName}' is missing.");
+            }
+
+            var replacement = File.ReadAllBytes(stagePath);
+            if (!string.Equals(HashBytes(replacement), transactionFile.AfterSha256, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"repair-unreadable-transaction-invalid: staged replacement for '{transactionFile.TargetName}' is unreadable or corrupt.");
+            }
+
+            if (transactionFile.IsLive
+                && (!HasExpectedFileLength(targetPath, transactionFile.BeforeBytes)
+                    || !string.Equals(
+                        HashFileOrNull(targetPath),
+                        transactionFile.BeforeSha256,
+                        StringComparison.Ordinal)))
+            {
+                throw new InvalidDataException(
+                    $"repair-unreadable-race-detected: live file '{transactionFile.TargetName}' changed before its replacement; no live file was replaced.");
+            }
+
+            ReplaceBytesAtomically(targetPath, replacement);
+            if (!string.Equals(HashFileOrNull(targetPath), transactionFile.AfterSha256, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"repair-unreadable-verification-failed: replacement target '{transactionFile.TargetName}' did not match its staged bytes.");
+            }
+
+            transaction = transaction with { Phase = $"replaced:{transactionFile.TargetName}" };
+            PersistRepairUnreadableTransaction(directory, transaction);
+            if (!transactionFile.IsLive)
+            {
+                RepairUnreadableFaultInjector?.Invoke(
+                    NotifySupervisionRepairUnreadableFaultPoint.AfterQuarantinePublication);
+            }
+        }
+
+        transaction = transaction with { Phase = "audit-pending" };
+        PersistRepairUnreadableTransaction(directory, transaction);
+        if (!RepairUnreadableAuditContainsTransaction(directory, transaction.TransactionId))
+        {
+            RepairUnreadableFaultInjector?.Invoke(
+                NotifySupervisionRepairUnreadableFaultPoint.BeforeAuditAppend);
+            try
+            {
+                AppendRepairUnreadableAudit(directory, transaction.Audit);
+            }
+            catch when (RepairUnreadableAuditContainsTransaction(directory, transaction.TransactionId))
+            {
+                // Atomic append reached durable storage before a late writer
+                // error; the transaction id makes retry convergence exact.
+            }
+        }
+
+        if (!RepairUnreadableAuditContainsTransaction(directory, transaction.TransactionId))
+        {
+            throw new InvalidDataException(
+                $"repair-unreadable-audit-verification-failed: transaction '{transaction.TransactionId}' was not found after append.");
+        }
+
+        TryDeleteRepairUnreadableTransactionArtifacts(directory, transaction);
+        return transaction.Audit;
+    }
+
+    private static NotifySupervisionRepairUnreadableAudit BuildRepairUnreadableAudit(
+        IReadOnlyList<NotifySupervisionUnreadableRepairPlan> plans,
+        string transactionId,
+        DateTimeOffset occurredAt,
+        NotifySupervisionWriterIdentity writer) => new()
+    {
+        Schema = RepairUnreadableAuditSchema,
+        TransactionId = transactionId,
+        Operation = "repair-unreadable",
+        Outcome = "completed",
+        OccurredAt = occurredAt.ToUniversalTime(),
+        Writer = writer,
+        UnreadableRecordCount = plans.Sum(plan => plan.UnreadableRecords.Count),
+        Files = plans.Select(plan => new NotifySupervisionRepairUnreadableAuditFile
+        {
+            File = plan.RelativePath,
+            QuarantineFile = plan.RelativeQuarantinePath,
+            BeforeLiveBytes = plan.BeforeLiveBytes,
+            AfterLiveBytes = plan.ReadableBytes.LongLength,
+            QuarantinedBytes = plan.RemovedBytes.LongLength,
+            UnreadableRecordCount = plan.UnreadableRecords.Count,
+            LineNumbers = plan.UnreadableRecords.Select(record => record.Line).ToArray(),
+        }).ToArray(),
+    };
+
+    private static NotifySupervisionRepairUnreadableTransaction? ReadRepairUnreadableTransaction(
+        string directory)
+    {
+        var transactionPath = Path.Combine(directory, RepairUnreadableTransactionFileName);
+        if (!File.Exists(transactionPath))
+        {
+            return null;
+        }
+
+        var transaction = JsonSerializer.Deserialize<NotifySupervisionRepairUnreadableTransaction>(
+            File.ReadAllText(transactionPath, Utf8NoBom),
+            JsonOptions)
+            ?? throw new InvalidDataException("repair-unreadable-transaction-invalid: the transaction journal was empty.");
+        if (!string.Equals(transaction.Schema, RepairUnreadableTransactionSchema, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"repair-unreadable-transaction-invalid: unsupported transaction schema '{transaction.Schema}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(transaction.TransactionId)
+            || !string.Equals(transaction.Audit.TransactionId, transaction.TransactionId, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("repair-unreadable-transaction-invalid: transaction and audit identity did not match.");
+        }
+
+        _ = ResolveRepairUnreadableStageDirectory(directory, transaction);
+        return transaction;
+    }
+
+    private static void PersistRepairUnreadableTransaction(
+        string directory,
+        NotifySupervisionRepairUnreadableTransaction transaction) =>
+        ReplaceBytesAtomically(
+            Path.Combine(directory, RepairUnreadableTransactionFileName),
+            Utf8NoBom.GetBytes(JsonSerializer.Serialize(transaction, JsonOptions) + Environment.NewLine));
+
+    private static bool RepairUnreadableAuditContainsTransaction(string directory, string transactionId)
+    {
+        var auditPath = Path.Combine(directory, RepairUnreadableAuditFileName);
+        if (!File.Exists(auditPath))
+        {
+            return false;
+        }
+
+        foreach (var line in File.ReadLines(auditPath))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                if (document.RootElement.TryGetProperty("transaction_id", out var value)
+                    && string.Equals(value.GetString(), transactionId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+                // The transaction journal remains authoritative when a prior
+                // process stopped during an audit append.
+            }
+        }
+
+        return false;
+    }
+
+    private static string ResolveRepairUnreadableStageDirectory(
+        string directory,
+        NotifySupervisionRepairUnreadableTransaction transaction)
+    {
+        if (!transaction.StageDirectory.StartsWith(RepairUnreadableTransactionStagePrefix, StringComparison.Ordinal)
+            || Path.GetFileName(transaction.StageDirectory) != transaction.StageDirectory)
+        {
+            throw new InvalidDataException("repair-unreadable-transaction-invalid: transaction stage directory is unsafe.");
+        }
+
+        return Path.Combine(directory, transaction.StageDirectory);
+    }
+
+    private static string ResolveRepairUnreadableStagePath(string stageDirectory, string stageName)
+    {
+        if (string.IsNullOrWhiteSpace(stageName)
+            || Path.GetFileName(stageName) != stageName
+            || stageName is "." or "..")
+        {
+            throw new InvalidDataException("repair-unreadable-transaction-invalid: transaction stage path is unsafe.");
+        }
+
+        return Path.Combine(stageDirectory, stageName);
+    }
+
+    private static string ResolveRepairUnreadableTransactionTargetPath(string directory, string targetName)
+    {
+        var normalizedTarget = targetName.Replace('\\', '/');
+        if (string.IsNullOrWhiteSpace(normalizedTarget)
+            || Path.IsPathRooted(normalizedTarget)
+            || normalizedTarget.Split('/').Any(segment => segment is "" or "." or ".."))
+        {
+            throw new InvalidDataException("repair-unreadable-transaction-invalid: transaction target path is unsafe.");
+        }
+
+        var livePaths = ResolveCycleHistoryPaths(directory).ToList();
+        var stallsPath = Path.Combine(directory, StallFileName);
+        if (File.Exists(stallsPath))
+        {
+            livePaths.Add(stallsPath);
+        }
+
+        var allowedTargets = livePaths
+            .SelectMany(path => new[]
+            {
+                GetRelativeSupervisionPath(directory, path),
+                GetRelativeSupervisionPath(directory, ResolveUnreadableQuarantinePath(path)),
+            })
+            .ToHashSet(StringComparer.Ordinal);
+        if (!allowedTargets.Contains(normalizedTarget))
+        {
+            throw new InvalidDataException(
+                $"repair-unreadable-transaction-invalid: unsupported transaction target '{targetName}'.");
+        }
+
+        var targetPath = Path.GetFullPath(Path.Combine(directory, normalizedTarget));
+        var directoryPrefix = Path.GetFullPath(directory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        if (!targetPath.StartsWith(directoryPrefix, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("repair-unreadable-transaction-invalid: transaction target escaped the supervision directory.");
+        }
+
+        return targetPath;
+    }
+
+    private static void TryDeleteRepairUnreadableTransactionArtifacts(
+        string directory,
+        NotifySupervisionRepairUnreadableTransaction transaction)
+    {
+        try
+        {
+            var stageDirectory = ResolveRepairUnreadableStageDirectory(directory, transaction);
+            if (Directory.Exists(stageDirectory))
+            {
+                Directory.Delete(stageDirectory, recursive: true);
+            }
+
+            var transactionPath = Path.Combine(directory, RepairUnreadableTransactionFileName);
+            if (File.Exists(transactionPath))
+            {
+                File.Delete(transactionPath);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // The completed audit is durable. Leave the journal for the next
+            // explicit repair invocation to clean up without adding a second
+            // completed record.
+        }
+    }
+
+    private static void TryDeleteRepairUnreadableStageDirectory(string stageDirectory)
+    {
+        try
+        {
+            if (Directory.Exists(stageDirectory))
+            {
+                Directory.Delete(stageDirectory, recursive: true);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A failed preparation left no published live or quarantine bytes;
+            // a later explicit repair can remove this isolated staging residue.
         }
     }
 
@@ -2064,6 +2841,9 @@ internal static class NotifySupervisionStore
     private static string HashContent(string content) =>
         Convert.ToHexString(SHA256.HashData(Utf8NoBom.GetBytes(content)));
 
+    private static string HashBytes(byte[] content) =>
+        Convert.ToHexString(SHA256.HashData(content));
+
     private static string? HashFileOrNull(string path) =>
         File.Exists(path)
             ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))
@@ -2105,6 +2885,37 @@ internal static class NotifySupervisionStore
             {
                 writer.Write(content);
                 writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
+        }
+    }
+
+    private static void ReplaceBytesAtomically(string path, byte[] content)
+    {
+        var directory = Path.GetDirectoryName(path)!;
+        var temporary = Path.Combine(
+            directory,
+            $".{Path.GetFileName(path)}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            using (var stream = new FileStream(
+                temporary,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 4096,
+                options: FileOptions.WriteThrough))
+            {
+                stream.Write(content, 0, content.Length);
                 stream.Flush(flushToDisk: true);
             }
 
@@ -2800,6 +3611,196 @@ internal sealed record NotifySupervisionReadResult
     public required IReadOnlyList<NotifyPromptAudit> PromptAudits { get; init; }
     public IReadOnlyList<NotifySupervisionUnreadableRecord> UnreadableRecords { get; init; } = [];
     public string? Error { get; init; }
+}
+
+internal sealed record NotifySupervisionRepairUnreadableResult
+{
+    public required bool Applied { get; init; }
+    public required bool WouldRepair { get; init; }
+    public required string Directory { get; init; }
+    public required IReadOnlyList<NotifySupervisionRepairUnreadableFile> Files { get; init; }
+    public required IReadOnlyList<NotifySupervisionRepairUnreadableRecord> UnreadableRecords { get; init; }
+    public string? AuditPath { get; init; }
+    public NotifySupervisionRepairUnreadableAudit? Audit { get; init; }
+    public string? Error { get; init; }
+
+    public static NotifySupervisionRepairUnreadableResult Empty(string directory) => new()
+    {
+        Applied = false,
+        WouldRepair = false,
+        Directory = directory,
+        Files = [],
+        UnreadableRecords = [],
+    };
+
+    public static NotifySupervisionRepairUnreadableResult Failure(string directory, string error) => new()
+    {
+        Applied = false,
+        WouldRepair = false,
+        Directory = directory,
+        Files = [],
+        UnreadableRecords = [],
+        Error = error,
+    };
+
+    public static NotifySupervisionRepairUnreadableResult FromPlans(
+        string directory,
+        bool applied,
+        IReadOnlyList<NotifySupervisionUnreadableRepairPlan> plans,
+        NotifySupervisionRepairUnreadableAudit? audit,
+        string? error) => new()
+    {
+        Applied = applied,
+        WouldRepair = plans.Count > 0,
+        Directory = directory,
+        Files = plans.Select(plan => new NotifySupervisionRepairUnreadableFile
+        {
+            File = plan.RelativePath,
+            QuarantineFile = plan.RelativeQuarantinePath,
+            BeforeLiveBytes = plan.BeforeLiveBytes,
+            AfterLiveBytes = plan.ReadableBytes.LongLength,
+            QuarantinedBytes = plan.RemovedBytes.LongLength,
+            UnreadableRecordCount = plan.UnreadableRecords.Count,
+            LineNumbers = plan.UnreadableRecords.Select(record => record.Line).ToArray(),
+        }).ToArray(),
+        UnreadableRecords = plans.SelectMany(plan => plan.UnreadableRecords)
+            .OrderBy(record => record.File, StringComparer.Ordinal)
+            .ThenBy(record => record.Line)
+            .ToArray(),
+        AuditPath = audit is null ? null : Path.Combine(directory, NotifySupervisionStore.RepairUnreadableAuditFileName),
+        Audit = audit,
+        Error = error,
+    };
+
+    public static NotifySupervisionRepairUnreadableResult FromTransaction(
+        string directory,
+        NotifySupervisionRepairUnreadableTransaction transaction,
+        NotifySupervisionRepairUnreadableAudit audit) => new()
+    {
+        Applied = true,
+        WouldRepair = transaction.Plans.Count > 0,
+        Directory = directory,
+        Files = transaction.Plans.Select(plan => new NotifySupervisionRepairUnreadableFile
+        {
+            File = plan.RelativePath,
+            QuarantineFile = plan.RelativeQuarantinePath,
+            BeforeLiveBytes = plan.BeforeLiveBytes,
+            AfterLiveBytes = plan.AfterLiveBytes,
+            QuarantinedBytes = plan.QuarantinedBytes,
+            UnreadableRecordCount = plan.UnreadableRecords.Count,
+            LineNumbers = plan.UnreadableRecords.Select(record => record.Line).ToArray(),
+        }).ToArray(),
+        UnreadableRecords = transaction.Plans.SelectMany(plan => plan.UnreadableRecords)
+            .OrderBy(record => record.File, StringComparer.Ordinal)
+            .ThenBy(record => record.Line)
+            .ToArray(),
+        AuditPath = Path.Combine(directory, NotifySupervisionStore.RepairUnreadableAuditFileName),
+        Audit = audit,
+    };
+}
+
+internal sealed record NotifySupervisionRepairUnreadableFile
+{
+    [JsonPropertyName("file")] public required string File { get; init; }
+    [JsonPropertyName("quarantine_file")] public required string QuarantineFile { get; init; }
+    [JsonPropertyName("before_live_bytes")] public required long BeforeLiveBytes { get; init; }
+    [JsonPropertyName("after_live_bytes")] public required long AfterLiveBytes { get; init; }
+    [JsonPropertyName("quarantined_bytes")] public required long QuarantinedBytes { get; init; }
+    [JsonPropertyName("unreadable_record_count")] public required int UnreadableRecordCount { get; init; }
+    [JsonPropertyName("line_numbers")] public required IReadOnlyList<int> LineNumbers { get; init; }
+}
+
+internal sealed record NotifySupervisionRepairUnreadableRecord
+{
+    [JsonPropertyName("component")] public required string Component { get; init; }
+    [JsonPropertyName("file")] public required string File { get; init; }
+    [JsonPropertyName("line")] public required int Line { get; init; }
+    [JsonPropertyName("reason")] public required string Reason { get; init; }
+    [JsonPropertyName("byte_length")] public required int ByteLength { get; init; }
+}
+
+internal sealed record NotifySupervisionRepairUnreadableAudit
+{
+    [JsonPropertyName("schema")] public required string Schema { get; init; }
+    [JsonPropertyName("transaction_id")] public required string TransactionId { get; init; }
+    [JsonPropertyName("operation")] public required string Operation { get; init; }
+    [JsonPropertyName("outcome")] public required string Outcome { get; init; }
+    [JsonPropertyName("occurred_at")] public required DateTimeOffset OccurredAt { get; init; }
+    [JsonPropertyName("writer")] public required NotifySupervisionWriterIdentity Writer { get; init; }
+    [JsonPropertyName("unreadable_record_count")] public required int UnreadableRecordCount { get; init; }
+    [JsonPropertyName("files")] public required IReadOnlyList<NotifySupervisionRepairUnreadableAuditFile> Files { get; init; }
+}
+
+internal sealed record NotifySupervisionRepairUnreadableAuditFile
+{
+    [JsonPropertyName("file")] public required string File { get; init; }
+    [JsonPropertyName("quarantine_file")] public required string QuarantineFile { get; init; }
+    [JsonPropertyName("before_live_bytes")] public required long BeforeLiveBytes { get; init; }
+    [JsonPropertyName("after_live_bytes")] public required long AfterLiveBytes { get; init; }
+    [JsonPropertyName("quarantined_bytes")] public required long QuarantinedBytes { get; init; }
+    [JsonPropertyName("unreadable_record_count")] public required int UnreadableRecordCount { get; init; }
+    [JsonPropertyName("line_numbers")] public required IReadOnlyList<int> LineNumbers { get; init; }
+}
+
+internal sealed record NotifySupervisionRepairUnreadableTransaction
+{
+    [JsonPropertyName("schema")] public required string Schema { get; init; }
+    [JsonPropertyName("transaction_id")] public required string TransactionId { get; init; }
+    [JsonPropertyName("phase")] public required string Phase { get; init; }
+    [JsonPropertyName("stage_directory")] public required string StageDirectory { get; init; }
+    [JsonPropertyName("files")] public required IReadOnlyList<NotifySupervisionRepairUnreadableTransactionFile> Files { get; init; }
+    [JsonPropertyName("plans")] public required IReadOnlyList<NotifySupervisionRepairUnreadableTransactionPlan> Plans { get; init; }
+    [JsonPropertyName("audit")] public required NotifySupervisionRepairUnreadableAudit Audit { get; init; }
+}
+
+internal sealed record NotifySupervisionRepairUnreadableTransactionFile
+{
+    [JsonPropertyName("target")] public required string TargetName { get; init; }
+    [JsonPropertyName("stage")] public required string StageName { get; init; }
+    [JsonPropertyName("before_sha256")] public string? BeforeSha256 { get; init; }
+    [JsonPropertyName("after_sha256")] public required string AfterSha256 { get; init; }
+    [JsonPropertyName("before_bytes")] public required long BeforeBytes { get; init; }
+    [JsonPropertyName("is_live")] public required bool IsLive { get; init; }
+}
+
+internal sealed record NotifySupervisionRepairUnreadableTransactionPlan
+{
+    [JsonPropertyName("file")] public required string RelativePath { get; init; }
+    [JsonPropertyName("quarantine_file")] public required string RelativeQuarantinePath { get; init; }
+    [JsonPropertyName("before_live_bytes")] public required long BeforeLiveBytes { get; init; }
+    [JsonPropertyName("after_live_bytes")] public required long AfterLiveBytes { get; init; }
+    [JsonPropertyName("quarantined_bytes")] public required long QuarantinedBytes { get; init; }
+    [JsonPropertyName("unreadable_records")] public required IReadOnlyList<NotifySupervisionRepairUnreadableRecord> UnreadableRecords { get; init; }
+}
+
+internal sealed record NotifySupervisionUnreadableRepairPlan
+{
+    public required string LivePath { get; init; }
+    public required string RelativePath { get; init; }
+    public required string QuarantinePath { get; init; }
+    public required string RelativeQuarantinePath { get; init; }
+    public required long BeforeLiveBytes { get; init; }
+    public required string BeforeLiveSha256 { get; init; }
+    public required byte[] ReadableBytes { get; init; }
+    public required byte[] RemovedBytes { get; init; }
+    public required bool QuarantineExisted { get; init; }
+    public required long BeforeQuarantineBytes { get; init; }
+    public string? BeforeQuarantineSha256 { get; init; }
+    public required byte[] ExistingQuarantineBytes { get; init; }
+    public required IReadOnlyList<NotifySupervisionRepairUnreadableRecord> UnreadableRecords { get; init; }
+}
+
+internal sealed record NotifySupervisionRawLine
+{
+    public required int Line { get; init; }
+    public required byte[] ContentBytes { get; init; }
+    public required byte[] FullBytes { get; init; }
+}
+
+internal enum NotifySupervisionRepairUnreadableFaultPoint
+{
+    AfterQuarantinePublication,
+    BeforeAuditAppend,
 }
 
 internal sealed record NotifySupervisionUnreadableRecord
