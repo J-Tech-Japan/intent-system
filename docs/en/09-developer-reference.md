@@ -2763,7 +2763,7 @@ literal:
 ```
 
 The shape is written with placeholders on purpose: **read the actual values from
-`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0281)
+`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0291)
 for the line currently being cut. A worked example here would be a second copy
 of the version pair that goes stale on the next roll — the defect G557/G560
 exist to remove.
@@ -2969,7 +2969,55 @@ rotated by this command; the result and `shrink-audit.jsonl` say so explicitly.
 out of scope. Use `--dry-run` to inspect the measured plan without writing the
 manifest, JSONL files, or audit.
 
-### Next release readiness (v0.28.1)
+### Next release readiness (v0.29.1)
+
+**RELEASE PREPARED / NOT PUBLISHED.**
+
+G778 measured the v0.29.0 preparation from the exact named base
+`65e02d86d5e9e415d1fe934b0d5e8bad87af9ccf`. Its normal clean Release build
+reports `intent-cli 0.28.1-65e02d8-G772`; it is the old `nextVersion`
+placeholder identity, not v0.29.0. The same base built with explicit
+`-p:Version=0.29.0` reports `intent-cli 0.29.0-65e02d8-G772`. Published
+v0.29.0 derives `VERSION` from the release tag's `RAW` value in `release.yml`;
+`eng/version.json` governs local builds and dry runs only.
+
+The prepared files are `release-notes-v0.29.0.md` and the
+`release-notes-v0.29.1.md` DRAFT stub. The current policy is:
+
+```json
+{
+  "stableVersion": "0.29.0",
+  "nextVersion": "0.29.1"
+}
+```
+
+`0.29.1` is a replaceable development placeholder, not the next real release
+number. No tag, GitHub Release, package publish, workflow change, or product
+source change belongs to this prepare-only slice.
+
+The active package-policy evidence is `stableVersion 0.29.0`, `nextVersion 0.29.1`,
+and local candidate `JTechJapan.IntentSystem.Cli.0.29.1.nupkg`.
+The host-only release-prep claim boundary is `release-prep:<owner/repo>:0.29.1`;
+this child release-prep uses supplied authority and does not inspect or mutate host state.
+
+The tagged v0.28.0 CLI returned `invalid-notification: Unknown argument
+'repair-unreadable'.`; the named base renders
+`notify supervise repair-unreadable`. That one command-route addition is the
+minor-bump evidence. The v0.28.0 rule does not count option-level additions:
+G776's `--wake-command` is explicitly not a second command route.
+
+The v0.29.0 notes enumerate the exact G773–G777 first-parent range, all five
+unit/PR/issue/merge tuples, and their operator-observable outcomes. The EN/JA
+tuple parity is compared directly by `ReleaseNotesV0290DocsTests`; a one-field
+mirror mutation must fail. The same guard pins these truthfulness boundaries:
+repair-unreadable quarantines unreadable lines verbatim with no reconstruction,
+never automatically or on read; undeclared wake-channel teams receive zero
+changed bytes; and the observed 9-record transaction `6279ad14` is path
+evidence, not a fleet-cleanliness claim. `ReleasePackageMetadataTests`,
+`VersionSourcePolicyGuardTests`, and `JapaneseTerminologyGuardG613Tests` remain
+the release-policy, source, and terminology guards.
+
+### Previous v0.28.0 release-prep evidence (retained in history only)
 
 **RELEASE PREPARED / NOT PUBLISHED.**
 

@@ -165,12 +165,12 @@ public sealed class ReleaseNotesV0240DocsTests
     }
 
     [Fact]
-    public void ShippedV0240NotesAndReadinessPointAtTheCurrentV0281Line()
+    public void ShippedV0240NotesAndReadinessPointAtTheCurrentV0291Line()
     {
         var root = RepoVersionPolicySource.RepoRoot();
         var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.28.0", policy.StableVersion);
-        Assert.Equal("0.28.1", policy.NextVersion);
+        Assert.Equal("0.29.0", policy.StableVersion);
+        Assert.Equal("0.29.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
@@ -184,6 +184,8 @@ public sealed class ReleaseNotesV0240DocsTests
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.27.1.md")));
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.28.0.md")));
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.28.1.md")));
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.29.0.md")));
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.29.1.md")));
 
             var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
             Assert.Contains("0.24.0", reference, StringComparison.Ordinal);
@@ -191,13 +193,15 @@ public sealed class ReleaseNotesV0240DocsTests
             Assert.Contains("0.25.0", reference, StringComparison.Ordinal);
             Assert.Contains("release-notes-v0.28.0.md", reference, StringComparison.Ordinal);
             Assert.Contains("release-notes-v0.28.1.md", reference, StringComparison.Ordinal);
+            Assert.Contains("release-notes-v0.29.0.md", reference, StringComparison.Ordinal);
+            Assert.Contains("release-notes-v0.29.1.md", reference, StringComparison.Ordinal);
             Assert.DoesNotContain("release-notes-v0.27.0.md", reference, StringComparison.Ordinal);
             Assert.DoesNotContain("release-notes-v0.24.1.md", reference, StringComparison.Ordinal);
             Assert.Contains(
-                language == "en" ? "Next release readiness (v0.28.1)" : "次リリース準備(v0.28.1)",
+                language == "en" ? "Next release readiness (v0.29.1)" : "次リリース準備(v0.29.1)",
                 reference,
                 StringComparison.Ordinal);
-            Assert.Contains("intent-cli 0.28.0-565530e-G769", reference, StringComparison.Ordinal);
+            Assert.Contains("intent-cli 0.29.0-65e02d8-G772", reference, StringComparison.Ordinal);
             Assert.Contains("ReleasePackageMetadataTests", reference, StringComparison.Ordinal);
             Assert.Contains("VersionSourcePolicyGuardTests", reference, StringComparison.Ordinal);
         }

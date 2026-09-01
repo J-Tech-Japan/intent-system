@@ -214,12 +214,12 @@ public sealed class ReleaseNotesV0260DocsTests
         var root = RepoVersionPolicySource.RepoRoot();
         var policyPath = Path.Combine(root, "eng", "version.json");
         Assert.Equal(
-            "{\n  \"stableVersion\": \"0.28.0\",\n  \"nextVersion\": \"0.28.1\"\n}\n",
+            "{\n  \"stableVersion\": \"0.29.0\",\n  \"nextVersion\": \"0.29.1\"\n}\n",
             File.ReadAllText(policyPath));
 
         var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.28.0", policy.StableVersion);
-        Assert.Equal("0.28.1", policy.NextVersion);
+        Assert.Equal("0.29.0", policy.StableVersion);
+        Assert.Equal("0.29.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
@@ -231,6 +231,8 @@ public sealed class ReleaseNotesV0260DocsTests
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.27.1.md")));
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.28.0.md")));
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.28.1.md")));
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.29.0.md")));
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.29.1.md")));
         }
     }
 
@@ -255,7 +257,9 @@ public sealed class ReleaseNotesV0260DocsTests
         var readiness = ReadCurrentReadiness(language);
 
         Assert.Contains(
-            language == "en" ? "Next release readiness (v0.28.1)" : "次リリース準備(v0.28.1)",
+            language == "en"
+                ? "Previous v0.28.0 release-prep evidence (retained in history only)"
+                : "previous v0.28.0 release-prep evidence (history のみ)",
             readiness,
             StringComparison.Ordinal);
         Assert.Contains("0.25.0", readiness, StringComparison.Ordinal);
@@ -370,7 +374,9 @@ public sealed class ReleaseNotesV0260DocsTests
     {
         var content = File.ReadAllText(Path.Combine(
             RepoVersionPolicySource.RepoRoot(), "docs", language, "09-developer-reference.md"));
-        var heading = language == "en" ? "### Next release readiness (v0.28.1)" : "### 次リリース準備(v0.28.1)";
+        var heading = language == "en"
+            ? "### Previous v0.28.0 release-prep evidence (retained in history only)"
+            : "### previous v0.28.0 release-prep evidence (history のみ)";
         var start = content.IndexOf(heading, StringComparison.Ordinal);
         Assert.True(start >= 0, $"Missing current readiness heading in {language}.");
         var end = content.IndexOf("**Previous v0.25.0 preparation evidence", start, StringComparison.Ordinal);

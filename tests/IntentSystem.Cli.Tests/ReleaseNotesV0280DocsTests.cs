@@ -156,17 +156,19 @@ public sealed class ReleaseNotesV0280DocsTests
         var policyPath = Path.Combine(root, "eng", "version.json");
 
         Assert.Equal(
-            "{\n  \"stableVersion\": \"0.28.0\",\n  \"nextVersion\": \"0.28.1\"\n}\n",
+            "{\n  \"stableVersion\": \"0.29.0\",\n  \"nextVersion\": \"0.29.1\"\n}\n",
             File.ReadAllText(policyPath));
 
         var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.28.0", policy.StableVersion);
-        Assert.Equal("0.28.1", policy.NextVersion);
+        Assert.Equal("0.29.0", policy.StableVersion);
+        Assert.Equal("0.29.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.28.0.md")));
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.28.1.md")));
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.29.0.md")));
+            Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.29.1.md")));
             Assert.False(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.27.0.md")));
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.27.1.md")));
 
@@ -188,7 +190,9 @@ public sealed class ReleaseNotesV0280DocsTests
             root, "docs", language, "09-developer-reference.md"));
 
         Assert.Contains(
-            language == "en" ? "Next release readiness (v0.28.1)" : "次リリース準備(v0.28.1)",
+            language == "en"
+                ? "Previous v0.28.0 release-prep evidence (retained in history only)"
+                : "previous v0.28.0 release-prep evidence (history のみ)",
             reference,
             StringComparison.Ordinal);
         Assert.Contains("0.28.0", reference, StringComparison.Ordinal);
