@@ -195,6 +195,15 @@ internal static class GuideDesignThreadCommand
                 },
                 G770ResolutionRule = "G770 resolution rule: scope the negative with a limiting word naming exactly what it protects — for example, `root resolution` — rather than broadening it to forbid the required change.",
             },
+            ExternalResidenceOperatingContract = new DesignThreadExternalResidenceOperatingContract
+            {
+                FrontendRelabel = "External-to-external frontend relabel: an external seat may change its frontend application freely; residence, reader, and routing root stay unchanged; no transition command is involved; do not use `session-layer topology update-residence`; frontend is an operator label, never a routing input; re-record at most with `intent-cli session-layer topology record` when the operator wants to change the frontend label.",
+                RoutingRootMust = "Routing-root MUST: every notify send and receive uses the canonical routing root. A wrong root strands notify records outside canonical state while the sender still returns `delivered: true`.",
+                CollectLoop = $"Collect loop: `intent-cli notify collect --domain {domainArg} --team {teamArg} --role design --since <cursor> --wait --timeout-ms <timeout-ms> --routing-root {root} --format json`; the caller holds the cursor, consumes the returned next cursor, and omits `--since` only for the first receive.",
+                WakeChannelPattern = "Wake-channel pattern: canonical `intent-cli notify` is the durable record; a wake channel is a courtesy-only signal; dual-send is the practiced form. Bind durable wake addresses before reading and never substitute a terminal-only address for a durable bound address.",
+                OrcaWorkedExample = "Non-normative Orca example: bind the design coordinator terminal before reading with `orca orchestration run-use --id <run-id>`, then use the blocking check `orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json`. Orca is only a courtesy wake receiver alongside canonical `intent-cli notify`; intent-cli neither launches nor manages Orca.",
+                ResidenceTransition = $"A herdr↔external residence change is a different operation from an external-to-external frontend relabel: `intent-cli session-layer topology update-residence --domain {domainArg} --team {teamArg} --role design --current-resident <herdr|external> --new-resident <herdr|external> [destination fields] --confirm-update-residence --write --format json`.",
+            },
         };
     }
 
@@ -278,6 +287,14 @@ internal static class GuideDesignThreadCommand
         writer.WriteLine($"- **discriminating pair:** {result.PacketAuthoringCheck.DiscriminatingPair}");
         foreach (var example in result.PacketAuthoringCheck.RecognitionExamples) writer.WriteLine($"- **recognition example:** {example}");
         writer.WriteLine($"- **G770 resolution:** {result.PacketAuthoringCheck.G770ResolutionRule}");
+        writer.WriteLine();
+        writer.WriteLine("## 9. External-residence operating contract (G775)");
+        writer.WriteLine($"- **frontend relabel first:** {result.ExternalResidenceOperatingContract.FrontendRelabel}");
+        writer.WriteLine($"- **routing-root law:** {result.ExternalResidenceOperatingContract.RoutingRootMust}");
+        writer.WriteLine($"- **collect:** {result.ExternalResidenceOperatingContract.CollectLoop}");
+        writer.WriteLine($"- **wake channel:** {result.ExternalResidenceOperatingContract.WakeChannelPattern}");
+        writer.WriteLine($"- **worked example:** {result.ExternalResidenceOperatingContract.OrcaWorkedExample}");
+        writer.WriteLine($"- **different transition:** {result.ExternalResidenceOperatingContract.ResidenceTransition}");
         WriteList(writer, "## Negative invariants", result.NegativeInvariants);
     }
 
@@ -356,6 +373,7 @@ internal sealed record DesignThreadGuideResult
     public required DesignThreadReporting Reporting { get; init; }
     public required IReadOnlyList<string> NegativeInvariants { get; init; }
     public required DesignThreadPacketAuthoringCheck PacketAuthoringCheck { get; init; }
+    public required DesignThreadExternalResidenceOperatingContract ExternalResidenceOperatingContract { get; init; }
 }
 
 internal sealed record DesignThreadReachability
@@ -397,4 +415,14 @@ internal sealed record DesignThreadPacketAuthoringCheck
     public required string DiscriminatingPair { get; init; }
     public required IReadOnlyList<string> RecognitionExamples { get; init; }
     public required string G770ResolutionRule { get; init; }
+}
+
+internal sealed record DesignThreadExternalResidenceOperatingContract
+{
+    public required string FrontendRelabel { get; init; }
+    public required string RoutingRootMust { get; init; }
+    public required string CollectLoop { get; init; }
+    public required string WakeChannelPattern { get; init; }
+    public required string OrcaWorkedExample { get; init; }
+    public required string ResidenceTransition { get; init; }
 }

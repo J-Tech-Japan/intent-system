@@ -254,6 +254,54 @@ needed change). Apply the G770 resolution rule: scope the negative with a
 limiting word naming exactly what it protects — for example, `root resolution`
 — instead of broadening it to forbid the needed change.
 
+### External-residence operating contract (G775)
+
+**Frontend relabel first.** An already-external seat may change its frontend
+application freely: residence, reader, and routing root are unchanged. Do not
+use `session-layer topology update-residence` for that external-to-external
+relabel. No transition command is involved. `frontend` is an operator label,
+never a routing input; re-record at most with `intent-cli session-layer topology
+record` when the operator wants to change that label.
+
+**Routing-root MUST.** Every `notify` send and receive uses the canonical
+`--routing-root <routing-root>`. A wrong root strands notify records outside
+the state canonical readers see while the sender still returns
+`delivered: true`.
+
+A herdr↔external residence transition is a **different operation** from a
+frontend relabel. When the human answer changes residence, use the guarded
+`session-layer topology update-residence` route; do not let that route imply a
+transition for an external-to-external frontend change. The human-selected
+external branch of `guide bootstrap` names this distinct route so the rendered
+bootstrap reaches the residence transition without conflating it with relabel.
+
+**Bind the wake address.** Bind durable wake addresses before the first read,
+and never substitute a terminal-only address for a durable bound address.
+
+**Collect after binding.** The external receive is an explicit pull loop; the
+caller retains the opaque cursor, supplies the returned next cursor on the next
+receive, and omits `--since` only for the first receive:
+
+```text
+intent-cli notify collect --domain <domain> --team <team> --role design --since <cursor> --wait --timeout-ms <timeout-ms> --routing-root <routing-root> --format json
+```
+
+**Dual-send after the loop is established.** Canonical `intent-cli notify` is
+the durable record. A wake channel is a courtesy-only signal; dual-send is the
+practiced form.
+
+> **Non-normative Orca worked example.** A design operator may bind the
+> coordinator terminal before reading, then perform Orca's bounded blocking
+> check:
+>
+> ```text
+> orca orchestration run-use --id <run-id>
+> orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json
+> ```
+>
+> Orca is only a courtesy wake receiver beside canonical `intent-cli notify`;
+> intent-cli neither launches nor manages Orca.
+
 ### Role-contract precedence (G672 — preview-through-1.x)
 
 When `guide next` or `guide onboarding` is invoked with `--role`, the role's

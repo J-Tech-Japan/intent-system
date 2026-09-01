@@ -225,6 +225,52 @@ boundary の衝突）、G767 AC1/AC6（status と full clean-payload oracle の�
 必要な変更まで禁じるほど広げず、保護する対象を正確に名前で示す限定語、たとえば
 `root resolution`、で範囲を絞ることです。
 
+### external residence の運用契約（G775）
+
+**最初にフロントエンドの表示名変更。** すでに `external` である seat は、frontend
+application を自由に変更できます。residence、reader、routing root は変わりません。
+この external-to-external の表示名変更で
+`session-layer topology update-residence` を使いません。`frontend` は operator label であり
+routing input ではありません。transition command は関与しません。operator がこの label を
+変えたいときだけ、最大でも `intent-cli session-layer topology record` で再記録します。
+
+**routing-root MUST。** すべての `notify` の send / receive は正本の
+`--routing-root <routing-root>` を使います。root を誤ると、sender が
+`delivered: true` を返しても、notify record は canonical reader から見えない場所に
+取り残されます。
+
+herdr↔external の residence transition は、frontend の表示名変更とは**別の操作**です。
+human answer が residence を変えるときは、guarded な
+`session-layer topology update-residence` route を使います。この route が
+external-to-external の表示名変更にも必要だとは読まないでください。human-selected
+external branch の `guide bootstrap` がこの別の route を示すため、rendered bootstrap は
+表示名変更と residence transition を混同しません。
+
+**wake address を接続。** 最初に読む前に永続的な wake address を接続し、terminal-only
+address を永続的に接続済みの address の代わりにはしません。
+
+**接続後に collect。** external receive は明示的な pull loop です。caller は opaque cursor
+を保持し、返された next cursor を次の receive に渡します。最初の receive だけ `--since` を
+省略します。
+
+```text
+intent-cli notify collect --domain <domain> --team <team> --role design --since <cursor> --wait --timeout-ms <timeout-ms> --routing-root <routing-root> --format json
+```
+
+**loop を確立してから dual-send。** canonical な `intent-cli notify` は永続的な record
+です。wake channel は `courtesy-only` の signal であり、`dual-send` が実践する形です。
+
+> **非規範的な Orca の例。** design operator は読む前に coordinator terminal を接続し、
+> Orca の bounded blocking check を実行できます。
+>
+> ```text
+> orca orchestration run-use --id <run-id>
+> orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json
+> ```
+>
+> Orca は canonical な `intent-cli notify` に添える courtesy wake receiver だけです。
+> intent-cli は Orca を起動も管理もしません。
+
 ### role contract の precedence（G672 — preview-through-1.x）
 
 `guide next` または `guide onboarding` を `--role` 付きで呼ぶと、contract を持つ role の

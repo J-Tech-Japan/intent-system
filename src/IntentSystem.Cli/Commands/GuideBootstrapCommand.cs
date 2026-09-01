@@ -163,11 +163,12 @@ internal static class GuideBootstrapCommand
                 {
                     Number = 5,
                     Id = "ask-app-kind-and-place-design",
-                    Instruction = $"Ask the human which agent kind this application conversation uses and whether that kind has an inbound application monitor. Never infer or default either answer. With a monitor, design may be the recorded external reader; at the human-selected external branch, follow the rendered `intent-cli guide design-thread --domain {domainArg} --team {teamArg} --routing-root {routingRoot} --format markdown` guidance for its canonical role-scoped `intent-cli notify collect --role design` receive, caller-held cursor, and bounded wait. Without one, design must be a recorded herdr seat at the routing-root cwd. This placement rule does not move recovery authority from orchestration.",
+                    Instruction = $"Ask the human which agent kind this application conversation uses and whether that kind has an inbound application monitor. Never infer or default either answer. With a monitor, design may be the recorded external reader; at the human-selected external branch, follow the rendered `intent-cli guide design-thread --domain {domainArg} --team {teamArg} --routing-root {routingRoot} --format markdown` guidance for its canonical role-scoped `intent-cli notify collect --role design` receive, caller-held cursor, bounded wait, frontend relabel, routing-root law, and wake-channel pattern. A later herdr↔external residence change is a different operation from an external-to-external frontend relabel and uses `session-layer topology update-residence`. Without a monitor, design must be a recorded herdr seat at the routing-root cwd. This placement rule does not move recovery authority from orchestration.",
                     EmittedCommands =
                     [
                         $"intent-cli session-layer topology record --domain {domainArg} --team {teamArg} --role design --resident <external-or-herdr-from-human-answer> <reader-or-workspace-pane-and-cwd-fields> --write --format json",
                         $"intent-cli guide design-thread --domain {domainArg} --team {teamArg} --routing-root {routingRoot} --format markdown",
+                        $"intent-cli session-layer topology update-residence --domain {domainArg} --team {teamArg} --role design --current-resident <herdr|external> --new-resident <herdr|external> [destination fields] --confirm-update-residence --write --format json",
                     ],
                 },
                 new BootstrapStep

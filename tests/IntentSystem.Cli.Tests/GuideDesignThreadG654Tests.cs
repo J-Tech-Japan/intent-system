@@ -38,6 +38,9 @@ public sealed class GuideDesignThreadG654Tests
     // differ; changing any parent value, nesting, or field order changes this
     // oracle rather than weakening a full-payload assertion.
     private const string ParentPayloadOracleHash = "c43e27f362c39d9c737fc2269b1979bdf8ad9b7ecb07f3dd0491ba1325d0c54f";
+    private static readonly string[] G774BaselinePayloadFieldNames =
+        ParentPayloadFieldNames.Append("packet_authoring_check").ToArray();
+    private const string G774BaselinePayloadOracleHash = "8110a6150605810aaa609fc2c34668341b939e58bc0dc35085c7290e6c72b136";
 
     [Theory]
     [InlineData("agmsg", false)]
@@ -111,7 +114,7 @@ public sealed class GuideDesignThreadG654Tests
     }
 
     [Fact]
-    public void Json_PacketAuthoringCheckIsTheOnlyAdditivePayloadDelta_G774()
+    public void Json_PacketAuthoringCheckRemainsTheG774Baseline_G774()
     {
         using var writer = new StringWriter();
         Assert.Equal(
@@ -124,13 +127,18 @@ public sealed class GuideDesignThreadG654Tests
         var root = document.RootElement;
         var fields = root.EnumerateObject().ToArray();
 
-        Assert.Equal(
-            ParentPayloadFieldNames.Append("packet_authoring_check"),
-            fields.Select(field => field.Name));
-        var parentPayloadOracle = ComputePayloadOracle(fields.Where(field => field.Name != "packet_authoring_check"));
+        var g774BaselineFields = fields
+            .Where(field => field.Name != "external_residence_operating_contract")
+            .ToArray();
+        Assert.Equal(G774BaselinePayloadFieldNames, g774BaselineFields.Select(field => field.Name));
+        var g774BaselineOracle = ComputePayloadOracle(g774BaselineFields);
+        Assert.True(
+            string.Equals(G774BaselinePayloadOracleHash, g774BaselineOracle, StringComparison.Ordinal),
+            $"G774 baseline payload oracle changed. Expected '{G774BaselinePayloadOracleHash}', actual '{g774BaselineOracle}'.");
+        var parentPayloadOracle = ComputePayloadOracle(fields.Where(field => field.Name is not "packet_authoring_check" and not "external_residence_operating_contract"));
         Assert.True(
             string.Equals(ParentPayloadOracleHash, parentPayloadOracle, StringComparison.Ordinal),
-            $"Parent payload oracle changed. Expected '{ParentPayloadOracleHash}', actual '{parentPayloadOracle}'.");
+            $"G654 parent payload oracle changed. Expected '{ParentPayloadOracleHash}', actual '{parentPayloadOracle}'.");
 
         var check = root.GetProperty("packet_authoring_check");
         Assert.Equal(
@@ -159,6 +167,81 @@ public sealed class GuideDesignThreadG654Tests
     }
 
     [Fact]
+    public void Json_ExternalResidenceOperatingContractIsTheOnlyAdditivePayloadDelta_G775()
+    {
+        using var writer = new StringWriter();
+        Assert.Equal(
+            0,
+            GuideDesignThreadCommand.Execute(
+                CreateContext(),
+                ["--domain", "intent-cli", "--team", "intent-cli-dev", "--routing-root", "/g774-parent", "--format", "json"],
+                writer));
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        var fields = root.EnumerateObject().ToArray();
+
+        Assert.Equal(
+            G774BaselinePayloadFieldNames.Append("external_residence_operating_contract"),
+            fields.Select(field => field.Name));
+        var g774BaselineOracle = ComputePayloadOracle(fields.Where(field => field.Name != "external_residence_operating_contract"));
+        Assert.True(
+            string.Equals(G774BaselinePayloadOracleHash, g774BaselineOracle, StringComparison.Ordinal),
+            $"G774 baseline payload oracle changed. Expected '{G774BaselinePayloadOracleHash}', actual '{g774BaselineOracle}'.");
+
+        var contract = root.GetProperty("external_residence_operating_contract");
+        Assert.Equal(
+            new[]
+            {
+                "frontend_relabel",
+                "routing_root_must",
+                "collect_loop",
+                "wake_channel_pattern",
+                "orca_worked_example",
+                "residence_transition",
+            },
+            contract.EnumerateObject().Select(field => field.Name));
+
+        var frontendRelabel = contract.GetProperty("frontend_relabel").GetString()!;
+        Assert.StartsWith("External-to-external frontend relabel:", frontendRelabel);
+        Assert.Contains("residence, reader, and routing root stay unchanged", frontendRelabel, StringComparison.Ordinal);
+        Assert.Contains("no transition command is involved", frontendRelabel, StringComparison.Ordinal);
+        Assert.Contains("do not use `session-layer topology update-residence`", frontendRelabel, StringComparison.Ordinal);
+        Assert.Contains("frontend is an operator label, never a routing input", frontendRelabel, StringComparison.Ordinal);
+        Assert.Contains("re-record at most", frontendRelabel, StringComparison.Ordinal);
+
+        var routingRootMust = contract.GetProperty("routing_root_must").GetString()!;
+        Assert.Contains("MUST", routingRootMust, StringComparison.Ordinal);
+        Assert.Contains("strands notify records", routingRootMust, StringComparison.Ordinal);
+        Assert.Contains("delivered: true", routingRootMust, StringComparison.Ordinal);
+
+        var collectLoop = contract.GetProperty("collect_loop").GetString()!;
+        Assert.Contains("--role design", collectLoop, StringComparison.Ordinal);
+        Assert.Contains("--wait --timeout-ms", collectLoop, StringComparison.Ordinal);
+        Assert.Contains("--routing-root /g774-parent", collectLoop, StringComparison.Ordinal);
+        Assert.Contains("caller holds the cursor", collectLoop, StringComparison.Ordinal);
+
+        var wakeChannel = contract.GetProperty("wake_channel_pattern").GetString()!;
+        Assert.Contains("courtesy-only", wakeChannel, StringComparison.Ordinal);
+        Assert.Contains("dual-send", wakeChannel, StringComparison.Ordinal);
+        Assert.Contains("durable wake addresses", wakeChannel, StringComparison.Ordinal);
+
+        var orcaExample = contract.GetProperty("orca_worked_example").GetString()!;
+        Assert.Contains("Non-normative Orca example", orcaExample, StringComparison.Ordinal);
+        Assert.Contains("orca orchestration run-use --id <run-id>", orcaExample, StringComparison.Ordinal);
+        Assert.Contains("orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json", orcaExample, StringComparison.Ordinal);
+        Assert.Contains("intent-cli neither launches nor manages Orca", orcaExample, StringComparison.Ordinal);
+
+        var residenceTransition = contract.GetProperty("residence_transition").GetString()!;
+        Assert.Contains("different operation", residenceTransition, StringComparison.Ordinal);
+        Assert.Contains("herdr↔external", residenceTransition, StringComparison.Ordinal);
+        Assert.Contains("session-layer topology update-residence", residenceTransition, StringComparison.Ordinal);
+
+        using var unknownArgumentWriter = new StringWriter();
+        Assert.Equal(1, GuideDesignThreadCommand.Execute(CreateContext(), ["--frontend", "orca"], unknownArgumentWriter));
+        Assert.Contains("Unknown argument '--frontend'.", unknownArgumentWriter.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Markdown_RendersPacketAuthoringCheckWithAllRecognitionExamples_G774()
     {
         using var writer = new StringWriter();
@@ -172,6 +255,59 @@ public sealed class GuideDesignThreadG654Tests
         Assert.Contains("named discriminating pair", output, StringComparison.Ordinal);
         foreach (var recognitionExample in new[] { "G765 AC4/AC6", "G767 AC1/AC6", "G769 AC3/AC4", "root resolution" })
             Assert.Contains(recognitionExample, output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Markdown_RendersExternalResidenceOperatingContractInIncidentOrder_G775()
+    {
+        using var writer = new StringWriter();
+        Assert.Equal(0, GuideDesignThreadCommand.Execute(CreateContext(), ["--domain", "intent-cli", "--team", "intent-cli-dev", "--routing-root", "/g775-routing-root"], writer));
+        var output = writer.ToString();
+        var sectionStart = output.IndexOf("## 9. External-residence operating contract (G775)", StringComparison.Ordinal);
+        var sectionEnd = output.IndexOf("## Negative invariants", sectionStart, StringComparison.Ordinal);
+        Assert.True(sectionStart >= 0 && sectionEnd > sectionStart, output);
+        var section = output[sectionStart..sectionEnd];
+
+        Assert.StartsWith(
+            "## 9. External-residence operating contract (G775)\n- **frontend relabel first:** External-to-external frontend relabel:",
+            section);
+        Assert.Contains("residence, reader, and routing root stay unchanged", section, StringComparison.Ordinal);
+        Assert.Contains("no transition command is involved", section, StringComparison.Ordinal);
+        Assert.Contains("do not use `session-layer topology update-residence`", section, StringComparison.Ordinal);
+        Assert.Contains("frontend is an operator label, never a routing input", section, StringComparison.Ordinal);
+        Assert.Contains("Routing-root MUST", section, StringComparison.Ordinal);
+        Assert.Contains("delivered: true", section, StringComparison.Ordinal);
+        Assert.Contains("--role design", section, StringComparison.Ordinal);
+        Assert.Contains("--wait --timeout-ms", section, StringComparison.Ordinal);
+        Assert.Contains("--routing-root /g775-routing-root", section, StringComparison.Ordinal);
+        Assert.Contains("courtesy-only", section, StringComparison.Ordinal);
+        Assert.Contains("dual-send", section, StringComparison.Ordinal);
+        Assert.Contains("Non-normative Orca example", section, StringComparison.Ordinal);
+        Assert.Contains("intent-cli neither launches nor manages Orca", section, StringComparison.Ordinal);
+        Assert.Contains("A herdr↔external residence change is a different operation", section, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BootstrapExternalBranchNamesDistinctUpdateResidenceRoute_G775()
+    {
+        using var writer = new StringWriter();
+        Assert.Equal(
+            0,
+            GuideBootstrapCommand.Execute(
+                CreateContext(),
+                ["--domain", "intent-cli", "--team", "intent-cli-dev", "--target-repo", "example/repo", "--routing-root", "/g775-routing-root", "--format", "markdown"],
+                writer));
+        var output = writer.ToString();
+        var stepStart = output.IndexOf("### 5. ask-app-kind-and-place-design", StringComparison.Ordinal);
+        var stepEnd = output.IndexOf("### 6. delegate-first-task", stepStart, StringComparison.Ordinal);
+        Assert.True(stepStart >= 0 && stepEnd > stepStart, output);
+        var externalBranch = output[stepStart..stepEnd];
+
+        var relabelIndex = externalBranch.IndexOf("external-to-external frontend relabel", StringComparison.Ordinal);
+        var transitionIndex = externalBranch.IndexOf("session-layer topology update-residence", StringComparison.Ordinal);
+        Assert.True(relabelIndex >= 0 && transitionIndex > relabelIndex, externalBranch);
+        Assert.Contains("different operation", externalBranch, StringComparison.Ordinal);
+        Assert.Contains("--current-resident <herdr|external>", externalBranch, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -250,7 +386,67 @@ public sealed class GuideDesignThreadG654Tests
         Assert.Contains("判別対", ja, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void EnglishAndJapaneseDocs_SemanticallyMirrorExternalResidenceOperatingContract_G775()
+    {
+        var en = ReadRepoFile("docs/en/12-agent-message-orchestration.md");
+        var ja = ReadRepoFile("docs/ja/12-agent-message-orchestration.md");
+        var enSection = Section(en, "### External-residence operating contract (G775)", "### Role-contract precedence");
+        var jaSection = Section(ja, "### external residence の運用契約（G775）", "### role contract の precedence");
+
+        Assert.StartsWith("### External-residence operating contract (G775)\n\n**Frontend relabel first.", enSection);
+        Assert.Contains("residence, reader, and routing root are unchanged", enSection, StringComparison.Ordinal);
+        Assert.Contains("No transition command is involved", enSection, StringComparison.Ordinal);
+        Assert.Contains("delivered: true", enSection, StringComparison.Ordinal);
+        Assert.Contains("--wait --timeout-ms", enSection, StringComparison.Ordinal);
+        Assert.Contains("courtesy-only", enSection, StringComparison.Ordinal);
+        Assert.Contains("dual-send", enSection, StringComparison.Ordinal);
+        Assert.Contains("Non-normative Orca worked example", enSection, StringComparison.Ordinal);
+        Assert.Contains("intent-cli neither launches nor manages Orca", enSection, StringComparison.Ordinal);
+        Assert.Contains("different operation", enSection, StringComparison.Ordinal);
+        Assert.Contains("guide bootstrap", enSection, StringComparison.Ordinal);
+        Assert.True(
+            enSection.IndexOf("A herdr↔external residence transition", StringComparison.Ordinal)
+            < enSection.IndexOf("**Bind the wake address.**", StringComparison.Ordinal));
+        Assert.True(
+            enSection.IndexOf("**Bind the wake address.**", StringComparison.Ordinal)
+            < enSection.IndexOf("**Collect after binding.**", StringComparison.Ordinal));
+        Assert.True(
+            enSection.IndexOf("**Collect after binding.**", StringComparison.Ordinal)
+            < enSection.IndexOf("**Dual-send after the loop is established.**", StringComparison.Ordinal));
+
+        Assert.StartsWith("### external residence の運用契約（G775）\n\n**最初にフロントエンドの表示名変更。", jaSection);
+        Assert.Contains("residence、reader、routing root は変わりません", jaSection, StringComparison.Ordinal);
+        Assert.Contains("transition command は関与しません", jaSection, StringComparison.Ordinal);
+        Assert.Contains("delivered: true", jaSection, StringComparison.Ordinal);
+        Assert.Contains("--wait --timeout-ms", jaSection, StringComparison.Ordinal);
+        Assert.Contains("courtesy-only", jaSection, StringComparison.Ordinal);
+        Assert.Contains("dual-send", jaSection, StringComparison.Ordinal);
+        Assert.Contains("非規範的な Orca の例", jaSection, StringComparison.Ordinal);
+        Assert.Contains("intent-cli は Orca を起動も管理もしません", jaSection, StringComparison.Ordinal);
+        Assert.Contains("別の操作", jaSection, StringComparison.Ordinal);
+        Assert.Contains("guide bootstrap", jaSection, StringComparison.Ordinal);
+        Assert.True(
+            jaSection.IndexOf("herdr↔external の residence transition", StringComparison.Ordinal)
+            < jaSection.IndexOf("**wake address を接続。**", StringComparison.Ordinal));
+        Assert.True(
+            jaSection.IndexOf("**wake address を接続。**", StringComparison.Ordinal)
+            < jaSection.IndexOf("**接続後に collect。**", StringComparison.Ordinal));
+        Assert.True(
+            jaSection.IndexOf("**接続後に collect。**", StringComparison.Ordinal)
+            < jaSection.IndexOf("**loop を確立してから dual-send。**", StringComparison.Ordinal));
+    }
+
     private static string Join(JsonElement array) => string.Join('\n', array.EnumerateArray().Select(item => item.GetString()));
+
+    private static string Section(string document, string start, string end)
+    {
+        var startIndex = document.IndexOf(start, StringComparison.Ordinal);
+        Assert.True(startIndex >= 0, $"Missing section '{start}'.");
+        var endIndex = document.IndexOf(end, startIndex, StringComparison.Ordinal);
+        Assert.True(endIndex > startIndex, $"Missing section terminator '{end}'.");
+        return document[startIndex..endIndex];
+    }
 
     private static string ComputePayloadOracle(IEnumerable<JsonProperty> fields)
     {
