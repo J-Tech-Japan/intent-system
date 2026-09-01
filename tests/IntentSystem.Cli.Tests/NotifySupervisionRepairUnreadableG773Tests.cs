@@ -30,6 +30,7 @@ public sealed class NotifySupervisionRepairUnreadableG773Tests : IDisposable
     {
         NotifyCommand.UtcNowFactory = null;
         NotifySupervisionStore.RepairUnreadableBeforeLengthRecheck = null;
+        NotifySupervisionStore.RepairUnreadableFaultInjector = null;
         if (Directory.Exists(root))
         {
             Directory.Delete(root, recursive: true);
@@ -200,6 +201,170 @@ public sealed class NotifySupervisionRepairUnreadableG773Tests : IDisposable
         {
             NotifySupervisionStore.RepairUnreadableBeforeLengthRecheck = null;
         }
+    }
+
+    [Fact]
+    public void FailureAfterQuarantinePublication_RetryMovesBytesExactlyOnceAndAppendsOneAudit_G773()
+    {
+        var cyclePath = WriteCycle("readable-cycle");
+        var readable = File.ReadAllBytes(cyclePath);
+        var unreadable = Encoding.UTF8.GetBytes("{bad-cycle-json}\n");
+        File.AppendAllBytes(cyclePath, unreadable);
+        var quarantinePath = Path.Combine(TeamDirectory(), "cycles.unreadable.jsonl");
+        var auditPath = Path.Combine(TeamDirectory(), "repair-unreadable-audit.jsonl");
+        NotifySupervisionStore.RepairUnreadableFaultInjector = point =>
+        {
+            if (point == NotifySupervisionRepairUnreadableFaultPoint.AfterQuarantinePublication)
+            {
+                throw new IOException("injected-after-quarantine-publication");
+            }
+        };
+
+        try
+        {
+            var (failedExit, failedOutput) = RunRepair("--write");
+
+            Assert.Equal(1, failedExit);
+            Assert.Contains("injected-after-quarantine-publication", failedOutput, StringComparison.Ordinal);
+            Assert.Equal(readable.Concat(unreadable).ToArray(), File.ReadAllBytes(cyclePath));
+            Assert.Equal(unreadable, File.ReadAllBytes(quarantinePath));
+            Assert.False(File.Exists(auditPath));
+        }
+        finally
+        {
+            NotifySupervisionStore.RepairUnreadableFaultInjector = null;
+        }
+
+        var (retryExit, _) = RunRepair("--write");
+
+        Assert.Equal(0, retryExit);
+        Assert.Equal(readable, File.ReadAllBytes(cyclePath));
+        Assert.Equal(unreadable, File.ReadAllBytes(quarantinePath));
+        var auditLine = Assert.Single(File.ReadAllLines(auditPath));
+        using var audit = JsonDocument.Parse(auditLine);
+        Assert.Equal("completed", audit.RootElement.GetProperty("outcome").GetString());
+        Assert.Equal(1, audit.RootElement.GetProperty("unreadable_record_count").GetInt32());
+        Assert.False(File.Exists(Path.Combine(
+            TeamDirectory(),
+            NotifySupervisionStore.RepairUnreadableTransactionFileName)));
+        var (livenessExit, livenessOutput) = RunLiveness(root);
+        Assert.Equal(0, livenessExit);
+        using var liveness = JsonDocument.Parse(livenessOutput);
+        Assert.Equal(0, liveness.RootElement.GetProperty("unreadable_record_count").GetInt32());
+    }
+
+    [Fact]
+    public void FailureAfterLaterQuarantinePublication_RecoversEveryFileWithoutDuplicateEvidence_G773()
+    {
+        var cyclePath = WriteCycle("readable-cycle");
+        var stallPath = NotifySupervisionStore.ResolveStallPath(ArtifactRoot(), Domain, Team);
+        Assert.True(NotifySupervisionStore.OpenStall(
+            stallPath,
+            new NotifySupervisionStallRecord
+            {
+                Key = "readable-stall",
+                Kind = "g773",
+                OwnerRole = "implementation",
+                Source = "g773-test",
+                Summary = "readable",
+                SurfacedAt = now,
+            },
+            write: true).Applied);
+        var readableCycles = File.ReadAllBytes(cyclePath);
+        var readableStalls = File.ReadAllBytes(stallPath);
+        var unreadableCycle = Encoding.UTF8.GetBytes("{bad-cycle-json}\n");
+        var unreadableStall = Encoding.UTF8.GetBytes("{bad-stall-json}\n");
+        File.AppendAllBytes(cyclePath, unreadableCycle);
+        File.AppendAllBytes(stallPath, unreadableStall);
+        var cyclesQuarantinePath = Path.Combine(TeamDirectory(), "cycles.unreadable.jsonl");
+        var stallsQuarantinePath = Path.Combine(TeamDirectory(), "stalls.unreadable.jsonl");
+        var auditPath = Path.Combine(TeamDirectory(), "repair-unreadable-audit.jsonl");
+        var publications = 0;
+        NotifySupervisionStore.RepairUnreadableFaultInjector = point =>
+        {
+            if (point == NotifySupervisionRepairUnreadableFaultPoint.AfterQuarantinePublication
+                && ++publications == 2)
+            {
+                throw new IOException("injected-after-later-quarantine-publication");
+            }
+        };
+
+        try
+        {
+            var (failedExit, failedOutput) = RunRepair("--write");
+
+            Assert.Equal(1, failedExit);
+            Assert.Contains("injected-after-later-quarantine-publication", failedOutput, StringComparison.Ordinal);
+            Assert.Equal(readableCycles, File.ReadAllBytes(cyclePath));
+            Assert.Equal(readableStalls.Concat(unreadableStall).ToArray(), File.ReadAllBytes(stallPath));
+            Assert.Equal(unreadableCycle, File.ReadAllBytes(cyclesQuarantinePath));
+            Assert.Equal(unreadableStall, File.ReadAllBytes(stallsQuarantinePath));
+            Assert.False(File.Exists(auditPath));
+        }
+        finally
+        {
+            NotifySupervisionStore.RepairUnreadableFaultInjector = null;
+        }
+
+        var (retryExit, _) = RunRepair("--write");
+
+        Assert.Equal(0, retryExit);
+        Assert.Equal(readableCycles, File.ReadAllBytes(cyclePath));
+        Assert.Equal(readableStalls, File.ReadAllBytes(stallPath));
+        Assert.Equal(unreadableCycle, File.ReadAllBytes(cyclesQuarantinePath));
+        Assert.Equal(unreadableStall, File.ReadAllBytes(stallsQuarantinePath));
+        var auditLine = Assert.Single(File.ReadAllLines(auditPath));
+        using var audit = JsonDocument.Parse(auditLine);
+        Assert.Equal(2, audit.RootElement.GetProperty("unreadable_record_count").GetInt32());
+        Assert.Equal(2, audit.RootElement.GetProperty("files").GetArrayLength());
+        Assert.False(File.Exists(Path.Combine(
+            TeamDirectory(),
+            NotifySupervisionStore.RepairUnreadableTransactionFileName)));
+    }
+
+    [Fact]
+    public void AuditFailure_LeavesNoCompletedAuditAndRetryAppendsExactlyOne_G773()
+    {
+        var cyclePath = WriteCycle("readable-cycle");
+        var readable = File.ReadAllBytes(cyclePath);
+        var unreadable = Encoding.UTF8.GetBytes("{bad-cycle-json}\n");
+        File.AppendAllBytes(cyclePath, unreadable);
+        var quarantinePath = Path.Combine(TeamDirectory(), "cycles.unreadable.jsonl");
+        var auditPath = Path.Combine(TeamDirectory(), "repair-unreadable-audit.jsonl");
+        NotifySupervisionStore.RepairUnreadableFaultInjector = point =>
+        {
+            if (point == NotifySupervisionRepairUnreadableFaultPoint.BeforeAuditAppend)
+            {
+                throw new IOException("injected-before-repair-audit");
+            }
+        };
+
+        try
+        {
+            var (failedExit, failedOutput) = RunRepair("--write");
+
+            Assert.Equal(1, failedExit);
+            Assert.Contains("injected-before-repair-audit", failedOutput, StringComparison.Ordinal);
+            Assert.Equal(readable, File.ReadAllBytes(cyclePath));
+            Assert.Equal(unreadable, File.ReadAllBytes(quarantinePath));
+            Assert.False(File.Exists(auditPath));
+        }
+        finally
+        {
+            NotifySupervisionStore.RepairUnreadableFaultInjector = null;
+        }
+
+        var (retryExit, _) = RunRepair("--write");
+
+        Assert.Equal(0, retryExit);
+        Assert.Equal(readable, File.ReadAllBytes(cyclePath));
+        Assert.Equal(unreadable, File.ReadAllBytes(quarantinePath));
+        var auditLine = Assert.Single(File.ReadAllLines(auditPath));
+        using var audit = JsonDocument.Parse(auditLine);
+        Assert.Equal("completed", audit.RootElement.GetProperty("outcome").GetString());
+        Assert.False(File.Exists(Path.Combine(
+            TeamDirectory(),
+            NotifySupervisionStore.RepairUnreadableTransactionFileName)));
     }
 
     [Fact]
