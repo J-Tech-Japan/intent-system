@@ -16,7 +16,8 @@ internal sealed record NotifyRecordedRole(
     string? EnvelopeProfileReference = null,
     AgentLaunchEnvelopeProfile? EnvelopeProfileOverride = null,
     string? Model = null,
-    string? ReasoningEffort = null)
+    string? ReasoningEffort = null,
+    string? WakeCommand = null)
 {
     public const string HerdrResident = "herdr";
     public const string ExternalResident = "external";
@@ -105,6 +106,62 @@ internal static class SessionLayerTopologyDeclaredValueRules
         if (value.Length > MaxLength)
         {
             error = $"{field} must be at most {MaxLength} characters when supplied.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    public static bool TryRead(
+        JsonElement role,
+        string property,
+        out string? value,
+        out string error)
+    {
+        value = null;
+        if (!role.TryGetProperty(property, out var element)
+            || element.ValueKind == JsonValueKind.Null)
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        if (element.ValueKind != JsonValueKind.String)
+        {
+            error = $"Topology field '{property}' must be a string or null when present.";
+            return false;
+        }
+
+        value = element.GetString();
+        return TryValidate(value, $"Topology field '{property}'", out error);
+    }
+}
+
+/// <summary>
+/// G776: an external role may declare one literal, one-line courtesy wake
+/// template. This is syntax-only validation: intent-cli neither parses shell
+/// syntax nor attempts to execute, look up, validate, or health-check it.
+/// </summary>
+internal static class SessionLayerTopologyWakeCommandRules
+{
+    public static bool TryValidate(string? value, string field, out string error)
+    {
+        if (value is null)
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            error = $"{field} must be non-empty when supplied.";
+            return false;
+        }
+
+        if (value.IndexOfAny(['\r', '\n']) >= 0)
+        {
+            error = $"{field} must be a one-line literal command template.";
             return false;
         }
 
@@ -374,6 +431,25 @@ internal static class NotifyRoleTopologyStore
                         $"Role '{property.Name}' has an invalid declared reasoning effort: {reasoningEffortError}");
                 }
 
+                if (!SessionLayerTopologyWakeCommandRules.TryRead(
+                        property.Value,
+                        "wake_command",
+                        out var wakeCommand,
+                        out var wakeCommandError))
+                {
+                    return Failure(
+                        "topology-invalid",
+                        $"Role '{property.Name}' has an invalid declared wake command: {wakeCommandError}");
+                }
+
+                if (wakeCommand is not null
+                    && !string.Equals(resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal))
+                {
+                    return Failure(
+                        "topology-invalid",
+                        $"Role '{property.Name}' declares wake_command but only an external resident may declare a courtesy wake command.");
+                }
+
                 if (profileReference is not null)
                 {
                     if (!envelopeProfiles.TryGetValue(profileReference, out var referencedProfile))
@@ -414,7 +490,8 @@ internal static class NotifyRoleTopologyStore
                     profileReference,
                     profileOverride,
                     model,
-                    reasoningEffort));
+                    reasoningEffort,
+                    wakeCommand));
             }
 
             if (roles.Count == 0)

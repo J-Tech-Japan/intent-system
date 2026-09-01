@@ -201,6 +201,7 @@ internal static class GuideDesignThreadCommand
                 RoutingRootMust = "Routing-root MUST: every notify send and receive uses the canonical routing root. A wrong root strands notify records outside canonical state while the sender still returns `delivered: true`.",
                 CollectLoop = $"Collect loop: `intent-cli notify collect --domain {domainArg} --team {teamArg} --role design --since <cursor> --wait --timeout-ms <timeout-ms> --routing-root {root} --format json`; the caller holds the cursor, consumes the returned next cursor, and omits `--since` only for the first receive.",
                 WakeChannelPattern = "Wake-channel pattern: canonical `intent-cli notify` is the durable record; a wake channel is a courtesy-only signal; dual-send is the practiced form. Bind durable wake addresses before reading and never substitute a terminal-only address for a durable bound address.",
+                WakeChannelDeclaration = "Declared external wake: an operator may record one literal one-line `--wake-command` template on an external role, for example `orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}`. `notify delegate` renders `{task_id}` and `{summary}` only as text, leaves unknown placeholders untouched, and never executes, validates, health-checks, launches, or manages the command. The canonical notify write always comes first; the rendered declared wake is courtesy-only and never substitutes for that durable record.",
                 OrcaWorkedExample = "Non-normative Orca example: bind the design coordinator terminal before reading with `orca orchestration run-use --id <run-id>`, then use the blocking check `orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json`. Orca is only a courtesy wake receiver alongside canonical `intent-cli notify`; intent-cli neither launches nor manages Orca.",
                 ResidenceTransition = $"A herdr↔external residence change is a different operation from an external-to-external frontend relabel: `intent-cli session-layer topology update-residence --domain {domainArg} --team {teamArg} --role design --current-resident <herdr|external> --new-resident <herdr|external> [destination fields] --confirm-update-residence --write --format json`.",
             },
@@ -293,6 +294,7 @@ internal static class GuideDesignThreadCommand
         writer.WriteLine($"- **routing-root law:** {result.ExternalResidenceOperatingContract.RoutingRootMust}");
         writer.WriteLine($"- **collect:** {result.ExternalResidenceOperatingContract.CollectLoop}");
         writer.WriteLine($"- **wake channel:** {result.ExternalResidenceOperatingContract.WakeChannelPattern}");
+        writer.WriteLine($"- **declared wake:** {result.ExternalResidenceOperatingContract.WakeChannelDeclaration}");
         writer.WriteLine($"- **worked example:** {result.ExternalResidenceOperatingContract.OrcaWorkedExample}");
         writer.WriteLine($"- **different transition:** {result.ExternalResidenceOperatingContract.ResidenceTransition}");
         WriteList(writer, "## Negative invariants", result.NegativeInvariants);
@@ -423,6 +425,7 @@ internal sealed record DesignThreadExternalResidenceOperatingContract
     public required string RoutingRootMust { get; init; }
     public required string CollectLoop { get; init; }
     public required string WakeChannelPattern { get; init; }
+    public required string WakeChannelDeclaration { get; init; }
     public required string OrcaWorkedExample { get; init; }
     public required string ResidenceTransition { get; init; }
 }

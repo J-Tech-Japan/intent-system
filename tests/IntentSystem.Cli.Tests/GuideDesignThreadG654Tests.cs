@@ -41,6 +41,9 @@ public sealed class GuideDesignThreadG654Tests
     private static readonly string[] G774BaselinePayloadFieldNames =
         ParentPayloadFieldNames.Append("packet_authoring_check").ToArray();
     private const string G774BaselinePayloadOracleHash = "8110a6150605810aaa609fc2c34668341b939e58bc0dc35085c7290e6c72b136";
+    // G776 may append exactly one declaration field. The existing G775
+    // operating-contract fields remain a raw-value and rendered-order oracle.
+    private const string G775ExternalResidenceContractOracleHash = "192178832e068e7651fc09fa9377059f1b3298cc91da263e428aa31a397bcd03";
 
     [Theory]
     [InlineData("agmsg", false)]
@@ -196,10 +199,31 @@ public sealed class GuideDesignThreadG654Tests
                 "routing_root_must",
                 "collect_loop",
                 "wake_channel_pattern",
+                "wake_channel_declaration",
                 "orca_worked_example",
                 "residence_transition",
             },
             contract.EnumerateObject().Select(field => field.Name));
+
+        var g775Fields = contract
+            .EnumerateObject()
+            .Where(field => field.Name != "wake_channel_declaration")
+            .ToArray();
+        Assert.Equal(
+            new[]
+            {
+                "frontend_relabel",
+                "routing_root_must",
+                "collect_loop",
+                "wake_channel_pattern",
+                "orca_worked_example",
+                "residence_transition",
+            },
+            g775Fields.Select(field => field.Name));
+        var g775Oracle = ComputePayloadOracle(g775Fields);
+        Assert.True(
+            string.Equals(G775ExternalResidenceContractOracleHash, g775Oracle, StringComparison.Ordinal),
+            $"G775 operating-contract oracle changed. Expected '{G775ExternalResidenceContractOracleHash}', actual '{g775Oracle}'.");
 
         var frontendRelabel = contract.GetProperty("frontend_relabel").GetString()!;
         Assert.StartsWith("External-to-external frontend relabel:", frontendRelabel);
@@ -224,6 +248,13 @@ public sealed class GuideDesignThreadG654Tests
         Assert.Contains("courtesy-only", wakeChannel, StringComparison.Ordinal);
         Assert.Contains("dual-send", wakeChannel, StringComparison.Ordinal);
         Assert.Contains("durable wake addresses", wakeChannel, StringComparison.Ordinal);
+
+        var wakeDeclaration = contract.GetProperty("wake_channel_declaration").GetString()!;
+        Assert.Contains("--wake-command", wakeDeclaration, StringComparison.Ordinal);
+        Assert.Contains("{task_id}", wakeDeclaration, StringComparison.Ordinal);
+        Assert.Contains("{summary}", wakeDeclaration, StringComparison.Ordinal);
+        Assert.Contains("unknown placeholders", wakeDeclaration, StringComparison.Ordinal);
+        Assert.Contains("never executes", wakeDeclaration, StringComparison.Ordinal);
 
         var orcaExample = contract.GetProperty("orca_worked_example").GetString()!;
         Assert.Contains("Non-normative Orca example", orcaExample, StringComparison.Ordinal);
@@ -282,6 +313,8 @@ public sealed class GuideDesignThreadG654Tests
         Assert.Contains("--routing-root /g775-routing-root", section, StringComparison.Ordinal);
         Assert.Contains("courtesy-only", section, StringComparison.Ordinal);
         Assert.Contains("dual-send", section, StringComparison.Ordinal);
+        Assert.Contains("--wake-command", section, StringComparison.Ordinal);
+        Assert.Contains("never executes", section, StringComparison.Ordinal);
         Assert.Contains("Non-normative Orca example", section, StringComparison.Ordinal);
         Assert.Contains("intent-cli neither launches nor manages Orca", section, StringComparison.Ordinal);
         Assert.Contains("A herdr↔external residence change is a different operation", section, StringComparison.Ordinal);

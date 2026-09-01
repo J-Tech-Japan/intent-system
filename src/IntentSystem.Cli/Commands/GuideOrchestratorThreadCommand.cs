@@ -2226,6 +2226,7 @@ internal static class GuideOrchestratorThreadCommand
                     "Implementation/review threads finish a delegation with exactly one canonical `intent-cli notify report` call using the command embedded by `notify delegate`. "
                     + "The reply is a SIGNAL; the orchestrator re-verifies every claim against intent-cli / GitHub "
                     + "before acting on it.",
+                WakeChannelDeclaration = "Declared external wake: when an external recipient topology record declares a literal `--wake-command`, `notify delegate` renders that text only. The canonical notify write is the durable record and always comes first; after it succeeds, the rendered wake is a courtesy-only signal that never substitutes for the record. intent-cli never executes, validates, health-checks, launches, or manages the declaration.",
                 Accepted = "{\"status\":\"accepted\",\"thread\":\"implementation\",\"ref\":\"issue#<n>\",\"note\":\"claimed; starting\"}",
                 Progress = "{\"status\":\"progress\",\"thread\":\"implementation\",\"ref\":\"issue#<n>\",\"note\":\"branch pushed; CI running\"}",
                 Completed = "{\"status\":\"completed\",\"thread\":\"implementation\",\"ref\":\"pr#<n>\",\"note\":\"PR opened, Closes #<n>, CI green\"}",
@@ -5201,6 +5202,8 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
         writer.WriteLine(guide.AgmsgReplyContract.Description);
         writer.WriteLine();
+        writer.WriteLine($"- **declared external wake:** {guide.AgmsgReplyContract.WakeChannelDeclaration}");
+        writer.WriteLine();
         writer.WriteLine("```json");
         writer.WriteLine(guide.AgmsgReplyContract.Accepted);
         writer.WriteLine(guide.AgmsgReplyContract.Progress);
@@ -7187,6 +7190,9 @@ internal sealed record OrchestratorReplyContract
 {
     [JsonPropertyName("description")]
     public required string Description { get; init; }
+
+    [JsonPropertyName("wake_channel_declaration")]
+    public required string WakeChannelDeclaration { get; init; }
 
     [JsonPropertyName("accepted")]
     public required string Accepted { get; init; }
