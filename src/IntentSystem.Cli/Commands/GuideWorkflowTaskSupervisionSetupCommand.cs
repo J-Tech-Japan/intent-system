@@ -30,7 +30,7 @@ internal static class GuideWorkflowTaskSupervisionSetupCommand
         new SupervisionSetupCommand
         {
             Name = "install",
-            Command = "intent-cli notify supervise install --domain <domain> --team <team> --repo <owner/repo> --owner-role orchestration --bound 900 --interval 300 --startup-bound 30 --platform macos --write --format json",
+            Command = $"intent-cli notify supervise install --domain <domain> --team <team> --repo <owner/repo> --owner-role orchestration --bound 900 --interval 300 --startup-bound {NotifySuperviseInstallCommand.DefaultStartupBoundSeconds} --platform macos --write --format json",
             Purpose = "Emit the current-session artifact and require bounded first-cycle proof; install does not execute lifecycle registration.",
         },
         new SupervisionSetupCommand
@@ -38,6 +38,12 @@ internal static class GuideWorkflowTaskSupervisionSetupCommand
             Name = "register-current-gui-session",
             Command = "launchctl bootstrap gui/$(id -u) '<artifact-path>'",
             Purpose = "Explicit operator action for the current GUI session only; never a login-auto-loaded registration.",
+        },
+        new SupervisionSetupCommand
+        {
+            Name = "verify-first-cycle",
+            Command = $"intent-cli notify supervise install --domain <domain> --team <team> --repo <owner/repo> --owner-role orchestration --bound 900 --interval 300 --startup-bound {NotifySuperviseInstallCommand.DefaultStartupBoundSeconds} --platform macos --verify --format json",
+            Purpose = "After explicit registration, re-prove the existing artifact without rewriting it; a late qualifying cycle writes durable first-cycle evidence.",
         },
         new SupervisionSetupCommand
         {

@@ -12,7 +12,8 @@ namespace IntentSystem.Cli.Commands;
 internal static class NotifySuperviseInstallCommand
 {
     public const string Operation = "install";
-    public const int DefaultStartupBoundSeconds = 30;
+    public const int DefaultStartupBoundSeconds = 120;
+    public const int DefaultVerifyStartupBoundSeconds = 1;
     public const int MaximumStartupBoundSeconds = 3600;
     internal static Func<NotifySuperviseFirstCycleRequest, NotifySuperviseFirstCycleResult>? FirstCycleProbeFactory { get; set; }
     internal static Func<DateTimeOffset> UtcNowFactory { get; set; } = () => DateTimeOffset.UtcNow;
@@ -20,10 +21,10 @@ internal static class NotifySuperviseInstallCommand
     public const string Usage =
         "Usage: intent-cli notify supervise install --domain <d> --team <t> --repo <owner/repo> "
         + "--owner-role <role> --bound <seconds> --interval <seconds> "
-        + "[--startup-bound <seconds>; default 30] "
+        + "[--startup-bound <seconds>; default 120 for --write, 1 for --verify] "
         + "[--persistence persistent] "
         + "[--event-mode] [--platform macos|windows|linux] [--output <path>] [--routing-root <host-root>] "
-        + "[--dry-run|--write] [--format markdown|json]";
+        + "[--verify|--dry-run|--write] [--format markdown|json]";
 
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
@@ -66,12 +67,16 @@ internal static class NotifySuperviseInstallCommand
         }
 
         string routingRoot;
+        string artifactRoot;
         string artifactPath;
         try
         {
             routingRoot = Path.GetFullPath(options.RoutingRoot ?? context.RepoRoot);
+            artifactRoot = options.RoutingRoot is null
+                ? context.ResolveSupervisionArtifactRootPath()
+                : NotifySuperviseLivenessCommand.ResolveSupervisionArtifactRootPath(context, routingRoot);
             artifactPath = options.Output is null
-                ? ResolveDefaultArtifactPath(context, options)
+                ? ResolveDefaultArtifactPath(artifactRoot, options)
                 : Path.GetFullPath(options.Output, context.RepoRoot);
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
@@ -109,7 +114,7 @@ internal static class NotifySuperviseInstallCommand
 
         var label = $"intent-cli.supervise.{options.Domain}.{options.Team}";
         var supervisionDirectory = Path.Combine(
-            context.ResolveSupervisionArtifactRootPath(),
+            artifactRoot,
             options.Domain,
             options.Team);
         var runtimeDirectory = Path.Combine(supervisionDirectory, "runtime");
@@ -153,6 +158,8 @@ internal static class NotifySuperviseInstallCommand
             }
         }
         NotifySuperviseFirstCycleResult? firstCycle = null;
+        DateTimeOffset? artifactWrittenAt = null;
+        IReadOnlyList<NotifySuperviseRuntimeLogSnapshot> runtimeLogs = Array.Empty<NotifySuperviseRuntimeLogSnapshot>();
 
         if (options.Write)
         {
@@ -167,29 +174,84 @@ internal static class NotifySuperviseInstallCommand
 
                 Directory.CreateDirectory(directory);
                 Directory.CreateDirectory(runtimeDirectory);
+                artifactWrittenAt = UtcNowFactory().ToUniversalTime();
                 File.WriteAllText(artifactPath, artifact, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                File.SetLastWriteTimeUtc(artifactPath, artifactWrittenAt.Value.UtcDateTime);
+                artifactWrittenAt = ReadArtifactWrittenAt(artifactPath);
+                runtimeLogs = CaptureRuntimeLogs([standardOutPath, standardErrorPath]);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 EmitFailure(writer, options.Format, $"Could not write the scheduler artifact: {exception.Message}");
                 return 1;
             }
+        }
+        else if (options.Verify)
+        {
+            if (!File.Exists(artifactPath))
+            {
+                EmitFailure(
+                    writer,
+                    options.Format,
+                    $"verify-artifact-not-found: no existing supervisor artifact was found at '{artifactPath}'; run install --write to author it before using --verify.");
+                return 1;
+            }
 
+            try
+            {
+                artifactWrittenAt = ReadArtifactWrittenAt(artifactPath);
+                runtimeLogs = CaptureRuntimeLogsForVerify(
+                    [standardOutPath, standardErrorPath],
+                    artifactWrittenAt.Value);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                EmitFailure(writer, options.Format, $"Could not inspect the existing scheduler artifact: {exception.Message}");
+                return 1;
+            }
+        }
+
+        if (options.Write || options.Verify)
+        {
+            // A bare verify deliberately remains a one-read re-proof against
+            // the artifact timestamp. An explicitly supplied verify bound,
+            // however, opens a new proof window from this verification.
+            var verificationStartedAt = options.Verify && options.HasExplicitStartupBound
+                ? UtcNowFactory().ToUniversalTime()
+                : artifactWrittenAt!.Value;
             firstCycle = (FirstCycleProbeFactory ?? NotifySuperviseFirstCycleProbe.Wait)(new NotifySuperviseFirstCycleRequest
             {
-                ArtifactRoot = context.ResolveSupervisionArtifactRootPath(),
+                ArtifactRoot = artifactRoot,
                 Domain = options.Domain,
                 Team = options.Team,
                 ArtifactPath = artifactPath,
                 CyclePath = NotifySupervisionStore.ResolveCyclePath(
-                    context.ResolveSupervisionArtifactRootPath(),
+                    artifactRoot,
                     options.Domain,
                     options.Team),
                 StartupBoundSeconds = options.StartupBoundSeconds,
-                StartedAt = UtcNowFactory().ToUniversalTime(),
+                ArtifactWrittenAt = artifactWrittenAt!.Value,
+                VerificationStartedAt = verificationStartedAt,
+                RuntimeLogs = runtimeLogs,
             });
             if (!firstCycle.Verified)
             {
+                if (firstCycle.FailureKind is not null)
+                {
+                    EmitFirstCycleFailure(
+                        writer,
+                        options.Format,
+                        artifactPath,
+                        registrationCommand,
+                        options.StartupBoundSeconds,
+                        firstCycle);
+                    return 1;
+                }
+
+                // Test-owned probe factories from prior contracts supply a
+                // result only, not runtime-log observations. Keep their
+                // established diagnostic shape while the real probe supplies
+                // the G781 machine-readable distinction below.
                 EmitFailure(
                     writer,
                     options.Format,
@@ -199,15 +261,22 @@ internal static class NotifySuperviseInstallCommand
 
             if (firstCycle.Writer is null)
             {
-                EmitFailure(
+                EmitFirstCycleFailure(
                     writer,
                     options.Format,
-                    $"first-cycle-proof-failed: the first cycle had no writer identity; inspect stdout log '{standardOutPath}' and stderr log '{standardErrorPath}'.");
+                    artifactPath,
+                    registrationCommand,
+                    options.StartupBoundSeconds,
+                    firstCycle with
+                    {
+                        FailureKind = "post-install-process-missing-writer",
+                        FailureReason = "The observed post-install cycle had no writer identity.",
+                    });
                 return 1;
             }
 
             var installedRecord = NotifySupervisionStore.RecordInstalledSupervisor(
-                context.ResolveSupervisionArtifactRootPath(),
+                artifactRoot,
                 new NotifySupervisionInstalledSupervisor
                 {
                     Domain = options.Domain,
@@ -229,7 +298,7 @@ internal static class NotifySuperviseInstallCommand
             }
         }
 
-        var verificationStatus = !options.Write
+        var verificationStatus = !options.Write && !options.Verify
             ? "preview-unverified"
             : firstCycle?.Verified == true
                 ? "first-cycle-verified"
@@ -243,6 +312,7 @@ internal static class NotifySuperviseInstallCommand
             Label = label,
             ArtifactPath = artifactPath,
             ArtifactWritten = options.Write,
+            ArtifactWrittenAt = artifactWrittenAt,
             Lifetime = options.PersistenceIntent is null
                 ? "current GUI session only; no LaunchAgents login auto-load and no reboot persistence"
                 : "operator-declared persistent intent; registration remains an explicit operator action and intent-cli executes no OS lifecycle command",
@@ -256,25 +326,125 @@ internal static class NotifySuperviseInstallCommand
             FirstCycleStatus = firstCycle?.Status ?? "preview-unverified",
             FirstCycleId = firstCycle?.CycleId,
             FirstCycleWriter = firstCycle?.Writer,
+            FirstCycleAttempts = firstCycle?.Attempts,
             InstalledSupervisorPath = NotifySupervisionStore.ResolveInstalledSupervisorPath(
-                context.ResolveSupervisionArtifactRootPath(), options.Domain, options.Team),
+                artifactRoot, options.Domain, options.Team),
             EventMode = options.EventMode,
             SuperviseInvocation = invocation,
             RegistrationCommand = registrationCommand,
             UnregistrationCommand = unregistrationCommand,
             ReconcileCommand = "intent-cli notify supervise reconcile --write",
-            CommandMode = options.Write ? "write" : "dry-run",
+            CommandMode = options.Verify ? "verify" : options.Write ? "write" : "dry-run",
             ManagesProcess = false,
             RecordedPath = runtime.RecordedPath,
             RuntimeBinaries = runtime.Binaries,
             UnresolvedBinaries = unresolvedBinaries,
             Summary = options.Write
-                ? $"Emitted and first-cycle-verified the {options.Platform} supervisor artifact with event mode {(options.EventMode ? "enabled" : "disabled")} for {(options.PersistenceIntent is null ? "the current GUI session only; no LaunchAgents login auto-load or reboot persistence is configured" : "operator-declared persistent intent; the operator still owns explicit registration and intent-cli executes no OS lifecycle command")}. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. First-cycle evidence is recorded at '{NotifySupervisionStore.ResolveInstalledSupervisorPath(context.ResolveSupervisionArtifactRootPath(), options.Domain, options.Team)}'. Legacy login-persistent artifacts removed: {legacyArtifactsRemoved.Length}. Install emitted the artifact but did not execute lifecycle registration; use 'intent-cli notify supervise reconcile --write' for explicit unload/removal."
+                ? $"Emitted and first-cycle-verified the {options.Platform} supervisor artifact with event mode {(options.EventMode ? "enabled" : "disabled")} for {(options.PersistenceIntent is null ? "the current GUI session only; no LaunchAgents login auto-load or reboot persistence is configured" : "operator-declared persistent intent; the operator still owns explicit registration and intent-cli executes no OS lifecycle command")}. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. First-cycle evidence is recorded at '{NotifySupervisionStore.ResolveInstalledSupervisorPath(artifactRoot, options.Domain, options.Team)}'. Legacy login-persistent artifacts removed: {legacyArtifactsRemoved.Length}. Install emitted the artifact but did not execute lifecycle registration; use 'intent-cli notify supervise reconcile --write' for explicit unload/removal."
+                : options.Verify
+                    ? $"Re-proved the existing {options.Platform} supervisor artifact without rewriting it. First-cycle evidence is recorded at '{NotifySupervisionStore.ResolveInstalledSupervisorPath(artifactRoot, options.Domain, options.Team)}'. Install verification did not execute lifecycle registration; use 'intent-cli notify supervise reconcile --write' for explicit unload/removal."
                 : $"Previewed the {options.Platform} supervisor artifact path and operator lifecycle commands without writing, probing, or executing anything. Lifetime is {(options.PersistenceIntent is null ? "current GUI session only; no LaunchAgents login auto-load or reboot persistence is configured" : "operator-declared persistent intent; registration remains an explicit operator action")}. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. A write requires bounded first-cycle proof and records failure log paths.",
         };
         Emit(writer, options.Format, result);
         return 0;
     }
+
+    private static DateTimeOffset ReadArtifactWrittenAt(string artifactPath) =>
+        new(File.GetLastWriteTimeUtc(artifactPath), TimeSpan.Zero);
+
+    private static IReadOnlyList<NotifySuperviseRuntimeLogSnapshot> CaptureRuntimeLogs(
+        IEnumerable<string> paths) =>
+        paths.Select(path => CaptureRuntimeLog(path, artifactWrittenAt: null)).ToArray();
+
+    private static IReadOnlyList<NotifySuperviseRuntimeLogSnapshot> CaptureRuntimeLogsForVerify(
+        IEnumerable<string> paths,
+        DateTimeOffset artifactWrittenAt) =>
+        paths.Select(path => CaptureRuntimeLog(path, artifactWrittenAt)).ToArray();
+
+    private static NotifySuperviseRuntimeLogSnapshot CaptureRuntimeLog(
+        string path,
+        DateTimeOffset? artifactWrittenAt)
+    {
+        if (!File.Exists(path))
+        {
+            return new NotifySuperviseRuntimeLogSnapshot
+            {
+                Path = path,
+                ExistedAtBaseline = false,
+                LengthAtBaseline = 0,
+                LastWriteAtBaseline = null,
+            };
+        }
+
+        var file = new FileInfo(path);
+        var lastWriteAt = new DateTimeOffset(file.LastWriteTimeUtc, TimeSpan.Zero);
+        return new NotifySuperviseRuntimeLogSnapshot
+        {
+            Path = path,
+            ExistedAtBaseline = artifactWrittenAt is null || lastWriteAt <= artifactWrittenAt.Value,
+            LengthAtBaseline = file.Length,
+            LastWriteAtBaseline = lastWriteAt,
+        };
+    }
+
+    private static void EmitFirstCycleFailure(
+        TextWriter writer,
+        string format,
+        string artifactPath,
+        string registrationCommand,
+        int startupBoundSeconds,
+        NotifySuperviseFirstCycleResult firstCycle)
+    {
+        var failureKind = firstCycle.FailureKind
+            ?? "post-install-process-missing-writer";
+        var observedLogs = string.Equals(
+            failureKind,
+            "no-post-install-process",
+            StringComparison.Ordinal)
+            ? Array.Empty<string>()
+            : firstCycle.RuntimeLogPaths;
+        var reason = string.IsNullOrWhiteSpace(firstCycle.FailureReason)
+            ? string.Empty
+            : " " + firstCycle.FailureReason;
+        var error = failureKind switch
+        {
+            "no-post-install-process" =>
+                $"first-cycle-proof-failed: no supervisor process started under artifact '{artifactPath}' within {startupBoundSeconds}s. intent-cli does not load scheduler jobs. Run the registration command '{registrationCommand}', then use 'intent-cli notify supervise install --verify' to prove a late start (attempts: {firstCycle.Attempts}).{reason}",
+            "post-install-process-wrote-no-cycle" =>
+                $"first-cycle-proof-failed: a supervisor process ran and wrote no cycle within {startupBoundSeconds}s. Existing runtime logs: {FormatRuntimeLogPaths(observedLogs)}. Use 'intent-cli notify supervise install --verify' after the process writes a qualifying cycle (attempts: {firstCycle.Attempts}).{reason}",
+            "post-install-process-missing-writer" =>
+                $"first-cycle-proof-failed: a supervisor process wrote a post-install cycle without the required writer identity. Existing runtime logs: {FormatRuntimeLogPaths(observedLogs)}. Use 'intent-cli notify supervise install --verify' after the process writes a qualifying cycle with writer identity (attempts: {firstCycle.Attempts}).{reason}",
+            "first-cycle-state-unreadable" =>
+                $"first-cycle-proof-failed: the supervision state could not be read while proving artifact '{artifactPath}' (attempts: {firstCycle.Attempts}).{reason}",
+            _ =>
+                $"first-cycle-proof-failed: first-cycle proof failed with kind '{failureKind}' (attempts: {firstCycle.Attempts}).{reason}",
+        };
+
+        if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+        {
+            writer.WriteLine(JsonSerializer.Serialize(new
+            {
+                operation = "supervise-install",
+                success = false,
+                error,
+                manages_process = false,
+                first_cycle_failure_kind = failureKind,
+                first_cycle_attempts = firstCycle.Attempts,
+                runtime_logs_observed = observedLogs,
+                artifact_path = artifactPath,
+                registration_command = registrationCommand,
+                verify_command = "intent-cli notify supervise install --verify",
+            }, JsonOptions));
+            return;
+        }
+
+        writer.WriteLine($"supervise-install-failed: [{failureKind}] {error}");
+    }
+
+    private static string FormatRuntimeLogPaths(IReadOnlyList<string> paths) =>
+        paths.Count == 0
+            ? "none"
+            : string.Join(", ", paths.Select(path => $"'{path}'"));
 
     private static NotifySuperviseRuntimeResolution ResolveRuntime(
         InstallOptions options,
@@ -323,7 +493,7 @@ internal static class NotifySuperviseInstallCommand
                 $"'{name}' was not found as an absolute executable through the emission environment PATH.");
     }
 
-    private static string ResolveDefaultArtifactPath(CliContext context, InstallOptions options)
+    private static string ResolveDefaultArtifactPath(string artifactRoot, InstallOptions options)
     {
         var label = $"intent-cli.supervise.{options.Domain}.{options.Team}";
         var extension = options.Platform switch
@@ -333,7 +503,7 @@ internal static class NotifySuperviseInstallCommand
             _ => ".service",
         };
         return Path.Combine(
-            context.ResolveSupervisionArtifactRootPath(),
+            artifactRoot,
             options.Domain,
             options.Team,
             "install",
@@ -597,6 +767,8 @@ RestartSec=30
         int? interval = null;
         int? startupBound = null;
         var write = false;
+        var dryRun = false;
+        var verify = false;
         var eventMode = false;
         var format = FormatMarkdown;
         error = string.Empty;
@@ -632,7 +804,8 @@ RestartSec=30
                     if (!ReadPositiveInt(args, ref index, argument, MaximumStartupBoundSeconds, out startupBound, out error)) return Fail(out options);
                     break;
                 case "--write": write = true; break;
-                case "--dry-run": write = false; break;
+                case "--dry-run": dryRun = true; break;
+                case "--verify": verify = true; break;
                 case "--event-mode": eventMode = true; break;
                 case "--format":
                     if (!ReadValue(args, ref index, argument, out format, out error)) return Fail(out options);
@@ -670,14 +843,34 @@ RestartSec=30
             error = "--platform must be macos, windows, or linux.";
             return Fail(out options);
         }
+        if (verify && (write || dryRun))
+        {
+            error = "--verify is exclusive with --write and --dry-run; it re-proves an existing artifact without rewriting it.";
+            return Fail(out options);
+        }
+        if (write && dryRun)
+        {
+            error = "--write and --dry-run are mutually exclusive.";
+            return Fail(out options);
+        }
 
         options = new InstallOptions
         {
-            Domain = domain!, Team = team!, Repo = repo!, OwnerRole = ownerRole!,
-            BoundSeconds = bound.Value, IntervalSeconds = interval.Value,
-            StartupBoundSeconds = startupBound ?? DefaultStartupBoundSeconds,
-            RoutingRoot = routingRoot, Output = output, Platform = platform,
-            Write = write, Format = format!,
+            Domain = domain!,
+            Team = team!,
+            Repo = repo!,
+            OwnerRole = ownerRole!,
+            BoundSeconds = bound.Value,
+            IntervalSeconds = interval.Value,
+            StartupBoundSeconds = startupBound
+                ?? (verify ? DefaultVerifyStartupBoundSeconds : DefaultStartupBoundSeconds),
+            HasExplicitStartupBound = startupBound is not null,
+            RoutingRoot = routingRoot,
+            Output = output,
+            Platform = platform,
+            Write = write,
+            Format = format!,
+            Verify = verify,
             EventMode = eventMode,
             PersistenceIntent = persistenceIntent,
         };
@@ -771,6 +964,10 @@ RestartSec=30
         writer.WriteLine($"- lifetime: {result.Lifetime}");
         writer.WriteLine($"- event mode: {result.EventMode.ToString().ToLowerInvariant()}");
         writer.WriteLine($"- artifact path: `{result.ArtifactPath}` (written: {result.ArtifactWritten.ToString().ToLowerInvariant()})");
+        if (result.ArtifactWrittenAt is not null)
+        {
+            writer.WriteLine($"- artifact written at: {result.ArtifactWrittenAt.Value:O}");
+        }
         writer.WriteLine($"- supervise runtime directory: `{result.RuntimeDirectory}`");
         writer.WriteLine($"- stdout log path: `{result.StandardOutPath}`");
         writer.WriteLine($"- stderr log path: `{result.StandardErrorPath}`");
@@ -778,6 +975,10 @@ RestartSec=30
         if (result.FirstCycleId is not null)
         {
             writer.WriteLine($"- first cycle id: `{result.FirstCycleId}`");
+        }
+        if (result.FirstCycleAttempts is not null)
+        {
+            writer.WriteLine($"- first cycle proof attempts: {result.FirstCycleAttempts.Value}");
         }
         writer.WriteLine($"- supervise invocation: `{result.SuperviseInvocation}`");
         writer.WriteLine($"- recorded PATH: `{result.RecordedPath}`");
@@ -804,10 +1005,12 @@ RestartSec=30
         public required int BoundSeconds { get; init; }
         public required int IntervalSeconds { get; init; }
         public required int StartupBoundSeconds { get; init; }
+        public required bool HasExplicitStartupBound { get; init; }
         public required string Platform { get; init; }
         public string? RoutingRoot { get; init; }
         public string? Output { get; init; }
         public required bool Write { get; init; }
+        public required bool Verify { get; init; }
         public bool EventMode { get; init; }
         public string? PersistenceIntent { get; init; }
         public required string Format { get; init; }
@@ -836,6 +1039,9 @@ RestartSec=30
         [JsonPropertyName("label")] public required string Label { get; init; }
         [JsonPropertyName("artifact_path")] public required string ArtifactPath { get; init; }
         [JsonPropertyName("artifact_written")] public required bool ArtifactWritten { get; init; }
+        [JsonPropertyName("artifact_written_at")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public DateTimeOffset? ArtifactWrittenAt { get; init; }
         [JsonPropertyName("lifetime")] public required string Lifetime { get; init; }
         [JsonPropertyName("persistence_intent")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -849,6 +1055,9 @@ RestartSec=30
         [JsonPropertyName("first_cycle_status")] public required string FirstCycleStatus { get; init; }
         [JsonPropertyName("first_cycle_id")] public string? FirstCycleId { get; init; }
         [JsonPropertyName("first_cycle_writer")] public NotifySupervisionWriterIdentity? FirstCycleWriter { get; init; }
+        [JsonPropertyName("first_cycle_attempts")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? FirstCycleAttempts { get; init; }
         [JsonPropertyName("installed_supervisor_path")] public required string InstalledSupervisorPath { get; init; }
         [JsonPropertyName("event_mode")] public required bool EventMode { get; init; }
         [JsonPropertyName("supervise_invocation")] public required string SuperviseInvocation { get; init; }
@@ -872,7 +1081,18 @@ internal sealed record NotifySuperviseFirstCycleRequest
     public required string ArtifactPath { get; init; }
     public required string CyclePath { get; init; }
     public required int StartupBoundSeconds { get; init; }
-    public required DateTimeOffset StartedAt { get; init; }
+    public required DateTimeOffset ArtifactWrittenAt { get; init; }
+    public required DateTimeOffset VerificationStartedAt { get; init; }
+    public IReadOnlyList<NotifySuperviseRuntimeLogSnapshot> RuntimeLogs { get; init; } =
+        Array.Empty<NotifySuperviseRuntimeLogSnapshot>();
+}
+
+internal sealed record NotifySuperviseRuntimeLogSnapshot
+{
+    public required string Path { get; init; }
+    public required bool ExistedAtBaseline { get; init; }
+    public required long LengthAtBaseline { get; init; }
+    public DateTimeOffset? LastWriteAtBaseline { get; init; }
 }
 
 internal sealed record NotifySuperviseFirstCycleResult
@@ -884,16 +1104,28 @@ internal sealed record NotifySuperviseFirstCycleResult
     public DateTimeOffset? ObservedAt { get; init; }
     public int Attempts { get; init; }
     public string? FailureReason { get; init; }
+    public string? FailureKind { get; init; }
+    public IReadOnlyList<string> RuntimeLogPaths { get; init; } = Array.Empty<string>();
 }
 
 internal static class NotifySuperviseFirstCycleProbe
 {
     public static NotifySuperviseFirstCycleResult Wait(NotifySuperviseFirstCycleRequest request)
     {
-        var deadline = request.StartedAt.AddSeconds(request.StartupBoundSeconds);
+        var deadline = request.VerificationStartedAt.AddSeconds(request.StartupBoundSeconds);
         var attempts = 0;
+        NotifySupervisionCycle? lastCycle = null;
         while (true)
         {
+            // Check before reading again. This keeps an N-second proof to at
+            // most N full-store reads and prevents the final read from turning
+            // the bounded wait into an N+1 busy-poll.
+            if (attempts > 0
+                && NotifySuperviseInstallCommand.UtcNowFactory().ToUniversalTime() >= deadline)
+            {
+                return Timeout(request, attempts, lastCycle);
+            }
+
             attempts++;
             var state = NotifySupervisionStore.Read(request.ArtifactRoot, request.Domain, request.Team);
             if (!state.Resolved)
@@ -904,12 +1136,14 @@ internal static class NotifySuperviseFirstCycleProbe
                     Status = "first-cycle-state-unreadable",
                     Attempts = attempts,
                     FailureReason = state.Error,
+                    FailureKind = "first-cycle-state-unreadable",
                 };
             }
 
             var cycle = state.LastCycle;
+            lastCycle = cycle;
             if (cycle is not null
-                && cycle.CompletedAt >= request.StartedAt
+                && cycle.CompletedAt > request.ArtifactWrittenAt
                 && cycle.Writer is not null)
             {
                 return new NotifySuperviseFirstCycleResult
@@ -926,19 +1160,97 @@ internal static class NotifySuperviseFirstCycleProbe
             var now = NotifySuperviseInstallCommand.UtcNowFactory().ToUniversalTime();
             if (now >= deadline)
             {
-                return new NotifySuperviseFirstCycleResult
-                {
-                    Verified = false,
-                    Status = "first-cycle-timeout",
-                    Attempts = attempts,
-                    FailureReason = cycle is null
-                        ? $"No cycle was recorded at '{request.CyclePath}'."
-                        : $"The latest cycle '{cycle.CycleId}' completed at {cycle.CompletedAt:O} without a post-install writer identity.",
-                };
+                return Timeout(request, attempts, cycle);
             }
 
-            NotifySuperviseInstallCommand.Delay(
-                TimeSpan.FromMilliseconds(Math.Min(250, Math.Max(25, (deadline - now).TotalMilliseconds))));
+            // G781: full-store reads are deliberately paced at one second.
+            // The next loop checks the deadline before another read.
+            NotifySuperviseInstallCommand.Delay(TimeSpan.FromSeconds(1));
         }
     }
+
+    private static NotifySuperviseFirstCycleResult Timeout(
+        NotifySuperviseFirstCycleRequest request,
+        int attempts,
+        NotifySupervisionCycle? cycle)
+    {
+        var runtime = ObserveRuntimeLogs(request.RuntimeLogs);
+        if (cycle is not null
+            && cycle.CompletedAt > request.ArtifactWrittenAt
+            && cycle.Writer is null)
+        {
+            return new NotifySuperviseFirstCycleResult
+            {
+                Verified = false,
+                Status = "first-cycle-timeout",
+                Attempts = attempts,
+                FailureKind = "post-install-process-missing-writer",
+                RuntimeLogPaths = runtime.ExistingPaths,
+                FailureReason = $"The latest post-install cycle '{cycle.CycleId}' completed at {cycle.CompletedAt:O} without a writer identity.",
+            };
+        }
+
+        var failureKind = runtime.HasPostArtifactActivity
+            ? "post-install-process-wrote-no-cycle"
+            : "no-post-install-process";
+        return new NotifySuperviseFirstCycleResult
+        {
+            Verified = false,
+            Status = "first-cycle-timeout",
+            Attempts = attempts,
+            FailureKind = failureKind,
+            RuntimeLogPaths = runtime.ExistingPaths,
+            FailureReason = cycle is null
+                ? $"No cycle was recorded at '{request.CyclePath}'."
+                : $"The latest cycle '{cycle.CycleId}' completed at {cycle.CompletedAt:O} before the artifact's recorded written-at or without a post-install writer identity.",
+        };
+    }
+
+    private static RuntimeLogActivity ObserveRuntimeLogs(
+        IReadOnlyList<NotifySuperviseRuntimeLogSnapshot> snapshots)
+    {
+        var existingPaths = new List<string>();
+        var hasPostArtifactActivity = false;
+        foreach (var snapshot in snapshots)
+        {
+            if (!TryReadRuntimeLog(snapshot.Path, out var current))
+            {
+                continue;
+            }
+
+            existingPaths.Add(snapshot.Path);
+            hasPostArtifactActivity |= !snapshot.ExistedAtBaseline
+                || current.Length > snapshot.LengthAtBaseline
+                || (snapshot.LastWriteAtBaseline is not null
+                    && current.LastWriteAt > snapshot.LastWriteAtBaseline.Value);
+        }
+
+        return new RuntimeLogActivity(existingPaths, hasPostArtifactActivity);
+    }
+
+    private static bool TryReadRuntimeLog(
+        string path,
+        out (long Length, DateTimeOffset LastWriteAt) current)
+    {
+        current = default;
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return false;
+            }
+
+            var file = new FileInfo(path);
+            current = (file.Length, new DateTimeOffset(file.LastWriteTimeUtc, TimeSpan.Zero));
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private sealed record RuntimeLogActivity(
+        IReadOnlyList<string> ExistingPaths,
+        bool HasPostArtifactActivity);
 }

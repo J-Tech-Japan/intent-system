@@ -41,13 +41,24 @@ public sealed class GuideWorkflowTaskSupervisionSetupG712Tests
         Assert.True(result.GetProperty("read_only").GetBoolean());
 
         var commands = result.GetProperty("commands").EnumerateArray().ToArray();
-        Assert.Equal(5, commands.Length);
+        Assert.Equal(6, commands.Length);
         Assert.Contains(commands, command =>
             command.GetProperty("name").GetString() == "install"
             && command.GetProperty("command").GetString()!.Contains("notify supervise install", StringComparison.Ordinal));
         Assert.Contains(commands, command =>
             command.GetProperty("name").GetString() == "register-current-gui-session"
             && command.GetProperty("command").GetString()!.Contains("launchctl bootstrap gui/$(id -u)", StringComparison.Ordinal));
+        var registrationIndex = Array.FindIndex(
+            commands,
+            command => command.GetProperty("name").GetString() == "register-current-gui-session");
+        var verifyIndex = Array.FindIndex(
+            commands,
+            command => command.GetProperty("name").GetString() == "verify-first-cycle");
+        Assert.True(verifyIndex > registrationIndex);
+        Assert.Contains(
+            "--verify",
+            commands[verifyIndex].GetProperty("command").GetString(),
+            StringComparison.Ordinal);
         Assert.Contains(commands, command =>
             command.GetProperty("name").GetString() == "reconcile"
             && command.GetProperty("command").GetString()!.Contains("notify supervise reconcile --write", StringComparison.Ordinal));
@@ -85,6 +96,8 @@ public sealed class GuideWorkflowTaskSupervisionSetupG712Tests
         Assert.Contains("metadata-free route", output, StringComparison.Ordinal);
         Assert.Contains("notify supervise install", output, StringComparison.Ordinal);
         Assert.Contains("launchctl bootstrap gui/$(id -u)", output, StringComparison.Ordinal);
+        Assert.Contains("verify-first-cycle", output, StringComparison.Ordinal);
+        Assert.Contains("--verify", output, StringComparison.Ordinal);
         Assert.Contains("notify supervise reconcile --write --format json", output, StringComparison.Ordinal);
         Assert.Contains("notify supervise uninstall --write --format json", output, StringComparison.Ordinal);
         Assert.Contains("notify supervise shrink --domain <domain> --team <team> --write --format json", output, StringComparison.Ordinal);

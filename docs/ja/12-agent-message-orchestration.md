@@ -842,7 +842,7 @@ standing loop の setup は ad-hoc な background shell ではなく出力専用
 intent-cli notify supervise install --domain <domain> --team <team> \
   --repo <owner/repo> --owner-role <logical-role> --bound <seconds> \
   --interval <seconds> [--startup-bound <seconds>] [--platform macos|windows|linux] \
-  [--output <path>] [--routing-root <host-root>] --write --format json
+  [--output <path>] [--routing-root <host-root>] [--verify|--dry-run|--write] --format json
 ```
 
 `--platform` を省略すると current platform の scheduler definition、すなわち macOS の launchd plist、
@@ -887,11 +887,35 @@ legacy record に対する runtime warning は defense in depth として残し�
 macOS の launchd plist は `WorkingDirectory` を routing root に設定し、
 `StandardOutPath` と `StandardErrorPath` を
 `.intent-cli/supervision/<domain>/<team>/runtime/` 配下へ向けます。install
-result は runtime directory と両方の log path を明示します。write は、宣言した
-`--startup-bound`（既定 30 秒）内に managed process が writer identity 付きの
-最初の `cycles.jsonl` record を追記した後だけ成功します。そうでなければ
-`first-cycle-proof-failed` として失敗し、両 log path を示します。artifact は
-operator が確認できるよう残ります。install は registration を実行せず、明示的な
+result は runtime directory と両方の log path を明示します。G781 では通常の install の
+`--startup-bound` の既定値を 120 秒にし、store の read は 1 秒に 1 回以下とし、
+`first_cycle_attempts` を返します。bare の `--verify` は operator が `--startup-bound` を
+明示しない限り、1 回だけ読む 1 秒の re-proof を使います。`--routing-root` を指定した場合は
+relative supervision root が write と verify の default artifact、runtime log、cycle、
+installed evidence の path を支配します。
+
+timeout は引き続き `first-cycle-proof-failed` ですが、
+`first_cycle_failure_kind` で区別します。`no-post-install-process` は artifact の
+記録済み written-at 以後に runtime log が作成も成長もしていない状態です。この場合は
+その artifact 配下で supervisor process が開始していないこと、intent-cli は scheduler job を
+読み込まないこと、正確な platform registration command を示し、存在しない log path は出力しません。
+`post-install-process-wrote-no-cycle` は artifact 作成後に runtime log が成長した状態で、
+process は実行されたが cycle を書かなかったことと、実在する log file だけを示します。3 つ目の
+timeout `post-install-process-missing-writer` は post-install cycle に必要な writer identity がないことを
+示します。store を読めない場合は別の `first-cycle-state-unreadable` proof failure です。
+
+operator が表示された registration command を実行した後は、artifact を再作成せず late start を
+証明できます。
+
+```bash
+intent-cli notify supervise install --domain <domain> --team <team> \
+  --repo <owner/repo> --owner-role <logical-role> --bound <seconds> \
+  --interval <seconds> [--startup-bound <seconds>] --verify --format json
+```
+
+`--verify` は `--write` / `--dry-run` と排他的です。既存 artifact を必要とし、その artifact の
+記録済み written-at 後に完了した writer identity 付き cycle を受け入れ、成功した `--write` と同じく
+`installed-supervisor.json` を書きます。install と verify は registration を実行せず、明示的な
 `notify supervise reconcile --write` / `uninstall --write` が operator-approved な unload/削除 path です。
 
 最初の cycle の writer は
