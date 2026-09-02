@@ -78,11 +78,15 @@ internal static class BugImplementationIssueCommand
 
         string? createdIssueUrl = null;
         int? createdIssueNumber = null;
+        var effectiveRepairTargets = ResolveEffectiveRepairTargets(repair);
 
         if (repair.ReadyToIssueCut)
         {
-            var targetRepo = ResolveSingleGitHubTargetRepo(context.RepoRoot, repair.ImplementationRepairTargets);
-            var body = BuildIssueBody(BuildIssueBodyContext(context.RepoRoot, repair));
+            var targetRepo = ResolveSingleGitHubTargetRepo(
+                context.RepoRoot,
+                effectiveRepairTargets,
+                repair.RepairExecutionUnit);
+            var body = BuildIssueBody(BuildIssueBodyContext(context.RepoRoot, repair, effectiveRepairTargets));
             var linkedIssue = PublisherFactory().CreateIssue(targetRepo, repair.SuggestedIssueTitle, body);
             createdIssueUrl = linkedIssue.Url;
             createdIssueNumber = linkedIssue.Number;
@@ -95,7 +99,7 @@ internal static class BugImplementationIssueCommand
             CreatedIssueTitle = repair.SuggestedIssueTitle,
             CreatedIssueUrl = createdIssueUrl,
             CreatedIssueNumber = createdIssueNumber,
-            ImplementationRepairTargets = repair.ImplementationRepairTargets
+            ImplementationRepairTargets = effectiveRepairTargets
         };
 
         var artifactPath = WriteArtifact(context.RepoRoot, artifact);
@@ -117,7 +121,19 @@ internal static class BugImplementationIssueCommand
         return absolutePath;
     }
 
-    private static string ResolveSingleGitHubTargetRepo(string repoRoot, IReadOnlyList<string> implementationRepairTargets)
+    private static IReadOnlyList<string> ResolveEffectiveRepairTargets(BugImplementationRepairArtifact repair)
+    {
+        ArgumentNullException.ThrowIfNull(repair);
+
+        return string.IsNullOrWhiteSpace(repair.RepairExecutionUnit)
+            ? repair.ImplementationRepairTargets
+            : [$".intent-cli/issues/{repair.RepairExecutionUnit}/packet.yaml"];
+    }
+
+    private static string ResolveSingleGitHubTargetRepo(
+        string repoRoot,
+        IReadOnlyList<string> implementationRepairTargets,
+        string? recordedRepairExecutionUnit)
     {
         if (implementationRepairTargets.Count == 0)
         {
@@ -133,7 +149,15 @@ internal static class BugImplementationIssueCommand
                 throw new InvalidOperationException($"Implementation repair target packet was not found at {packetPath}");
             }
 
-            var packet = ProjectionPacketRuntimeReader.Read(File.ReadAllText(packetPath));
+            var yaml = File.ReadAllText(packetPath);
+            if (!string.IsNullOrWhiteSpace(recordedRepairExecutionUnit)
+                && UsesG337ImplementationIssuePacketSchema(yaml))
+            {
+                throw new InvalidOperationException(
+                    $"Recorded repair target '{target}' uses the G337 'implementation_issue_packet' schema, but bug implementation-issue expects the legacy ProjectionPacketRuntimeReader 'execution_unit' schema. Run `intent-cli issue publish-flow {recordedRepairExecutionUnit}` to publish the recorded repair packet before retrying.");
+            }
+
+            var packet = ProjectionPacketRuntimeReader.Read(yaml);
             if (string.IsNullOrWhiteSpace(packet.TargetRepo))
             {
                 throw new InvalidOperationException("Projection packet must contain a target repo.");
@@ -156,7 +180,16 @@ internal static class BugImplementationIssueCommand
         return distinctRepos[0];
     }
 
-    private static StandaloneIssueBodyContext BuildIssueBodyContext(string repoRoot, BugImplementationRepairArtifact repair)
+    private static bool UsesG337ImplementationIssuePacketSchema(string yaml)
+    {
+        return yaml.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Any(line => string.Equals(line.Trim(), "implementation_issue_packet:", StringComparison.Ordinal));
+    }
+
+    private static StandaloneIssueBodyContext BuildIssueBodyContext(
+        string repoRoot,
+        BugImplementationRepairArtifact repair,
+        IReadOnlyList<string> implementationRepairTargets)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repoRoot);
         ArgumentNullException.ThrowIfNull(repair);
@@ -165,7 +198,7 @@ internal static class BugImplementationIssueCommand
         var triage = execution is null ? null : TryReadTriageArtifact(repoRoot, execution.TriageRef);
         var reportRef = execution?.ReportRef ?? triage?.ReportRef;
         var report = string.IsNullOrWhiteSpace(reportRef) ? null : TryReadReportArtifact(repoRoot, reportRef);
-        var targets = repair.ImplementationRepairTargets
+        var targets = implementationRepairTargets
             .Select(target => ReadStandaloneIssuePacketContract(repoRoot, target))
             .ToArray();
 
@@ -366,7 +399,7 @@ internal static class BugImplementationIssueCommand
             $"Implementation repair artifact: {BugImplementationRepairArtifactPathResolver.Resolve(context.Repair.BugId)}"
         };
 
-        links.AddRange(context.Repair.ImplementationRepairTargets.Select(target => $"Packet target: {target}"));
+        links.AddRange(context.Targets.Select(target => $"Packet target: {target.PacketRef}"));
 
         if (context.Report is not null)
         {

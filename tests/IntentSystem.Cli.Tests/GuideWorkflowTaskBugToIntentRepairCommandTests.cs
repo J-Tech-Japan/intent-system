@@ -357,6 +357,36 @@ public sealed class GuideWorkflowTaskBugToIntentRepairCommandTests
     }
 
     [Fact]
+    public void StageCommands_G782_RenderFromOwnUsageAndParseThroughTheRealRouter()
+    {
+        var implementationRepairStage = GuideWorkflowTaskBugToIntentRepairCommand.Stages
+            .Single(stage => string.Equals(stage.Stage, "implementation-repair", StringComparison.Ordinal));
+        Assert.Equal(BugImplementationRepairCommand.Usage, implementationRepairStage.Command);
+
+        using var temporaryDirectory = new TemporaryDirectory();
+        foreach (var stage in GuideWorkflowTaskBugToIntentRepairCommand.Stages)
+        {
+            var command = RenderStageCommand(stage.Command);
+            Assert.DoesNotContain("<", command, StringComparison.Ordinal);
+
+            using var writer = new StringWriter();
+            CommandRouter.Execute(command.Split(' ', StringSplitOptions.RemoveEmptyEntries)[1..], CreateContext(temporaryDirectory.Path), writer);
+            var output = writer.ToString();
+
+            Assert.DoesNotContain("Unknown argument", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("requires", output, StringComparison.OrdinalIgnoreCase);
+        }
+
+        using var guideWriter = new StringWriter();
+        Assert.Equal(
+            0,
+            GuideWorkflowTaskBugToIntentRepairCommand.Execute(CreateContext(temporaryDirectory.Path), Array.Empty<string>(), guideWriter));
+        Assert.Contains(BugImplementationRepairCommand.Usage, guideWriter.ToString(), StringComparison.Ordinal);
+        Assert.Contains("repair_execution_unit", guideWriter.ToString(), StringComparison.Ordinal);
+        Assert.Contains("recorded_at", guideWriter.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownArgument_ExitsOne()
     {
         using var writer = new StringWriter();
@@ -476,11 +506,42 @@ public sealed class GuideWorkflowTaskBugToIntentRepairCommandTests
         return dir!;
     }
 
-    private static CliContext CreateContext()
+    private static string RenderStageCommand(string command)
+    {
+        return command
+            .Replace("[--text <text> | --from-file <path>]", "--text <text>", StringComparison.Ordinal)
+            .Replace("[<bug-id>]", "<bug-id>", StringComparison.Ordinal)
+            .Replace("[--execution-unit <unit>]", "--execution-unit <unit>", StringComparison.Ordinal)
+            .Replace("[--issue-number <n>]", "--issue-number <n>", StringComparison.Ordinal)
+            .Replace("[--issue-url <url>]", "--issue-url <url>", StringComparison.Ordinal)
+            .Replace("[--actor <name>]", "--actor <name>", StringComparison.Ordinal)
+            .Replace("[--note <text>]", "--note <text>", StringComparison.Ordinal)
+            .Replace("[--suspected-failure-locus <text>]", "--suspected-failure-locus <text>", StringComparison.Ordinal)
+            .Replace("[--instruction-refs <csv>]", "--instruction-refs <csv>", StringComparison.Ordinal)
+            .Replace("[--affected-intent-refs <csv>]", "--affected-intent-refs <csv>", StringComparison.Ordinal)
+            .Replace("[--affected-rule-spec-refs <csv>]", "--affected-rule-spec-refs <csv>", StringComparison.Ordinal)
+            .Replace("[--clarification-candidates <csv>]", "--clarification-candidates <csv>", StringComparison.Ordinal)
+            .Replace("[--execution-units <csv>]", "--execution-units <csv>", StringComparison.Ordinal)
+            .Replace("[--issues <csv>]", "--issues <csv>", StringComparison.Ordinal)
+            .Replace("[--prs <csv>]", "--prs <csv>", StringComparison.Ordinal)
+            .Replace("[--reviews <csv>]", "--reviews <csv>", StringComparison.Ordinal)
+            .Replace("<owner/repo>", "J-Tech-Japan/intent-system", StringComparison.Ordinal)
+            .Replace("<domain>", "intent-cli", StringComparison.Ordinal)
+            .Replace("<bug-id>", "BUG-1706", StringComparison.Ordinal)
+            .Replace("<unit>", "G782", StringComparison.Ordinal)
+            .Replace("<n>", "1706", StringComparison.Ordinal)
+            .Replace("<url>", "https://github.com/J-Tech-Japan/intent-system/issues/1706", StringComparison.Ordinal)
+            .Replace("<name>", "implementation", StringComparison.Ordinal)
+            .Replace("<text>", "guide-text", StringComparison.Ordinal)
+            .Replace("<csv>", "guide-csv", StringComparison.Ordinal)
+            .Replace("<path>", "guide-path", StringComparison.Ordinal);
+    }
+
+    private static CliContext CreateContext(string? repoRoot = null)
     {
         return new CliContext
         {
-            RepoRoot = Path.GetTempPath(),
+            RepoRoot = repoRoot ?? Path.GetTempPath(),
             Config = new CliConfig
             {
                 Project = new ProjectConfig
@@ -491,6 +552,24 @@ public sealed class GuideWorkflowTaskBugToIntentRepairCommandTests
                 }
             }
         };
+    }
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        public TemporaryDirectory()
+        {
+            Path = Directory.CreateTempSubdirectory("intent-cli-g782-guide-tests-").FullName;
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Path))
+            {
+                Directory.Delete(Path, recursive: true);
+            }
+        }
     }
 
     // ----- G349: copilot-local host agent can ask bug-to-intent-repair guide -----

@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace IntentSystem.Cli.Commands;
 
 internal sealed record BugImplementationRepairArtifact
@@ -15,6 +17,18 @@ internal sealed record BugImplementationRepairArtifact
     public required string SuggestedGoal { get; init; }
 
     public required bool ReadyToIssueCut { get; init; }
+
+    public string? RepairExecutionUnit { get; init; }
+
+    public int? RepairIssueNumber { get; init; }
+
+    public string? RepairIssueUrl { get; init; }
+
+    public string? RecordedBy { get; init; }
+
+    public string? Note { get; init; }
+
+    public DateTimeOffset? RecordedAt { get; init; }
 }
 
 internal static class BugImplementationRepairArtifactYaml
@@ -45,6 +59,15 @@ internal static class BugImplementationRepairArtifactYaml
 
         AppendList(lines, "implementation_task_candidates", artifact.ImplementationTaskCandidates);
         AppendList(lines, "implementation_repair_targets", artifact.ImplementationRepairTargets);
+        AppendOptionalScalar(lines, "repair_execution_unit", artifact.RepairExecutionUnit);
+        AppendOptionalInteger(lines, "repair_issue_number", artifact.RepairIssueNumber);
+        AppendOptionalScalar(lines, "repair_issue_url", artifact.RepairIssueUrl);
+        AppendOptionalScalar(lines, "recorded_by", artifact.RecordedBy);
+        AppendOptionalScalar(lines, "note", artifact.Note);
+        AppendOptionalScalar(
+            lines,
+            "recorded_at",
+            artifact.RecordedAt?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
 
         return string.Join(Environment.NewLine, lines) + Environment.NewLine;
     }
@@ -64,8 +87,30 @@ internal static class BugImplementationRepairArtifactYaml
             ImplementationRepairTargets = GetRequiredList(values, "implementation_repair_targets"),
             SuggestedIssueTitle = GetRequiredScalar(values, "suggested_issue_title"),
             SuggestedGoal = GetRequiredScalar(values, "suggested_goal"),
-            ReadyToIssueCut = GetRequiredBoolean(values, "ready_to_issue_cut")
+            ReadyToIssueCut = GetRequiredBoolean(values, "ready_to_issue_cut"),
+            RepairExecutionUnit = GetOptionalScalar(values, "repair_execution_unit"),
+            RepairIssueNumber = GetOptionalPositiveInteger(values, "repair_issue_number"),
+            RepairIssueUrl = GetOptionalScalar(values, "repair_issue_url"),
+            RecordedBy = GetOptionalScalar(values, "recorded_by"),
+            Note = GetOptionalScalar(values, "note"),
+            RecordedAt = GetOptionalDateTimeOffset(values, "recorded_at")
         };
+    }
+
+    private static void AppendOptionalScalar(List<string> lines, string label, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            lines.Add($"{label}: {Quote(value)}");
+        }
+    }
+
+    private static void AppendOptionalInteger(List<string> lines, string label, int? value)
+    {
+        if (value is not null)
+        {
+            lines.Add($"{label}: {value.Value.ToString(CultureInfo.InvariantCulture)}");
+        }
     }
 
     private static void AppendList(List<string> lines, string label, IReadOnlyList<string> values)
@@ -166,6 +211,58 @@ internal static class BugImplementationRepairArtifactYaml
         }
 
         return booleanValue;
+    }
+
+    private static string? GetOptionalScalar(IReadOnlyDictionary<string, object?> values, string key)
+    {
+        if (!values.TryGetValue(key, out var value))
+        {
+            return null;
+        }
+
+        if (value is not string text || string.IsNullOrWhiteSpace(text))
+        {
+            throw new InvalidOperationException($"Bug implementation-repair YAML field '{key}' must be a non-empty scalar string when present.");
+        }
+
+        return text;
+    }
+
+    private static int? GetOptionalPositiveInteger(IReadOnlyDictionary<string, object?> values, string key)
+    {
+        if (!values.TryGetValue(key, out var value))
+        {
+            return null;
+        }
+
+        if (value is not string text
+            || !int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+            || parsed <= 0)
+        {
+            throw new InvalidOperationException($"Bug implementation-repair YAML field '{key}' must be a positive integer when present.");
+        }
+
+        return parsed;
+    }
+
+    private static DateTimeOffset? GetOptionalDateTimeOffset(IReadOnlyDictionary<string, object?> values, string key)
+    {
+        if (!values.TryGetValue(key, out var value))
+        {
+            return null;
+        }
+
+        if (value is not string text
+            || !DateTimeOffset.TryParse(
+                text,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind,
+                out var parsed))
+        {
+            throw new InvalidOperationException($"Bug implementation-repair YAML field '{key}' must be an ISO-8601 timestamp when present.");
+        }
+
+        return parsed;
     }
 
     private static IReadOnlyList<string> GetRequiredList(IReadOnlyDictionary<string, object?> values, string key)

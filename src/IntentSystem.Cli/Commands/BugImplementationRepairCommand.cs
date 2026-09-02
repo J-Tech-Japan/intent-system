@@ -1,7 +1,14 @@
+using System.Globalization;
+
 namespace IntentSystem.Cli.Commands;
 
 internal static class BugImplementationRepairCommand
 {
+    internal const string Usage =
+        "intent-cli bug implementation-repair <bug-id> [--execution-unit <unit>] [--issue-number <n>] [--issue-url <url>] [--actor <name>] [--note <text>]";
+
+    public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -11,12 +18,17 @@ internal static class BugImplementationRepairCommand
         try
         {
             var result = ExecuteCore(context, args);
-            BugImplementationRepairRenderer.WriteSummary(writer, result.Artifact, result.ArtifactPath);
+            BugImplementationRepairRenderer.WriteSummary(
+                writer,
+                result.Artifact,
+                result.ArtifactPath,
+                result.PreviousArtifact);
             return 0;
         }
         catch (InvalidOperationException exception)
         {
             writer.WriteLine(exception.Message);
+            writer.WriteLine($"Usage: {Usage}");
             return 1;
         }
     }
@@ -26,15 +38,12 @@ internal static class BugImplementationRepairCommand
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(args);
 
-        if (args.Length != 1 || string.IsNullOrWhiteSpace(args[0]))
-        {
-            throw new InvalidOperationException("Bug implementation-repair command requires '<bug-id>'.");
-        }
-
-        var bugId = args[0].Trim();
+        var parsed = ParseArguments(args);
+        var bugId = parsed.BugId;
         var reportRef = $".intent-cli/bugs/{bugId}.report.yaml";
         var triageRef = $".intent-cli/bugs/{bugId}.triage.yaml";
         var executionRef = $".intent-cli/bugs/{bugId}.plan.yaml";
+        var previousArtifact = TryReadExistingArtifact(context.RepoRoot, bugId);
 
         var reportPath = ResolveExistingArtifactPath(context.RepoRoot, reportRef, "Bug report artifact");
         var triagePath = ResolveExistingArtifactPath(context.RepoRoot, triageRef, "Bug triage artifact");
@@ -57,6 +66,13 @@ internal static class BugImplementationRepairCommand
             ? NormalizeImplementationRepairTargets(implementationTaskCandidates)
             : [];
 
+        var repairExecutionUnit = parsed.RepairExecutionUnit ?? previousArtifact?.RepairExecutionUnit;
+        var repairIssueNumber = parsed.RepairIssueNumber ?? previousArtifact?.RepairIssueNumber;
+        var repairIssueUrl = parsed.RepairIssueUrl ?? previousArtifact?.RepairIssueUrl;
+        var recordedBy = parsed.RecordedBy ?? previousArtifact?.RecordedBy;
+        var note = parsed.Note ?? previousArtifact?.Note;
+        ValidateRepairIssueIdentity(repairIssueNumber, repairIssueUrl);
+
         var artifact = new BugImplementationRepairArtifact
         {
             BugId = bugId,
@@ -65,15 +81,148 @@ internal static class BugImplementationRepairCommand
             ImplementationRepairTargets = implementationRepairTargets,
             SuggestedIssueTitle = $"Implementation repair: {report.Title} ({bugId})",
             SuggestedGoal = BuildSuggestedGoal(report, bugId, implementationRepairTargets, executionRef, readyToIssueCut),
-            ReadyToIssueCut = readyToIssueCut
+            ReadyToIssueCut = readyToIssueCut,
+            RepairExecutionUnit = repairExecutionUnit,
+            RepairIssueNumber = repairIssueNumber,
+            RepairIssueUrl = repairIssueUrl,
+            RecordedBy = recordedBy,
+            Note = note,
+            RecordedAt = parsed.HasRecordedRepairLinkUpdate
+                ? TimestampFactory().ToUniversalTime()
+                : previousArtifact?.RecordedAt
         };
 
         var artifactPath = WriteArtifact(context.RepoRoot, artifact);
         return new BugImplementationRepairCommandResult
         {
             Artifact = artifact,
-            ArtifactPath = artifactPath
+            ArtifactPath = artifactPath,
+            PreviousArtifact = parsed.HasRecordedRepairLinkUpdate && HasRecordedRepairDetails(previousArtifact)
+                ? previousArtifact
+                : null
         };
+    }
+
+    private static ParsedArguments ParseArguments(string[] args)
+    {
+        if (args.Length == 0 || string.IsNullOrWhiteSpace(args[0]))
+        {
+            throw new InvalidOperationException("Bug implementation-repair command requires '<bug-id>'.");
+        }
+
+        var seenFlags = new HashSet<string>(StringComparer.Ordinal);
+        string? repairExecutionUnit = null;
+        int? repairIssueNumber = null;
+        string? repairIssueUrl = null;
+        string? recordedBy = null;
+        string? note = null;
+
+        for (var index = 1; index < args.Length; index += 2)
+        {
+            var flag = args[index];
+            if (!flag.StartsWith("--", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Unknown argument '{flag}'.");
+            }
+
+            if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+            {
+                throw new InvalidOperationException($"Flag '{flag}' requires a value.");
+            }
+
+            if (!seenFlags.Add(flag))
+            {
+                throw new InvalidOperationException($"Flag '{flag}' may be specified only once.");
+            }
+
+            var value = args[index + 1].Trim();
+            switch (flag)
+            {
+                case "--execution-unit":
+                    if (!IsExecutionUnitToken(value))
+                    {
+                        throw new InvalidOperationException(
+                            $"Repair execution unit '{value}' must be an alphanumeric token such as 'G782'.");
+                    }
+
+                    repairExecutionUnit = value;
+                    break;
+                case "--issue-number":
+                    if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var issueNumber)
+                        || issueNumber <= 0)
+                    {
+                        throw new InvalidOperationException($"Repair issue number '{value}' must be a positive integer.");
+                    }
+
+                    repairIssueNumber = issueNumber;
+                    break;
+                case "--issue-url":
+                    repairIssueUrl = value;
+                    break;
+                case "--actor":
+                    recordedBy = value;
+                    break;
+                case "--note":
+                    note = value;
+                    break;
+                default:
+                    throw new InvalidOperationException(
+                        $"Unknown argument '{flag}'. Supported: [--execution-unit <unit>] [--issue-number <n>] [--issue-url <url>] [--actor <name>] [--note <text>].");
+            }
+        }
+
+        return new ParsedArguments(
+            args[0].Trim(),
+            repairExecutionUnit,
+            repairIssueNumber,
+            repairIssueUrl,
+            recordedBy,
+            note);
+    }
+
+    private static BugImplementationRepairArtifact? TryReadExistingArtifact(string repoRoot, string bugId)
+    {
+        var relativePath = BugImplementationRepairArtifactPathResolver.Resolve(bugId);
+        var absolutePath = Path.GetFullPath(Path.Combine(repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        if (!File.Exists(absolutePath))
+        {
+            return null;
+        }
+
+        var artifact = BugImplementationRepairArtifactYaml.Deserialize(File.ReadAllText(absolutePath));
+        ValidateBugId("implementation-repair", bugId, artifact.BugId);
+        return artifact;
+    }
+
+    private static void ValidateRepairIssueIdentity(int? repairIssueNumber, string? repairIssueUrl)
+    {
+        if (repairIssueNumber is not null
+            && !string.IsNullOrWhiteSpace(repairIssueUrl)
+            && !repairIssueUrl.EndsWith(
+                repairIssueNumber.Value.ToString(CultureInfo.InvariantCulture),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Repair issue URL '{repairIssueUrl}' does not end with repair issue number '{repairIssueNumber.Value.ToString(CultureInfo.InvariantCulture)}'.");
+        }
+    }
+
+    private static bool HasRecordedRepairDetails(BugImplementationRepairArtifact? artifact)
+    {
+        return artifact is not null
+            && (!string.IsNullOrWhiteSpace(artifact.RepairExecutionUnit)
+                || artifact.RepairIssueNumber is not null
+                || !string.IsNullOrWhiteSpace(artifact.RepairIssueUrl)
+                || !string.IsNullOrWhiteSpace(artifact.RecordedBy)
+                || !string.IsNullOrWhiteSpace(artifact.Note)
+                || artifact.RecordedAt is not null);
+    }
+
+    private static bool IsExecutionUnitToken(string value)
+    {
+        return value.Length > 0
+            && char.IsLetter(value[0])
+            && value.All(character => char.IsLetterOrDigit(character) || character == '-');
     }
 
     private static string ResolveExistingArtifactPath(string repoRoot, string relativePath, string artifactLabel)
@@ -141,5 +290,20 @@ internal static class BugImplementationRepairCommand
             .Select(value => value.Trim())
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private sealed record ParsedArguments(
+        string BugId,
+        string? RepairExecutionUnit,
+        int? RepairIssueNumber,
+        string? RepairIssueUrl,
+        string? RecordedBy,
+        string? Note)
+    {
+        public bool HasRecordedRepairLinkUpdate => RepairExecutionUnit is not null
+            || RepairIssueNumber is not null
+            || RepairIssueUrl is not null
+            || RecordedBy is not null
+            || Note is not null;
     }
 }
