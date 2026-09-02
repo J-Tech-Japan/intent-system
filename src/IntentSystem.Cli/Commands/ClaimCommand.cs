@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using IntentSystem.Cli.Infrastructure;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -146,7 +147,8 @@ internal static class ClaimCommand
 
         var canonicalBranch = ResolveRemoteDefaultBranch(repoRoot);
         var remote = canonicalBranch.Remote;
-        var defaultBranch = canonicalBranch.Name;
+        var targetBranch = canonicalBranch.Name;
+        var targetRef = $"refs/heads/{targetBranch}";
         if (!request.Write)
         {
             return new ClaimTransactionResult(
@@ -156,13 +158,10 @@ internal static class ClaimCommand
         }
         SweepStaleTransactionRoots(warningWriter, deleteDirectory);
 
-
-        var targetRef = $"refs/heads/{defaultBranch}";
-
         HostStateGitRetryEvidence? lastGitWriteRetry = null;
-        var hostFetch = RunGit(repoRoot, ["fetch", "--quiet", "origin", defaultBranch], hostStateWrite: true);
+        var hostFetch = RunGit(repoRoot, ["fetch", "--quiet", "origin", targetBranch], hostStateWrite: true);
         CaptureRetry(ref lastGitWriteRetry, hostFetch);
-        EnsureSuccess(hostFetch, "refresh origin default branch before claim transaction");
+        EnsureSuccess(hostFetch, "refresh canonical claim branch before claim transaction");
 
         ClaimRecord? lastObserved = null;
         for (var attempt = 1; attempt <= request.MaxAttempts; attempt++)
@@ -176,12 +175,12 @@ internal static class ClaimCommand
             try
             {
                 var clone = RunGit(Path.GetTempPath(),
-                    ["clone", "--quiet", "--single-branch", "--branch", defaultBranch, remote, transactionRoot]);
+                    ["clone", "--quiet", "--single-branch", "--branch", targetBranch, remote, transactionRoot]);
                 EnsureSuccess(clone, "clone claim transaction workspace");
 
                 // The sequence is deliberately visible and invariant: ff-only
                 // pull, create/change, commit, then a non-forced push.
-                var pull = RunGit(transactionRoot, ["pull", "--ff-only", "origin", defaultBranch], hostStateWrite: true);
+                var pull = RunGit(transactionRoot, ["pull", "--ff-only", "origin", targetBranch], hostStateWrite: true);
                 CaptureRetry(ref lastGitWriteRetry, pull);
                 EnsureSuccess(pull, "fast-forward claim base");
 
@@ -218,6 +217,7 @@ internal static class ClaimCommand
                     return Held(request, relativeClaimPath, attempt, current) with
                     {
                         GitWriteRetry = lastGitWriteRetry,
+                        TargetRef = targetRef,
                     };
                 }
                 if (request.Operation != ClaimOperation.Acquire && current is null)
@@ -227,6 +227,7 @@ internal static class ClaimCommand
                         null, null, null, "No active claim exists for this scope.")
                     {
                         GitWriteRetry = lastGitWriteRetry,
+                        TargetRef = targetRef,
                     };
                 }
                 if (request.Operation == ClaimOperation.Release
@@ -237,6 +238,7 @@ internal static class ClaimCommand
                         "Only the complete attributed holder identity (actor and team) may release; use explicit takeover otherwise.") with
                     {
                         GitWriteRetry = lastGitWriteRetry,
+                        TargetRef = targetRef,
                     };
                 }
                 if (request.Operation == ClaimOperation.Takeover
@@ -246,6 +248,7 @@ internal static class ClaimCommand
                         $"--displaced-holder must name the current holder '{current.Actor}'.") with
                     {
                         GitWriteRetry = lastGitWriteRetry,
+                        TargetRef = targetRef,
                     };
                 }
 
@@ -321,7 +324,7 @@ internal static class ClaimCommand
                     };
                     var detail = RefreshInvokingClone(
                         repoRoot,
-                        defaultBranch,
+                        targetBranch,
                         ref lastGitWriteRetry,
                         "The plain push succeeded; this is the ownership transition fact.");
                     return new ClaimTransactionResult(
@@ -338,11 +341,11 @@ internal static class ClaimCommand
                 }
 
                 var gitPushError = push.StandardError.Trim();
-                var fetch = RunGit(transactionRoot, ["fetch", "origin", defaultBranch]);
+                var fetch = RunGit(transactionRoot, ["fetch", "origin", targetBranch]);
                 EnsureSuccess(fetch, "inspect rejected claim push");
-                var remoteDefaultHead = RunGit(transactionRoot, ["rev-parse", $"origin/{defaultBranch}"]);
-                EnsureSuccess(remoteDefaultHead, "resolve rejected claim push target head");
-                var remoteHead = remoteDefaultHead.StandardOutput.Trim();
+                var remoteTargetHead = RunGit(transactionRoot, ["rev-parse", $"origin/{targetBranch}"]);
+                EnsureSuccess(remoteTargetHead, "resolve rejected claim push target head");
+                var remoteHead = remoteTargetHead.StandardOutput.Trim();
                 var remoteCommitMatches = string.Equals(
                     remoteHead,
                     transactionCommitSha,
@@ -350,7 +353,7 @@ internal static class ClaimCommand
                 var remoteAdvanced = !string.Equals(remoteHead, baseCommit, StringComparison.Ordinal);
 
                 var remoteClaimTree = RunGit(transactionRoot,
-                    ["ls-tree", "-r", "--name-only", $"origin/{defaultBranch}", "--", relativeClaimPath]);
+                    ["ls-tree", "-r", "--name-only", $"origin/{targetBranch}", "--", relativeClaimPath]);
                 EnsureSuccess(remoteClaimTree, "inspect rejected claim push scope");
                 var remoteClaimExists = remoteClaimTree.StandardOutput
                     .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -358,7 +361,7 @@ internal static class ClaimCommand
                 if (remoteClaimExists)
                 {
                     var remoteClaim = RunGit(transactionRoot,
-                        ["show", $"origin/{defaultBranch}:{relativeClaimPath}"]);
+                        ["show", $"origin/{targetBranch}:{relativeClaimPath}"]);
                     EnsureSuccess(remoteClaim, "read rejected claim push scope");
                     var holder = JsonSerializer.Deserialize<ClaimRecord>(remoteClaim.StandardOutput, JsonOptions)
                         ?? throw new InvalidOperationException("remote claim record was empty");
@@ -381,7 +384,7 @@ internal static class ClaimCommand
                         };
                         var detail = RefreshInvokingClone(
                             repoRoot,
-                            defaultBranch,
+                            targetBranch,
                             ref lastGitWriteRetry,
                             "The remote branch contains the transaction commit after the push process returned a failure; verified remote state is the ownership transition fact.");
                         return new ClaimTransactionResult(
@@ -405,6 +408,7 @@ internal static class ClaimCommand
                             "The push was rejected and the same scope now exists on origin.") with
                         {
                             GitWriteRetry = lastGitWriteRetry,
+                            TargetRef = targetRef,
                         };
                     }
                 }
@@ -417,7 +421,7 @@ internal static class ClaimCommand
                     var status = "released";
                     var detail = RefreshInvokingClone(
                         repoRoot,
-                        defaultBranch,
+                        targetBranch,
                         ref lastGitWriteRetry,
                         "The remote branch contains the transaction commit after the push process returned a failure; verified remote state is the ownership transition fact.");
                     return new ClaimTransactionResult(
@@ -536,8 +540,8 @@ internal static class ClaimCommand
             return 1;
         }
 
-        var metadataBranch = ResolveConfiguredMetadataBranch(context);
-        if (string.IsNullOrWhiteSpace(metadataBranch))
+        var configuredMetadataBranch = ResolveConfiguredMetadataBranch(context);
+        if (string.IsNullOrWhiteSpace(configuredMetadataBranch))
         {
             WriteStrandedReport(
                 writer,
@@ -550,14 +554,32 @@ internal static class ClaimCommand
                     string.Empty,
                     Array.Empty<ClaimStrandedEntry>(),
                     Array.Empty<string>(),
-                    "No metadata branch is configured; no stranded-claim report is needed."));
+                    "No legacy metadata source branch is configured; no stranded-claim report is needed."));
             return 0;
         }
 
         try
         {
             var canonicalBranch = ResolveRemoteDefaultBranch(context.RepoRoot);
-            var scan = ReadStrandedClaims(context.RepoRoot, metadataBranch, canonicalBranch);
+            var sourceBranch = ResolveStrandedSourceBranch(context, canonicalBranch);
+            if (string.IsNullOrWhiteSpace(sourceBranch))
+            {
+                WriteStrandedReport(
+                    writer,
+                    format,
+                    new ClaimStrandedReportResult(
+                        "not-configured",
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        Array.Empty<ClaimStrandedEntry>(),
+                        Array.Empty<string>(),
+                        "No stranded source branch is configured; no stranded-claim report is needed."));
+                return 0;
+            }
+
+            var scan = ReadStrandedClaims(context.RepoRoot, sourceBranch, canonicalBranch);
             WriteStrandedReport(
                 writer,
                 format,
@@ -575,8 +597,8 @@ internal static class ClaimCommand
                             $"canonical record already exists for {item.Scope}; migration leaves it unchanged")
                         .ToArray(),
                     scan.Stranded.Count == 0
-                        ? "No active claim exists on the configured metadata branch without a canonical counterpart."
-                        : $"Found {scan.Stranded.Count} active claim record(s) on the metadata branch that are absent from the canonical branch."));
+                        ? "No active claim exists on the stranded source branch without a canonical counterpart."
+                        : $"Found {scan.Stranded.Count} active claim record(s) on the stranded source branch that are absent from the canonical branch."));
             return 0;
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
@@ -586,9 +608,11 @@ internal static class ClaimCommand
                 format,
                 new ClaimStrandedReportResult(
                     "unavailable",
-                    metadataBranch,
+                    configuredMetadataBranch,
                     string.Empty,
-                    RemoteTrackingRef(metadataBranch),
+                    string.IsNullOrWhiteSpace(configuredMetadataBranch)
+                        ? string.Empty
+                        : RemoteTrackingRef(configuredMetadataBranch),
                     string.Empty,
                     Array.Empty<ClaimStrandedEntry>(),
                     Array.Empty<string>(),
@@ -700,7 +724,6 @@ internal static class ClaimCommand
             return 1;
         }
 
-        var configuredMetadataBranch = ResolveConfiguredMetadataBranch(context);
         ClaimRemoteDefaultBranch canonicalBranch;
         try
         {
@@ -726,7 +749,8 @@ internal static class ClaimCommand
             return 1;
         }
 
-        if (!string.Equals(currentMetadataBranch, configuredMetadataBranch, StringComparison.Ordinal))
+        var strandedSourceBranch = ResolveStrandedSourceBranch(context, canonicalBranch);
+        if (!string.Equals(currentMetadataBranch, strandedSourceBranch, StringComparison.Ordinal))
         {
             WriteStrandedMigration(
                 writer,
@@ -741,7 +765,7 @@ internal static class ClaimCommand
                     Array.Empty<ClaimStrandedEntry>(),
                     false,
                     null,
-                    $"--current-metadata-branch must match the configured metadata branch '{configuredMetadataBranch}'.",
+                    $"--current-metadata-branch must match the resolved stranded source branch '{strandedSourceBranch}'.",
                     null));
             return 1;
         }
@@ -761,7 +785,7 @@ internal static class ClaimCommand
                     Array.Empty<ClaimStrandedEntry>(),
                     false,
                     null,
-                    $"--new-canonical-branch must match the resolved origin default branch '{canonicalBranch.Name}'.",
+                    $"--new-canonical-branch must match the resolved canonical claim branch '{canonicalBranch.Name}'.",
                     null));
             return 1;
         }
@@ -794,7 +818,7 @@ internal static class ClaimCommand
                     null,
                     scan.Stranded.Count == 0
                         ? "Dry-run found no canonical migration to apply."
-                        : $"Dry-run would copy {scan.Stranded.Count} stranded active claim record(s) to the canonical branch; the metadata branch is not rewritten.",
+                        : $"Dry-run would copy {scan.Stranded.Count} stranded active claim record(s) to the canonical branch; the source branch is not rewritten.",
                     $"refs/heads/{canonicalBranch.Name}");
             }
             else
@@ -827,7 +851,7 @@ internal static class ClaimCommand
     }
 
     /// <summary>
-    /// G763: the migration is a claim transaction with a plain push to the
+    /// G763/G780: the migration is a claim transaction with a plain push to
     /// canonical branch. A non-fast-forward push never overwrites a newer
     /// canonical record; the bounded retry simply re-reads both branches.
     /// </summary>
@@ -941,7 +965,7 @@ internal static class ClaimCommand
                         true,
                         transactionCommitSha,
                         "The remote branch contains the transaction commit after the push process returned a failure; "
-                        + "verified remote state is the ownership transition fact. The metadata branch remains unchanged.",
+                        + "verified remote state is the ownership transition fact. The source branch remains unchanged.",
                         $"refs/heads/{request.NewCanonicalBranch}")
                     {
                         GitWriteRetry = lastGitWriteRetry,
@@ -965,7 +989,7 @@ internal static class ClaimCommand
                         scan.Conflicts,
                         true,
                         transactionCommitSha,
-                        $"Migrated {scan.Stranded.Count} stranded active claim record(s) to the canonical branch; the metadata branch remains unchanged.",
+                        $"Migrated {scan.Stranded.Count} stranded active claim record(s) to the canonical branch; the source branch remains unchanged.",
                         $"refs/heads/{request.NewCanonicalBranch}")
                     {
                         GitWriteRetry = lastGitWriteRetry,
@@ -1041,9 +1065,9 @@ internal static class ClaimCommand
         // sufficient evidence because it can hide a successful remote push.
         var fetch = RunGit(transactionRoot, ["fetch", "origin", canonicalBranch]);
         EnsureSuccess(fetch, "inspect rejected stranded-claim migration push");
-        var remoteDefaultHead = RunGit(transactionRoot, ["rev-parse", $"origin/{canonicalBranch}"]);
-        if (remoteDefaultHead.ExitCode != 0
-            || !string.Equals(remoteDefaultHead.StandardOutput.Trim(), transactionCommitSha, StringComparison.Ordinal))
+        var remoteTargetHead = RunGit(transactionRoot, ["rev-parse", $"origin/{canonicalBranch}"]);
+        if (remoteTargetHead.ExitCode != 0
+            || !string.Equals(remoteTargetHead.StandardOutput.Trim(), transactionCommitSha, StringComparison.Ordinal))
         {
             return false;
         }
@@ -1194,6 +1218,20 @@ internal static class ClaimCommand
         return string.Empty;
     }
 
+    /// <summary>
+    /// G780: a declared same-repository claim target reverses the stranded
+    /// migration direction. Historical records on the remote default branch
+    /// are then the source that must be compared with and migrated to the
+    /// configured metadata write branch. Legacy hosts retain G763's
+    /// configured-metadata-to-default direction.
+    /// </summary>
+    private static string ResolveStrandedSourceBranch(
+        CliContext context,
+        ClaimRemoteDefaultBranch canonicalBranch) =>
+        canonicalBranch.UsesMetadataWriteBranch
+            ? canonicalBranch.RemoteDefaultBranch
+            : ResolveConfiguredMetadataBranch(context);
+
     private static string RemoteTrackingRef(string branch) => $"refs/remotes/origin/{branch}";
 
     private static void WriteStrandedReport(
@@ -1271,7 +1309,7 @@ internal static class ClaimCommand
 
     private static void WriteStrandedReportHelp(TextWriter writer) =>
         writer.WriteLine(
-            "Usage: intent-cli claim stranded [list] [--format json|markdown] (reports metadata-branch records absent from canonical branch)");
+            "Usage: intent-cli claim stranded [list] [--format json|markdown] (reports source-branch records absent from the canonical claim branch)");
 
     private static void WriteStrandedMigrationHelp(TextWriter writer) =>
         writer.WriteLine(
@@ -1559,7 +1597,7 @@ internal static class ClaimCommand
 
     private static string RefreshInvokingClone(
         string repoRoot,
-        string defaultBranch,
+        string targetBranch,
         ref HostStateGitRetryEvidence? lastGitWriteRetry,
         string committedDetail)
     {
@@ -1567,13 +1605,13 @@ internal static class ClaimCommand
         {
             var localRefresh = RunGit(
                 repoRoot,
-                ["fetch", "--quiet", "origin", defaultBranch],
+                ["fetch", "--quiet", "origin", targetBranch],
                 hostStateWrite: true);
             CaptureRetry(ref lastGitWriteRetry, localRefresh);
             return localRefresh.ExitCode == 0
                 ? committedDetail
                 : committedDetail
-                    + " The invoking clone could not refresh the origin default-branch tracking ref: "
+                    + " The invoking clone could not refresh the canonical claim-branch tracking ref: "
                     + localRefresh.StandardError.Trim();
         }
         catch (Exception exception)
@@ -1696,8 +1734,10 @@ internal static class ClaimCommand
 
     /// <summary>
     /// Resolve the one canonical remote branch used by both claim writes and
-    /// claim reads. The caller must fail closed when this metadata is absent
-    /// or unsafe; no caller may substitute its current checkout branch.
+    /// claim reads. A declared same-repository metadata write branch replaces
+    /// the remote default branch as the canonical claim target. The caller
+    /// must fail closed when either source is absent or unsafe; no caller may
+    /// substitute its current checkout branch.
     /// </summary>
     internal static ClaimRemoteDefaultBranch ResolveRemoteDefaultBranch(string repoRoot)
     {
@@ -1718,7 +1758,76 @@ internal static class ClaimCommand
                 + "fall back to the current branch.");
         }
 
-        return new ClaimRemoteDefaultBranch(remote, defaultBranch);
+        var metadataWriteBranch = ResolveDeclaredMetadataWriteBranch(repoRoot);
+        if (metadataWriteBranch is null)
+        {
+            return new ClaimRemoteDefaultBranch(
+                remote,
+                defaultBranch,
+                defaultBranch,
+                UsesMetadataWriteBranch: false);
+        }
+
+        var configuredBranch = RunGit(
+            repoRoot,
+            ["ls-remote", "--exit-code", "--heads", "origin", $"refs/heads/{metadataWriteBranch}"]);
+        if (configuredBranch.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"Configured metadata_write_branch '{metadataWriteBranch}' is absent on origin; "
+                + "refusing to fall back to the remote default or current branch.");
+        }
+
+        return new ClaimRemoteDefaultBranch(
+            remote,
+            metadataWriteBranch,
+            defaultBranch,
+            UsesMetadataWriteBranch: true);
+    }
+
+    /// <summary>
+    /// Reads only the invoking checkout's configuration. The same-repository
+    /// claim topology is deliberately opt-in: legacy metadata source/write
+    /// settings alone continue to use the G747 remote-default target.
+    /// </summary>
+    private static string? ResolveDeclaredMetadataWriteBranch(string repoRoot)
+    {
+        var configPath = CliRuntimeContracts.GetConfigPath(repoRoot);
+        if (!File.Exists(configPath)) return null;
+
+        try
+        {
+            var project = CliConfigLoader.LoadFromFile(configPath).Project;
+            if (!project.SameRepoTopology
+                || string.IsNullOrWhiteSpace(project.MetadataWriteBranch))
+            {
+                return null;
+            }
+
+            var metadataWriteBranch = project.MetadataWriteBranch.Trim();
+            if (!IsSafeRemoteBranch(metadataWriteBranch))
+            {
+                throw new InvalidOperationException(
+                    $"Configured metadata_write_branch '{metadataWriteBranch}' is not a safe remote branch name; "
+                    + "refusing to fall back to the remote default or current branch.");
+            }
+
+            return metadataWriteBranch;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidOperationException or FormatException)
+        {
+            if (exception.Message.Contains("metadata_write_branch", StringComparison.Ordinal))
+            {
+                throw;
+            }
+
+            throw new InvalidOperationException(
+                "Could not read same-repo metadata_write_branch configuration; "
+                + "refusing to fall back to the remote default or current branch. "
+                + exception.Message,
+                exception);
+        }
     }
 
     private static bool IsSafeRemoteBranch(string value)
@@ -2028,7 +2137,11 @@ internal static class ClaimCommand
     }
 }
 
-internal sealed record ClaimRemoteDefaultBranch(string Remote, string Name);
+internal sealed record ClaimRemoteDefaultBranch(
+    string Remote,
+    string Name,
+    string RemoteDefaultBranch,
+    bool UsesMetadataWriteBranch);
 
 internal enum ClaimOperation { Acquire, Release, Takeover }
 

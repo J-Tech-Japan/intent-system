@@ -189,9 +189,10 @@ internal static class ClaimOwnershipVerifier
     /// </summary>
     private static CanonicalClaimEvidence ReadCanonicalEvidence(string repoRoot, string scope)
     {
-        // Ordinary verification reads the canonical branch for ownership.
-        // A configured metadata branch is adoption evidence only: it can
-        // prove that claims were adopted, but it never supplies ownership.
+        // Ordinary verification reads the topology-aware canonical branch
+        // for ownership. A noncanonical branch is adoption evidence only:
+        // it can prove that claims were adopted, but it never supplies
+        // ownership.
         var inside = RunGit(repoRoot, ["rev-parse", "--is-inside-work-tree"]);
         if (inside.ExitCode != 0
             || !string.Equals(inside.StandardOutput.Trim(), "true", StringComparison.Ordinal))
@@ -208,7 +209,7 @@ internal static class ClaimOwnershipVerifier
         {
             return CanonicalClaimEvidence.Unavailable(
                 string.IsNullOrWhiteSpace(exception.Message)
-                    ? "resolving origin default branch failed"
+                    ? "resolving canonical claim branch failed"
                     : exception.Message);
         }
 
@@ -219,7 +220,7 @@ internal static class ClaimOwnershipVerifier
         {
             return CanonicalClaimEvidence.Unavailable(
                 string.IsNullOrWhiteSpace(fetch.StandardError)
-                    ? "fetching the canonical default branch from origin failed"
+                    ? "fetching the canonical claim branch from origin failed"
                     : fetch.StandardError.Trim());
         }
 
@@ -240,6 +241,14 @@ internal static class ClaimOwnershipVerifier
         var storeConfigured = claimPaths.Length > 0;
         if (!storeConfigured)
         {
+            // G780: a declared same-repository target is authoritative for
+            // ordinary verification. The remote default is only a stranded
+            // migration source, never a verifier fallback.
+            if (canonicalBranch.UsesMetadataWriteBranch)
+            {
+                return CanonicalClaimEvidence.NoStore;
+            }
+
             // G766: an empty canonical claims tree is not enough to infer that
             // the host never adopted claims. A configured metadata branch is
             // an additional read-only adoption signal, but it never supplies

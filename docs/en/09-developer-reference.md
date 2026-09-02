@@ -200,11 +200,12 @@ reports `not-configured`, the keys above are not being resolved — check they a
 under `[project]` (not a different table) and spelled exactly
 `metadata_source_branch` / `metadata_write_branch`.
 
-Those metadata-branch keys do not change where a claim transaction writes. A
-metadata branch can be read as adoption evidence when the canonical claims tree
-is empty, but ownership remains canonical and a claim writer still targets the
-remote default branch. See [Remote default-branch targeting (G747)](#remote-default-branch-targeting-g747)
-for the target-ref and rejected-push contract.
+Claim targeting uses these keys only when the topology is explicitly declared:
+with `same_repo_topology = true` and a non-empty `metadata_write_branch`, the
+claim writer and every claim reader use `metadata_write_branch`. If either
+condition is absent, the G747 remote-default behavior remains unchanged.
+See [Claim target topology (G747, G780)](#claim-target-topology-g747-g780) for
+the target-ref, fail-closed, and stranded-migration contract.
 
 Host vs child bootstrap (G514): the host-side automation commands
 (`automation summary`, `automation same-repo-metadata-preflight`,
@@ -2715,35 +2716,58 @@ warning: claim transaction committed successfully, but best-effort cleanup could
 This keeps the committed claim visible to the operator and to downstream
 claim-gated flows without backgrounding the claim or hand-writing its packet.
 
-### Remote default-branch targeting (G747)
+### Claim target topology (G747, G780)
 
-Every claim transaction resolves the remote default branch from
-`git ls-remote --symref origin HEAD`. The transaction clone starts from that
-branch and pushes the transaction commit explicitly to
-`refs/heads/<resolved-default-branch>`. The invoking checkout current branch
-is never used as the claim target or advanced by the refresh. If the symref is
-missing, ambiguous, unsafe, or cannot be queried, the command fails closed; it
-never falls back to the current branch. Successful transaction results include
-the resolved `target_ref`.
+One shared resolver chooses the canonical remote branch for claim acquisition,
+release, takeover, verification, the worker store probe, and stranded scans and
+migrations. It first resolves the remote default branch from
+`git ls-remote --symref origin HEAD`; the current checkout branch is never a
+claim target or a fallback.
 
-### Rejected default-branch pushes (G779)
+- **Default topology (G747).** If `.intent-cli/config.toml` does not declare
+  both `same_repo_topology = true` and a non-empty
+  `metadata_write_branch`, the remote default branch is canonical. The
+  transaction clone starts there and pushes explicitly to
+  `refs/heads/<resolved-default-branch>`.
+- **Declared same-repo topology (G780).** If both settings are present in the
+  invoking checkout's `[project]` configuration, the configured
+  `metadata_write_branch` is canonical. Every writer and reader uses
+  `refs/heads/<metadata_write_branch>` instead; the product/default branch is
+  not advanced by a claim operation.
+
+The resolver fails closed in either topology. A missing, ambiguous, unsafe, or
+unqueryable origin HEAD is refused. In declared same-repo topology, an unsafe
+or absent `metadata_write_branch` is also refused, and the command does **not**
+fall back to the remote default or current branch. Successful transaction
+results include the resolved `target_ref`.
+
+`claim stranded` retains G763's original direction on a default-topology host:
+the configured legacy metadata branch is the source and the remote default is
+canonical. On a declared same-repo host the direction reverses: records on the
+remote default are the source and `metadata_write_branch` is canonical. Inspect
+the report, run `claim stranded migrate --dry-run`, then use the confirmed
+`--write` migration; it is a transaction-backed copy and leaves the source
+branch unchanged. A subsequent report is `clean` when every source record has
+a canonical counterpart.
+
+### Rejected claim-target pushes (G779)
 
 A non-zero claim push is not automatically a race. After a rejected push, the
 command first checks whether origin already contains the transaction commit or
 the scope record; those remain the existing committed and held outcomes. If it
-contains neither and the post-rejection `origin/<default>` head still equals the
+contains neither and the post-rejection canonical target head still equals the
 transaction `base_commit`, the result is `push-rejected` with exit code 1. It
 includes `target_ref`, `base_commit`, `remote_advanced: false`, and
 `git_push_error` (Git's trimmed stderr), and does not create a second transaction
 workspace or retry.
 
-If the remote default ref did move, the command keeps the existing fresh-base,
+If the canonical target ref did move, the command keeps the existing fresh-base,
 bounded reapply behavior. A final `retry-exhausted` result identifies the
 `target_ref`, `base_commit`, last `remote_head`, `remote_advanced: true`, and
 last `git_push_error`; its detail calls the condition an unrelated remote
-advance only in that case. In practical terms, a protected default branch now
+advance only in that case. In practical terms, a protected target branch
 surfaces as `push-rejected` with the server's message: the claim writer needs
-ordinary plain-push access to the resolved remote default branch.
+ordinary plain-push access to the resolved canonical target.
 
 An acquire whose active record already has the same actor and team is an
 intentional no-op. Its result says that the scope is already held and that no
