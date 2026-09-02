@@ -22,11 +22,19 @@ internal static class WorkerEvidencePasteAnalyzer
         "actual counts pasted",
     };
 
+    private static readonly IReadOnlyList<string> CriterionNameMarkers = new[]
+    {
+        "criterion",
+        "criteria",
+        "ac",
+    };
+
     /// <summary>
     /// Measures the supplied PR body against the source issue's explicitly
     /// evidence-bearing acceptance criteria. A fence satisfies a criterion
-    /// only when its immediately preceding Markdown heading or its first line
-    /// names that criterion as <c>Criterion &lt;ordinal&gt;</c>.
+    /// only when its immediately preceding Markdown heading or non-empty line,
+    /// or its first line, names that criterion using one of the packet-defined
+    /// forms.
     /// </summary>
     public static WorkerEvidencePasteAnalysisResult Analyze(string issueBody, string prBody)
     {
@@ -131,12 +139,12 @@ internal static class WorkerEvidencePasteAnalyzer
                 continue;
             }
 
-            var heading = FindImmediatelyPrecedingHeading(lines, index);
+            var precedingName = FindImmediatelyPrecedingFenceName(lines, index);
             var firstLine = index + 1 < closingIndex ? lines[index + 1].Trim() : string.Empty;
             foreach (var criterion in required)
             {
-                if (NamesCriterion(heading, criterion.Ordinal)
-                    || NamesCriterion(firstLine, criterion.Ordinal))
+                if (NamesCriterion(precedingName, criterion)
+                    || NamesCriterion(firstLine, criterion))
                 {
                     namedOrdinals.Add(criterion.Ordinal);
                 }
@@ -233,7 +241,7 @@ internal static class WorkerEvidencePasteAnalyzer
         return -1;
     }
 
-    private static string? FindImmediatelyPrecedingHeading(string[] lines, int fenceIndex)
+    private static string? FindImmediatelyPrecedingFenceName(string[] lines, int fenceIndex)
     {
         for (var index = fenceIndex - 1; index >= 0; index--)
         {
@@ -242,67 +250,136 @@ internal static class WorkerEvidencePasteAnalyzer
                 continue;
             }
 
-            return TryReadHeading(lines[index], out _, out var heading) ? heading : null;
+            return TryReadHeading(lines[index], out _, out var heading)
+                ? heading
+                : lines[index].Trim();
         }
 
         return null;
     }
 
-    private static bool NamesCriterion(string? candidate, int ordinal)
+    private static bool NamesCriterion(string? candidate, WorkerEvidenceCriterion criterion) =>
+        NamesCriterionOrdinal(candidate, criterion.Ordinal)
+        || ContainsDistinctiveCriterionPhrase(candidate, criterion.Text);
+
+    private static bool NamesCriterionOrdinal(string? candidate, int ordinal)
     {
         if (string.IsNullOrWhiteSpace(candidate))
         {
             return false;
         }
 
-        const string marker = "criterion";
-        var searchStart = 0;
-        while (searchStart < candidate.Length)
+        foreach (var marker in CriterionNameMarkers)
         {
-            var index = candidate.IndexOf(marker, searchStart, StringComparison.OrdinalIgnoreCase);
-            if (index < 0)
+            var searchStart = 0;
+            while (searchStart < candidate.Length)
             {
-                return false;
-            }
-
-            var beforeIsWord = index > 0 && char.IsLetterOrDigit(candidate[index - 1]);
-            var cursor = index + marker.Length;
-            var afterIsWord = cursor < candidate.Length && char.IsLetterOrDigit(candidate[cursor]);
-            if (!beforeIsWord && !afterIsWord)
-            {
-                while (cursor < candidate.Length && char.IsWhiteSpace(candidate[cursor]))
+                var index = candidate.IndexOf(marker, searchStart, StringComparison.OrdinalIgnoreCase);
+                if (index < 0)
                 {
-                    cursor++;
+                    break;
                 }
 
-                if (cursor < candidate.Length && candidate[cursor] == '#')
+                var beforeIsWord = index > 0 && char.IsLetterOrDigit(candidate[index - 1]);
+                var cursor = index + marker.Length;
+                var afterIsWord = cursor < candidate.Length && char.IsLetterOrDigit(candidate[cursor]);
+                if (!beforeIsWord && !afterIsWord)
                 {
-                    cursor++;
                     while (cursor < candidate.Length && char.IsWhiteSpace(candidate[cursor]))
                     {
                         cursor++;
                     }
+
+                    if (cursor < candidate.Length && candidate[cursor] == '#')
+                    {
+                        cursor++;
+                        while (cursor < candidate.Length && char.IsWhiteSpace(candidate[cursor]))
+                        {
+                            cursor++;
+                        }
+                    }
+
+                    var numberStart = cursor;
+                    while (cursor < candidate.Length && char.IsDigit(candidate[cursor]))
+                    {
+                        cursor++;
+                    }
+
+                    if (numberStart < cursor
+                        && int.TryParse(candidate[numberStart..cursor], out var namedOrdinal)
+                        && namedOrdinal == ordinal
+                        && (cursor == candidate.Length || !char.IsLetterOrDigit(candidate[cursor])))
+                    {
+                        return true;
+                    }
                 }
 
-                var numberStart = cursor;
-                while (cursor < candidate.Length && char.IsDigit(candidate[cursor]))
+                searchStart = index + marker.Length;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsDistinctiveCriterionPhrase(string? candidate, string criterionText)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return false;
+        }
+
+        var candidateWords = ExtractWords(candidate);
+        var criterionWords = ExtractWords(criterionText);
+        const int minimumPhraseWords = 4;
+        if (candidateWords.Count < minimumPhraseWords || criterionWords.Count < minimumPhraseWords)
+        {
+            return false;
+        }
+
+        for (var candidateStart = 0; candidateStart <= candidateWords.Count - minimumPhraseWords; candidateStart++)
+        {
+            for (var criterionStart = 0; criterionStart <= criterionWords.Count - minimumPhraseWords; criterionStart++)
+            {
+                var matchedWords = 0;
+                while (candidateStart + matchedWords < candidateWords.Count
+                    && criterionStart + matchedWords < criterionWords.Count
+                    && string.Equals(
+                        candidateWords[candidateStart + matchedWords],
+                        criterionWords[criterionStart + matchedWords],
+                        StringComparison.OrdinalIgnoreCase))
                 {
-                    cursor++;
+                    matchedWords++;
                 }
 
-                if (numberStart < cursor
-                    && int.TryParse(candidate[numberStart..cursor], out var namedOrdinal)
-                    && namedOrdinal == ordinal
-                    && (cursor == candidate.Length || !char.IsLetterOrDigit(candidate[cursor])))
+                if (matchedWords >= minimumPhraseWords)
                 {
                     return true;
                 }
             }
-
-            searchStart = index + marker.Length;
         }
 
         return false;
+    }
+
+    private static IReadOnlyList<string> ExtractWords(string text)
+    {
+        var words = new List<string>();
+        var start = -1;
+        for (var index = 0; index <= text.Length; index++)
+        {
+            var isWordCharacter = index < text.Length && char.IsLetterOrDigit(text[index]);
+            if (isWordCharacter && start < 0)
+            {
+                start = index;
+            }
+            else if (!isWordCharacter && start >= 0)
+            {
+                words.Add(text[start..index]);
+                start = -1;
+            }
+        }
+
+        return words;
     }
 }
 
@@ -311,8 +388,9 @@ internal static class WorkerEvidencePasteRule
 {
     public const string Text =
         "Every Acceptance Criteria bullet that contains `actual output pasted` or `actual counts pasted` "
-        + "requires a fenced block of collected output in the PR body. Name the matching `Criterion <ordinal>` "
-        + "in the block's immediately preceding Markdown heading or its first line; paraphrased or expected values "
+        + "requires a fenced block of collected output in the PR body. Name the matching `AC <ordinal>`, "
+        + "`Criterion <ordinal>`, `Criteria <ordinal>`, or a distinctive four-or-more-word criterion phrase "
+        + "in the block's immediately preceding Markdown heading or non-empty line, or its first line; paraphrased or expected values "
         + "are a request-update. `intent-cli worker result-summary` measures this rule when given `--pr-body` or `--pr-body-file`.";
 }
 

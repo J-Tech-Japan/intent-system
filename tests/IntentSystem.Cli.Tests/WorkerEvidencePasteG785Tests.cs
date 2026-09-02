@@ -139,6 +139,70 @@ public sealed class WorkerEvidencePasteG785Tests : IDisposable
                 && warning.Contains("Criterion 3", StringComparison.Ordinal));
     }
 
+    public static TheoryData<string, string> PacketDefinedFenceNames() => new()
+    {
+        { "heading", "AC 1" },
+        { "heading", "criterion 1" },
+        { "heading", "criteria 1" },
+        { "heading", DistinctiveCriterionPhrase },
+        { "non-empty line", "AC 1" },
+        { "non-empty line", "criterion 1" },
+        { "non-empty line", "criteria 1" },
+        { "non-empty line", DistinctiveCriterionPhrase },
+        { "fence first line", "AC 1" },
+        { "fence first line", "criterion 1" },
+        { "fence first line", "criteria 1" },
+        { "fence first line", DistinctiveCriterionPhrase },
+    };
+
+    [Theory]
+    [MemberData(nameof(PacketDefinedFenceNames))]
+    public void ResultSummary_AcceptsEveryPacketDefinedFenceNameAtEveryAllowedLocation_G785(
+        string location,
+        string name)
+    {
+        using var workspace = new EvidenceWorkspace();
+        WorkerResultSummaryCommand.IssueLookupFactory = () => new StubIssueLookup(PacketDefinedFenceNamesIssue);
+
+        var summary = ExecuteResultSummary(
+            workspace.Context,
+            NamedFenceBody(location, name),
+            writeFixtureOutput: false);
+
+        Assert.Equal(new[] { 1 }, summary.EvidenceBlocksPresent.Select(criterion => criterion.Ordinal));
+        Assert.Empty(summary.EvidenceGap);
+    }
+
+    [Theory]
+    [MemberData(nameof(PacketDefinedFenceNames))]
+    public void WorkerComplete_AcceptsEveryPacketDefinedFenceNameAtEveryAllowedLocation_G785(
+        string location,
+        string name)
+    {
+        using var workspace = new EvidenceWorkspace();
+        workspace.WriteQueueStateSentinel();
+        var queueBefore = File.ReadAllText(workspace.QueueStatePath);
+        var mutator = new RecordingMutator();
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup(NamedFenceBody(location, name));
+        WorkerCompleteCommand.IssueLookupFactory = () => new StubIssueLookup(PacketDefinedFenceNamesIssue);
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            CompletionArgs(githubOnly: true),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var completion = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(completion.GithubOnly);
+        Assert.Equal("github-only-no-host-state", completion.DomainSource);
+        Assert.Equal(new[] { 1 }, completion.EvidenceBlocksPresent.Select(criterion => criterion.Ordinal));
+        Assert.Empty(completion.EvidenceGap);
+        Assert.Equal(queueBefore, File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal(2, mutator.Transitions.Count);
+    }
+
     [Fact]
     public void WorkerComplete_RefusesGapRecordsReasonedOverrideAndRejectsBlankReason_G785()
     {
@@ -219,19 +283,25 @@ public sealed class WorkerEvidencePasteG785Tests : IDisposable
             "### Criterion 1\n```text\ncollected output\n```");
         Assert.Empty(acceptanceProseOnly.EvidenceRequired);
 
-        var unnamedFence = WorkerEvidencePasteAnalyzer.Analyze(
+        var positionalFences = WorkerEvidencePasteAnalyzer.Analyze(
             PasteCriteriaIssue,
             """
             Closes #785
 
-            ### Validation transcript
+            ```json
+            { "fence": "first", "passed": true }
+            ```
+
+            ```text
+            42 passed
+            ```
 
             ```json
-            { "passed": true }
+            { "fence": "third", "passed": true }
             ```
             """);
-        Assert.Equal(new[] { 1, 2, 3 }, unnamedFence.EvidenceGap.Select(criterion => criterion.Ordinal));
-        Assert.Empty(unnamedFence.EvidenceBlocksPresent);
+        Assert.Equal(new[] { 1, 2, 3 }, positionalFences.EvidenceGap.Select(criterion => criterion.Ordinal));
+        Assert.Empty(positionalFences.EvidenceBlocksPresent);
 
         var firstLineNamesCriterion = WorkerEvidencePasteAnalyzer.Analyze(
             PasteCriteriaIssue,
@@ -243,6 +313,18 @@ public sealed class WorkerEvidencePasteG785Tests : IDisposable
             """);
         Assert.Equal(new[] { 1 }, firstLineNamesCriterion.EvidenceBlocksPresent.Select(criterion => criterion.Ordinal));
         Assert.Equal(new[] { 2, 3 }, firstLineNamesCriterion.EvidenceGap.Select(criterion => criterion.Ordinal));
+
+        var shortCriterionPhrase = WorkerEvidencePasteAnalyzer.Analyze(
+            PacketDefinedFenceNamesIssue,
+            """
+            ### Operational telemetry snapshot
+
+            ```text
+            collected output
+            ```
+            """);
+        Assert.Empty(shortCriterionPhrase.EvidenceBlocksPresent);
+        Assert.Equal(new[] { 1 }, shortCriterionPhrase.EvidenceGap.Select(criterion => criterion.Ordinal));
     }
 
     [Fact]
@@ -330,16 +412,25 @@ public sealed class WorkerEvidencePasteG785Tests : IDisposable
             Assert.Contains("evidence_blocks_present", docs, StringComparison.Ordinal);
             Assert.Contains("evidence_gap", docs, StringComparison.Ordinal);
             Assert.Contains("--accept-evidence-gap", docs, StringComparison.Ordinal);
+            Assert.Contains("AC <ordinal>", docs, StringComparison.Ordinal);
+            Assert.Contains("Criterion <ordinal>", docs, StringComparison.Ordinal);
+            Assert.Contains("Criteria <ordinal>", docs, StringComparison.Ordinal);
         }
     }
 
-    private static WorkerResultSummaryResult ExecuteResultSummary(CliContext context, string prBody)
+    private static WorkerResultSummaryResult ExecuteResultSummary(
+        CliContext context,
+        string prBody,
+        bool writeFixtureOutput = true)
     {
-        var output = ExecuteResultSummaryOutput(context, prBody);
+        var output = ExecuteResultSummaryOutput(context, prBody, writeFixtureOutput);
         return JsonSerializer.Deserialize<WorkerResultSummaryResult>(output)!;
     }
 
-    private static string ExecuteResultSummaryOutput(CliContext context, string prBody)
+    private static string ExecuteResultSummaryOutput(
+        CliContext context,
+        string prBody,
+        bool writeFixtureOutput = true)
     {
         using var writer = new StringWriter();
         var exitCode = WorkerResultSummaryCommand.Execute(
@@ -358,7 +449,10 @@ public sealed class WorkerEvidencePasteG785Tests : IDisposable
 
         Assert.Equal(0, exitCode);
         var output = writer.ToString();
-        Console.WriteLine("G785 worker result-summary fixture:\n" + output);
+        if (writeFixtureOutput)
+        {
+            Console.WriteLine("G785 worker result-summary fixture:\n" + output);
+        }
         return output;
     }
 
@@ -386,6 +480,14 @@ public sealed class WorkerEvidencePasteG785Tests : IDisposable
         args.Add("json");
         return args.ToArray();
     }
+
+    private static string NamedFenceBody(string location, string name) => location switch
+    {
+        "heading" => $"Closes #785\n\n### {name}\n\n```text\ncollected output\n```",
+        "non-empty line" => $"Closes #785\n\n{name}\n\n```text\ncollected output\n```",
+        "fence first line" => $"Closes #785\n\n```text\n{name}\ncollected output\n```",
+        _ => throw new ArgumentOutOfRangeException(nameof(location), location, "Unsupported fence-name location."),
+    };
 
     private static string RenderGuide(Func<CliContext, StringWriter, int> execute)
     {
@@ -449,6 +551,20 @@ public sealed class WorkerEvidencePasteG785Tests : IDisposable
         ## Verification
 
         - Run the fixture.
+        """;
+
+    private const string DistinctiveCriterionPhrase = "Operational telemetry snapshot persistence";
+
+    private const string PacketDefinedFenceNamesIssue = """
+        # G785 packet-defined fence-name fixture
+
+        ## Acceptance Criteria
+
+        - Retain operational telemetry snapshot persistence for repair evidence — actual output pasted.
+
+        ## Verification
+
+        - Run the packet-defined name matrix.
         """;
 
     private const string NoPasteCriteriaIssue = """

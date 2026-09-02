@@ -505,9 +505,10 @@ worker/metadata コマンドだけでループを回す operator dogfooding 向�
 Acceptance Criteria の bullet に `actual output pasted` または `actual counts pasted`
 を**そのまま**書くと、収集済み PR body evidence がコントラクトになります。worker が読むのは
 `## Acceptance Criteria` 配下の unordered bullet だけで、Verification などに同じ語があっても
-要件にはなりません。該当する各 criterion には、直前の Markdown heading または fence の最初の
-行で `Criterion <ordinal>` を名前として示した、収集済み output の fenced block が必要です。
-aggregate count、要約、expected value は代わりになりません。
+要件にはなりません。該当する各 criterion には、直前の Markdown heading または non-empty line、
+または fence の最初の行で `AC <ordinal>`、`Criterion <ordinal>`、`Criteria <ordinal>`、あるいは
+その criterion 由来の識別可能な 4 語以上の phrase を名前として示した、収集済み output の
+fenced block が必要です。aggregate count、要約、expected value は代わりになりません。
 
 ```bash
 intent-cli worker result-summary --kind issue-to-pr --repo <owner>/<repo> \

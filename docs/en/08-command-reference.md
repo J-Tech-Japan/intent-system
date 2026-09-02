@@ -554,8 +554,10 @@ using exactly `actual output pasted` or `actual counts pasted`. The worker reads
 only unordered bullets under `## Acceptance Criteria`; the same words in
 Verification or elsewhere do not create a requirement. For each matching
 criterion, the PR body needs a fenced block of collected output whose immediately
-preceding Markdown heading or first line names `Criterion <ordinal>`. Aggregate,
-paraphrased, or expected values are not a substitute.
+preceding Markdown heading or non-empty line, or whose first line, names it as
+`AC <ordinal>`, `Criterion <ordinal>`, `Criteria <ordinal>`, or a distinctive
+four-or-more-word phrase from that criterion. Aggregate, paraphrased, or expected
+values are not a substitute.
 
 ```bash
 intent-cli worker result-summary --kind issue-to-pr --repo <owner>/<repo> \
