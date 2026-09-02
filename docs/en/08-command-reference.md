@@ -547,6 +547,39 @@ Operator-dogfooding prompt templates that wire these loops entirely through the
 deterministic worker/metadata commands live under
 [`docs/automation-templates/`](../automation-templates/README.md).
 
+### Pasted-evidence gate (G785)
+
+An Acceptance Criteria bullet can make collected PR-body evidence a contract by
+using exactly `actual output pasted` or `actual counts pasted`. The worker reads
+only unordered bullets under `## Acceptance Criteria`; the same words in
+Verification or elsewhere do not create a requirement. For each matching
+criterion, the PR body needs a fenced block of collected output whose immediately
+preceding Markdown heading or first line names `Criterion <ordinal>`. Aggregate,
+paraphrased, or expected values are not a substitute.
+
+```bash
+intent-cli worker result-summary --kind issue-to-pr --repo <owner>/<repo> \
+  --issue <n> --pr <n> --outcome pr-created --pr-body-file <pr-body.md> --format json
+intent-cli worker complete --kind issue --number <n> --repo <owner>/<repo> \
+  --outcome pr-created --pr <n> --github-only --write --format json
+```
+
+`result-summary` emits `evidence_required` (ordinal and criterion text),
+`evidence_blocks_present`, and `evidence_gap`. The `pr-created` completion gate
+refuses a nonempty gap without applying labels. An explicit exceptional path is
+available only with a nonempty recorded reason:
+
+```bash
+intent-cli worker complete --kind issue --number <n> --repo <owner>/<repo> \
+  --outcome pr-created --pr <n> --github-only \
+  --accept-evidence-gap "<recorded reason>" --write --format json
+```
+
+That result retains the gap and records `evidence_gap_accepted`; it does not
+claim that the missing collected output was present. Both worker guides render
+the same rule, and the packet-draft guide tells authors which two phrases the
+worker recognizes.
+
 ## Session-scoped supervision setup (G712)
 
 The declared supervision setup route is executable from a bare directory with

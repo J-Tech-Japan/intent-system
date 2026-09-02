@@ -75,7 +75,7 @@ internal static class GuideWorkflowTaskPacketDraftCommand
         // contract sections too; list them so a scaffolded packet is complete by
         // default and the agent does not have to memorize the full shape.
         new IssueContractSection { Section = "standalone-child-issue-contract", Purpose = "One-paragraph restatement of exactly what the child PR must deliver, readable on its own without the surrounding design thread. The packet scaffold emits this section by default (G482)." },
-        new IssueContractSection { Section = "acceptance-criteria", Purpose = "Testable, externally-verifiable criteria. Every criterion maps to a concrete assertion the reviewer can run." },
+        new IssueContractSection { Section = "acceptance-criteria", Purpose = "Testable, externally-verifiable criteria. Every criterion maps to a concrete assertion the reviewer can run. When durable PR-body evidence is required, use exactly `actual output pasted` or `actual counts pasted`; worker-side detection recognizes only those phrases and requires a named fenced collected-output block." },
         new IssueContractSection { Section = "verification", Purpose = "Which tests / generated assertions prove the criteria. CI + the reviewer cite this list before approval (G316)." },
         new IssueContractSection { Section = "related-links", Purpose = "Predecessor slices and spec references (e.g. `specs/15-external-user-guided-workflow.md`). Operators trace the lineage without reading the host repo." },
         new IssueContractSection { Section = "base-branch-policy", Purpose = "The expected PR base branch, stated in the body so child implementation agents pick the correct base without reading host metadata (G347). Required by the publish gate." },

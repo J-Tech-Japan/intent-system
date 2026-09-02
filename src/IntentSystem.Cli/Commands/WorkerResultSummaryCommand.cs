@@ -10,7 +10,9 @@ namespace IntentSystem.Cli.Commands;
 ///
 /// No-mutation invariants (verified by tests):
 /// - never invokes <c>NestedProviderLauncher</c>;
-/// - never calls <c>Process.Start</c>, <c>gh</c>, or any GitHub network path;
+/// - never calls <c>Process.Start</c> or a GitHub mutation path directly;
+///   when a caller supplies a PR body for G785 measurement, the injected
+///   issue lookup reads only that source issue through its adapter;
 /// - never creates branches/PRs/comments;
 /// - never resolves review threads / merges / closes;
 /// - never edits <c>.intent-cli</c> queue or runs state.
@@ -29,6 +31,14 @@ internal static class WorkerResultSummaryCommand
     /// "no nested provider launch" guarantee.
     /// </summary>
     public static Func<bool>? NestedProviderLauncher { get; set; }
+
+    /// <summary>
+    /// G785 test seam: the supplied PR body is measured against the GitHub
+    /// source issue's Acceptance Criteria. Production uses
+    /// <see cref="GhCliGitHubIssueLookup"/>; tests inject a deterministic
+    /// lookup so no network call is needed.
+    /// </summary>
+    public static Func<IGitHubIssueLookup>? IssueLookupFactory { get; set; }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -72,6 +82,49 @@ internal static class WorkerResultSummaryCommand
         {
             writer.WriteLine(exception.Message);
             return 1;
+        }
+
+        // G785: result-summary remains read-only, but when the caller has
+        // deliberately supplied a PR body we can measure it against the one
+        // GitHub child artifact the worker is allowed to read: the source
+        // issue body. Without a supplied body there is nothing to inspect,
+        // so preserve the legacy declarative result with empty measurement
+        // fields rather than inventing a gap from missing input.
+        if (prBody is not null
+            && string.Equals(kind, WorkerResultSummaryConstants.Kinds.IssueToPr, StringComparison.Ordinal)
+            && string.Equals(outcome, WorkerResultSummaryConstants.Outcomes.PrCreated, StringComparison.Ordinal)
+            && issue is { } evidenceIssueNumber)
+        {
+            WorkerEvidencePasteAnalysisResult evidence;
+            try
+            {
+                var issueLookup = IssueLookupFactory?.Invoke() ?? new GhCliGitHubIssueLookup();
+                var issueBody = issueLookup.Lookup(repo!, evidenceIssueNumber).Body;
+                evidence = WorkerEvidencePasteAnalyzer.Analyze(issueBody, prBody);
+            }
+            catch (Exception exception) when (
+                exception is InvalidOperationException
+                or IOException)
+            {
+                writer.WriteLine(
+                    $"failed to fetch issue #{evidenceIssueNumber} for evidence-paste measurement (G785): {exception.Message}");
+                return 1;
+            }
+
+            result = result with
+            {
+                EvidenceRequired = evidence.EvidenceRequired,
+                EvidenceBlocksPresent = evidence.EvidenceBlocksPresent,
+                EvidenceGap = evidence.EvidenceGap,
+            };
+
+            if (evidence.EvidenceGap.Count > 0)
+            {
+                var warnings = result.Warnings.ToList();
+                warnings.Add(
+                    $"evidence-paste (G785): missing named fenced collected-output block(s) for {FormatCriteria(evidence.EvidenceGap)}.");
+                result = result with { Warnings = warnings };
+            }
         }
 
         // G311: when the caller supplied the PR body, run the closing-
@@ -163,8 +216,23 @@ internal static class WorkerResultSummaryCommand
         }
         writer.WriteLine();
 
+        if (result.EvidenceRequired.Count > 0)
+        {
+            writer.WriteLine("## Evidence-paste measurement");
+            writer.WriteLine($"- required: {FormatCriteria(result.EvidenceRequired)}");
+            writer.WriteLine($"- blocks present: {FormatCriteria(result.EvidenceBlocksPresent)}");
+            writer.WriteLine($"- gap: {FormatCriteria(result.EvidenceGap)}");
+            writer.WriteLine();
+        }
+
         writer.WriteLine(result.Summary);
     }
+
+    private static string FormatCriteria(IReadOnlyList<WorkerEvidenceCriterion> criteria) =>
+        criteria.Count == 0
+            ? "(none)"
+            : string.Join(", ", criteria.Select(criterion =>
+                $"Criterion {criterion.Ordinal}: {criterion.Text}"));
 
     private static bool TryParseArguments(
         string[] args,
