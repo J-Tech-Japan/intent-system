@@ -98,7 +98,7 @@ internal static class ClaimOwnershipVerifier
                 invokingTeam,
                 null,
                 null,
-                $"claim verification refused scope '{scope}': holder is none (unheld); acquire the scope before starting work.");
+                $"claim verification refused scope '{scope}': holder is none (unheld); acquire the scope before starting work. {evidence.Detail}");
         }
 
         ClaimRecord? record;
@@ -189,9 +189,9 @@ internal static class ClaimOwnershipVerifier
     /// </summary>
     private static CanonicalClaimEvidence ReadCanonicalEvidence(string repoRoot, string scope)
     {
-        // G763: ordinary verification is deliberately canonical-only. The
-        // explicit `claim stranded` surface is the only claim command that
-        // reads a configured metadata branch for migration diagnostics.
+        // Ordinary verification reads the canonical branch for ownership.
+        // A configured metadata branch is adoption evidence only: it can
+        // prove that claims were adopted, but it never supplies ownership.
         var inside = RunGit(repoRoot, ["rev-parse", "--is-inside-work-tree"]);
         if (inside.ExitCode != 0
             || !string.Equals(inside.StandardOutput.Trim(), "true", StringComparison.Ordinal))
@@ -309,14 +309,19 @@ internal static class ClaimOwnershipVerifier
                     : tree.StandardError.Trim());
         }
 
-        var claimCount = tree.StandardOutput
+        var claimPaths = tree.StandardOutput
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Count(IsActiveClaimPath);
-        return claimCount == 0
-            ? CanonicalClaimEvidence.NoStore
-            : CanonicalClaimEvidence.MetadataOnly(
-                metadataBranch,
-                claimCount);
+            .Where(path => path.StartsWith(ClaimCommand.ClaimsDirectory + "/", StringComparison.Ordinal))
+            .ToArray();
+        if (claimPaths.Length == 0)
+        {
+            return CanonicalClaimEvidence.NoStore;
+        }
+
+        var activeClaimCount = claimPaths.Count(IsActiveClaimPath);
+        return activeClaimCount == 0
+            ? CanonicalClaimEvidence.MetadataHistoryOnly(metadataBranch, claimPaths.Length)
+            : CanonicalClaimEvidence.MetadataOnly(metadataBranch, activeClaimCount);
     }
 
     private static (string? Branch, string? Error) ReadConfiguredMetadataBranch(string repoRoot)
@@ -457,6 +462,13 @@ internal static class ClaimOwnershipVerifier
                 true,
                 null,
                 $"Claims store is configured on metadata branch '{metadataBranch}' with {claimCount} active record(s), but the canonical branch has no claim records; refusing to treat every scope as unconfigured.");
+        public static CanonicalClaimEvidence MetadataHistoryOnly(string metadataBranch, int claimPathCount) =>
+            new(
+                true,
+                true,
+                false,
+                null,
+                $"Claims store is adopted on metadata branch '{metadataBranch}' with {claimPathCount} claim history path(s), but no active record exists on that branch or the canonical branch.");
     }
 
     private sealed record GitResult(int ExitCode, string StandardOutput, string StandardError);

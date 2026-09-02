@@ -252,18 +252,18 @@ internal static class ClaimCommand
                 var now = DateTimeOffset.UtcNow;
                 var head = RunGit(transactionRoot, ["rev-parse", "HEAD"]);
                 EnsureSuccess(head, "resolve claim base commit");
+                var baseCommit = head.StandardOutput.Trim();
                 string? historyPath = null;
 
                 if (request.Operation == ClaimOperation.Acquire)
                 {
                     WriteClaim(absoluteClaimPath, new ClaimRecord(
                         "1", request.Scope, request.Actor, request.Team, now,
-                        head.StandardOutput.Trim()));
+                        baseCommit));
                 }
                 else
                 {
-                    historyPath = WriteHistory(
-                        transactionRoot, request, current!, now, head.StandardOutput.Trim());
+                    historyPath = WriteHistory(transactionRoot, request, current!, now, baseCommit);
                     if (request.Operation == ClaimOperation.Release)
                     {
                         File.Delete(absoluteClaimPath);
@@ -272,7 +272,7 @@ internal static class ClaimCommand
                     {
                         WriteClaim(absoluteClaimPath, new ClaimRecord(
                             "1", request.Scope, request.Actor, request.Team, now,
-                            head.StandardOutput.Trim()));
+                            baseCommit));
                     }
                 }
 
@@ -337,23 +337,36 @@ internal static class ClaimCommand
                     };
                 }
 
+                var gitPushError = push.StandardError.Trim();
                 var fetch = RunGit(transactionRoot, ["fetch", "origin", defaultBranch]);
                 EnsureSuccess(fetch, "inspect rejected claim push");
                 var remoteDefaultHead = RunGit(transactionRoot, ["rev-parse", $"origin/{defaultBranch}"]);
-                var remoteCommitMatches = remoteDefaultHead.ExitCode == 0
-                    && string.Equals(remoteDefaultHead.StandardOutput.Trim(), transactionCommitSha, StringComparison.Ordinal);
+                EnsureSuccess(remoteDefaultHead, "resolve rejected claim push target head");
+                var remoteHead = remoteDefaultHead.StandardOutput.Trim();
+                var remoteCommitMatches = string.Equals(
+                    remoteHead,
+                    transactionCommitSha,
+                    StringComparison.Ordinal);
+                var remoteAdvanced = !string.Equals(remoteHead, baseCommit, StringComparison.Ordinal);
 
-                var remoteClaim = RunGit(transactionRoot,
-                    ["show", $"origin/{defaultBranch}:{relativeClaimPath}"]);
-                if (remoteClaim.ExitCode == 0)
+                var remoteClaimTree = RunGit(transactionRoot,
+                    ["ls-tree", "-r", "--name-only", $"origin/{defaultBranch}", "--", relativeClaimPath]);
+                EnsureSuccess(remoteClaimTree, "inspect rejected claim push scope");
+                var remoteClaimExists = remoteClaimTree.StandardOutput
+                    .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Contains(relativeClaimPath, StringComparer.Ordinal);
+                if (remoteClaimExists)
                 {
+                    var remoteClaim = RunGit(transactionRoot,
+                        ["show", $"origin/{defaultBranch}:{relativeClaimPath}"]);
+                    EnsureSuccess(remoteClaim, "read rejected claim push scope");
                     var holder = JsonSerializer.Deserialize<ClaimRecord>(remoteClaim.StandardOutput, JsonOptions)
                         ?? throw new InvalidOperationException("remote claim record was empty");
                     if (remoteCommitMatches
                         && request.Operation != ClaimOperation.Release
                         && string.Equals(holder.Actor, request.Actor, StringComparison.Ordinal)
                         && string.Equals(holder.Team, request.Team, StringComparison.Ordinal)
-                        && string.Equals(holder.BaseCommit, head.StandardOutput.Trim(), StringComparison.Ordinal))
+                        && string.Equals(holder.BaseCommit, baseCommit, StringComparison.Ordinal))
                     {
                         // A receive-side failure can be reported after the
                         // remote ref has advanced. The fetched commit and
@@ -398,7 +411,7 @@ internal static class ClaimCommand
 
                 if (remoteCommitMatches
                     && request.Operation == ClaimOperation.Release
-                    && remoteClaim.ExitCode != 0)
+                    && !remoteClaimExists)
                 {
                     committed = true;
                     var status = "released";
@@ -416,16 +429,39 @@ internal static class ClaimCommand
                     };
                 }
 
-                // Unrelated remote advance: discard this isolated workspace and
+                if (!remoteAdvanced)
+                {
+                    return new ClaimTransactionResult(
+                        "push-rejected", request.Scope, relativeClaimPath, false, attempt,
+                        lastObserved?.Actor, null, null,
+                        $"Push to '{targetRef}' was rejected without advancing the remote target; "
+                        + $"origin remained at base commit '{baseCommit}'.")
+                    {
+                        GitWriteRetry = lastGitWriteRetry,
+                        TargetRef = targetRef,
+                        BaseCommit = baseCommit,
+                        RemoteHead = remoteHead,
+                        RemoteAdvanced = false,
+                        GitPushError = gitPushError,
+                    };
+                }
+
+                // A genuine remote advance: discard this isolated workspace and
                 // reapply from a fresh ff-only base. No force, rebase, or merge.
                 if (attempt == request.MaxAttempts)
                 {
                     return new ClaimTransactionResult(
                         "retry-exhausted", request.Scope, relativeClaimPath, false, attempt,
                         lastObserved?.Actor, null, null,
-                        $"Push was rejected by unrelated remote advance after {attempt} bounded attempt(s).")
+                        $"Push to '{targetRef}' was rejected by unrelated remote advance from base commit "
+                        + $"'{baseCommit}' to remote head '{remoteHead}' after {attempt} bounded attempt(s).")
                     {
                         GitWriteRetry = lastGitWriteRetry,
+                        TargetRef = targetRef,
+                        BaseCommit = baseCommit,
+                        RemoteHead = remoteHead,
+                        RemoteAdvanced = true,
+                        GitPushError = gitPushError,
                     };
                 }
             }
@@ -1974,6 +2010,10 @@ internal static class ClaimCommand
         writer.WriteLine($"- claim_path: `{result.ClaimPath}`");
         writer.WriteLine($"- push_succeeded: {(result.PushSucceeded ? "true" : "false")}");
         if (result.TargetRef is not null) writer.WriteLine($"- target_ref: `{result.TargetRef}`");
+        if (result.BaseCommit is not null) writer.WriteLine($"- base_commit: `{result.BaseCommit}`");
+        if (result.RemoteHead is not null) writer.WriteLine($"- remote_head: `{result.RemoteHead}`");
+        if (result.RemoteAdvanced is not null) writer.WriteLine($"- remote_advanced: {result.RemoteAdvanced.Value.ToString().ToLowerInvariant()}");
+        if (result.GitPushError is not null) writer.WriteLine($"- git_push_error: {result.GitPushError}");
         if (result.Holder is not null) writer.WriteLine($"- holder: {result.Holder}");
         if (result.HolderTeam is not null) writer.WriteLine($"- holder_team: {result.HolderTeam}");
         if (result.DisplacedHolder is not null) writer.WriteLine($"- displaced_holder: {result.DisplacedHolder}");
@@ -2111,6 +2151,22 @@ internal sealed record ClaimTransactionResult(
     [JsonPropertyName("target_ref")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TargetRef { get; init; }
+
+    [JsonPropertyName("base_commit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BaseCommit { get; init; }
+
+    [JsonPropertyName("remote_head")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RemoteHead { get; init; }
+
+    [JsonPropertyName("remote_advanced")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? RemoteAdvanced { get; init; }
+
+    [JsonPropertyName("git_push_error")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GitPushError { get; init; }
 
     [JsonPropertyName("git_write_retry")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
