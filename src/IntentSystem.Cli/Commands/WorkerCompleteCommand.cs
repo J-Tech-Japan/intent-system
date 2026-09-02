@@ -77,6 +77,7 @@ internal static class WorkerCompleteCommand
                 out var number,
                 out var outcome,
                 out var prNumber,
+                out var acceptEvidenceGap,
                 out var explicitDomain,
                 out var mode,
                 out var childCwd,
@@ -114,6 +115,11 @@ internal static class WorkerCompleteCommand
         // succeed without publishing the PR.
         var isPrCreatedOutcome = string.Equals(kind, GhCliGitHubLabelMutator.Kinds.Issue, StringComparison.Ordinal)
             && string.Equals(outcome, WorkerResultSummaryConstants.Outcomes.PrCreated, StringComparison.Ordinal);
+        if (acceptEvidenceGap is not null && !isPrCreatedOutcome)
+        {
+            writer.WriteLine("--accept-evidence-gap is only valid with --kind issue --outcome pr-created.");
+            return 1;
+        }
         if (isPrCreatedOutcome && prNumber is null)
         {
             writer.WriteLine("--pr is required when --kind issue --outcome pr-created (created PR number publishes intent-target to host review).");
@@ -173,6 +179,7 @@ internal static class WorkerCompleteCommand
         // distinct closing refs). The check runs on both --dry-run and
         // --write so dry-run guidance is consistent with the write block.
         PrClosingReferenceResult? closingRefResult = null;
+        GitHubPrLookupResult? prLookupResult = null;
         if (isPrCreatedOutcome && prNumber is { } prNumberForCheck)
         {
             IGitHubPrLookup prLookup;
@@ -188,7 +195,6 @@ internal static class WorkerCompleteCommand
                 return 1;
             }
 
-            GitHubPrLookupResult prLookupResult;
             try
             {
                 prLookupResult = prLookup.Lookup(repo!, prNumberForCheck);
@@ -253,6 +259,34 @@ internal static class WorkerCompleteCommand
                 {
                     return 1;
                 }
+            }
+        }
+
+        // G785: this is a write-boundary gate beside the existing closing-
+        // reference and branch checks. Once the GitHub source contract is
+        // available, a nonempty evidence gap fails closed. A pre-existing
+        // best-effort issue-lookup failure remains inconclusive so it does not
+        // silently tighten the older ambiguity/base-branch gates. The explicit,
+        // nonempty reason records an operator-approved override without
+        // pretending the missing evidence was present.
+        var evidence = WorkerEvidencePasteAnalysisResult.Empty;
+        string? evidenceGapAccepted = null;
+        if (isPrCreatedOutcome && prLookupResult is not null)
+        {
+            if (TryMeasureEvidencePaste(repo!, number, prLookupResult.Body, out evidence)
+                && evidence.EvidenceGap.Count > 0)
+            {
+                if (acceptEvidenceGap is null)
+                {
+                    writer.WriteLine(
+                        $"refused to complete issue #{number} as `pr-created`: evidence gap (G785) — "
+                        + $"no named fenced collected-output block for {FormatEvidenceCriteria(evidence.EvidenceGap)}.");
+                    writer.WriteLine(
+                        "- Repair: paste the collected output in a fenced block whose heading or first line names each missing Criterion, or re-run with `--accept-evidence-gap <recorded reason>`.");
+                    return 1;
+                }
+
+                evidenceGapAccepted = acceptEvidenceGap;
             }
         }
 
@@ -428,6 +462,10 @@ internal static class WorkerCompleteCommand
             ExecutionUnit = resolvedExecutionUnit,
             ChildCwd = inChildCwdMode,
             GithubOnly = githubOnly,
+            EvidenceRequired = evidence.EvidenceRequired,
+            EvidenceBlocksPresent = evidence.EvidenceBlocksPresent,
+            EvidenceGap = evidence.EvidenceGap,
+            EvidenceGapAccepted = evidenceGapAccepted,
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -878,6 +916,42 @@ internal static class WorkerCompleteCommand
         return IssueContractCheckOutcome.Ambiguous;
     }
 
+    /// <summary>
+    /// G785: read the GitHub source issue and measure the already-fetched PR
+    /// body. A measured nonempty gap is fail-closed at the completion boundary.
+    /// A lookup failure stays inconclusive to preserve the established
+    /// best-effort behavior of the pre-existing issue-contract gates. It never
+    /// reads host queue, packet, or intent files, so <c>--github-only</c>
+    /// remains GitHub-contract-only.
+    /// </summary>
+    private static bool TryMeasureEvidencePaste(
+        string repo,
+        int issueNumber,
+        string prBody,
+        out WorkerEvidencePasteAnalysisResult evidence)
+    {
+        evidence = WorkerEvidencePasteAnalysisResult.Empty;
+
+        try
+        {
+            var issueLookup = IssueLookupFactory?.Invoke() ?? new GhCliGitHubIssueLookup();
+            var issue = issueLookup.Lookup(repo, issueNumber);
+            evidence = WorkerEvidencePasteAnalyzer.Analyze(issue.Body, prBody);
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+            or IOException)
+        {
+            _ = exception;
+            return false;
+        }
+    }
+
+    private static string FormatEvidenceCriteria(IReadOnlyList<WorkerEvidenceCriterion> criteria) =>
+        string.Join(", ", criteria.Select(criterion =>
+            $"Criterion {criterion.Ordinal}: {criterion.Text}"));
+
     private static BaseBranchCheckOutcome TryCheckBaseBranchFromIssue(
         string repo,
         int issueNumber,
@@ -1040,6 +1114,16 @@ internal static class WorkerCompleteCommand
         {
             writer.WriteLine($"- execution-unit: {result.ExecutionUnit}");
         }
+        if (result.EvidenceRequired.Count > 0)
+        {
+            writer.WriteLine($"- evidence required: {FormatEvidenceCriteria(result.EvidenceRequired)}");
+            writer.WriteLine($"- evidence blocks present: {FormatEvidenceCriteria(result.EvidenceBlocksPresent)}");
+            writer.WriteLine($"- evidence gap: {(result.EvidenceGap.Count == 0 ? "(none)" : FormatEvidenceCriteria(result.EvidenceGap))}");
+        }
+        if (result.EvidenceGapAccepted is not null)
+        {
+            writer.WriteLine($"- evidence_gap_accepted: {result.EvidenceGapAccepted}");
+        }
         writer.WriteLine($"- proceed: {result.Proceed}");
         writer.WriteLine($"- applied: {result.Applied}");
         writer.WriteLine($"- add: {(result.AddLabels.Count == 0 ? "(none)" : string.Join(", ", result.AddLabels))}");
@@ -1082,6 +1166,7 @@ internal static class WorkerCompleteCommand
         out int number,
         out string? outcome,
         out int? prNumber,
+        out string? acceptEvidenceGap,
         out string? explicitDomain,
         out string mode,
         out bool childCwd,
@@ -1094,6 +1179,7 @@ internal static class WorkerCompleteCommand
         number = 0;
         outcome = null;
         prNumber = null;
+        acceptEvidenceGap = null;
         explicitDomain = null;
         mode = WorkerClaimCompleteConstants.Modes.DryRun;
         childCwd = false;
@@ -1116,6 +1202,16 @@ internal static class WorkerCompleteCommand
                         return false;
                     }
                     prNumber = parsedPr;
+                    index++;
+                    break;
+
+                case "--accept-evidence-gap":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--accept-evidence-gap requires a non-empty recorded reason.";
+                        return false;
+                    }
+                    acceptEvidenceGap = args[index + 1].Trim();
                     index++;
                     break;
 
@@ -1210,7 +1306,7 @@ internal static class WorkerCompleteCommand
 
                 default:
                     error =
-                        $"Unknown argument '{argument}'. Supported: --repo <owner/repo> --domain <name> --kind <issue|pr> --number <N> --outcome <outcome> [--pr <N>] [--write] [--dry-run] [--format text|json].";
+                        $"Unknown argument '{argument}'. Supported: --repo <owner/repo> --domain <name> --kind <issue|pr> --number <N> --outcome <outcome> [--pr <N>] [--accept-evidence-gap <reason>] [--write] [--dry-run] [--format text|json].";
                     return false;
             }
         }

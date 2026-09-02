@@ -12,16 +12,19 @@ namespace IntentSystem.Cli.Tests;
 /// advisory label-cleanup actions, the warnings, the JSON shape, the
 /// camelCase alias, and the no-mutation invariants.
 /// </summary>
+[Collection("WorkerNextActionSharedState")]
 public sealed class WorkerResultSummaryCommandTests : IDisposable
 {
     public WorkerResultSummaryCommandTests()
     {
         WorkerResultSummaryCommand.NestedProviderLauncher = null;
+        WorkerResultSummaryCommand.IssueLookupFactory = () => new NoEvidenceIssueLookup();
     }
 
     public void Dispose()
     {
         WorkerResultSummaryCommand.NestedProviderLauncher = null;
+        WorkerResultSummaryCommand.IssueLookupFactory = null;
     }
 
     [Fact]
@@ -897,6 +900,17 @@ public sealed class WorkerResultSummaryCommandTests : IDisposable
         var output = writer.ToString();
         Assert.Contains("- pr_draft: true", output, StringComparison.Ordinal);
         Assert.Contains("host merge will be blocked", output, StringComparison.Ordinal);
+    }
+
+    private sealed class NoEvidenceIssueLookup : IGitHubIssueLookup
+    {
+        public GitHubIssueLookupResult Lookup(string repo, int issueNumber) => new()
+        {
+            Number = issueNumber,
+            State = "OPEN",
+            Title = "existing result-summary fixture",
+            Body = "## Acceptance Criteria\n\n- Existing criterion without a G785 phrase.\n",
+        };
     }
 
     private sealed class WorkerResultSummaryWorkspace : IDisposable

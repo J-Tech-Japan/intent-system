@@ -135,4 +135,24 @@ internal sealed record WorkerCompleteResult
 
     [JsonPropertyName("githubOnly")]
     public bool? GithubOnlyCamel => GithubOnly;
+
+    /// <summary>G785: criteria that required a named fenced evidence block.</summary>
+    [JsonPropertyName("evidence_required")]
+    public required IReadOnlyList<WorkerEvidenceCriterion> EvidenceRequired { get; init; }
+
+    /// <summary>G785: required criteria with a named collected-output fence.</summary>
+    [JsonPropertyName("evidence_blocks_present")]
+    public required IReadOnlyList<WorkerEvidenceCriterion> EvidenceBlocksPresent { get; init; }
+
+    /// <summary>G785: required criteria that remain unsatisfied by the PR body.</summary>
+    [JsonPropertyName("evidence_gap")]
+    public required IReadOnlyList<WorkerEvidenceCriterion> EvidenceGap { get; init; }
+
+    /// <summary>
+    /// G785: nonempty recorded reason supplied through
+    /// <c>--accept-evidence-gap</c> when a pr-created completion intentionally
+    /// proceeds despite <see cref="EvidenceGap"/>.
+    /// </summary>
+    [JsonPropertyName("evidence_gap_accepted")]
+    public string? EvidenceGapAccepted { get; init; }
 }

@@ -66,6 +66,9 @@ internal static class WorkerResultSummaryAnalyzer
             Warnings = warnings,
             Summary = summary,
             PrDraft = prDraft,
+            EvidenceRequired = Array.Empty<WorkerEvidenceCriterion>(),
+            EvidenceBlocksPresent = Array.Empty<WorkerEvidenceCriterion>(),
+            EvidenceGap = Array.Empty<WorkerEvidenceCriterion>(),
         };
     }
 

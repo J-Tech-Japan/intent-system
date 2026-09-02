@@ -72,6 +72,22 @@ internal sealed record WorkerResultSummaryResult
     /// </summary>
     [JsonPropertyName("prDraft")]
     public bool? PrDraftCamelCase => PrDraft;
+
+    /// <summary>
+    /// G785: acceptance-criteria bullets that use one of the sanctioned
+    /// evidence-paste phrases. Empty when no supplied PR body was measured or
+    /// the source issue has no such criterion.
+    /// </summary>
+    [JsonPropertyName("evidence_required")]
+    public required IReadOnlyList<WorkerEvidenceCriterion> EvidenceRequired { get; init; }
+
+    /// <summary>G785: required criteria with a named collected-output fence.</summary>
+    [JsonPropertyName("evidence_blocks_present")]
+    public required IReadOnlyList<WorkerEvidenceCriterion> EvidenceBlocksPresent { get; init; }
+
+    /// <summary>G785: required criteria still lacking a named output fence.</summary>
+    [JsonPropertyName("evidence_gap")]
+    public required IReadOnlyList<WorkerEvidenceCriterion> EvidenceGap { get; init; }
 }
 
 /// <summary>

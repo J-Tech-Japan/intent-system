@@ -175,6 +175,7 @@ Repeated-stall recovery (G408: when the same issue has stalled without progress 
                 "Acceptance Criteria",
                 "Verification"
             },
+            EvidencePasteRule = WorkerEvidencePasteRule.Text,
             OutcomeClassification = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["pr-created"] = "Ready-for-review PR created successfully.",
@@ -224,6 +225,11 @@ Repeated-stall recovery (G408: when the same issue has stalled without progress 
         {
             writer.WriteLine($"- {section}");
         }
+        writer.WriteLine();
+
+        writer.WriteLine("## Evidence-paste rule (G785)");
+        writer.WriteLine();
+        writer.WriteLine(result.EvidencePasteRule);
         writer.WriteLine();
 
         writer.WriteLine("## Forbidden rule sources");
@@ -415,6 +421,9 @@ internal sealed record GuideWorkerIssueToPrResult
 
     [JsonPropertyName("contract_gate_sections")]
     public required IReadOnlyList<string> ContractGateSections { get; init; }
+
+    [JsonPropertyName("evidence_paste_rule")]
+    public required string EvidencePasteRule { get; init; }
 
     [JsonPropertyName("outcome_classification")]
     public required IReadOnlyDictionary<string, string> OutcomeClassification { get; init; }

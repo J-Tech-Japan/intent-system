@@ -526,6 +526,38 @@ intent-cli guide oneshot --kind host-review-next-slice    --domain <name>
 worker/metadata コマンドだけでループを回す operator dogfooding 向けプロンプトテンプレートは
 [`docs/automation-templates/`](../automation-templates/README.md) にあります。
 
+### 貼り付け evidence gate（G785）
+
+Acceptance Criteria の bullet に `actual output pasted` または `actual counts pasted`
+を**そのまま**書くと、収集済み PR body evidence がコントラクトになります。worker が読むのは
+`## Acceptance Criteria` 配下の unordered bullet だけで、Verification などに同じ語があっても
+要件にはなりません。該当する各 criterion には、直前の Markdown heading または non-empty line、
+または fence の最初の行で `AC <ordinal>`、`Criterion <ordinal>`、`Criteria <ordinal>`、あるいは
+その criterion 由来の識別可能な 4 語以上の phrase を名前として示した、収集済み output の
+fenced block が必要です。aggregate count、要約、expected value は代わりになりません。
+
+```bash
+intent-cli worker result-summary --kind issue-to-pr --repo <owner>/<repo> \
+  --issue <n> --pr <n> --outcome pr-created --pr-body-file <pr-body.md> --format json
+intent-cli worker complete --kind issue --number <n> --repo <owner>/<repo> \
+  --outcome pr-created --pr <n> --github-only --write --format json
+```
+
+`result-summary` は `evidence_required`（ordinal と criterion text）、
+`evidence_blocks_present`、`evidence_gap` を出力します。`pr-created` completion gate は
+gap が空でなければ label を適用せずに拒否します。例外を明示するには、空でない記録理由を
+付けます。
+
+```bash
+intent-cli worker complete --kind issue --number <n> --repo <owner>/<repo> \
+  --outcome pr-created --pr <n> --github-only \
+  --accept-evidence-gap "<recorded reason>" --write --format json
+```
+
+結果には gap を残したまま `evidence_gap_accepted` が記録され、欠けた collected output が
+存在したとは扱いません。両方の worker guide は同じ rule を表示し、packet-draft guide は
+worker が認識する二つの phrase を著者に示します。
+
 ## セッションスコープの supervision セットアップ（G712）
 
 宣言された supervision setup route は、`.intent-cli/config.toml` や host metadata

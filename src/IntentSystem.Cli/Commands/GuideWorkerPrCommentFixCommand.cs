@@ -137,6 +137,7 @@ Repeated-stall recovery (G408: when the same PR has cycled without progress for 
                 "intent-cli guide commands list --format json",
                 $"intent-cli automation summary --domain {domainPlaceholder} --format json"
             },
+            EvidencePasteRule = WorkerEvidencePasteRule.Text,
             RepeatedStallRecovery = new RepeatedStallRecoveryGuidance
             {
                 Trigger = "Same PR has cycled without progress for two or more consecutive wakes.",
@@ -193,6 +194,11 @@ Repeated-stall recovery (G408: when the same PR has cycled without progress for 
         {
             writer.WriteLine($"- `{call}`");
         }
+        writer.WriteLine();
+
+        writer.WriteLine("## Evidence-paste rule (G785)");
+        writer.WriteLine();
+        writer.WriteLine(result.EvidencePasteRule);
         writer.WriteLine();
 
         writer.WriteLine("## Forbidden rule sources");
@@ -334,6 +340,9 @@ internal sealed record GuideWorkerPrCommentFixResult
 
     [JsonPropertyName("first_calls")]
     public required IReadOnlyList<string> FirstCalls { get; init; }
+
+    [JsonPropertyName("evidence_paste_rule")]
+    public required string EvidencePasteRule { get; init; }
 
     [JsonPropertyName("outcome_classification")]
     public required IReadOnlyDictionary<string, string> OutcomeClassification { get; init; }
