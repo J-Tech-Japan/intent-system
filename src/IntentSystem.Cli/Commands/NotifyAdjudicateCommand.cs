@@ -174,7 +174,8 @@ internal static class NotifyAdjudicateCommand
         if (!options.Write)
         {
             return Emit(writer, options, Result(authorization, live, audited: false, executed: false)
-                with { Summary = authorization.Summary + " Dry-run: no audit or key sequence was written." });
+                with
+            { Summary = authorization.Summary + " Dry-run: no audit or key sequence was written." });
         }
 
         var initialAudit = NotifySupervisionStore.RecordPromptAudit(auditPath, audit, write: true);
@@ -207,7 +208,8 @@ internal static class NotifyAdjudicateCommand
                 audit with { Timestamp = Now(), Outcome = "stale-dialog-cas-refused", Rule = audit.Rule + " (stale-dialog-cas-refused)" },
                 write: true);
             return Emit(writer, options, Result(authorization, live, audited: true, executed: false)
-                with { Summary = authorization.Summary + $" No key was sent: {cas.Summary}" },
+                with
+            { Summary = authorization.Summary + $" No key was sent: {cas.Summary}" },
                 exitCode: 1);
         }
 
@@ -241,21 +243,21 @@ internal static class NotifyAdjudicateCommand
         {
             return Emit(writer, options, Result(authorization, live, audited: true, executed: execution.ExitCode == 0)
                 with
-                {
-                    Decision = "escalate",
-                    Rule = authorization.Rule + " (terminal-audit-write-failed)",
-                    Summary = $"The bounded answer {(execution.ExitCode == 0 ? "was sent" : "failed")}, but its terminal audit could not be durably appended: {terminalAudit.Error ?? "not applied"}. Reconciliation is required.",
-                    MechanicalExecutor = null,
-                },
+            {
+                Decision = "escalate",
+                Rule = authorization.Rule + " (terminal-audit-write-failed)",
+                Summary = $"The bounded answer {(execution.ExitCode == 0 ? "was sent" : "failed")}, but its terminal audit could not be durably appended: {terminalAudit.Error ?? "not applied"}. Reconciliation is required.",
+                MechanicalExecutor = null,
+            },
                 exitCode: 1);
         }
         return Emit(writer, options, Result(authorization, live, audited: true, executed: execution.ExitCode == 0)
             with
-            {
-                Summary = execution.ExitCode == 0
+        {
+            Summary = execution.ExitCode == 0
                     ? authorization.Summary + $" Executed only registry keys [{string.Join(", ", authorization.AnswerKeys)}]."
                     : authorization.Summary + $" The bounded answer failed: {execution.StandardError}",
-            },
+        },
             exitCode: execution.ExitCode == 0 ? 0 : 1);
     }
 
@@ -267,20 +269,23 @@ internal static class NotifyAdjudicateCommand
         LiveDialog live,
         bool audited,
         bool executed) => new()
-    {
-        Decision = authorization.Decision,
-        Rule = authorization.Rule,
-        Summary = authorization.Summary,
-        ActorRole = authorization.DecisionActorRole,
-        MechanicalExecutor = authorization.MechanicalExecutor,
-        AnswerableBy = authorization.AnswerableBy,
-        RiskTags = authorization.RiskTags,
-        ScopeOrRuleId = authorization.ScopeOrRuleId,
-        StateChangeSequence = live.Agent?.StateChangeSequence,
-        ObservedTextHash = live.TextHash,
-        Audited = audited,
-        Executed = executed,
-    };
+        {
+            Decision = authorization.Decision,
+            Rule = authorization.Rule,
+            Summary = authorization.Summary,
+            ActorRole = authorization.DecisionActorRole,
+            MechanicalExecutor = authorization.MechanicalExecutor,
+            AnswerableBy = authorization.AnswerableBy,
+            RiskTags = authorization.RiskTags,
+            ScopeOrRuleId = authorization.ScopeOrRuleId,
+            MatchedScopes = authorization.MatchedScopes,
+            AnswerKeys = authorization.AnswerKeys,
+            ExactAnswerScope = authorization.ExactAnswerScope,
+            StateChangeSequence = live.Agent?.StateChangeSequence,
+            ObservedTextHash = live.TextHash,
+            Audited = audited,
+            Executed = executed,
+        };
 
     private static AdjudicationResult Refused(string? actorRole, string rule, string summary) => new()
     {
@@ -498,6 +503,8 @@ internal static class NotifyAdjudicateCommand
             writer.WriteLine($"- rule: {result.Rule}");
             writer.WriteLine($"- actor: {result.ActorRole}");
             writer.WriteLine($"- mechanical executor: {result.MechanicalExecutor ?? "none"}");
+            writer.WriteLine($"- matched scopes: {string.Join(", ", result.MatchedScopes.DefaultIfEmpty("none"))}");
+            writer.WriteLine($"- answer keys: {string.Join(", ", result.AnswerKeys.DefaultIfEmpty("none"))}");
             writer.WriteLine($"- audited: {result.Audited}; executed: {result.Executed}");
             writer.WriteLine($"- summary: {result.Summary}");
         }
@@ -549,6 +556,9 @@ internal static class NotifyAdjudicateCommand
         public string? AnswerableBy { get; init; }
         public IReadOnlyList<string> RiskTags { get; init; } = [];
         public string? ScopeOrRuleId { get; init; }
+        public IReadOnlyList<string> MatchedScopes { get; init; } = [];
+        public IReadOnlyList<string> AnswerKeys { get; init; } = [];
+        public string? ExactAnswerScope { get; init; }
         public long? StateChangeSequence { get; init; }
         public string? ObservedTextHash { get; init; }
         public bool Audited { get; init; }

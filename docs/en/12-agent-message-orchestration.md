@@ -863,6 +863,14 @@ same-wake scratch-ledger identity requirement; G690 does not weaken that
 contract. Any future design-answerable class still has to use the canonical
 adjudication surface and live CAS.
 
+For the Codex shell dialog, the payload is only the `$ `, `> `, or `Command:`
+line(s) after the header and before the **first choice**. `Environment:` is
+chrome, and a non-choice wrapped line before that boundary continues the
+preceding command. The first choice, every wrapped choice line, and the
+`Press enter` hint are dialog chrome rather than command text. A `$` command
+marker or a fenced block after the first choice is a hidden tail and rejects
+the entire extraction; the shell AST verifier is not relaxed or rewritten.
+
 Each supervision cycle also compares the structured argv of every running
 recorded seat with its kind's recorded recipe. The comparison covers exactly
 the security envelope: sandbox mode, approval mode, writable roots/add-dirs,
@@ -1004,6 +1012,8 @@ background shell:
 intent-cli notify supervise install --domain <domain> --team <team> \
   --repo <owner/repo> --owner-role <logical-role> --bound <seconds> \
   --interval <seconds> [--startup-bound <seconds>] [--platform macos|windows|linux] \
+  [--pre-approve <agent-kind>:<prompt-class>]... \
+  [--pre-escalate <agent-kind>:<prompt-class>]... [--shell-policy <json>]... \
   [--output <path>] [--routing-root <host-root>] [--verify|--dry-run|--write] --format json
 ```
 
@@ -1015,6 +1025,13 @@ explicit cross-authoring override. Every artifact is named and labelled
 supervise` invocation, including domain, team, repo, owner role, bound, and
 interval. Output names the written path, lifetime, runtime logs, legacy
 artifacts removed, and exact registration/unregistration/reconcile commands.
+Install accepts `--pre-approve`, `--pre-escalate`, and `--shell-policy` with
+the same validation as `notify supervise` and embeds each supplied policy
+argument in the artifact's `ProgramArguments`. When that artifact starts its
+supervisor, its first cycle records the policy under
+`pre-approval-policy.json`; reconcile continues to treat the artifact as a
+managed artifact. Omitting all three options preserves the existing
+policy-free invocation.
 G712 deliberately chooses the permitted GUI-session lifetime: the artifact is
 kept under the routing repository's
 `.intent-cli/supervision/<domain>/<team>/install/`, never under

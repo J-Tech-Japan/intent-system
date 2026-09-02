@@ -734,6 +734,12 @@ shell scope（`owned-scratch-delete` を含む）は orchestration-only で、�
 要件も維持します。G690 はこの contract を弱めません。将来 design-answerable な class が追加されても、
 canonical adjudication surface と live CAS が必須です。
 
+Codex shell dialog の payload は、header の後で **first choice** の前にある `$ `、`> `、または
+`Command:` line(s) だけです。`Environment:` は chrome であり、boundary より前の non-choice wrapped
+line は直前の command の continuation になります。first choice、wrapped choice line、`Press enter` hint は
+command text ではなく dialog chrome です。first choice の後に `$` command marker または fenced block が
+現れた場合は hidden tail として extraction 全体を拒否し、shell AST verifier を緩めたり書き換えたりしません。
+
 各 supervision cycle は running recorded seat の structured argv と kind ごとの recorded
 recipe も比較します。比較対象は security envelope、すなわち sandbox mode、approval mode、
 writable roots/add-dirs、network access だけです。bound の欠落、extra root、より広い envelope は
@@ -848,6 +854,8 @@ standing loop の setup は ad-hoc な background shell ではなく出力専用
 intent-cli notify supervise install --domain <domain> --team <team> \
   --repo <owner/repo> --owner-role <logical-role> --bound <seconds> \
   --interval <seconds> [--startup-bound <seconds>] [--platform macos|windows|linux] \
+  [--pre-approve <agent-kind>:<prompt-class>]... \
+  [--pre-escalate <agent-kind>:<prompt-class>]... [--shell-policy <json>]... \
   [--output <path>] [--routing-root <host-root>] [--verify|--dry-run|--write] --format json
 ```
 
@@ -857,6 +865,12 @@ Windows の `schtasks` compatible Task Scheduler XML、または Linux の syste
 `intent-cli.supervise.<domain>.<team>` という team 固有の名前と label を持ち、domain、team、repo、
 owner role、bound、interval を含む完全な `notify supervise` invocation を埋め込みます。output は write 先、lifetime、
 runtime log、legacy artifact の削除、registration / unregistration / reconcile の正確な command を表示します。
+install は `--pre-approve`、`--pre-escalate`、`--shell-policy` を `notify supervise` と
+同じ validation で受け取り、supplied policy argument を artifact の
+`ProgramArguments` に埋め込みます。artifact から supervisor が開始した場合、first cycle
+は policy を `pre-approval-policy.json` に記録します。reconcile はその artifact を
+managed artifact として扱い続けます。3 つの option をすべて省略すると既存の
+policy-free invocation を保持します。
 G712 は許可された GUI-session lifetime を選びます。artifact は routing repository の
 `.intent-cli/supervision/<domain>/<team>/install/` 配下に置き、`~/Library/LaunchAgents` には置きません。macOS plist
 は `RunAtLoad` を持たないため login auto-load も reboot persistence もなく、logout/reboot で GUI domain が消えます。
