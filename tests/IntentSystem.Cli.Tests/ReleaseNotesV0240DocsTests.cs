@@ -169,8 +169,8 @@ public sealed class ReleaseNotesV0240DocsTests
     {
         var root = RepoVersionPolicySource.RepoRoot();
         var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.29.0", policy.StableVersion);
-        Assert.Equal("0.29.1", policy.NextVersion);
+        Assert.Equal("0.30.0", policy.StableVersion);
+        Assert.Equal("0.30.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
@@ -198,7 +198,7 @@ public sealed class ReleaseNotesV0240DocsTests
             Assert.DoesNotContain("release-notes-v0.27.0.md", reference, StringComparison.Ordinal);
             Assert.DoesNotContain("release-notes-v0.24.1.md", reference, StringComparison.Ordinal);
             Assert.Contains(
-                language == "en" ? "Next release readiness (v0.29.1)" : "次リリース準備(v0.29.1)",
+                language == "en" ? "Next release readiness (v0.30.1)" : "次リリース準備(v0.30.1)",
                 reference,
                 StringComparison.Ordinal);
             Assert.Contains("intent-cli 0.29.0-65e02d8-G772", reference, StringComparison.Ordinal);
