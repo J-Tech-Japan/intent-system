@@ -224,7 +224,7 @@ internal static class AutomationIssuePublishCommand
             RemoveLabels = Array.Empty<string>(),
             CurrentLabels = currentLabels,
             PublishedAt = publishedAt,
-            Summary = BuildSummary(issue.Value, AppliedLabel),
+            Summary = BuildSummary(issue.Value, AppliedLabel, mode),
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -423,8 +423,13 @@ internal static class AutomationIssuePublishCommand
     private static string BuildIssueUrl(string repo, int issue) =>
         $"https://github.com/{repo}/issues/{issue.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
 
-    private static string BuildSummary(int issue, string label) =>
-        $"Would publish issue #{issue.ToString(System.Globalization.CultureInfo.InvariantCulture)} by adding {label}.";
+    private static string BuildSummary(int issue, string label, string mode)
+    {
+        var issueText = issue.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal)
+            ? $"Published issue #{issueText} by adding {label}."
+            : $"Would publish issue #{issueText} by adding {label}.";
+    }
 
     private static void WriteText(TextWriter writer, AutomationIssuePublishResult result)
     {

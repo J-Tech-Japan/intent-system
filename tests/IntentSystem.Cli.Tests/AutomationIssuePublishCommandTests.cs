@@ -139,6 +139,40 @@ public sealed class AutomationIssuePublishCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G783_ModeAwareSummaryMatchesJsonAndTextOutput()
+    {
+        using var workspace = new AutomationIssuePublishWorkspace();
+        var mutator = new FakeMutator();
+        AutomationIssuePublishCommand.MutatorFactory = () => mutator;
+
+        var dryRunJson = ExecutePublish(workspace.Context, "json");
+        var writeJson = ExecutePublish(workspace.Context, "json", "--write");
+        var dryRunText = ExecutePublish(workspace.Context, "text");
+        var writeText = ExecutePublish(workspace.Context, "text", "--write");
+
+        var dryRunResult = JsonSerializer.Deserialize<AutomationIssuePublishResult>(dryRunJson.Output)!;
+        var writeResult = JsonSerializer.Deserialize<AutomationIssuePublishResult>(writeJson.Output)!;
+        const string dryRunSummary = "Would publish issue #783 by adding intent-target.";
+        const string writeSummary = "Published issue #783 by adding intent-target.";
+
+        Assert.Equal(0, dryRunJson.ExitCode);
+        Assert.Equal(0, writeJson.ExitCode);
+        Assert.Equal(0, dryRunText.ExitCode);
+        Assert.Equal(0, writeText.ExitCode);
+        Assert.Equal(dryRunSummary, dryRunResult.Summary);
+        Assert.Equal(writeSummary, writeResult.Summary);
+        Assert.DoesNotContain("Would", writeResult.Summary, StringComparison.Ordinal);
+        Assert.NotEqual(dryRunResult.Summary, writeResult.Summary);
+        Assert.StartsWith(dryRunSummary, dryRunText.Output, StringComparison.Ordinal);
+        Assert.StartsWith(writeSummary, writeText.Output, StringComparison.Ordinal);
+
+        Console.WriteLine($"G783 dry-run JSON:{Environment.NewLine}{dryRunJson.Output}");
+        Console.WriteLine($"G783 write JSON:{Environment.NewLine}{writeJson.Output}");
+        Console.WriteLine($"G783 dry-run text:{Environment.NewLine}{dryRunText.Output}");
+        Console.WriteLine($"G783 write text:{Environment.NewLine}{writeText.Output}");
+    }
+
+    [Fact]
     public void Execute_TextOutputIncludesPublishMetadata()
     {
         using var workspace = new AutomationIssuePublishWorkspace();
@@ -366,6 +400,25 @@ public sealed class AutomationIssuePublishCommandTests : IDisposable
             IReadOnlyCollection<string> addLabels,
             IReadOnlyCollection<string> removeLabels) =>
             throw new NotSupportedException("reconcile path not exercised by these tests");
+    }
+
+    private static (int ExitCode, string Output) ExecutePublish(
+        CliContext context,
+        string format,
+        params string[] modeArguments)
+    {
+        var arguments = new List<string>
+        {
+            "--repo", "J-Tech-Japan/intent-system",
+            "--issue", "783"
+        };
+        arguments.AddRange(modeArguments);
+        arguments.Add("--format");
+        arguments.Add(format);
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationIssuePublishCommand.Execute(context, [.. arguments], writer);
+        return (exitCode, writer.ToString());
     }
 
     private sealed record AppliedTransition(
