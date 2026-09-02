@@ -564,9 +564,14 @@ session action, and `notify supervise reconcile --write` / `uninstall --write`
 reports before/after state and removes only managed drift. The route is
 read-only and does not execute any of those lifecycle commands.
 
-G781 sets the install startup-proof default to 120 seconds. After the explicit
-registration command, the guide renders `install --verify` to re-prove the
-existing artifact without rewriting it. Its timeout contract distinguishes
+G781 sets the normal install startup-proof default to 120 seconds. A bare
+`install --verify` without `--startup-bound` uses a one-read, one-second
+re-proof; pass `--startup-bound` explicitly to request a longer bounded wait.
+When `--routing-root` is supplied, its supervision root also governs the
+default artifact, runtime-log, cycle, and installed-evidence paths. After the
+explicit registration command, the guide renders `install --verify` to
+re-prove the existing artifact without rewriting it. Its timeout contract
+distinguishes
 `no-post-install-process` from `post-install-process-wrote-no-cycle`: the
 former names the registration action without inventing a nonexistent log path,
 while the latter names only runtime logs that exist. The third timeout,

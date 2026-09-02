@@ -517,7 +517,10 @@ intent-cli guide workflow task supervision-setup --format markdown
 を報告し、managed drift だけを削除します。route 自体は read-only で、これらの lifecycle command
 を実行しません。
 
-G781 では install startup proof の既定値を 120 秒にします。explicit registration command の後、
+G781 では通常の install startup proof の既定値を 120 秒にします。`--startup-bound` を省略した
+bare の `install --verify` は 1 回だけ読む 1 秒の short re-proof であり、より長い bounded wait は
+`--startup-bound` を明示します。`--routing-root` を指定した場合、その supervision root は default
+artifact、runtime log、cycle、installed evidence の path も支配します。explicit registration command の後、
 guide は既存 artifact を書き換えず再証明する `install --verify` を表示します。timeout contract は
 `no-post-install-process` と `post-install-process-wrote-no-cycle` を区別します。前者は存在しない
 log path を作らず registration action を示し、後者は実在する runtime log だけを示します。3 つ目の

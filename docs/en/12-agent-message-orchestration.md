@@ -1055,9 +1055,13 @@ correction of the invalid configuration.
 On macOS the generated launchd plist sets `WorkingDirectory` to the routing
 root and routes `StandardOutPath` and `StandardErrorPath` below
 `.intent-cli/supervision/<domain>/<team>/runtime/`. The install result names the
-runtime directory and both log paths. G781 raises the default
-`--startup-bound` to 120 seconds, reads the store at most once per second, and
-reports `first_cycle_attempts`.
+runtime directory and both log paths. G781 uses a 120-second default
+`--startup-bound` for normal install, reads the store at most once per second,
+and reports `first_cycle_attempts`. A bare `--verify` instead uses a one-read,
+one-second re-proof unless the operator explicitly supplies `--startup-bound`.
+With `--routing-root`, the relative supervision root governs the default
+artifact, runtime-log, cycle, and installed-evidence paths for both write and
+verify.
 
 A timeout remains `first-cycle-proof-failed`, but now carries
 `first_cycle_failure_kind`. `no-post-install-process` means neither runtime log

@@ -887,9 +887,12 @@ legacy record に対する runtime warning は defense in depth として残し�
 macOS の launchd plist は `WorkingDirectory` を routing root に設定し、
 `StandardOutPath` と `StandardErrorPath` を
 `.intent-cli/supervision/<domain>/<team>/runtime/` 配下へ向けます。install
-result は runtime directory と両方の log path を明示します。G781 では
-`--startup-bound` の既定値を 120 秒へ上げ、store の read は 1 秒に 1 回以下とし、
-`first_cycle_attempts` を返します。
+result は runtime directory と両方の log path を明示します。G781 では通常の install の
+`--startup-bound` の既定値を 120 秒にし、store の read は 1 秒に 1 回以下とし、
+`first_cycle_attempts` を返します。bare の `--verify` は operator が `--startup-bound` を
+明示しない限り、1 回だけ読む 1 秒の re-proof を使います。`--routing-root` を指定した場合は
+relative supervision root が write と verify の default artifact、runtime log、cycle、
+installed evidence の path を支配します。
 
 timeout は引き続き `first-cycle-proof-failed` ですが、
 `first_cycle_failure_kind` で区別します。`no-post-install-process` は artifact の

@@ -8,7 +8,8 @@ namespace IntentSystem.Cli.Tests;
 /// <summary>
 /// G781: first-cycle proof distinguishes an artifact that never started from a
 /// post-install process that wrote no cycle, supports late re-proof without
-/// rewriting the artifact, and paces full-store reads.
+/// rewriting the artifact, routes default evidence through --routing-root,
+/// and paces full-store reads.
 /// </summary>
 [Collection("WorkerNextActionSharedState")]
 public sealed class NotifySuperviseInstallG781Tests : IDisposable
@@ -174,7 +175,7 @@ public sealed class NotifySuperviseInstallG781Tests : IDisposable
             write: true).Applied);
 
         now = writtenAt.AddSeconds(3);
-        var verified = RunInstall(artifactPath, "--verify", startupBoundSeconds: 1);
+        var verified = RunInstall(artifactPath, "--verify", startupBoundSeconds: 5);
 
         Assert.Equal(0, verified.ExitCode);
         using var verifiedDocument = JsonDocument.Parse(verified.Payload);
@@ -183,6 +184,7 @@ public sealed class NotifySuperviseInstallG781Tests : IDisposable
         Assert.False(verifiedPayload.GetProperty("artifact_written").GetBoolean());
         Assert.Equal(writtenAt, verifiedPayload.GetProperty("artifact_written_at").GetDateTimeOffset());
         Assert.Equal("first-cycle-verified", verifiedPayload.GetProperty("verification_status").GetString());
+        Assert.Equal(5, verifiedPayload.GetProperty("startup_bound_seconds").GetInt32());
         Assert.Equal(1, verifiedPayload.GetProperty("first_cycle_attempts").GetInt32());
         Assert.True(File.Exists(verifiedPayload.GetProperty("installed_supervisor_path").GetString()));
         Assert.Equal(beforeBytes, File.ReadAllText(artifactPath));
@@ -203,6 +205,120 @@ public sealed class NotifySuperviseInstallG781Tests : IDisposable
             "installed first-cycle record",
             livenessDocument.RootElement.GetProperty("scheduler_evidence_detail").GetString(),
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RoutingRootControlsDefaultArtifactAndEvidencePathsForWriteAndVerify()
+    {
+        var invokerRoot = Path.Combine(root, "routing-invoker");
+        var routingRoot = Path.Combine(root, "routing-target");
+        var context = CreateContext(invokerRoot);
+        var targetArtifactRoot = NotifySuperviseLivenessCommand.ResolveSupervisionArtifactRootPath(
+            context,
+            routingRoot);
+        var invokerArtifactRoot = context.ResolveSupervisionArtifactRootPath();
+        var expectedArtifactPath = Path.Combine(
+            targetArtifactRoot,
+            Domain,
+            Team,
+            "install",
+            Label + ".plist");
+        var expectedInstalledPath = Path.Combine(
+            targetArtifactRoot,
+            Domain,
+            Team,
+            "installed-supervisor.json");
+
+        var initial = RunDefaultInstall(
+            context,
+            routingRoot,
+            "--write",
+            startupBoundSeconds: 1);
+
+        Assert.Equal(1, initial.ExitCode);
+        using (var initialDocument = JsonDocument.Parse(initial.Payload))
+        {
+            Assert.Equal(
+                expectedArtifactPath,
+                initialDocument.RootElement.GetProperty("artifact_path").GetString());
+        }
+        Assert.True(File.Exists(expectedArtifactPath));
+        Assert.True(Directory.Exists(Path.Combine(targetArtifactRoot, Domain, Team, "runtime")));
+        Assert.False(File.Exists(Path.Combine(
+            invokerArtifactRoot,
+            Domain,
+            Team,
+            "install",
+            Label + ".plist")));
+        Assert.False(Directory.Exists(Path.Combine(invokerArtifactRoot, Domain, Team, "runtime")));
+
+        var writtenAt = new DateTimeOffset(File.GetLastWriteTimeUtc(expectedArtifactPath), TimeSpan.Zero);
+        Assert.True(NotifySupervisionStore.RecordCycle(
+            NotifySupervisionStore.ResolveCyclePath(targetArtifactRoot, Domain, Team),
+            new NotifySupervisionCycle
+            {
+                CycleId = "g781-routing-root",
+                StartedAt = writtenAt.AddSeconds(1),
+                CompletedAt = writtenAt.AddSeconds(2),
+                IntervalSeconds = 300,
+                Writer = new NotifySupervisionWriterIdentity
+                {
+                    Pid = 7812,
+                    ProcessStartTime = writtenAt.AddSeconds(1),
+                    Host = "g781-routing-root",
+                },
+            },
+            write: true).Applied);
+
+        now = writtenAt.AddSeconds(3);
+        var verified = RunDefaultInstall(context, routingRoot, "--verify");
+
+        Assert.Equal(0, verified.ExitCode);
+        using var verifiedDocument = JsonDocument.Parse(verified.Payload);
+        var verifiedPayload = verifiedDocument.RootElement;
+        Assert.Equal(expectedArtifactPath, verifiedPayload.GetProperty("artifact_path").GetString());
+        Assert.Equal(
+            Path.Combine(targetArtifactRoot, Domain, Team, "runtime"),
+            verifiedPayload.GetProperty("runtime_directory").GetString());
+        Assert.Equal(
+            Path.Combine(targetArtifactRoot, Domain, Team, "runtime", Label + ".stdout.log"),
+            verifiedPayload.GetProperty("stdout_log_path").GetString());
+        Assert.Equal(
+            Path.Combine(targetArtifactRoot, Domain, Team, "runtime", Label + ".stderr.log"),
+            verifiedPayload.GetProperty("stderr_log_path").GetString());
+        Assert.Equal(expectedInstalledPath, verifiedPayload.GetProperty("installed_supervisor_path").GetString());
+        Assert.True(File.Exists(expectedInstalledPath));
+        Assert.False(File.Exists(Path.Combine(
+            invokerArtifactRoot,
+            Domain,
+            Team,
+            "installed-supervisor.json")));
+    }
+
+    [Fact]
+    public void BareVerifyUsesOneReadShortDefaultWithoutDelay()
+    {
+        var artifactPath = ArtifactPath("bare-verify-default");
+        var initial = RunInstall(artifactPath, "--write", startupBoundSeconds: 1);
+        Assert.Equal(1, initial.ExitCode);
+        var writtenAt = new DateTimeOffset(File.GetLastWriteTimeUtc(artifactPath), TimeSpan.Zero);
+        var delayCount = 0;
+        NotifySuperviseInstallCommand.Delay = delay =>
+        {
+            delayCount++;
+            now = now.Add(delay);
+        };
+        now = writtenAt.AddSeconds(2);
+
+        var verified = RunInstallWithoutStartupBound(artifactPath, "--verify");
+
+        Assert.Equal(1, verified.ExitCode);
+        using var document = JsonDocument.Parse(verified.Payload);
+        var payload = document.RootElement;
+        Assert.Equal("no-post-install-process", payload.GetProperty("first_cycle_failure_kind").GetString());
+        Assert.Equal(1, payload.GetProperty("first_cycle_attempts").GetInt32());
+        Assert.Contains("within 1s", payload.GetProperty("error").GetString(), StringComparison.Ordinal);
+        Assert.Equal(0, delayCount);
     }
 
     [Fact]
@@ -314,21 +430,69 @@ public sealed class NotifySuperviseInstallG781Tests : IDisposable
         string mode,
         int startupBoundSeconds,
         params string[] additionalModeArguments)
+        => RunInstallCore(
+            CreateContext(),
+            root,
+            artifactPath,
+            mode,
+            startupBoundSeconds,
+            additionalModeArguments);
+
+    private (int ExitCode, string Payload) RunInstallWithoutStartupBound(
+        string artifactPath,
+        string mode,
+        params string[] additionalModeArguments)
+        => RunInstallCore(
+            CreateContext(),
+            root,
+            artifactPath,
+            mode,
+            null,
+            additionalModeArguments);
+
+    private (int ExitCode, string Payload) RunDefaultInstall(
+        CliContext context,
+        string routingRoot,
+        string mode,
+        int? startupBoundSeconds = null,
+        params string[] additionalModeArguments)
+        => RunInstallCore(
+            context,
+            routingRoot,
+            null,
+            mode,
+            startupBoundSeconds,
+            additionalModeArguments);
+
+    private static (int ExitCode, string Payload) RunInstallCore(
+        CliContext context,
+        string routingRoot,
+        string? artifactPath,
+        string mode,
+        int? startupBoundSeconds,
+        params string[] additionalModeArguments)
     {
         var arguments = new List<string>
         {
             "install", "--domain", Domain, "--team", Team,
             "--repo", "J-Tech-Japan/intent-system", "--owner-role", "orchestration",
             "--bound", "900", "--interval", "300",
-            "--startup-bound", startupBoundSeconds.ToString(),
-            "--platform", "macos", "--output", artifactPath,
-            "--routing-root", root, mode,
+            "--platform", "macos", "--routing-root", routingRoot,
         };
+        if (startupBoundSeconds is { } startupBound)
+        {
+            arguments.AddRange(["--startup-bound", startupBound.ToString()]);
+        }
+        if (artifactPath is not null)
+        {
+            arguments.AddRange(["--output", artifactPath]);
+        }
+        arguments.Add(mode);
         arguments.AddRange(additionalModeArguments);
         arguments.AddRange(["--format", "json"]);
 
         using var writer = new StringWriter();
-        var exitCode = NotifyCommand.ExecuteSupervise(CreateContext(), arguments.ToArray(), writer);
+        var exitCode = NotifyCommand.ExecuteSupervise(context, arguments.ToArray(), writer);
         return (exitCode, writer.ToString());
     }
 
@@ -347,9 +511,9 @@ public sealed class NotifySuperviseInstallG781Tests : IDisposable
         "runtime",
         Label + "." + stream + ".log");
 
-    private CliContext CreateContext() => new()
+    private CliContext CreateContext(string? repoRoot = null) => new()
     {
-        RepoRoot = root,
+        RepoRoot = repoRoot ?? root,
         Config = new CliConfig
         {
             Project = new ProjectConfig

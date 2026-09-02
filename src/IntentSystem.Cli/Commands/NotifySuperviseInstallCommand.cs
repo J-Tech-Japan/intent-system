@@ -13,6 +13,7 @@ internal static class NotifySuperviseInstallCommand
 {
     public const string Operation = "install";
     public const int DefaultStartupBoundSeconds = 120;
+    public const int DefaultVerifyStartupBoundSeconds = 1;
     public const int MaximumStartupBoundSeconds = 3600;
     internal static Func<NotifySuperviseFirstCycleRequest, NotifySuperviseFirstCycleResult>? FirstCycleProbeFactory { get; set; }
     internal static Func<DateTimeOffset> UtcNowFactory { get; set; } = () => DateTimeOffset.UtcNow;
@@ -20,7 +21,7 @@ internal static class NotifySuperviseInstallCommand
     public const string Usage =
         "Usage: intent-cli notify supervise install --domain <d> --team <t> --repo <owner/repo> "
         + "--owner-role <role> --bound <seconds> --interval <seconds> "
-        + "[--startup-bound <seconds>; default 120] "
+        + "[--startup-bound <seconds>; default 120 for --write, 1 for --verify] "
         + "[--persistence persistent] "
         + "[--event-mode] [--platform macos|windows|linux] [--output <path>] [--routing-root <host-root>] "
         + "[--verify|--dry-run|--write] [--format markdown|json]";
@@ -66,12 +67,16 @@ internal static class NotifySuperviseInstallCommand
         }
 
         string routingRoot;
+        string artifactRoot;
         string artifactPath;
         try
         {
             routingRoot = Path.GetFullPath(options.RoutingRoot ?? context.RepoRoot);
+            artifactRoot = options.RoutingRoot is null
+                ? context.ResolveSupervisionArtifactRootPath()
+                : NotifySuperviseLivenessCommand.ResolveSupervisionArtifactRootPath(context, routingRoot);
             artifactPath = options.Output is null
-                ? ResolveDefaultArtifactPath(context, options)
+                ? ResolveDefaultArtifactPath(artifactRoot, options)
                 : Path.GetFullPath(options.Output, context.RepoRoot);
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
@@ -109,7 +114,7 @@ internal static class NotifySuperviseInstallCommand
 
         var label = $"intent-cli.supervise.{options.Domain}.{options.Team}";
         var supervisionDirectory = Path.Combine(
-            context.ResolveSupervisionArtifactRootPath(),
+            artifactRoot,
             options.Domain,
             options.Team);
         var runtimeDirectory = Path.Combine(supervisionDirectory, "runtime");
@@ -210,12 +215,12 @@ internal static class NotifySuperviseInstallCommand
         {
             firstCycle = (FirstCycleProbeFactory ?? NotifySuperviseFirstCycleProbe.Wait)(new NotifySuperviseFirstCycleRequest
             {
-                ArtifactRoot = context.ResolveSupervisionArtifactRootPath(),
+                ArtifactRoot = artifactRoot,
                 Domain = options.Domain,
                 Team = options.Team,
                 ArtifactPath = artifactPath,
                 CyclePath = NotifySupervisionStore.ResolveCyclePath(
-                    context.ResolveSupervisionArtifactRootPath(),
+                    artifactRoot,
                     options.Domain,
                     options.Team),
                 StartupBoundSeconds = options.StartupBoundSeconds,
@@ -264,7 +269,7 @@ internal static class NotifySuperviseInstallCommand
             }
 
             var installedRecord = NotifySupervisionStore.RecordInstalledSupervisor(
-                context.ResolveSupervisionArtifactRootPath(),
+                artifactRoot,
                 new NotifySupervisionInstalledSupervisor
                 {
                     Domain = options.Domain,
@@ -316,7 +321,7 @@ internal static class NotifySuperviseInstallCommand
             FirstCycleWriter = firstCycle?.Writer,
             FirstCycleAttempts = firstCycle?.Attempts,
             InstalledSupervisorPath = NotifySupervisionStore.ResolveInstalledSupervisorPath(
-                context.ResolveSupervisionArtifactRootPath(), options.Domain, options.Team),
+                artifactRoot, options.Domain, options.Team),
             EventMode = options.EventMode,
             SuperviseInvocation = invocation,
             RegistrationCommand = registrationCommand,
@@ -328,9 +333,9 @@ internal static class NotifySuperviseInstallCommand
             RuntimeBinaries = runtime.Binaries,
             UnresolvedBinaries = unresolvedBinaries,
             Summary = options.Write
-                ? $"Emitted and first-cycle-verified the {options.Platform} supervisor artifact with event mode {(options.EventMode ? "enabled" : "disabled")} for {(options.PersistenceIntent is null ? "the current GUI session only; no LaunchAgents login auto-load or reboot persistence is configured" : "operator-declared persistent intent; the operator still owns explicit registration and intent-cli executes no OS lifecycle command")}. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. First-cycle evidence is recorded at '{NotifySupervisionStore.ResolveInstalledSupervisorPath(context.ResolveSupervisionArtifactRootPath(), options.Domain, options.Team)}'. Legacy login-persistent artifacts removed: {legacyArtifactsRemoved.Length}. Install emitted the artifact but did not execute lifecycle registration; use 'intent-cli notify supervise reconcile --write' for explicit unload/removal."
+                ? $"Emitted and first-cycle-verified the {options.Platform} supervisor artifact with event mode {(options.EventMode ? "enabled" : "disabled")} for {(options.PersistenceIntent is null ? "the current GUI session only; no LaunchAgents login auto-load or reboot persistence is configured" : "operator-declared persistent intent; the operator still owns explicit registration and intent-cli executes no OS lifecycle command")}. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. First-cycle evidence is recorded at '{NotifySupervisionStore.ResolveInstalledSupervisorPath(artifactRoot, options.Domain, options.Team)}'. Legacy login-persistent artifacts removed: {legacyArtifactsRemoved.Length}. Install emitted the artifact but did not execute lifecycle registration; use 'intent-cli notify supervise reconcile --write' for explicit unload/removal."
                 : options.Verify
-                    ? $"Re-proved the existing {options.Platform} supervisor artifact without rewriting it. First-cycle evidence is recorded at '{NotifySupervisionStore.ResolveInstalledSupervisorPath(context.ResolveSupervisionArtifactRootPath(), options.Domain, options.Team)}'. Install verification did not execute lifecycle registration; use 'intent-cli notify supervise reconcile --write' for explicit unload/removal."
+                    ? $"Re-proved the existing {options.Platform} supervisor artifact without rewriting it. First-cycle evidence is recorded at '{NotifySupervisionStore.ResolveInstalledSupervisorPath(artifactRoot, options.Domain, options.Team)}'. Install verification did not execute lifecycle registration; use 'intent-cli notify supervise reconcile --write' for explicit unload/removal."
                 : $"Previewed the {options.Platform} supervisor artifact path and operator lifecycle commands without writing, probing, or executing anything. Lifetime is {(options.PersistenceIntent is null ? "current GUI session only; no LaunchAgents login auto-load or reboot persistence is configured" : "operator-declared persistent intent; registration remains an explicit operator action")}. Runtime transport binaries are resolved absolutely when available; unresolved binaries: {(unresolvedBinaries.Length == 0 ? "none" : string.Join(", ", unresolvedBinaries))}; the recorded PATH covers any remaining command name. A write requires bounded first-cycle proof and records failure log paths.",
         };
         Emit(writer, options.Format, result);
@@ -481,7 +486,7 @@ internal static class NotifySuperviseInstallCommand
                 $"'{name}' was not found as an absolute executable through the emission environment PATH.");
     }
 
-    private static string ResolveDefaultArtifactPath(CliContext context, InstallOptions options)
+    private static string ResolveDefaultArtifactPath(string artifactRoot, InstallOptions options)
     {
         var label = $"intent-cli.supervise.{options.Domain}.{options.Team}";
         var extension = options.Platform switch
@@ -491,7 +496,7 @@ internal static class NotifySuperviseInstallCommand
             _ => ".service",
         };
         return Path.Combine(
-            context.ResolveSupervisionArtifactRootPath(),
+            artifactRoot,
             options.Domain,
             options.Team,
             "install",
@@ -844,11 +849,19 @@ RestartSec=30
 
         options = new InstallOptions
         {
-            Domain = domain!, Team = team!, Repo = repo!, OwnerRole = ownerRole!,
-            BoundSeconds = bound.Value, IntervalSeconds = interval.Value,
-            StartupBoundSeconds = startupBound ?? DefaultStartupBoundSeconds,
-            RoutingRoot = routingRoot, Output = output, Platform = platform,
-            Write = write, Format = format!,
+            Domain = domain!,
+            Team = team!,
+            Repo = repo!,
+            OwnerRole = ownerRole!,
+            BoundSeconds = bound.Value,
+            IntervalSeconds = interval.Value,
+            StartupBoundSeconds = startupBound
+                ?? (verify ? DefaultVerifyStartupBoundSeconds : DefaultStartupBoundSeconds),
+            RoutingRoot = routingRoot,
+            Output = output,
+            Platform = platform,
+            Write = write,
+            Format = format!,
             Verify = verify,
             EventMode = eventMode,
             PersistenceIntent = persistenceIntent,
