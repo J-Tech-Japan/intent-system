@@ -44,7 +44,8 @@ internal static class SessionLayerTopologyCommand
         + "--current-kind <kind> --new-kind <kind> --confirm-update-kind [--dry-run|--write] [--format json]";
     private const string UpdateFieldUsage =
         "Usage: intent-cli session-layer topology update-field --domain <name> --team <name> --role <name> "
-        + "--field delivery_method --current <value|absent> --new <value> --confirm-update-field "
+        + "--field delivery_method|frontend|wake_command --current <value|absent> --new <value|absent> --confirm-update-field "
+        + "(--new absent clears only frontend or wake_command) "
         + "[--dry-run|--write] [--format json]";
     private const string UpdateResidenceUsage =
         "Usage: intent-cli session-layer topology update-residence --domain <name> --team <name> --role <name> "
@@ -1743,8 +1744,7 @@ internal static class SessionLayerTopologyWriter
                 return Conflict(
                     request,
                     path,
-                    $"Role '{request.Role}' already has a conflicting recorded shape. Refusing to silently "
-                    + "repair or replace it; validate and record an operator-approved non-conflicting role.");
+                    DescribeRoleConflict(request, existingRole, requestedRole));
             }
 
             return new SessionLayerTopologyRecordResult
@@ -2430,12 +2430,20 @@ internal static class SessionLayerTopologyWriter
     public static SessionLayerTopologyFieldUpdateResult UpdateField(string routingRoot, SessionLayerTopologyFieldUpdateRequest request)
     {
         var mode = request.Write ? "write" : "dry-run";
-        if (!string.Equals(request.Field, "delivery_method", StringComparison.Ordinal))
+        if (request.Field is not ("delivery_method" or "frontend" or "wake_command"))
             return new(request.Team, request.Role, request.Field, request.CurrentValue, request.NewValue, mode, false, false, true,
-                $"Field '{request.Field}' is not in the topology update registry. Only 'delivery_method' is allowed.");
-        if (request.NewValue is not ("inline" or "file-backed"))
+                $"Field '{request.Field}' is not in the topology update registry. Only 'delivery_method', 'frontend', and 'wake_command' are allowed.");
+        if (string.Equals(request.Field, "delivery_method", StringComparison.Ordinal)
+            && request.NewValue is not ("inline" or "file-backed"))
             return new(request.Team, request.Role, request.Field, request.CurrentValue, request.NewValue, mode, false, false, true,
                 $"Field 'delivery_method' must be 'inline' or 'file-backed', not '{request.NewValue}'.");
+        if (string.Equals(request.Field, "wake_command", StringComparison.Ordinal)
+            && !string.Equals(request.NewValue, "absent", StringComparison.Ordinal)
+            && !SessionLayerTopologyWakeCommandRules.TryValidate(request.NewValue, "--new", out var wakeCommandError))
+        {
+            return new(request.Team, request.Role, request.Field, request.CurrentValue, request.NewValue, mode, false, false, true,
+                wakeCommandError);
+        }
 
         var path = NotifyRoleTopologyStore.ResolvePath(routingRoot, request.Domain, request.Team);
         var validation = NotifyRoleTopologyStore.Validate(routingRoot, request.Domain, request.Team);
@@ -2451,6 +2459,16 @@ internal static class SessionLayerTopologyWriter
                 return new(request.Team, request.Role, request.Field, request.CurrentValue, request.NewValue, mode, false, false, true,
                     $"Role '{request.Role}' is not a valid recorded role. {error}");
 
+            if (request.Field is "frontend" or "wake_command")
+            {
+                var resident = ReadString(role, "resident") ?? "missing";
+                if (!string.Equals(resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal))
+                {
+                    return new(request.Team, request.Role, request.Field, request.CurrentValue, request.NewValue, mode, false, false, true,
+                        $"Field '{request.Field}' is allowed only on an external resident; role '{request.Role}' records residence '{resident}'.");
+                }
+            }
+
             var hasField = role.TryGetPropertyValue(request.Field, out var fieldNode);
             var actual = hasField ? fieldNode?.GetValue<string>() : null;
             var matches = string.Equals(request.CurrentValue, "absent", StringComparison.Ordinal)
@@ -2463,7 +2481,15 @@ internal static class SessionLayerTopologyWriter
                     $"Role '{request.Role}' records {request.Field} '{recorded}', not stated current value '{request.CurrentValue}'. Refusing update-field.");
             }
 
-            role[request.Field] = request.NewValue;
+            if (request.Field is "frontend" or "wake_command"
+                && string.Equals(request.NewValue, "absent", StringComparison.Ordinal))
+            {
+                role.Remove(request.Field);
+            }
+            else
+            {
+                role[request.Field] = request.NewValue;
+            }
             if (request.Write) WriteAtomically(path, root.ToJsonString(FileJsonOptions) + Environment.NewLine);
             return new(request.Team, request.Role, request.Field, request.CurrentValue, request.NewValue, mode, request.Write, true, false,
                 request.Write
@@ -2819,6 +2845,31 @@ internal static class SessionLayerTopologyWriter
     private static bool RoleMatches(JsonObject existing, JsonObject requested) =>
         KnownRoleFields.All(field =>
             string.Equals(ReadString(existing, field), ReadString(requested, field), StringComparison.Ordinal));
+
+    private static string DescribeRoleConflict(
+        SessionLayerTopologyRecordRequest request,
+        JsonObject existing,
+        JsonObject requested)
+    {
+        var differences = KnownRoleFields
+            .Where(field => !string.Equals(ReadString(existing, field), ReadString(requested, field), StringComparison.Ordinal))
+            .Select(field => DescribeRoleFieldDifference(field, ReadString(existing, field), ReadString(requested, field)));
+        return $"Role '{request.Role}' already has a conflicting recorded shape. Differing field(s): "
+            + $"{string.Join("; ", differences)}. Refusing to silently repair or replace it.";
+    }
+
+    private static string DescribeRoleFieldDifference(string field, string? recorded, string? requested)
+    {
+        var command = field switch
+        {
+            "resident" => "; use `intent-cli session-layer topology update-residence` for a residence change",
+            "delivery_method" or "frontend" or "wake_command" =>
+                $"; use `intent-cli session-layer topology update-field --field {field}` for this field",
+            "kind" => "; use `intent-cli session-layer topology update-kind` for a kind change",
+            _ => string.Empty,
+        };
+        return $"{field}: recorded '{recorded ?? "absent"}', requested '{requested ?? "absent"}'{command}";
+    }
 
     private static string? ReadTeamWorkspace(JsonObject team)
     {

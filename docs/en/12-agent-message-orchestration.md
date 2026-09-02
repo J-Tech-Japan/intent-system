@@ -260,8 +260,11 @@ limiting word naming exactly what it protects — for example, `root resolution`
 application freely: residence, reader, and routing root are unchanged. Do not
 use `session-layer topology update-residence` for that external-to-external
 relabel. No transition command is involved. `frontend` is an operator label,
-never a routing input; re-record at most with `intent-cli session-layer topology
-record` when the operator wants to change that label.
+never a routing input. On an existing external role, change or clear that label
+only with `intent-cli session-layer topology update-field --field frontend
+--current <value|absent> --new <value|absent> --confirm-update-field --write`;
+`--new absent` clears it. Re-recording a differing shape remains a conflict and
+never replaces the record.
 
 **Routing-root MUST.** Every `notify` send and receive uses the canonical
 `--routing-root <routing-root>`. A wrong root strands notify records outside
@@ -293,7 +296,11 @@ practiced form.
 **Declare the courtesy wake explicitly (G776).** Only an operator may add a
 literal, one-line `--wake-command` template to an `external` topology record.
 The record and `session-layer topology show` preserve the declaration verbatim.
-At render time, `notify delegate` substitutes `{task_id}` and `{summary}` only;
+For an existing external role, set or clear `wake_command` only with
+`session-layer topology update-field --field wake_command --current
+<value|absent> --new <value|absent> --confirm-update-field --write`; `--new
+absent` clears it. At render time, `notify delegate` substitutes `{task_id}` and
+`{summary}` only;
 unknown placeholders such as `{foo}` remain literal. The canonical notify write
 always comes first. The resulting one-line wake is courtesy-only and never
 substitutes for the durable record. `intent-cli` renders this operator-supplied
@@ -1985,9 +1992,11 @@ by hand:
 ```text
 intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] [--model <text>] [--reasoning-effort <text>] --write
 herdr pane rename <pane-id> <logical-role>
-intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] [--model <text>] [--reasoning-effort <text>] --write
+intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] [--wake-command <literal-template>] [--model <text>] [--reasoning-effort <text>] --write
 intent-cli session-layer topology update-kind --domain <domain> --team <team> --role <role> --current-kind <kind> --new-kind <kind> --confirm-update-kind --write
 intent-cli session-layer topology update-field --domain <domain> --team <team> --role <role> --field delivery_method --current <absent|inline|file-backed> --new <inline|file-backed> --confirm-update-field --write
+intent-cli session-layer topology update-field --domain <domain> --team <team> --role <role> --field frontend --current <value|absent> --new <value|absent> --confirm-update-field --write
+intent-cli session-layer topology update-field --domain <domain> --team <team> --role <role> --field wake_command --current <value|absent> --new <value|absent> --confirm-update-field --write
 intent-cli session-layer topology retire-legacy --domain <domain> --team <team> --evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write
 intent-cli session-layer topology validate --domain <domain> --team <team> --live --format json
 intent-cli session-layer topology show --domain <domain> --team <team> --format json
@@ -2073,10 +2082,16 @@ never carried, or for changing its already recorded value. It requires the
 role, the field name, the stated current value, the new value, explicit
 confirmation, and `--dry-run` or `--write`; state `--current absent` only when
 the field is actually absent. A stale statement is refused in both directions.
-The registry initially permits only `delivery_method`, so an unknown or dotted
-name is refused rather than becoming an arbitrary JSON-path editor. The command
+The registry permits `delivery_method` plus the external-only operator labels
+`frontend` and `wake_command`; an unknown or dotted name is refused rather than
+becoming an arbitrary JSON-path editor. `delivery_method` retains its existing
+`inline|file-backed` values. The two external labels may use `--new absent` to
+clear an existing value, and are refused on a herdr resident. The command
 changes only that field. It does not relax `record`: re-recording a different
-shape still refuses its conflict and has no force flag.
+shape still refuses its conflict and has no force flag; the refusal names each
+differing field with its recorded and requested values, and names
+`update-field --field <name>` for a label difference or `update-residence` for
+a residence change.
 
 #### Guarded residence transition (G761)
 
