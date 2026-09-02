@@ -189,8 +189,8 @@ public sealed class AgentMessageOrchestrationDocsTests
             Assert.Contains("force flag", doc, StringComparison.Ordinal);
         }
 
-        Assert.Contains("registry initially permits only `delivery_method`", en, StringComparison.Ordinal);
-        Assert.Contains("registry が最初に許可するのは `delivery_method` だけ", ja, StringComparison.Ordinal);
+        Assert.Contains("registry permits `delivery_method` plus the external-only operator labels", en, StringComparison.Ordinal);
+        Assert.Contains("registry が許可するのは `delivery_method` と、external", ja, StringComparison.Ordinal);
         Assert.Contains("arbitrary JSON-path editor", en, StringComparison.Ordinal);
         Assert.Contains("任意の JSON path を編集できない", ja, StringComparison.Ordinal);
         Assert.Contains("stale statement is refused in both directions", en, StringComparison.Ordinal);

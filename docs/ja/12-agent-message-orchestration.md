@@ -231,8 +231,11 @@ boundary の衝突）、G767 AC1/AC6（status と full clean-payload oracle の�
 application を自由に変更できます。residence、reader、routing root は変わりません。
 この external-to-external の表示名変更で
 `session-layer topology update-residence` を使いません。`frontend` は operator label であり
-routing input ではありません。transition command は関与しません。operator がこの label を
-変えたいときだけ、最大でも `intent-cli session-layer topology record` で再記録します。
+routing input ではありません。transition command は関与しません。既存の external role の
+label は `intent-cli session-layer topology update-field --field frontend --current
+<value|absent> --new <value|absent> --confirm-update-field --write` だけで変更または
+削除します。`--new absent` は削除を表します。異なる shape の re-record は conflict のままで、
+record を置換しません。
 
 **routing-root MUST。** すべての `notify` の send / receive は正本の
 `--routing-root <routing-root>` を使います。root を誤ると、sender が
@@ -262,7 +265,10 @@ intent-cli notify collect --domain <domain> --team <team> --role design --since 
 
 **courtesy wake を明示的に宣言（G776）。** `external` topology record に literal な
 一行の `--wake-command` template を追加できるのは operator だけです。record と
-`session-layer topology show` は宣言をそのまま保持して表示します。render 時にだけ
+`session-layer topology show` は宣言をそのまま保持して表示します。
+既存の external role の `wake_command` は `session-layer topology update-field --field
+wake_command --current <value|absent> --new <value|absent> --confirm-update-field --write`
+だけで設定または削除します。`--new absent` は削除を表します。render 時にだけ
 `notify delegate` が `{task_id}` と `{summary}` を置換し、`{foo}` のような未知の
 placeholder は literal のまま残します。canonical notify write が必ず先であり、得られる
 一行の wake は `courtesy-only` で、永続的な record の代わりにはなりません。intent-cli は
@@ -1738,9 +1744,11 @@ foreign-workspace-only name、ambiguous mapping は prompt / append なしで fa
 ```text
 intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident herdr --workspace-id <workspace-id> --pane-id <pane-id> --cwd <role-cwd> [--kind <agent-kind>] [--model <text>] [--reasoning-effort <text>] --write
 herdr pane rename <pane-id> <logical-role>
-intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] [--model <text>] [--reasoning-effort <text>] --write
+intent-cli session-layer topology record --domain <domain> --team <team> --role <role> --resident external --reader <routing-root-relative-path> [--frontend <frontend>] [--wake-command <literal-template>] [--model <text>] [--reasoning-effort <text>] --write
 intent-cli session-layer topology update-kind --domain <domain> --team <team> --role <role> --current-kind <kind> --new-kind <kind> --confirm-update-kind --write
 intent-cli session-layer topology update-field --domain <domain> --team <team> --role <role> --field delivery_method --current <absent|inline|file-backed> --new <inline|file-backed> --confirm-update-field --write
+intent-cli session-layer topology update-field --domain <domain> --team <team> --role <role> --field frontend --current <value|absent> --new <value|absent> --confirm-update-field --write
+intent-cli session-layer topology update-field --domain <domain> --team <team> --role <role> --field wake_command --current <value|absent> --new <value|absent> --confirm-update-field --write
 intent-cli session-layer topology retire-legacy --domain <domain> --team <team> --evidence <named-fleet-migration-evidence> --confirm-retire-legacy --write
 intent-cli session-layer topology validate --domain <domain> --team <team> --live --format json
 intent-cli session-layer topology show --domain <domain> --team <team> --format json
@@ -1810,10 +1818,13 @@ herdr query を行いません。mapping が存在するか herdr-only が必要
 `update-field` は、recorded role が一度も持たなかった field を宣言する場合、または既に記録された値を
 変更する場合のための狭い経路です。role、field 名、stated current value、新しい値、explicit confirmation、
 `--dry-run` または `--write` が必要です。field が実際に absent の場合に限り `--current absent` と指定します。
-古い認識にもとづく指定は両方向で拒否されます。registry が最初に許可するのは `delivery_method` だけなので、
-unknown または dotted name は任意の JSON path を編集できないよう拒否されます。この command が
+古い認識にもとづく指定は両方向で拒否されます。registry が許可するのは `delivery_method` と、external
+role 専用の operator label である `frontend` / `wake_command` です。unknown または dotted name は任意の
+JSON path を編集できないよう拒否されます。`delivery_method` の値はこれまで通り `inline|file-backed` だけです。
+二つの external label は `--new absent` で既存の値を削除でき、herdr resident では拒否されます。この command が
 変更するのはその field だけです。`record` の conflict refusal は緩和されず、異なる shape の re-record は
-引き続き拒否され、force flag もありません。
+引き続き拒否され、force flag もありません。refusal は各 differing field の recorded/requested value を示し、
+label の差には `update-field --field <name>`、residence の差には `update-residence` を示します。
 
 #### Guarded residence transition (G761)
 

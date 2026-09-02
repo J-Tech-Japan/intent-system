@@ -41,7 +41,7 @@ public sealed class GuideDesignThreadG777Tests
 
     // The full b766f2d0 payload, including raw G774, G775, and G776 blocks,
     // stays byte-for-byte stable when the one G777 sibling is excluded.
-    private const string G776BaselinePayloadOracleHash = "6cd7190c6e6ef168d738b00f10f3855357166a111ad42c4bbed2bf3e8a59b206";
+    private const string G776BaselinePayloadOracleHash = "5ebb02d016c9afec671e58184f993705d0c6e597ecf334239b19d704bfaf3294";
 
     [Fact]
     public void RenderedLivenessGuidance_NamesTheSanctionedDryRunBeforeWriteResponse_G777()

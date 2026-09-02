@@ -43,7 +43,7 @@ public sealed class GuideDesignThreadG654Tests
     private const string G774BaselinePayloadOracleHash = "8110a6150605810aaa609fc2c34668341b939e58bc0dc35085c7290e6c72b136";
     // G776 may append exactly one declaration field. The existing G775
     // operating-contract fields remain a raw-value and rendered-order oracle.
-    private const string G775ExternalResidenceContractOracleHash = "192178832e068e7651fc09fa9377059f1b3298cc91da263e428aa31a397bcd03";
+    private const string G775ExternalResidenceContractOracleHash = "1c297f028c3e8ea5e1901b84ff962e542d864aa1139130ea9c1092539789cbe4";
 
     [Theory]
     [InlineData("agmsg", false)]
@@ -234,7 +234,9 @@ public sealed class GuideDesignThreadG654Tests
         Assert.Contains("no transition command is involved", frontendRelabel, StringComparison.Ordinal);
         Assert.Contains("do not use `session-layer topology update-residence`", frontendRelabel, StringComparison.Ordinal);
         Assert.Contains("frontend is an operator label, never a routing input", frontendRelabel, StringComparison.Ordinal);
-        Assert.Contains("re-record at most", frontendRelabel, StringComparison.Ordinal);
+        Assert.DoesNotContain("session-layer topology record", frontendRelabel, StringComparison.Ordinal);
+        Assert.Contains("session-layer topology update-field", frontendRelabel, StringComparison.Ordinal);
+        Assert.Contains("--field frontend", frontendRelabel, StringComparison.Ordinal);
 
         var routingRootMust = contract.GetProperty("routing_root_must").GetString()!;
         Assert.Contains("MUST", routingRootMust, StringComparison.Ordinal);
@@ -256,6 +258,8 @@ public sealed class GuideDesignThreadG654Tests
         Assert.Contains("--wake-command", wakeDeclaration, StringComparison.Ordinal);
         Assert.Contains("{task_id}", wakeDeclaration, StringComparison.Ordinal);
         Assert.Contains("{summary}", wakeDeclaration, StringComparison.Ordinal);
+        Assert.Contains("session-layer topology update-field", wakeDeclaration, StringComparison.Ordinal);
+        Assert.Contains("--field wake_command", wakeDeclaration, StringComparison.Ordinal);
         Assert.Contains("unknown placeholders", wakeDeclaration, StringComparison.Ordinal);
         Assert.Contains("never executes", wakeDeclaration, StringComparison.Ordinal);
 
