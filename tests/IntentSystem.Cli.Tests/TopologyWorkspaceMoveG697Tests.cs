@@ -182,6 +182,146 @@ public sealed class TopologyWorkspaceMoveG697Tests
     }
 
     [Fact]
+    public void Move_SharedPaneRolesTravelTogether_G735()
+    {
+        var context = CreateFixture();
+        SetHerdrOnly(context);
+        RecordHerdr(context, "orchestrator", "wAA:p1", "/orchestration", "codex", "inline");
+        RecordHerdr(context, "orchestration", "wAA:p1", "/orchestration", "codex", "inline");
+        RecordHerdr(context, "implementation", "wAA:p2", "/implementation", "claude", "file-backed");
+        var topologyPath = NotifyRoleTopologyStore.ResolvePath(context.RepoRoot, Domain, Team);
+        var beforeBytes = File.ReadAllBytes(topologyPath);
+
+        var preview = Run(context, [
+            "session-layer", "topology", "move", "--domain", Domain, "--team", Team,
+            "--workspace-id", "w44",
+            "--pane-map", "wAA:p1=w44:p1", "--pane-map", "wAA:p2=w44:p2",
+            "--dry-run", "--format", "json",
+        ]);
+        Assert.Equal("dry-run", preview.GetProperty("mode").GetString());
+        Assert.False(preview.GetProperty("conflict").GetBoolean());
+        Assert.True(preview.GetProperty("changed").GetBoolean());
+        Assert.Equal(beforeBytes, File.ReadAllBytes(topologyPath));
+
+        var write = Run(context, [
+            "session-layer", "topology", "move", "--domain", Domain, "--team", Team,
+            "--workspace-id", "w44",
+            "--pane-map", "wAA:p1=w44:p1", "--pane-map", "wAA:p2=w44:p2",
+            "--write", "--format", "json",
+        ]);
+        Assert.Equal("write", write.GetProperty("mode").GetString());
+        Assert.True(write.GetProperty("applied").GetBoolean());
+        Assert.False(write.GetProperty("conflict").GetBoolean());
+
+        var moved = JsonNode.Parse(File.ReadAllText(topologyPath))!.AsObject();
+        Assert.Equal("w44", moved["workspace_id"]!.GetValue<string>());
+        var movedRoles = moved["roles"]!.AsObject();
+        Assert.Equal("w44:p1", movedRoles["orchestrator"]!["pane_id"]!.GetValue<string>());
+        Assert.Equal("w44", movedRoles["orchestrator"]!["workspace_id"]!.GetValue<string>());
+        Assert.Equal("w44:p1", movedRoles["orchestration"]!["pane_id"]!.GetValue<string>());
+        Assert.Equal("w44", movedRoles["orchestration"]!["workspace_id"]!.GetValue<string>());
+        Assert.Equal("w44:p2", movedRoles["implementation"]!["pane_id"]!.GetValue<string>());
+
+        var validation = Run(context, [
+            "session-layer", "topology", "validate", "--domain", Domain, "--team", Team, "--format", "json",
+        ]);
+        Assert.True(validation.GetProperty("valid").GetBoolean());
+    }
+
+    [Fact]
+    public void Move_ConflictingMapForSharedOldPaneIsRefused_G735()
+    {
+        var context = CreateFixture();
+        SetHerdrOnly(context);
+        RecordHerdr(context, "orchestrator", "wAA:p1", "/orchestration", "codex", "inline");
+        RecordHerdr(context, "orchestration", "wAA:p1", "/orchestration", "codex", "inline");
+        var topologyPath = NotifyRoleTopologyStore.ResolvePath(context.RepoRoot, Domain, Team);
+        var before = File.ReadAllText(topologyPath);
+
+        var (exitCode, refused) = RunWithRawOutput(context, [
+            "session-layer", "topology", "move", "--domain", Domain, "--team", Team,
+            "--workspace-id", "w44",
+            "--pane-map", "wAA:p1=w44:p1", "--pane-map", "wAA:p1=w44:p2",
+            "--dry-run", "--format", "json",
+        ]);
+        Assert.Equal(1, exitCode);
+        Assert.Contains("more than once", refused, StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllText(topologyPath));
+    }
+
+    [Fact]
+    public void Move_TwoDifferentOldPanesConvergingOnOneNewPaneIsStillRefused_G735()
+    {
+        var context = CreateFixture();
+        SetHerdrOnly(context);
+        RecordHerdr(context, "orchestration", "wAA:p1", "/orchestration", "codex", "inline");
+        RecordHerdr(context, "implementation", "wAA:p2", "/implementation", "claude", "file-backed");
+        var topologyPath = NotifyRoleTopologyStore.ResolvePath(context.RepoRoot, Domain, Team);
+        var before = File.ReadAllText(topologyPath);
+
+        var refused = Run(context, [
+            "session-layer", "topology", "move", "--domain", Domain, "--team", Team,
+            "--workspace-id", "w44",
+            "--pane-map", "wAA:p1=w44:p1", "--pane-map", "wAA:p2=w44:p1",
+            "--dry-run", "--format", "json",
+        ], expectedExitCode: 1);
+        Assert.True(refused.GetProperty("conflict").GetBoolean());
+        Assert.Contains("different old panes", refused.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("ambiguous", refused.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllText(topologyPath));
+    }
+
+    [Fact]
+    public void Record_WorkspaceMismatchGuidanceLeadsToAMoveThatSucceeds_G735()
+    {
+        var context = CreateFixture();
+        SetHerdrOnly(context);
+        RecordHerdr(context, "orchestration", "wAA:p1", "/orchestration", "codex", "inline");
+        RecordHerdr(context, "orchestration", "wAA:p1", "/orchestration", "codex", "inline");
+        RecordHerdr(context, "implementation", "wAA:p2", "/implementation", "claude", "file-backed");
+        var topologyPath = NotifyRoleTopologyStore.ResolvePath(context.RepoRoot, Domain, Team);
+        var beforeBytes = File.ReadAllBytes(topologyPath);
+
+        var mismatch = RecordHerdrResult(context, "review", "w44:p1", "/review", "claude", "inline");
+        Assert.Equal(1, mismatch.ExitCode);
+        var summary = mismatch.Result.GetProperty("summary").GetString()!;
+        Assert.Contains("already records workspace_id", summary, StringComparison.Ordinal);
+        Assert.Contains("topology move", summary, StringComparison.Ordinal);
+        Assert.Contains("share one recorded old pane", summary, StringComparison.Ordinal);
+
+        using var guidanceWriter = new StringWriter();
+        Assert.Equal(0, GuideTopologyWorkspaceMoveCommand.Execute(
+            context,
+            ["--domain", Domain, "--team", Team, "--format", "markdown"],
+            guidanceWriter));
+        Assert.Contains("share one recorded old pane", guidanceWriter.ToString(), StringComparison.Ordinal);
+
+        // Following the record-side guidance verbatim must reach a command that
+        // works — the old deadlock refused the shared-pane map it pointed at.
+        var preview = Run(context, [
+            "session-layer", "topology", "move", "--domain", Domain, "--team", Team,
+            "--workspace-id", "w44",
+            "--pane-map", "wAA:p1=w44:p1", "--pane-map", "wAA:p2=w44:p2",
+            "--dry-run", "--format", "json",
+        ]);
+        Assert.False(preview.GetProperty("conflict").GetBoolean());
+        Assert.Equal(beforeBytes, File.ReadAllBytes(topologyPath));
+
+        var write = Run(context, [
+            "session-layer", "topology", "move", "--domain", Domain, "--team", Team,
+            "--workspace-id", "w44",
+            "--pane-map", "wAA:p1=w44:p1", "--pane-map", "wAA:p2=w44:p2",
+            "--write", "--format", "json",
+        ]);
+        Assert.True(write.GetProperty("applied").GetBoolean());
+
+        var validation = Run(context, [
+            "session-layer", "topology", "validate", "--domain", Domain, "--team", Team, "--format", "json",
+        ]);
+        Assert.True(validation.GetProperty("valid").GetBoolean());
+    }
+
+    [Fact]
     public void InstalledRecipe_IsReachableFromDirectAndRoleFacingGuides_G697()
     {
         var context = CreateFixture();
@@ -368,6 +508,15 @@ public sealed class TopologyWorkspaceMoveG697Tests
         var result = RunWithResult(context, args);
         Assert.Equal(expectedExitCode, result.ExitCode);
         return result.Result;
+    }
+
+    private static (int ExitCode, string Output) RunWithRawOutput(
+        CliContext context,
+        IReadOnlyList<string> args)
+    {
+        using var writer = new StringWriter();
+        var exitCode = CommandRouter.Execute(args.ToArray(), context, writer);
+        return (exitCode, writer.ToString());
     }
 
     private static (int ExitCode, JsonElement Result) RunWithResult(

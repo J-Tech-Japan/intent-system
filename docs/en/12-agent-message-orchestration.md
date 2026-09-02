@@ -1599,9 +1599,15 @@ complete inspect → dry-run preview → explicit write → validate → notify
 preflight sequence. The move requires a complete operator-supplied old-pane to
 new-pane map for herdr roles, holds a CAS lock, compares the topology digest,
 and atomically updates the team and role workspace/pane ids while preserving
-all other role fields. It never queries herdr, creates panes, changes
-membership, or repairs a per-role conflict; that refusal names this move
-command as its sanctioned whole-team transition.
+all other role fields. Ambiguity is keyed on the old pane (G735): several roles
+that share one recorded old pane travel together under that single mapping, so
+a team whose roles share one pane is moved by this canonical command. Two
+different old panes mapping to one new pane remain refused, as does one old
+pane mapped to two different new panes. It never queries herdr, creates panes,
+changes membership, or repairs a per-role conflict; that refusal names this
+move command as its sanctioned whole-team transition and states the shared-pane
+mapping rule, so a reader directed here always reaches a command that accepts
+the layout being rebuilt.
 
 Agent kind is whatever herdr can start: Claude, Codex, Copilot, Cursor, OpenCode,
 and others are examples, not a supported-set restriction. Logical role defaults

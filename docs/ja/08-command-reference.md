@@ -84,10 +84,13 @@ intent-cli notify delegate --domain <domain> --team <team> --from <sender-role> 
 
 move は、記録済み herdr role ごとに完全な old-to-new pane map を明示的に必要とし、team と role の
 workspace/pane id を一つの atomic operation で更新します。role membership、cwd、kind、delivery method、
-reader、profile、その他すべての field は維持します。herdr query、workspace の discover、pane の作成、
+reader、profile、その他すべての field は維持します。ambiguity の判定は old pane を基準とします
+（G735）: 同じ recorded old pane を共有する role はその 1 件の mapping で一緒に移動し、異なる 2 つの
+old pane が 1 つの new pane に収束する場合は引き続き拒否されます。herdr query、workspace の discover、pane の作成、
 per-role refusal の repair は行いません。writer は CAS lock を保持し、置換前に topology digest を比較します。
 stale な `--current-digest` は拒否されます。既存の per-role mismatch message は sanctioned な whole-team
-transition としてこの command を示します。
+transition としてこの command を示し、shared-pane の mapping 規則も併記するため、2 つの surface が互いに
+案内し合うだけで実行できない状態は解消されます。
 
 ---
 

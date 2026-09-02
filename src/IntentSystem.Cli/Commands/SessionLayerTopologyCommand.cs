@@ -1184,7 +1184,10 @@ internal static class SessionLayerTopologyWriter
                     + $"'{request.Role}' requested '{request.WorkspaceId}'. Refusing to repair the conflict. "
                     + "For an operator-approved whole-team rebuild, use `intent-cli session-layer topology move "
                     + "--domain <domain> --team <team> --workspace-id <new-workspace-id> --pane-map "
-                    + "<old-pane>=<new-pane> --write`.");
+                    + "<old-pane>=<new-pane> --write`. Map each recorded old pane to one new pane; roles that "
+                    + "share one recorded old pane travel together under that single mapping, while two "
+                    + "different old panes may not map to the same new pane. `intent-cli guide "
+                    + "topology-workspace-move` renders the full sequence.");
             }
 
             if (string.IsNullOrWhiteSpace(recordedWorkspace))
@@ -1339,7 +1342,7 @@ internal static class SessionLayerTopologyWriter
             }
 
             var recordedPanes = new HashSet<string>(StringComparer.Ordinal);
-            var mappedPanes = new HashSet<string>(StringComparer.Ordinal);
+            var paneTargets = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var (roleName, roleNode) in roles!.OrderBy(entry => entry.Key, StringComparer.Ordinal))
             {
                 if (roleNode is not JsonObject role)
@@ -1377,15 +1380,25 @@ internal static class SessionLayerTopologyWriter
                         + "refusing a partial workspace move.");
                 }
 
-                if (!mappedPanes.Add(newPane))
+                var conflictingOldPane = paneTargets.FirstOrDefault(
+                    entry => !string.Equals(entry.Key, oldPane, StringComparison.Ordinal)
+                    && string.Equals(entry.Value, newPane, StringComparison.Ordinal)).Key;
+                if (conflictingOldPane is not null)
                 {
                     return MoveConflict(
                         request,
                         path,
                         currentDigest,
-                        $"--pane-map maps more than one recorded role to new pane '{newPane}'; refusing an "
-                        + "ambiguous workspace move.");
+                        $"--pane-map maps different old panes '{conflictingOldPane}' and '{oldPane}' to the same "
+                        + $"new pane '{newPane}'; refusing an ambiguous workspace move. Roles that share one old "
+                        + "pane may map together, but roles from different old panes may not converge on one pane.");
                 }
+
+                // G735: ambiguity is keyed on old-pane identity, not on new-pane
+                // repetition. Several roles sharing one old pane travel with that
+                // pane and are unambiguous; two different old panes converging on
+                // one new pane is. The rewrite below still runs for every role.
+                paneTargets[oldPane] = newPane;
 
                 var paneWorkspace = WorkspaceFromPane(newPane);
                 if (paneWorkspace is not null

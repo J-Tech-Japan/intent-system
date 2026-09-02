@@ -90,11 +90,15 @@ intent-cli notify delegate --domain <domain> --team <team> --from <sender-role> 
 The move requires a complete explicit old-to-new pane map for recorded herdr
 roles, updates the team and role workspace/pane ids in one atomic operation,
 and preserves role membership, cwd, kind, delivery method, readers, profiles,
-and all other fields. It never queries herdr, discovers a workspace, creates
-panes, or repairs a per-role refusal. The writer holds a CAS lock and compares
+and all other fields. Ambiguity is keyed on the old pane (G735): roles that
+share one recorded old pane travel together under that single mapping, while
+two different old panes converging on one new pane remain refused. It never
+queries herdr, discovers a workspace, creates panes, or repairs a per-role
+refusal. The writer holds a CAS lock and compares
 the topology digest before replacement; a stale `--current-digest` is refused.
 The existing per-role mismatch message points to this command as the
-sanctioned whole-team transition.
+sanctioned whole-team transition and states the shared-pane mapping rule, so
+the two surfaces no longer redirect past each other.
 
 ---
 
