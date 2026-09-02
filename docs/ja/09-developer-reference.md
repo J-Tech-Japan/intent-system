@@ -187,11 +187,11 @@ metadata_write_branch  = "main-metadata"   # host loop がメタデータを WRI
 配下にあること、`metadata_source_branch` / `metadata_write_branch` の綴りが正確であることを
 確認してください。
 
-これらの metadata-branch key は claim transaction の書き込み先を変更しません。canonical
-claims tree が空のときメタデータ用ブランチは adoption evidence として読まれる場合がありますが、
-ownership は canonical のままであり、claim writer は引き続き remote の default branch を対象に
-します。target ref と rejected-push 契約は
-[remote の default branch を対象にする場合 (G747)](#remote-の-default-branch-を対象にする場合-g747)
+claim の target は、topology が明示的に宣言された場合にだけこれらの key を使います。
+`same_repo_topology = true` かつ空でない `metadata_write_branch` がある場合、claim writer と
+すべての claim reader は `metadata_write_branch` を使います。どちらかの条件が無ければ、G747 の
+remote default branch 挙動は変わりません。target ref、fail-closed、stranded migration の契約は
+[claim target topology (G747, G780)](#claim-target-topology-g747-g780)
 を参照してください。
 
 host と child の bootstrap（G514）: host 側 automation コマンド（`automation summary`、
@@ -2776,30 +2776,49 @@ warning: claim transaction committed successfully, but best-effort cleanup could
 これにより、commit 済み claim は operator と downstream の claim-gated flow から見え続け、
 claim の background 実行や packet の手書きは不要です。
 
-### remote の default branch を対象にする場合 (G747)
+### claim target topology (G747, G780)
 
-すべての claim transaction は `git ls-remote --symref origin HEAD` から remote の
-`default branch` を解決します。transaction clone はその branch から始め、transaction
-commit を `refs/heads/<resolved-default-branch>` へ明示的に push します。呼び出し元
-checkout の current branch は claim の target にせず、refresh でも進めません。symref が
-無い、曖昧、安全に扱えない、または query できない場合は fail closed とし、current branch
-へは fallback しません。成功した transaction result には解決した `target_ref` が含まれます。
+一つの shared resolver が、claim acquire、release、takeover、verify、worker store probe、
+stranded scan/migration の canonical remote branch を選びます。最初に
+`git ls-remote --symref origin HEAD` から remote default branch を解決しますが、呼び出し元
+checkout の current branch を claim target や fallback に使うことはありません。
 
-### default branch への push 拒否 (G779)
+- **default topology (G747)。** `.intent-cli/config.toml` が
+  `same_repo_topology = true` と空でない `metadata_write_branch` の**両方**を宣言しない場合、
+  remote default branch が canonical です。transaction clone はその branch から始め、
+  `refs/heads/<resolved-default-branch>` へ明示的に push します。
+- **declared same-repo topology (G780)。** 呼び出し元 checkout の `[project]` config に両方が
+  ある場合、設定された `metadata_write_branch` が canonical です。writer と reader はすべて
+  `refs/heads/<metadata_write_branch>` を使い、product/default branch を claim operation で
+  進めません。
+
+resolver はどちらの topology でも fail closed です。origin HEAD が無い、曖昧、安全でない、
+または query できない場合は拒否します。declared same-repo topology では unsafe または origin に
+存在しない `metadata_write_branch` も拒否し、remote default/current branch へ fallback しません。
+成功した transaction result には解決済みの `target_ref` が含まれます。
+
+`claim stranded` は default-topology host では G763 の元の方向を保ちます。configured legacy
+メタデータ用ブランチが source、remote default が canonical です。declared same-repo host では方向が
+逆になり、remote default 上の record が source、`metadata_write_branch` が canonical です。
+report を確認して `claim stranded migrate --dry-run` を実行し、その後 confirmed な `--write`
+migration を使います。これは transaction-backed copy で source branch を変更しません。すべての
+source record に canonical counterpart があれば、次の report は `clean` です。
+
+### claim target への push 拒否 (G779)
 
 claim push が nonzero を返しても、それだけで race とはみなしません。拒否後に command はまず
 origin が transaction commit または scope record をすでに持つかを確認し、それらは従来どおり
-committed / held outcome です。どちらもなく、post-rejection の `origin/<default>` head が
+committed / held outcome です。どちらもなく、post-rejection の canonical target head が
 transaction の `base_commit` と同じなら、exit code 1 の `push-rejected` を返します。この
 result には `target_ref`、`base_commit`、`remote_advanced: false`、および Git の trim 済み
 stderr である `git_push_error` が含まれ、2 個目の transaction workspace を作らず retry もしません。
 
-remote default ref が移動していた場合は、既存の fresh-base による bounded reapply を維持します。
+canonical target ref が移動していた場合は、既存の fresh-base による bounded reapply を維持します。
 最後の `retry-exhausted` result には `target_ref`、`base_commit`、最後の `remote_head`、
 `remote_advanced: true`、最後の `git_push_error` が入り、detail で unrelated remote advance
-と呼ぶのはこの場合だけです。実務上、protected default branch は server message を伴う
-`push-rejected` として表面化します。claim writer には解決済み remote default branch への
-通常の plain-push 権限が必要です。
+と呼ぶのはこの場合だけです。実務上、protected target branch は server message を伴う
+`push-rejected` として表面化します。claim writer には解決済み canonical target への通常の
+plain-push 権限が必要です。
 
 active record の actor と team が同じ acquire は意図した no-op です。result は scope が
 すでに保持され、claim commit は不要 (`nothing to commit`) であることを示します。teardown
