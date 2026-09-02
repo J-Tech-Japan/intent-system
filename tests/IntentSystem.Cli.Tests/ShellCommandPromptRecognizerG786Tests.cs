@@ -9,13 +9,14 @@ public sealed class ShellCommandPromptRecognizerG786Tests
     private const string CycleId = "g786-current-cycle";
 
     [Fact]
-    public void MeasuredDialog_ExtractsOnlyTheCommandAndTreatsChoicesAsChrome()
+    public void VerbatimFiftyColumnDialog_ExtractsTheSpaceJoinedCommandAndTreatsChoicesAsChrome()
     {
         var observed = MeasuredDialog();
 
         Assert.True(ShellCommandPromptRecognizer.TryExtract(observed, out var payload));
         Assert.NotNull(payload);
         Assert.Equal($"rm -rf {FirstScratchPath} {SecondScratchPath}", payload!.Command);
+        Assert.Equal(PromptDialogCas.HashText(observed), payload.DialogHash);
         Assert.DoesNotContain("Environment:", payload.Command, StringComparison.Ordinal);
         Assert.DoesNotContain("don't ask again", payload.Command, StringComparison.Ordinal);
         Assert.DoesNotContain("Press enter", payload.Command, StringComparison.Ordinal);
@@ -38,7 +39,7 @@ public sealed class ShellCommandPromptRecognizerG786Tests
     }
 
     [Fact]
-    public void EnvironmentAndBareContinuation_AreNotChoicesOrPayloadChrome()
+    public void PreChoiceWrappedContinuation_JoinsWithExactlyOneSpace()
     {
         var observed = Header + "\nEnvironment: local\n"
             + "$ rm -rf " + FirstScratchPath + "\n"
@@ -47,7 +48,7 @@ public sealed class ShellCommandPromptRecognizerG786Tests
             + "Press enter to confirm or esc to cancel";
 
         Assert.True(ShellCommandPromptRecognizer.TryExtract(observed, out var payload));
-        Assert.Equal($"rm -rf {FirstScratchPath}\n{SecondScratchPath}", payload!.Command);
+        Assert.Equal($"rm -rf {FirstScratchPath} {SecondScratchPath}", payload!.Command);
     }
 
     [Theory]
@@ -76,7 +77,7 @@ public sealed class ShellCommandPromptRecognizerG786Tests
     }
 
     [Fact]
-    public void MeasuredDialog_UsesBothOwnedScratchLedgerPathsForBoundedAuthorization()
+    public void VerbatimFiftyColumnDialog_UsesBothOwnedScratchLedgerPathsForBoundedAuthorization()
     {
         Assert.True(ShellCommandPromptRecognizer.TryExtract(MeasuredDialog(), out var payload));
         var covered = ShellCommandPolicyRegistry.Evaluate(
@@ -102,7 +103,15 @@ public sealed class ShellCommandPromptRecognizerG786Tests
 
     private const string Header = "Would you like to run the following command?";
 
-    private static string MeasuredDialog() => Dialog($"rm -rf {FirstScratchPath} {SecondScratchPath}");
+    private static string MeasuredDialog() => Header + "\n"
+        + "Environment: local\n"
+        + "$ rm -rf " + FirstScratchPath + "\n"
+        + SecondScratchPath + "\n"
+        + "› 1. Yes, proceed (y)\n"
+        + "  2. Yes, and don't ask again for commands that\n"
+        + "     start with `rm -rf …`\n"
+        + "  3. No, and tell Codex what to do differently\n"
+        + "Press enter to confirm or esc to cancel";
 
     private static string Dialog(string command) => Header + "\n"
         + "Environment: local\n"

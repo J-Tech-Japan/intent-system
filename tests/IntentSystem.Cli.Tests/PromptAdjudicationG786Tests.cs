@@ -44,7 +44,7 @@ public sealed class PromptAdjudicationG786Tests : IDisposable
     public void Dispose() => NotifyCommand.ProcessRunnerFactory = null;
 
     [Fact]
-    public void DryRun_AnswersMeasuredDialogWithTheOwnedScratchScopeAndYesKey()
+    public void DryRun_AnswersVerbatimFiftyColumnDialogWithTheOwnedScratchScopeAndYesKey()
     {
         Prepare([FirstScratchPath, SecondScratchPath]);
         var runner = new FixtureRunner(ObservedDialog());
@@ -69,7 +69,7 @@ public sealed class PromptAdjudicationG786Tests : IDisposable
     }
 
     [Fact]
-    public void DryRun_EscalatesAndNamesTheUncoveredScratchPath()
+    public void DryRun_VerbatimFiftyColumnDialogEscalatesAndNamesTheUncoveredScratchPath()
     {
         Prepare([FirstScratchPath]);
         var runner = new FixtureRunner(ObservedDialog());
@@ -154,7 +154,8 @@ public sealed class PromptAdjudicationG786Tests : IDisposable
 
     private static string ObservedDialog() => "Would you like to run the following command?\n"
         + "Environment: local\n"
-        + "$ rm -rf " + FirstScratchPath + " " + SecondScratchPath + "\n"
+        + "$ rm -rf " + FirstScratchPath + "\n"
+        + SecondScratchPath + "\n"
         + "› 1. Yes, proceed (y)\n"
         + "  2. Yes, and don't ask again for commands that\n"
         + "     start with `rm -rf …`\n"

@@ -104,7 +104,10 @@ internal static class ShellCommandPromptRecognizer
             }
         }
 
-        var command = string.Join('\n', commandLines).Trim();
+        // Dialog wrapping is visual chrome. Every fragment collected here is
+        // before the first numbered choice, so join wrapped command text as a
+        // single shell command rather than turning it into a new segment.
+        var command = string.Join(' ', commandLines).Trim();
         if (command.Length == 0)
         {
             return false;
