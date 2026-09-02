@@ -3051,7 +3051,43 @@ result は literal bytes の削減、追加した reference bytes、record の n
 `shrink-audit.jsonl` に明記します。`.intent-cli/runs/*.provider.jsonl` は別の provider-run state なので
 scope 外です。`--dry-run` なら manifest、JSONL、audit を書き込まずに測定済み plan だけを確認できます。
 
-### 次リリース準備(v0.29.1)
+### 次リリース準備(v0.30.1)
+
+**RELEASE PREPARED / NOT PUBLISHED。**
+
+G787 は exact named product base
+`d9dc053dd81f53c3a8be420ee7c6798b808f4521` から v0.30.0 preparation を測定しました。
+rolled policy で normal clean Release build は `intent-cli 0.30.1-d9dc053-G772` を返し、
+これは新しい `nextVersion` placeholder identity であって v0.30.0 ではありません。同じ base を
+explicit `-p:Version=0.30.0` で build すると `intent-cli 0.30.0-d9dc053-G772` を返します。
+published v0.30.0 は `release.yml` の release tag `RAW` から `VERSION` を導出し、
+`eng/version.json` は local builds と dry runs だけを管理します。
+
+prepared files は `release-notes-v0.30.0.md` と
+`release-notes-v0.30.1.md` の DRAFT stub です。current policy は次のとおりです:
+
+```json
+{
+  "stableVersion": "0.30.0",
+  "nextVersion": "0.30.1"
+}
+```
+
+`0.30.1` は replaceable development placeholder であり、次の real release number
+ではありません。tag、GitHub Release、package publish、workflow change、product source
+change はこの prepare-only slice に含みません。
+
+active package-policy evidence は `stableVersion 0.30.0`、`nextVersion 0.30.1`、local
+candidate `JTechJapan.IntentSystem.Cli.0.30.1.nupkg` です。host-only release-prep claim boundary は
+`release-prep:<owner/repo>:0.30.1` で、この child release-prep は提供済みの権限を使い、
+host state を inspect/mutate しません。eight-unit inventory は G779–G786
+で、EN/JA tuple と consumer-follow-up parity、measured identity、truthfulness、placeholder
+check は `ReleaseNotesV0300DocsTests` が guard します。
+G780 は declared same-repository host の canonical claim location を
+`metadata_write_branch` に変更します。この arc の `--verify`、`--accept-evidence-gap`、
+`--shell-policy` は option-level surface であり、extra command route ではありません。
+
+### previous v0.29.0 release-prep evidence (history のみ)
 
 **RELEASE PREPARED / NOT PUBLISHED。**
 

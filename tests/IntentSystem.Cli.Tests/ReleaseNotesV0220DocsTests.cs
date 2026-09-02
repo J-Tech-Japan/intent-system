@@ -287,8 +287,10 @@ public sealed class ReleaseNotesV0220DocsTests
         Assert.Contains($"release-notes-v{policy.NextVersion}.md", section, StringComparison.Ordinal);
         Assert.Contains("RELEASE PREPARED / NOT PUBLISHED", section, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("placeholder", compact, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("repair-unreadable", section, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("--wake-command", section, StringComparison.Ordinal);
+        Assert.Contains("metadata_write_branch", section, StringComparison.Ordinal);
+        Assert.Contains("--verify", section, StringComparison.Ordinal);
+        Assert.Contains("--accept-evidence-gap", section, StringComparison.Ordinal);
+        Assert.Contains("--shell-policy", section, StringComparison.Ordinal);
         Assert.Contains("option-level", section, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("GitHub Release", section, StringComparison.Ordinal);
 
