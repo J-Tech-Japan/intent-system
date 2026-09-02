@@ -2879,7 +2879,7 @@ internal static class GuideOrchestratorThreadCommand
                     $"pane status debounce: `--debounce-consecutive-observations <count>` (alias `--status-debounce-consecutive`); default: {NotifySupervisionEmissionPolicy.DefaultDebounceConsecutiveObservations} consecutive observations",
                     "write mode records the resolved values at `.intent-cli/supervision/<domain>/<team>/emission-policy.json` and repeats them on every cycle",
                     "G704 bound rule: `--bound` must be >= `--interval`; otherwise `bound-below-interval` names the structural `supervisor-not-running` consequence while the runtime warning remains",
-                    $"G704 startup proof: `--startup-bound <seconds>` (default {NotifySuperviseInstallCommand.DefaultStartupBoundSeconds}s) must observe a writer-bearing first cycle before a write reports success",
+                    $"G781 startup proof: `--startup-bound <seconds>` defaults to {NotifySuperviseInstallCommand.DefaultStartupBoundSeconds}s, reads at most once per second, and must observe a writer-bearing first cycle before a write reports success",
                     "G704 macOS artifact: WorkingDirectory is the routing root; StandardOutPath and StandardErrorPath are under `.intent-cli/supervision/<domain>/<team>/runtime/`; installed writer identity is recorded beside bound/emission state",
                 },
                 OperatingSemantics = new[]
@@ -2891,7 +2891,7 @@ internal static class GuideOrchestratorThreadCommand
                     "a pane status flap below the recorded consecutive threshold is not classified; the threshold-consecutive settled state is classified once with the existing observation-only boundary",
                     "detection predicates and G695 continuation-chain recording remain unchanged; parking suppresses duplicate findings only and never performs a lifecycle transition",
                     "G704 duplicate-supervisor compares G676 writer identities with the installed record and routes the same key through G699 backoff/park",
-                    "first-cycle proof failure is named `first-cycle-proof-failed` and names both log paths; a post-install cycle with writer identity is the only success evidence",
+                    "G781 first-cycle proof failure is named `first-cycle-proof-failed`: `no-post-install-process` names registration without a missing log path, while `post-install-process-wrote-no-cycle` names only existing logs; `install --verify` proves a late start",
                 },
                 NegativeChecks = new[]
                 {

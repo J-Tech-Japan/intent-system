@@ -564,6 +564,15 @@ session action, and `notify supervise reconcile --write` / `uninstall --write`
 reports before/after state and removes only managed drift. The route is
 read-only and does not execute any of those lifecycle commands.
 
+G781 sets the install startup-proof default to 120 seconds. After the explicit
+registration command, the guide renders `install --verify` to re-prove the
+existing artifact without rewriting it. Its timeout contract distinguishes
+`no-post-install-process` from `post-install-process-wrote-no-cycle`: the
+former names the registration action without inventing a nonexistent log path,
+while the latter names only runtime logs that exist. The third timeout,
+`post-install-process-missing-writer`, records a post-install cycle that lacks
+writer identity. The guide does not load or query a scheduler job.
+
 ## Recovery
 
 ```bash

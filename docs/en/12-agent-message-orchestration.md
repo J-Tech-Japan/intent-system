@@ -997,7 +997,7 @@ background shell:
 intent-cli notify supervise install --domain <domain> --team <team> \
   --repo <owner/repo> --owner-role <logical-role> --bound <seconds> \
   --interval <seconds> [--startup-bound <seconds>] [--platform macos|windows|linux] \
-  [--output <path>] [--routing-root <host-root>] --write --format json
+  [--output <path>] [--routing-root <host-root>] [--verify|--dry-run|--write] --format json
 ```
 
 Without `--platform`, the command emits the current platform's scheduler
@@ -1055,13 +1055,38 @@ correction of the invalid configuration.
 On macOS the generated launchd plist sets `WorkingDirectory` to the routing
 root and routes `StandardOutPath` and `StandardErrorPath` below
 `.intent-cli/supervision/<domain>/<team>/runtime/`. The install result names the
-runtime directory and both log paths. A write reports success only after the
-managed process appends a writer-bearing first cycle within the declared
-`--startup-bound` (default 30 seconds). Otherwise it fails as
-`first-cycle-proof-failed` and names both log paths. The artifact remains for
-operator inspection. Install does not execute registration; the explicit
-`notify supervise reconcile --write` or `uninstall --write` command is the
-operator-approved unload/removal path.
+runtime directory and both log paths. G781 raises the default
+`--startup-bound` to 120 seconds, reads the store at most once per second, and
+reports `first_cycle_attempts`.
+
+A timeout remains `first-cycle-proof-failed`, but now carries
+`first_cycle_failure_kind`. `no-post-install-process` means neither runtime log
+appeared or grew after the artifact's recorded written-at: it says that no
+supervisor process started under that artifact, states that intent-cli does not
+load scheduler jobs, names the exact platform registration command, and does
+not invent a missing log path. `post-install-process-wrote-no-cycle` means a
+runtime log did grow after the artifact was written: it says that a process ran
+and wrote no cycle, and names only log files that actually exist. A third
+timeout, `post-install-process-missing-writer`, records a post-install cycle
+without the required writer identity. An unreadable store remains a separately
+named `first-cycle-state-unreadable` proof failure.
+
+After the operator runs the printed registration command, a late start can be
+proved without rewriting the artifact:
+
+```bash
+intent-cli notify supervise install --domain <domain> --team <team> \
+  --repo <owner/repo> --owner-role <logical-role> --bound <seconds> \
+  --interval <seconds> [--startup-bound <seconds>] --verify --format json
+```
+
+`--verify` is exclusive with `--write` and `--dry-run`. It requires the
+existing artifact, accepts a writer-bearing cycle completed after that
+artifact's recorded written-at, and writes
+`installed-supervisor.json` exactly as a successful `--write` proof does.
+Install and verify do not execute registration; the explicit `notify supervise
+reconcile --write` or `uninstall --write` command is the operator-approved
+unload/removal path.
 
 The first-cycle writer is recorded in
 `.intent-cli/supervision/<domain>/<team>/installed-supervisor.json`. A later
