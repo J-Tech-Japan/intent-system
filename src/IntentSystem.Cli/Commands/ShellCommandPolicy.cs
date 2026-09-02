@@ -428,11 +428,17 @@ internal static class ShellCommandPolicyRegistry
                 .ToArray();
             if (candidates.Length == 0)
             {
+                var uncoveredTarget = FindUncoveredOwnedScratchTarget(
+                    segment,
+                    validPolicies,
+                    cwd,
+                    currentCycleId);
                 return Refused(
                     Rule(rulePrefix, matches.Select(policy => policy.Scope)),
                     payload,
                     "shell-segment-out-of-scope",
-                    "Every shell AST segment must be covered by a matching scoped policy; an unknown command, substitution, redirect, or out-of-scope path remains escalate-only.",
+                    "Every shell AST segment must be covered by a matching scoped policy; an unknown command, substitution, redirect, or out-of-scope path remains escalate-only."
+                    + (uncoveredTarget is null ? string.Empty : $" Uncovered path: {uncoveredTarget}."),
                     matches.Select(policy => policy.Scope).Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToArray());
             }
 
@@ -534,6 +540,35 @@ internal static class ShellCommandPolicyRegistry
     private static bool IsOwnedScratchSegment(ShellCommandSegment segment) =>
         segment.Argv.Count > 0
         && string.Equals(segment.Argv[0], "rm", StringComparison.Ordinal);
+
+    private static string? FindUncoveredOwnedScratchTarget(
+        ShellCommandSegment segment,
+        IReadOnlyList<NotifyScopedPromptPolicy> policies,
+        string? cwd,
+        string? currentCycleId)
+    {
+        if (!IsOwnedScratchSegment(segment) || cwd is null)
+        {
+            return null;
+        }
+
+        var eligiblePolicies = policies
+            .Where(policy => string.Equals(policy.Scope, OwnedScratchDeleteScope, StringComparison.Ordinal))
+            .Where(policy => string.Equals(policy.ScratchLedgerCycleId, currentCycleId, StringComparison.Ordinal))
+            .Where(policy => HasTokenPrefix(segment.Argv, policy.ArgvTokenPrefix))
+            .ToArray();
+        if (eligiblePolicies.Length == 0)
+        {
+            return null;
+        }
+
+        return segment.Argv
+            .Skip(1)
+            .Where(token => !token.StartsWith("-", StringComparison.Ordinal))
+            .FirstOrDefault(target => !eligiblePolicies.Any(policy =>
+                policy.ScratchLedgerPaths.Any(path => SamePathFrom(path, target, cwd))
+                && policy.PathConstraints.Any(path => SamePathFrom(path, target, cwd))));
+    }
 
     private static ShellCommandPolicyAuthorization Authorization(
         NotifyScopedPromptPolicy policy,

@@ -23,7 +23,9 @@ internal static class NotifySuperviseInstallCommand
         + "--owner-role <role> --bound <seconds> --interval <seconds> "
         + "[--startup-bound <seconds>; default 120 for --write, 1 for --verify] "
         + "[--persistence persistent] "
-        + "[--event-mode] [--platform macos|windows|linux] [--output <path>] [--routing-root <host-root>] "
+        + "[--event-mode] [--pre-approve <agent-kind>:<prompt-class>]... "
+        + "[--pre-escalate <agent-kind>:<prompt-class>]... [--shell-policy <json>]... "
+        + "[--platform macos|windows|linux] [--output <path>] [--routing-root <host-root>] "
         + "[--verify|--dry-run|--write] [--format markdown|json]";
 
     private const string FormatJson = "json";
@@ -549,6 +551,11 @@ internal static class NotifySuperviseInstallCommand
         {
             arguments.Add("--event-mode");
         }
+        foreach (var policyArgument in options.PolicyArguments)
+        {
+            arguments.Add(policyArgument.Option);
+            arguments.Add(policyArgument.Value);
+        }
         foreach (var binary in runtime.Binaries.Where(binary => (binary.Name is "herdr" or "bash") && binary.Resolved))
         {
             arguments.Add(binary.Name == "herdr" ? "--herdr-executable" : "--bash-executable");
@@ -713,23 +720,23 @@ RestartSec=30
         string platform,
         string label,
         string artifactPath) => platform switch
-    {
-        MacOs =>
-        (
-            $"launchctl bootstrap gui/$(id -u) {QuoteShellArgument(artifactPath)}",
-            $"launchctl bootout gui/$(id -u)/{label}"
-        ),
-        Windows =>
-        (
-            $"schtasks /Create /TN {QuoteWindowsArgument(label)} /XML {QuoteWindowsArgument(artifactPath)} /F",
-            $"schtasks /Delete /TN {QuoteWindowsArgument(label)} /F"
-        ),
-        _ =>
-        (
-            $"systemctl --user link {QuoteShellArgument(artifactPath)} && systemctl --user start {QuoteShellArgument(label + ".service")}",
-            $"systemctl --user stop {QuoteShellArgument(label + ".service")} && systemctl --user unlink {QuoteShellArgument(artifactPath)}"
-        ),
-    };
+        {
+            MacOs =>
+            (
+                $"launchctl bootstrap gui/$(id -u) {QuoteShellArgument(artifactPath)}",
+                $"launchctl bootout gui/$(id -u)/{label}"
+            ),
+            Windows =>
+            (
+                $"schtasks /Create /TN {QuoteWindowsArgument(label)} /XML {QuoteWindowsArgument(artifactPath)} /F",
+                $"schtasks /Delete /TN {QuoteWindowsArgument(label)} /F"
+            ),
+            _ =>
+            (
+                $"systemctl --user link {QuoteShellArgument(artifactPath)} && systemctl --user start {QuoteShellArgument(label + ".service")}",
+                $"systemctl --user stop {QuoteShellArgument(label + ".service")} && systemctl --user unlink {QuoteShellArgument(artifactPath)}"
+            ),
+        };
 
     private static string FormatShellInvocation(string executable, IReadOnlyList<string> arguments) =>
         executable + " " + string.Join(" ", arguments.Select(QuoteShellArgument));
@@ -771,6 +778,10 @@ RestartSec=30
         var verify = false;
         var eventMode = false;
         var format = FormatMarkdown;
+        var preApprovalAcceptRules = new List<NotifyPreApprovalRule>();
+        var preApprovalEscalateRules = new List<NotifyPreApprovalRule>();
+        var scopedPolicies = new List<NotifyScopedPromptPolicy>();
+        var policyArguments = new List<InstallPolicyArgument>();
         error = string.Empty;
 
         for (var index = 0; index < args.Length; index++)
@@ -807,6 +818,65 @@ RestartSec=30
                 case "--dry-run": dryRun = true; break;
                 case "--verify": verify = true; break;
                 case "--event-mode": eventMode = true; break;
+                case "--pre-approve":
+                    if (!ReadValue(args, ref index, argument, out var acceptRuleValue, out error)
+                        || !NotifyPreApprovalPolicyStore.TryParseRule(acceptRuleValue!, out var acceptRule))
+                    {
+                        error = "--pre-approve requires <agent-kind>:<prompt-class> using safe identifiers.";
+                        return Fail(out options);
+                    }
+                    if (!NotifyPreApprovalPolicyStore.TryValidateRule(acceptRule!, out error))
+                    {
+                        return Fail(out options);
+                    }
+                    preApprovalAcceptRules.Add(acceptRule!);
+                    policyArguments.Add(new InstallPolicyArgument(argument, acceptRuleValue!));
+                    break;
+                case "--pre-escalate":
+                    if (!ReadValue(args, ref index, argument, out var escalateRuleValue, out error)
+                        || !NotifyPreApprovalPolicyStore.TryParseRule(escalateRuleValue!, out var escalateRule))
+                    {
+                        error = "--pre-escalate requires <agent-kind>:<prompt-class> using safe identifiers.";
+                        return Fail(out options);
+                    }
+                    if (!NotifyPreApprovalPolicyStore.TryValidateRule(escalateRule!, out error))
+                    {
+                        return Fail(out options);
+                    }
+                    preApprovalEscalateRules.Add(escalateRule!);
+                    policyArguments.Add(new InstallPolicyArgument(argument, escalateRuleValue!));
+                    break;
+                case "--shell-policy":
+                case "--pre-approve-shell":
+                    if (!ReadValue(args, ref index, argument, out var shellPolicyValue, out error))
+                    {
+                        return Fail(out options);
+                    }
+                    NotifyScopedPromptPolicy? shellPolicy;
+                    try
+                    {
+                        shellPolicy = JsonSerializer.Deserialize<NotifyScopedPromptPolicy>(shellPolicyValue!, JsonOptions);
+                    }
+                    catch (JsonException exception)
+                    {
+                        error = $"{argument} requires one scoped policy JSON object: {exception.Message}";
+                        return Fail(out options);
+                    }
+                    if (shellPolicy is null)
+                    {
+                        error = $"{argument} requires one scoped policy JSON object.";
+                        return Fail(out options);
+                    }
+                    if (!NotifyPreApprovalPolicyStore.TryValidateScopedPolicy(
+                        shellPolicy,
+                        out error,
+                        requireScratchLedgerCycleId: false))
+                    {
+                        return Fail(out options);
+                    }
+                    scopedPolicies.Add(shellPolicy);
+                    policyArguments.Add(new InstallPolicyArgument(argument, shellPolicyValue!));
+                    break;
                 case "--format":
                     if (!ReadValue(args, ref index, argument, out format, out error)) return Fail(out options);
                     if (format is not FormatJson and not FormatMarkdown)
@@ -853,6 +923,25 @@ RestartSec=30
             error = "--write and --dry-run are mutually exclusive.";
             return Fail(out options);
         }
+        if ((preApprovalAcceptRules.Count == 0) != (preApprovalEscalateRules.Count == 0))
+        {
+            error = "A recorded pre-approval policy requires at least one --pre-approve and one --pre-escalate rule; without both, omit them and remain escalate-only.";
+            return Fail(out options);
+        }
+        if (!NotifyPreApprovalPolicyStore.TryValidateNoOverlap(
+            preApprovalAcceptRules,
+            preApprovalEscalateRules,
+            out error))
+        {
+            return Fail(out options);
+        }
+        if (!NotifyPreApprovalPolicyStore.TryValidateScopedPolicies(
+            scopedPolicies,
+            out error,
+            requireScratchLedgerCycleId: false))
+        {
+            return Fail(out options);
+        }
 
         options = new InstallOptions
         {
@@ -873,6 +962,7 @@ RestartSec=30
             Verify = verify,
             EventMode = eventMode,
             PersistenceIntent = persistenceIntent,
+            PolicyArguments = policyArguments,
         };
         return true;
     }
@@ -1013,8 +1103,11 @@ RestartSec=30
         public required bool Verify { get; init; }
         public bool EventMode { get; init; }
         public string? PersistenceIntent { get; init; }
+        public required IReadOnlyList<InstallPolicyArgument> PolicyArguments { get; init; }
         public required string Format { get; init; }
     }
+
+    private sealed record InstallPolicyArgument(string Option, string Value);
 
     private sealed record NotifySuperviseRuntimeResolution(
         IReadOnlyList<NotifySuperviseRuntimeBinary> Binaries,

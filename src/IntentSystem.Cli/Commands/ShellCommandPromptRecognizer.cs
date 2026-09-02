@@ -41,7 +41,8 @@ internal static class ShellCommandPromptRecognizer
         var choiceBlockStarted = false;
         for (var index = headerIndex + 1; index < lines.Length; index++)
         {
-            var line = Normalize(lines[index]);
+            var rawLine = lines[index];
+            var line = NormalizeContent(rawLine);
             if (line.Length == 0 || IsFrame(line))
             {
                 continue;
@@ -49,17 +50,17 @@ internal static class ShellCommandPromptRecognizer
 
             if (!insideFence && choiceBlockStarted)
             {
-                if (IsChoice(line))
+                // Choice text, its wrapped lines, and the terminal hint are
+                // dialog chrome. They are never part of the command. A new
+                // command marker or fenced block is instead a hidden tail:
+                // fail closed rather than authorizing a truncated payload.
+                if (line.StartsWith('$')
+                    || IsCommandLine(line, out _)
+                    || line.StartsWith("```", StringComparison.Ordinal))
                 {
-                    continue;
+                    return false;
                 }
-
-                // Once terminal choice chrome has started, any residual
-                // non-choice content could be a hidden command tail. Do not
-                // truncate the payload at the first choice-looking line:
-                // reject the whole extraction so no unevaluated segment can
-                // reach policy authorization.
-                return false;
+                continue;
             }
 
             if (line.StartsWith("```", StringComparison.Ordinal))
@@ -68,26 +69,36 @@ internal static class ShellCommandPromptRecognizer
                 continue;
             }
 
-            if (!insideFence && IsChoice(line))
+            if (insideFence)
             {
-                if (commandLines.Count > 0)
-                {
-                    choiceBlockStarted = true;
-                }
-
                 continue;
             }
 
-            if (line.StartsWith("$ ", StringComparison.Ordinal)
-                || line.StartsWith("> ", StringComparison.Ordinal))
+            // Choice recognition intentionally consumes the raw line. The
+            // content normalizer removes numeric prefixes for headers and
+            // payloads, which would otherwise make "1. Yes" indistinguishable
+            // from arbitrary prose.
+            if (IsChoice(rawLine))
             {
-                line = line[2..].TrimStart();
+                choiceBlockStarted = true;
+                continue;
             }
-            if (line.StartsWith("Command:", StringComparison.OrdinalIgnoreCase))
+
+            if (line.StartsWith("Environment:", StringComparison.OrdinalIgnoreCase))
             {
-                line = line["Command:".Length..].TrimStart();
+                continue;
             }
-            if (line.Length > 0)
+
+            if (IsCommandLine(line, out var commandLine))
+            {
+                commandLines.Add(commandLine);
+                continue;
+            }
+
+            // A non-choice line is a continuation only after a structural
+            // command marker. This keeps header prose and environment chrome
+            // out of the payload while retaining wrapped commands.
+            if (commandLines.Count > 0)
             {
                 commandLines.Add(line);
             }
@@ -112,13 +123,13 @@ internal static class ShellCommandPromptRecognizer
 
     private static string Normalize(string line)
     {
-        var normalized = line.Trim().Trim('│', '┃', '║').Trim();
+        var normalized = NormalizeContent(line);
         if (normalized.Length == 0)
         {
             return normalized;
         }
 
-        if (normalized[0] is '›' or '❯' or '○' or '●' or '>')
+        if (normalized[0] == '>')
         {
             normalized = normalized[1..].TrimStart();
         }
@@ -136,13 +147,48 @@ internal static class ShellCommandPromptRecognizer
         return normalized;
     }
 
+    private static string NormalizeContent(string line)
+    {
+        var normalized = line.Trim().Trim('│', '┃', '║').Trim();
+        if (normalized.Length > 0 && normalized[0] is '›' or '❯' or '○' or '●')
+        {
+            normalized = normalized[1..].TrimStart();
+        }
+
+        return normalized;
+    }
+
+    private static bool IsCommandLine(string line, out string commandLine)
+    {
+        if (line.StartsWith('$'))
+        {
+            commandLine = line[1..].TrimStart();
+            return commandLine.Length > 0;
+        }
+
+        if (line.StartsWith("> ", StringComparison.Ordinal))
+        {
+            commandLine = line[2..].TrimStart();
+            return true;
+        }
+
+        if (line.StartsWith("Command:", StringComparison.OrdinalIgnoreCase))
+        {
+            commandLine = line["Command:".Length..].TrimStart();
+            return true;
+        }
+
+        commandLine = string.Empty;
+        return false;
+    }
+
     private static bool IsFrame(string line) => line.Length > 0
         && line.All(character => character is '┌' or '└' or '├' or '┤' or '─'
             or '╭' or '╰' or '╯' or '╮' or '┬' or '┴' or '┼');
 
-    private static bool IsChoice(string line)
+    private static bool IsChoice(string rawLine)
     {
-        var normalized = Normalize(line);
+        var normalized = NormalizeContent(rawLine);
         var lower = normalized.ToLowerInvariant();
         if (lower is "yes" or "no" or "y" or "n" or "allow" or "deny"
             or "cancel" or "reject" or "approve" or "run")
@@ -150,8 +196,8 @@ internal static class ShellCommandPromptRecognizer
             return true;
         }
 
-        if (lower.Contains("[y/n]", StringComparison.Ordinal)
-            || lower.Contains("[yes/no]", StringComparison.Ordinal)
+        if (lower.StartsWith("yes ", StringComparison.Ordinal)
+            || lower.StartsWith("no ", StringComparison.Ordinal)
             || lower.StartsWith("allow ", StringComparison.Ordinal)
             || lower.StartsWith("always allow", StringComparison.Ordinal)
             || lower.StartsWith("continue ", StringComparison.Ordinal)

@@ -32,9 +32,9 @@ public sealed class ShellCommandPolicyG689Tests
     {
         var observed = "Would you like to run the following command?\n\n"
             + "$ dotnet test tests/IntentSystem.Cli.Tests.csproj\n"
-            + "read -p \"continue? [y/n]\" answer\n"
-            + "rm -rf " + Scratch + "\n\n"
-            + "1. Allow once\n2. Deny";
+            + "1. Allow once\n"
+            + "$ rm -rf " + Scratch + "\n"
+            + "2. Deny";
 
         Assert.False(ShellCommandPromptRecognizer.TryExtract(observed, out var payload));
         Assert.Null(payload);
