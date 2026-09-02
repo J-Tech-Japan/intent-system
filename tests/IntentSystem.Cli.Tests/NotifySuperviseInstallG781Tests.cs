@@ -322,6 +322,56 @@ public sealed class NotifySuperviseInstallG781Tests : IDisposable
     }
 
     [Fact]
+    public void ExplicitVerifyStartupBoundWaitsFromVerificationStartForLateCycle()
+    {
+        var artifactPath = ArtifactPath("explicit-verify-window");
+        var initial = RunInstall(artifactPath, "--write", startupBoundSeconds: 1);
+        Assert.Equal(1, initial.ExitCode);
+        var beforeBytes = File.ReadAllText(artifactPath);
+        var writtenAt = new DateTimeOffset(File.GetLastWriteTimeUtc(artifactPath), TimeSpan.Zero);
+        var artifactRoot = CreateContext().ResolveSupervisionArtifactRootPath();
+        var delayCount = 0;
+
+        // The artifact is already older than the explicit verification bound.
+        // The qualifying cycle arrives after the new proof window begins.
+        now = writtenAt.AddSeconds(6);
+        NotifySuperviseInstallCommand.Delay = delay =>
+        {
+            now = now.Add(delay);
+            if (++delayCount != 1) return;
+
+            Assert.True(NotifySupervisionStore.RecordCycle(
+                NotifySupervisionStore.ResolveCyclePath(artifactRoot, Domain, Team),
+                new NotifySupervisionCycle
+                {
+                    CycleId = "g781-explicit-verify-window",
+                    StartedAt = now.AddSeconds(-1),
+                    CompletedAt = now,
+                    IntervalSeconds = 300,
+                    Writer = new NotifySupervisionWriterIdentity
+                    {
+                        Pid = 7813,
+                        ProcessStartTime = now.AddSeconds(-1),
+                        Host = "g781-explicit-window",
+                    },
+                },
+                write: true).Applied);
+        };
+
+        var verified = RunInstall(artifactPath, "--verify", startupBoundSeconds: 5);
+
+        Assert.Equal(0, verified.ExitCode);
+        using var document = JsonDocument.Parse(verified.Payload);
+        var payload = document.RootElement;
+        Assert.Equal("first-cycle-verified", payload.GetProperty("verification_status").GetString());
+        Assert.Equal(5, payload.GetProperty("startup_bound_seconds").GetInt32());
+        Assert.Equal(2, payload.GetProperty("first_cycle_attempts").GetInt32());
+        Assert.Equal(1, delayCount);
+        Assert.Equal(beforeBytes, File.ReadAllText(artifactPath));
+        Assert.Equal(writtenAt, new DateTimeOffset(File.GetLastWriteTimeUtc(artifactPath), TimeSpan.Zero));
+    }
+
+    [Fact]
     public void VerifyRejectsCycleCompletedAtTheArtifactWrittenAt()
     {
         var artifactPath = ArtifactPath("equal-timestamp");
@@ -393,7 +443,8 @@ public sealed class NotifySuperviseInstallG781Tests : IDisposable
             ArtifactPath = ArtifactPath("paced"),
             CyclePath = Path.Combine(root, "no-cycle.jsonl"),
             StartupBoundSeconds = 3,
-            StartedAt = now,
+            ArtifactWrittenAt = now,
+            VerificationStartedAt = now,
         });
 
         Assert.False(result.Verified);

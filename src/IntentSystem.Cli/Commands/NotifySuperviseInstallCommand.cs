@@ -213,6 +213,12 @@ internal static class NotifySuperviseInstallCommand
 
         if (options.Write || options.Verify)
         {
+            // A bare verify deliberately remains a one-read re-proof against
+            // the artifact timestamp. An explicitly supplied verify bound,
+            // however, opens a new proof window from this verification.
+            var verificationStartedAt = options.Verify && options.HasExplicitStartupBound
+                ? UtcNowFactory().ToUniversalTime()
+                : artifactWrittenAt!.Value;
             firstCycle = (FirstCycleProbeFactory ?? NotifySuperviseFirstCycleProbe.Wait)(new NotifySuperviseFirstCycleRequest
             {
                 ArtifactRoot = artifactRoot,
@@ -224,7 +230,8 @@ internal static class NotifySuperviseInstallCommand
                     options.Domain,
                     options.Team),
                 StartupBoundSeconds = options.StartupBoundSeconds,
-                StartedAt = artifactWrittenAt!.Value,
+                ArtifactWrittenAt = artifactWrittenAt!.Value,
+                VerificationStartedAt = verificationStartedAt,
                 RuntimeLogs = runtimeLogs,
             });
             if (!firstCycle.Verified)
@@ -857,6 +864,7 @@ RestartSec=30
             IntervalSeconds = interval.Value,
             StartupBoundSeconds = startupBound
                 ?? (verify ? DefaultVerifyStartupBoundSeconds : DefaultStartupBoundSeconds),
+            HasExplicitStartupBound = startupBound is not null,
             RoutingRoot = routingRoot,
             Output = output,
             Platform = platform,
@@ -997,6 +1005,7 @@ RestartSec=30
         public required int BoundSeconds { get; init; }
         public required int IntervalSeconds { get; init; }
         public required int StartupBoundSeconds { get; init; }
+        public required bool HasExplicitStartupBound { get; init; }
         public required string Platform { get; init; }
         public string? RoutingRoot { get; init; }
         public string? Output { get; init; }
@@ -1072,7 +1081,8 @@ internal sealed record NotifySuperviseFirstCycleRequest
     public required string ArtifactPath { get; init; }
     public required string CyclePath { get; init; }
     public required int StartupBoundSeconds { get; init; }
-    public required DateTimeOffset StartedAt { get; init; }
+    public required DateTimeOffset ArtifactWrittenAt { get; init; }
+    public required DateTimeOffset VerificationStartedAt { get; init; }
     public IReadOnlyList<NotifySuperviseRuntimeLogSnapshot> RuntimeLogs { get; init; } =
         Array.Empty<NotifySuperviseRuntimeLogSnapshot>();
 }
@@ -1102,7 +1112,7 @@ internal static class NotifySuperviseFirstCycleProbe
 {
     public static NotifySuperviseFirstCycleResult Wait(NotifySuperviseFirstCycleRequest request)
     {
-        var deadline = request.StartedAt.AddSeconds(request.StartupBoundSeconds);
+        var deadline = request.VerificationStartedAt.AddSeconds(request.StartupBoundSeconds);
         var attempts = 0;
         NotifySupervisionCycle? lastCycle = null;
         while (true)
@@ -1133,7 +1143,7 @@ internal static class NotifySuperviseFirstCycleProbe
             var cycle = state.LastCycle;
             lastCycle = cycle;
             if (cycle is not null
-                && cycle.CompletedAt > request.StartedAt
+                && cycle.CompletedAt > request.ArtifactWrittenAt
                 && cycle.Writer is not null)
             {
                 return new NotifySuperviseFirstCycleResult
@@ -1166,7 +1176,7 @@ internal static class NotifySuperviseFirstCycleProbe
     {
         var runtime = ObserveRuntimeLogs(request.RuntimeLogs);
         if (cycle is not null
-            && cycle.CompletedAt > request.StartedAt
+            && cycle.CompletedAt > request.ArtifactWrittenAt
             && cycle.Writer is null)
         {
             return new NotifySuperviseFirstCycleResult
