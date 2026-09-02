@@ -200,6 +200,12 @@ reports `not-configured`, the keys above are not being resolved — check they a
 under `[project]` (not a different table) and spelled exactly
 `metadata_source_branch` / `metadata_write_branch`.
 
+Those metadata-branch keys do not change where a claim transaction writes. A
+metadata branch can be read as adoption evidence when the canonical claims tree
+is empty, but ownership remains canonical and a claim writer still targets the
+remote default branch. See [Remote default-branch targeting (G747)](#remote-default-branch-targeting-g747)
+for the target-ref and rejected-push contract.
+
 Host vs child bootstrap (G514): the host-side automation commands
 (`automation summary`, `automation same-repo-metadata-preflight`,
 `automation queue-seed-from-packet`) load `.intent-cli/config.toml` from the
@@ -2719,6 +2725,25 @@ is never used as the claim target or advanced by the refresh. If the symref is
 missing, ambiguous, unsafe, or cannot be queried, the command fails closed; it
 never falls back to the current branch. Successful transaction results include
 the resolved `target_ref`.
+
+### Rejected default-branch pushes (G779)
+
+A non-zero claim push is not automatically a race. After a rejected push, the
+command first checks whether origin already contains the transaction commit or
+the scope record; those remain the existing committed and held outcomes. If it
+contains neither and the post-rejection `origin/<default>` head still equals the
+transaction `base_commit`, the result is `push-rejected` with exit code 1. It
+includes `target_ref`, `base_commit`, `remote_advanced: false`, and
+`git_push_error` (Git's trimmed stderr), and does not create a second transaction
+workspace or retry.
+
+If the remote default ref did move, the command keeps the existing fresh-base,
+bounded reapply behavior. A final `retry-exhausted` result identifies the
+`target_ref`, `base_commit`, last `remote_head`, `remote_advanced: true`, and
+last `git_push_error`; its detail calls the condition an unrelated remote
+advance only in that case. In practical terms, a protected default branch now
+surfaces as `push-rejected` with the server's message: the claim writer needs
+ordinary plain-push access to the resolved remote default branch.
 
 An acquire whose active record already has the same actor and team is an
 intentional no-op. Its result says that the scope is already held and that no

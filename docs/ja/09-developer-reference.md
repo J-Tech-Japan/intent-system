@@ -187,6 +187,13 @@ metadata_write_branch  = "main-metadata"   # host loop がメタデータを WRI
 配下にあること、`metadata_source_branch` / `metadata_write_branch` の綴りが正確であることを
 確認してください。
 
+これらの metadata-branch key は claim transaction の書き込み先を変更しません。canonical
+claims tree が空のときメタデータ用ブランチは adoption evidence として読まれる場合がありますが、
+ownership は canonical のままであり、claim writer は引き続き remote の default branch を対象に
+します。target ref と rejected-push 契約は
+[remote の default branch を対象にする場合 (G747)](#remote-の-default-branch-を対象にする場合-g747)
+を参照してください。
+
 host と child の bootstrap（G514）: host 側 automation コマンド（`automation summary`、
 `automation same-repo-metadata-preflight`、`automation queue-seed-from-packet`）は解決された
 repo root の `.intent-cli/config.toml` をロードするため、他の host コマンドと同じ effective な
@@ -2777,6 +2784,22 @@ commit を `refs/heads/<resolved-default-branch>` へ明示的に push します
 checkout の current branch は claim の target にせず、refresh でも進めません。symref が
 無い、曖昧、安全に扱えない、または query できない場合は fail closed とし、current branch
 へは fallback しません。成功した transaction result には解決した `target_ref` が含まれます。
+
+### default branch への push 拒否 (G779)
+
+claim push が nonzero を返しても、それだけで race とはみなしません。拒否後に command はまず
+origin が transaction commit または scope record をすでに持つかを確認し、それらは従来どおり
+committed / held outcome です。どちらもなく、post-rejection の `origin/<default>` head が
+transaction の `base_commit` と同じなら、exit code 1 の `push-rejected` を返します。この
+result には `target_ref`、`base_commit`、`remote_advanced: false`、および Git の trim 済み
+stderr である `git_push_error` が含まれ、2 個目の transaction workspace を作らず retry もしません。
+
+remote default ref が移動していた場合は、既存の fresh-base による bounded reapply を維持します。
+最後の `retry-exhausted` result には `target_ref`、`base_commit`、最後の `remote_head`、
+`remote_advanced: true`、最後の `git_push_error` が入り、detail で unrelated remote advance
+と呼ぶのはこの場合だけです。実務上、protected default branch は server message を伴う
+`push-rejected` として表面化します。claim writer には解決済み remote default branch への
+通常の plain-push 権限が必要です。
 
 active record の actor と team が同じ acquire は意図した no-op です。result は scope が
 すでに保持され、claim commit は不要 (`nothing to commit`) であることを示します。teardown
