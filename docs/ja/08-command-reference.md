@@ -489,6 +489,32 @@ intent-cli issue publish-flow <id> --repo <owner>/<repo> --write --format json
 intent-cli automation issue-publish --write
 ```
 
+### bug implementation-repair の link（G782）
+
+child repair の handoff は、command 自身が受け付ける link flag を使って durable な bug
+projection に記録します:
+
+```bash
+intent-cli bug implementation-repair <bug-id> \
+  [--execution-unit <unit>] [--issue-number <n>] [--issue-url <url>] \
+  [--actor <name>] [--note <text>]
+```
+
+指定した値は `repair_execution_unit`、`repair_issue_number`、`repair_issue_url`、
+`recorded_by`、`note`、`recorded_at` として保存されます。link flag なしの再実行は既存の
+recorded link を維持し、新しい値を渡した再実行は置換して結果に以前の値を表示します。
+`--issue-number` と `--issue-url` を両方指定する場合、URL の最終 URI path segment はその
+number と完全に一致する必要があり、違う場合は command が両方の指定値を示して拒否します。
+query string や fragment は最終 path segment を変えないため、issue number `1706` に対する
+`.../issues/1705?repair=1706` は拒否されます。
+
+`intent-cli bug implementation-issue <bug-id>` は記録済みの
+`repair_execution_unit` を優先し、target として
+`.intent-cli/issues/<unit>/packet.yaml` だけを使います。G337 の
+`implementation_issue_packet` schema を root に持つ packet は、この handoff が期待する
+legacy `ProjectionPacketRuntimeReader` の `execution_unit` schema ではありません。先に
+`intent-cli issue publish-flow <unit> --repo <owner/repo> --write` で publish してから再試行してください。
+
 ## 実装・レビューループ
 
 ```bash

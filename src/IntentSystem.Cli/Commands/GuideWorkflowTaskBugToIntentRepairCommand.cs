@@ -75,8 +75,8 @@ internal static class GuideWorkflowTaskBugToIntentRepairCommand
         {
             Stage = "implementation-repair",
             Purpose = "OPTIONAL when the lane is implementation-mismatch — scaffold an implementation-repair issue tied to the bug report so the child loop picks it up via `worker next-action`. Implementation-repair is NOT the primary lane: most bugs that surface in child PRs are caused by intent-gap or rule-gap upstream, so check triage's classification before defaulting here.",
-            Command = "intent-cli bug implementation-repair <bug-id> [--issue-number <n>] [--issue-url <url>] [--actor <name>] [--note <text>]",
-            Output = "An implementation-repair record on the bug projection linking the original bug report to the implementation-repair issue / PR. The issue is created on the implementation repo (e.g. J-Tech-Japan/intent-system) and picks up `intent-target` through the standard G337 publish-flow.",
+            Command = BugImplementationRepairCommand.Usage,
+            Output = "An implementation-repair record on the bug projection linking the original bug report to the implementation-repair issue / PR. It records optional `repair_execution_unit`, `repair_issue_number`, `repair_issue_url`, `recorded_by`, `note`, and `recorded_at` fields; re-running without link flags preserves prior values. The issue is created on the implementation repo (e.g. J-Tech-Japan/intent-system) and picks up `intent-target` through the standard G337 publish-flow.",
             Boundary = "The bug-implementation-repair record runs on the HOST repo (the bug projection is host-owned). The actual implementation-repair issue and PR run on the implementation repo via the standard issue/PR/child-loop lifecycle. Use `intent-cli issue draft <execution-unit>` if you want to scaffold the issue body directly from an existing packet artifact.",
             FailsOpen = "If triage classified the gap as intent-gap / packet-gap / rule-gap, do NOT also open an implementation-repair issue without an upstream intent-repair packet — the child PR would re-implement the wrong guidance. The intent-repair stage MUST land first."
         }

@@ -535,6 +535,34 @@ intent-cli issue publish-flow <id> --repo <owner>/<repo> --write --format json
 intent-cli automation issue-publish --write
 ```
 
+### Bug implementation-repair links (G782)
+
+Record the child repair handoff on the durable bug projection with the command's
+own accepted link flags:
+
+```bash
+intent-cli bug implementation-repair <bug-id> \
+  [--execution-unit <unit>] [--issue-number <n>] [--issue-url <url>] \
+  [--actor <name>] [--note <text>]
+```
+
+When supplied, these values are stored as `repair_execution_unit`,
+`repair_issue_number`, `repair_issue_url`, `recorded_by`, `note`, and
+`recorded_at`. Re-running without link flags preserves a prior recorded link;
+re-running with new values replaces it and names the prior values in the
+result. If both `--issue-number` and `--issue-url` are present, the URL's final
+URI path segment must exactly equal that number or the command refuses and
+names both supplied values. A query string or fragment does not change the
+final path segment, so `.../issues/1705?repair=1706` is rejected for issue
+number `1706`.
+
+`intent-cli bug implementation-issue <bug-id>` gives a recorded
+`repair_execution_unit` precedence and uses only
+`.intent-cli/issues/<unit>/packet.yaml` as its target. A packet rooted in the
+G337 `implementation_issue_packet` schema is not the legacy
+`ProjectionPacketRuntimeReader` `execution_unit` schema expected by this
+handoff; publish it first with `intent-cli issue publish-flow <unit> --repo <owner/repo> --write` and retry.
+
 ## Implementation & review loops
 
 ```bash
