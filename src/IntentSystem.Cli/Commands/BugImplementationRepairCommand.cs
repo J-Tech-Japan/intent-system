@@ -196,14 +196,22 @@ internal static class BugImplementationRepairCommand
 
     private static void ValidateRepairIssueIdentity(int? repairIssueNumber, string? repairIssueUrl)
     {
-        if (repairIssueNumber is not null
-            && !string.IsNullOrWhiteSpace(repairIssueUrl)
-            && !repairIssueUrl.EndsWith(
-                repairIssueNumber.Value.ToString(CultureInfo.InvariantCulture),
-                StringComparison.Ordinal))
+        if (repairIssueNumber is null || string.IsNullOrWhiteSpace(repairIssueUrl))
+        {
+            return;
+        }
+
+        var expectedIssueNumber = repairIssueNumber.Value.ToString(CultureInfo.InvariantCulture);
+        var hasMatchingFinalPathSegment = Uri.TryCreate(repairIssueUrl, UriKind.Absolute, out var issueUri)
+            && string.Equals(
+                issueUri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault(),
+                expectedIssueNumber,
+                StringComparison.Ordinal);
+
+        if (!hasMatchingFinalPathSegment)
         {
             throw new InvalidOperationException(
-                $"Repair issue URL '{repairIssueUrl}' does not end with repair issue number '{repairIssueNumber.Value.ToString(CultureInfo.InvariantCulture)}'.");
+                $"Repair issue URL '{repairIssueUrl}' must have final URI path segment '{expectedIssueNumber}'.");
         }
     }
 

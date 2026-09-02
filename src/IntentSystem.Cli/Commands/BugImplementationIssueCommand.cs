@@ -153,8 +153,9 @@ internal static class BugImplementationIssueCommand
             if (!string.IsNullOrWhiteSpace(recordedRepairExecutionUnit)
                 && UsesG337ImplementationIssuePacketSchema(yaml))
             {
+                var targetRepo = ResolveG337TargetRepo(repoRoot, yaml);
                 throw new InvalidOperationException(
-                    $"Recorded repair target '{target}' uses the G337 'implementation_issue_packet' schema, but bug implementation-issue expects the legacy ProjectionPacketRuntimeReader 'execution_unit' schema. Run `intent-cli issue publish-flow {recordedRepairExecutionUnit}` to publish the recorded repair packet before retrying.");
+                    $"Recorded repair target '{target}' uses the G337 'implementation_issue_packet' schema, but bug implementation-issue expects the legacy ProjectionPacketRuntimeReader 'execution_unit' schema. Run `intent-cli issue publish-flow {recordedRepairExecutionUnit} --repo {targetRepo} --write` to publish the recorded repair packet before retrying.");
             }
 
             var packet = ProjectionPacketRuntimeReader.Read(yaml);
@@ -184,6 +185,22 @@ internal static class BugImplementationIssueCommand
     {
         return yaml.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Any(line => string.Equals(line.Trim(), "implementation_issue_packet:", StringComparison.Ordinal));
+    }
+
+    private static string ResolveG337TargetRepo(string repoRoot, string yaml)
+    {
+        var fields = PreparedPacketYamlScalarParser.Parse(yaml);
+        if (!fields.TryGetValue("implementation_issue_packet.target_repo", out var packetTargetRepo)
+            || string.IsNullOrWhiteSpace(packetTargetRepo))
+        {
+            throw new InvalidOperationException(
+                "G337 implementation_issue_packet must contain a target_repo to render its publish-flow recovery command.");
+        }
+
+        return GitHubRepositoryTargetResolver.Resolve(
+            repoRoot,
+            packetTargetRepo,
+            GitCommandRunnerFactory());
     }
 
     private static StandaloneIssueBodyContext BuildIssueBodyContext(

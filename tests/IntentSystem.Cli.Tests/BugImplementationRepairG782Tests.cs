@@ -55,8 +55,10 @@ public sealed class BugImplementationRepairG782Tests
         Assert.Contains("recorded_at", yaml, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void Execute_G782_RejectsMismatchedIssueNumberAndUrlWithoutWritingArtifact()
+    [Theory]
+    [InlineData("https://github.com/J-Tech-Japan/intent-system/issues/1705")]
+    [InlineData("https://github.com/J-Tech-Japan/intent-system/issues/1705?repair=1706")]
+    public void Execute_G782_RejectsMismatchedIssueNumberAndFinalUrlPathWithoutWritingArtifact(string issueUrl)
     {
         using var temporaryDirectory = new TemporaryDirectory();
         var repoRoot = temporaryDirectory.CreateDirectory("repo");
@@ -68,13 +70,13 @@ public sealed class BugImplementationRepairG782Tests
             [
                 "BUG-1706",
                 "--issue-number", "1706",
-                "--issue-url", "https://github.com/J-Tech-Japan/intent-system/issues/1705"
+                "--issue-url", issueUrl
             ],
             writer);
 
         Assert.Equal(1, exitCode);
         Assert.Contains("1706", writer.ToString(), StringComparison.Ordinal);
-        Assert.Contains("https://github.com/J-Tech-Japan/intent-system/issues/1705", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains(issueUrl, writer.ToString(), StringComparison.Ordinal);
         Assert.False(File.Exists(ArtifactPath(repoRoot, "BUG-1706")));
     }
 
@@ -210,10 +212,13 @@ public sealed class BugImplementationRepairG782Tests
             Path.Combine("repo", ".intent-cli", "issues", "G782", "packet.yaml"),
             CreateG337PacketYaml());
         var originalPublisherFactory = BugImplementationIssueCommand.PublisherFactory;
+        var originalGitRunnerFactory = BugImplementationIssueCommand.GitCommandRunnerFactory;
 
         try
         {
             BugImplementationIssueCommand.PublisherFactory = () => new ThrowingPublisher();
+            temporaryDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+            BugImplementationIssueCommand.GitCommandRunnerFactory = () => new FakeGitCommandRunner();
             using var writer = new StringWriter();
 
             var exitCode = BugImplementationIssueCommand.Execute(CreateContext(repoRoot), ["BUG-1706"], writer);
@@ -222,11 +227,15 @@ public sealed class BugImplementationRepairG782Tests
             Assert.Contains(".intent-cli/issues/G782/packet.yaml", writer.ToString(), StringComparison.Ordinal);
             Assert.Contains("implementation_issue_packet", writer.ToString(), StringComparison.Ordinal);
             Assert.Contains("execution_unit", writer.ToString(), StringComparison.Ordinal);
-            Assert.Contains("intent-cli issue publish-flow G782", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains(
+                "intent-cli issue publish-flow G782 --repo J-Tech-Japan/intent-system --write",
+                writer.ToString(),
+                StringComparison.Ordinal);
         }
         finally
         {
             BugImplementationIssueCommand.PublisherFactory = originalPublisherFactory;
+            BugImplementationIssueCommand.GitCommandRunnerFactory = originalGitRunnerFactory;
         }
     }
 
