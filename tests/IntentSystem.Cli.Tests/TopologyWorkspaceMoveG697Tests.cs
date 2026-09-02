@@ -278,6 +278,88 @@ public sealed class TopologyWorkspaceMoveG697Tests
         Assert.False(Directory.Exists(configDirectory));
     }
 
+    [Fact]
+    public void Move_SharedPane_RolesTravelTogether_G735()
+    {
+        var context = CreateFixture();
+        SetHerdrOnly(context);
+        RecordHerdr(context, "orchestrator", "w2X:p1", "/orchestration", "codex", "inline");
+        RecordHerdr(context, "orchestration", "w2X:p1", "/orchestration", "codex", "inline");
+        RecordHerdr(context, "implementation", "w2X:p2", "/implementation", "claude", "file-backed");
+
+        var topologyPath = NotifyRoleTopologyStore.ResolvePath(context.RepoRoot, Domain, Team);
+        var before = File.ReadAllText(topologyPath);
+
+        var preview = Run(context, [
+            "session-layer", "topology", "move", "--domain", Domain, "--team", Team,
+            "--workspace-id", "w44", "--pane-map", "w2X:p1=w44:p1", "--pane-map", "w2X:p2=w44:p2",
+            "--dry-run", "--format", "json",
+        ]);
+
+        Assert.Equal("dry-run", preview.GetProperty("mode").GetString());
+        Assert.False(preview.GetProperty("conflict").GetBoolean());
+        Assert.True(preview.GetProperty("changed").GetBoolean());
+        Assert.Equal("w2X", preview.GetProperty("previous_workspace_id").GetString());
+        Assert.Equal("w44", preview.GetProperty("workspace_id").GetString());
+        Assert.Equal(before, File.ReadAllText(topologyPath));
+
+        var afterRoles = preview.GetProperty("after").GetProperty("roles");
+        Assert.Equal("w44:p1", afterRoles.GetProperty("orchestrator").GetProperty("pane_id").GetString());
+        Assert.Equal("w44:p1", afterRoles.GetProperty("orchestration").GetProperty("pane_id").GetString());
+        Assert.Equal("w44", afterRoles.GetProperty("orchestrator").GetProperty("workspace_id").GetString());
+        Assert.Equal("w44", afterRoles.GetProperty("orchestration").GetProperty("workspace_id").GetString());
+        Assert.Equal("w44:p2", afterRoles.GetProperty("implementation").GetProperty("pane_id").GetString());
+
+        var write = Run(context, [
+            "session-layer", "topology", "move", "--domain", Domain, "--team", Team,
+            "--workspace-id", "w44", "--pane-map", "w2X:p1=w44:p1", "--pane-map", "w2X:p2=w44:p2",
+            "--current-digest", preview.GetProperty("current_digest").GetString()!, "--write", "--format", "json",
+        ]);
+
+        Assert.Equal("write", write.GetProperty("mode").GetString());
+        Assert.True(write.GetProperty("applied").GetBoolean());
+        Assert.False(write.GetProperty("conflict").GetBoolean());
+
+        var moved = JsonNode.Parse(File.ReadAllText(topologyPath))!.AsObject();
+        Assert.Equal("w44", moved["workspace_id"]!.GetValue<string>());
+        var movedRoles = moved["roles"]!.AsObject();
+        Assert.Equal("w44:p1", movedRoles["orchestrator"]!["pane_id"]!.GetValue<string>());
+        Assert.Equal("w44:p1", movedRoles["orchestration"]!["pane_id"]!.GetValue<string>());
+        Assert.Equal("w44", movedRoles["orchestrator"]!["workspace_id"]!.GetValue<string>());
+        Assert.Equal("w44", movedRoles["orchestration"]!["workspace_id"]!.GetValue<string>());
+        Assert.Equal("w44:p2", movedRoles["implementation"]!["pane_id"]!.GetValue<string>());
+
+        var validation = Run(context, [
+            "session-layer", "topology", "validate", "--domain", Domain, "--team", Team, "--format", "json",
+        ]);
+        Assert.True(validation.GetProperty("valid").GetBoolean());
+    }
+
+    [Fact]
+    public void Move_TwoOldPanesToOneNewPane_StillRefuses_G735()
+    {
+        var context = CreateFixture();
+        SetHerdrOnly(context);
+        RecordHerdr(context, "orchestration", "w2X:p1", "/orchestration", "codex", "inline");
+        RecordHerdr(context, "implementation", "w2X:p2", "/implementation", "claude", "inline");
+
+        var topologyPath = NotifyRoleTopologyStore.ResolvePath(context.RepoRoot, Domain, Team);
+        var before = File.ReadAllText(topologyPath);
+
+        var result = Run(context, [
+            "session-layer", "topology", "move", "--domain", Domain, "--team", Team,
+            "--workspace-id", "w44", "--pane-map", "w2X:p1=w44:p1", "--pane-map", "w2X:p2=w44:p1",
+            "--dry-run", "--format", "json",
+        ], expectedExitCode: 1);
+
+        Assert.True(result.GetProperty("conflict").GetBoolean());
+        Assert.Contains("old panes", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("w2X:p1", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("w2X:p2", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("w44:p1", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllText(topologyPath));
+    }
+
     private static void AssertMoveGuide(JsonElement root)
     {
         Assert.Equal("guide topology-workspace-move", root.GetProperty("guide_surface").GetString());
