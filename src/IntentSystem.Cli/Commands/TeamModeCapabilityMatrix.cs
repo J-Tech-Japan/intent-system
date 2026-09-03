@@ -100,6 +100,7 @@ internal sealed record TeamModeCapabilityMatrix
             or AutomationStalledWorkCommand.KindCiHeadMoved
             => TeamModeCapabilityClasses.Ci,
         AutomationStalledWorkCommand.KindPendingDelegationOpen
+            or AutomationStalledWorkCommand.KindDelegationSettledByOutcome
             => TeamModeCapabilityClasses.Delegation,
         AutomationStalledWorkCommand.KindOperatorAttentionPending
             or AutomationStalledWorkCommand.KindOperatorAttentionCannotDetermine

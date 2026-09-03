@@ -99,6 +99,7 @@ internal static class GitHubApiReadInventory
         "closingIssuesReferences[].number",
         "closingIssuesReferences[].repository.owner.login",
         "closingIssuesReferences[].repository.name",
+        "mergeCommit.oid",
     ];
 
     private static readonly IReadOnlyList<string> StatusRollupFields =

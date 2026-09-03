@@ -516,6 +516,137 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_MergedLinkedPrAndClosedIssueIsSettledByOutcome_G793()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        var pending = BuildPendingDelegation(
+            "G793-settled",
+            FixedNow.AddHours(-6),
+            expectedArtifact: "https://github.com/J-Tech-Japan/intent-system/issues/1731");
+        Assert.True(NotifyPendingDelegationStore.WriteDispatch(workspace.RootPath, pending).Written);
+
+        const string mergeSha = "793merge00000000000000000000000000000000";
+        var merged = BuildPr(
+            1733,
+            "G793: settle a visibly completed delegation",
+            FixedNow.AddDays(-2),
+            state: "MERGED",
+            closingIssueNumber: 1731,
+            mergeCommitOid: mergeSha);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [merged]);
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--team", "intent-cli-dev", "--repo", "J-Tech-Japan/intent-system",
+                "--stale-minutes", "0", "--format", "json"],
+            writer));
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.False(document.RootElement.GetProperty("stalled").GetBoolean());
+        Assert.Equal(0, document.RootElement.GetProperty("open_pending_delegations").GetInt32());
+        Assert.DoesNotContain(
+            document.RootElement.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindPendingDelegationOpen);
+        var settled = Assert.Single(
+            document.RootElement.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindDelegationSettledByOutcome);
+        Assert.Equal(mergeSha, settled.GetProperty("merge_sha").GetString());
+        Assert.Equal(1731, settled.GetProperty("closed_issue_number").GetInt32());
+        Assert.Equal(1731, settled.GetProperty("issue").GetProperty("number").GetInt32());
+        Assert.Equal(1733, settled.GetProperty("pr").GetProperty("number").GetInt32());
+    }
+
+    [Fact]
+    public void Execute_GenuinelyOpenDelegationShapesRemainPendingWithDisposalRoute_G793()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        var issueOpen = BuildIssue(1734, "G793: open source issue", FixedNow.AddHours(-6));
+        var issueForUnmergedPr = BuildIssue(1735, "G793: unmerged source issue", FixedNow.AddHours(-6));
+        var records = new[]
+        {
+            BuildPendingDelegation("G793-open-issue", FixedNow.AddHours(-6),
+                expectedArtifact: "https://github.com/J-Tech-Japan/intent-system/issues/1734"),
+            BuildPendingDelegation("G793-unmerged-pr", FixedNow.AddHours(-6),
+                expectedArtifact: "https://github.com/J-Tech-Japan/intent-system/pull/1736"),
+            BuildPendingDelegation("G793-no-linked-pr", FixedNow.AddHours(-6),
+                expectedArtifact: "no linked pull request"),
+        };
+        foreach (var record in records)
+        {
+            Assert.True(NotifyPendingDelegationStore.WriteDispatch(workspace.RootPath, record).Written);
+        }
+
+        var mergedPrForOpenIssue = BuildPr(
+            1733,
+            "G793: would close an issue that is still open",
+            FixedNow.AddDays(-2),
+            state: "MERGED",
+            closingIssueNumber: issueOpen.Number,
+            mergeCommitOid: "793merge-open-issue");
+        var unmergedPr = BuildPr(
+            1736,
+            "G793: unmerged pull request",
+            FixedNow.AddHours(-2),
+            state: "OPEN",
+            closingIssueNumber: issueForUnmergedPr.Number);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(
+            issues: [issueOpen, issueForUnmergedPr],
+            prs: [unmergedPr],
+            mergedPrs: [mergedPrForOpenIssue]);
+
+        var result = AutomationStalledWorkCommand.Analyze(
+            workspace.Context,
+            "intent-cli",
+            "J-Tech-Japan/intent-system",
+            staleMinutes: 0);
+
+        Assert.Equal(3, result.OpenPendingDelegations);
+        var pendingItems = result.Items
+            .Where(item => item.Kind == AutomationStalledWorkCommand.KindPendingDelegationOpen)
+            .ToArray();
+        Assert.Equal(3, pendingItems.Length);
+        Assert.Equal(
+            ["G793-no-linked-pr", "G793-open-issue", "G793-unmerged-pr"],
+            pendingItems.Select(item => item.ExecutionUnit).OrderBy(value => value, StringComparer.Ordinal));
+        foreach (var item in pendingItems)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(item.RecommendedAction));
+            Assert.Contains(
+                "intent-cli notify dispose --domain intent-cli --team intent-cli-dev",
+                item.RecommendedAction,
+                StringComparison.Ordinal);
+            Assert.Contains("--kind applied-elsewhere", item.RecommendedAction, StringComparison.Ordinal);
+            Assert.Contains("--actor", item.RecommendedAction, StringComparison.Ordinal);
+            Assert.Contains("--reason", item.RecommendedAction, StringComparison.Ordinal);
+            Assert.Contains("--applied-outcome-evidence", item.RecommendedAction, StringComparison.Ordinal);
+            Assert.Contains("--write", item.RecommendedAction, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Analyze_PendingDelegationReadIsByteForByteReadOnly_G793()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        var pending = BuildPendingDelegation("G793-read-only", FixedNow.AddHours(-6), "no linked pull request");
+        Assert.True(NotifyPendingDelegationStore.WriteDispatch(workspace.RootPath, pending).Written);
+        var pendingPath = NotifyPendingDelegationStore.ResolvePath(
+            workspace.RootPath,
+            "intent-cli",
+            "intent-cli-dev");
+        var before = File.ReadAllBytes(pendingPath);
+
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+        _ = AutomationStalledWorkCommand.Analyze(
+            workspace.Context,
+            "intent-cli",
+            "J-Tech-Japan/intent-system",
+            staleMinutes: 0);
+
+        Assert.Equal(before, File.ReadAllBytes(pendingPath));
+    }
+
+    [Fact]
     public void Execute_PublishedNotDelegated_FiresWhenPacketConfirmsRequestedDomain()
     {
         using var workspace = new StalledWorkWorkspace();
@@ -4027,6 +4158,25 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         int number, string title, DateTimeOffset createdAt, params string[] labels) =>
         BuildIssue(number, title, createdAt, updatedAt: null, labels);
 
+    private static NotifyPendingDelegation BuildPendingDelegation(
+        string taskId,
+        DateTimeOffset dispatchedAt,
+        string expectedArtifact) => new()
+        {
+            Domain = "intent-cli",
+            Team = "intent-cli-dev",
+            TaskId = taskId,
+            DelegatingRole = "orchestration",
+            RecipientRole = "implementation",
+            RecipientIdentity = "implementation-seat",
+            ExpectedArtifact = expectedArtifact,
+            ExpectedArtifacts = [expectedArtifact],
+            Objective = $"Implement {taskId} and report the result.",
+            Inputs = ["https://github.com/J-Tech-Japan/intent-system/issues/1731"],
+            ResultNonce = $"{taskId}-nonce",
+            DispatchedAt = dispatchedAt,
+        };
+
     /// <summary>G533: overload accepting an independent <c>updatedAt</c> for claimed-but-silent fixtures — defaults to <paramref name="createdAt"/> when omitted, matching the pre-G533 fixture shape.</summary>
     private static GitHubAutomationIssueCandidate BuildIssue(
         int number, string title, DateTimeOffset createdAt, DateTimeOffset? updatedAt, params string[] labels) => new()
@@ -4103,7 +4253,8 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         DateTimeOffset? updatedAt = null,
         bool isDraft = false,
         string headRefOid = "",
-        IReadOnlyList<GitHubAutomationStatusCheckCandidate>? statusCheckRollup = null) => new()
+        IReadOnlyList<GitHubAutomationStatusCheckCandidate>? statusCheckRollup = null,
+        string mergeCommitOid = "") => new()
         {
             Number = number,
             Title = title,
@@ -4113,6 +4264,9 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
             State = state,
             IsDraft = isDraft,
             HeadRefOid = headRefOid,
+            MergeCommit = string.IsNullOrWhiteSpace(mergeCommitOid)
+                ? null
+                : new GitHubAutomationMergeCommit { Oid = mergeCommitOid },
             StatusCheckRollup = statusCheckRollup ?? Array.Empty<GitHubAutomationStatusCheckCandidate>(),
             Labels = (extraLabels ?? Array.Empty<string>()).Select(name => new GitHubAutomationLabel { Name = name }).ToArray(),
             ClosingIssuesReferences = closingIssueNumber is int n
