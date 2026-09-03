@@ -4,15 +4,18 @@ using IntentSystem.Cli.Infrastructure;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G792: v0.31.0 is a measured, prepare-only release line. These guards keep
+/// G794: v0.31.0 is a measured, prepare-only release line. These guards keep
 /// the exact first-parent inventory, three independently measured identities,
-/// EN/JA parity, truthfulness boundaries, and version-policy roll durable.
+/// EN/JA parity, truthfulness boundaries, and version-policy roll durable while
+/// the release base widens through G793.
 /// </summary>
 public sealed class ReleaseNotesV0310DocsTests
 {
-    private const string Base = "79a245c655e17ac654ac440fda31709ee38e28b8";
-    private const string NormalPlaceholderIdentity = "intent-cli 0.31.1-79a245c-G791";
-    private const string ExplicitReleaseIdentity = "intent-cli 0.31.0-79a245c-G791";
+    private const string Base = "fed2bbc74449b389565b8241732fe376b7a1c421";
+    private const string NormalPlaceholderIdentity = "intent-cli 0.31.1-fed2bbc-G793";
+    private const string ExplicitReleaseIdentity = "intent-cli 0.31.0-fed2bbc-G793";
+    private const string DeveloperReferenceNormalIdentity = "intent-cli 0.31.1-79a245c-G791";
+    private const string DeveloperReferenceExplicitIdentity = "intent-cli 0.31.0-79a245c-G791";
     private const string TaggedIdentity = "intent-cli 0.30.0-f4b01c2-G772";
 
     private static readonly (string Unit, string Pr, string Issue, string Merge)[] Units =
@@ -21,6 +24,8 @@ public sealed class ReleaseNotesV0310DocsTests
         ("G789", "#1725", "#1724", "9d03309a155dc5f714be8a99bb3c2234724bf589"),
         ("G791", "#1728", "#1727", "aa5c49f51bffa634ca7a96a08f1245e53a372904"),
         ("G790", "#1729", "#1726", "79a245c655e17ac654ac440fda31709ee38e28b8"),
+        ("G792", "#1732", "#1730", "26f0edf85cc6371c66ede5383de6543e11acd1fb"),
+        ("G793", "#1733", "#1731", "fed2bbc74449b389565b8241732fe376b7a1c421"),
     ];
 
     private static readonly (string Issue, string Unit, string FollowUp)[] ConsumerFollowUps =
@@ -31,7 +36,7 @@ public sealed class ReleaseNotesV0310DocsTests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void NotesCoverExactlyTheFourGitDerivedUnits(string language)
+    public void NotesCoverExactlyTheSixGitDerivedUnits(string language)
     {
         var notes = ReadNotes(language);
         var listed = Regex.Matches(notes, @"(?m)^- (G\d+) —")
@@ -39,7 +44,7 @@ public sealed class ReleaseNotesV0310DocsTests
             .ToArray();
 
         Assert.Equal(Units.Select(unit => unit.Unit), listed);
-        Assert.Equal(4, listed.Length);
+        Assert.Equal(6, listed.Length);
 
         foreach (var unit in Units)
         {
@@ -107,6 +112,11 @@ public sealed class ReleaseNotesV0310DocsTests
         Assert.Contains("command-route", notes, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("option-level", notes, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(language == "en" ? "**not** v0.31.0" : "**v0.31.0 ではありません**", normalized, StringComparison.Ordinal);
+
+        foreach (Match identity in Regex.Matches(notes, @"(?m)^intent-cli [^\r\n]+"))
+        {
+            Assert.DoesNotContain("79a245c", identity.Value, StringComparison.Ordinal);
+        }
     }
 
     [Theory]
@@ -115,11 +125,11 @@ public sealed class ReleaseNotesV0310DocsTests
     public void NotesPinEveryFirstParentCommitAndPrepareOnlyBoundary(string language)
     {
         var notes = ReadNotes(language);
-        const string range = "v0.30.0..79a245c655e17ac654ac440fda31709ee38e28b8";
+        var range = $"v0.30.0..{Base}";
 
         Assert.Contains($"git rev-list --first-parent --reverse {range}", notes, StringComparison.Ordinal);
         Assert.Contains($"git rev-list --first-parent --count {range}", notes, StringComparison.Ordinal);
-        Assert.Contains("\n4\n", notes, StringComparison.Ordinal);
+        Assert.Contains("\n6\n", notes, StringComparison.Ordinal);
         Assert.Contains("PREPARED / NOT PUBLISHED", notes, StringComparison.Ordinal);
         Assert.Contains("no tag", notes, StringComparison.OrdinalIgnoreCase);
 
@@ -128,6 +138,13 @@ public sealed class ReleaseNotesV0310DocsTests
             Assert.Contains(unit.Merge, notes, StringComparison.Ordinal);
             Assert.Contains($"{unit.Unit} / PR {unit.Pr} / issue {unit.Issue}", notes, StringComparison.Ordinal);
         }
+
+        Assert.Contains("G792", notes, StringComparison.Ordinal);
+        Assert.Contains("G793", notes, StringComparison.Ordinal);
+        Assert.Contains(
+            language == "en" ? "this release's own preparation unit" : "この release 自身の preparation unit",
+            notes,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
@@ -158,6 +175,10 @@ public sealed class ReleaseNotesV0310DocsTests
         Assert.Contains("non-normative", normalized, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(language == "en" ? "neither launches" : "launch も manage もしません", normalized, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Orca", notes, StringComparison.Ordinal);
+        Assert.Contains("settled outcome", normalized, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("merged linked PR", normalized, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("closed linked issue", normalized, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("applied-elsewhere", normalized, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -195,8 +216,8 @@ public sealed class ReleaseNotesV0310DocsTests
             language == "en" ? "### Next release readiness (v0.31.1)" : "### 次リリース準備(v0.31.1)",
             reference,
             StringComparison.Ordinal);
-        Assert.Contains(NormalPlaceholderIdentity, reference, StringComparison.Ordinal);
-        Assert.Contains(ExplicitReleaseIdentity, reference, StringComparison.Ordinal);
+        Assert.Contains(DeveloperReferenceNormalIdentity, reference, StringComparison.Ordinal);
+        Assert.Contains(DeveloperReferenceExplicitIdentity, reference, StringComparison.Ordinal);
         Assert.Contains("release-notes-v0.31.0.md", reference, StringComparison.Ordinal);
         Assert.Contains("release-notes-v0.31.1.md", reference, StringComparison.Ordinal);
         Assert.Contains("ReleaseNotesV0310DocsTests", reference, StringComparison.Ordinal);
