@@ -269,8 +269,23 @@ internal static class AutomationHostSyncPreflightCommand
         var paths = new List<string>();
         foreach (var entry in entries)
         {
-            if (driftPaths.Contains(entry.Path)
-                || !NestedSubmodulePointerDriftDetector.TryGetParentRecordedGitlinkCommit(runner, entry.Path, out _))
+            var parentGitlink = NestedSubmodulePointerDriftDetector.InspectParentGitlink(runner, entry.Path);
+            if (!parentGitlink.IsGitlink)
+            {
+                continue;
+            }
+
+            // G791 repair: a staged parent gitlink (for example porcelain
+            // `MM owner`) is foreign work in the superproject. It is never a
+            // clean pointer-only drift or a safe-stash candidate, even when
+            // the nested checkout itself is clean.
+            if (parentGitlink.HasStagedGitlinkChange)
+            {
+                paths.Add(entry.Path);
+                continue;
+            }
+
+            if (driftPaths.Contains(entry.Path))
             {
                 continue;
             }
@@ -292,7 +307,8 @@ internal static class AutomationHostSyncPreflightCommand
         var drifts = new List<NestedPointerDriftSubmodule>();
         foreach (var entry in entries)
         {
-            if (!NestedSubmodulePointerDriftDetector.TryGetParentRecordedGitlinkCommit(runner, entry.Path, out var parentCommit))
+            var parentGitlink = NestedSubmodulePointerDriftDetector.InspectParentGitlink(runner, entry.Path);
+            if (!parentGitlink.IsAligned)
             {
                 continue;
             }
@@ -302,7 +318,7 @@ internal static class AutomationHostSyncPreflightCommand
                 && NestedSubmodulePointerDriftDetector.TryDetect(
                     runner,
                     entry.Path,
-                    parentCommit,
+                    parentGitlink.HeadRecordedCommit!,
                     owningStatus.StandardOutput,
                     out var drift))
             {

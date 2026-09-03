@@ -727,16 +727,24 @@ internal static class AutomationWorkspaceGuardCommand
 
         foreach (var entry in nonDurableEntries)
         {
-            if (NestedSubmodulePointerDriftDetector.TryGetParentRecordedGitlinkCommit(runner, entry.Path, out var parentCommit))
+            var parentGitlink = NestedSubmodulePointerDriftDetector.InspectParentGitlink(runner, entry.Path);
+            if (parentGitlink.HasStagedGitlinkChange)
+            {
+                // G791 repair: an MM parent entry is not clean nested-pointer
+                // drift. Do not let it fall through to G306, and do not
+                // checkout a value that is only present in the index.
+                submoduleInternalDirty.Add(entry);
+            }
+            else if (parentGitlink.IsAligned)
             {
                 var submoduleStatus = runner.Run(["-C", entry.Path, "status", "--porcelain"]);
                 if (submoduleStatus.ExitCode == 0 && string.IsNullOrWhiteSpace(submoduleStatus.StandardOutput))
-                    gitlinkOnly.Add((entry, parentCommit));
+                    gitlinkOnly.Add((entry, parentGitlink.HeadRecordedCommit!));
                 else if (submoduleStatus.ExitCode == 0
                     && NestedSubmodulePointerDriftDetector.TryDetect(
                         runner,
                         entry.Path,
-                        parentCommit,
+                        parentGitlink.HeadRecordedCommit!,
                         submoduleStatus.StandardOutput,
                         out var drift))
                     nestedPointerDrift.Add(drift);

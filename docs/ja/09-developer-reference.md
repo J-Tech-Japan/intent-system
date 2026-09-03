@@ -3521,6 +3521,11 @@ untouched nested path をすべて列挙します。`host-sync-preflight` は sa
 ではなく同じ classification を返し、workspace-guard は stash も checkout も行わない
 no-op として表します。
 
+parent-recorded gitlink は index ではなく `HEAD` から読み取ります。staged な
+superproject gitlink（たとえば porcelain の `MM owner`）は clean nested-pointer
+drift ではなく foreign parent work です。両 command は fail-closed で拒否し、G306
+safe-stash も direct-proceed lane も提示しません。
+
 これは foreign path を触らずに残す permission です。drifted submodule に対して
 `git stash`、`git checkout`、`git submodule update`、`git add`、`git commit` を
 実行してはいけません。nested checkout に real uncommitted content が一つでもあれば、

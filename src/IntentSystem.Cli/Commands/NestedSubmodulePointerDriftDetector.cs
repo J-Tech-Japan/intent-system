@@ -10,25 +10,58 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal static class NestedSubmodulePointerDriftDetector
 {
-    public static bool TryGetParentRecordedGitlinkCommit(IGitRunner runner, string path, out string parentCommit)
+    /// <summary>
+    /// Inspects the gitlink that the parent commit actually records for a
+    /// submodule path. The index is intentionally not trusted here: an index
+    /// modification means the host is no longer in the narrow G791 "aligned
+    /// parent gitlink" state, even if the checkout happens to match the staged
+    /// value. An unreadable staged comparison is likewise fail-closed.
+    /// </summary>
+    public static ParentGitlinkInspection InspectParentGitlink(IGitRunner runner, string path)
     {
-        var result = runner.Run(["ls-files", "--stage", "--", path]);
-        if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.StandardOutput))
+        var headResult = runner.Run(["ls-tree", "HEAD", "--", path]);
+        if (headResult.ExitCode != 0 || string.IsNullOrWhiteSpace(headResult.StandardOutput))
         {
-            parentCommit = string.Empty;
-            return false;
+            return ParentGitlinkInspection.NotGitlink;
         }
 
-        var firstLine = result.StandardOutput.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries)[0];
-        var parts = firstLine.Split(' ', 3);
+        var firstLine = headResult.StandardOutput.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries)[0];
+        var parts = firstLine.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length < 2 || !string.Equals(parts[0], "160000", StringComparison.Ordinal))
         {
-            parentCommit = string.Empty;
-            return false;
+            return ParentGitlinkInspection.NotGitlink;
+        }
+        // `git ls-tree` prints "<mode> commit <sha>\t<path>". The fallback
+        // form keeps the parser compatible with older lightweight test runners
+        // that modeled just "<mode> <sha>".
+        var commitIndex = parts.Length >= 3 && string.Equals(parts[1], "commit", StringComparison.Ordinal)
+            ? 2
+            : 1;
+        if (parts.Length <= commitIndex || string.IsNullOrWhiteSpace(parts[commitIndex]))
+        {
+            return ParentGitlinkInspection.NotGitlink;
         }
 
-        parentCommit = parts[1].Trim();
-        return true;
+        // `git diff --cached --quiet` exits 1 for a staged change. Any other
+        // nonzero exit is also unsafe to treat as aligned: a read failure must
+        // never become a direct-proceed decision.
+        var stagedResult = runner.Run(["diff", "--cached", "--quiet", "--", path]);
+        return new ParentGitlinkInspection
+        {
+            HeadRecordedCommit = parts[commitIndex].Trim(),
+            HasStagedGitlinkChange = stagedResult.ExitCode != 0,
+        };
+    }
+
+    /// <summary>
+    /// Compatibility helper for callers that only need an aligned parent
+    /// gitlink. The commit is read from <c>HEAD</c>, never from the index.
+    /// </summary>
+    public static bool TryGetParentRecordedGitlinkCommit(IGitRunner runner, string path, out string parentCommit)
+    {
+        var inspection = InspectParentGitlink(runner, path);
+        parentCommit = inspection.HeadRecordedCommit ?? string.Empty;
+        return inspection.IsAligned;
     }
 
     public static string? GetCurrentHead(IGitRunner runner, string submodulePath)
@@ -156,6 +189,25 @@ internal static class NestedSubmodulePointerDriftDetector
         }
         return paths;
     }
+}
+
+/// <summary>
+/// The parent gitlink inspection used by both G791 callers. A gitlink with a
+/// staged replacement is deliberately distinct from a non-gitlink path: it is
+/// a known unsafe host state that must not fall through to a safe-stash or
+/// direct-proceed lane.
+/// </summary>
+internal sealed record ParentGitlinkInspection
+{
+    public static ParentGitlinkInspection NotGitlink { get; } = new();
+
+    public string? HeadRecordedCommit { get; init; }
+
+    public bool HasStagedGitlinkChange { get; init; }
+
+    public bool IsGitlink => !string.IsNullOrWhiteSpace(HeadRecordedCommit);
+
+    public bool IsAligned => IsGitlink && !HasStagedGitlinkChange;
 }
 
 internal sealed record NestedPointerDriftSubmodule

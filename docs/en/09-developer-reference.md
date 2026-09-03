@@ -3494,6 +3494,11 @@ owning submodule and every untouched nested path. `host-sync-preflight` emits
 this same classification instead of the safe-stash lane; workspace-guard
 represents it as a no-op, with no stash or checkout.
 
+The parent-recorded gitlink is read from `HEAD`, not the index. A staged
+superproject gitlink (for example porcelain `MM owner`) is foreign parent work,
+not clean nested-pointer drift: both commands fail closed and do not offer the
+G306 safe-stash or direct-proceed lane.
+
 This permission is to leave foreign paths alone. It must not run `git stash`,
 `git checkout`, `git submodule update`, `git add`, or `git commit` against the
 drifted submodules. If any nested checkout carries real uncommitted content,

@@ -5,6 +5,7 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection(AutomationSubmoduleSafetySharedStateCollection.Name)]
 public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
 {
     public AutomationWorkspaceGuardCommandTests()
@@ -266,9 +267,9 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         // should appear in gitlink_paths, not safe_stash_paths.
         using var workspace = new GuardWorkspace();
         var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n");
-        // ls-files returns mode 160000 → gitlink
-        fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
-            stdout: "160000 abc1234567890abcdef 0\tsubmodules/SekibanAsAService\n");
+        // ls-tree HEAD returns mode 160000 → gitlink.
+        fake.QueueResponse("ls-tree HEAD -- submodules/SekibanAsAService",
+            stdout: "160000 commit abc1234567890abcdef\tsubmodules/SekibanAsAService\n");
         // Internal status → empty (clean)
         fake.QueueResponse("-C submodules/SekibanAsAService status --porcelain", stdout: "");
         AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
@@ -296,8 +297,8 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         // A submodule that has internal uncommitted changes must be refused.
         using var workspace = new GuardWorkspace();
         var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n");
-        fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
-            stdout: "160000 abc1234567890abcdef 0\tsubmodules/SekibanAsAService\n");
+        fake.QueueResponse("ls-tree HEAD -- submodules/SekibanAsAService",
+            stdout: "160000 commit abc1234567890abcdef\tsubmodules/SekibanAsAService\n");
         // Internal status → non-empty (dirty inside submodule)
         fake.QueueResponse("-C submodules/SekibanAsAService status --porcelain",
             stdout: " M src/SomeFile.cs\n");
@@ -326,9 +327,9 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         AutomationWorkspaceGuardCommand.UtcNowFactory = () => new DateTimeOffset(2026, 5, 13, 0, 0, 0, TimeSpan.Zero);
 
         var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n");
-        // Classification: ls-files → 160000 (gitlink), internal status → clean
-        fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
-            stdout: "160000 parentcommit1234 0\tsubmodules/SekibanAsAService\n");
+        // Classification: HEAD gitlink → 160000, internal status → clean.
+        fake.QueueResponse("ls-tree HEAD -- submodules/SekibanAsAService",
+            stdout: "160000 commit parentcommit1234\tsubmodules/SekibanAsAService\n");
         fake.QueueResponse("-C submodules/SekibanAsAService status --porcelain", stdout: "");
         // Begin write: get current submodule HEAD
         fake.QueueResponse("-C submodules/SekibanAsAService rev-parse HEAD",
@@ -379,8 +380,8 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         // A submodule with internal uncommitted changes must refuse begin.
         using var workspace = new GuardWorkspace();
         var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n");
-        fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
-            stdout: "160000 abc1234567890 0\tsubmodules/SekibanAsAService\n");
+        fake.QueueResponse("ls-tree HEAD -- submodules/SekibanAsAService",
+            stdout: "160000 commit abc1234567890\tsubmodules/SekibanAsAService\n");
         fake.QueueResponse("-C submodules/SekibanAsAService status --porcelain",
             stdout: " M src/SomeFile.cs\n");
         AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
@@ -492,13 +493,13 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         AutomationWorkspaceGuardCommand.UtcNowFactory = () => new DateTimeOffset(2026, 5, 13, 0, 0, 0, TimeSpan.Zero);
 
         var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n M scratch.txt\n");
-        // For submodules/SekibanAsAService: ls-files → gitlink, internal → clean
-        fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
-            stdout: "160000 parentcommit1234 0\tsubmodules/SekibanAsAService\n");
+        // For submodules/SekibanAsAService: HEAD gitlink, internal clean.
+        fake.QueueResponse("ls-tree HEAD -- submodules/SekibanAsAService",
+            stdout: "160000 commit parentcommit1234\tsubmodules/SekibanAsAService\n");
         fake.QueueResponse("-C submodules/SekibanAsAService status --porcelain", stdout: "");
-        // For scratch.txt: ls-files → regular file (not 160000)
-        fake.QueueResponse("ls-files --stage -- scratch.txt",
-            stdout: "100644 abc123 0\tscratch.txt\n");
+        // For scratch.txt: regular file (not 160000).
+        fake.QueueResponse("ls-tree HEAD -- scratch.txt",
+            stdout: "100644 blob abc123\tscratch.txt\n");
         // Gitlink begin: rev-parse HEAD and checkout
         fake.QueueResponse("-C submodules/SekibanAsAService rev-parse HEAD",
             stdout: "originalhead5678\n");
@@ -544,12 +545,12 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
 
         var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n M scratch.txt\n");
         // Classification: gitlink + internal clean
-        fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
-            stdout: "160000 parentcommit1234 0\tsubmodules/SekibanAsAService\n");
+        fake.QueueResponse("ls-tree HEAD -- submodules/SekibanAsAService",
+            stdout: "160000 commit parentcommit1234\tsubmodules/SekibanAsAService\n");
         fake.QueueResponse("-C submodules/SekibanAsAService status --porcelain", stdout: "");
         // scratch.txt is regular
-        fake.QueueResponse("ls-files --stage -- scratch.txt",
-            stdout: "100644 abc456 0\tscratch.txt\n");
+        fake.QueueResponse("ls-tree HEAD -- scratch.txt",
+            stdout: "100644 blob abc456\tscratch.txt\n");
         // Collect original HEAD (read-only, before any mutation)
         fake.QueueResponse("-C submodules/SekibanAsAService rev-parse HEAD",
             stdout: "originalhead5678\n");
@@ -595,11 +596,11 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         AutomationWorkspaceGuardCommand.UtcNowFactory = () => new DateTimeOffset(2026, 5, 13, 12, 0, 0, TimeSpan.Zero);
 
         var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n M scratch.txt\n");
-        fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
-            stdout: "160000 parentcommit1234 0\tsubmodules/SekibanAsAService\n");
+        fake.QueueResponse("ls-tree HEAD -- submodules/SekibanAsAService",
+            stdout: "160000 commit parentcommit1234\tsubmodules/SekibanAsAService\n");
         fake.QueueResponse("-C submodules/SekibanAsAService status --porcelain", stdout: "");
-        fake.QueueResponse("ls-files --stage -- scratch.txt",
-            stdout: "100644 abc456 0\tscratch.txt\n");
+        fake.QueueResponse("ls-tree HEAD -- scratch.txt",
+            stdout: "100644 blob abc456\tscratch.txt\n");
         fake.QueueResponse("-C submodules/SekibanAsAService rev-parse HEAD",
             stdout: "originalhead5678\n");
         fake.QueueResponse("-C submodules/SekibanAsAService checkout parentcommit1234", stdout: "");
@@ -658,7 +659,8 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
 
         // The three discriminating facts are read, and the proceed lane never
         // mutates another domain's owning or nested checkout.
-        Assert.Contains(fake.Invocations, args => args.SequenceEqual(["ls-files", "--stage", "--", "submodules/SekibanAsAService"]));
+        Assert.Contains(fake.Invocations, args => args.SequenceEqual(["ls-tree", "HEAD", "--", "submodules/SekibanAsAService"]));
+        Assert.Contains(fake.Invocations, args => args.SequenceEqual(["diff", "--cached", "--quiet", "--", "submodules/SekibanAsAService"]));
         Assert.Contains(fake.Invocations, args => args.SequenceEqual(["-C", "submodules/SekibanAsAService", "rev-parse", "HEAD"]));
         Assert.Contains(fake.Invocations, args => args.SequenceEqual(["-C", "submodules/SekibanAsAService", "submodule", "status"]));
         Assert.Contains(fake.Invocations, args => args.SequenceEqual(["-C", "submodules/SekibanAsAService/Sekiban", "status", "--porcelain"]));
@@ -697,7 +699,7 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         const string owner = "submodules/SekibanAsAService";
         const string parentCommit = "a111111111111111111111111111111111111111";
         var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n");
-        fake.QueueResponse($"ls-files --stage -- {owner}", stdout: $"160000 {parentCommit} 0\t{owner}\n");
+        fake.QueueResponse($"ls-tree HEAD -- {owner}", stdout: $"160000 commit {parentCommit}\t{owner}\n");
         fake.QueueResponse($"-C {owner} status --porcelain", stdout: " M Sekiban\n");
         fake.QueueResponse($"-C {owner} rev-parse HEAD", stdout: parentCommit + "\n");
         fake.QueueResponse($"-C {owner} submodule status", stdout: "+4e086ad8 Sekiban (heads/main)\n");

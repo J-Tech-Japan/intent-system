@@ -10,6 +10,7 @@ namespace IntentSystem.Cli.Tests;
 /// ahead-count and diverged-commit details from the git probe into the analyzer
 /// and surfaces the ff-blocked pre-mutation operator stop in its JSON + exit code.
 /// </summary>
+[Collection(AutomationSubmoduleSafetySharedStateCollection.Name)]
 public sealed class AutomationHostSyncPreflightCommandTests : IDisposable
 {
     public void Dispose() => AutomationHostSyncPreflightCommand.GitProbeFactory = null;
