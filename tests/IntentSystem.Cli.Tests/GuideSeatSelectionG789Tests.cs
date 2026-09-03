@@ -1,4 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
@@ -16,6 +19,51 @@ public sealed class GuideSeatSelectionG789Tests
 {
     private const string Domain = "intent-cli";
     private const string Repo = "J-Tech-Japan/intent-system";
+    private const string ParentGuideReviewPayloadOracleHash = "8e90346d3975ec83b2c450cbd60fdb8ef47a467c759ec8d6fdce6b4f27670e35";
+    private static readonly string[] ParentGuideReviewPayloadFieldNames =
+    [
+        "domain",
+        "repo",
+        "pr",
+        "queue_state_path",
+        "execution_unit",
+        "queue_item_title",
+        "queue_item_state",
+        "packet_directory",
+        "packet_files",
+        "packet_paths",
+        "intent_reference_paths",
+        "review_checklist",
+        "review_boundaries",
+        "approval_summary_requirements",
+        "same_account_review_verdict",
+        "guide_reachability",
+        "topology_workspace_move",
+        "request_update_requirements",
+        "automated_reviewer_comment_triage",
+        "device_gated_evidence_policy",
+        "review_standing_policy",
+        "review_policy_source",
+        "review_blocker_protocol",
+        "pr_blocker_comment_template",
+        "review_blocker_routing_examples",
+        "chat_is_not_durable_workflow_state",
+        "validation_suggestions",
+        "tests_pass_is_necessary_not_sufficient",
+        "gaps",
+        "ready",
+    ];
+    private static readonly string[] ParentGuideReviewPolicyFieldNames =
+    [
+        "source",
+        "domain",
+        "warnings",
+        "device_gated_evidence",
+        "draft_handling",
+        "external_artifact_intake",
+        "test_evidence_sufficiency",
+        "follow_up_tracking",
+    ];
 
     [Fact]
     public void MixedKindTopology_RendersOrderedOrcaBlockAndDifferentKindReviewSeat_G789()
@@ -128,6 +176,36 @@ public sealed class GuideSeatSelectionG789Tests
             markdown,
             "### Review-seat selection (G789)",
             "## Review blocker protocol"));
+    }
+
+    [Fact]
+    public void GuideReview_RemovingOnlyG789SelectionMatchesImmutableParentPayload_G789()
+    {
+        using var fixture = new TopologyFixture(
+            "review-oracle",
+            Path.Combine(Path.GetTempPath(), "g789-guide-review-oracle-root"));
+        fixture.SeedReviewablePr();
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, GuideReviewCommand.Execute(
+            fixture.Context,
+            ["--repo", Repo, "--pr", "1724", "--domain", Domain, "--format", "json"],
+            writer));
+        using var document = JsonDocument.Parse(writer.ToString());
+        var head = document.RootElement;
+        var headPolicy = head.GetProperty("review_standing_policy");
+        Assert.True(headPolicy.TryGetProperty("review_seat_selection", out _));
+
+        using var projected = JsonDocument.Parse(RemoveG789Additions(head));
+        var fields = projected.RootElement.EnumerateObject().ToArray();
+        Assert.Equal(ParentGuideReviewPayloadFieldNames, fields.Select(field => field.Name));
+        var policyFields = fields.Single(field => field.Name == "review_standing_policy")
+            .Value.EnumerateObject().Select(field => field.Name);
+        Assert.Equal(ParentGuideReviewPolicyFieldNames, policyFields);
+
+        var actualOracle = ComputePayloadOracle(fields);
+        Assert.Equal(ParentGuideReviewPayloadOracleHash, actualOracle);
+        Console.WriteLine($"G789 guide-review parent remainder oracle: expected={ParentGuideReviewPayloadOracleHash}; actual={actualOracle}; removed=review_standing_policy.review_seat_selection");
     }
 
     [Fact]
@@ -300,9 +378,13 @@ public sealed class GuideSeatSelectionG789Tests
 
     private sealed class TopologyFixture : IDisposable
     {
-        public TopologyFixture(string suffix)
+        public TopologyFixture(string suffix, string? rootOverride = null)
         {
-            Root = Directory.CreateTempSubdirectory($"guide-g789-{suffix}-").FullName;
+            Root = rootOverride ?? Directory.CreateTempSubdirectory($"guide-g789-{suffix}-").FullName;
+            if (rootOverride is not null && Directory.Exists(Root))
+            {
+                Directory.Delete(Root, recursive: true);
+            }
             Team = $"g789-{suffix}";
             Context = new CliContext
             {
@@ -424,5 +506,22 @@ public sealed class GuideSeatSelectionG789Tests
                 Directory.Delete(Root, recursive: true);
             }
         }
+    }
+
+    private static string RemoveG789Additions(JsonElement root)
+    {
+        var projected = JsonNode.Parse(root.GetRawText())!.AsObject();
+        projected["team_and_duty_split"]?.AsObject().Remove("review_seat_selection");
+        projected["external_residence_operating_contract"]?.AsObject().Remove("orca_operating_block");
+        projected["review_standing_policy"]?.AsObject().Remove("review_seat_selection");
+        return projected.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static string ComputePayloadOracle(IEnumerable<JsonProperty> fields)
+    {
+        var payload = string.Join(
+            "\u001E",
+            fields.Select(field => field.Name + "\u001F" + field.Value.GetRawText()));
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
     }
 }

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
@@ -37,16 +38,16 @@ public sealed class GuideDesignThreadG654Tests
     // order. Only the separately asserted packet_authoring_check block may
     // differ; changing any parent value, nesting, or field order changes this
     // oracle rather than weakening a full-payload assertion.
-    // G789 adds the always-reachable static review-seat rule inside the
-    // existing team_and_duty_split object, so the parent hash includes that
-    // additive nested payload.
-    private const string ParentPayloadOracleHash = "0af4402fa1b72909c2b79712b1a25f3bf1af08aa16d534b8632d510bf8c05082";
+    // G789 is additive: these immutable hashes remain the parent values from
+    // cfdacb4a657d9a60ab82fea3faa435ff732f389f after the new nested keys are
+    // removed from the rendered head.
+    private const string ParentPayloadOracleHash = "c43e27f362c39d9c737fc2269b1979bdf8ad9b7ecb07f3dd0491ba1325d0c54f";
     private static readonly string[] G774BaselinePayloadFieldNames =
         ParentPayloadFieldNames.Append("packet_authoring_check").ToArray();
-    private const string G774BaselinePayloadOracleHash = "a559d7abddaee47e05fc688e811e7edbc0bb8bde54b486c4e32334c53f058592";
+    private const string G774BaselinePayloadOracleHash = "8110a6150605810aaa609fc2c34668341b939e58bc0dc35085c7290e6c72b136";
     // G776 may append exactly one declaration field. The existing G775
     // operating-contract fields remain a raw-value and rendered-order oracle.
-    private const string G775ExternalResidenceContractOracleHash = "01c68d8acd2aa420a7597838ef4ac85ed7ba72797ae820030405be9c16cbbf5a";
+    private const string G775ExternalResidenceContractOracleHash = "1c297f028c3e8ea5e1901b84ff962e542d864aa1139130ea9c1092539789cbe4";
 
     [Theory]
     [InlineData("agmsg", false)]
@@ -132,8 +133,10 @@ public sealed class GuideDesignThreadG654Tests
         using var document = JsonDocument.Parse(writer.ToString());
         var root = document.RootElement;
         var fields = root.EnumerateObject().ToArray();
+        using var projected = JsonDocument.Parse(RemoveG789Additions(root));
+        var projectedFields = projected.RootElement.EnumerateObject().ToArray();
 
-        var g774BaselineFields = fields
+        var g774BaselineFields = projectedFields
             .Where(field => field.Name is not "external_residence_operating_contract" and not "unreadable_repair_response")
             .ToArray();
         Assert.Equal(G774BaselinePayloadFieldNames, g774BaselineFields.Select(field => field.Name));
@@ -141,10 +144,11 @@ public sealed class GuideDesignThreadG654Tests
         Assert.True(
             string.Equals(G774BaselinePayloadOracleHash, g774BaselineOracle, StringComparison.Ordinal),
             $"G774 baseline payload oracle changed. Expected '{G774BaselinePayloadOracleHash}', actual '{g774BaselineOracle}'.");
-        var parentPayloadOracle = ComputePayloadOracle(fields.Where(field => field.Name is not "packet_authoring_check" and not "external_residence_operating_contract" and not "unreadable_repair_response"));
+        var parentPayloadOracle = ComputePayloadOracle(projectedFields.Where(field => field.Name is not "packet_authoring_check" and not "external_residence_operating_contract" and not "unreadable_repair_response"));
         Assert.True(
             string.Equals(ParentPayloadOracleHash, parentPayloadOracle, StringComparison.Ordinal),
             $"G654 parent payload oracle changed. Expected '{ParentPayloadOracleHash}', actual '{parentPayloadOracle}'.");
+        Console.WriteLine($"G789 guide design-thread parent remainder oracle: expected={ParentPayloadOracleHash}; actual={parentPayloadOracle}; removed=team_and_duty_split.review_seat_selection,external_residence_operating_contract.orca_operating_block");
 
         var check = root.GetProperty("packet_authoring_check");
         Assert.Equal(
@@ -185,8 +189,10 @@ public sealed class GuideDesignThreadG654Tests
         using var document = JsonDocument.Parse(writer.ToString());
         var root = document.RootElement;
         var fields = root.EnumerateObject().ToArray();
+        using var projected = JsonDocument.Parse(RemoveG789Additions(root));
+        var projectedFields = projected.RootElement.EnumerateObject().ToArray();
 
-        var g775BaselineFields = fields
+        var g775BaselineFields = projectedFields
             .Where(field => field.Name != "unreadable_repair_response")
             .ToArray();
         Assert.Equal(
@@ -212,7 +218,8 @@ public sealed class GuideDesignThreadG654Tests
             },
             contract.EnumerateObject().Select(field => field.Name));
 
-        var g775Fields = contract
+        var projectedContract = projected.RootElement.GetProperty("external_residence_operating_contract");
+        var g775Fields = projectedContract
             .EnumerateObject()
             .Where(field => field.Name != "wake_channel_declaration")
             .ToArray();
@@ -224,7 +231,6 @@ public sealed class GuideDesignThreadG654Tests
                 "collect_loop",
                 "wake_channel_pattern",
                 "orca_worked_example",
-                "orca_operating_block",
                 "residence_transition",
             },
             g775Fields.Select(field => field.Name));
@@ -232,6 +238,7 @@ public sealed class GuideDesignThreadG654Tests
         Assert.True(
             string.Equals(G775ExternalResidenceContractOracleHash, g775Oracle, StringComparison.Ordinal),
             $"G775 operating-contract oracle changed. Expected '{G775ExternalResidenceContractOracleHash}', actual '{g775Oracle}'.");
+        Console.WriteLine($"G789 guide design-thread G775 remainder oracle: expected={G775ExternalResidenceContractOracleHash}; actual={g775Oracle}; removed=external_residence_operating_contract.orca_operating_block");
 
         var frontendRelabel = contract.GetProperty("frontend_relabel").GetString()!;
         Assert.StartsWith("External-to-external frontend relabel:", frontendRelabel);
@@ -499,6 +506,14 @@ public sealed class GuideDesignThreadG654Tests
             "\u001E",
             fields.Select(field => field.Name + "\u001F" + field.Value.GetRawText()));
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
+    }
+
+    private static string RemoveG789Additions(JsonElement root)
+    {
+        var projected = JsonNode.Parse(root.GetRawText())!.AsObject();
+        projected["team_and_duty_split"]?.AsObject().Remove("review_seat_selection");
+        projected["external_residence_operating_contract"]?.AsObject().Remove("orca_operating_block");
+        return projected.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 
     private static CliContext CreateContext() => new()

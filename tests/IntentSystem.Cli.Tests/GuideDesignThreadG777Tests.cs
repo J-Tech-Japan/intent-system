@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
@@ -39,9 +40,10 @@ public sealed class GuideDesignThreadG777Tests
         "external_residence_operating_contract",
     ];
 
-    // The full G789 payload, including raw G774/G775/G789 blocks, stays
-    // stable when the one G777 sibling is excluded.
-    private const string G776BaselinePayloadOracleHash = "bfb054d9b5ce9006dbae2764d7ed5648e2dfa736054f0532987ebe857f2712b8";
+    // Immutable G776 parent oracle from cfdacb4a657d9a60ab82fea3faa435ff732f389f.
+    // The current head is projected back to that parent by removing only the
+    // G789 nested additions before this hash is computed.
+    private const string G776BaselinePayloadOracleHash = "5ebb02d016c9afec671e58184f993705d0c6e597ecf334239b19d704bfaf3294";
 
     [Fact]
     public void RenderedLivenessGuidance_NamesTheSanctionedDryRunBeforeWriteResponse_G777()
@@ -68,6 +70,8 @@ public sealed class GuideDesignThreadG777Tests
     {
         using var document = JsonDocument.Parse(RenderJson());
         var fields = document.RootElement.EnumerateObject().ToArray();
+        using var projected = JsonDocument.Parse(RemoveG789Additions(document.RootElement));
+        var projectedFields = projected.RootElement.EnumerateObject().ToArray();
 
         Assert.Equal(
             G776BaselinePayloadFieldNames.Append("unreadable_repair_response"),
@@ -76,11 +80,12 @@ public sealed class GuideDesignThreadG777Tests
         var addition = Assert.Single(fields, field => field.Name == "unreadable_repair_response");
         Assert.Contains("repair-unreadable", addition.Value.GetString()!, StringComparison.Ordinal);
 
-        var baseline = fields.Where(field => field.Name != "unreadable_repair_response").ToArray();
+        var baseline = projectedFields.Where(field => field.Name != "unreadable_repair_response").ToArray();
         var actualOracle = ComputePayloadOracle(baseline);
         Assert.True(
             string.Equals(G776BaselinePayloadOracleHash, actualOracle, StringComparison.Ordinal),
             $"G776 sibling baseline changed. Expected '{G776BaselinePayloadOracleHash}', actual '{actualOracle}'.");
+        Console.WriteLine($"G789 guide design-thread G776 remainder oracle: expected={G776BaselinePayloadOracleHash}; actual={actualOracle}; removed=team_and_duty_split.review_seat_selection,external_residence_operating_contract.orca_operating_block");
     }
 
     [Fact]
@@ -149,6 +154,14 @@ public sealed class GuideDesignThreadG777Tests
             "\u001E",
             fields.Select(field => field.Name + "\u001F" + field.Value.GetRawText()));
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
+    }
+
+    private static string RemoveG789Additions(JsonElement root)
+    {
+        var projected = JsonNode.Parse(root.GetRawText())!.AsObject();
+        projected["team_and_duty_split"]?.AsObject().Remove("review_seat_selection");
+        projected["external_residence_operating_contract"]?.AsObject().Remove("orca_operating_block");
+        return projected.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 
     private static CliContext CreateContext() => new()
