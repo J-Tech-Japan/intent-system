@@ -19,7 +19,9 @@ public sealed class GuideSeatSelectionG789Tests
 {
     private const string Domain = "intent-cli";
     private const string Repo = "J-Tech-Japan/intent-system";
-    private const string ParentGuideReviewPayloadOracleHash = "8e90346d3975ec83b2c450cbd60fdb8ef47a467c759ec8d6fdce6b4f27670e35";
+    // Immutable parent remainder oracle from cfdacb4a657d9a60ab82fea3faa435ff732f389f,
+    // rendered with the deterministic /tmp fixture root used by this test.
+    private const string ParentGuideReviewPayloadOracleHash = "dcc8a884b71ef40c2567bcd6141ded8c035c2f20fc42632e829bd5e2b875ce8c";
     private static readonly string[] ParentGuideReviewPayloadFieldNames =
     [
         "domain",
@@ -183,7 +185,7 @@ public sealed class GuideSeatSelectionG789Tests
     {
         using var fixture = new TopologyFixture(
             "review-oracle",
-            Path.Combine(Path.GetTempPath(), "g789-guide-review-oracle-root"));
+            "/tmp/g789-guide-review-oracle-root");
         fixture.SeedReviewablePr();
 
         using var writer = new StringWriter();
