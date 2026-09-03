@@ -124,6 +124,40 @@ internal static class NotifyReportOutboxStore
         }
     }
 
+    /// <summary>
+    /// Reads every current sender-side report entry for the team. A delivered
+    /// child report remains execution evidence even after its local outbox
+    /// state changes from <c>undelivered</c> to <c>delivered</c>.
+    /// </summary>
+    public static IReadOnlyList<NotifyReportOutboxEntry> ReadAll(
+        string routingRoot,
+        string domain,
+        string team,
+        out string? error)
+    {
+        string path;
+        try
+        {
+            path = ResolvePath(routingRoot, domain, team);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            error = exception.Message;
+            return [];
+        }
+
+        lock (Sync)
+        {
+            var current = ReadCurrent(path, out error);
+            return error is null
+                ? current.Values
+                    .OrderBy(value => value.CreatedAt)
+                    .ThenBy(value => value.TaskId, StringComparer.Ordinal)
+                    .ToArray()
+                : [];
+        }
+    }
+
     private static Dictionary<string, NotifyReportOutboxEntry> ReadCurrent(string path, out string? error)
     {
         error = null;

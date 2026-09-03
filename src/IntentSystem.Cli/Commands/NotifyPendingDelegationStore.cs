@@ -447,6 +447,41 @@ internal static class NotifyPendingDelegationStore
         return records.OrderBy(value => value.DispatchedAt).ToArray();
     }
 
+    /// <summary>
+    /// Reads the current record for every dispatch generation in one team
+    /// ledger. Unlike <see cref="ReadOpen"/>, settled children remain visible:
+    /// their original dispatch is still evidence that the recipient delegated
+    /// the delivered unit downstream.
+    /// </summary>
+    public static IReadOnlyList<NotifyPendingDelegation> ReadAll(
+        string routingRoot,
+        string domain,
+        string team,
+        out string? error)
+    {
+        string path;
+        try
+        {
+            path = ResolvePath(routingRoot, domain, team);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            error = exception.Message;
+            return [];
+        }
+
+        lock (Sync)
+        {
+            var current = ReadCurrent(path, out error);
+            return error is null
+                ? current.Values
+                    .OrderBy(value => value.DispatchedAt)
+                    .ThenBy(value => value.TaskId, StringComparer.Ordinal)
+                    .ToArray()
+                : [];
+        }
+    }
+
     private static NotifyPendingStoreWriteResult Append(string path, NotifyPendingDelegation record)
     {
         var eventRecord = new NotifyPendingEvent

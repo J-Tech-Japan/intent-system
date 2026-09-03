@@ -60,9 +60,13 @@ public sealed class NotifySupervisionG748Tests : IDisposable
         Assert.Contains("task_id:G748-done", finding.Evidence!, StringComparer.Ordinal);
         Assert.Contains("seat 'role=implementation;workspace=wG748;pane=wG748:p2'", finding.Summary, StringComparison.Ordinal);
         Assert.Contains("300s execution-start window", finding.Summary, StringComparison.Ordinal);
-        Assert.Contains("Canonical report absent", finding.Summary, StringComparison.Ordinal);
-        Assert.Contains("expected artifact absent", finding.Summary, StringComparison.Ordinal);
-        Assert.Contains("durable target-entity transition absent", finding.Summary, StringComparison.Ordinal);
+        Assert.Contains("Source-derived execution evidence counts:", finding.Summary, StringComparison.Ordinal);
+        Assert.Contains("pending-ledger=0", finding.Summary, StringComparison.Ordinal);
+        Assert.Contains("report-outbox=0", finding.Summary, StringComparison.Ordinal);
+        Assert.Contains("notification-events=0", finding.Summary, StringComparison.Ordinal);
+        Assert.Contains("queue-state=0", finding.Summary, StringComparison.Ordinal);
+        Assert.Contains("continuation-chain=0", finding.Summary, StringComparison.Ordinal);
+        Assert.Contains("expected-artifact=0", finding.Summary, StringComparison.Ordinal);
         Assert.Contains("window_seconds:300", finding.Evidence!, StringComparer.Ordinal);
         Assert.Equal(pending.TaskId, NotifyPendingDelegationStore.Find(
             root,

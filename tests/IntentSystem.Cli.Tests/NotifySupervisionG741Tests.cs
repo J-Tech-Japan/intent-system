@@ -71,16 +71,25 @@ public sealed class NotifySupervisionG741Tests : IDisposable
         Assert.Contains("G741-fired", finding.Summary, StringComparison.Ordinal);
         Assert.Contains("seat 'role=implementation;workspace=wG741;pane=wG741:p2'", finding.Summary, StringComparison.Ordinal);
         Assert.Contains("300s execution-start window", finding.Summary, StringComparison.Ordinal);
-        Assert.Contains("Canonical report absent", finding.Summary, StringComparison.Ordinal);
-        Assert.Contains("expected artifact absent", finding.Summary, StringComparison.Ordinal);
-        Assert.Contains("durable target-entity transition absent", finding.Summary, StringComparison.Ordinal);
+        Assert.Contains("Source-derived execution evidence counts:", finding.Summary, StringComparison.Ordinal);
+        Assert.Contains("pending-ledger=0", finding.Summary, StringComparison.Ordinal);
+        Assert.Contains("report-outbox=0", finding.Summary, StringComparison.Ordinal);
+        Assert.Contains("notification-events=0", finding.Summary, StringComparison.Ordinal);
+        Assert.Contains("queue-state=0", finding.Summary, StringComparison.Ordinal);
+        Assert.Contains("continuation-chain=0", finding.Summary, StringComparison.Ordinal);
+        Assert.Contains("expected-artifact=0", finding.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("Canonical report absent", finding.Summary, StringComparison.Ordinal);
         Assert.Contains("Checked sources:", finding.Summary, StringComparison.Ordinal);
         Assert.Contains("task_id:G741-fired", finding.Evidence!, StringComparer.Ordinal);
         Assert.Contains($"delivered_at:{firstNow:O}", finding.Evidence!, StringComparer.Ordinal);
         Assert.Contains("window_seconds:300", finding.Evidence!, StringComparer.Ordinal);
-        Assert.Contains(finding.Evidence!, item => item.StartsWith("canonical_report:absent", StringComparison.Ordinal));
-        Assert.Contains(finding.Evidence!, item => item.StartsWith("expected_artifact:absent", StringComparison.Ordinal));
-        Assert.Contains(finding.Evidence!, item => item.StartsWith("durable_target_entity_transition:absent", StringComparison.Ordinal));
+        Assert.Contains(finding.Evidence!, item => item.StartsWith("source_counts:", StringComparison.Ordinal));
+        Assert.Contains(finding.Evidence!, item => item.StartsWith("pending-ledger:count=0", StringComparison.Ordinal));
+        Assert.Contains(finding.Evidence!, item => item.StartsWith("report-outbox:count=0", StringComparison.Ordinal));
+        Assert.Contains(finding.Evidence!, item => item.StartsWith("notification-events:count=0", StringComparison.Ordinal));
+        Assert.Contains(finding.Evidence!, item => item.StartsWith("queue-state:count=0", StringComparison.Ordinal));
+        Assert.Contains(finding.Evidence!, item => item.StartsWith("continuation-chain:count=0", StringComparison.Ordinal));
+        Assert.Contains(finding.Evidence!, item => item.StartsWith("expected-artifact:count=0", StringComparison.Ordinal));
         Assert.Contains(runner.Calls, call =>
             call.Arguments.Take(3).SequenceEqual(["agent", "prompt", "wG741:p1"]));
 

@@ -597,7 +597,7 @@ message を黙らせず、2 つの outcome を operator が整合できるよう
 
 **活動証拠 (G652 — 1.x を通じた preview)。** 実行中 process は作業の証拠ではありません。herdr では status が `agent_status`、`state_change_seq`、最後の状態変更時刻も示します。`working` には working agent と進行する活動が必要です。sequence baseline がまだない場合、status は `live-idle` を断定せず `activity-unknown` を返します。dispatch 後の状態変更時刻は cold-start の `working` の十分な証拠です。supervision は最初の baseline を live-idle finding なしで記録し、その後に変化しない live-idle recipient に report がなければ一度だけ表示して terminal の確認を remedy として示します。この finding のために terminal content を読んだり recovery に入ったりしません。declared bound が configured interval より小さい場合は、supervise start と各 cycle で structural false alarm warning を出し、CLI が黙って補正する値ではありません。
 
-### delivery 済みだが observable start がない委譲 (G741)
+### delivery 済みだが observable start がない委譲 (G741/G788)
 
 `notify supervise` は、永続的な delivery evidence が
 `delivery_succeeded=true`、recipient が後続 observation でも
@@ -608,6 +608,20 @@ task の canonical report が absent、全 expected artifact source が absent�
 永続的な target-entity transition source が absent でなければなりません。
 seat が working/started、artifact・report・target transition が見える場合は
 non-finding です。
+
+G788 では、この absence 判定を単一の missing report から推測せず source-derived にします。
+configured execution-unit regex から共有の `execution-unit token` を抽出し、
+`pending-ledger`、`report-outbox`、`notification-events`、`queue-state`、
+`continuation-chain`、`expected-artifact` を確認します。後ろの 2 つは従来の
+continuation と expected artifact check を保持し、最初の 4 つは downstream delegation、
+child-report delivery、delivery 後の queue progress を示します。token に一致する source
+が一つでもあれば positive execution evidence となり finding は抑制されます。
+recipient が downstream activity を発行しているが target token を持たない場合は、
+escalation wake を出さず informational な
+`delegation-in-progress-no-direct-report` を記録します。6 source が全て absent のときだけ
+finding を出し、各 source の `Source-derived` count を記録します。configured form の
+`G779-start`、`design-delegate-SKS-G909`、lower-case equivalent は case-insensitive に
+token は一致し、tokenless text は evidence ではありません。
 
 recipient activity の観測 state set は `idle` と `done` の 2 つです。`idle` は
 開始されなかった seat、`done` は turn を完了したが delegated work を生成しなかった
