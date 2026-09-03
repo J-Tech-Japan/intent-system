@@ -82,6 +82,7 @@ public sealed class GuideSeatSelectionG789Tests
         Assert.Contains("review-seat selection (G789)", markdown, StringComparison.Ordinal);
 
         Fixture("mixed design-thread Orca block JSON", operatingBlock.GetRawText());
+        Fixture("mixed design-thread wake declaration JSON", contract.GetProperty("wake_channel_declaration").GetRawText());
         Fixture("mixed design-thread review-seat JSON", selection.GetRawText());
         Fixture("mixed design-thread Markdown Orca block", Section(
             markdown,
