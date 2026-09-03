@@ -108,11 +108,16 @@ namespace IntentSystem.Cli.Commands;
 ///   — never <c>claimed-but-silent</c>, since the unit is legitimately
 ///   waiting, not silently stalled. Names the canonical <c>automation
 ///   issue-block</c> reconcile command.</item>
+/// <item><c>delegation-settled-by-outcome</c> (G793) — a pending delegation
+///   whose unit has a merged linked PR and closed linked issue. The row is
+///   retained as informational evidence with the merge SHA and issue number,
+///   but is excluded from outstanding counts and stalled status.</item>
 /// <item><c>pending-delegation-open</c> — an open durable notify delegation
 ///   older than the stale threshold. It is informational: the recommendation
-///   is to inspect the task and, only after an attributed outcome judgment, use
-///   <c>notify dispose</c>; elapsed time never settles it. Disposition-settled
-///   and report-settled records are excluded from both this population and the
+///   names the complete <c>notify dispose --kind applied-elsewhere</c> route;
+///   only an attributed outcome judgment may use it, and elapsed time never
+///   settles the row. Disposition-, report-, and independently observed
+///   merged/closed-outcome records are excluded from this population and the
 ///   open count.</item>
 /// </list>
 ///
@@ -246,6 +251,13 @@ internal static class AutomationStalledWorkCommand
     /// is no longer owed and never writes a disposition.
     /// </summary>
     public const string KindPendingDelegationOpen = "pending-delegation-open";
+
+    /// <summary>
+    /// G793: a durable delegation record whose execution unit is evidenced by
+    /// a merged linked PR and the PR's closed linked issue. This remains
+    /// visible as informational evidence, but is not an outstanding stall.
+    /// </summary>
+    public const string KindDelegationSettledByOutcome = "delegation-settled-by-outcome";
 
     /// <summary>
     /// G533: an issue claimed via <c>intent-issue-in-progress</c> (with no
@@ -746,7 +758,14 @@ internal static class AutomationStalledWorkCommand
             excluded,
             warnings,
             recordingRole);
-        CollectPendingDelegations(openPendingDelegations, now, capabilityMatrix, items);
+        var settledPendingDelegations = CollectPendingDelegations(
+            openPendingDelegations,
+            openIssues,
+            mergedPrs,
+            repo,
+            now,
+            capabilityMatrix,
+            items);
 
         var operatorAttention = CollectOperatorAttention(context, domain, now, items);
 
@@ -785,14 +804,19 @@ internal static class AutomationStalledWorkCommand
             RecordingRole = recordingRole,
             StaleMinutesThreshold = staleMinutes,
             BacklogIdleMinutesThreshold = backlogIdleMinutes,
-            OpenPendingDelegations = openPendingDelegations.Count,
+            // G793: the diagnostic count describes genuinely outstanding
+            // delegations, so an open store record with independently
+            // observed merged/closed outcome is excluded from this count.
+            OpenPendingDelegations = openPendingDelegations.Count - settledPendingDelegations,
             // G589: a still-pending CI item remains visible, but it must not
             // by itself trip a heartbeat/watcher wake. The kind changes when
             // the exact head becomes terminal, and that terminal item is the
             // dedupe-ready actionable signal. Other historical informational
             // kinds retain their established stalled semantics.
             Stalled = githubApiFailure is not null
-                || filtered.Any(item => item.Kind is not KindCiPending and not KindAwaitingOperatorMerge),
+                || filtered.Any(item => item.Kind is not KindCiPending
+                    and not KindAwaitingOperatorMerge
+                    and not KindDelegationSettledByOutcome),
             Items = resultItems,
             Excluded = excluded,
             Warnings = warnings,
@@ -1040,33 +1064,194 @@ internal static class AutomationStalledWorkCommand
         }
     }
 
-    private static void CollectPendingDelegations(
+    private static int CollectPendingDelegations(
         IReadOnlyList<NotifyPendingDelegation> openDelegations,
+        IReadOnlyList<GitHubAutomationIssueCandidate> openIssues,
+        IReadOnlyList<GitHubAutomationPrCandidate> mergedPrs,
+        string repo,
         DateTimeOffset now,
         TeamModeCapabilityMatrix capabilityMatrix,
         List<StalledWorkItem> items)
     {
         if (!capabilityMatrix.IsApplicable(TeamModeCapabilityClasses.Delegation))
         {
-            return;
+            return 0;
         }
 
+        var settledCount = 0;
         foreach (var delegation in openDelegations)
         {
             var ageMinutes = Math.Max(0, (int)Math.Floor((now - delegation.DispatchedAt).TotalMinutes));
+            var outcome = FindSettledDelegationOutcome(delegation, openIssues, mergedPrs, repo);
+            if (outcome is not null)
+            {
+                settledCount++;
+                items.Add(new StalledWorkItem
+                {
+                    Kind = KindDelegationSettledByOutcome,
+                    ExecutionUnit = delegation.TaskId,
+                    Issue = new StalledWorkRef
+                    {
+                        Number = outcome.ClosedIssueNumber,
+                        Url = outcome.ClosedIssueUrl,
+                    },
+                    Pr = new StalledWorkRef
+                    {
+                        Number = outcome.PullRequestNumber,
+                        Url = outcome.PullRequestUrl,
+                    },
+                    AgeMinutes = ageMinutes,
+                    IsInformational = true,
+                    RecommendedAction =
+                        $"settled by outcome: merged PR #{outcome.PullRequestNumber} at "
+                        + $"{outcome.MergeSha} closed issue #{outcome.ClosedIssueNumber}; "
+                        + "no pending-state write was performed.",
+                    MergeSha = outcome.MergeSha,
+                    ClosedIssueNumber = outcome.ClosedIssueNumber,
+                });
+                continue;
+            }
+
             items.Add(new StalledWorkItem
             {
                 Kind = KindPendingDelegationOpen,
                 ExecutionUnit = delegation.TaskId,
                 AgeMinutes = ageMinutes,
                 IsInformational = true,
-                RecommendedAction =
-                    $"inspect open notify delegation '{delegation.TaskId}' for team '{delegation.Team}'; "
-                    + "if its outcome is no longer owed, an attributed owner may run "
-                    + $"`intent-cli notify dispose --domain {delegation.Domain} --team {delegation.Team} --task-id {delegation.TaskId} ... --write`; elapsed time alone never settles it.",
+                RecommendedAction = BuildPendingDelegationDisposalAction(delegation),
             });
         }
+
+        return settledCount;
     }
+
+    private static string BuildPendingDelegationDisposalAction(NotifyPendingDelegation delegation) =>
+        $"inspect open notify delegation '{delegation.TaskId}' for team '{delegation.Team}'; "
+        + "if its outcome is no longer owed, an attributed owner may run "
+        + $"`intent-cli notify dispose --domain {delegation.Domain} --team {delegation.Team} "
+        + $"--task-id {delegation.TaskId} --kind applied-elsewhere --actor \"<actor>\" "
+        + "--reason \"<reason>\" --applied-outcome-evidence \"<evidence>\" --write`; "
+        + "elapsed time alone never settles it.";
+
+    private static DelegationOutcomeEvidence? FindSettledDelegationOutcome(
+        NotifyPendingDelegation delegation,
+        IReadOnlyList<GitHubAutomationIssueCandidate> openIssues,
+        IReadOnlyList<GitHubAutomationPrCandidate> mergedPrs,
+        string repo)
+    {
+        var delegationText = string.Join(
+            "\n",
+            new[] { delegation.TaskId, delegation.ExpectedArtifact, delegation.Objective ?? string.Empty }
+                .Concat(delegation.ExpectedArtifacts ?? Array.Empty<string>())
+                .Concat(delegation.Inputs ?? Array.Empty<string>()));
+        var referencedNumbers = ExtractGitHubReferenceNumbers(delegationText);
+        var unitTokens = ExtractExecutionUnitTokens(delegationText);
+
+        foreach (var pr in mergedPrs)
+        {
+            if (!string.Equals(pr.State, "MERGED", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(pr.MergeCommit?.Oid)
+                || !MatchesDelegationEvidence(pr, unitTokens, referencedNumbers))
+            {
+                continue;
+            }
+
+            var closedReferences = pr.ClosingIssuesReferences
+                .Where(reference => reference.Number > 0 && ReferenceMatchesRepo(reference, repo))
+                .Where(reference => !openIssues.Any(issue =>
+                    issue.Number == reference.Number && IsOpen(issue.State)))
+                .ToArray();
+            if (closedReferences.Length == 0)
+            {
+                continue;
+            }
+
+            // A delegation that names a particular issue gets that exact
+            // closure as evidence. If it names no issue, accept only a single
+            // closing reference rather than guessing across multiple issues.
+            var linkedReferences = closedReferences
+                .Where(reference => referencedNumbers.Contains(reference.Number))
+                .ToArray();
+            var linkedReference = linkedReferences.Length == 1
+                ? linkedReferences[0]
+                : linkedReferences.Length == 0 && closedReferences.Length == 1
+                    ? closedReferences[0]
+                    : null;
+            if (linkedReference is null)
+            {
+                continue;
+            }
+
+            return new DelegationOutcomeEvidence(
+                pr.Number,
+                pr.Url,
+                pr.MergeCommit!.Oid,
+                linkedReference.Number,
+                $"https://github.com/{repo}/issues/{linkedReference.Number}");
+        }
+
+        return null;
+    }
+
+    private static bool MatchesDelegationEvidence(
+        GitHubAutomationPrCandidate pr,
+        IReadOnlySet<string> unitTokens,
+        IReadOnlySet<int> referencedNumbers)
+    {
+        var candidateText = $"{pr.Title}\n{pr.Body}";
+        if (unitTokens.Any(token => ContainsToken(candidateText, token)))
+        {
+            return true;
+        }
+
+        return referencedNumbers.Contains(pr.Number)
+            || pr.ClosingIssuesReferences.Any(reference => referencedNumbers.Contains(reference.Number));
+    }
+
+    private static IReadOnlySet<string> ExtractExecutionUnitTokens(string text) =>
+        System.Text.RegularExpressions.Regex.Matches(
+                text,
+                @"(?<![A-Za-z0-9])G[0-9]+(?![A-Za-z0-9])",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            .Select(match => match.Value.ToUpperInvariant())
+            .ToHashSet(StringComparer.Ordinal);
+
+    private static IReadOnlySet<int> ExtractGitHubReferenceNumbers(string text) =>
+        System.Text.RegularExpressions.Regex.Matches(text, @"(?:issues|pull)/([0-9]+)|#([0-9]+)")
+            .Select(match => match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value)
+            .Select(value => int.TryParse(value, out var number) ? number : 0)
+            .Where(number => number > 0)
+            .ToHashSet();
+
+    private static bool ContainsToken(string text, string token)
+    {
+        var searchStart = 0;
+        while (true)
+        {
+            var index = text.IndexOf(token, searchStart, StringComparison.OrdinalIgnoreCase);
+            if (index < 0)
+            {
+                return false;
+            }
+
+            var beforeOk = index == 0 || !char.IsLetterOrDigit(text[index - 1]);
+            var afterIndex = index + token.Length;
+            var afterOk = afterIndex >= text.Length || !char.IsLetterOrDigit(text[afterIndex]);
+            if (beforeOk && afterOk)
+            {
+                return true;
+            }
+
+            searchStart = index + 1;
+        }
+    }
+
+    private sealed record DelegationOutcomeEvidence(
+        int PullRequestNumber,
+        string PullRequestUrl,
+        string MergeSha,
+        int ClosedIssueNumber,
+        string ClosedIssueUrl);
 
     /// <summary>
     /// G670: keeps a backlog-ready-idle contract-incomplete exclusion only
@@ -4719,6 +4904,14 @@ internal static class AutomationStalledWorkCommand
                 {
                     writer.WriteLine($"- pr: #{pr.Number} — {pr.Url}");
                 }
+                if (item.MergeSha is { } mergeSha)
+                {
+                    writer.WriteLine($"- merge_sha: {mergeSha}");
+                }
+                if (item.ClosedIssueNumber is { } closedIssueNumber)
+                {
+                    writer.WriteLine($"- closed_issue_number: #{closedIssueNumber}");
+                }
                 if (item.ReleasedVersion is { } releasedVersion)
                 {
                     writer.WriteLine($"- released_version: {releasedVersion}");
@@ -4920,8 +5113,9 @@ internal sealed record AutomationStalledWorkResult
     public required int BacklogIdleMinutesThreshold { get; init; }
 
     /// <summary>
-    /// G671: count of current open notify delegations for the requested
-    /// domain. Report-settled and disposition-settled records are excluded.
+    /// G671/G793: count of genuinely outstanding notify delegations for the
+    /// requested domain. Report-, disposition-, and independently observed
+    /// merged/closed-outcome records are excluded.
     /// </summary>
     [JsonPropertyName("open_pending_delegations")]
     public required int OpenPendingDelegations { get; init; }
@@ -5047,6 +5241,22 @@ internal sealed record StalledWorkItem
 
     [JsonPropertyName("recommended_action")]
     public required string RecommendedAction { get; init; }
+
+    /// <summary>
+    /// G793: merge commit evidence for a delegation settled by an observed
+    /// merged linked PR. Null for all other finding kinds.
+    /// </summary>
+    [JsonPropertyName("merge_sha")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MergeSha { get; init; }
+
+    /// <summary>
+    /// G793: the linked issue whose closure is part of the settlement proof.
+    /// Null for all other finding kinds.
+    /// </summary>
+    [JsonPropertyName("closed_issue_number")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ClosedIssueNumber { get; init; }
 
     /// <summary>
     /// G725: the release and the two policy values required to clear the

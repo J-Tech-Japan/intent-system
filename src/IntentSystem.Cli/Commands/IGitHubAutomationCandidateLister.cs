@@ -148,6 +148,14 @@ internal sealed record GitHubAutomationPrCandidate
     public string HeadRefOid { get; init; } = string.Empty;
 
     /// <summary>
+    /// G793: the merge commit reported by GitHub for a merged PR. This is
+    /// separate from <see cref="HeadRefOid"/>: the branch head proves what
+    /// was reviewed, while the merge commit proves that the unit landed.
+    /// </summary>
+    [JsonPropertyName("mergeCommit")]
+    public GitHubAutomationMergeCommit? MergeCommit { get; init; }
+
+    /// <summary>
     /// G589: authoritative GitHub check/status rollup for <see cref="HeadRefOid"/>.
     /// The stalled-work analyzer normalizes CheckRun and StatusContext entries
     /// without performing any workflow transition.
@@ -155,6 +163,13 @@ internal sealed record GitHubAutomationPrCandidate
     [JsonPropertyName("statusCheckRollup")]
     public IReadOnlyList<GitHubAutomationStatusCheckCandidate> StatusCheckRollup { get; init; }
         = Array.Empty<GitHubAutomationStatusCheckCandidate>();
+}
+
+/// <summary>G793: immutable merge SHA nested in GitHub's PR payload.</summary>
+internal sealed record GitHubAutomationMergeCommit
+{
+    [JsonPropertyName("oid")]
+    public string Oid { get; init; } = string.Empty;
 }
 
 /// <summary>G589: union-shaped row from GitHub's PR statusCheckRollup.</summary>
@@ -287,7 +302,7 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
     // can map an approved-but-draft PR to `approved-pr-draft-blocked`
     // (G297) instead of attempting a merge.
     internal const string PrListJsonFields =
-        "number,title,url,body,baseRefName,createdAt,updatedAt,labels,closingIssuesReferences,state,isDraft,headRefOid,statusCheckRollup";
+        "number,title,url,body,baseRefName,createdAt,updatedAt,labels,closingIssuesReferences,state,isDraft,headRefOid,mergeCommit,statusCheckRollup";
 
     /// <summary>
     /// G206: builds the <c>gh pr list</c> argument list shared by the live
