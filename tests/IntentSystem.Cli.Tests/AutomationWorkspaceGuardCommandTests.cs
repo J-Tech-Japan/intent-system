@@ -270,7 +270,7 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
             stdout: "160000 abc1234567890abcdef 0\tsubmodules/SekibanAsAService\n");
         // Internal status → empty (clean)
-        fake.QueueResponse("-C submodules/SekibanAsAService status --short", stdout: "");
+        fake.QueueResponse("-C submodules/SekibanAsAService status --porcelain", stdout: "");
         AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
 
         using var writer = new StringWriter();
@@ -299,7 +299,7 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
             stdout: "160000 abc1234567890abcdef 0\tsubmodules/SekibanAsAService\n");
         // Internal status → non-empty (dirty inside submodule)
-        fake.QueueResponse("-C submodules/SekibanAsAService status --short",
+        fake.QueueResponse("-C submodules/SekibanAsAService status --porcelain",
             stdout: " M src/SomeFile.cs\n");
         AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
 
@@ -329,7 +329,7 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         // Classification: ls-files → 160000 (gitlink), internal status → clean
         fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
             stdout: "160000 parentcommit1234 0\tsubmodules/SekibanAsAService\n");
-        fake.QueueResponse("-C submodules/SekibanAsAService status --short", stdout: "");
+        fake.QueueResponse("-C submodules/SekibanAsAService status --porcelain", stdout: "");
         // Begin write: get current submodule HEAD
         fake.QueueResponse("-C submodules/SekibanAsAService rev-parse HEAD",
             stdout: "originalhead5678\n");
@@ -381,7 +381,7 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n");
         fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
             stdout: "160000 abc1234567890 0\tsubmodules/SekibanAsAService\n");
-        fake.QueueResponse("-C submodules/SekibanAsAService status --short",
+        fake.QueueResponse("-C submodules/SekibanAsAService status --porcelain",
             stdout: " M src/SomeFile.cs\n");
         AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
 
@@ -495,7 +495,7 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         // For submodules/SekibanAsAService: ls-files → gitlink, internal → clean
         fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
             stdout: "160000 parentcommit1234 0\tsubmodules/SekibanAsAService\n");
-        fake.QueueResponse("-C submodules/SekibanAsAService status --short", stdout: "");
+        fake.QueueResponse("-C submodules/SekibanAsAService status --porcelain", stdout: "");
         // For scratch.txt: ls-files → regular file (not 160000)
         fake.QueueResponse("ls-files --stage -- scratch.txt",
             stdout: "100644 abc123 0\tscratch.txt\n");
@@ -546,7 +546,7 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         // Classification: gitlink + internal clean
         fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
             stdout: "160000 parentcommit1234 0\tsubmodules/SekibanAsAService\n");
-        fake.QueueResponse("-C submodules/SekibanAsAService status --short", stdout: "");
+        fake.QueueResponse("-C submodules/SekibanAsAService status --porcelain", stdout: "");
         // scratch.txt is regular
         fake.QueueResponse("ls-files --stage -- scratch.txt",
             stdout: "100644 abc456 0\tscratch.txt\n");
@@ -597,7 +597,7 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n M scratch.txt\n");
         fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
             stdout: "160000 parentcommit1234 0\tsubmodules/SekibanAsAService\n");
-        fake.QueueResponse("-C submodules/SekibanAsAService status --short", stdout: "");
+        fake.QueueResponse("-C submodules/SekibanAsAService status --porcelain", stdout: "");
         fake.QueueResponse("ls-files --stage -- scratch.txt",
             stdout: "100644 abc456 0\tscratch.txt\n");
         fake.QueueResponse("-C submodules/SekibanAsAService rev-parse HEAD",
@@ -625,6 +625,85 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         Assert.Equal(1, stateDoc.RootElement.GetProperty("gitlink_restore_paths").GetArrayLength());
         Assert.Equal("originalhead5678",
             stateDoc.RootElement.GetProperty("gitlink_restore_paths")[0].GetProperty("original_head").GetString());
+    }
+
+    // ======================================================================
+    // G791 — clean nested-pointer drift is a leave-untouched proceed lane
+    // ======================================================================
+
+    [Fact]
+    public void Begin_G791_CleanNestedPointerDrift_ProceedsWithoutTouchingForeignSubmodules()
+    {
+        using var workspace = new GuardWorkspace();
+        var fake = CreateG791NestedPointerDriftRunner(nestedCheckoutHasContent: false);
+        AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationWorkspaceGuardCommand.Execute(
+            workspace.Context,
+            ["--mode", "begin", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("proceed_allowed").GetBoolean());
+        Assert.Equal(0, root.GetProperty("safe_stash_paths").GetArrayLength());
+        Assert.Equal(0, root.GetProperty("gitlink_paths").GetArrayLength());
+        var drift = Assert.Single(root.GetProperty("nested_pointer_drift_submodules").EnumerateArray());
+        Assert.Equal("submodules/SekibanAsAService", drift.GetProperty("owning_submodule_path").GetString());
+        Assert.Equal("submodules/SekibanAsAService/Sekiban", drift.GetProperty("untouched_nested_paths")[0].GetString());
+        Assert.Contains("no stash or checkout was run", root.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(workspace.RepoRoot, ".intent-cli", "workspace-guard.json")));
+
+        // The three discriminating facts are read, and the proceed lane never
+        // mutates another domain's owning or nested checkout.
+        Assert.Contains(fake.Invocations, args => args.SequenceEqual(["ls-files", "--stage", "--", "submodules/SekibanAsAService"]));
+        Assert.Contains(fake.Invocations, args => args.SequenceEqual(["-C", "submodules/SekibanAsAService", "rev-parse", "HEAD"]));
+        Assert.Contains(fake.Invocations, args => args.SequenceEqual(["-C", "submodules/SekibanAsAService", "submodule", "status"]));
+        Assert.Contains(fake.Invocations, args => args.SequenceEqual(["-C", "submodules/SekibanAsAService/Sekiban", "status", "--porcelain"]));
+        Assert.DoesNotContain(fake.Invocations, args =>
+            args.Contains("stash")
+            || args.Contains("checkout")
+            || (args.Contains("submodule") && args.Contains("update"))
+            || args.Contains("add")
+            || args.Contains("commit"));
+    }
+
+    [Fact]
+    public void Begin_G791_NestedCheckoutWithRealContent_RefusesAndNamesInternalChanges()
+    {
+        using var workspace = new GuardWorkspace();
+        var fake = CreateG791NestedPointerDriftRunner(nestedCheckoutHasContent: true);
+        AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationWorkspaceGuardCommand.Execute(
+            workspace.Context,
+            ["--mode", "begin", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("proceed_allowed").GetBoolean());
+        Assert.Equal(0, root.GetProperty("nested_pointer_drift_submodules").GetArrayLength());
+        Assert.Contains("internal uncommitted changes", root.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(workspace.RepoRoot, ".intent-cli", "workspace-guard.json")));
+    }
+
+    private static FakeGitRunner CreateG791NestedPointerDriftRunner(bool nestedCheckoutHasContent)
+    {
+        const string owner = "submodules/SekibanAsAService";
+        const string parentCommit = "a111111111111111111111111111111111111111";
+        var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n");
+        fake.QueueResponse($"ls-files --stage -- {owner}", stdout: $"160000 {parentCommit} 0\t{owner}\n");
+        fake.QueueResponse($"-C {owner} status --porcelain", stdout: " M Sekiban\n");
+        fake.QueueResponse($"-C {owner} rev-parse HEAD", stdout: parentCommit + "\n");
+        fake.QueueResponse($"-C {owner} submodule status", stdout: "+4e086ad8 Sekiban (heads/main)\n");
+        fake.QueueResponse($"-C {owner}/Sekiban status --porcelain",
+            stdout: nestedCheckoutHasContent ? " M src/real-content.cs\n" : "");
+        return fake;
     }
 
     private sealed class FakeGitRunner : IGitRunner

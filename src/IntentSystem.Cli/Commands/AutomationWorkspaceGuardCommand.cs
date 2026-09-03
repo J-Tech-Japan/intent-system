@@ -84,11 +84,11 @@ internal static class AutomationWorkspaceGuardCommand
     private static int ExecutePlan(IGitRunner runner, CliContext context, string format, TextWriter writer)
     {
         var entries = ScanWorkingTree(runner);
-        var nonDurable = entries.Where(e => !IsDurableStatePath(e.Path)).ToArray();
-        var durable = entries.Where(e => IsDurableStatePath(e.Path)).ToArray();
+        var nonDurable = entries.Where(e => !DurableHostStatePathClassifier.IsDurableHostStatePath(e.Path)).ToArray();
+        var durable = entries.Where(e => DurableHostStatePathClassifier.IsDurableHostStatePath(e.Path)).ToArray();
 
         // G352: classify non-durable entries to surface gitlink vs regular paths in the plan.
-        var (gitlinkOnly, submoduleInternalDirty, regular) = ClassifyNonDurableEntries(runner, nonDurable);
+        var (gitlinkOnly, submoduleInternalDirty, nestedPointerDrift, regular) = ClassifyNonDurableEntries(runner, nonDurable);
 
         var stashMessage = regular.Count > 0 ? BuildStashMessage() : null;
         var totalNonDurable = nonDurable.Length;
@@ -99,6 +99,10 @@ internal static class AutomationWorkspaceGuardCommand
             summary = $"workspace-guard plan: {durable.Length} dirty durable-state path(s) present; safe-stash refused. Reconcile durable host-state through the G304 fail-closed path before re-running.";
         else if (submoduleInternalDirty.Count > 0)
             summary = $"workspace-guard plan: {submoduleInternalDirty.Count} submodule(s) have internal uncommitted changes ({string.Join(", ", submoduleInternalDirty.Select(e => e.Path))}); checkout-lane refused. Manually reconcile submodule internal changes before re-running.";
+        else if (nestedPointerDrift.Count > 0 && regular.Count > 0)
+            summary = $"workspace-guard plan: {nestedPointerDrift.Count} aligned host gitlink(s) contain only clean nested-pointer drift and {regular.Count} regular path(s). Leave the owning and nested submodule paths untouched; only the regular paths use the stash lane on `--mode begin --write`.";
+        else if (nestedPointerDrift.Count > 0)
+            summary = $"workspace-guard plan: {nestedPointerDrift.Count} aligned host gitlink(s) contain only clean nested-pointer drift; leave the owning and nested submodule paths untouched and proceed without stash or checkout.";
         else if (gitlinkOnly.Count > 0 && regular.Count > 0)
             summary = $"workspace-guard plan: {gitlinkOnly.Count} gitlink-only path(s) (checkout lane) + {regular.Count} regular path(s) (stash lane) on `--mode begin --write`.";
         else if (gitlinkOnly.Count > 0)
@@ -114,6 +118,7 @@ internal static class AutomationWorkspaceGuardCommand
             ProceedAllowed = proceedAllowed,
             SafeStashPaths = regular.ToArray(),
             GitlinkPaths = gitlinkOnly.Select(t => t.Entry).ToArray(),
+            NestedPointerDriftSubmodules = nestedPointerDrift,
             DirtyDurableStatePaths = durable,
             StashMessage = stashMessage,
             StashRef = null,
@@ -129,8 +134,8 @@ internal static class AutomationWorkspaceGuardCommand
     private static int ExecuteBegin(IGitRunner runner, CliContext context, string statePath, bool write, string format, TextWriter writer)
     {
         var entries = ScanWorkingTree(runner);
-        var nonDurable = entries.Where(e => !IsDurableStatePath(e.Path)).ToArray();
-        var durable = entries.Where(e => IsDurableStatePath(e.Path)).ToArray();
+        var nonDurable = entries.Where(e => !DurableHostStatePathClassifier.IsDurableHostStatePath(e.Path)).ToArray();
+        var durable = entries.Where(e => DurableHostStatePathClassifier.IsDurableHostStatePath(e.Path)).ToArray();
 
         if (durable.Length > 0)
         {
@@ -151,7 +156,7 @@ internal static class AutomationWorkspaceGuardCommand
         }
 
         // G352: classify non-durable entries: gitlink-only, submodule-internal-dirty, regular.
-        var (gitlinkOnly, submoduleInternalDirty, regularStash) = ClassifyNonDurableEntries(runner, nonDurable);
+        var (gitlinkOnly, submoduleInternalDirty, nestedPointerDrift, regularStash) = ClassifyNonDurableEntries(runner, nonDurable);
 
         // G352: refuse if any submodule has internal uncommitted changes — we cannot safely auto-reset those.
         if (submoduleInternalDirty.Count > 0)
@@ -187,7 +192,10 @@ internal static class AutomationWorkspaceGuardCommand
                 StashRef = null,
                 ConflictPaths = Array.Empty<string>(),
                 StateFilePath = statePath,
-                Summary = "workspace-guard begin: working tree is clean; no stash created."
+                NestedPointerDriftSubmodules = nestedPointerDrift,
+                Summary = nestedPointerDrift.Count == 0
+                    ? "workspace-guard begin: working tree is clean; no stash created."
+                    : $"workspace-guard begin: {nestedPointerDrift.Count} aligned host gitlink(s) have only clean nested-pointer drift; no stash or checkout was run and the foreign paths remain untouched."
             };
             EmitResult(writer, format, noop);
             return 0;
@@ -202,12 +210,13 @@ internal static class AutomationWorkspaceGuardCommand
                 ProceedAllowed = true,
                 SafeStashPaths = regularStash.ToArray(),
                 GitlinkPaths = gitlinkOnly.Select(t => t.Entry).ToArray(),
+                NestedPointerDriftSubmodules = nestedPointerDrift,
                 DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
                 StashMessage = message,
                 StashRef = null,
                 ConflictPaths = Array.Empty<string>(),
                 StateFilePath = statePath,
-                Summary = BuildBeginDryRunSummary(gitlinkOnly.Count, regularStash.Count, message)
+                Summary = BuildBeginDryRunSummary(gitlinkOnly.Count, nestedPointerDrift.Count, regularStash.Count, message)
             };
             EmitResult(writer, format, dryRun);
             return 0;
@@ -229,6 +238,7 @@ internal static class AutomationWorkspaceGuardCommand
                     ProceedAllowed = false,
                     SafeStashPaths = regularStash.ToArray(),
                     GitlinkPaths = gitlinkOnly.Select(t => t.Entry).ToArray(),
+                    NestedPointerDriftSubmodules = nestedPointerDrift,
                     DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
                     StashMessage = message,
                     StashRef = null,
@@ -365,6 +375,7 @@ internal static class AutomationWorkspaceGuardCommand
             ProceedAllowed = true,
             SafeStashPaths = regularStash.ToArray(),
             GitlinkPaths = gitlinkOnly.Select(t => t.Entry).ToArray(),
+            NestedPointerDriftSubmodules = nestedPointerDrift,
             DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
             StashMessage = message,
             StashRef = stashRef,
@@ -376,13 +387,16 @@ internal static class AutomationWorkspaceGuardCommand
         return 0;
     }
 
-    private static string BuildBeginDryRunSummary(int gitlinkCount, int regularCount, string? message)
+    private static string BuildBeginDryRunSummary(int gitlinkCount, int nestedPointerDriftCount, int regularCount, string? message)
     {
+        var nestedSuffix = nestedPointerDriftCount > 0
+            ? $" Leave {nestedPointerDriftCount} clean nested-pointer-drift submodule(s) untouched."
+            : string.Empty;
         if (gitlinkCount > 0 && regularCount > 0)
-            return $"workspace-guard begin (dry-run): would preserve {gitlinkCount} gitlink path(s) via checkout lane and stash {regularCount} regular path(s) under '{message}'. Re-run with --write to apply.";
+            return $"workspace-guard begin (dry-run): would preserve {gitlinkCount} gitlink path(s) via checkout lane and stash {regularCount} regular path(s) under '{message}'.{nestedSuffix} Re-run with --write to apply.";
         if (gitlinkCount > 0)
-            return $"workspace-guard begin (dry-run): would preserve {gitlinkCount} gitlink-only path(s) via checkout lane. Re-run with --write to apply.";
-        return $"workspace-guard begin (dry-run): would stash {regularCount} path(s) under '{message}'. Re-run with --write to apply.";
+            return $"workspace-guard begin (dry-run): would preserve {gitlinkCount} gitlink-only path(s) via checkout lane.{nestedSuffix} Re-run with --write to apply.";
+        return $"workspace-guard begin (dry-run): would stash {regularCount} path(s) under '{message}'.{nestedSuffix} Re-run with --write to apply.";
     }
 
     private static string BuildBeginSuccessSummary(int gitlinkCount, int regularCount, string? stashRef, string statePath)
@@ -556,13 +570,6 @@ internal static class AutomationWorkspaceGuardCommand
         return entries;
     }
 
-    private static bool IsDurableStatePath(string path)
-    {
-        var normalized = path.Replace('\\', '/').TrimStart('/');
-        return normalized.StartsWith(".intent-cli/", StringComparison.Ordinal)
-            || normalized.StartsWith("intents/", StringComparison.Ordinal);
-    }
-
     private static string BuildStashMessage()
     {
         var iso = ResolveNow().ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture);
@@ -634,6 +641,7 @@ internal static class AutomationWorkspaceGuardCommand
         }
         writer.WriteLine($"- safe_stash_paths: {result.SafeStashPaths.Count}");
         writer.WriteLine($"- gitlink_paths: {result.GitlinkPaths.Count}");
+        writer.WriteLine($"- nested_pointer_drift_submodules: {result.NestedPointerDriftSubmodules.Count}");
         writer.WriteLine($"- dirty_durable_state_paths: {result.DirtyDurableStatePaths.Count}");
         if (result.ConflictPaths.Count > 0)
         {
@@ -659,6 +667,19 @@ internal static class AutomationWorkspaceGuardCommand
                 writer.WriteLine($"- `{entry.Status}` `{entry.Path}`");
             }
         }
+        if (result.NestedPointerDriftSubmodules.Count > 0)
+        {
+            writer.WriteLine();
+            writer.WriteLine("## Clean nested-pointer drift (left untouched)");
+            foreach (var drift in result.NestedPointerDriftSubmodules)
+            {
+                writer.WriteLine($"- owning submodule `{drift.OwningSubmodulePath}` (parent-recorded `{drift.ParentRecordedCommit}`)");
+                foreach (var nestedPath in drift.UntouchedNestedPaths)
+                {
+                    writer.WriteLine($"  - untouched nested path `{nestedPath}`");
+                }
+            }
+        }
         if (result.DirtyDurableStatePaths.Count > 0)
         {
             writer.WriteLine();
@@ -681,40 +702,6 @@ internal static class AutomationWorkspaceGuardCommand
 
     // ------------------------------------------------------------------ G352 helpers
 
-    /// <summary>
-    /// G352: checks whether <paramref name="path"/> is a submodule gitlink (mode 160000)
-    /// in the git index, and returns the parent-recorded commit sha.
-    /// </summary>
-    private static bool TryGetGitlinkCommit(IGitRunner runner, string path, out string parentCommit)
-    {
-        var result = runner.Run(new[] { "ls-files", "--stage", "--", path });
-        if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.StandardOutput))
-        {
-            parentCommit = string.Empty;
-            return false;
-        }
-        // Format: "<mode> <sha> <stage>\t<path>"
-        var firstLine = result.StandardOutput.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries)[0];
-        var parts = firstLine.Split(' ', 3);
-        if (parts.Length < 2 || !string.Equals(parts[0], "160000", StringComparison.Ordinal))
-        {
-            parentCommit = string.Empty;
-            return false;
-        }
-        parentCommit = parts[1].Trim();
-        return true;
-    }
-
-    /// <summary>
-    /// G352: returns true when the submodule at <paramref name="submodulePath"/>
-    /// has no internal uncommitted changes (clean working tree inside the submodule).
-    /// </summary>
-    private static bool IsSubmoduleInternallyClean(IGitRunner runner, string submodulePath)
-    {
-        var result = runner.Run(new[] { "-C", submodulePath, "status", "--short" });
-        return result.ExitCode == 0 && string.IsNullOrWhiteSpace(result.StandardOutput);
-    }
-
     /// <summary>G352: returns the current HEAD sha of the submodule, or null on failure.</summary>
     private static string? GetCurrentSubmoduleHead(IGitRunner runner, string submodulePath)
     {
@@ -723,25 +710,36 @@ internal static class AutomationWorkspaceGuardCommand
     }
 
     /// <summary>
-    /// G352: classifies non-durable dirty entries into gitlink-only,
-    /// submodule-internal-dirty, and regular buckets.
+    /// G791: classifies non-durable dirty entries into gitlink-only,
+    /// clean nested-pointer drift, submodule-internal-dirty, and regular buckets.
     /// </summary>
     private static (
         IReadOnlyList<(HostSyncWorkingTreeEntry Entry, string ParentCommit)> GitlinkOnly,
         IReadOnlyList<HostSyncWorkingTreeEntry> SubmoduleInternalDirty,
+        IReadOnlyList<NestedPointerDriftSubmodule> NestedPointerDrift,
         IReadOnlyList<HostSyncWorkingTreeEntry> Regular)
     ClassifyNonDurableEntries(IGitRunner runner, IReadOnlyList<HostSyncWorkingTreeEntry> nonDurableEntries)
     {
         var gitlinkOnly = new List<(HostSyncWorkingTreeEntry, string)>();
         var submoduleInternalDirty = new List<HostSyncWorkingTreeEntry>();
+        var nestedPointerDrift = new List<NestedPointerDriftSubmodule>();
         var regular = new List<HostSyncWorkingTreeEntry>();
 
         foreach (var entry in nonDurableEntries)
         {
-            if (TryGetGitlinkCommit(runner, entry.Path, out var parentCommit))
+            if (NestedSubmodulePointerDriftDetector.TryGetParentRecordedGitlinkCommit(runner, entry.Path, out var parentCommit))
             {
-                if (IsSubmoduleInternallyClean(runner, entry.Path))
+                var submoduleStatus = runner.Run(["-C", entry.Path, "status", "--porcelain"]);
+                if (submoduleStatus.ExitCode == 0 && string.IsNullOrWhiteSpace(submoduleStatus.StandardOutput))
                     gitlinkOnly.Add((entry, parentCommit));
+                else if (submoduleStatus.ExitCode == 0
+                    && NestedSubmodulePointerDriftDetector.TryDetect(
+                        runner,
+                        entry.Path,
+                        parentCommit,
+                        submoduleStatus.StandardOutput,
+                        out var drift))
+                    nestedPointerDrift.Add(drift);
                 else
                     submoduleInternalDirty.Add(entry);
             }
@@ -750,7 +748,7 @@ internal static class AutomationWorkspaceGuardCommand
                 regular.Add(entry);
             }
         }
-        return (gitlinkOnly, submoduleInternalDirty, regular);
+        return (gitlinkOnly, submoduleInternalDirty, nestedPointerDrift, regular);
     }
 
     // ------------------------------------------------------------------ arg parse
@@ -878,6 +876,13 @@ internal sealed record WorkspaceGuardResult
     /// </summary>
     [JsonPropertyName("gitlink_paths")]
     public IReadOnlyList<HostSyncWorkingTreeEntry> GitlinkPaths { get; init; } = Array.Empty<HostSyncWorkingTreeEntry>();
+
+    /// <summary>
+    /// G791: host gitlink is aligned and the only dirt is clean nested-submodule
+    /// pointer drift. These foreign paths deliberately remain untouched.
+    /// </summary>
+    [JsonPropertyName("nested_pointer_drift_submodules")]
+    public IReadOnlyList<NestedPointerDriftSubmodule> NestedPointerDriftSubmodules { get; init; } = Array.Empty<NestedPointerDriftSubmodule>();
 }
 
 /// <summary>G352: gitlink restore entry recording the original submodule HEAD so

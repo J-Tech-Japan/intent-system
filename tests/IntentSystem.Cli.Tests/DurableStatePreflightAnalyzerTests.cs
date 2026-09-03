@@ -374,7 +374,7 @@ public sealed class DurableStatePreflightAnalyzerTests
     }
 
     [Fact]
-    public void Analyze_EmptyDirtyPaths_ReturnsNeedsOperatorReview()
+    public void Analyze_G791_EmptyDirtyPaths_ReturnsClean()
     {
         var input = new DurableStatePreflightInput
         {
@@ -383,10 +383,12 @@ public sealed class DurableStatePreflightAnalyzerTests
 
         var result = DurableStatePreflightAnalyzer.Analyze(input);
 
-        // No verified paths and no unsafe paths — classification is
-        // needs-operator-review (the host loop should never call this
-        // with an empty bundle, but the analyzer must be deterministic).
-        Assert.Equal(DurableStatePreflightAnalyzer.ClassificationNeedsOperatorReview, result.Classification);
+        Assert.Equal(DurableStatePreflightAnalyzer.ClassificationClean, result.Classification);
+        Assert.Empty(result.VerifiedPaths);
+        Assert.Empty(result.ReviewPaths);
+        Assert.Empty(result.UnsafePaths);
+        Assert.Null(result.RecommendedCommitMessage);
+        Assert.Contains("No dirty durable-state paths", result.Summary, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -3467,3 +3467,37 @@ This makes duplicate queue items **recoverable, not impossible**. Do not hand
 edit queue-state. The repair is deliberately limited to duplicate reporting
 and strict-dominance reconciliation; concurrent-write prevention, locking,
 CAS, and queue-schema changes remain separate work.
+
+### Host durable-state and foreign nested-pointer drift (G791)
+
+`automation workspace-guard`, `automation durable-state-preflight`, and
+`automation host-sync-preflight` use one durable-host-state path boundary:
+`.intent-cli/**`, `intents/**`, `AGENTS.md`, and `CLAUDE.md`. A path cannot be
+unsafe to stash in one command while being invisible to the command that names
+the recovery route.
+
+`automation durable-state-preflight` recognizes append-only runtime JSONL
+records beneath `.intent-cli/continuation-chains/**`, `.intent-cli/events/**`,
+`.intent-cli/notify/**`, and `.intent-cli/supervision/**`, plus a structurally
+valid generated `.intent-cli/supervision/**/emission-policy.json`. Those
+records are `verified-commit-ready` with their exact paths and a recommended
+commit message. A preflight with no dirty durable paths is `clean`, never an
+empty `needs-operator-review` result. In-place edits, deletions, malformed
+records, and other unrecognized durable content remain fail-closed.
+
+`nested-pointer-drift` is a narrow direct-proceed classification for another
+domain's live submodule checkout. It requires all three facts: the host
+gitlink equals the parent-recorded commit; the owning submodule's
+`git submodule status` reports differing nested gitlinks; and every affected
+nested checkout has an empty `git status --porcelain`. The payload names the
+owning submodule and every untouched nested path. `host-sync-preflight` emits
+this same classification instead of the safe-stash lane; workspace-guard
+represents it as a no-op, with no stash or checkout.
+
+This permission is to leave foreign paths alone. It must not run `git stash`,
+`git checkout`, `git submodule update`, `git add`, or `git commit` against the
+drifted submodules. If any nested checkout carries real uncommitted content,
+both `workspace-guard` and `host-sync-preflight` refuse with
+`submodule-internal-dirty`; neither offers the G306 safe-stash lane. Reconciling
+another domain's nested pointer drift or real nested content is the owning
+domain team's responsibility.

@@ -17,6 +17,7 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal static class DurableStatePreflightAnalyzer
 {
+    public const string ClassificationClean = "clean";
     public const string ClassificationVerifiedCommitReady = "verified-commit-ready";
     public const string ClassificationNeedsOperatorReview = "needs-operator-review";
     public const string ClassificationUnsafe = "unsafe-durable-state";
@@ -129,6 +130,11 @@ internal static class DurableStatePreflightAnalyzer
                             Path = path,
                             Reason = $"`{path}` is dirty inside `{IssuesDirectorySegment}` but is not a recognized canonical publish artifact; host-loop auto-commit must not touch operator-owned issue metadata.",
                         });
+                        break;
+                    }
+                    if (entry.RuntimeRecordDelta is not null)
+                    {
+                        ApplyRuntimeRecordResult(path, entry.RuntimeRecordDelta, verified, review, unsafePaths);
                         break;
                     }
                     // Untracked durable-state path that isn't queue-state or runs.jsonl
@@ -260,6 +266,50 @@ internal static class DurableStatePreflightAnalyzer
                 {
                     Path = path,
                     Reason = $"unrecognized runs.jsonl delta classification `{entry.RunsJsonlDelta.Classification}` for `{path}`.",
+                });
+                break;
+        }
+    }
+
+    private static void ApplyRuntimeRecordResult(
+        string path,
+        DurableRuntimeRecordDelta delta,
+        List<DurableStateVerifiedPath> verified,
+        List<DurableStateReviewPath> review,
+        List<DurableStateUnsafePath> unsafePaths)
+    {
+        switch (delta.Classification)
+        {
+            case DurableRuntimeRecordAnalyzer.ClassificationAppendOnly:
+            case DurableRuntimeRecordAnalyzer.ClassificationValidPolicy:
+                verified.Add(new DurableStateVerifiedPath
+                {
+                    Path = path,
+                    Summary = delta.Summary,
+                });
+                break;
+
+            case DurableRuntimeRecordAnalyzer.ClassificationNeedsOperatorReview:
+                review.Add(new DurableStateReviewPath
+                {
+                    Path = path,
+                    Reason = delta.Summary,
+                });
+                break;
+
+            case DurableRuntimeRecordAnalyzer.ClassificationInvalid:
+                unsafePaths.Add(new DurableStateUnsafePath
+                {
+                    Path = path,
+                    Reason = delta.Summary,
+                });
+                break;
+
+            default:
+                unsafePaths.Add(new DurableStateUnsafePath
+                {
+                    Path = path,
+                    Reason = $"unrecognized runtime durable-state classification '{delta.Classification}' for '{path}'.",
                 });
                 break;
         }
@@ -436,7 +486,7 @@ internal static class DurableStatePreflightAnalyzer
         }
         return verified > 0
             ? ClassificationVerifiedCommitReady
-            : ClassificationNeedsOperatorReview;
+            : ClassificationClean;
     }
 
     private static bool IsAlwaysUnsafe(string normalizedPath)
@@ -470,6 +520,8 @@ internal static class DurableStatePreflightAnalyzer
         {
             ClassificationVerifiedCommitReady =>
                 $"All {verified.Count} dirty durable-state path(s) are deterministic forward-only updates; safe to auto-commit (G312).",
+            ClassificationClean =>
+                "No dirty durable-state paths are present; durable-state preflight is clean (G312).",
             ClassificationNeedsOperatorReview =>
                 $"{review.Count} dirty durable-state path(s) need operator review before commit (G312); auto-commit refused.",
             ClassificationUnsafe =>
@@ -504,6 +556,13 @@ internal sealed record DurableStateDirtyPath
     /// path or when the file could not be read.
     /// </summary>
     public PublishYamlCanonicalResult? PublishYamlDelta { get; init; }
+
+    /// <summary>
+    /// G791: optional verdict for append-only runtime JSONL ledgers and the
+    /// generated supervision emission policy. Null keeps an otherwise
+    /// unrecognized durable path in the operator-review lane.
+    /// </summary>
+    public DurableRuntimeRecordDelta? RuntimeRecordDelta { get; init; }
 
     /// <summary>
     /// G361: optional prepared-packet classification for dirty

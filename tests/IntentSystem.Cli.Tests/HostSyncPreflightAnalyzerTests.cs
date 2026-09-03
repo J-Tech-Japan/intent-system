@@ -260,6 +260,56 @@ public sealed class HostSyncPreflightAnalyzerTests
         Assert.Empty(result.SubmoduleCheckoutMismatchPaths);
     }
 
+    // ── G791 clean nested-pointer drift ─────────────────────────────────
+
+    [Fact]
+    public void Analyze_G791_AllDirtyPathsAreCleanNestedPointerDrift_ProceedsWithoutSafeStash()
+    {
+        var result = HostSyncPreflightAnalyzer.Analyze(
+            "main",
+            behindOriginCommits: 0,
+            workingTreeEntries: new[] { Entry("submodules/SekibanAsAService", " m") },
+            nestedPointerDriftSubmodules: new[]
+            {
+                new NestedPointerDriftSubmodule
+                {
+                    OwningSubmodulePath = "submodules/SekibanAsAService",
+                    ParentRecordedCommit = "a111111111111111111111111111111111111111",
+                    UntouchedNestedPaths = new[] { "submodules/SekibanAsAService/Sekiban" }
+                }
+            });
+
+        Assert.Equal(HostSyncPreflightAnalyzer.ClassificationNestedPointerDrift, result.Classification);
+        Assert.True(result.ProceedAllowed);
+        Assert.False(result.SafeStashRequired);
+        Assert.Empty(result.SafeStashPaths);
+        var drift = Assert.Single(result.NestedPointerDriftSubmodules);
+        Assert.Equal("submodules/SekibanAsAService", drift.OwningSubmodulePath);
+        Assert.Equal("submodules/SekibanAsAService/Sekiban", Assert.Single(drift.UntouchedNestedPaths));
+        Assert.Contains("leave the owning and nested submodule paths untouched", result.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain(result.NextSteps, step => step.Contains("--mode begin --write", StringComparison.Ordinal));
+        Assert.Contains(result.NextSteps, step => step.Contains("Do NOT run workspace-guard", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Analyze_G791_RealNestedCheckoutContent_IsHardStopNotSafeStash()
+    {
+        var result = HostSyncPreflightAnalyzer.Analyze(
+            "main",
+            behindOriginCommits: 0,
+            workingTreeEntries: new[] { Entry("submodules/SekibanAsAService", " M") },
+            submoduleInternalDirtyPaths: new[] { "submodules/SekibanAsAService" });
+
+        Assert.Equal(HostSyncPreflightAnalyzer.ClassificationSubmoduleInternalDirty, result.Classification);
+        Assert.False(result.ProceedAllowed);
+        Assert.False(result.SafeStashRequired);
+        Assert.Empty(result.SafeStashPaths);
+        Assert.Equal("submodules/SekibanAsAService", Assert.Single(result.SubmoduleInternalDirtyPaths));
+        Assert.Contains("do not enter the G306 safe-stash lane", result.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(result.NextSteps, step => step.Contains("STOP", StringComparison.Ordinal));
+        Assert.Contains(result.NextSteps, step => step.Contains("Do NOT run the G306 safe-stash lane", StringComparison.Ordinal));
+    }
+
     // ── G400 ff-blocked (diverged) pre-mutation operator stop ───────────
 
     [Fact]
