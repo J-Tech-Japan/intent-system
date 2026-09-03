@@ -293,6 +293,38 @@ operator が渡した text を render するだけで、shell を起動して実
 > orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}
 > ```
 
+> **非規範的な Orca の操作順序（G789）。** seat message の前に Run を create または
+> 接続し、id を共有し、各 sender が自身の handle を与えます。順序は次のとおりです。
+>
+> ```text
+> orca orchestration run-create --objective <text> [--from <handle>]
+> orca orchestration run-use --id <run-id> [--from <handle>]
+> ```
+>
+> 1. create-or-bind form のどちらか一つを使い、誰かが `run:<run-id>` を宛先にする前に、
+>    得られた `<run-id>` を全 sender と共有します。
+> 2. 各 sender は自身の `--from <role>` handle を渡します。宣言済みの wake send form を
+>    変更せずに使い、続けて bounded check を行います。
+>
+>    ```text
+>    orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}
+>    orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json
+>    ```
+>
+> 同じ Orca channel が herdr seat の courtesy wake と design-to-design message を運びます。
+> どちらも永続的な workflow evidence ではありません。canonical な `intent-cli notify` が
+> 永続的な記録のままです。これは非規範的な setup だけであり、intent-cli は option を
+> 追加せず、Orca を起動も管理もしません。
+
+**mixed-kind review-seat selection（G789）。** recorded topology field が決定します。herdr
+seat には `kind`、external seat には `frontend` を使い、role name、model、residence、
+co-location から kind を推測しません。recorded kind が異なるときは、design と異なる
+recorded kind/frontend を持つ review seat が design output と PR の両方を査読します。
+すべての recorded kind が同じなら、design↔orchestration の cross-review は許容され、
+review seat は引き続き PR を査読します。`guide design-thread` はこれを
+`team_and_duty_split.review_seat_selection` に、記録済み team が一意なら `guide review` は
+同じ topology-specific rule を `review_standing_policy` に表示します。
+
 ### role contract の precedence（G672 — preview-through-1.x）
 
 `guide next` または `guide onboarding` を `--role` 付きで呼ぶと、contract を持つ role の

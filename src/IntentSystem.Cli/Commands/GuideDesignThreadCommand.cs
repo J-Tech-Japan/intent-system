@@ -13,6 +13,8 @@ namespace IntentSystem.Cli.Commands;
 internal static class GuideDesignThreadCommand
 {
     public const string CommandName = "intent-cli guide design-thread";
+    internal const string OrcaWakeSendForm = "orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}";
+    internal const string OrcaCheckForm = "orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json";
     private const string UsageLine =
         "Usage: intent-cli guide design-thread [--domain <name>] [--team <team>] [--routing-root <path>] [--format markdown|json]";
 
@@ -63,7 +65,13 @@ internal static class GuideDesignThreadCommand
             return 1;
         }
 
-        var result = BuildResult(domain, team, routingRoot);
+        var topology = ReviewSeatSelectionGuidanceResolver.ResolveTopology(routingRoot ?? string.Empty, domain, team);
+        var result = BuildResult(
+            domain,
+            team,
+            routingRoot,
+            topology is null ? null : ReviewSeatSelectionGuidanceResolver.Create(topology),
+            CreateOrcaOperatingBlock());
         if (string.Equals(format, "json", StringComparison.Ordinal))
         {
             writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
@@ -76,8 +84,19 @@ internal static class GuideDesignThreadCommand
         return 0;
     }
 
-    internal static DesignThreadGuideResult BuildResult(string? domain, string? team, string? routingRoot)
+    internal static DesignThreadGuideResult BuildResult(
+        string? domain,
+        string? team,
+        string? routingRoot,
+        ReviewSeatSelectionGuidance? reviewSeatSelection = null,
+        DesignThreadOrcaOperatingBlock? orcaOperatingBlock = null)
     {
+        // G789: the static rule and non-normative Orca operating block are
+        // always reachable. Readable topology only enriches the rule with
+        // recorded team/kind-specific resolution; it must never gate the
+        // baseline guidance.
+        reviewSeatSelection ??= ReviewSeatSelectionGuidanceResolver.CreateStatic();
+        orcaOperatingBlock ??= CreateOrcaOperatingBlock();
         var root = string.IsNullOrWhiteSpace(routingRoot) ? "<routing-root>" : routingRoot!;
         var domainArg = string.IsNullOrWhiteSpace(domain) ? "<domain>" : domain.Trim();
         var teamArg = string.IsNullOrWhiteSpace(team) ? "<team>" : team.Trim();
@@ -156,6 +175,7 @@ internal static class GuideDesignThreadCommand
                 OrchestrationOwnership = "Orchestration owns detection, classification, and authorized recovery for every stall class, including review wedges.",
                 DesignMode = "Design is event-driven and receives only the agreed escalation set.",
                 DesignEscalations = DesignEscalations,
+                ReviewSeatSelection = reviewSeatSelection,
             },
             Monitoring = new DesignThreadMonitoring
             {
@@ -201,13 +221,29 @@ internal static class GuideDesignThreadCommand
                 RoutingRootMust = "Routing-root MUST: every notify send and receive uses the canonical routing root. A wrong root strands notify records outside canonical state while the sender still returns `delivered: true`.",
                 CollectLoop = $"Collect loop: `intent-cli notify collect --domain {domainArg} --team {teamArg} --role design --since <cursor> --wait --timeout-ms <timeout-ms> --routing-root {root} --format json`; the caller holds the cursor, consumes the returned next cursor, and omits `--since` only for the first receive.",
                 WakeChannelPattern = "Wake-channel pattern: canonical `intent-cli notify` is the durable record; a wake channel is a courtesy-only signal; dual-send is the practiced form. Bind durable wake addresses before reading and never substitute a terminal-only address for a durable bound address.",
-                WakeChannelDeclaration = $"Declared external wake: an operator may record one literal one-line `--wake-command` template on an external role, for example `orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {{task_id}} --body {{summary}}`. On an existing external role, set or clear that label only with `intent-cli session-layer topology update-field --domain {domainArg} --team {teamArg} --role <role> --field wake_command --current <value|absent> --new <value|absent> --confirm-update-field --write --format json`. `notify delegate` renders `{{task_id}}` and `{{summary}}` only as text, leaves unknown placeholders untouched, and never executes, validates, health-checks, launches, or manages the command. The canonical notify write always comes first; the rendered declared wake is courtesy-only and never substitutes for that durable record.",
-                OrcaWorkedExample = "Non-normative Orca example: bind the design coordinator terminal before reading with `orca orchestration run-use --id <run-id>`, then use the blocking check `orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json`. Orca is only a courtesy wake receiver alongside canonical `intent-cli notify`; intent-cli neither launches nor manages Orca.",
+                WakeChannelDeclaration = $"Declared external wake: an operator may record one literal one-line `--wake-command` template on an external role, for example `{OrcaWakeSendForm}`. On an existing external role, set or clear that label only with `intent-cli session-layer topology update-field --domain {domainArg} --team {teamArg} --role <role> --field wake_command --current <value|absent> --new <value|absent> --confirm-update-field --write --format json`. `notify delegate` renders `{{task_id}}` and `{{summary}}` only as text, leaves unknown placeholders untouched, and never executes, validates, health-checks, launches, or manages the command. The canonical notify write always comes first; the rendered declared wake is courtesy-only and never substitutes for that durable record.",
+                OrcaWorkedExample = $"Non-normative Orca example: bind the design coordinator terminal before reading with `orca orchestration run-use --id <run-id>`, then use the blocking check `{OrcaCheckForm}`. Orca is only a courtesy wake receiver alongside canonical `intent-cli notify`; intent-cli neither launches nor manages Orca.",
+                OrcaOperatingBlock = orcaOperatingBlock,
                 ResidenceTransition = $"A herdr↔external residence change is a different operation from an external-to-external frontend relabel: `intent-cli session-layer topology update-residence --domain {domainArg} --team {teamArg} --role design --current-resident <herdr|external> --new-resident <herdr|external> [destination fields] --confirm-update-residence --write --format json`.",
             },
             UnreadableRepairResponse = "When liveness reports a non-zero `unreadable_record_count`, the sanctioned response is `intent-cli notify supervise repair-unreadable`: run `--dry-run` first, inspect the evidence, and use `--write` only second; it is never automatic and never performed on read. The repair quarantines unreadable lines verbatim as evidence and makes no reconstruction claim.",
         };
     }
+
+    private static DesignThreadOrcaOperatingBlock CreateOrcaOperatingBlock() => new()
+    {
+        Label = "Non-normative Orca operating block",
+        SetupOrder =
+        [
+            "Create or bind a Run before seat messages: `orca orchestration run-create --objective <text> [--from <handle>]` or `orca orchestration run-use --id <run-id> [--from <handle>]`.",
+            "Share the resulting `<run-id>` with every sender before anyone addresses `run:<run-id>`.",
+            "Each sender supplies its own `--from <role>` handle; it is a sender handle, not a routing identity.",
+        ],
+        SendForm = OrcaWakeSendForm,
+        CheckForm = OrcaCheckForm,
+        SharedChannel = "The same Orca channel carries herdr seats' courtesy wakes and design-to-design messages; neither replaces the canonical notify record.",
+        DurableRecord = "Canonical `intent-cli notify` remains durable. This non-normative block adds no intent-cli option, and intent-cli neither launches nor manages Orca.",
+    };
 
     private static void WriteMarkdown(TextWriter writer, DesignThreadGuideResult result)
     {
@@ -271,6 +307,17 @@ internal static class GuideDesignThreadCommand
         writer.WriteLine($"- {result.TeamAndDutySplit.OrchestrationOwnership}");
         writer.WriteLine($"- {result.TeamAndDutySplit.DesignMode}");
         foreach (var item in result.TeamAndDutySplit.DesignEscalations) writer.WriteLine($"  - {item}");
+        if (result.TeamAndDutySplit.ReviewSeatSelection is { } reviewSeatSelection)
+        {
+            writer.WriteLine("- **review-seat selection (G789):** " + reviewSeatSelection.MixedKindRule);
+            writer.WriteLine("  - " + reviewSeatSelection.SingleKindAllowance);
+            writer.WriteLine("  - " + reviewSeatSelection.RecordedFieldsDecide);
+            if (reviewSeatSelection.RecordedSeatKinds is { } recordedSeatKinds)
+            {
+                writer.WriteLine("  - recorded topology: " + string.Join(", ", recordedSeatKinds));
+                writer.WriteLine("  - selection: " + reviewSeatSelection.Selection);
+            }
+        }
         writer.WriteLine($"- {result.Monitoring.Separation}");
         writer.WriteLine($"- {result.Monitoring.ResidualDesignCheck}");
         writer.WriteLine($"- **unreadable-record response (G777):** {result.UnreadableRepairResponse}");
@@ -298,6 +345,15 @@ internal static class GuideDesignThreadCommand
         writer.WriteLine($"- **wake channel:** {result.ExternalResidenceOperatingContract.WakeChannelPattern}");
         writer.WriteLine($"- **declared wake:** {result.ExternalResidenceOperatingContract.WakeChannelDeclaration}");
         writer.WriteLine($"- **worked example:** {result.ExternalResidenceOperatingContract.OrcaWorkedExample}");
+        if (result.ExternalResidenceOperatingContract.OrcaOperatingBlock is { } orcaOperatingBlock)
+        {
+            writer.WriteLine($"- **{orcaOperatingBlock.Label}:**");
+            foreach (var step in orcaOperatingBlock.SetupOrder) writer.WriteLine($"  - {step}");
+            writer.WriteLine($"  - send: `{orcaOperatingBlock.SendForm}`");
+            writer.WriteLine($"  - check: `{orcaOperatingBlock.CheckForm}`");
+            writer.WriteLine($"  - {orcaOperatingBlock.SharedChannel}");
+            writer.WriteLine($"  - {orcaOperatingBlock.DurableRecord}");
+        }
         writer.WriteLine($"- **different transition:** {result.ExternalResidenceOperatingContract.ResidenceTransition}");
         WriteList(writer, "## Negative invariants", result.NegativeInvariants);
     }
@@ -408,7 +464,17 @@ internal sealed record DesignThreadObservationBoundary
     public required string FallbackRoute { get; init; }
     public required string KeystrokeBoundary { get; init; }
 }
-internal sealed record DesignThreadTeamAndDutySplit { public required string Formula { get; init; } public required string MonitoringRule { get; init; } public required string OrchestrationOwnership { get; init; } public required string DesignMode { get; init; } public required IReadOnlyList<string> DesignEscalations { get; init; } }
+internal sealed record DesignThreadTeamAndDutySplit
+{
+    public required string Formula { get; init; }
+    public required string MonitoringRule { get; init; }
+    public required string OrchestrationOwnership { get; init; }
+    public required string DesignMode { get; init; }
+    public required IReadOnlyList<string> DesignEscalations { get; init; }
+    [JsonPropertyName("review_seat_selection")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ReviewSeatSelectionGuidance? ReviewSeatSelection { get; init; }
+}
 internal sealed record DesignThreadMonitoring { public required string Separation { get; init; } public required string ResidualDesignCheck { get; init; } public required string BoundRule { get; init; } public required string GuideRefreshRule { get; init; } public required string DeploymentRule { get; init; } }
 internal sealed record DesignThreadReporting { public required string Rule { get; init; } public required string HumanActionRule { get; init; } }
 internal sealed record DesignThreadPacketAuthoringCheck
@@ -430,5 +496,18 @@ internal sealed record DesignThreadExternalResidenceOperatingContract
     public required string WakeChannelPattern { get; init; }
     public required string WakeChannelDeclaration { get; init; }
     public required string OrcaWorkedExample { get; init; }
+    [JsonPropertyName("orca_operating_block")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DesignThreadOrcaOperatingBlock? OrcaOperatingBlock { get; init; }
     public required string ResidenceTransition { get; init; }
+}
+
+internal sealed record DesignThreadOrcaOperatingBlock
+{
+    public required string Label { get; init; }
+    public required IReadOnlyList<string> SetupOrder { get; init; }
+    public required string SendForm { get; init; }
+    public required string CheckForm { get; init; }
+    public required string SharedChannel { get; init; }
+    public required string DurableRecord { get; init; }
 }

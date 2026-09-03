@@ -45,6 +45,15 @@ internal sealed record ReviewStandingPolicy
     public required ReviewPolicySection FollowUpTracking { get; init; }
 
     /// <summary>
+    /// G789: the static review-seat rule is always rendered. A single readable
+    /// recorded team may enrich it with the topology-specific resolution;
+    /// missing, unreadable, or ambiguous topology leaves those fields absent.
+    /// </summary>
+    [JsonPropertyName("review_seat_selection")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ReviewSeatSelectionGuidance? ReviewSeatSelection { get; init; }
+
+    /// <summary>
     /// G451: the safe built-in default policy. Reproduces the prior G445
     /// device-gated evidence rules verbatim plus conservative defaults for the
     /// other recurring decisions, so a host with no policy file keeps today's
