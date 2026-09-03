@@ -165,8 +165,8 @@ public sealed class ReleaseNotesV0250DocsTests
         var root = RepoVersionPolicySource.RepoRoot();
         var policy = RepoVersionPolicySource.Read();
 
-        Assert.Equal("0.30.0", policy.StableVersion);
-        Assert.Equal("0.30.1", policy.NextVersion);
+        Assert.Equal("0.31.0", policy.StableVersion);
+        Assert.Equal("0.31.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
@@ -193,7 +193,7 @@ public sealed class ReleaseNotesV0250DocsTests
             RepoVersionPolicySource.RepoRoot(), "docs", language, "09-developer-reference.md"));
 
         Assert.Contains(
-            language == "en" ? "Next release readiness (v0.30.1)" : "次リリース準備(v0.30.1)",
+            language == "en" ? "Next release readiness (v0.31.1)" : "次リリース準備(v0.31.1)",
             reference,
             StringComparison.Ordinal);
         Assert.Contains(CurrentStableInstallDisplayIdentity, reference, StringComparison.Ordinal);
