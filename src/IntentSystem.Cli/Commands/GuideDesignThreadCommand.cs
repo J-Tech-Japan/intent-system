@@ -15,6 +15,8 @@ internal static class GuideDesignThreadCommand
     public const string CommandName = "intent-cli guide design-thread";
     internal const string OrcaWakeSendForm = "orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}";
     internal const string OrcaCheckForm = "orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json";
+    internal const string SessionLayerInspectRoute =
+        "Read-only live observation: `intent-cli session-layer inspect --domain <domain> --team <team> [--role <role>] [--tail <lines>] [--routing-root <host-root>] --format json` reads recorded roles and explicit herdr pane state without focus, prompt, key, or process-management operations.";
     private const string UsageLine =
         "Usage: intent-cli guide design-thread [--domain <name>] [--team <team>] [--routing-root <path>] [--format markdown|json]";
 
@@ -165,6 +167,7 @@ internal static class GuideDesignThreadCommand
                 PaneReadRule = "Terminal pane reading is permitted only for operational liveness diagnosis: determine whether a seat is alive or responding after an explicit operator or authorized orchestration diagnostic request.",
                 CanonicalEvidenceRule = "Terminal content is never parsed, promoted, or cited as canonical workflow evidence. Canonical workflow evidence remains intent-cli/GitHub state, recorded activity, and real artifacts.",
                 RecoveryOwnershipRule = "A liveness observation never transfers detection, classification, or authorized recovery ownership from orchestration to design; design remains observation-only outside its declared escalation and approval boundaries.",
+                InspectRoute = SessionLayerInspectRoute,
                 FallbackRoute = "If orchestration cannot read panes, use `intent-cli notify status --task-id <task-id> --domain <domain> --team <team> --routing-root <host-root> --format json` and the configured non-destructive `status-request`/canonical report route. Treat the returned liveness as observation only and escalate unresolved silence; do not infer workflow state or recovery ownership from it.",
                 KeystrokeBoundary = "Keystrokes are never a generic design relay: apply G701 `dialog-answering/v1` exactly. The provisioner answers self-provisioned gates; design may mechanically answer only an exact dialog/action match already approved by the human through the session layer, with the human as decision actor and no per-action class generalization; every unapproved, unknown-origin, uncertain, or mismatching dialog goes through design to the human with grounds.",
             },
@@ -298,6 +301,7 @@ internal static class GuideDesignThreadCommand
         writer.WriteLine($"- **pane read:** {result.ObservationBoundary.PaneReadRule}");
         writer.WriteLine($"- **canonical evidence:** {result.ObservationBoundary.CanonicalEvidenceRule}");
         writer.WriteLine($"- **recovery ownership:** {result.ObservationBoundary.RecoveryOwnershipRule}");
+        writer.WriteLine($"- **inspect route:** {result.ObservationBoundary.InspectRoute}");
         writer.WriteLine($"- **fallback observation route:** {result.ObservationBoundary.FallbackRoute}");
         writer.WriteLine($"- **keystroke/dialog boundary:** {result.ObservationBoundary.KeystrokeBoundary}");
         writer.WriteLine();
@@ -461,6 +465,7 @@ internal sealed record DesignThreadObservationBoundary
     public required string PaneReadRule { get; init; }
     public required string CanonicalEvidenceRule { get; init; }
     public required string RecoveryOwnershipRule { get; init; }
+    public required string InspectRoute { get; init; }
     public required string FallbackRoute { get; init; }
     public required string KeystrokeBoundary { get; init; }
 }

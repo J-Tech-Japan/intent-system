@@ -56,6 +56,7 @@ internal static class Program
                 || IsNextCommand(args)
                 || IsInspectCommand(args)
                 || IsWorkerCommand(args)
+                || IsSessionLayerInspectCommand(args)
                 || IsSkillCommand(args)
                 || IsNotifyCommand(args)
                 || IsPromptClassCommand(args)
@@ -344,6 +345,19 @@ internal static class Program
                 || string.Equals(args[1], "issue-preflight", StringComparison.Ordinal)
                 || string.Equals(args[1], "pr-review-preflight", StringComparison.Ordinal)
                 || string.Equals(args[1], "pr-comment-preflight", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// G790: the session-layer inspect route is read-only and accepts its
+    /// topology root explicitly, so it remains usable from a metadata-free
+    /// child checkout. The route itself never falls back to a focused pane or
+    /// performs a session-layer mutation.
+    /// </summary>
+    private static bool IsSessionLayerInspectCommand(string[] args)
+    {
+        return args.Length >= 2
+            && string.Equals(args[0], "session-layer", StringComparison.Ordinal)
+            && string.Equals(args[1], "inspect", StringComparison.Ordinal);
     }
 
     /// <summary>
