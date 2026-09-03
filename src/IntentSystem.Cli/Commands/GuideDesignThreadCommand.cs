@@ -71,9 +71,7 @@ internal static class GuideDesignThreadCommand
             team,
             routingRoot,
             topology is null ? null : ReviewSeatSelectionGuidanceResolver.Create(topology),
-            topology is not null && ReviewSeatSelectionGuidanceResolver.IsExternalDesign(topology)
-                ? CreateOrcaOperatingBlock()
-                : null);
+            CreateOrcaOperatingBlock());
         if (string.Equals(format, "json", StringComparison.Ordinal))
         {
             writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
@@ -93,6 +91,12 @@ internal static class GuideDesignThreadCommand
         ReviewSeatSelectionGuidance? reviewSeatSelection = null,
         DesignThreadOrcaOperatingBlock? orcaOperatingBlock = null)
     {
+        // G789: the static rule and non-normative Orca operating block are
+        // always reachable. Readable topology only enriches the rule with
+        // recorded team/kind-specific resolution; it must never gate the
+        // baseline guidance.
+        reviewSeatSelection ??= ReviewSeatSelectionGuidanceResolver.CreateStatic();
+        orcaOperatingBlock ??= CreateOrcaOperatingBlock();
         var root = string.IsNullOrWhiteSpace(routingRoot) ? "<routing-root>" : routingRoot!;
         var domainArg = string.IsNullOrWhiteSpace(domain) ? "<domain>" : domain.Trim();
         var teamArg = string.IsNullOrWhiteSpace(team) ? "<team>" : team.Trim();
@@ -308,8 +312,11 @@ internal static class GuideDesignThreadCommand
             writer.WriteLine("- **review-seat selection (G789):** " + reviewSeatSelection.MixedKindRule);
             writer.WriteLine("  - " + reviewSeatSelection.SingleKindAllowance);
             writer.WriteLine("  - " + reviewSeatSelection.RecordedFieldsDecide);
-            writer.WriteLine("  - recorded topology: " + string.Join(", ", reviewSeatSelection.RecordedSeatKinds));
-            writer.WriteLine("  - selection: " + reviewSeatSelection.Selection);
+            if (reviewSeatSelection.RecordedSeatKinds is { } recordedSeatKinds)
+            {
+                writer.WriteLine("  - recorded topology: " + string.Join(", ", recordedSeatKinds));
+                writer.WriteLine("  - selection: " + reviewSeatSelection.Selection);
+            }
         }
         writer.WriteLine($"- {result.Monitoring.Separation}");
         writer.WriteLine($"- {result.Monitoring.ResidualDesignCheck}");

@@ -45,9 +45,9 @@ internal sealed record ReviewStandingPolicy
     public required ReviewPolicySection FollowUpTracking { get; init; }
 
     /// <summary>
-    /// G789: topology-specific review-seat selection is rendered only when a
-    /// single readable recorded team is available for the requested domain.
-    /// Omitting it preserves the pre-G789 standing-policy payload exactly.
+    /// G789: the static review-seat rule is always rendered. A single readable
+    /// recorded team may enrich it with the topology-specific resolution;
+    /// missing, unreadable, or ambiguous topology leaves those fields absent.
     /// </summary>
     [JsonPropertyName("review_seat_selection")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

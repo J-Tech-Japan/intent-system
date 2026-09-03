@@ -149,7 +149,7 @@ public sealed class GuideSeatSelectionG789Tests
         var designSelection = designDocument.RootElement
             .GetProperty("team_and_duty_split")
             .GetProperty("review_seat_selection");
-        Assert.False(designDocument.RootElement.GetProperty("external_residence_operating_contract").TryGetProperty("orca_operating_block", out _));
+        Assert.True(designDocument.RootElement.GetProperty("external_residence_operating_contract").TryGetProperty("orca_operating_block", out _));
         Assert.Contains("Single recorded kind", designSelection.GetProperty("selection").GetString(), StringComparison.Ordinal);
         Assert.Contains("design↔orchestration cross-review is acceptable", designSelection.GetProperty("selection").GetString(), StringComparison.Ordinal);
 
@@ -166,6 +166,90 @@ public sealed class GuideSeatSelectionG789Tests
 
         Fixture("single-kind design-thread JSON", designSelection.GetRawText());
         Fixture("single-kind guide review JSON", reviewSelection.GetRawText());
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("unreadable")]
+    [InlineData("ambiguous")]
+    public void MissingUnreadableOrAmbiguousTopology_StillRendersStaticGuidanceWithoutResolution_G789(string scenario)
+    {
+        using var fixture = new TopologyFixture($"fallback-{scenario}");
+        if (string.Equals(scenario, "unreadable", StringComparison.Ordinal))
+        {
+            fixture.RecordUnreadable();
+        }
+        else if (string.Equals(scenario, "ambiguous", StringComparison.Ordinal))
+        {
+            fixture.RecordAmbiguousTeams();
+        }
+        fixture.SeedReviewablePr();
+
+        var designArgs = new List<string>
+        {
+            "--domain", Domain,
+            "--routing-root", fixture.Root,
+            "--format", "json",
+        };
+        // With multiple recorded teams there is no selected team to resolve;
+        // the guide must still render its static rule instead of guessing.
+        if (!string.Equals(scenario, "ambiguous", StringComparison.Ordinal))
+        {
+            designArgs.InsertRange(2, ["--team", fixture.Team]);
+        }
+
+        using var designJsonWriter = new StringWriter();
+        Assert.Equal(0, GuideDesignThreadCommand.Execute(fixture.Context, designArgs.ToArray(), designJsonWriter));
+        using var designDocument = JsonDocument.Parse(designJsonWriter.ToString());
+        var designRoot = designDocument.RootElement;
+        var designSelection = designRoot.GetProperty("team_and_duty_split").GetProperty("review_seat_selection");
+        AssertStaticSelectionWithoutResolution(designSelection);
+        var designContract = designRoot.GetProperty("external_residence_operating_contract");
+        Assert.True(designContract.TryGetProperty("orca_operating_block", out var designOrca));
+        Assert.Equal("Non-normative Orca operating block", designOrca.GetProperty("label").GetString());
+
+        designArgs[^1] = "markdown";
+        using var designMarkdownWriter = new StringWriter();
+        Assert.Equal(0, GuideDesignThreadCommand.Execute(fixture.Context, designArgs.ToArray(), designMarkdownWriter));
+        var designMarkdown = designMarkdownWriter.ToString();
+        var designSelectionSection = Section(
+            designMarkdown,
+            "- **review-seat selection (G789):**",
+            "- **different transition:**");
+        Assert.Contains("When recorded seat kinds differ", designSelectionSection, StringComparison.Ordinal);
+        Assert.Contains("Non-normative Orca operating block", designMarkdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("- recorded topology:", designSelectionSection, StringComparison.Ordinal);
+        Assert.DoesNotContain("- selection:", designSelectionSection, StringComparison.Ordinal);
+
+        using var reviewJsonWriter = new StringWriter();
+        Assert.Equal(0, GuideReviewCommand.Execute(
+            fixture.Context,
+            ["--repo", Repo, "--pr", "1724", "--domain", Domain, "--format", "json"],
+            reviewJsonWriter));
+        using var reviewDocument = JsonDocument.Parse(reviewJsonWriter.ToString());
+        var reviewSelection = reviewDocument.RootElement
+            .GetProperty("review_standing_policy")
+            .GetProperty("review_seat_selection");
+        AssertStaticSelectionWithoutResolution(reviewSelection);
+
+        using var reviewMarkdownWriter = new StringWriter();
+        Assert.Equal(0, GuideReviewCommand.Execute(
+            fixture.Context,
+            ["--repo", Repo, "--pr", "1724", "--domain", Domain, "--format", "markdown"],
+            reviewMarkdownWriter));
+        var reviewMarkdown = reviewMarkdownWriter.ToString();
+        var reviewSelectionSection = Section(
+            reviewMarkdown,
+            "### Review-seat selection (G789)",
+            "## Review blocker protocol");
+        Assert.Contains("When recorded seat kinds differ", reviewSelectionSection, StringComparison.Ordinal);
+        Assert.DoesNotContain("- recorded topology (", reviewSelectionSection, StringComparison.Ordinal);
+        Assert.DoesNotContain("- selection:", reviewSelectionSection, StringComparison.Ordinal);
+
+        Fixture($"{scenario} fallback design-thread JSON", designSelection.GetRawText());
+        Fixture($"{scenario} fallback design-thread Markdown", designSelectionSection);
+        Fixture($"{scenario} fallback guide review JSON", reviewSelection.GetRawText());
+        Fixture($"{scenario} fallback guide review Markdown", reviewSelectionSection);
     }
 
     [Fact]
@@ -201,6 +285,17 @@ public sealed class GuideSeatSelectionG789Tests
         var endIndex = document.IndexOf(end, startIndex, StringComparison.Ordinal);
         Assert.True(endIndex > startIndex, $"Missing section end '{end}'.");
         return document[startIndex..endIndex];
+    }
+
+    private static void AssertStaticSelectionWithoutResolution(JsonElement selection)
+    {
+        Assert.Contains("When recorded seat kinds differ", selection.GetProperty("mixed_kind_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("design↔orchestration cross-review is acceptable", selection.GetProperty("single_kind_allowance").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Only recorded topology fields decide", selection.GetProperty("recorded_fields_decide").GetString(), StringComparison.Ordinal);
+        foreach (var property in new[] { "topology_team", "recorded_seat_kinds", "design_seat", "review_seat", "selected_review_seat", "selection" })
+        {
+            Assert.False(selection.TryGetProperty(property, out _), $"Unexpected topology resolution property '{property}'.");
+        }
     }
 
     private sealed class TopologyFixture : IDisposable
@@ -241,19 +336,41 @@ public sealed class GuideSeatSelectionG789Tests
         }
 
         public void RecordHerdr(string role, string kind)
+            => RecordHerdr(Team, role, kind);
+
+        public void RecordHerdr(string team, string role, string kind)
         {
             var result = Run(
             [
-                "session-layer", "topology", "record", "--domain", Domain, "--team", Team,
+                "session-layer", "topology", "record", "--domain", Domain, "--team", team,
                 "--role", role, "--resident", "herdr", "--workspace-id", "wG789",
-                "--pane-id", $"wG789:{role}", "--cwd", "/g789", "--kind", kind,
+                "--pane-id", $"wG789:{team}:{role}", "--cwd", "/g789", "--kind", kind,
                 "--delivery-method", "inline", "--write", "--format", "json",
             ]);
             Assert.Equal(0, result.ExitCode);
         }
 
+        public void RecordUnreadable()
+        {
+            var directory = Path.Combine(Root, ".intent-cli", "topology", Domain);
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, $"{Team}.json"), "{ not valid json");
+        }
+
+        public void RecordAmbiguousTeams()
+        {
+            foreach (var team in new[] { $"{Team}-a", $"{Team}-b" })
+            {
+                RecordHerdr(team, "design", "codex");
+                RecordHerdr(team, "implementation", "codex");
+                RecordHerdr(team, "orchestration", "codex");
+                RecordHerdr(team, "review", "codex");
+            }
+        }
+
         public void SeedReviewablePr()
         {
+            Directory.CreateDirectory(Path.Combine(Root, ".intent-cli"));
             var state = new QueueState
             {
                 SchemaVersion = "1",

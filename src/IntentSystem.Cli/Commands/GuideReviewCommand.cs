@@ -252,11 +252,12 @@ internal static class GuideReviewCommand
         // G451: resolve the domain standing-policy registry (optional file,
         // safe defaults when absent/invalid). Fail-closed and read-only.
         var standingPolicy = ReviewStandingPolicyRegistry.Resolve(context, domain);
-        var reviewSeatSelection = ReviewSeatSelectionGuidanceResolver.ResolveUniqueTeam(context.RepoRoot, domain);
-        if (reviewSeatSelection is not null)
-        {
-            standingPolicy = standingPolicy with { ReviewSeatSelection = reviewSeatSelection };
-        }
+        // G789: keep the static review-seat rule reachable even when there is
+        // no readable, uniquely identifiable topology. A readable topology
+        // only enriches that rule with the recorded team/kind resolution.
+        var reviewSeatSelection = ReviewSeatSelectionGuidanceResolver.ResolveUniqueTeam(context.RepoRoot, domain)
+            ?? ReviewSeatSelectionGuidanceResolver.CreateStatic();
+        standingPolicy = standingPolicy with { ReviewSeatSelection = reviewSeatSelection };
 
         var queueStatePath = context.GetQueueStatePath();
         var gaps = new List<string>();
@@ -740,9 +741,12 @@ internal static class GuideReviewCommand
                 writer.WriteLine($"- {reviewSeatSelection.MixedKindRule}");
                 writer.WriteLine($"- {reviewSeatSelection.SingleKindAllowance}");
                 writer.WriteLine($"- {reviewSeatSelection.RecordedFieldsDecide}");
-                writer.WriteLine($"- recorded topology ({reviewSeatSelection.TopologyTeam}): {string.Join(", ", reviewSeatSelection.RecordedSeatKinds)}");
-                writer.WriteLine($"- design: {reviewSeatSelection.DesignSeat}; review: {reviewSeatSelection.ReviewSeat}; selected review seat: {reviewSeatSelection.SelectedReviewSeat}");
-                writer.WriteLine($"- selection: {reviewSeatSelection.Selection}");
+                if (reviewSeatSelection.RecordedSeatKinds is { } recordedSeatKinds)
+                {
+                    writer.WriteLine($"- recorded topology ({reviewSeatSelection.TopologyTeam}): {string.Join(", ", recordedSeatKinds)}");
+                    writer.WriteLine($"- design: {reviewSeatSelection.DesignSeat}; review: {reviewSeatSelection.ReviewSeat}; selected review seat: {reviewSeatSelection.SelectedReviewSeat}");
+                    writer.WriteLine($"- selection: {reviewSeatSelection.Selection}");
+                }
             }
             writer.WriteLine();
         }

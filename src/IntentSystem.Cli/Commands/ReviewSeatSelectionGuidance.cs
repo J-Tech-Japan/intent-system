@@ -3,10 +3,11 @@ using System.Text.Json.Serialization;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G789: renders the review-seat rule from recorded topology only. The
-/// resident-specific record fields are deliberately the sole input: herdr
-/// seats contribute <c>kind</c>, while external seats contribute
-/// <c>frontend</c>. Role names, models, and co-location never infer a kind.
+/// G789: renders the static review-seat rule on every guide surface. The
+/// resident-specific record fields are deliberately the sole input for the
+/// optional topology resolution: herdr seats contribute <c>kind</c>, while
+/// external seats contribute <c>frontend</c>. Role names, models, and
+/// co-location never infer a kind.
 /// </summary>
 internal sealed record ReviewSeatSelectionGuidance
 {
@@ -20,22 +21,28 @@ internal sealed record ReviewSeatSelectionGuidance
     public required string RecordedFieldsDecide { get; init; }
 
     [JsonPropertyName("topology_team")]
-    public required string TopologyTeam { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TopologyTeam { get; init; }
 
     [JsonPropertyName("recorded_seat_kinds")]
-    public required IReadOnlyList<string> RecordedSeatKinds { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? RecordedSeatKinds { get; init; }
 
     [JsonPropertyName("design_seat")]
-    public required string DesignSeat { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DesignSeat { get; init; }
 
     [JsonPropertyName("review_seat")]
-    public required string ReviewSeat { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ReviewSeat { get; init; }
 
     [JsonPropertyName("selected_review_seat")]
-    public required string SelectedReviewSeat { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SelectedReviewSeat { get; init; }
 
     [JsonPropertyName("selection")]
-    public required string Selection { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Selection { get; init; }
 }
 
 internal static class ReviewSeatSelectionGuidanceResolver
@@ -51,6 +58,13 @@ internal static class ReviewSeatSelectionGuidanceResolver
         var topology = ResolveTopology(routingRoot, domain, team);
         return topology is null ? null : Create(topology);
     }
+
+    public static ReviewSeatSelectionGuidance CreateStatic() => new()
+    {
+        MixedKindRule = "When recorded seat kinds differ, the review seat with a recorded kind/frontend different from design reviews design output as well as PRs.",
+        SingleKindAllowance = "When all recorded seat kinds are the same, design↔orchestration cross-review is acceptable.",
+        RecordedFieldsDecide = "Only recorded topology fields decide: `kind` for a herdr seat and `frontend` for an external seat. Do not infer a kind from role name, model, residence, or co-location.",
+    };
 
     public static NotifyTeamTopology? ResolveTopology(
         string routingRoot,
@@ -85,15 +99,26 @@ internal static class ReviewSeatSelectionGuidanceResolver
             routingRoot,
             NotifyRoleTopologyStore.TopologyDirectoryRelativePath.Replace('/', Path.DirectorySeparatorChar),
             domain.Trim());
-        if (!Directory.Exists(directory))
+        string[] candidates;
+        try
         {
+            if (!Directory.Exists(directory))
+            {
+                return null;
+            }
+
+            candidates = Directory
+                .EnumerateFiles(directory, "*.json", SearchOption.TopDirectoryOnly)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A directory that cannot be inspected is just as unsuitable for
+            // topology-specific selection as a malformed record. Callers keep
+            // the static rule and never guess a team.
             return null;
         }
-
-        var candidates = Directory
-            .EnumerateFiles(directory, "*.json", SearchOption.TopDirectoryOnly)
-            .OrderBy(path => path, StringComparer.Ordinal)
-            .ToArray();
         if (candidates.Length != 1)
         {
             return null;
@@ -140,11 +165,8 @@ internal static class ReviewSeatSelectionGuidanceResolver
                 : "Mixed recorded kinds: review does not have a different recorded kind/frontend from design; select a recorded different-kind review seat before it reviews design output, while review still reviews PRs."
             : "Single recorded kind: design↔orchestration cross-review is acceptable; review continues to review PRs.";
 
-        return new ReviewSeatSelectionGuidance
+        return CreateStatic() with
         {
-            MixedKindRule = "When recorded seat kinds differ, the review seat with a recorded kind/frontend different from design reviews design output as well as PRs.",
-            SingleKindAllowance = "When all recorded seat kinds are the same, design↔orchestration cross-review is acceptable.",
-            RecordedFieldsDecide = "Only recorded topology fields decide: `kind` for a herdr seat and `frontend` for an external seat. Do not infer a kind from role name, model, residence, or co-location.",
             TopologyTeam = topology.Team,
             RecordedSeatKinds = seats,
             DesignSeat = design.Display,

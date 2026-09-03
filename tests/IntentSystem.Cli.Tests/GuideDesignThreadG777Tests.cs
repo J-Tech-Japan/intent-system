@@ -39,9 +39,9 @@ public sealed class GuideDesignThreadG777Tests
         "external_residence_operating_contract",
     ];
 
-    // The full b766f2d0 payload, including raw G774, G775, and G776 blocks,
-    // stays byte-for-byte stable when the one G777 sibling is excluded.
-    private const string G776BaselinePayloadOracleHash = "5ebb02d016c9afec671e58184f993705d0c6e597ecf334239b19d704bfaf3294";
+    // The full G789 payload, including raw G774/G775/G789 blocks, stays
+    // stable when the one G777 sibling is excluded.
+    private const string G776BaselinePayloadOracleHash = "bfb054d9b5ce9006dbae2764d7ed5648e2dfa736054f0532987ebe857f2712b8";
 
     [Fact]
     public void RenderedLivenessGuidance_NamesTheSanctionedDryRunBeforeWriteResponse_G777()

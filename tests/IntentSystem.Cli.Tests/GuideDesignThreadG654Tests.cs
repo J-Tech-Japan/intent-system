@@ -37,13 +37,16 @@ public sealed class GuideDesignThreadG654Tests
     // order. Only the separately asserted packet_authoring_check block may
     // differ; changing any parent value, nesting, or field order changes this
     // oracle rather than weakening a full-payload assertion.
-    private const string ParentPayloadOracleHash = "c43e27f362c39d9c737fc2269b1979bdf8ad9b7ecb07f3dd0491ba1325d0c54f";
+    // G789 adds the always-reachable static review-seat rule inside the
+    // existing team_and_duty_split object, so the parent hash includes that
+    // additive nested payload.
+    private const string ParentPayloadOracleHash = "0af4402fa1b72909c2b79712b1a25f3bf1af08aa16d534b8632d510bf8c05082";
     private static readonly string[] G774BaselinePayloadFieldNames =
         ParentPayloadFieldNames.Append("packet_authoring_check").ToArray();
-    private const string G774BaselinePayloadOracleHash = "8110a6150605810aaa609fc2c34668341b939e58bc0dc35085c7290e6c72b136";
+    private const string G774BaselinePayloadOracleHash = "a559d7abddaee47e05fc688e811e7edbc0bb8bde54b486c4e32334c53f058592";
     // G776 may append exactly one declaration field. The existing G775
     // operating-contract fields remain a raw-value and rendered-order oracle.
-    private const string G775ExternalResidenceContractOracleHash = "1c297f028c3e8ea5e1901b84ff962e542d864aa1139130ea9c1092539789cbe4";
+    private const string G775ExternalResidenceContractOracleHash = "01c68d8acd2aa420a7597838ef4ac85ed7ba72797ae820030405be9c16cbbf5a";
 
     [Theory]
     [InlineData("agmsg", false)]
@@ -204,6 +207,7 @@ public sealed class GuideDesignThreadG654Tests
                 "wake_channel_pattern",
                 "wake_channel_declaration",
                 "orca_worked_example",
+                "orca_operating_block",
                 "residence_transition",
             },
             contract.EnumerateObject().Select(field => field.Name));
@@ -220,6 +224,7 @@ public sealed class GuideDesignThreadG654Tests
                 "collect_loop",
                 "wake_channel_pattern",
                 "orca_worked_example",
+                "orca_operating_block",
                 "residence_transition",
             },
             g775Fields.Select(field => field.Name));
