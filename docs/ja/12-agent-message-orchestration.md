@@ -611,6 +611,8 @@ non-finding です。
 
 G788 では、この absence 判定を単一の missing report から推測せず source-derived にします。
 configured execution-unit regex から共有の `execution-unit token` を抽出し、
+task id、objective、input の順で最初の configured match だけを用いるため、後方の token が
+最初の token を上書きすることはありません。
 `pending-ledger`、`report-outbox`、`notification-events`、`queue-state`、
 `continuation-chain`、`expected-artifact` を確認します。後ろの 2 つは従来の
 continuation と expected artifact check を保持し、最初の 4 つは downstream delegation、

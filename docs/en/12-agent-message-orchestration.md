@@ -697,7 +697,9 @@ seat, visible artifact, report, or target transition is a non-finding.
 
 G788 makes that absence decision source-derived rather than inferred from a
 single missing report. It extracts one shared `execution-unit token` from the
-configured execution-unit regex, then checks `pending-ledger`, `report-outbox`,
+configured execution-unit regex, taking only the first configured match in
+task-id, then objective, then input order; a later token cannot override that
+first token. It then checks `pending-ledger`, `report-outbox`,
 `notification-events`, `queue-state`, `continuation-chain`, and
 `expected-artifact`. The latter two preserve the earlier continuation and
 expected artifact checks; the first four capture downstream delegation,

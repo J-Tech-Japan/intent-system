@@ -102,18 +102,50 @@ public sealed class NotifySupervisionG788Tests : IDisposable
     }
 
     [Theory]
-    [InlineData("outbox")]
-    [InlineData("event")]
-    public void ChildReportEvidenceFromOutboxOrNotificationEventSuppressesFinding_G788(string source)
+    [InlineData("objective")]
+    [InlineData("input")]
+    public void DeliveredParentTokenFromObjectiveOrInputMatchesRecipientDownstream_G788(string parentTokenCarrier)
     {
-        var scenario = CreateScenario($"child-report-{source}");
+        var scenario = CreateScenario(
+            $"parent-{parentTokenCarrier}-fallback",
+            parentTaskId: "parent-start",
+            parentObjective: parentTokenCarrier == "objective"
+                ? "coordinate execution unit G788"
+                : "coordinate the child delegation",
+            parentInputs: parentTokenCarrier == "input" ? ["G788 fixture input"] : ["ordinary input"]);
+        var child = WriteDownstreamDelegation(scenario, tokenCarrier: "task-id");
+
+        var pass = RunAfterWindow(scenario);
+
+        Assert.DoesNotContain(pass.Findings, finding =>
+            finding.Kind == "delegation-delivered-never-executed");
+        var audit = NotifySupervisionStore.Read(
+            scenario.Context.ResolveSupervisionArtifactRootPath(),
+            Domain,
+            Team).LastCycle!.DelegationExecutionEvidence!;
+        Assert.Contains(audit, item => item.Contains("task_id=parent-start; unit=G788", StringComparison.Ordinal));
+        Assert.Contains(audit, item => item.Contains($"pending-ledger:task_id={child.TaskId}", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("outbox", "task-id")]
+    [InlineData("outbox", "summary")]
+    [InlineData("outbox", "artifact")]
+    [InlineData("event", "task-id")]
+    [InlineData("event", "summary")]
+    [InlineData("event", "artifact")]
+    public void ChildReportEvidenceFromEveryConfiguredCarrierSuppressesFinding_G788(
+        string source,
+        string tokenCarrier)
+    {
+        var scenario = CreateScenario($"child-report-{source}-{tokenCarrier}");
         if (source == "outbox")
         {
-            WriteChildReportOutbox(scenario);
+            WriteChildReportOutbox(scenario, tokenCarrier);
         }
         else
         {
-            WriteChildNotificationEvent(scenario);
+            WriteChildNotificationEvent(scenario, tokenCarrier);
         }
 
         var pass = RunAfterWindow(scenario);
@@ -125,6 +157,44 @@ public sealed class NotifySupervisionG788Tests : IDisposable
             Domain,
             Team).LastCycle!.DelegationExecutionEvidence!;
         Assert.Contains(audit, item => item.StartsWith($"{(source == "outbox" ? "report-outbox" : "notification-events")}:count=1", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("delegation")]
+    [InlineData("outbox")]
+    [InlineData("event")]
+    public void EarlierDifferentUnitInChildCarrierDoesNotSuppressTrueStall_G788(string source)
+    {
+        var scenario = CreateScenario($"earlier-different-unit-{source}");
+        switch (source)
+        {
+            case "delegation":
+                WriteDownstreamDelegation(scenario, tokenCarrier: "earlier-different-unit");
+                break;
+            case "outbox":
+                WriteChildReportOutbox(scenario, tokenCarrier: "earlier-different-unit");
+                break;
+            default:
+                WriteChildNotificationEvent(scenario, tokenCarrier: "earlier-different-unit");
+                break;
+        }
+
+        var pass = RunAfterWindow(scenario);
+
+        var finding = Assert.Single(pass.Findings, item =>
+            item.Kind == "delegation-delivered-never-executed");
+        Assert.Contains(
+            "pending-ledger=0; report-outbox=0; notification-events=0; queue-state=0; continuation-chain=0; expected-artifact=0.",
+            finding.Summary,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(pass.Findings, item =>
+            item.Kind == "delegation-in-progress-no-direct-report");
+        Assert.Contains(
+            NotifySupervisionStore.Read(scenario.Context.ResolveSupervisionArtifactRootPath(), Domain, Team)
+                .LastCycle!.DelegationExecutionEvidence!,
+            item => item.StartsWith(
+                $"{(source == "delegation" ? "pending-ledger" : source == "outbox" ? "report-outbox" : "notification-events")}:count=0",
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -207,15 +277,27 @@ public sealed class NotifySupervisionG788Tests : IDisposable
     }
 
     [Theory]
-    [InlineData("G779-start", "G779")]
-    [InlineData("design-delegate-SKS-G909-implement-20260902", "SKS-G909")]
-    [InlineData("sks-g909-implementation-20260902", "SKS-G909")]
-    [InlineData("tokenless-task-id", null)]
-    public void ExecutionUnitTokenRuleIsSharedAndCaseInsensitive_G788(string taskId, string? expected)
+    [InlineData("G779-start", null, null, "G779")]
+    [InlineData("design-delegate-SKS-G909-implement-20260902", null, null, "SKS-G909")]
+    [InlineData("sks-g909-implementation-20260902", null, null, "SKS-G909")]
+    [InlineData("tokenless-task-id", null, null, null)]
+    [InlineData("parent-start", "coordinate G788 downstream", "ordinary input", "G788")]
+    [InlineData("parent-start", "coordinate ordinary work", "G788 input", "G788")]
+    [InlineData("G789-parent", "coordinate G788 downstream", "G788 input", "G789")]
+    [InlineData("parent-start", "implement G789 before G788 downstream", "G788 input", "G789")]
+    public void ExecutionUnitTokenRuleIsOrderedAndCaseInsensitive_G788(
+        string taskId,
+        string? objective,
+        string? input,
+        string? expected)
     {
         var pattern = new Regex(@"^(?:[A-Z]+-)?G[0-9]+$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
-        var actual = NotifyDelegationExecutionEvidence.ExtractExecutionUnitToken(taskId, pattern);
+        var actual = NotifyDelegationExecutionEvidence.ExtractExecutionUnitToken(
+            taskId,
+            objective,
+            input is null ? null : [input],
+            pattern);
 
         Assert.Equal(expected, actual);
     }
@@ -247,7 +329,11 @@ public sealed class NotifySupervisionG788Tests : IDisposable
         }
     }
 
-    private Scenario CreateScenario(string name)
+    private Scenario CreateScenario(
+        string name,
+        string parentTaskId = "G788-start",
+        string? parentObjective = null,
+        IReadOnlyList<string>? parentInputs = null)
     {
         now = firstNow;
         var scenarioRoot = Path.Combine(root, name);
@@ -256,7 +342,11 @@ public sealed class NotifySupervisionG788Tests : IDisposable
         RecordHerdrOnlyMode(context);
         WriteExecutionUnitBinding(scenarioRoot);
         WriteTopology(scenarioRoot);
-        var pending = WriteDeliveredParentDelegation(scenarioRoot);
+        var pending = WriteDeliveredParentDelegation(
+            scenarioRoot,
+            parentTaskId,
+            parentObjective,
+            parentInputs);
         var runner = new FixtureRunner();
         return new Scenario
         {
@@ -301,21 +391,25 @@ public sealed class NotifySupervisionG788Tests : IDisposable
         agmsgScriptsDirectory: scenarioRoot,
         delegationExecutionWindowSeconds: 300);
 
-    private NotifyPendingDelegation WriteDeliveredParentDelegation(string scenarioRoot)
+    private NotifyPendingDelegation WriteDeliveredParentDelegation(
+        string scenarioRoot,
+        string taskId,
+        string? objective,
+        IReadOnlyList<string>? inputs)
     {
         var pending = new NotifyPendingDelegation
         {
             Domain = Domain,
             Team = Team,
-            TaskId = "G788-start",
+            TaskId = taskId,
             DelegatingRole = "design",
             RecipientRole = "orchestration",
             ReportToRole = "design",
             RecipientIdentity = "role=orchestration;workspace=wG788;pane=wG788:p2",
             ExpectedArtifact = "expected-artifact.txt",
             ExpectedArtifacts = ["expected-artifact.txt"],
-            Objective = "coordinate the G788 delegation",
-            Inputs = ["fixture"],
+            Objective = objective ?? "coordinate the G788 delegation",
+            Inputs = inputs ?? ["fixture"],
             ResultNonce = "g788-parent-nonce",
             DispatchedAt = firstNow.AddSeconds(-1),
             TransportMode = SessionLayerMode.HerdrOnly,
@@ -339,7 +433,11 @@ public sealed class NotifySupervisionG788Tests : IDisposable
         DateTimeOffset? dispatchedAt = null)
     {
         var taskId = tokenCarrier == "task-id" ? "G788-implementation" : "child-implementation";
-        var objective = tokenCarrier == "objective" ? "implement G788 downstream" : "implement the child work";
+        var objective = tokenCarrier == "objective"
+            ? "implement G788 downstream"
+            : tokenCarrier == "earlier-different-unit"
+                ? "implement G789 before G788 downstream"
+                : "implement the child work";
         IReadOnlyList<string> inputs = tokenCarrier == "input" ? ["G788 evidence"] : ["ordinary input"];
         var child = new NotifyPendingDelegation
         {
@@ -369,36 +467,54 @@ public sealed class NotifySupervisionG788Tests : IDisposable
         return child;
     }
 
-    private void WriteChildReportOutbox(Scenario scenario)
+    private void WriteChildReportOutbox(Scenario scenario, string tokenCarrier = "task-id")
     {
+        var taskId = tokenCarrier == "task-id" ? "G788-child-report" : "child-report";
+        var summary = tokenCarrier == "summary"
+            ? "child report for G788"
+            : tokenCarrier == "earlier-different-unit"
+                ? "child report for G789 before G788"
+                : "child report";
+        var artifact = tokenCarrier == "artifact"
+            ? "https://example.test/G788-child"
+            : "https://example.test/child";
         var write = NotifyReportOutboxStore.WriteNew(scenario.Root, new NotifyReportOutboxEntry
         {
             Domain = Domain,
             Team = Team,
-            TaskId = "G788-child-report",
+            TaskId = taskId,
             ResultNonce = "g788-child-report-nonce",
             FromRole = "implementation",
             ToRole = "design",
             Status = "completed",
-            Artifact = "https://example.test/G788-child",
-            Summary = "child report for G788",
+            Artifact = artifact,
+            Summary = summary,
             CreatedAt = firstNow.AddSeconds(10),
             DeliveryState = "delivered",
         });
         Assert.True(write.Written, write.Error);
     }
 
-    private void WriteChildNotificationEvent(Scenario scenario)
+    private void WriteChildNotificationEvent(Scenario scenario, string tokenCarrier = "task-id")
     {
+        var unit = tokenCarrier == "task-id" ? "G788-child-event" : "child-event";
+        var summary = tokenCarrier == "summary"
+            ? "child report for G788"
+            : tokenCarrier == "earlier-different-unit"
+                ? "child report for G789 before G788"
+                : "child report";
+        var artifact = tokenCarrier == "artifact"
+            ? "https://example.test/G788-child"
+            : "https://example.test/child";
         Assert.True(NotifyEventWriter.TryResolveWritePath(scenario.Root, Domain, Team, out var path, out var error), error);
         NotifyEventWriter.Append(path, new NotifyDesignEvent
         {
             Timestamp = firstNow.AddSeconds(10),
             Team = Team,
             Kind = "report",
-            Unit = "G788-child-event",
-            Summary = "child report",
-            Artifact = "https://example.test/child",
+            Unit = unit,
+            Summary = summary,
+            Artifact = artifact,
         });
     }
 

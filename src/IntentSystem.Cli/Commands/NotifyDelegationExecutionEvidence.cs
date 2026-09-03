@@ -127,7 +127,11 @@ internal sealed record NotifyDelegationExecutionEvidence
         }
         var unitToken = unitPattern is null
             ? null
-            : ExtractExecutionUnitToken(record.TaskId, unitPattern);
+            : ExtractExecutionUnitToken(
+                record.TaskId,
+                record.Objective,
+                record.Inputs,
+                unitPattern);
 
         var expectedArtifactPresent = false;
         IReadOnlyList<string> expectedArtifacts = record.ExpectedArtifacts is { Count: > 0 } artifacts
@@ -179,13 +183,18 @@ internal sealed record NotifyDelegationExecutionEvidence
                     .ToArray();
                 foreach (var candidate in downstream)
                 {
-                    if (CarriesExecutionUnitToken(candidate, unitToken, unitPattern))
+                    var candidateUnitToken = ExtractExecutionUnitToken(
+                        candidate.TaskId,
+                        candidate.Objective,
+                        candidate.Inputs,
+                        unitPattern);
+                    if (string.Equals(candidateUnitToken, unitToken, StringComparison.OrdinalIgnoreCase))
                     {
                         pendingLedgerPresent = true;
                         pendingDetails.Add(
                             $"pending-ledger:task_id={candidate.TaskId}; delegating_role={candidate.DelegatingRole}; dispatched_at={candidate.DispatchedAt:O}; source={pendingLedgerPath}");
                     }
-                    else
+                    else if (candidateUnitToken is null)
                     {
                         hasTokenlessDownstream = true;
                         tokenlessDownstreamDetails.Add(
@@ -206,9 +215,18 @@ internal sealed record NotifyDelegationExecutionEvidence
             else if (unitPattern is not null && unitToken is not null)
             {
                 foreach (var entry in outbox.Where(entry => entry.CreatedAt > deliveredAt
-                    && !string.Equals(entry.TaskId, record.TaskId, StringComparison.Ordinal)
-                    && CarriesExecutionUnitToken(entry, unitToken, unitPattern)))
+                    && !string.Equals(entry.TaskId, record.TaskId, StringComparison.Ordinal)))
                 {
+                    var entryUnitToken = ExtractExecutionUnitToken(
+                        entry.TaskId,
+                        entry.Summary,
+                        [entry.Artifact],
+                        unitPattern);
+                    if (!string.Equals(entryUnitToken, unitToken, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
                     reportOutboxPresent = true;
                     reportOutboxDetails.Add(
                         $"report-outbox:task_id={entry.TaskId}; from_role={entry.FromRole}; created_at={entry.CreatedAt:O}; source={reportOutboxPath}");
@@ -259,10 +277,17 @@ internal sealed record NotifyDelegationExecutionEvidence
                             eventUnit,
                             record.TaskId,
                             StringComparison.Ordinal);
+                        var eventUnitToken = unitPattern is null
+                            ? null
+                            : ExtractExecutionUnitToken(
+                                eventUnit,
+                                summary,
+                                artifact is null ? null : [artifact],
+                                unitPattern);
                         var isTokenCarryingChildReport = unitPattern is not null
                             && unitToken is not null
                             && !string.Equals(eventUnit, record.TaskId, StringComparison.Ordinal)
-                            && CarriesExecutionUnitToken(unitToken, unitPattern, eventUnit, summary, artifact);
+                            && string.Equals(eventUnitToken, unitToken, StringComparison.OrdinalIgnoreCase);
                         if (!isExactTaskReport && !isTokenCarryingChildReport)
                         {
                             continue;
@@ -364,12 +389,41 @@ internal sealed record NotifyDelegationExecutionEvidence
     }
 
     /// <summary>
-    /// Extracts one configured execution-unit token from a task id or prose
-    /// field. All G788 source checks call this rule, so the same token governs
-    /// downstream delegation, child-report, event, and queue matching.
+    /// Extracts one configured, case-insensitive execution-unit token in record
+    /// field order: task id, objective, then inputs. All G788 source checks
+    /// call this rule, so a later token cannot override an earlier token from
+    /// the same carrier.
     /// </summary>
-    internal static string? ExtractExecutionUnitToken(string? value, Regex executionUnitPattern) =>
-        ExtractExecutionUnitTokens(value, executionUnitPattern).FirstOrDefault();
+    internal static string? ExtractExecutionUnitToken(
+        string? taskId,
+        string? objective,
+        IEnumerable<string?>? inputs,
+        Regex executionUnitPattern)
+    {
+        var orderedFields = new List<string?> { taskId, objective };
+        if (inputs is not null)
+        {
+            orderedFields.AddRange(inputs);
+        }
+
+        foreach (var value in orderedFields)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            foreach (Match candidate in CandidateExecutionUnitPattern.Matches(value))
+            {
+                if (executionUnitPattern.IsMatch(candidate.Value))
+                {
+                    return candidate.Value.ToUpperInvariant();
+                }
+            }
+        }
+
+        return null;
+    }
 
     private static readonly Regex CandidateExecutionUnitPattern = new(
         @"(?<![A-Za-z0-9])(?:[A-Za-z][A-Za-z0-9]*-)?G[0-9]+(?![A-Za-z0-9])",
@@ -378,22 +432,6 @@ internal sealed record NotifyDelegationExecutionEvidence
     private static readonly Regex DefaultExecutionUnitPattern = new(
         @"^(?:[A-Za-z][A-Za-z0-9]*-)?G[0-9]+$",
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static IEnumerable<string> ExtractExecutionUnitTokens(string? value, Regex executionUnitPattern)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            yield break;
-        }
-
-        foreach (Match candidate in CandidateExecutionUnitPattern.Matches(value))
-        {
-            if (executionUnitPattern.IsMatch(candidate.Value))
-            {
-                yield return candidate.Value.ToUpperInvariant();
-            }
-        }
-    }
 
     private static Regex? ResolveUnitPattern(string routingRoot, string domain, out string? error)
     {
@@ -424,34 +462,6 @@ internal sealed record NotifyDelegationExecutionEvidence
             return null;
         }
     }
-
-    private static bool CarriesExecutionUnitToken(
-        NotifyPendingDelegation candidate,
-        string unitToken,
-        Regex executionUnitPattern)
-    {
-        var values = new List<string?> { candidate.TaskId, candidate.Objective };
-        values.AddRange(candidate.Inputs ?? []);
-        return CarriesExecutionUnitToken(unitToken, executionUnitPattern, values.ToArray());
-    }
-
-    private static bool CarriesExecutionUnitToken(
-        NotifyReportOutboxEntry entry,
-        string unitToken,
-        Regex executionUnitPattern) =>
-        CarriesExecutionUnitToken(
-            unitToken,
-            executionUnitPattern,
-            entry.TaskId,
-            entry.Summary,
-            entry.Artifact);
-
-    private static bool CarriesExecutionUnitToken(
-        string unitToken,
-        Regex executionUnitPattern,
-        params string?[] values) => values
-        .SelectMany(value => ExtractExecutionUnitTokens(value, executionUnitPattern))
-        .Any(candidate => string.Equals(candidate, unitToken, StringComparison.OrdinalIgnoreCase));
 
     private static IReadOnlyList<string> ResolveEventPaths(
         string routingRoot,
