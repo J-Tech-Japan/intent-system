@@ -1,7 +1,7 @@
 # Release Notes — intent-cli v0.31.0
 
 > **PREPARED / NOT PUBLISHED.** This prepare-only note set records the measured
-> G788–G791 chain. It does not create a tag or GitHub Release, publish a package,
+> G788–G793 chain. It does not create a tag or GitHub Release, publish a package,
 > change a workflow or publish configuration, post a consumer comment, or change
 > product source.
 
@@ -22,7 +22,7 @@ changelogs.
 
 ## Independently measured minor justification
 
-The named product base is `79a245c655e17ac654ac440fda31709ee38e28b8`. The
+The named product base is `fed2bbc74449b389565b8241732fe376b7a1c421`. The
 installed tagged v0.30.0 tool was measured with an explicit release version:
 
 ```text
@@ -52,9 +52,9 @@ The tagged surface has no `inspect` route. The v0.28.0 release rule is the
 auditable distinction: **a command-route addition is a minor bump; option-level
 additions do not count as command routes.** The named base adds exactly one
 command route, the read-only `session-layer inspect`; that decides v0.31.0.
-G788 evidence sources and informational output, G789 guide blocks, and G791's
-nested-pointer-drift classification are listed but explicitly not counted as
-additional routes.
+G788 evidence sources and informational output, G789 guide blocks, G791's
+nested-pointer-drift classification, and G793's settled-outcome/disposal
+classification are listed but explicitly not counted as additional routes.
 
 ## Measured version identities
 
@@ -62,7 +62,7 @@ The named base was checked with a clean Release build after the policy roll:
 
 ```text
 $ git rev-parse HEAD
-79a245c655e17ac654ac440fda31709ee38e28b8
+fed2bbc74449b389565b8241732fe376b7a1c421
 $ dotnet clean
 Build succeeded.
     0 Warning(s)
@@ -72,7 +72,7 @@ Build succeeded.
     0 Warning(s)
     0 Error(s)
 $ dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-intent-cli 0.31.1-79a245c-G791
+intent-cli 0.31.1-fed2bbc-G793
 ```
 
 That normal identity is the `nextVersion` placeholder and is **not** v0.31.0.
@@ -84,8 +84,12 @@ Build succeeded.
     0 Warning(s)
     0 Error(s)
 $ dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-intent-cli 0.31.0-79a245c-G791
+intent-cli 0.31.0-fed2bbc-G793
 ```
+
+The historical G790 merge SHA `79a245c655e17ac654ac440fda31709ee38e28b8`
+remains only in the inventory; no measured identity banner contains that stale
+base fragment.
 
 Published versioning is a third identity and is derived by `release.yml`, not
 by the local policy file:
@@ -99,9 +103,9 @@ VERSION=0.31.0
 The release workflow supplies `-p:Version=<tag>` from `RAW`; `eng/version.json`
 governs local builds and dry runs only. This prepare-only slice created no tag.
 
-## Release inventory: exactly four first-parent units
+## Release inventory: exactly six first-parent units
 
-The inventory is derived from the exact first-parent range. Git measured four
+The inventory is derived from the exact first-parent range. Git measured six
 commits, and every commit has one operator-observable outcome:
 
 - G788 — PR #1723 / issue #1722; merge commit `cfdacb4a657d9a60ab82fea3faa435ff732f389f`.
@@ -120,17 +124,27 @@ commits, and every commit has one operator-observable outcome:
   **Operator-observable outcome:** `session-layer inspect` reports recorded role
   state and an optional bounded pane tail read without focus, prompts, key sends,
   or process management.
+- G792 — PR #1732 / issue #1730; merge commit `26f0edf85cc6371c66ede5383de6543e11acd1fb`.
+  **Operator-observable outcome:** this release's own preparation unit records
+  the measured v0.31.0 notes, identity banners, and version-policy roll.
+- G793 — PR #1733 / issue #1731; merge commit `fed2bbc74449b389565b8241732fe376b7a1c421`.
+  **Operator-observable outcome:** `automation stalled-work` stops reporting a
+  delegation as outstanding only after its own unit has a merged PR and closed
+  issue, records the settled classification with merge SHA and issue evidence,
+  and names `notify dispose --kind applied-elsewhere` on every still-open row.
 
 ## First-parent accounting
 
 ```text
-$ git rev-list --first-parent --reverse v0.30.0..79a245c655e17ac654ac440fda31709ee38e28b8
+$ git rev-list --first-parent --reverse v0.30.0..fed2bbc74449b389565b8241732fe376b7a1c421
 cfdacb4a657d9a60ab82fea3faa435ff732f389f
 9d03309a155dc5f714be8a99bb3c2234724bf589
 aa5c49f51bffa634ca7a96a08f1245e53a372904
 79a245c655e17ac654ac440fda31709ee38e28b8
-$ git rev-list --first-parent --count v0.30.0..79a245c655e17ac654ac440fda31709ee38e28b8
-4
+26f0edf85cc6371c66ede5383de6543e11acd1fb
+fed2bbc74449b389565b8241732fe376b7a1c421
+$ git rev-list --first-parent --count v0.30.0..fed2bbc74449b389565b8241732fe376b7a1c421
+6
 ```
 
 | first-parent commit | classification | release inventory |
@@ -139,8 +153,10 @@ $ git rev-list --first-parent --count v0.30.0..79a245c655e17ac654ac440fda31709ee
 | `9d03309a155dc5f714be8a99bb3c2234724bf589` | G789 / PR #1725 / issue #1724 | included |
 | `aa5c49f51bffa634ca7a96a08f1245e53a372904` | G791 / PR #1728 / issue #1727 | included |
 | `79a245c655e17ac654ac440fda31709ee38e28b8` | G790 / PR #1729 / issue #1726 | included |
+| `26f0edf85cc6371c66ede5383de6543e11acd1fb` | G792 / PR #1732 / issue #1730 | included — this release's own preparation unit |
+| `fed2bbc74449b389565b8241732fe376b7a1c421` | G793 / PR #1733 / issue #1731 | included |
 
-The first-parent range contains exactly these four merge commits and nothing
+The first-parent range contains exactly these six merge commits and nothing
 else; the table is not a changelog of second-parent commits.
 
 ## Consumer follow-up after publication
@@ -168,16 +184,19 @@ the released version and closes it.
   and writes to no other domain's submodule.
 - G789's design-thread Orca block is non-normative; intent-cli neither launches
   nor manages Orca.
+- G793's settled outcome requires both a merged linked PR and closed linked issue;
+  still-open rows remain pending and carry the non-empty
+  `notify dispose --kind applied-elsewhere` recommendation.
 
 ## Prepare-only verification
 
-`ReleaseNotesV0310DocsTests` compares the EN/JA unit/PR/issue/merge tuples and
-consumer row, and deliberately fails on a one-field mirror mutation. The PR
-pastes the actual parent absence/failure output for each new test, focused
-release-note validation (13 passed), full CLI Release validation (5655 passed,
-1 skipped, 0 failed), all-project Release validation (5985 passed, 1 skipped,
+`ReleaseNotesV0310DocsTests` and the G794 amendment guards compare the EN/JA
+unit/PR/issue/merge tuples and consumer row, assert the six measured commits,
+and deliberately fail on a one-field mirror mutation. The PR pastes the actual
+parent absence/failure output for each new test, focused release-note validation
+(20 passed, 0 skipped, 0 failed), full CLI Release validation (5665 passed,
+1 skipped, 0 failed), all-project Release validation (5995 passed, 1 skipped,
 0 failed), all three identity outputs, `git diff --check`, and exact-head CI.
-The diff is limited to release notes, version policy, placeholders,
-developer-reference readiness, and tests; it has no tag, GitHub Release,
-package publish, workflow/publish-config, consumer-comment, or product-source
-change.
+The diff is limited to the two release notes and tests; it has
+no tag, GitHub Release, package publish, workflow/publish-config,
+consumer-comment, version-policy, or product-source change.
