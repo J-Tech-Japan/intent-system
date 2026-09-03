@@ -162,7 +162,7 @@ internal static class ReviewSeatSelectionGuidanceResolver
         var selection = mixedKinds
             ? reviewDiffersFromDesign
                 ? "Mixed recorded kinds: review has a different recorded kind/frontend from design, so review reviews design output and PRs."
-                : "Mixed recorded kinds: review does not have a different recorded kind/frontend from design; select a recorded different-kind review seat before it reviews design output, while review still reviews PRs."
+                : "Mixed recorded kinds: review does not have a different recorded kind/frontend from design; no distinct-kind review seat is resolved for design output. Select a recorded different-kind review seat before it reviews design output, while review still reviews PRs."
             : "Single recorded kind: design↔orchestration cross-review is acceptable; review continues to review PRs.";
 
         return CreateStatic() with
@@ -171,7 +171,7 @@ internal static class ReviewSeatSelectionGuidanceResolver
             RecordedSeatKinds = seats,
             DesignSeat = design.Display,
             ReviewSeat = review.Display,
-            SelectedReviewSeat = ReviewRole,
+            SelectedReviewSeat = mixedKinds && !reviewDiffersFromDesign ? null : ReviewRole,
             Selection = selection,
         };
     }

@@ -744,7 +744,8 @@ internal static class GuideReviewCommand
                 if (reviewSeatSelection.RecordedSeatKinds is { } recordedSeatKinds)
                 {
                     writer.WriteLine($"- recorded topology ({reviewSeatSelection.TopologyTeam}): {string.Join(", ", recordedSeatKinds)}");
-                    writer.WriteLine($"- design: {reviewSeatSelection.DesignSeat}; review: {reviewSeatSelection.ReviewSeat}; selected review seat: {reviewSeatSelection.SelectedReviewSeat}");
+                    var selectedReviewSeat = reviewSeatSelection.SelectedReviewSeat ?? "unresolved";
+                    writer.WriteLine($"- design: {reviewSeatSelection.DesignSeat}; review: {reviewSeatSelection.ReviewSeat}; selected review seat: {selectedReviewSeat}");
                     writer.WriteLine($"- selection: {reviewSeatSelection.Selection}");
                 }
             }

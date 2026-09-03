@@ -181,6 +181,46 @@ public sealed class GuideSeatSelectionG789Tests
     }
 
     [Fact]
+    public void GuideReview_MixedKindSameKindReviewRemainsUnresolved_G789()
+    {
+        using var fixture = new TopologyFixture("review-same-kind");
+        fixture.RecordHerdr("design", "codex");
+        fixture.RecordHerdr("review", "codex");
+        fixture.RecordHerdr("orchestration", "codex");
+        fixture.RecordExternal("implementation", "claude-app");
+        fixture.SeedReviewablePr();
+
+        using var jsonWriter = new StringWriter();
+        Assert.Equal(0, GuideReviewCommand.Execute(
+            fixture.Context,
+            ["--repo", Repo, "--pr", "1724", "--domain", Domain, "--format", "json"],
+            jsonWriter));
+        using var document = JsonDocument.Parse(jsonWriter.ToString());
+        var selection = document.RootElement
+            .GetProperty("review_standing_policy")
+            .GetProperty("review_seat_selection");
+        Assert.Equal("design (kind:codex)", selection.GetProperty("design_seat").GetString());
+        Assert.Equal("review (kind:codex)", selection.GetProperty("review_seat").GetString());
+        Assert.False(selection.TryGetProperty("selected_review_seat", out _));
+        Assert.Contains("no distinct-kind review seat is resolved", selection.GetProperty("selection").GetString(), StringComparison.Ordinal);
+        Assert.Contains("select a recorded different-kind review seat", selection.GetProperty("selection").GetString(), StringComparison.OrdinalIgnoreCase);
+
+        using var markdownWriter = new StringWriter();
+        Assert.Equal(0, GuideReviewCommand.Execute(
+            fixture.Context,
+            ["--repo", Repo, "--pr", "1724", "--domain", Domain, "--format", "markdown"],
+            markdownWriter));
+        var markdown = markdownWriter.ToString();
+        var section = Section(markdown, "### Review-seat selection (G789)", "## Review blocker protocol");
+        Assert.Contains("selected review seat: unresolved", section, StringComparison.Ordinal);
+        Assert.DoesNotContain("selected review seat: review", section, StringComparison.Ordinal);
+        Assert.Contains("no distinct-kind review seat is resolved", section, StringComparison.Ordinal);
+
+        Fixture("same-kind mixed guide review JSON", selection.GetRawText());
+        Fixture("same-kind mixed guide review Markdown", section);
+    }
+
+    [Fact]
     public void GuideReview_RemovingOnlyG789SelectionMatchesImmutableParentPayload_G789()
     {
         using var fixture = new TopologyFixture(
