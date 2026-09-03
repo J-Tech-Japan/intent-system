@@ -326,6 +326,41 @@ or manages the command.
 > orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}
 > ```
 
+> **Non-normative Orca operating order (G789).** Before any seat message,
+> create or bind the Run, share its identifier, and have each sender provide
+> its own handle in this order:
+>
+> ```text
+> orca orchestration run-create --objective <text> [--from <handle>]
+> orca orchestration run-use --id <run-id> [--from <handle>]
+> ```
+>
+> 1. Use exactly one of the create-or-bind forms, then share the resulting
+>    `<run-id>` with every sender before anyone addresses `run:<run-id>`.
+> 2. Each sender supplies its own `--from <role>` handle. Use the declared
+>    wake send form unchanged, then use the bounded check:
+>
+>    ```text
+>    orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}
+>    orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json
+>    ```
+>
+> The same Orca channel carries herdr seats' courtesy wakes and
+> design-to-design messages. Neither is durable workflow evidence: canonical
+> `intent-cli notify` remains the durable record. This is non-normative setup
+> only; intent-cli adds no option and neither launches nor manages Orca.
+
+**Mixed-kind review-seat selection (G789).** The recorded topology fields
+decide: use `kind` for a herdr seat and `frontend` for an external seat; do
+not infer a kind from role name, model, residence, or co-location. When those
+recorded kinds differ, the review seat with a different recorded
+kind/frontend from design reviews design output as well as PRs. When all
+recorded kinds are the same, design↔orchestration cross-review is acceptable;
+the review seat still reviews PRs. `guide design-thread` renders this under
+`team_and_duty_split.review_seat_selection`, and `guide review` renders the
+same topology-specific rule under `review_standing_policy` when one recorded
+team is unambiguous.
+
 ### Role-contract precedence (G672 — preview-through-1.x)
 
 When `guide next` or `guide onboarding` is invoked with `--role`, the role's

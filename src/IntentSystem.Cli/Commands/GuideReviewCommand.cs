@@ -252,6 +252,11 @@ internal static class GuideReviewCommand
         // G451: resolve the domain standing-policy registry (optional file,
         // safe defaults when absent/invalid). Fail-closed and read-only.
         var standingPolicy = ReviewStandingPolicyRegistry.Resolve(context, domain);
+        var reviewSeatSelection = ReviewSeatSelectionGuidanceResolver.ResolveUniqueTeam(context.RepoRoot, domain);
+        if (reviewSeatSelection is not null)
+        {
+            standingPolicy = standingPolicy with { ReviewSeatSelection = reviewSeatSelection };
+        }
 
         var queueStatePath = context.GetQueueStatePath();
         var gaps = new List<string>();
@@ -729,6 +734,16 @@ internal static class GuideReviewCommand
             WritePolicySection(writer, "External artifact intake", policy.ExternalArtifactIntake.Rules);
             WritePolicySection(writer, "Test-evidence sufficiency", policy.TestEvidenceSufficiency.Rules);
             WritePolicySection(writer, "Follow-up tracking", policy.FollowUpTracking.Rules);
+            if (policy.ReviewSeatSelection is { } reviewSeatSelection)
+            {
+                writer.WriteLine("### Review-seat selection (G789)");
+                writer.WriteLine($"- {reviewSeatSelection.MixedKindRule}");
+                writer.WriteLine($"- {reviewSeatSelection.SingleKindAllowance}");
+                writer.WriteLine($"- {reviewSeatSelection.RecordedFieldsDecide}");
+                writer.WriteLine($"- recorded topology ({reviewSeatSelection.TopologyTeam}): {string.Join(", ", reviewSeatSelection.RecordedSeatKinds)}");
+                writer.WriteLine($"- design: {reviewSeatSelection.DesignSeat}; review: {reviewSeatSelection.ReviewSeat}; selected review seat: {reviewSeatSelection.SelectedReviewSeat}");
+                writer.WriteLine($"- selection: {reviewSeatSelection.Selection}");
+            }
             writer.WriteLine();
         }
 
