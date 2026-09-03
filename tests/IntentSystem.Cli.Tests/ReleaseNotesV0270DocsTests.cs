@@ -155,12 +155,12 @@ public sealed class ReleaseNotesV0270DocsTests
     {
         var root = RepoVersionPolicySource.RepoRoot();
         Assert.Equal(
-            "{\n  \"stableVersion\": \"0.30.0\",\n  \"nextVersion\": \"0.30.1\"\n}\n",
+            "{\n  \"stableVersion\": \"0.31.0\",\n  \"nextVersion\": \"0.31.1\"\n}\n",
             File.ReadAllText(Path.Combine(root, "eng", "version.json")));
 
         var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.30.0", policy.StableVersion);
-        Assert.Equal("0.30.1", policy.NextVersion);
+        Assert.Equal("0.31.0", policy.StableVersion);
+        Assert.Equal("0.31.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {

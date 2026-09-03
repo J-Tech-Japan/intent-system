@@ -2812,7 +2812,7 @@ literal:
 ```
 
 The shape is written with placeholders on purpose: **read the actual values from
-`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0301)
+`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0311)
 for the line currently being cut. A worked example here would be a second copy
 of the version pair that goes stale on the next roll — the defect G557/G560
 exist to remove.
@@ -3018,42 +3018,69 @@ rotated by this command; the result and `shrink-audit.jsonl` say so explicitly.
 out of scope. Use `--dry-run` to inspect the measured plan without writing the
 manifest, JSONL files, or audit.
 
-### Next release readiness (v0.30.1)
+### Next release readiness (v0.31.1)
 
 **RELEASE PREPARED / NOT PUBLISHED.**
 
-G787 measured the v0.30.0 preparation from the exact named product base
-`d9dc053dd81f53c3a8be420ee7c6798b808f4521`. With the rolled policy, its
-normal clean Release build reports `intent-cli 0.30.1-d9dc053-G772`; it is the
-new `nextVersion` placeholder identity, not v0.30.0. The same base built with
-explicit `-p:Version=0.30.0` reports `intent-cli 0.30.0-d9dc053-G772`.
-Published v0.30.0 derives `VERSION` from the release tag's `RAW` value in
-`release.yml`; `eng/version.json` governs local builds and dry runs only.
+G792 measured the v0.31.0 preparation from the exact named product base
+`79a245c655e17ac654ac440fda31709ee38e28b8` after the four first-parent merges
+G788, G789, G791, and G790. A normal clean Release build reports
+`intent-cli 0.31.1-79a245c-G791`; this is the new `nextVersion` placeholder
+identity, **not** v0.31.0. The same base with explicit `-p:Version=0.31.0`
+reports `intent-cli 0.31.0-79a245c-G791`. Published v0.31.0 derives `VERSION`
+from the release tag's `RAW` value in `release.yml`; `eng/version.json` governs
+local builds and dry runs only.
 
-The prepared files are `release-notes-v0.30.0.md` and the
-`release-notes-v0.30.1.md` DRAFT stub. The current policy is:
+The prepared files are `release-notes-v0.31.0.md` and the
+`release-notes-v0.31.1.md` DRAFT stub. The current policy is:
 
 ```json
 {
-  "stableVersion": "0.30.0",
-  "nextVersion": "0.30.1"
+  "stableVersion": "0.31.0",
+  "nextVersion": "0.31.1"
 }
 ```
 
-`0.30.1` is a replaceable development placeholder, not the next real release
+`0.31.1` is a replaceable development placeholder, not the next real release
 number. No tag, GitHub Release, package publish, workflow change, or product
 source change belongs to this prepare-only slice.
 
-The active package-policy evidence is `stableVersion 0.30.0`, `nextVersion 0.30.1`,
-and local candidate `JTechJapan.IntentSystem.Cli.0.30.1.nupkg`.
-The host-only release-prep claim boundary is `release-prep:<owner/repo>:0.30.1`;
+The active package-policy evidence is `stableVersion 0.31.0`, `nextVersion 0.31.1`,
+and local candidate `JTechJapan.IntentSystem.Cli.0.31.1.nupkg`.
+The host-only release-prep claim boundary is `release-prep:<owner/repo>:0.31.0`;
 this child release-prep uses supplied authority and does not inspect or mutate host state.
-The eight-unit inventory is G779–G786; its EN/JA tuple and consumer-follow-up
-parity is guarded by `ReleaseNotesV0300DocsTests`, along with the measured
-identity, truthfulness, and placeholder checks.
-G780 changes a declared same-repository host's canonical claim location to
-`metadata_write_branch`. The arc's `--verify`, `--accept-evidence-gap`, and
-`--shell-policy` additions are option-level surfaces, not extra command routes.
+The exact four-unit inventory is G788, G789, G791, and G790; its EN/JA
+unit/PR/issue/merge tuple and consumer-follow-up parity is guarded by
+`ReleaseNotesV0310DocsTests`, alongside measured identities, truthfulness, and
+placeholder checks; `ReleasePackageMetadataTests` continues to guard the
+release-policy shape and demanded next-version note.
+G788's evidence sources, G789's guide blocks, and G791's nested-pointer-drift
+classification are explicitly option/behavior additions, not extra command routes.
+The current readiness record also preserves `metadata_write_branch` topology
+evidence and the `--verify`, `--accept-evidence-gap`, and `--shell-policy`
+option-level surfaces; no GitHub Release exists yet.
+The policy-derived next-version placeholder boundary remains
+`release-prep:<owner/repo>:0.31.1`; the prepared release target above is
+`release-prep:<owner/repo>:0.31.0`.
+
+The measured minor decision uses the v0.28.0 rule: **a command-route addition is
+a minor bump; option-level additions do not count as command routes.** The
+tagged v0.30.0 tool did not expose `session-layer inspect`; the named base adds
+that one read-only command route. G788 evidence sources/informational output,
+G789 guide text, and G791 nested-pointer-drift classification are listed but
+explicitly not counted as routes.
+
+G792 truthfulness is deliberately bounded: the delivered-never-executed finding
+counts a downstream delegation, a child report carrying the same execution-unit
+token, or a queue transition as execution evidence, still fires on a true stall,
+and lists what was checked rather than asserting absence. `session-layer inspect`
+is read-only, resolves targets only from recorded topology or explicit `--role`,
+has no focus default, exits 0 when the session layer is unavailable, and does not
+answer dialogs; `notify adjudicate` remains that path. The host guard proceeds on
+another domain's nested pointer drift only when every nested checkout is clean,
+refuses uncommitted nested content, and writes to no other domain submodule. The
+G789 design-thread Orca block is non-normative; intent-cli neither launches nor
+manages Orca.
 
 ### Previous v0.29.0 release-prep evidence (retained in history only)
 

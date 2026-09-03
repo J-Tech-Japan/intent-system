@@ -179,17 +179,17 @@ public sealed class ReleaseNotesV0300DocsTests
     {
         var root = RepoVersionPolicySource.RepoRoot();
         Assert.Equal(
-            "{\n  \"stableVersion\": \"0.30.0\",\n  \"nextVersion\": \"0.30.1\"\n}\n",
+            "{\n  \"stableVersion\": \"0.31.0\",\n  \"nextVersion\": \"0.31.1\"\n}\n",
             File.ReadAllText(Path.Combine(root, "eng", "version.json")));
 
         var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.30.0", policy.StableVersion);
-        Assert.Equal("0.30.1", policy.NextVersion);
+        Assert.Equal("0.31.0", policy.StableVersion);
+        Assert.Equal("0.31.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.30.0.md")));
-            var stub = File.ReadAllText(Path.Combine(root, "docs", language, "release-notes-v0.30.1.md"));
+            var stub = File.ReadAllText(Path.Combine(root, "docs", language, "release-notes-v0.31.1.md"));
             Assert.Contains("DRAFT", stub, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("replaceable", stub, StringComparison.OrdinalIgnoreCase);
             Assert.Contains(language == "en" ? "not a changelog" : "changelog ではありません", stub, StringComparison.OrdinalIgnoreCase);

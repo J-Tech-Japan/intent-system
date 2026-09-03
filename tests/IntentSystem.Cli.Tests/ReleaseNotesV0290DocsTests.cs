@@ -124,12 +124,12 @@ public sealed class ReleaseNotesV0290DocsTests
     {
         var root = RepoVersionPolicySource.RepoRoot();
         Assert.Equal(
-            "{\n  \"stableVersion\": \"0.30.0\",\n  \"nextVersion\": \"0.30.1\"\n}\n",
+            "{\n  \"stableVersion\": \"0.31.0\",\n  \"nextVersion\": \"0.31.1\"\n}\n",
             File.ReadAllText(Path.Combine(root, "eng", "version.json")));
 
         var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.30.0", policy.StableVersion);
-        Assert.Equal("0.30.1", policy.NextVersion);
+        Assert.Equal("0.31.0", policy.StableVersion);
+        Assert.Equal("0.31.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
@@ -151,7 +151,7 @@ public sealed class ReleaseNotesV0290DocsTests
             RepoVersionPolicySource.RepoRoot(), "docs", language, "09-developer-reference.md"));
 
         Assert.Contains(
-            language == "en" ? "### Next release readiness (v0.30.1)" : "### 次リリース準備(v0.30.1)",
+            language == "en" ? "### Next release readiness (v0.31.1)" : "### 次リリース準備(v0.31.1)",
             reference,
             StringComparison.Ordinal);
         Assert.Contains(NormalBaseIdentity, reference, StringComparison.Ordinal);
