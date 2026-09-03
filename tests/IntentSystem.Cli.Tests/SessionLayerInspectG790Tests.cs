@@ -102,6 +102,112 @@ public sealed class SessionLayerInspectG790Tests : IDisposable
     }
 
     [Fact]
+    public void Inspect_NonzeroAgentListReturnsExitCodeZeroWithRecordedFieldsAndNoLiveState_G790()
+    {
+        WriteTopology();
+        var runner = new FixtureRunner(
+            output: "",
+            tailOutput: "",
+            handler: (_, arguments) => arguments.SequenceEqual(["agent", "list"])
+                ? new NotifyProcessResult(42, string.Empty, "session-layer unavailable")
+                : new NotifyProcessResult(0, string.Empty, string.Empty));
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        NotifyCommand.HerdrExecutableFactory = () => "/absolute/fake-herdr";
+
+        var (exitCode, result) = Run(
+            "session-layer", "inspect",
+            "--domain", Domain,
+            "--team", Team,
+            "--format", "json");
+
+        Assert.Equal(0, exitCode);
+        Assert.True(result.GetProperty("topology_available").GetBoolean());
+        Assert.True(result.GetProperty("live_query_attempted").GetBoolean());
+        Assert.Contains("exit code 42", result.GetProperty("unavailable_reason").GetString()!, StringComparison.Ordinal);
+
+        var design = Role(result, "design");
+        Assert.Equal("herdr", design.GetProperty("resident").GetString());
+        Assert.Equal("codex", design.GetProperty("kind").GetString());
+        Assert.False(design.TryGetProperty("live", out _));
+        Assert.Contains("exit code 42", design.GetProperty("unavailable_reason").GetString()!, StringComparison.Ordinal);
+
+        var implementation = Role(result, "implementation");
+        Assert.Equal("herdr", implementation.GetProperty("resident").GetString());
+        Assert.Equal("claude", implementation.GetProperty("kind").GetString());
+        Assert.False(implementation.TryGetProperty("live", out _));
+        Assert.Contains("exit code 42", implementation.GetProperty("unavailable_reason").GetString()!, StringComparison.Ordinal);
+        Assert.False(Role(result, "review").TryGetProperty("live", out _));
+
+        Assert.Collection(
+            runner.Calls,
+            call =>
+            {
+                Assert.Equal("/absolute/fake-herdr", call.FileName);
+                Assert.Equal(["agent", "list"], call.Arguments);
+            });
+        AssertNoMutationOrFocusCommands(runner);
+    }
+
+    [Fact]
+    public void Inspect_NonzeroPaneReadReturnsExitCodeZeroWithRecordedFieldsAndNoLiveState_G790()
+    {
+        WriteTopology();
+        var runner = new FixtureRunner(
+            output: EmptyAgentListJson(),
+            tailOutput: "",
+            handler: (_, arguments) =>
+            {
+                if (arguments.SequenceEqual(["agent", "list"]))
+                {
+                    return new NotifyProcessResult(0, EmptyAgentListJson(), string.Empty);
+                }
+
+                if (arguments.SequenceEqual(["pane", "read", "--source", "recent-unwrapped", DesignPane]))
+                {
+                    return new NotifyProcessResult(43, string.Empty, "pane read unavailable");
+                }
+
+                return new NotifyProcessResult(0, string.Empty, string.Empty);
+            });
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        NotifyCommand.HerdrExecutableFactory = () => "/absolute/fake-herdr";
+
+        var (exitCode, result) = Run(
+            "session-layer", "inspect",
+            "--domain", Domain,
+            "--team", Team,
+            "--role", "design",
+            "--tail", "5",
+            "--format", "json");
+
+        Assert.Equal(0, exitCode);
+        Assert.True(result.GetProperty("topology_available").GetBoolean());
+        Assert.True(result.GetProperty("live_query_attempted").GetBoolean());
+        Assert.Equal(5, result.GetProperty("tail_requested").GetInt32());
+
+        var design = Role(result, "design");
+        Assert.Equal("herdr", design.GetProperty("resident").GetString());
+        Assert.Equal("codex", design.GetProperty("kind").GetString());
+        Assert.False(design.TryGetProperty("live", out _));
+        Assert.Contains("no-agent-at-recorded-pane", design.GetProperty("unavailable_reason").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("exit code 43", design.GetProperty("tail_unavailable_reason").GetString()!, StringComparison.Ordinal);
+
+        Assert.Collection(
+            runner.Calls,
+            listCall =>
+            {
+                Assert.Equal("/absolute/fake-herdr", listCall.FileName);
+                Assert.Equal(["agent", "list"], listCall.Arguments);
+            },
+            tailCall =>
+            {
+                Assert.Equal("/absolute/fake-herdr", tailCall.FileName);
+                Assert.Equal(["pane", "read", "--source", "recent-unwrapped", DesignPane], tailCall.Arguments);
+            });
+        AssertNoMutationOrFocusCommands(runner);
+    }
+
+    [Fact]
     public void Inspect_TailIsExplicitPaneBoundedAndCapped_G790()
     {
         WriteTopology();
@@ -284,6 +390,15 @@ public sealed class SessionLayerInspectG790Tests : IDisposable
                 "cwd": "/g790/implementation"
               }
             ]
+          }
+        }
+        """;
+
+    private static string EmptyAgentListJson() =>
+        """
+        {
+          "result": {
+            "agents": []
           }
         }
         """;
