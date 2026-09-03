@@ -4237,6 +4237,26 @@ route as applicable. Treat the returned liveness as observation only and
 escalate unresolved silence; do not infer workflow state or recovery ownership
 from it.
 
+G790 also provides a single read-only inspection surface for this observation:
+
+```text
+intent-cli session-layer inspect --domain <domain> --team <team> [--role <role>] \
+  [--tail <lines>] [--herdr-executable <absolute-path>] \
+  [--routing-root <host-root>] --format json
+```
+
+It resolves each role from the recorded topology, runs only `herdr agent list`,
+and reports recorded residence/kind/frontend alongside the live workspace,
+pane, and agent state for herdr residents. External residents have no live
+pane state. A missing or failing session-layer executable is reported per role
+with exit code 0 and the recorded fields intact. A bounded tail uses the
+explicit recorded pane only, requires `--role`, and is capped at 200 trailing
+lines via `herdr pane read --source recent-unwrapped <pane-id>`. No focused
+pane, prompt, key-send, dialog, split, close, start, stop, or kill operation is
+available on this route. Terminal content remains observation-only and is not
+canonical workflow evidence; dialog answering remains on
+`intent-cli notify adjudicate`.
+
 Keystrokes follow the G701 `dialog-answering/v1` three-tier boundary, not a
 generic design relay: the provisioner answers self-provisioned gates; design
 may mechanically answer only an exact dialog/action match already approved by

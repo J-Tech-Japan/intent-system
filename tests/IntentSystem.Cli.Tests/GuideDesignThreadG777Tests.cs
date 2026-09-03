@@ -161,6 +161,7 @@ public sealed class GuideDesignThreadG777Tests
         var projected = JsonNode.Parse(root.GetRawText())!.AsObject();
         projected["team_and_duty_split"]?.AsObject().Remove("review_seat_selection");
         projected["external_residence_operating_contract"]?.AsObject().Remove("orca_operating_block");
+        projected["observation_boundary"]?.AsObject().Remove("inspect_route");
         return projected.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 

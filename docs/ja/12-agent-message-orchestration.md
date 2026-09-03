@@ -3710,6 +3710,24 @@ intent-cli notify status --task-id <task-id> --domain <domain> --team <team> --r
 返った liveness は observation としてだけ扱い、解決しない silence はエスカレーションします。そこから
 workflow state や recovery ownership を推論してはいけません。
 
+G790 は、この observation 用の read-only inspection surface も提供します:
+
+```text
+intent-cli session-layer inspect --domain <domain> --team <team> [--role <role>] \
+  [--tail <lines>] [--herdr-executable <absolute-path>] \
+  [--routing-root <host-root>] --format json
+```
+
+記録済み topology から各 role を解決し、`herdr agent list` だけを実行して、herdr
+resident について記録済み residence/kind/frontend と live workspace、pane、agent state
+を並べます。external resident には live pane state を出しません。session-layer executable
+が無い、または失敗した場合は role ごとの unavailable reason と記録済み field を保持した
+まま exit code 0 で返します。bounded tail は明示された記録済み pane だけを使い、`--role`
+を必須とし、`herdr pane read --source recent-unwrapped <pane-id>` で末尾 200 行に制限します。
+この route には focused pane、prompt、key-send、dialog、split、close、start、stop、kill
+操作がありません。terminal content は observation に限られ canonical workflow evidence には
+ならず、dialog の回答は `intent-cli notify adjudicate` だけで行います。
+
 keystroke は generic な design relay ではなく、G701 `dialog-answering/v1` の three-tier boundary
 に従います。provisioner 自身が作った gate は provisioner が回答します。human が conversation で
 既に許可した action は、exact dialog/action match の場合だけ design が session layer を通じて
