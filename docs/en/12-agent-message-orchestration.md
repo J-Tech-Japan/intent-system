@@ -676,7 +676,7 @@ recovery for that finding. A declared bound below the configured interval is a
 structural false-alarm warning, emitted at supervise start and on each cycle,
 not a value the CLI silently corrects.
 
-### Delivered delegation with no observable start (G741)
+### Delivered delegation with no observable start (G741/G788)
 
 `notify supervise` emits `delegation-delivered-never-executed` only when a
 delegation's durable delivery evidence says `delivery_succeeded=true`, the
@@ -694,6 +694,23 @@ not satisfy this finding. The full conjunction also requires the canonical
 report for the task to be absent, every expected artifact source to be absent,
 and the durable target-entity transition source to be absent. A working/started
 seat, visible artifact, report, or target transition is a non-finding.
+
+G788 makes that absence decision source-derived rather than inferred from a
+single missing report. It extracts one shared `execution-unit token` from the
+configured execution-unit regex, taking only the first configured match in
+task-id, then objective, then input order; a later token cannot override that
+first token. It then checks `pending-ledger`, `report-outbox`,
+`notification-events`, `queue-state`, `continuation-chain`, and
+`expected-artifact`. The latter two preserve the earlier continuation and
+expected artifact checks; the first four capture downstream delegation,
+child-report delivery, and post-delivery queue progress. Any matching source is
+positive execution evidence and suppresses the finding. When recipient-issued
+downstream activity is visible but carries no target token, supervision records
+the informational `delegation-in-progress-no-direct-report` result without an
+escalation wake. Only a true six-source absence emits the finding, with a
+`Source-derived` count for each named source. Token matching is case-insensitive
+for configured forms such as `G779-start`, `design-delegate-SKS-G909`, and
+lower-case equivalents; tokenless text is not evidence.
 
 The finding names `task_id`, seat, `delivered_at`, the window, and every
 checked source. It wakes the delegation's owner role through the recorded

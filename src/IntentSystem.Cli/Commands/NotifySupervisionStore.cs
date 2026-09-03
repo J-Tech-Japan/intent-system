@@ -3408,6 +3408,16 @@ internal sealed record NotifySupervisionCycle
     [JsonPropertyName("last_observed_agent_statuses")] public IReadOnlyDictionary<string, string> LastObservedAgentStatuses { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
     [JsonPropertyName("last_observed_agent_status_consecutive_counts")] public IReadOnlyDictionary<string, int> LastObservedAgentStatusConsecutiveCounts { get; init; } = new Dictionary<string, int>(StringComparer.Ordinal);
     [JsonPropertyName("last_observed_agent_status_run_from")] public IReadOnlyDictionary<string, string> LastObservedAgentStatusRunFrom { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+    /// <summary>
+    /// G788 additive audit of the six delivered-delegation evidence sources.
+    /// It is recorded for suppressing evidence as well as true stalls, so a
+    /// no-finding result still names what the cycle actually consulted.
+    /// </summary>
+    // Keep no-delegation cycles byte-compatible with parent records. A cycle
+    // that did consult G788 evidence writes the non-null audit explicitly.
+    [JsonPropertyName("delegation_execution_evidence")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? DelegationExecutionEvidence { get; init; }
     [JsonPropertyName("transitions")] public IReadOnlyList<NotifySupervisionTransition> Transitions { get; init; } = [];
     [JsonPropertyName("wait_events")] public IReadOnlyList<NotifySupervisionWaitEvent> WaitEvents { get; init; } = [];
 }

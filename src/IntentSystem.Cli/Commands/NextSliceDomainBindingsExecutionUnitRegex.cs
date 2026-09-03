@@ -57,6 +57,37 @@ internal static class NextSliceDomainBindingsExecutionUnitRegex
         }
 
         var bindingsPath = ResolveBindingsAbsolutePath(context, domain);
+        return ResolveBindingsPath(bindingsPath);
+    }
+
+    /// <summary>
+    /// Resolves the same domain binding from an explicit runtime root. Host
+    /// supervisors use this rather than their caller's cwd so an explicit
+    /// <c>--routing-root</c> governs the unit-token boundary as well as the
+    /// evidence files it already governs.
+    /// </summary>
+    internal static ExecutionUnitRegexResolution ResolveAtRoot(string root, string? domain)
+    {
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            return ExecutionUnitRegexResolution.MissingOrAbsent("(no domain configured)");
+        }
+
+        string bindingsPath;
+        try
+        {
+            bindingsPath = Path.GetFullPath(Path.Combine(root, "intents", domain, "automation", "bindings.md"));
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            return ExecutionUnitRegexResolution.MissingOrAbsent($"(unresolved: {exception.Message})");
+        }
+
+        return ResolveBindingsPath(bindingsPath);
+    }
+
+    private static ExecutionUnitRegexResolution ResolveBindingsPath(string? bindingsPath)
+    {
         if (string.IsNullOrWhiteSpace(bindingsPath) || !File.Exists(bindingsPath))
         {
             return ExecutionUnitRegexResolution.MissingOrAbsent(bindingsPath ?? "(unresolved)");

@@ -262,6 +262,7 @@ internal sealed class NotifyMeasuredSupervisor
         var observations = new List<NotifySupervisionObservation>();
         var actions = new List<NotifySupervisorAction>();
         var warnings = new List<string>();
+        var delegationEvidenceObservations = new List<string>();
         if (emissionPolicyWrite.Error is not null)
         {
             warnings.Add($"supervision-emission-policy-write-failed: {emissionPolicyWrite.Error}");
@@ -361,7 +362,8 @@ internal sealed class NotifyMeasuredSupervisor
                     previousCycle,
                     now,
                     observations,
-                    warnings);
+                    warnings,
+                    delegationEvidenceObservations);
                 if (!activity.Resolved || activity.Running != true || activity.StateChangeSequence is not { } sequence)
                 {
                     continue;
@@ -772,6 +774,9 @@ internal sealed class NotifyMeasuredSupervisor
             LastObservedAgentStatuses = observedStatuses,
             LastObservedAgentStatusConsecutiveCounts = observedStatusConsecutiveCounts,
             LastObservedAgentStatusRunFrom = observedStatusRunFrom,
+            DelegationExecutionEvidence = delegationEvidenceObservations.Count == 0
+                ? null
+                : delegationEvidenceObservations,
             Transitions = observations
                 .Where(observation => string.Equals(observation.Kind, "seat-state-transition", StringComparison.Ordinal))
                 .Select(observation =>
@@ -1307,7 +1312,8 @@ internal sealed class NotifyMeasuredSupervisor
         NotifySupervisionCycle? previousCycle,
         DateTimeOffset now,
         ICollection<NotifySupervisionObservation> observations,
-        ICollection<string> warnings)
+        ICollection<string> warnings,
+        ICollection<string> delegationEvidenceObservations)
     {
         if (!activity.Resolved
             || activity.Running != true
@@ -1357,20 +1363,6 @@ internal sealed class NotifyMeasuredSupervisor
             return;
         }
 
-        if (!evidence.IsResolved
-            || evidence.ExpectedArtifactPresent != false
-            || evidence.TargetEntityTransitionPresent != false)
-        {
-            if (!evidence.IsResolved)
-            {
-                warnings.Add($"delegation-execution-evidence-unavailable: task '{pending.TaskId}': "
-                    + (evidence.Error ?? "one or more evidence sources were unresolved; no finding was emitted."));
-            }
-
-            return;
-        }
-
-        var pendingPath = NotifyPendingDelegationStore.ResolvePath(routingRoot, pending.Domain, pending.Team);
         var seat = string.IsNullOrWhiteSpace(pending.RecipientIdentity)
             ? pending.RecipientRole
             : pending.RecipientIdentity;
@@ -1378,8 +1370,11 @@ internal sealed class NotifyMeasuredSupervisor
         var activityObservation =
             $"activity:{paneKey}: running={activity.Running}; agent_status={activity.AgentStatus}; "
             + $"state_change_seq={sequence.ToString(CultureInfo.InvariantCulture)}; source={activity.Source}";
-        var checkedSources =
-            $"delivery-evidence:{deliveryEvidence.Path}; pending-store:{pendingPath}; {evidence.ArtifactSource}; {evidence.TargetEntitySource}";
+        var consultedEvidence = evidence.BuildConsultedObservations(pending.TaskId);
+        foreach (var consulted in consultedEvidence)
+        {
+            delegationEvidenceObservations.Add(consulted);
+        }
         var evidenceLines = new List<string>
         {
             $"task_id:{pending.TaskId}",
@@ -1388,12 +1383,53 @@ internal sealed class NotifyMeasuredSupervisor
             $"window_seconds:{window}",
             $"delivery_evidence:success; source={deliveryEvidence.Path}",
             $"recipient_idle:true; source={activity.Source}; state_change_seq={sequence.ToString(CultureInfo.InvariantCulture)}",
-            $"canonical_report:absent; source={pendingPath}",
-            $"expected_artifact:absent; source={evidence.ArtifactSource}",
-            $"durable_target_entity_transition:absent; source={evidence.TargetEntitySource}",
+            $"source_counts:{evidence.SourceCountSummary}",
         };
-        evidenceLines.AddRange(evidence.ArtifactDetails);
-        evidenceLines.AddRange(evidence.TargetEntityDetails);
+        evidenceLines.AddRange(consultedEvidence);
+        var findingConsulted = new List<string>
+        {
+            activityObservation,
+            $"delivery-evidence:success; source={deliveryEvidence.Path}; delivered_at={deliveredAt:O}",
+            $"delivery:task_id={pending.TaskId}; delivery_succeeded=true; delivered_at={deliveredAt:O}; source={deliveryEvidence.Path}",
+        };
+        findingConsulted.AddRange(consultedEvidence);
+
+        if (!evidence.IsResolved)
+        {
+            warnings.Add($"delegation-execution-evidence-unavailable: task '{pending.TaskId}': "
+                + (evidence.Error ?? "one or more evidence sources were unresolved; no finding was emitted."));
+
+            return;
+        }
+
+        if (evidence.HasExecutionEvidence)
+        {
+            return;
+        }
+
+        if (evidence.HasTokenlessDownstreamDelegation)
+        {
+            observations.Add(new NotifySupervisionObservation
+            {
+                Key = $"delegation-in-progress-no-direct-report:{pending.TaskId}:{pending.ResultNonce ?? "legacy"}",
+                Kind = "delegation-in-progress-no-direct-report",
+                OwnerRole = pending.DelegatingRole ?? ownerRole,
+                SubjectRole = pending.RecipientRole,
+                Source = "notify-pending-delegation.execution",
+                Summary = $"Delegation task '{pending.TaskId}' has downstream activity from recipient seat '{seat}' after delivery, "
+                    + $"but no downstream task id, objective, or input carries execution-unit token '{evidence.ExecutionUnitToken ?? "<none>"}'. "
+                    + $"This is informational and has no escalation wake class. Source-derived execution evidence counts: "
+                    + $"{evidence.SourceCountSummary}. Checked sources: {BuildCheckedSources(evidence)}.",
+                DetectableAt = deliveredAt.AddSeconds(delegationExecutionWindowSeconds),
+                WorkspaceId = pending.WorkspaceId,
+                PaneId = pending.PaneId,
+                WakeSuppressed = true,
+                Evidence = evidenceLines,
+                ConsultedObservations = findingConsulted,
+            });
+
+            return;
+        }
 
         observations.Add(new NotifySupervisionObservation
         {
@@ -1404,31 +1440,34 @@ internal sealed class NotifyMeasuredSupervisor
             Source = "notify-pending-delegation.execution",
             Summary = $"Delegation task '{pending.TaskId}' was delivered to seat '{seat}' at '{deliveredAt:O}', "
                 + $"but the recipient is idle after the configured {window}s execution-start window. "
-                + $"Canonical report absent, expected artifact absent, and durable target-entity transition absent. "
-                + $"Checked sources: {checkedSources}. This observation is observation-only; it sends no keys, "
+                + $"Source-derived execution evidence counts: {evidence.SourceCountSummary}. "
+                + $"Checked sources: {BuildCheckedSources(evidence)}. This observation is observation-only; it sends no keys, "
                 + "answers no dialog, and restarts no seat; the finding routes to the delegation owner role.",
             DetectableAt = deliveredAt.AddSeconds(delegationExecutionWindowSeconds),
             WorkspaceId = pending.WorkspaceId,
             PaneId = pending.PaneId,
             Evidence = evidenceLines,
-            ConsultedObservations =
-            [
-                activityObservation,
-                $"delivery-evidence:success; source={deliveryEvidence.Path}; delivered_at={deliveredAt:O}",
-                $"delivery:task_id={pending.TaskId}; delivery_succeeded=true; delivered_at={deliveredAt:O}; source={deliveryEvidence.Path}",
-                $"canonical-report:absent; source={pendingPath}",
-                $"expected-artifact:absent; source={evidence.ArtifactSource}",
-                $"durable-target-entity-transition:absent; source={evidence.TargetEntitySource}",
-            ],
+            ConsultedObservations = findingConsulted,
         });
     }
+
+    private static string BuildCheckedSources(NotifyDelegationExecutionEvidence evidence) => string.Join(
+        "; ",
+        $"pending-ledger:{evidence.PendingLedgerSource}",
+        $"report-outbox:{evidence.ReportOutboxSource}",
+        $"notification-events:{evidence.NotificationEventsSource}",
+        $"queue-state:{evidence.QueueStateSource}",
+        $"continuation-chain:{evidence.ContinuationChainSource}",
+        $"expected-artifact:{evidence.ExpectedArtifactSource}");
 
     private string ResolveWakeTarget(NotifySupervisionObservation observation) =>
         observation.Prompt?.AdjudicationTargetRole
             ?? (IsOwnerSubject(observation.SubjectRole) ? DesignRole : observation.OwnerRole);
 
     private string? ResolveWakeClass(NotifySupervisionObservation observation) =>
-        observation.Prompt is { Decision: "accept" }
+        observation.WakeSuppressed
+            ? null
+            : observation.Prompt is { Decision: "accept" }
             ? "bounded-prompt-answer"
             : observation.Prompt is not null || IsOwnerSubject(observation.SubjectRole) ? "escalation" : null;
 
