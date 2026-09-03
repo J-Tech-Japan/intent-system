@@ -95,8 +95,8 @@ public sealed class JapaneseTerminologyGuardG613Tests
     [Fact]
     public void DeveloperReferenceG616_LeavesDurableOnlyAsGlossedConceptOrIdentifiers_G616()
     {
-        const int measuredOccurrences = 25;
-        const int keptOccurrences = 8;
+        const int measuredOccurrences = 26;
+        const int keptOccurrences = 9;
         const int translatedOccurrences = 17;
         var path = Path.Combine(RepoVersionPolicySource.RepoRoot(), "docs", "ja", "09-developer-reference.md");
         var content = File.ReadAllText(path);

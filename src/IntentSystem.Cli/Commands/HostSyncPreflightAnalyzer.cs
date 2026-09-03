@@ -22,6 +22,9 @@ namespace IntentSystem.Cli.Commands;
 /// <item><c>submodule-checkout-mismatch</c> — G357: parent gitlink has advanced (typically after git pull)
 ///   but the submodule working tree checkout is still at the old commit; the submodule itself is clean so
 ///   <c>git submodule update --init &lt;path&gt;</c> is the deterministic safe repair.</item>
+/// <item><c>nested-pointer-drift</c> — G791: the host gitlink is aligned, and its only dirt is
+///   clean nested-submodule pointer drift owned by another domain. The wake may proceed while leaving
+///   those foreign paths untouched; it must not enter a stash, checkout, or submodule-update lane.</item>
 /// </list>
 /// </summary>
 internal static class HostSyncPreflightAnalyzer
@@ -46,20 +49,18 @@ internal static class HostSyncPreflightAnalyzer
     public const string ClassificationDirtyUnrelatedSubmodule = "dirty-unrelated-submodule";
     public const string ClassificationDirtyMixed = "dirty-mixed";
 
+    /// <summary>G791: actual content within a submodule checkout; manual owning-team reconciliation is required.</summary>
+    public const string ClassificationSubmoduleInternalDirty = "submodule-internal-dirty";
+
+    /// <summary>G791: aligned host gitlinks whose only dirt is clean nested-pointer drift.</summary>
+    public const string ClassificationNestedPointerDrift = "nested-pointer-drift";
+
     /// <summary>
     /// G357: parent gitlink has advanced but submodule working tree checkout is stale.
     /// All paths in this classification have no local uncommitted changes inside the
     /// submodule, so <c>git submodule update --init &lt;path&gt;</c> is the safe repair.
     /// </summary>
     public const string ClassificationSubmoduleCheckoutMismatch = "submodule-checkout-mismatch";
-
-    private static readonly string[] DurableStatePathPrefixes =
-    [
-        ".intent-cli/queue-state.json",
-        ".intent-cli/runs.jsonl",
-        ".intent-cli/issues/",
-        "intents/"
-    ];
 
     /// <param name="submoduleGitlinkMismatchPaths">
     /// G357: paths where the parent gitlink has advanced but the submodule working tree
@@ -75,7 +76,9 @@ internal static class HostSyncPreflightAnalyzer
         IReadOnlyList<string>? submoduleGitlinkMismatchPaths = null,
         int aheadOriginCommits = 0,
         IReadOnlyList<HostSyncCommitInfo>? localOnlyCommits = null,
-        IReadOnlyList<HostSyncCommitInfo>? originAheadCommits = null)
+        IReadOnlyList<HostSyncCommitInfo>? originAheadCommits = null,
+        IReadOnlyList<NestedPointerDriftSubmodule>? nestedPointerDriftSubmodules = null,
+        IReadOnlyList<string>? submoduleInternalDirtyPaths = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(branch);
         ArgumentNullException.ThrowIfNull(workingTreeEntries);
@@ -94,12 +97,19 @@ internal static class HostSyncPreflightAnalyzer
         var mismatchSet = submoduleGitlinkMismatchPaths is { Count: > 0 }
             ? new HashSet<string>(submoduleGitlinkMismatchPaths, StringComparer.Ordinal)
             : null;
+        var nestedPointerDrift = nestedPointerDriftSubmodules ?? Array.Empty<NestedPointerDriftSubmodule>();
+        var nestedPointerDriftSet = nestedPointerDrift.Count > 0
+            ? new HashSet<string>(nestedPointerDrift.Select(drift => drift.OwningSubmodulePath), StringComparer.Ordinal)
+            : null;
+        var submoduleInternalDirtySet = submoduleInternalDirtyPaths is { Count: > 0 }
+            ? new HashSet<string>(submoduleInternalDirtyPaths, StringComparer.Ordinal)
+            : null;
 
         var dirtyDurable = new List<HostSyncWorkingTreeEntry>();
         var dirtyOther = new List<HostSyncWorkingTreeEntry>();
         foreach (var entry in workingTreeEntries)
         {
-            if (IsDurableStatePath(entry.Path))
+            if (DurableHostStatePathClassifier.IsDurableHostStatePath(entry.Path))
             {
                 dirtyDurable.Add(entry);
             }
@@ -114,10 +124,21 @@ internal static class HostSyncPreflightAnalyzer
         var allOtherAreGitlinkMismatches = mismatchSet is not null
             && dirtyOther.Count > 0
             && dirtyOther.All(e => mismatchSet.Contains(e.Path));
+        var allOtherAreNestedPointerDrift = nestedPointerDriftSet is not null
+            && dirtyOther.Count > 0
+            && dirtyOther.All(e => nestedPointerDriftSet.Contains(e.Path));
+        var hasSubmoduleInternalDirty = submoduleInternalDirtySet is not null
+            && dirtyOther.Any(e => submoduleInternalDirtySet.Contains(e.Path));
 
         var clean = behindOriginCommits == 0 && dirtyDurable.Count == 0 && dirtyOther.Count == 0;
         var classification = ClassifyTerminal(
-            behindOriginCommits, aheadOriginCommits, dirtyDurable.Count, dirtyOther.Count, allOtherAreGitlinkMismatches);
+            behindOriginCommits,
+            aheadOriginCommits,
+            dirtyDurable.Count,
+            dirtyOther.Count,
+            allOtherAreGitlinkMismatches,
+            allOtherAreNestedPointerDrift,
+            hasSubmoduleInternalDirty);
 
         // G306: when ONLY unrelated dirty paths are present (no dirty
         // durable host-state, no `dirty-mixed`, no submodule-checkout-mismatch),
@@ -127,10 +148,15 @@ internal static class HostSyncPreflightAnalyzer
         // `dirty-mixed` remain hard stops because automation cannot safely stash files
         // it might also be about to mutate. G357 submodule-checkout-mismatch uses the
         // `git submodule update --init` lane instead — NOT the safe-stash lane.
-        var safeStashAllowed = dirtyDurable.Count == 0
-            && dirtyOther.Count > 0
-            && !allOtherAreGitlinkMismatches;
-        var proceedAllowed = clean || safeStashAllowed;
+        var safeStashPaths = dirtyDurable.Count == 0
+            ? dirtyOther.Where(entry => (nestedPointerDriftSet is null || !nestedPointerDriftSet.Contains(entry.Path))
+                && (submoduleInternalDirtySet is null || !submoduleInternalDirtySet.Contains(entry.Path))).ToArray()
+            : Array.Empty<HostSyncWorkingTreeEntry>();
+        var safeStashAllowed = safeStashPaths.Length > 0
+            && !allOtherAreGitlinkMismatches
+            && !hasSubmoduleInternalDirty;
+        var nestedPointerDriftAllowed = dirtyDurable.Count == 0 && allOtherAreNestedPointerDrift;
+        var proceedAllowed = clean || safeStashAllowed || nestedPointerDriftAllowed;
 
         // SubmoduleCheckoutMismatchPaths is only populated for the
         // submodule-checkout-mismatch classification; dirty-mixed and other
@@ -138,10 +164,25 @@ internal static class HostSyncPreflightAnalyzer
         var mismatchPathsList = string.Equals(classification, ClassificationSubmoduleCheckoutMismatch, StringComparison.Ordinal)
             ? dirtyOther.Select(e => e.Path).ToArray()
             : Array.Empty<string>();
+        var nestedPointerDriftList = string.Equals(classification, ClassificationNestedPointerDrift, StringComparison.Ordinal)
+            ? nestedPointerDrift
+            : Array.Empty<NestedPointerDriftSubmodule>();
+        var submoduleInternalDirtyList = string.Equals(classification, ClassificationSubmoduleInternalDirty, StringComparison.Ordinal)
+            ? dirtyOther.Where(entry => submoduleInternalDirtySet!.Contains(entry.Path)).Select(entry => entry.Path).ToArray()
+            : Array.Empty<string>();
 
         var isFfBlocked = string.Equals(classification, ClassificationFfBlocked, StringComparison.Ordinal);
         var nextSteps = BuildNextSteps(
-            classification, behindOriginCommits, aheadOriginCommits, dirtyDurable, dirtyOther, mismatchPathsList, localOnly, originAhead);
+            classification,
+            behindOriginCommits,
+            aheadOriginCommits,
+            dirtyDurable,
+            dirtyOther,
+            mismatchPathsList,
+            nestedPointerDriftList,
+            submoduleInternalDirtyList,
+            localOnly,
+            originAhead);
 
         return new HostSyncPreflightResult
         {
@@ -160,33 +201,26 @@ internal static class HostSyncPreflightAnalyzer
             SafeStashRequired = safeStashAllowed,
             // G306: SafeStashPaths only populated when the safe-stash lane is active.
             // G357: submodule-checkout-mismatch uses the update lane, not safe-stash.
-            SafeStashPaths = safeStashAllowed ? dirtyOther : Array.Empty<HostSyncWorkingTreeEntry>(),
+            SafeStashPaths = safeStashAllowed ? safeStashPaths : Array.Empty<HostSyncWorkingTreeEntry>(),
             DirtyDurableStatePaths = dirtyDurable,
             DirtyUnrelatedPaths = dirtyOther,
             SubmoduleCheckoutMismatchPaths = mismatchPathsList,
+            NestedPointerDriftSubmodules = nestedPointerDriftList,
+            SubmoduleInternalDirtyPaths = submoduleInternalDirtyList,
             LocalOnlyCommits = localOnly,
             OriginAheadCommits = originAhead,
             Summary = BuildSummary(
-                classification, branch, behindOriginCommits, aheadOriginCommits, dirtyDurable.Count, dirtyOther.Count, mismatchPathsList),
+                classification,
+                branch,
+                behindOriginCommits,
+                aheadOriginCommits,
+                dirtyDurable.Count,
+                dirtyOther.Count,
+                mismatchPathsList,
+                nestedPointerDriftList,
+                submoduleInternalDirtyList),
             NextSteps = nextSteps
         };
-    }
-
-    private static bool IsDurableStatePath(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return false;
-        }
-        var normalized = path.Replace('\\', '/').TrimStart('/');
-        foreach (var prefix in DurableStatePathPrefixes)
-        {
-            if (normalized.StartsWith(prefix, StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static string ClassifyTerminal(
@@ -194,7 +228,9 @@ internal static class HostSyncPreflightAnalyzer
         int aheadOriginCommits,
         int dirtyDurableCount,
         int dirtyOtherCount,
-        bool allOtherAreGitlinkMismatches)
+        bool allOtherAreGitlinkMismatches,
+        bool allOtherAreNestedPointerDrift,
+        bool hasSubmoduleInternalDirty)
     {
         if (dirtyDurableCount > 0 && dirtyOtherCount > 0)
         {
@@ -206,6 +242,14 @@ internal static class HostSyncPreflightAnalyzer
         }
         if (dirtyOtherCount > 0)
         {
+            if (hasSubmoduleInternalDirty)
+            {
+                return ClassificationSubmoduleInternalDirty;
+            }
+            if (allOtherAreNestedPointerDrift)
+            {
+                return ClassificationNestedPointerDrift;
+            }
             // G357: all dirty-other paths are submodule gitlink mismatches whose
             // submodules themselves are clean → deterministic safe-update lane.
             return allOtherAreGitlinkMismatches
@@ -235,7 +279,9 @@ internal static class HostSyncPreflightAnalyzer
         int aheadCount,
         int dirtyDurableCount,
         int dirtyOtherCount,
-        IReadOnlyList<string> mismatchPaths)
+        IReadOnlyList<string> mismatchPaths,
+        IReadOnlyList<NestedPointerDriftSubmodule> nestedPointerDriftSubmodules,
+        IReadOnlyList<string> submoduleInternalDirtyPaths)
     {
         return classification switch
         {
@@ -251,8 +297,12 @@ internal static class HostSyncPreflightAnalyzer
                 $"Host repo on `{branch}` has {dirtyOtherCount} uncommitted change(s) outside durable host-state. Use the G306 safe-stash lane (`automation workspace-guard --mode begin --write` before the wake, `--mode end --write` after) to preserve and restore the unrelated changes; durable host-state remains untouched.",
             ClassificationDirtyMixed =>
                 $"Host repo on `{branch}` has {dirtyDurableCount} dirty durable-state path(s) AND {dirtyOtherCount} unrelated dirty path(s). Refusing to proceed (G304); both buckets must be reconciled before the wake.",
+            ClassificationSubmoduleInternalDirty =>
+                $"Host repo on `{branch}` has uncommitted content inside submodule checkout(s): {string.Join(", ", submoduleInternalDirtyPaths)}. Refusing to proceed: do not enter the G306 safe-stash lane because workspace-guard would refuse; the owning team must reconcile those paths manually.",
             ClassificationSubmoduleCheckoutMismatch =>
                 $"Host repo on `{branch}` has {mismatchPaths.Count} submodule gitlink mismatch(es): the parent gitlink has advanced but the submodule checkout is stale (G357). Run `git submodule update --init {string.Join(" ", mismatchPaths)}` to update the submodule checkout(s) to the parent-recorded commit, then re-run `automation host-sync-preflight` to confirm clean.",
+            ClassificationNestedPointerDrift =>
+                $"Host repo on `{branch}` has {nestedPointerDriftSubmodules.Count} aligned host gitlink(s) with only clean nested-pointer drift (G791). The wake may proceed, but leave the owning and nested submodule paths untouched: do not stash, checkout, update, add, or commit another domain's paths.",
             _ => throw new InvalidOperationException($"Unknown host-sync classification '{classification}'.")
         };
     }
@@ -264,6 +314,8 @@ internal static class HostSyncPreflightAnalyzer
         IReadOnlyList<HostSyncWorkingTreeEntry> dirtyDurable,
         IReadOnlyList<HostSyncWorkingTreeEntry> dirtyOther,
         IReadOnlyList<string> mismatchPaths,
+        IReadOnlyList<NestedPointerDriftSubmodule> nestedPointerDriftSubmodules,
+        IReadOnlyList<string> submoduleInternalDirtyPaths,
         IReadOnlyList<HostSyncCommitInfo> localOnlyCommits,
         IReadOnlyList<HostSyncCommitInfo> originAheadCommits)
     {
@@ -290,7 +342,9 @@ internal static class HostSyncPreflightAnalyzer
             {
                 "Also reconcile the unrelated dirty paths: " + string.Join(", ", dirtyOther.Select(e => "`" + e.Path + "`"))
             }).ToArray(),
+            ClassificationSubmoduleInternalDirty => BuildSubmoduleInternalDirtySteps(submoduleInternalDirtyPaths),
             ClassificationSubmoduleCheckoutMismatch => BuildSubmoduleMismatchSteps(mismatchPaths),
+            ClassificationNestedPointerDrift => BuildNestedPointerDriftSteps(nestedPointerDriftSubmodules),
             _ => throw new InvalidOperationException($"Unknown host-sync classification '{classification}'.")
         };
     }
@@ -304,6 +358,29 @@ internal static class HostSyncPreflightAnalyzer
             $"Run `git submodule update --init {pathArgs}` to update the submodule checkout(s) to the parent-recorded commit (G357). " +
             $"This is safe because the submodule(s) have no local uncommitted changes (verified by host-sync preflight). Mismatch path(s): {pathList}.",
             "Re-run `intent-cli automation host-sync-preflight --format json` after the update to confirm `classification: clean`."
+        };
+    }
+
+    private static IReadOnlyList<string> BuildNestedPointerDriftSteps(IReadOnlyList<NestedPointerDriftSubmodule> nestedPointerDriftSubmodules)
+    {
+        var ownerPaths = string.Join(", ", nestedPointerDriftSubmodules.Select(drift => $"`{drift.OwningSubmodulePath}`"));
+        var nestedPaths = string.Join(", ", nestedPointerDriftSubmodules.SelectMany(drift => drift.UntouchedNestedPaths).Select(path => $"`{path}`"));
+        return new[]
+        {
+            $"Proceed with the host wake while leaving the foreign owning submodule path(s) untouched: {ownerPaths}.",
+            $"Do NOT run workspace-guard, git stash, git checkout, git submodule update, git add, or git commit against the drifted paths. Clean nested checkout path(s): {nestedPaths}.",
+            "The pointer reconciliation belongs to the owning domain's team. Re-run `intent-cli automation host-sync-preflight --format json` after that team reconciles it."
+        };
+    }
+
+    private static IReadOnlyList<string> BuildSubmoduleInternalDirtySteps(IReadOnlyList<string> paths)
+    {
+        var pathList = string.Join(", ", paths.Select(path => $"`{path}`"));
+        return new[]
+        {
+            $"STOP: uncommitted content exists inside submodule checkout(s): {pathList}. The owning team must reconcile it manually before this wake can continue.",
+            "Do NOT run the G306 safe-stash lane, git stash, git checkout, git submodule update, git add, or git commit against those foreign paths.",
+            "Re-run `intent-cli automation host-sync-preflight --format json` only after the owning team has reconciled the submodule content."
         };
     }
 
@@ -432,6 +509,18 @@ internal sealed record HostSyncPreflightResult
     /// </summary>
     [JsonPropertyName("submodule_checkout_mismatch_paths")]
     public IReadOnlyList<string> SubmoduleCheckoutMismatchPaths { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// G791: aligned host gitlinks whose only dirt is clean nested-submodule pointer
+    /// drift. The host wake may proceed, but every listed path remains untouched.
+    /// Empty unless <see cref="Classification"/> is <c>nested-pointer-drift</c>.
+    /// </summary>
+    [JsonPropertyName("nested_pointer_drift_submodules")]
+    public IReadOnlyList<NestedPointerDriftSubmodule> NestedPointerDriftSubmodules { get; init; } = Array.Empty<NestedPointerDriftSubmodule>();
+
+    /// <summary>G791: submodule paths with real dirty content; never sent through G306.</summary>
+    [JsonPropertyName("submodule_internal_dirty_paths")]
+    public IReadOnlyList<string> SubmoduleInternalDirtyPaths { get; init; } = Array.Empty<string>();
 
     /// <summary>G400: local-only commits (origin/&lt;branch&gt;..HEAD) when ff-blocked. Empty otherwise.</summary>
     [JsonPropertyName("local_only_commits")]

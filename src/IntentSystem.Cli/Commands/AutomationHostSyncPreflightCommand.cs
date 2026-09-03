@@ -67,7 +67,9 @@ internal static class AutomationHostSyncPreflightCommand
             probe.SubmoduleGitlinkMismatchPaths,
             probe.AheadOriginCommits,
             probe.LocalOnlyCommits,
-            probe.OriginAheadCommits);
+            probe.OriginAheadCommits,
+            probe.NestedPointerDriftSubmodules,
+            probe.SubmoduleInternalDirtyPaths);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -90,6 +92,8 @@ internal static class AutomationHostSyncPreflightCommand
         writer.WriteLine($"- Ahead of origin: {result.AheadOriginCommits} commit(s)");
         writer.WriteLine($"- Dirty durable-state paths: {result.DirtyDurableStatePaths.Count}");
         writer.WriteLine($"- Dirty unrelated paths: {result.DirtyUnrelatedPaths.Count}");
+        writer.WriteLine($"- Clean nested-pointer drift submodules: {result.NestedPointerDriftSubmodules.Count}");
+        writer.WriteLine($"- Submodules with real internal changes: {result.SubmoduleInternalDirtyPaths.Count}");
         writer.WriteLine($"- Proceed allowed: {(result.ProceedAllowed ? "yes" : "**no**")}");
         writer.WriteLine();
         writer.WriteLine(result.Summary);
@@ -144,6 +148,19 @@ internal static class AutomationHostSyncPreflightCommand
             foreach (var path in result.SubmoduleCheckoutMismatchPaths)
             {
                 writer.WriteLine($"- `{path}` — parent gitlink advanced; run `git submodule update --init {path}`");
+            }
+        }
+        if (result.NestedPointerDriftSubmodules.Count > 0)
+        {
+            writer.WriteLine();
+            writer.WriteLine("## Clean nested-pointer drift (left untouched)");
+            foreach (var drift in result.NestedPointerDriftSubmodules)
+            {
+                writer.WriteLine($"- owning submodule `{drift.OwningSubmodulePath}` (parent-recorded `{drift.ParentRecordedCommit}`)");
+                foreach (var nestedPath in drift.UntouchedNestedPaths)
+                {
+                    writer.WriteLine($"  - untouched nested path `{nestedPath}`");
+                }
             }
         }
         if (result.NextSteps.Count > 0)
@@ -211,6 +228,14 @@ internal static class AutomationHostSyncPreflightCommand
         // G357: detect submodule gitlink mismatches (parent gitlink advanced after
         // git pull, submodule checkout is stale but the submodule itself is clean).
         var submoduleGitlinkMismatchPaths = DetectSubmoduleGitlinkMismatches(repoRoot, entries);
+        // G791: distinguish another domain's clean nested-pointer drift from
+        // real submodule content work. This detector is read-only and merely
+        // records the foreign paths that this wake must leave untouched.
+        var nestedPointerDriftSubmodules = DetectNestedPointerDriftSubmodules(repoRoot, entries);
+        var submoduleInternalDirtyPaths = DetectSubmoduleInternalDirtyPaths(
+            repoRoot,
+            entries,
+            nestedPointerDriftSubmodules);
 
         return new HostSyncGitProbe
         {
@@ -220,8 +245,87 @@ internal static class AutomationHostSyncPreflightCommand
             LocalOnlyCommits = localOnlyCommits,
             OriginAheadCommits = originAheadCommits,
             WorkingTreeEntries = entries,
-            SubmoduleGitlinkMismatchPaths = submoduleGitlinkMismatchPaths
+            SubmoduleGitlinkMismatchPaths = submoduleGitlinkMismatchPaths,
+            NestedPointerDriftSubmodules = nestedPointerDriftSubmodules,
+            SubmoduleInternalDirtyPaths = submoduleInternalDirtyPaths
         };
+    }
+
+    /// <summary>
+    /// G791: an entry with actual changes inside its checkout must never be
+    /// offered to the G306 safe-stash lane. The narrow clean nested-pointer
+    /// classification is removed first; everything else with non-empty
+    /// submodule porcelain is an owning-team/manual-reconciliation stop.
+    /// </summary>
+    private static IReadOnlyList<string> DetectSubmoduleInternalDirtyPaths(
+        string repoRoot,
+        IReadOnlyList<HostSyncWorkingTreeEntry> entries,
+        IReadOnlyList<NestedPointerDriftSubmodule> nestedPointerDriftSubmodules)
+    {
+        var driftPaths = new HashSet<string>(
+            nestedPointerDriftSubmodules.Select(drift => drift.OwningSubmodulePath),
+            StringComparer.Ordinal);
+        var runner = new ShellGitRunner(repoRoot);
+        var paths = new List<string>();
+        foreach (var entry in entries)
+        {
+            var parentGitlink = NestedSubmodulePointerDriftDetector.InspectParentGitlink(runner, entry.Path);
+            if (!parentGitlink.IsGitlink)
+            {
+                continue;
+            }
+
+            // G791 repair: a staged parent gitlink (for example porcelain
+            // `MM owner`) is foreign work in the superproject. It is never a
+            // clean pointer-only drift or a safe-stash candidate, even when
+            // the nested checkout itself is clean.
+            if (parentGitlink.HasStagedGitlinkChange)
+            {
+                paths.Add(entry.Path);
+                continue;
+            }
+
+            if (driftPaths.Contains(entry.Path))
+            {
+                continue;
+            }
+
+            var submoduleStatus = runner.Run(["-C", entry.Path, "status", "--porcelain"]);
+            if (submoduleStatus.ExitCode == 0 && !string.IsNullOrWhiteSpace(submoduleStatus.StandardOutput))
+            {
+                paths.Add(entry.Path);
+            }
+        }
+        return paths;
+    }
+
+    private static IReadOnlyList<NestedPointerDriftSubmodule> DetectNestedPointerDriftSubmodules(
+        string repoRoot,
+        IReadOnlyList<HostSyncWorkingTreeEntry> entries)
+    {
+        var runner = new ShellGitRunner(repoRoot);
+        var drifts = new List<NestedPointerDriftSubmodule>();
+        foreach (var entry in entries)
+        {
+            var parentGitlink = NestedSubmodulePointerDriftDetector.InspectParentGitlink(runner, entry.Path);
+            if (!parentGitlink.IsAligned)
+            {
+                continue;
+            }
+
+            var owningStatus = runner.Run(["-C", entry.Path, "status", "--porcelain"]);
+            if (owningStatus.ExitCode == 0
+                && NestedSubmodulePointerDriftDetector.TryDetect(
+                    runner,
+                    entry.Path,
+                    parentGitlink.HeadRecordedCommit!,
+                    owningStatus.StandardOutput,
+                    out var drift))
+            {
+                drifts.Add(drift);
+            }
+        }
+        return drifts;
     }
 
     /// <summary>
@@ -400,4 +504,10 @@ internal sealed record HostSyncGitProbe
     /// <c>git submodule update --init &lt;path&gt;</c> is the safe repair).
     /// </summary>
     public IReadOnlyList<string> SubmoduleGitlinkMismatchPaths { get; init; } = Array.Empty<string>();
+
+    /// <summary>G791: clean nested-pointer drift that must remain untouched by this wake.</summary>
+    public IReadOnlyList<NestedPointerDriftSubmodule> NestedPointerDriftSubmodules { get; init; } = Array.Empty<NestedPointerDriftSubmodule>();
+
+    /// <summary>G791: actual uncommitted content within a submodule checkout; hard-stop rather than G306.</summary>
+    public IReadOnlyList<string> SubmoduleInternalDirtyPaths { get; init; } = Array.Empty<string>();
 }

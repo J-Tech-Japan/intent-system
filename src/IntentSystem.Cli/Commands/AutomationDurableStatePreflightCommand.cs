@@ -86,7 +86,8 @@ internal static class AutomationDurableStatePreflightCommand
             WriteMarkdown(writer, result);
         }
 
-        return string.Equals(result.Classification, DurableStatePreflightAnalyzer.ClassificationVerifiedCommitReady, StringComparison.Ordinal)
+        return (string.Equals(result.Classification, DurableStatePreflightAnalyzer.ClassificationVerifiedCommitReady, StringComparison.Ordinal)
+                || string.Equals(result.Classification, DurableStatePreflightAnalyzer.ClassificationClean, StringComparison.Ordinal))
             ? 0
             : 1;
     }
@@ -148,13 +149,14 @@ internal static class AutomationDurableStatePreflightCommand
                 // tree shows up as `?? .intent-cli/`); the per-file
                 // filter below will drop anything outside the durable
                 // surface after expansion.
-                if (!IsDurableStatePath(path) && !IsDurableStateParent(path))
+                if (!DurableHostStatePathClassifier.IsDurableHostStatePath(path)
+                    && !DurableHostStatePathClassifier.IsDurableHostStateParent(path))
                 {
                     continue;
                 }
                 foreach (var expanded in ExpandUntrackedDirectory(repoRoot, path))
                 {
-                    if (!IsDurableStatePath(expanded))
+                    if (!DurableHostStatePathClassifier.IsDurableHostStatePath(expanded))
                     {
                         continue;
                     }
@@ -168,7 +170,7 @@ internal static class AutomationDurableStatePreflightCommand
             // command can be invoked standalone and only durable-state
             // paths are reported. Anything outside the durable surface is
             // ignored — the operator will use safe-stash for it.
-            if (!IsDurableStatePath(path))
+            if (!DurableHostStatePathClassifier.IsDurableHostStatePath(path))
             {
                 continue;
             }
@@ -221,6 +223,7 @@ internal static class AutomationDurableStatePreflightCommand
             RunsJsonlAppendOnlyResult? runsDelta = null;
             PublishYamlCanonicalResult? publishYamlDelta = null;
             PreparedPacketCommitReadyResult? preparedPacketDelta = null;
+            DurableRuntimeRecordDelta? runtimeRecordDelta = null;
 
             if (!isDeleted)
             {
@@ -250,6 +253,10 @@ internal static class AutomationDurableStatePreflightCommand
                     // on the verdict.
                     preparedPacketDelta = sharedVerdict;
                 }
+                else if (DurableRuntimeRecordAnalyzer.IsCandidate(path))
+                {
+                    runtimeRecordDelta = TryRuntimeRecordDelta(repoRoot, path);
+                }
             }
 
             dirtyPaths.Add(new DurableStateDirtyPath
@@ -260,6 +267,7 @@ internal static class AutomationDurableStatePreflightCommand
                 RunsJsonlDelta = runsDelta,
                 PublishYamlDelta = publishYamlDelta,
                 PreparedPacketDelta = preparedPacketDelta,
+                RuntimeRecordDelta = runtimeRecordDelta,
             });
         }
 
@@ -571,6 +579,52 @@ internal static class AutomationDurableStatePreflightCommand
         return RunsJsonlAppendOnlyAnalyzer.Analyze(headBlob, workingBlob);
     }
 
+    private static DurableRuntimeRecordDelta TryRuntimeRecordDelta(string repoRoot, string path)
+    {
+        string headBlob;
+        try
+        {
+            // A newly created runtime record has no HEAD blob. RunGit returns
+            // an empty output for that ordinary git-show miss, which is the
+            // correct empty ledger baseline for the append-only analyzer.
+            headBlob = RunGit(repoRoot, $"show HEAD:{path}");
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            return new DurableRuntimeRecordDelta
+            {
+                Classification = DurableRuntimeRecordAnalyzer.ClassificationInvalid,
+                Summary = $"could not read HEAD blob for '{path}': {exception.Message}",
+                AppendedRecordCount = 0,
+            };
+        }
+
+        var workingPath = Path.Combine(repoRoot, path);
+        if (!File.Exists(workingPath))
+        {
+            return new DurableRuntimeRecordDelta
+            {
+                Classification = DurableRuntimeRecordAnalyzer.ClassificationInvalid,
+                Summary = $"working-tree path '{path}' does not exist on disk.",
+                AppendedRecordCount = 0,
+            };
+        }
+
+        try
+        {
+            return DurableRuntimeRecordAnalyzer.Analyze(path, headBlob, File.ReadAllText(workingPath));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return new DurableRuntimeRecordDelta
+            {
+                Classification = DurableRuntimeRecordAnalyzer.ClassificationInvalid,
+                Summary = $"could not read working-tree '{path}': {exception.Message}",
+                AppendedRecordCount = 0,
+            };
+        }
+    }
+
     /// <summary>
     /// G343: detect <c>.intent-cli/issues/&lt;execution-unit&gt;/publish.yaml</c>
     /// paths and extract the directory-derived execution-unit so the
@@ -630,41 +684,6 @@ internal static class AutomationDurableStatePreflightCommand
         }
 
         return PublishYamlCanonicalAnalyzer.Analyze(content, executionUnit);
-    }
-
-    /// <summary>
-    /// G361: returns true when <paramref name="path"/> is a trailing-slash
-    /// directory entry that could be a PARENT of a durable-state path —
-    /// e.g. <c>.intent-cli/</c> when the entire artifact root is
-    /// untracked. The caller still expands and per-file filters.
-    /// </summary>
-    private static bool IsDurableStateParent(string path)
-    {
-        if (string.IsNullOrEmpty(path)) return false;
-        var normalized = path.Replace('\\', '/').TrimStart('/');
-        // Strip the trailing slash for prefix comparisons.
-        if (normalized.EndsWith('/'))
-        {
-            normalized = normalized[..^1];
-        }
-        return normalized.Equals(".intent-cli", StringComparison.Ordinal)
-            || normalized.StartsWith(".intent-cli/", StringComparison.Ordinal)
-            || normalized.Equals("intents", StringComparison.Ordinal)
-            || normalized.StartsWith("intents/", StringComparison.Ordinal);
-    }
-
-    private static bool IsDurableStatePath(string path)
-    {
-        if (string.IsNullOrEmpty(path)) return false;
-        var normalized = path.Replace('\\', '/').TrimStart('/');
-        return normalized.StartsWith(".intent-cli/queue-state.json", StringComparison.Ordinal)
-            || normalized.StartsWith(".intent-cli/runs.jsonl", StringComparison.Ordinal)
-            || normalized.StartsWith(".intent-cli/issues/", StringComparison.Ordinal)
-            || normalized.StartsWith("intents/", StringComparison.Ordinal)
-            || normalized.Equals("AGENTS.md", StringComparison.Ordinal)
-            || normalized.Equals("CLAUDE.md", StringComparison.Ordinal)
-            || normalized.Equals(".intent-cli/host-binding.toml", StringComparison.Ordinal)
-            || normalized.Equals(".intent-cli/config.toml", StringComparison.Ordinal);
     }
 
     private static string RunGit(string workingDirectory, string arguments)

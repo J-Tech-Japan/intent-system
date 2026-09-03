@@ -211,12 +211,82 @@ public sealed class AutomationDurableStatePreflightCommandTests : IDisposable
             },
             writer);
 
-        // Empty bundle classifies as needs-operator-review per the analyzer.
-        Assert.Equal(1, exitCode);
+        // G791: an empty durable bundle is a successful clean preflight,
+        // never an empty needs-operator-review result.
+        Assert.Equal(0, exitCode);
         using var doc = JsonDocument.Parse(writer.ToString());
         Assert.Equal(
-            DurableStatePreflightAnalyzer.ClassificationNeedsOperatorReview,
+            DurableStatePreflightAnalyzer.ClassificationClean,
             doc.RootElement.GetProperty("classification").GetString());
+        Assert.Contains("No dirty durable-state paths", doc.RootElement.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G791_RuntimeRecords_AgreeWithWorkspaceGuardAndAreCommitReady()
+    {
+        // One real git fixture feeds both commands. The shared classifier must
+        // name exactly the same measured durable paths that the guard refuses,
+        // while durable-state preflight supplies the actionable commit-ready
+        // route for those append-only/generated records.
+        AutomationDurableStatePreflightCommand.ProbeFactory = null;
+        using var workspace = new DurableStateGitWorkspace();
+        workspace.WriteAndModifyG791RuntimeRecords();
+
+        using var durableWriter = new StringWriter();
+        var durableExitCode = AutomationDurableStatePreflightCommand.Execute(
+            workspace.Context,
+            ["--format", "json"],
+            durableWriter);
+
+        using var guardWriter = new StringWriter();
+        var guardExitCode = AutomationWorkspaceGuardCommand.Execute(
+            workspace.Context,
+            ["--mode", "plan", "--format", "json"],
+            guardWriter);
+
+        Assert.Equal(0, durableExitCode);
+        Assert.Equal(1, guardExitCode);
+        using var durableDocument = JsonDocument.Parse(durableWriter.ToString());
+        using var guardDocument = JsonDocument.Parse(guardWriter.ToString());
+        Assert.Equal(DurableStatePreflightAnalyzer.ClassificationVerifiedCommitReady,
+            durableDocument.RootElement.GetProperty("classification").GetString());
+        Assert.NotNull(durableDocument.RootElement.GetProperty("recommended_commit_message").GetString());
+        Assert.False(guardDocument.RootElement.GetProperty("proceed_allowed").GetBoolean());
+
+        var preflightPaths = durableDocument.RootElement.GetProperty("verified_paths")
+            .EnumerateArray()
+            .Select(entry => entry.GetProperty("path").GetString()!)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        var guardPaths = guardDocument.RootElement.GetProperty("dirty_durable_state_paths")
+            .EnumerateArray()
+            .Select(entry => entry.GetProperty("path").GetString()!)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(G791RuntimeRecordPaths, preflightPaths);
+        Assert.Equal(preflightPaths, guardPaths);
+    }
+
+    [Fact]
+    public void Execute_G791_CleanGitWorkspace_PrintsCleanAndExitsZero()
+    {
+        AutomationDurableStatePreflightCommand.ProbeFactory = null;
+        using var workspace = new DurableStateGitWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationDurableStatePreflightCommand.Execute(
+            workspace.Context,
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(DurableStatePreflightAnalyzer.ClassificationClean,
+            document.RootElement.GetProperty("classification").GetString());
+        Assert.Empty(document.RootElement.GetProperty("verified_paths").EnumerateArray());
+        Assert.Empty(document.RootElement.GetProperty("review_paths").EnumerateArray());
+        Assert.Contains("No dirty durable-state paths", document.RootElement.GetProperty("summary").GetString()!, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -493,6 +563,24 @@ public sealed class AutomationDurableStatePreflightCommandTests : IDisposable
             RunGit("commit -q -m bindings");
         }
 
+        public void WriteAndModifyG791RuntimeRecords()
+        {
+            foreach (var path in G791RuntimeRecordPaths)
+            {
+                var absolutePath = Path.Combine(RepoRoot, path.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(absolutePath)!);
+                File.WriteAllText(absolutePath, InitialG791RuntimeContent(path));
+            }
+            RunGit("add .intent-cli");
+            RunGit("commit -q -m g791-runtime-baseline");
+
+            foreach (var path in G791RuntimeRecordPaths)
+            {
+                var absolutePath = Path.Combine(RepoRoot, path.Replace('/', Path.DirectorySeparatorChar));
+                File.WriteAllText(absolutePath, ModifiedG791RuntimeContent(path));
+            }
+        }
+
         public void Dispose()
         {
             if (Directory.Exists(RepoRoot)) Directory.Delete(RepoRoot, recursive: true);
@@ -514,4 +602,23 @@ public sealed class AutomationDurableStatePreflightCommandTests : IDisposable
             process.WaitForExit();
         }
     }
+
+    private static readonly string[] G791RuntimeRecordPaths =
+    [
+        ".intent-cli/continuation-chains/intent-cli/intent-cli-dev/chains.jsonl",
+        ".intent-cli/events/intent-cli/intent-cli-dev.jsonl",
+        ".intent-cli/notify/intent-cli/intent-cli-dev/pending.jsonl",
+        ".intent-cli/notify/intent-cli/intent-cli-dev/report-outbox.jsonl",
+        ".intent-cli/supervision/intent-cli/intent-cli-dev/emission-policy.json",
+    ];
+
+    private static string InitialG791RuntimeContent(string path) =>
+        path.EndsWith("emission-policy.json", StringComparison.Ordinal)
+            ? "{\"domain\":\"intent-cli\",\"team\":\"intent-cli-dev\",\"full_cadence_seconds\":300,\"repeat_backoff_seconds\":600,\"debounce_consecutive_observations\":2,\"recorded_at\":\"2026-09-03T00:00:00Z\"}\n"
+            : "{\"kind\":\"baseline\"}\n";
+
+    private static string ModifiedG791RuntimeContent(string path) =>
+        path.EndsWith("emission-policy.json", StringComparison.Ordinal)
+            ? "{\"domain\":\"intent-cli\",\"team\":\"intent-cli-dev\",\"full_cadence_seconds\":300,\"repeat_backoff_seconds\":600,\"debounce_consecutive_observations\":2,\"recorded_at\":\"2026-09-03T00:05:00Z\"}\n"
+            : "{\"kind\":\"baseline\"}\n{\"kind\":\"append\"}\n";
 }

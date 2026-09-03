@@ -3493,3 +3493,42 @@ unit 名と full competing entries を示して mutation を行いません。op
 ではありません**。queue-state を手編集してはいけません。対象は重複の報告と
 strict dominance による安全な整理だけであり、concurrent-write prevention、
 locking、CAS、queue schema の変更は別の作業です。
+
+### host の永続状態と他ドメインの nested-pointer drift (G791)
+
+`automation workspace-guard`、`automation durable-state-preflight`、
+`automation host-sync-preflight` は一つの host の永続状態 path 境界を共有します:
+`.intent-cli/**`、`intents/**`、`AGENTS.md`、`CLAUDE.md` です。ある command では
+stash できない unsafe な path が、recovery route を示す別 command から見えなくなることは
+ありません。
+
+この永続状態 preflight は
+`.intent-cli/continuation-chains/**`、`.intent-cli/events/**`、
+`.intent-cli/notify/**`、`.intent-cli/supervision/**` 配下の append-only runtime
+JSONL record と、構造的に valid な生成済み
+`.intent-cli/supervision/**/emission-policy.json` を認識します。これらの record は
+exact path と recommended commit message を含む `verified-commit-ready` になります。
+dirty な永続 path がない preflight は `clean` であり、空の
+`needs-operator-review` にはなりません。in-place edit、deletion、malformed record、
+その他の認識されない永続 content は従来どおり fail-closed です。
+
+`nested-pointer-drift` は、別 domain の live submodule checkout に対する狭い
+direct-proceed classification です。次の三つがすべて必要です: host gitlink が
+parent-recorded commit と一致すること、owning submodule の `git submodule status` が
+異なる nested gitlink を報告すること、影響を受けるすべての nested checkout の
+`git status --porcelain` が空であることです。payload は owning submodule と
+untouched nested path をすべて列挙します。`host-sync-preflight` は safe-stash lane
+ではなく同じ classification を返し、workspace-guard は stash も checkout も行わない
+no-op として表します。
+
+parent-recorded gitlink は index ではなく `HEAD` から読み取ります。staged な
+superproject gitlink（たとえば porcelain の `MM owner`）は clean nested-pointer
+drift ではなく foreign parent work です。両 command は fail-closed で拒否し、G306
+safe-stash も direct-proceed lane も提示しません。
+
+これは foreign path を触らずに残す permission です。drifted submodule に対して
+`git stash`、`git checkout`、`git submodule update`、`git add`、`git commit` を
+実行してはいけません。nested checkout に real uncommitted content が一つでもあれば、
+`workspace-guard` と `host-sync-preflight` はともに `submodule-internal-dirty` として
+拒否し、G306 safe-stash lane を提示しません。他 domain の nested pointer drift または
+real nested content の reconciliation は owning domain team の責務です。
