@@ -286,6 +286,14 @@ internal static class GuidePromptMatrixCommand
             .Select(entry => string.Equals(entry.Target, TargetHost, StringComparison.Ordinal)
                 ? entry with { ReviewPolicySource = reviewPolicySource }
                 : entry)
+            .Select(entry => entry with
+            {
+                // G797: every generated prompt carries the same canonical
+                // role words and route-compatible identifier guidance.  This
+                // is additive prompt text; mode selection and all existing
+                // command routes remain unchanged.
+                Prompt = GuideRoleVocabulary.RenderMarkdownBlock() + "\n\n" + entry.Prompt,
+            })
             .ToList();
     }
 
@@ -1493,6 +1501,8 @@ Hard rules:
     private static void WriteMarkdown(TextWriter writer, IReadOnlyList<GuidePromptMatrixEntry> entries)
     {
         writer.WriteLine("# Guide prompt matrix");
+        writer.WriteLine();
+        writer.WriteLine(GuideRoleVocabulary.RenderMarkdownBlock());
         writer.WriteLine();
         writer.WriteLine("> **PRIMARY for multi-thread setups:** the four-thread **orchestrator-message model** over the selected session transport");
         writer.WriteLine("> (design / orchestrator / implementation / review) is the practiced, maintained model — a");

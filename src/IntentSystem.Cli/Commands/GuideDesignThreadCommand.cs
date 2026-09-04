@@ -259,12 +259,14 @@ internal static class GuideDesignThreadCommand
         writer.WriteLine($"- routing root: `{result.RoutingRoot}`");
         writer.WriteLine($"- session layers: {result.SessionLayerRule}");
         writer.WriteLine();
+        writer.WriteLine(GuideRoleVocabulary.RenderMarkdownBlock());
+        writer.WriteLine();
         writer.WriteLine("## Reachability");
         writer.WriteLine($"- command: `{result.Reachability.Command}`");
         writer.WriteLine($"- catalog: `{result.Reachability.Catalog}`");
-        writer.WriteLine($"- design-role advisor: `{result.Reachability.Advisor}` names this guide.");
+        writer.WriteLine($"- Architect-role advisor: `{result.Reachability.Advisor}` names this guide.");
         writer.WriteLine();
-        writer.WriteLine("## External-resident design receive");
+        writer.WriteLine("## External-resident Architect receive");
         writer.WriteLine($"- canonical receive: `{result.Reachability.ExternalReader.Command}`");
         writer.WriteLine($"- cursor: {result.Reachability.ExternalReader.CursorRule}");
         writer.WriteLine($"- wait: {result.Reachability.ExternalReader.WaitRule}");

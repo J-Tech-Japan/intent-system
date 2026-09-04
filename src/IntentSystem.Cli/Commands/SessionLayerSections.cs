@@ -120,6 +120,7 @@ internal static class SessionLayerSections
         // (DocumentTitle) whose per-mode renderings these rows derive from.
         new(DocumentTitle.Agmsg, null, Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
         new(DocumentTitle.HerdrOnly, null, Applicability.HerdrOnly),
+        new("## Canonical role vocabulary (G797)", null, Applicability.ModeIndependent, Descriptive: true),
         new("(json) guide summary", "summary", Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
         new(ReplacementHeadingValue, "herdr_only_replaced_sections", Applicability.HerdrOnly),
         new("(json) herdr-only replacement note", "herdr_only_replacement_note", Applicability.HerdrOnly),

@@ -13,7 +13,7 @@ public sealed class GuideDesignThreadCommandTests
     public void DesignThread_RenderedGuideNamesExternalRoleScopedReceiveWithCallerCursorAndBoundedWait()
     {
         var output = RenderDesignMarkdown();
-        var section = SectionFrom(output, "## External-resident design receive");
+        var section = SectionFrom(output, "## External-resident Architect receive");
 
         Assert.Contains(
             "intent-cli notify collect --domain <domain> --team <team> --role design --since <cursor> --wait --timeout-ms <timeout-ms> --format json",
@@ -92,7 +92,7 @@ public sealed class GuideDesignThreadCommandTests
                     writer));
 
             var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(writer.ToString())));
-            Assert.Equal("8f1b1e5a948626af646482df096c48f40c71d59bc9ad23f8d110447e0177ab09", hash);
+            Assert.Equal("970132ffd142800bb1b0e55732f607df0318828058ad98b80603f7514b3d3f74", hash);
         }
         finally
         {

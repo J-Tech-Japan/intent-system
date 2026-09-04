@@ -4450,6 +4450,8 @@ internal static class GuideOrchestratorThreadCommand
         WriteSetupIntake(writer, guide.SetupIntake);
         writer.WriteLine(guide.Summary);
         writer.WriteLine();
+        writer.WriteLine(GuideRoleVocabulary.RenderMarkdownBlock());
+        writer.WriteLine();
 
         writer.WriteLine("## Guide reachability (G645/G696)");
         foreach (var route in guide.GuideReachability.Routes)
@@ -4519,6 +4521,10 @@ internal static class GuideOrchestratorThreadCommand
         {
             writer.WriteLine($"- {item}");
         }
+        writer.WriteLine();
+        writer.WriteLine($"### {GuideRoleVocabulary.Steward} boundary");
+        writer.WriteLine();
+        writer.WriteLine($"- {GuideRoleVocabulary.StewardBoundarySentence}");
         writer.WriteLine();
         writer.WriteLine($"### Host-state duty routing");
         writer.WriteLine();
