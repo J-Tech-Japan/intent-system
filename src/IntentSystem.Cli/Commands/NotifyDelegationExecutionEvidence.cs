@@ -255,6 +255,12 @@ internal sealed record NotifyDelegationExecutionEvidence
 
                         using var document = JsonDocument.Parse(line);
                         var root = document.RootElement;
+                        var eventTeam = ReadString(root, "team");
+                        if (!string.Equals(eventTeam, record.Team, StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
+
                         var eventUnit = ReadString(root, "unit");
                         var summary = ReadString(root, "summary");
                         var artifact = ReadString(root, "artifact");
@@ -479,8 +485,12 @@ internal sealed record NotifyDelegationExecutionEvidence
             .ToArray();
         foreach (var detail in details)
         {
-            if (detail.Contains($"task_id={reference}", StringComparison.Ordinal)
-                || detail.Contains($"unit={reference}", StringComparison.Ordinal))
+            var taskId = ReadCarrierField(detail, TaskIdCarrierFieldPattern);
+            var unit = ReadCarrierField(detail, UnitCarrierFieldPattern);
+            var executionUnit = ReadCarrierField(detail, ExecutionUnitCarrierFieldPattern);
+            if (string.Equals(taskId, reference, StringComparison.Ordinal)
+                || string.Equals(unit, reference, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(executionUnit, reference, StringComparison.OrdinalIgnoreCase))
             {
                 evidence = detail;
                 error = string.Empty;
@@ -504,9 +514,27 @@ internal sealed record NotifyDelegationExecutionEvidence
         return false;
     }
 
+    private static string? ReadCarrierField(string detail, Regex fieldPattern)
+    {
+        var match = fieldPattern.Match(detail);
+        return match.Success ? match.Groups["value"].Value : null;
+    }
+
     private static readonly Regex CandidateExecutionUnitPattern = new(
         @"(?<![A-Za-z0-9])(?:[A-Za-z][A-Za-z0-9]*-)?G[0-9]+(?![A-Za-z0-9])",
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex TaskIdCarrierFieldPattern = new(
+        @"(?<![A-Za-z0-9_])task_id=(?<value>[^;]+)",
+        RegexOptions.CultureInvariant);
+
+    private static readonly Regex UnitCarrierFieldPattern = new(
+        @"(?<![A-Za-z0-9_])unit=(?<value>[^;]+)",
+        RegexOptions.CultureInvariant);
+
+    private static readonly Regex ExecutionUnitCarrierFieldPattern = new(
+        @"(?<![A-Za-z0-9_])execution_unit=(?<value>[^;]+)",
+        RegexOptions.CultureInvariant);
 
     private static readonly Regex DefaultExecutionUnitPattern = new(
         @"^(?:[A-Za-z][A-Za-z0-9]*-)?G[0-9]+$",

@@ -206,6 +206,148 @@ public sealed class NotifyRoutingG796Tests
     }
 
     [Fact]
+    public void DownstreamReferenceRejectsPrefixOfRealCarrierValue_G796()
+    {
+        AssertPendingReferenceRejected(
+            requestedReference: "G796-child",
+            recordedReference: "G796-child-real",
+            negativeClass: "prefix");
+    }
+
+    [Fact]
+    public void DownstreamReferenceRejectsSuffixOfRealCarrierValue_G796()
+    {
+        AssertPendingReferenceRejected(
+            requestedReference: "child-real",
+            recordedReference: "G796-child-real",
+            negativeClass: "suffix");
+    }
+
+    [Fact]
+    public void DownstreamReferenceRejectsReferenceFromDifferentTeamOrDomain_G796()
+    {
+        var root = NewEvidenceRoot();
+        try
+        {
+            var parent = WriteUpstreamParent(root);
+            var foreignTeamReference = "G796-child-foreign-team";
+            Assert.True(
+                NotifyEventWriter.TryResolveWritePath(
+                    root,
+                    parent.Domain,
+                    "other-team",
+                    out var foreignEventPath,
+                    out var foreignEventError),
+                foreignEventError);
+            NotifyEventWriter.Append(foreignEventPath, new NotifyDesignEvent
+            {
+                Timestamp = parent.DispatchedAt.AddSeconds(1),
+                Team = "other-team",
+                Kind = "question",
+                Unit = foreignTeamReference,
+                Summary = "foreign-team child evidence",
+                Artifact = "child.txt",
+            });
+
+            var foreignDomainReference = "G796-child-foreign-domain";
+            var foreignDomainChild = parent with
+            {
+                Domain = "other-domain",
+                TaskId = foreignDomainReference,
+                DispatchedAt = parent.DispatchedAt.AddSeconds(1),
+            };
+            Assert.True(NotifyPendingDelegationStore.WriteDispatch(root, foreignDomainChild).Written);
+
+            Assert.False(
+                NotifyDelegationExecutionEvidence.TryResolveDownstreamReference(
+                    root,
+                    parent,
+                    foreignTeamReference,
+                    out _,
+                    out var teamError));
+            Assert.Contains("did not resolve", teamError, StringComparison.OrdinalIgnoreCase);
+            Assert.False(
+                NotifyDelegationExecutionEvidence.TryResolveDownstreamReference(
+                    root,
+                    parent,
+                    foreignDomainReference,
+                    out _,
+                    out var domainError));
+            Assert.Contains("did not resolve", domainError, StringComparison.OrdinalIgnoreCase);
+            output.WriteLine(
+                $"G796 AC6/AC8 negative_class=foreign-team-or-domain; team_reference={foreignTeamReference}; team_accepted=false; team_error={teamError}; domain_reference={foreignDomainReference}; domain_accepted=false; domain_error={domainError}");
+        }
+        finally
+        {
+            DeleteEvidenceRoot(root);
+        }
+    }
+
+    [Fact]
+    public void DownstreamReferenceRejectsFabricatedIdentifierWithExactCarrierComparison_G796()
+    {
+        AssertPendingReferenceRejected(
+            requestedReference: "fabricated-G796-proof",
+            recordedReference: "G796-child-real",
+            negativeClass: "fabricated");
+    }
+
+    [Fact]
+    public void DownstreamReferenceMatchesQueueCarrierWithExactExecutionUnitValue_G796()
+    {
+        var root = NewEvidenceRoot();
+        try
+        {
+            var parent = WriteUpstreamParent(root);
+            var queueState = new QueueState
+            {
+                SchemaVersion = "1",
+                UpdatedAt = parent.DispatchedAt.AddSeconds(1),
+                Items =
+                [
+                    new QueueItem
+                    {
+                        ExecutionUnit = "G796",
+                        Title = "G796 queue transition",
+                        State = QueueItemState.Active,
+                        Dependencies = [],
+                        BlockedBy = [],
+                        ClarificationReturnPath = string.Empty,
+                        PacketPaths = new PacketPaths
+                        {
+                            Yaml = ".intent-cli/issues/G796/packet.yaml",
+                            Implementation = ".intent-cli/issues/G796/implementation.md",
+                            ReviewContext = ".intent-cli/issues/G796/review-context.md",
+                        },
+                        WorkerRole = "implementation",
+                        ReviewRole = "review",
+                        Priority = "high",
+                    },
+                ],
+            };
+            var queuePath = Path.Combine(root, ".intent-cli", "queue-state.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(queuePath)!);
+            File.WriteAllText(queuePath, QueueStateSerializer.Serialize(queueState));
+
+            Assert.True(
+                NotifyDelegationExecutionEvidence.TryResolveDownstreamReference(
+                    root,
+                    parent,
+                    "G796",
+                    out var evidence,
+                    out var error),
+                error);
+            Assert.Contains("queue-state:execution_unit=G796", evidence, StringComparison.Ordinal);
+            output.WriteLine(
+                $"G796 AC6/AC8 positive_carrier=queue-state; reference=G796; accepted=true; evidence={evidence}");
+        }
+        finally
+        {
+            DeleteEvidenceRoot(root);
+        }
+    }
+
+    [Fact]
     public void RealPendingReferenceResolvesThroughTheG788EvidencePath_G796()
     {
         var root = NewEvidenceRoot();
@@ -477,5 +619,42 @@ public sealed class NotifyRoutingG796Tests
         }
 
         return parent;
+    }
+
+    private void AssertPendingReferenceRejected(
+        string requestedReference,
+        string recordedReference,
+        string negativeClass)
+    {
+        var root = NewEvidenceRoot();
+        try
+        {
+            var parent = WriteUpstreamParent(root);
+            var child = parent with
+            {
+                TaskId = recordedReference,
+                DelegatingRole = "steward",
+                RecipientRole = "architect",
+                RecipientIdentity = "role=architect",
+                DispatchedAt = parent.DispatchedAt.AddSeconds(1),
+                Ruling = null,
+            };
+            Assert.True(NotifyPendingDelegationStore.WriteDispatch(root, child).Written);
+
+            Assert.False(
+                NotifyDelegationExecutionEvidence.TryResolveDownstreamReference(
+                    root,
+                    parent,
+                    requestedReference,
+                    out _,
+                    out var error));
+            Assert.Contains("did not resolve", error, StringComparison.OrdinalIgnoreCase);
+            output.WriteLine(
+                $"G796 AC6/AC8 negative_class={negativeClass}; requested_reference={requestedReference}; recorded_reference={recordedReference}; accepted=false; error={error}");
+        }
+        finally
+        {
+            DeleteEvidenceRoot(root);
+        }
     }
 }
