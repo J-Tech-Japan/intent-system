@@ -6,6 +6,7 @@ using IntentSystem.Cli.Infrastructure;
 using IntentSystem.Cli.Models;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
+using Xunit.Abstractions;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -16,6 +17,13 @@ namespace IntentSystem.Cli.Tests;
 /// </summary>
 public sealed class RoleVocabularyG798Tests
 {
+    private readonly ITestOutputHelper output;
+
+    public RoleVocabularyG798Tests(ITestOutputHelper output)
+    {
+        this.output = output;
+    }
+
     [Fact]
     public void Load_ExactFourLineVendorConfig_IsUnchangedAndReportsEveryLegacyKey()
     {
@@ -59,6 +67,9 @@ public sealed class RoleVocabularyG798Tests
         Assert.Equal("Claude", report.GetProperty("interview").GetString());
         Assert.Equal("Codex", report.GetProperty("clarify").GetString());
         Assert.Equal(before, File.ReadAllBytes(configPath));
+        output.WriteLine("AC1/AC2 legacy_role_mappings JSON:");
+        output.WriteLine(writer.ToString());
+        output.WriteLine($"AC2 exit_code={exitCode}; config_bytes_unchanged={before.SequenceEqual(File.ReadAllBytes(configPath))}");
     }
 
     [Fact]
@@ -139,6 +150,7 @@ public sealed class RoleVocabularyG798Tests
             });
         Assert.Equal(LogicalRoleNormalizer.Builder, queueItem.WorkerRole);
         Assert.Equal(LogicalRoleNormalizer.Reviewer, queueItem.ReviewRole);
+        output.WriteLine($"AC3 seed worker_role={seeded.WorkerRole}; review_role={seeded.ReviewRole}; queue-enqueue worker_role={queueItem.WorkerRole}; review_role={queueItem.ReviewRole}; coder_written=false");
     }
 
     [Fact]
@@ -160,13 +172,13 @@ public sealed class RoleVocabularyG798Tests
             Items = items,
         });
 
-        var output = new StringBuilder();
+        var rendered = new StringBuilder();
         var context = fixture.CreateContext();
         foreach (var item in items)
         {
             using var writer = new StringWriter();
             Assert.Equal(0, IntentExplainCommand.Execute(context, [item.ExecutionUnit], writer));
-            output.Append(writer);
+            rendered.Append(writer);
         }
 
         foreach (var value in new[]
@@ -176,10 +188,12 @@ public sealed class RoleVocabularyG798Tests
         })
         {
             Assert.True(
-                output.ToString().Contains($"worker role: {value}", StringComparison.Ordinal)
-                    || output.ToString().Contains($"review role: {value}", StringComparison.Ordinal),
+                rendered.ToString().Contains($"worker role: {value}", StringComparison.Ordinal)
+                    || rendered.ToString().Contains($"review role: {value}", StringComparison.Ordinal),
                 $"legacy value '{value}' was not rendered by intent explain");
         }
+        output.WriteLine("AC4 intent explain output:");
+        output.WriteLine(rendered.ToString());
     }
 
     [Fact]
@@ -201,6 +215,7 @@ public sealed class RoleVocabularyG798Tests
         Assert.Equal("G798", group.ExecutionUnit);
         Assert.Equal(2, group.Entries.Count);
         Assert.Null(group.Winner);
+        output.WriteLine($"AC5 duplicate_groups={groups.Count}; execution_unit={group.ExecutionUnit}; entries={group.Entries.Count}; winner={(group.Winner is null ? "unresolved" : "selected")}");
     }
 
     [Fact]
@@ -235,6 +250,9 @@ public sealed class RoleVocabularyG798Tests
         var roundTrip = QueueStateSerializer.Deserialize(serialized).Items.Single();
         Assert.Equal("opencode", roundTrip.WorkerRole);
         Assert.Equal("opencode", roundTrip.ReviewRole);
+        output.WriteLine("AC6/AC7 queue-state JSON:");
+        output.WriteLine(serialized);
+        output.WriteLine($"AC7 config_worker_role={config.Roles.Implement}; config_review_role={config.Roles.Review}; queue_roundtrip_worker_role={roundTrip.WorkerRole}; queue_roundtrip_review_role={roundTrip.ReviewRole}; runtime_field_present={item.TryGetProperty("runtime", out _)}");
     }
 
     private static QueueItem CreateItem(string executionUnit, string workerRole, string reviewRole)
