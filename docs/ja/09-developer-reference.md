@@ -3051,63 +3051,56 @@ result は literal bytes の削減、追加した reference bytes、record の n
 `shrink-audit.jsonl` に明記します。`.intent-cli/runs/*.provider.jsonl` は別の provider-run state なので
 scope 外です。`--dry-run` なら manifest、JSONL、audit を書き込まずに測定済み plan だけを確認できます。
 
-### 次リリース準備(v0.31.1)
+### 次リリース準備(v0.32.1)
 
 **RELEASE PREPARED / NOT PUBLISHED。**
 
-G792 は G788、G789、G791、G790 の四つの first-parent merge 後の exact named
-product base `79a245c655e17ac654ac440fda31709ee38e28b8` から v0.31.0 preparation を測定しました。
-normal clean Release build は `intent-cli 0.31.1-79a245c-G791` を返します。これは新しい
-`nextVersion` placeholder identity であり、**v0.31.0 ではありません**。同じ base を
-explicit `-p:Version=0.31.0` で build すると `intent-cli 0.31.0-79a245c-G791` を返します。
-published v0.31.0 は `release.yml` の release tag の `RAW` から `VERSION` を導出し、
+G802 は G795、G798、G796、G800、G797、G801 の六つの first-parent merge 後の exact named
+product base `2a833a976688b3139678e4954162a9c00d32d0f4` から v0.32.0 preparation を測定しました。
+normal clean Release build は `intent-cli 0.32.1-2a833a9-G801` を返します。これは新しい
+`nextVersion` placeholder identity であり、**v0.32.0 ではありません**。同じ base を
+explicit `-p:Version=0.32.0` で build すると `intent-cli 0.32.0-2a833a9-G801` を返します。
+published v0.32.0 は `release.yml` の release tag の `RAW` から `VERSION` を導出し、
 `eng/version.json` は local builds と dry runs だけを管理します。
 
-prepared files は `release-notes-v0.31.0.md` と
-`release-notes-v0.31.1.md` の DRAFT stub です。current policy は次のとおりです:
+prepared files は `release-notes-v0.32.0.md` と
+`release-notes-v0.32.1.md` の DRAFT stub です。current policy は次のとおりです:
 
 ```json
 {
-  "stableVersion": "0.31.0",
-  "nextVersion": "0.31.1"
+  "stableVersion": "0.32.0",
+  "nextVersion": "0.32.1"
 }
 ```
 
-`0.31.1` は replaceable development placeholder であり、次の real release number
+`0.32.1` は replaceable development placeholder であり、次の real release number
 ではありません。tag、GitHub Release、package publish、workflow change、product source
 change はこの prepare-only slice に含みません。
 
-active package-policy evidence は `stableVersion 0.31.0`、`nextVersion 0.31.1`、local
-candidate `JTechJapan.IntentSystem.Cli.0.31.1.nupkg` です。host-only release-prep claim boundary は
-`release-prep:<owner/repo>:0.31.0` で、この child release-prep は提供済みの権限を使い、
-host state を inspect/mutate しません。exact four-unit inventory は G788、G789、G791、G790
-で、EN/JA の unit/PR/issue/merge tuple と consumer-follow-up parity、measured identity、
-truthfulness、placeholder check は `ReleaseNotesV0310DocsTests` が guard し、
-`ReleasePackageMetadataTests` は release-policy shape と next-version note を引き続き guard します。
-G788 の evidence source、G789 の guide block、G791 の nested-pointer-drift classification は
-extra command route ではなく option/behavior addition です。
-
-minor の測定判断は v0.28.0 の rule に従います: **a command-route addition is a minor bump;
-option-level additions do not count as command routes.** tagged v0.30.0 tool には
-`session-layer inspect` がなく、named base がこの read-only command route を一つ追加しました。
-G788 evidence source/informational output、G789 guide text、G791 nested-pointer-drift
-classification は列挙しますが route としては数えません。
-current readiness record は `metadata_write_branch` topology evidence と
-`--verify`、`--accept-evidence-gap`、`--shell-policy` の option-level surface も保持します。
-まだ GitHub Release は存在しません。
+active package-policy evidence は `stableVersion 0.32.0`、`nextVersion 0.32.1`、local
+candidate `JTechJapan.IntentSystem.Cli.0.32.1.nupkg` です。host-only release-prep claim boundary は
+`release-prep:<owner/repo>:0.32.0` で、この child release-prep は提供済みの権限を使い、
+host state を inspect/mutate しません。exact six-unit inventory は G795、G798、G796、G800、G797、G801
+で、EN/JA の unit/PR/issue/merge tuple、measured identity、alias promise、placeholder check は
+`ReleaseNotesV0320G802Tests` が guard し、`ReleasePackageMetadataTests` は release-policy shape と
+next-version note を引き続き guard します。
+G796 と G800 は command-route additions なので minor として数え、alias table/config repair、guide
+rendering、npm dist-tag behavior は列挙しますが routes としては **not counted** です。既存の route names
+と option-level surfaces は変更せず、GitHub Release はまだ存在しません。
 policy-derived next-version placeholder boundary は
-`release-prep:<owner/repo>:0.31.1` のままで、prepared release target は
-`release-prep:<owner/repo>:0.31.0` です。
+`release-prep:<owner/repo>:0.32.1` のままで、prepared release target は
+`release-prep:<owner/repo>:0.32.0` です。
 
-G792 の truthfulness boundary は次のとおりです。delivered-never-executed finding は downstream
-delegation、同じ execution-unit token を持つ child report、または queue transition を execution
-evidence として数え、true stall では引き続き発火し、absence を断定せず checked list を示します。
-`session-layer inspect` は read-only で、recorded topology または明示的 `--role` からだけ target
-を解決し、focus default を持たず、session layer unavailable のとき exit 0 となり、dialog に回答しません。
-その経路は `notify adjudicate` のままです。host guard は別 domain の nested pointer drift に対して、
-すべての nested checkout が clean の場合だけ進み、uncommitted nested content は拒否し、他 domain の
-submodule には書き込みません。G789 design-thread の Orca block は non-normative で、intent-cli は
-Orca を launch も manage もしません。
+readiness record は `metadata_write_branch` topology evidence と
+`--verify`、`--accept-evidence-gap`、`--shell-policy` の option-level surface も保持します。
+
+G802 の compatibility promise は次のとおりです。legacy names `design`、`orchestration`、
+`implementation`、`review` の四つは Architect、Orchestrator、Builder、Reviewer の aliases として
+still work します。Existing roles configuration keeps loading、existing queue-state keeps reading and
+displaying、no installed guide route changed name です。これは compatibility promise であり、new route
+claim ではありません。G795 canonical role/unknown-role refusal、G798 の read/display queue fields、
+G796 の ruling bytes/digest/origin boundary、G800 の sourced-finding/no-ruling/direct-research boundary、
+G801 の SemVer prerelease tag behavior もそのままです。size threshold、model name、runtime check は使いません。
 
 ### previous v0.29.0 release-prep evidence (history のみ)
 
