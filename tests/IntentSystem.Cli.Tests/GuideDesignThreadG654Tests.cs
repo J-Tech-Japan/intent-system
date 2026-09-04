@@ -511,6 +511,9 @@ public sealed class GuideDesignThreadG654Tests
     private static string RemoveG789Additions(JsonElement root)
     {
         var projected = JsonNode.Parse(root.GetRawText())!.AsObject();
+        // G800 adds a separate research contract payload; exclude it when
+        // checking the immutable G654/G774/G775/G777 parent projections.
+        projected.Remove("research_delegation");
         projected["team_and_duty_split"]?.AsObject().Remove("review_seat_selection");
         projected["external_residence_operating_contract"]?.AsObject().Remove("orca_operating_block");
         projected["observation_boundary"]?.AsObject().Remove("inspect_route");

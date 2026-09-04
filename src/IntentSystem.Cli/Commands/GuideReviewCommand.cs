@@ -417,6 +417,7 @@ internal static class GuideReviewCommand
             ReviewContextHead = reviewContextHead,
             ReviewChecklist = ReviewChecklist,
             ReviewBoundaries = ReviewBoundaries,
+            ResearchDelegation = ResearchDelegationContract.CreateGuidance(),
             ApprovalSummaryRequirements = ApprovalSummaryRequirements,
             RequestUpdateRequirements = RequestUpdateRequirements,
             AutomatedReviewerCommentTriage = AutomatedReviewerCommentTriagePolicy,
@@ -638,6 +639,21 @@ internal static class GuideReviewCommand
         {
             writer.WriteLine($"- {item}");
         }
+        writer.WriteLine();
+
+        writer.WriteLine("## Research delegation contract (G800)");
+        writer.WriteLine($"- task kind: `{result.ResearchDelegation.TaskKind}`");
+        writer.WriteLine($"- sender roles: {string.Join(", ", result.ResearchDelegation.SenderRoles.Select(role => $"`{role}`"))}");
+        writer.WriteLine($"- recipient roles: {string.Join(", ", result.ResearchDelegation.RecipientRoles.Select(role => $"`{role}`"))}");
+        writer.WriteLine($"- what goes down: {result.ResearchDelegation.WhatGoesDown}");
+        writer.WriteLine($"- who receives: {result.ResearchDelegation.WhoReceives}");
+        writer.WriteLine($"- what stays: {result.ResearchDelegation.WhatStays}");
+        writer.WriteLine($"- sourced findings: {result.ResearchDelegation.SourcedFindingRule}");
+        writer.WriteLine($"- no-ruling boundary: {result.ResearchDelegation.NoRulingBoundary}");
+        writer.WriteLine($"- direct research: {result.ResearchDelegation.DirectResearchRule}");
+        writer.WriteLine($"- visibility: {result.ResearchDelegation.VisibilityRule}");
+        writer.WriteLine($"- size rule: {result.ResearchDelegation.NoSizeRule}");
+        foreach (var example in result.ResearchDelegation.Examples) writer.WriteLine($"  - example: {example}");
         writer.WriteLine();
 
         writer.WriteLine("## Review boundaries");
@@ -981,6 +997,9 @@ internal sealed record GuideReviewResult
 
     [JsonPropertyName("review_checklist")]
     public required IReadOnlyList<string> ReviewChecklist { get; init; }
+
+    [JsonPropertyName("research_delegation")]
+    public required ResearchDelegationGuidance ResearchDelegation { get; init; }
 
     [JsonPropertyName("review_boundaries")]
     public required IReadOnlyList<string> ReviewBoundaries { get; init; }

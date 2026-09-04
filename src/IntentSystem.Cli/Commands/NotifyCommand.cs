@@ -15,6 +15,7 @@ internal static class NotifyCommand
     private const string OperationEscalate = "escalate";
     private const string OperationDispose = "dispose";
     internal const string OperationStatus = "status";
+    internal const string OperationResearchStatus = "research-status";
     internal const string OperationSupervise = "supervise";
     private const string CompletionEventKind = NotifyEventKindRouting.Completion;
     private const string BlockedEventKind = NotifyEventKindRouting.Blocked;
@@ -38,7 +39,7 @@ internal static class NotifyCommand
         + "[--event-kind completion|transition|acknowledgement|escalation|question|blocked] "
         + "[--ruling-payload <text> --ruling-origin <role> [--ruling-digest <sha256>] "
         + "[--ruling-envelope-field <key=value>]... --downstream-delegation-reference <id>] "
-        + "[--dry-run|--write] [--format markdown|json]";
+        + "[--task-kind research --question <text>] [--dry-run|--write] [--format markdown|json]";
 
     private const string ReportUsage =
         "Usage: intent-cli notify report --domain <d> --team <t> --from <role> --to <role> --task-id <id> "
@@ -46,7 +47,7 @@ internal static class NotifyCommand
         + "[--event-kind completion|transition|acknowledgement|escalation|question|blocked] "
         + "[--ruling-payload <text> --ruling-origin <role> [--ruling-digest <sha256>] "
         + "[--ruling-envelope-field <key=value>]... --downstream-delegation-reference <id>] "
-        + "[--routing-root <host-root>] [--report-root <role-work-root>] [--dry-run|--write] [--format markdown|json]";
+        + "[--task-kind research --finding <text> --source <source>]... [--routing-root <host-root>] [--report-root <role-work-root>] [--dry-run|--write] [--format markdown|json]";
 
     private const string CollectUsage =
         "Usage: intent-cli notify collect --domain <d> --team <t> (--task-id <id> | --role <role> "
@@ -76,6 +77,10 @@ internal static class NotifyCommand
 
     private const string StatusUsage =
         "Usage: intent-cli notify status --task-id <id> [--domain <d> --team <t>] "
+        + "[--routing-root <host-root>] [--format markdown|json]";
+
+    private const string ResearchStatusUsage =
+        "Usage: intent-cli notify research-status --domain <d> --team <t> "
         + "[--routing-root <host-root>] [--format markdown|json]";
 
     private const string SuperviseUsage =
@@ -144,6 +149,9 @@ internal static class NotifyCommand
 
     public static int ExecuteStatus(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, OperationStatus);
+
+    public static int ExecuteResearchStatus(CliContext context, string[] args, TextWriter writer) =>
+        Execute(context, args, writer, OperationResearchStatus);
 
     public static int ExecuteSupervise(CliContext context, string[] args, TextWriter writer)
     {
@@ -247,6 +255,14 @@ internal static class NotifyCommand
         if (string.Equals(operation, OperationReconcile, StringComparison.Ordinal))
         {
             return ExecuteReconcile(writer, options, routingRoot, reportRoot!);
+        }
+
+        // G800's visibility surface is an aggregate read.  It deliberately
+        // does not resolve a session layer or contact a recipient, so counts
+        // remain available even when no transport topology is configured.
+        if (string.Equals(operation, OperationResearchStatus, StringComparison.Ordinal))
+        {
+            return ExecuteResearchStatus(writer, options, routingRoot);
         }
 
         TeamModeResolution teamMode;
@@ -513,6 +529,37 @@ internal static class NotifyCommand
         if (string.Equals(operation, OperationReport, StringComparison.Ordinal))
         {
             var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
+            if (options.TaskKind is null && pending.Record is { } pendingForKind
+                && ResearchDelegationContract.IsResearch(pendingForKind.TaskKind))
+            {
+                options = options with
+                {
+                    TaskKind = ResearchDelegationContract.TaskKind,
+                    Question = pendingForKind.Question,
+                    DirectResearch = pendingForKind.DirectResearch == true,
+                };
+            }
+
+            if (ResearchDelegationContract.IsResearch(options.TaskKind)
+                && !ResearchDelegationContract.TryValidateReport(
+                    options.Findings,
+                    options.FindingSources,
+                    options.RulingPayload,
+                    options.RulingOrigin,
+                    options.RulingDigest,
+                    pending.Record?.DelegatingRole ?? options.FromRole,
+                    out _,
+                    out var researchReportError))
+            {
+                Emit(writer, options.Format, FailureResult(
+                    operation,
+                    options,
+                    SessionLayerMode.Default,
+                    "research-report-refused",
+                    researchReportError));
+                return 1;
+            }
+
             var openPending = pending.Resolved && pending.Record is { IsOpen: true };
             var disposedPending = pending.Resolved
                 && pending.Record is { ReportArrived: false, Disposition: not null };
@@ -539,9 +586,13 @@ internal static class NotifyCommand
                 persistedReportOutbox = new NotifyReportOutboxEntry
                 {
                     Domain = options.Domain!, Team = options.Team!, TaskId = options.TaskId!,
+                    TaskKind = options.TaskKind,
                     ResultNonce = (openPending || disposedPending) ? pending.Record!.ResultNonce : null,
                     FromRole = options.FromRole!, ToRole = options.ToRole!, Status = options.Status!, Artifact = options.Artifact!,
                     Summary = NotifyEventWriter.NormalizeSummary(options.Summary!),
+                    Question = options.Question,
+                    ResearchFindings = BuildResearchFindings(options),
+                    DirectResearch = options.DirectResearch ? true : null,
                     CreatedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(), DeliveryState = "prepared",
                 };
                 var write = NotifyReportOutboxStore.WriteNew(reportRoot!, persistedReportOutbox);
@@ -1221,7 +1272,10 @@ internal static class NotifyCommand
             report.Artifact,
             report.Summary,
             reportedAt,
-            options.Write);
+            options.Write,
+            report.ResearchFindings,
+            report.TaskKind,
+            report.DirectResearch);
         if (pendingReconciliation.Error is not null)
         {
             EmitReconciliation(writer, options.Format, new NotifyReconciliationResult
@@ -1472,6 +1526,50 @@ internal static class NotifyCommand
         AppliedOutcomeEvidence = options.AppliedOutcomeEvidence,
     };
 
+    private static int ExecuteResearchStatus(
+        TextWriter writer,
+        NotifyOptions options,
+        string routingRoot)
+    {
+        var metrics = ResearchDelegationContract.Measure(
+            routingRoot,
+            options.Domain!,
+            options.Team!,
+            out var error);
+        var result = new NotifyResearchStatusResult
+        {
+            Operation = OperationResearchStatus,
+            RoutingRoot = routingRoot,
+            Domain = options.Domain!,
+            Team = options.Team!,
+            ResearchDelegationsIssued = metrics.ResearchDelegationsIssued,
+            JudgementSeatTurnsWithoutDelegation = metrics.JudgementSeatTurnsWithoutDelegation,
+            Cause = error,
+            Summary = error is null
+                ? "Research activity counts are visibility-only measurements; no judgement quality or required action is inferred."
+                : $"Research activity counts were unavailable: {error}",
+        };
+        if (string.Equals(options.Format, FormatJson, StringComparison.Ordinal))
+        {
+            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+        }
+        else
+        {
+            writer.WriteLine($"# notify research-status — {result.Domain}/{result.Team}");
+            writer.WriteLine();
+            writer.WriteLine($"- research delegations issued: {result.ResearchDelegationsIssued}");
+            writer.WriteLine($"- judgement-seat turns without delegation: {result.JudgementSeatTurnsWithoutDelegation}");
+            if (result.Cause is not null)
+            {
+                writer.WriteLine($"- cause: {result.Cause}");
+            }
+            writer.WriteLine();
+            writer.WriteLine(result.Summary);
+        }
+
+        return error is null ? 0 : 1;
+    }
+
     private static int ExecuteStatus(CliContext context, TextWriter writer, NotifyOptions options, string routingRoot)
     {
         var lookup = NotifyPendingDelegationStore.Find(
@@ -1494,6 +1592,11 @@ internal static class NotifyCommand
         }
 
         var record = lookup.Record;
+        var researchMetrics = ResearchDelegationContract.Measure(
+            routingRoot,
+            record.Domain,
+            record.Team,
+            out _);
         if (record.Disposition is { } disposition)
         {
             EmitStatus(writer, options.Format, new NotifyStatusResult
@@ -1511,6 +1614,8 @@ internal static class NotifyCommand
                 ReportStatus = record.ReportStatus,
                 ReportArtifact = record.ReportArtifact,
                 ReportSummary = record.ReportSummary,
+                ResearchDelegationsIssued = researchMetrics.ResearchDelegationsIssued,
+                JudgementSeatTurnsWithoutDelegation = researchMetrics.JudgementSeatTurnsWithoutDelegation,
                 SettlementBasis = "disposition",
                 Disposition = disposition,
                 LateReportDisagreement = record.ReportArrived
@@ -1643,6 +1748,8 @@ internal static class NotifyCommand
             ReportStatus = record.ReportStatus,
             ReportArtifact = record.ReportArtifact,
             ReportSummary = record.ReportSummary,
+            ResearchDelegationsIssued = researchMetrics.ResearchDelegationsIssued,
+            JudgementSeatTurnsWithoutDelegation = researchMetrics.JudgementSeatTurnsWithoutDelegation,
             SettlementBasis = record.SettlementBasis,
             Verdict = verdict,
             Cause = null,
@@ -1856,6 +1963,8 @@ internal static class NotifyCommand
         writer.WriteLine($"- activity verdict: {result.ActivityVerdict ?? "<unknown>"}");
         writer.WriteLine($"- activity inputs: {result.ActivityInputs ?? "<unknown>"}");
         writer.WriteLine($"- report arrived: {result.ReportArrived?.ToString().ToLowerInvariant() ?? "<unknown>"}");
+        writer.WriteLine($"- research delegations issued: {result.ResearchDelegationsIssued}");
+        writer.WriteLine($"- judgement-seat turns without delegation: {result.JudgementSeatTurnsWithoutDelegation}");
         writer.WriteLine($"- settlement basis: {result.SettlementBasis ?? "<unknown>"}");
         if (result.Disposition is { } disposition)
         {
@@ -1937,12 +2046,16 @@ internal static class NotifyCommand
                     Domain = options.Domain!,
                     Team = options.Team!,
                     TaskId = options.TaskId!,
+                    TaskKind = options.TaskKind,
                     ResultNonce = reportPendingRecord?.ResultNonce,
                     FromRole = options.FromRole!,
                     ToRole = options.ToRole!,
                     Status = options.Status!,
                     Artifact = options.Artifact!,
                     Summary = NotifyEventWriter.NormalizeSummary(options.Summary!),
+                    Question = options.Question,
+                    ResearchFindings = BuildResearchFindings(options),
+                    DirectResearch = options.DirectResearch ? true : null,
                     CreatedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
                     DeliveryState = "prepared",
                 };
@@ -2189,7 +2302,10 @@ internal static class NotifyCommand
                 options.Status!,
                 options.Artifact!,
                 NotifyEventWriter.NormalizeSummary(options.Summary!),
-                (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime());
+                (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+                BuildResearchFindings(options),
+                options.TaskKind,
+                options.DirectResearch ? true : null);
             if (!reportWrite.Written)
             {
                 if (reportOutbox is not null)
@@ -2381,6 +2497,10 @@ internal static class NotifyCommand
         Artifact = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? options.Inputs.FirstOrDefault() ?? options.ExpectedArtifacts[0]
             : options.Artifact!,
+        TaskKind = options.TaskKind,
+        Question = options.Question,
+        ResearchFindings = BuildResearchFindings(options),
+        DirectResearch = options.DirectResearch ? true : null,
         Ruling = options.PreparedRuling,
         RulingEnvelopeFields = options.RulingEnvelopeFields.Count == 0
             ? null
@@ -2424,19 +2544,46 @@ internal static class NotifyCommand
             };
         }
 
+        var delegatingRole = options.FromRole;
+        var recipientRole = options.ToRole!;
+        var reportToRole = options.ReportToRole;
+        if (ResearchDelegationContract.IsResearch(options.TaskKind))
+        {
+            if (LogicalRoleNormalizer.TryNormalize(options.FromRole, out var canonicalFrom, out _)
+                && canonicalFrom is not null)
+            {
+                delegatingRole = canonicalFrom;
+            }
+
+            if (LogicalRoleNormalizer.TryNormalize(options.ToRole, out var canonicalTo, out _)
+                && canonicalTo is not null)
+            {
+                recipientRole = canonicalTo;
+            }
+
+            if (LogicalRoleNormalizer.TryNormalize(options.ReportToRole, out var canonicalReportTo, out _)
+                && canonicalReportTo is not null)
+            {
+                reportToRole = canonicalReportTo;
+            }
+        }
+
         return new NotifyPendingDelegation
         {
             Domain = options.Domain!,
             Team = options.Team!,
             TaskId = options.TaskId!,
-            DelegatingRole = options.FromRole,
-            RecipientRole = options.ToRole!,
-            ReportToRole = options.ReportToRole,
+            TaskKind = options.TaskKind,
+            DelegatingRole = delegatingRole,
+            RecipientRole = recipientRole,
+            ReportToRole = reportToRole,
             RecipientIdentity = identity,
             ExpectedArtifact = string.Join("; ", options.ExpectedArtifacts),
             ExpectedArtifacts = options.ExpectedArtifacts.ToArray(),
             Objective = options.Objective,
+            Question = options.Question,
             Inputs = options.Inputs.ToArray(),
+            DirectResearch = options.DirectResearch ? true : null,
             ResultNonce = options.ResultNonce,
             DispatchedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
             TransportMode = resolution.Mode,
@@ -2605,6 +2752,11 @@ internal static class NotifyCommand
         var builder = new StringBuilder();
         builder.AppendLine($"TASK {options.TaskId}");
         builder.AppendLine($"role: {options.ToRole}");
+        if (ResearchDelegationContract.IsResearch(options.TaskKind))
+        {
+            builder.AppendLine("task-kind: research");
+            builder.AppendLine($"question: {options.Question}");
+        }
         builder.AppendLine($"objective: {options.Objective}");
         builder.AppendLine("inputs:");
         foreach (var input in options.Inputs)
@@ -2615,6 +2767,12 @@ internal static class NotifyCommand
         foreach (var artifact in options.ExpectedArtifacts)
         {
             builder.AppendLine($"  - {artifact}");
+        }
+        if (ResearchDelegationContract.IsResearch(options.TaskKind))
+        {
+            builder.AppendLine("research-contract:");
+            builder.AppendLine("  sourced-findings-required: true");
+            builder.AppendLine("  ruling-bearing-reports: refused; the originating judgement seat must rule.");
         }
         builder.AppendLine("reporting-contract:");
         builder.AppendLine($"  task-id: {options.TaskId}");
@@ -2724,7 +2882,12 @@ internal static class NotifyCommand
         if (options.EventKind is null
             && options.PreparedRuling is null
             && options.DownstreamDelegationReference is null
-            && options.RulingEnvelopeFields.Count == 0)
+            && options.RulingEnvelopeFields.Count == 0
+            && options.TaskKind is null
+            && options.Question is null
+            && options.Findings.Count == 0
+            && options.FindingSources.Count == 0
+            && !options.DirectResearch)
         {
             // Preserve the pre-G796 report envelope byte-for-byte for callers
             // that do not opt into the new event/ruling fields.
@@ -2743,11 +2906,15 @@ internal static class NotifyCommand
         {
             notification = OperationReport,
             task_id = options.TaskId,
+            task_kind = options.TaskKind,
+            question = options.Question,
             event_kind = options.ResolvedEventKind ?? options.EventKind,
             status = options.Status,
             from_role = options.FromRole,
             artifact = options.Artifact,
             summary,
+            findings = BuildResearchFindings(options),
+            direct_research = options.DirectResearch ? true : (bool?)null,
             downstream_delegation_reference = options.DownstreamDelegationReference,
             ruling = options.PreparedRuling,
             ruling_envelope_fields = options.RulingEnvelopeFields.Count == 0
@@ -2839,6 +3006,21 @@ internal static class NotifyCommand
             out _,
             out error);
     }
+    private static IReadOnlyList<NotifyResearchFinding>? BuildResearchFindings(NotifyOptions options)
+    {
+        if (!ResearchDelegationContract.IsResearch(options.TaskKind)
+            || options.Findings.Count == 0
+            || !ResearchDelegationContract.TryBuildFindings(
+                options.Findings,
+                options.FindingSources,
+                out var findings,
+                out _))
+        {
+            return null;
+        }
+
+        return findings;
+    }
 
     private static NotifyInlinePayloadWarning? ResolveInlinePayloadWarning(NotifyOptions options, string payload)
     {
@@ -2903,6 +3085,10 @@ internal static class NotifyCommand
             FromRole = options.FromRole!,
             ToRole = options.ToRole,
             TaskId = options.TaskId!,
+            TaskKind = options.TaskKind,
+            Question = options.Question,
+            ResearchFindings = BuildResearchFindings(options),
+            DirectResearch = options.DirectResearch ? true : null,
             Status = options.Status,
             Artifact = options.Artifact,
             EventKind = options.EventKind,
@@ -2973,6 +3159,10 @@ internal static class NotifyCommand
             FromRole = options.FromRole!,
             ToRole = options.ToRole,
             TaskId = options.TaskId!,
+            TaskKind = options.TaskKind,
+            Question = options.Question,
+            ResearchFindings = BuildResearchFindings(options),
+            DirectResearch = options.DirectResearch ? true : null,
             Status = options.Status,
             Artifact = options.Artifact,
             EventKind = options.EventKind,
@@ -3231,9 +3421,11 @@ internal static class NotifyCommand
         string? toRole = null;
         string? reportToRole = null;
         string? taskId = null;
+        string? taskKind = null;
         string? role = null;
         string? since = null;
         string? objective = null;
+        string? question = null;
         string? resultNonce = null;
         string? status = null;
         string? artifact = null;
@@ -3267,6 +3459,8 @@ internal static class NotifyCommand
         var inputs = new List<string>();
         var expectedArtifacts = new List<string>();
         var rulingEnvelopeFields = new Dictionary<string, string>(StringComparer.Ordinal);
+        var findings = new List<string>();
+        var findingSources = new List<string>();
         var preApprovalAcceptRules = new List<NotifyPreApprovalRule>();
         var preApprovalEscalateRules = new List<NotifyPreApprovalRule>();
         var scopedPolicies = new List<NotifyScopedPromptPolicy>();
@@ -3275,6 +3469,7 @@ internal static class NotifyCommand
         var once = false;
         var eventMode = false;
         var wait = false;
+        var directResearch = false;
         var format = FormatMarkdown;
         error = string.Empty;
 
@@ -3289,15 +3484,22 @@ internal static class NotifyCommand
                 case "--to": if (!ReadValue(args, ref index, argument, out toRole, out error)) return false; break;
                 case "--report-to": if (!ReadValue(args, ref index, argument, out reportToRole, out error)) return false; break;
                 case "--task-id": if (!ReadValue(args, ref index, argument, out taskId, out error)) return false; break;
+                case "--task-kind": if (!ReadValue(args, ref index, argument, out taskKind, out error)) return false; break;
+                case "--research": taskKind = ResearchDelegationContract.TaskKind; break;
                 case "--role": if (!ReadValue(args, ref index, argument, out role, out error)) return false; break;
                 case "--since": if (!ReadValue(args, ref index, argument, out since, out error)) return false; break;
                 case "--objective": if (!ReadValue(args, ref index, argument, out objective, out error)) return false; break;
+                case "--question": if (!ReadValue(args, ref index, argument, out question, out error)) return false; break;
                 case "--result-nonce": if (!ReadValue(args, ref index, argument, out resultNonce, out error)) return false; break;
                 case "--status": if (!ReadValue(args, ref index, argument, out status, out error)) return false; break;
                 case "--artifact": if (!ReadValue(args, ref index, argument, out artifact, out error)) return false; break;
                 case "--summary": if (!ReadValue(args, ref index, argument, out summary, out error)) return false; break;
                 case "--event-kind": if (!ReadValue(args, ref index, argument, out eventKind, out error)) return false; break;
                 case "--ruling-payload": if (!ReadValue(args, ref index, argument, out rulingPayload, out error)) return false; break;
+                case "--ruling":
+                    if (!ReadValue(args, ref index, argument, out rulingPayload, out error)) return false;
+                    taskKind ??= ResearchDelegationContract.TaskKind;
+                    break;
                 case "--ruling-digest": if (!ReadValue(args, ref index, argument, out rulingDigest, out error)) return false; break;
                 case "--ruling-origin": if (!ReadValue(args, ref index, argument, out rulingOrigin, out error)) return false; break;
                 case "--downstream-delegation-reference":
@@ -3317,7 +3519,17 @@ internal static class NotifyCommand
                     var envelopeValue = envelopeField[(separator + 1)..];
                     rulingEnvelopeFields[envelopeKey] = envelopeValue;
                     break;
-                case "--kind": if (!ReadValue(args, ref index, argument, out dispositionKind, out error)) return false; break;
+                case "--kind":
+                    if (!ReadValue(args, ref index, argument, out var kindValue, out error)) return false;
+                    if (string.Equals(kindValue, ResearchDelegationContract.TaskKind, StringComparison.OrdinalIgnoreCase))
+                    {
+                        taskKind = ResearchDelegationContract.TaskKind;
+                    }
+                    else
+                    {
+                        dispositionKind = kindValue;
+                    }
+                    break;
                 case "--actor": if (!ReadValue(args, ref index, argument, out actor, out error)) return false; break;
                 case "--reason": if (!ReadValue(args, ref index, argument, out reason, out error)) return false; break;
                 case "--superseding-task-id": if (!ReadValue(args, ref index, argument, out supersedingTaskId, out error)) return false; break;
@@ -3487,12 +3699,24 @@ internal static class NotifyCommand
                     if (!ReadValue(args, ref index, argument, out var expectedArtifact, out error)) return false;
                     expectedArtifacts.Add(expectedArtifact!);
                     break;
+                case "--finding":
+                    if (!ReadValue(args, ref index, argument, out var finding, out error)) return false;
+                    findings.Add(finding!);
+                    taskKind ??= ResearchDelegationContract.TaskKind;
+                    break;
+                case "--source":
+                case "--finding-source":
+                    if (!ReadValue(args, ref index, argument, out var findingSource, out error)) return false;
+                    findingSources.Add(findingSource!);
+                    taskKind ??= ResearchDelegationContract.TaskKind;
+                    break;
                 case "--write": write = true; break;
                 case "--dry-run": write = false; break;
                 case "--auto-redispatch": autoRedispatch = true; break;
                 case "--once": once = true; break;
                 case "--event-mode": eventMode = true; break;
                 case "--wait": wait = true; break;
+                case "--direct-research": directResearch = true; break;
                 case "--format":
                     if (!ReadValue(args, ref index, argument, out format, out error)) return false;
                     if (format is not FormatJson and not FormatMarkdown)
@@ -3507,6 +3731,7 @@ internal static class NotifyCommand
             }
         }
 
+        objective ??= question;
         options = new NotifyOptions
         {
             Domain = domain,
@@ -3515,9 +3740,11 @@ internal static class NotifyCommand
             ToRole = toRole,
             ReportToRole = reportToRole,
             TaskId = taskId,
+            TaskKind = taskKind,
             Role = role,
             Since = since,
             Objective = objective,
+            Question = question,
             Inputs = inputs,
             ExpectedArtifacts = expectedArtifacts,
             ResultNonce = resultNonce,
@@ -3525,16 +3752,18 @@ internal static class NotifyCommand
             Artifact = artifact,
             Summary = summary,
             EventKind = eventKind,
-            RulingPayload = rulingPayload,
-            RulingDigest = rulingDigest,
-            RulingOrigin = rulingOrigin,
             DownstreamDelegationReference = downstreamDelegationReference,
             RulingEnvelopeFields = rulingEnvelopeFields,
+            Findings = findings,
+            FindingSources = findingSources,
             DispositionKind = dispositionKind,
             Actor = actor,
             Reason = reason,
             SupersedingTaskId = supersedingTaskId,
             AppliedOutcomeEvidence = appliedOutcomeEvidence,
+            RulingPayload = rulingPayload,
+            RulingOrigin = rulingOrigin,
+            RulingDigest = rulingDigest,
             RoutingRoot = routingRoot,
             ReportRoot = reportRoot,
             Repo = repo,
@@ -3559,6 +3788,7 @@ internal static class NotifyCommand
             Once = once,
             EventMode = eventMode,
             Wait = wait,
+            DirectResearch = directResearch,
             Format = format,
         };
 
@@ -3568,8 +3798,24 @@ internal static class NotifyCommand
     private static bool Validate(string operation, NotifyOptions options, out string error)
     {
         error = string.Empty;
+        if (options.TaskKind is not null
+            && !ResearchDelegationContract.IsResearch(options.TaskKind))
+        {
+            error = $"unknown task kind '{options.TaskKind}'; accepted task kinds are {ResearchDelegationContract.TaskKind}.";
+            return false;
+        }
+
+        if (ResearchDelegationContract.IsResearch(options.TaskKind)
+            && operation is not OperationDelegate and not OperationReport)
+        {
+            error = "task kind research is supported only by notify delegate and notify report.";
+            return false;
+        }
+
         var requiredIdentity = string.Equals(operation, OperationStatus, StringComparison.Ordinal)
             ? new[] { ("--task-id", options.TaskId) }
+            : string.Equals(operation, OperationResearchStatus, StringComparison.Ordinal)
+                ? new[] { ("--domain", options.Domain), ("--team", options.Team) }
             : string.Equals(operation, OperationCollect, StringComparison.Ordinal)
                 ? options.Role is not null
                     ? new[] { ("--domain", options.Domain), ("--team", options.Team), ("--role", options.Role) }
@@ -3626,6 +3872,30 @@ internal static class NotifyCommand
             if (options.Domain is not null ^ options.Team is not null)
             {
                 error = "status requires --domain and --team together when either is supplied.";
+                return false;
+            }
+        }
+
+        if (string.Equals(operation, OperationResearchStatus, StringComparison.Ordinal))
+        {
+            if (options.FromRole is not null
+                || options.ToRole is not null
+                || options.ReportToRole is not null
+                || options.TaskId is not null
+                || options.Role is not null
+                || options.Status is not null
+                || options.Artifact is not null
+                || options.Summary is not null
+                || options.TaskKind is not null
+                || options.Question is not null
+                || options.Findings.Count > 0
+                || options.FindingSources.Count > 0
+                || options.RulingPayload is not null
+                || options.RulingOrigin is not null
+                || options.RulingDigest is not null
+                || options.DirectResearch)
+            {
+                error = "research-status is a read-only aggregate surface; supply only domain, team, routing-root, and format.";
                 return false;
             }
         }
@@ -3801,6 +4071,37 @@ internal static class NotifyCommand
                 error = "delegate requires --objective, at least one --expected-artifact, and a safe --result-nonce.";
                 return false;
             }
+
+            if (ResearchDelegationContract.IsResearch(options.TaskKind))
+            {
+                if (!ResearchDelegationContract.TryNormalizePair(
+                        options.FromRole,
+                        options.ToRole,
+                        out _,
+                        out _,
+                        out error))
+                {
+                    return false;
+                }
+
+                if (string.IsNullOrWhiteSpace(options.Question))
+                {
+                    error = "research delegate requires --question (the research question carried by the task).";
+                    return false;
+                }
+
+                if (options.Findings.Count > 0 || options.FindingSources.Count > 0
+                    || options.RulingPayload is not null || options.RulingOrigin is not null || options.RulingDigest is not null)
+                {
+                    error = "research delegate accepts a question and expected artifact; findings and ruling metadata belong to notify report.";
+                    return false;
+                }
+            }
+            else if (options.TaskKind is not null)
+            {
+                error = $"unknown task kind '{options.TaskKind}'; accepted task kinds are {ResearchDelegationContract.TaskKind}.";
+                return false;
+            }
         }
         else if (string.Equals(operation, OperationReport, StringComparison.Ordinal))
         {
@@ -3811,6 +4112,27 @@ internal static class NotifyCommand
                 || string.IsNullOrWhiteSpace(options.Summary))
             {
                 error = "report requires --to, --status completed|blocked|question, --artifact, and --summary.";
+                return false;
+            }
+
+            if (ResearchDelegationContract.IsResearch(options.TaskKind))
+            {
+                if (!ResearchDelegationContract.TryValidateReport(
+                        options.Findings,
+                        options.FindingSources,
+                        options.RulingPayload,
+                        options.RulingOrigin,
+                        options.RulingDigest,
+                        options.FromRole,
+                        out _,
+                        out error))
+                {
+                    return false;
+                }
+            }
+            else if (options.TaskKind is not null)
+            {
+                error = $"unknown task kind '{options.TaskKind}'; accepted task kinds are {ResearchDelegationContract.TaskKind}.";
                 return false;
             }
         }
@@ -3908,6 +4230,12 @@ internal static class NotifyCommand
             // Status validation is complete above; it is intentionally read-only
             // and has no artifact/summary requirement.
         }
+        else if (string.Equals(operation, OperationResearchStatus, StringComparison.Ordinal))
+        {
+            // Research-status is a read-only aggregate surface. Its argument
+            // restrictions are enforced above and it never needs an artifact
+            // or summary like an event operation does.
+        }
         else if (string.IsNullOrWhiteSpace(options.Artifact) || string.IsNullOrWhiteSpace(options.Summary))
         {
             error = "escalate requires --artifact and --summary.";
@@ -3960,6 +4288,7 @@ internal static class NotifyCommand
         OperationCollect => CollectUsage,
         OperationReconcile => ReconcileUsage,
         OperationStatus => StatusUsage,
+        OperationResearchStatus => ResearchStatusUsage,
         OperationSupervise => SuperviseUsage,
         OperationDispose => DisposeUsage,
         _ => EscalateUsage,
@@ -3974,11 +4303,15 @@ internal sealed record NotifyOptions
     public string? ToRole { get; init; }
     public string? ReportToRole { get; init; }
     public string? TaskId { get; init; }
+    public string? TaskKind { get; init; }
     public string? Role { get; init; }
     public string? Since { get; init; }
     public string? Objective { get; init; }
+    public string? Question { get; init; }
     public required IReadOnlyList<string> Inputs { get; init; }
     public required IReadOnlyList<string> ExpectedArtifacts { get; init; }
+    public IReadOnlyList<string> Findings { get; init; } = [];
+    public IReadOnlyList<string> FindingSources { get; init; } = [];
     public string? ResultNonce { get; init; }
     public string? Status { get; init; }
     public string? Artifact { get; init; }
@@ -3997,6 +4330,9 @@ internal sealed record NotifyOptions
     public string? Reason { get; init; }
     public string? SupersedingTaskId { get; init; }
     public string? AppliedOutcomeEvidence { get; init; }
+    public string? RulingPayload { get; init; }
+    public string? RulingOrigin { get; init; }
+    public string? RulingDigest { get; init; }
     public string? RoutingRoot { get; init; }
     public string? ReportRoot { get; init; }
     public string? Repo { get; init; }
@@ -4020,6 +4356,7 @@ internal sealed record NotifyOptions
     public bool Once { get; init; }
     public bool EventMode { get; init; }
     public bool Wait { get; init; }
+    public bool DirectResearch { get; init; }
     public bool Write { get; init; }
     public required string Format { get; init; }
 }
@@ -4039,6 +4376,10 @@ internal sealed record NotifyResult
     [JsonPropertyName("from_role")] public required string FromRole { get; init; }
     [JsonPropertyName("to_role")] public string? ToRole { get; init; }
     [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+    [JsonPropertyName("task_kind")] public string? TaskKind { get; init; }
+    [JsonPropertyName("question")] public string? Question { get; init; }
+    [JsonPropertyName("research_findings")] public IReadOnlyList<NotifyResearchFinding>? ResearchFindings { get; init; }
+    [JsonPropertyName("direct_research")] public bool? DirectResearch { get; init; }
     [JsonPropertyName("status")] public string? Status { get; init; }
     [JsonPropertyName("artifact")] public string? Artifact { get; init; }
     [JsonPropertyName("event_kind")] public string? EventKind { get; init; }
@@ -4245,6 +4586,8 @@ internal sealed record NotifyStatusResult
     [JsonPropertyName("report_status")] public string? ReportStatus { get; init; }
     [JsonPropertyName("report_artifact")] public string? ReportArtifact { get; init; }
     [JsonPropertyName("report_summary")] public string? ReportSummary { get; init; }
+    [JsonPropertyName("research_delegations_issued")] public int ResearchDelegationsIssued { get; init; }
+    [JsonPropertyName("judgement_seat_turns_without_delegation")] public int JudgementSeatTurnsWithoutDelegation { get; init; }
     [JsonPropertyName("settlement_basis")] public string? SettlementBasis { get; init; }
     [JsonPropertyName("disposition")] public NotifyPendingDisposition? Disposition { get; init; }
     [JsonPropertyName("late_report_disagreement")] public string? LateReportDisagreement { get; init; }
@@ -4278,6 +4621,12 @@ internal sealed record NotifyStatusResult
             ReportStatus = record?.ReportStatus,
             ReportArtifact = record?.ReportArtifact,
             ReportSummary = record?.ReportSummary,
+            ResearchDelegationsIssued = record is not null && record.Domain is not null && record.Team is not null
+                ? ResearchDelegationContract.Measure(routingRoot, record.Domain, record.Team, out _).ResearchDelegationsIssued
+                : 0,
+            JudgementSeatTurnsWithoutDelegation = record is not null && record.Domain is not null && record.Team is not null
+                ? ResearchDelegationContract.Measure(routingRoot, record.Domain, record.Team, out _).JudgementSeatTurnsWithoutDelegation
+                : 0,
             SettlementBasis = record?.SettlementBasis,
             Disposition = record?.Disposition,
             LateReportDisagreement = record is { ReportArrived: true, Disposition: not null }
@@ -4448,4 +4797,16 @@ internal sealed record NotifyDesignEvent
     [JsonPropertyName("downstream_delegation_reference")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DownstreamDelegationReference { get; init; }
+    [JsonPropertyName("task_kind")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TaskKind { get; init; }
+    [JsonPropertyName("question")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Question { get; init; }
+    [JsonPropertyName("research_findings")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<NotifyResearchFinding>? ResearchFindings { get; init; }
+    [JsonPropertyName("direct_research")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? DirectResearch { get; init; }
 }

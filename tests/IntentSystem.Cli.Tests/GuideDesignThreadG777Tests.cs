@@ -73,9 +73,11 @@ public sealed class GuideDesignThreadG777Tests
         using var projected = JsonDocument.Parse(RemoveG789Additions(document.RootElement));
         var projectedFields = projected.RootElement.EnumerateObject().ToArray();
 
+        // Project away later additive payloads before asserting the G777
+        // field diff; G800 owns the separate research contract field.
         Assert.Equal(
             G776BaselinePayloadFieldNames.Append("unreadable_repair_response"),
-            fields.Select(field => field.Name));
+            projectedFields.Select(field => field.Name));
 
         var addition = Assert.Single(fields, field => field.Name == "unreadable_repair_response");
         Assert.Contains("repair-unreadable", addition.Value.GetString()!, StringComparison.Ordinal);
@@ -159,6 +161,9 @@ public sealed class GuideDesignThreadG777Tests
     private static string RemoveG789Additions(JsonElement root)
     {
         var projected = JsonNode.Parse(root.GetRawText())!.AsObject();
+        // G800 adds a separate research contract payload; keep this parent
+        // oracle scoped to the pre-G800 guide surface.
+        projected.Remove("research_delegation");
         projected["team_and_duty_split"]?.AsObject().Remove("review_seat_selection");
         projected["external_residence_operating_contract"]?.AsObject().Remove("orca_operating_block");
         projected["observation_boundary"]?.AsObject().Remove("inspect_route");
