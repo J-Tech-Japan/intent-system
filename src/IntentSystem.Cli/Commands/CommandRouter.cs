@@ -161,6 +161,7 @@ internal static class CommandRouter
                 ["escalate"] = NotifyCommand.ExecuteEscalate,
                 ["dispose"] = NotifyCommand.ExecuteDispose,
                 ["status"] = NotifyCommand.ExecuteStatus,
+                ["research-status"] = NotifyCommand.ExecuteResearchStatus,
                 ["supervise"] = NotifyCommand.ExecuteSupervise,
                 ["adjudicate"] = NotifyAdjudicateCommand.Execute
             },

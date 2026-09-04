@@ -553,6 +553,9 @@ public sealed class GuideSeatSelectionG789Tests
     private static string RemoveG789Additions(JsonElement root)
     {
         var projected = JsonNode.Parse(root.GetRawText())!.AsObject();
+        // G800 is another additive guide payload.  Keep this immutable G789
+        // oracle scoped to the parent surface by projecting it away too.
+        projected.Remove("research_delegation");
         projected["team_and_duty_split"]?.AsObject().Remove("review_seat_selection");
         projected["external_residence_operating_contract"]?.AsObject().Remove("orca_operating_block");
         projected["review_standing_policy"]?.AsObject().Remove("review_seat_selection");

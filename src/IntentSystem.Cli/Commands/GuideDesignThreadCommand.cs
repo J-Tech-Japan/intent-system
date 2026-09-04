@@ -180,6 +180,7 @@ internal static class GuideDesignThreadCommand
                 DesignEscalations = DesignEscalations,
                 ReviewSeatSelection = reviewSeatSelection,
             },
+            ResearchDelegation = ResearchDelegationContract.CreateGuidance(),
             Monitoring = new DesignThreadMonitoring
             {
                 Separation = "Supervision runs outside the design conversation and is consulted at most once per design wake.",
@@ -329,6 +330,20 @@ internal static class GuideDesignThreadCommand
         writer.WriteLine($"- {result.Monitoring.GuideRefreshRule}");
         writer.WriteLine($"- {result.Monitoring.DeploymentRule}");
         writer.WriteLine();
+        writer.WriteLine("## 6a. Research delegation contract (G800)");
+        writer.WriteLine($"- task kind: `{result.ResearchDelegation.TaskKind}`");
+        writer.WriteLine($"- sender roles: {string.Join(", ", result.ResearchDelegation.SenderRoles.Select(role => $"`{role}`"))}");
+        writer.WriteLine($"- recipient roles: {string.Join(", ", result.ResearchDelegation.RecipientRoles.Select(role => $"`{role}`"))}");
+        writer.WriteLine($"- what goes down: {result.ResearchDelegation.WhatGoesDown}");
+        writer.WriteLine($"- who receives: {result.ResearchDelegation.WhoReceives}");
+        writer.WriteLine($"- what stays: {result.ResearchDelegation.WhatStays}");
+        writer.WriteLine($"- sourced findings: {result.ResearchDelegation.SourcedFindingRule}");
+        writer.WriteLine($"- no-ruling boundary: {result.ResearchDelegation.NoRulingBoundary}");
+        writer.WriteLine($"- direct research: {result.ResearchDelegation.DirectResearchRule}");
+        writer.WriteLine($"- visibility: {result.ResearchDelegation.VisibilityRule}");
+        writer.WriteLine($"- size rule: {result.ResearchDelegation.NoSizeRule}");
+        foreach (var example in result.ResearchDelegation.Examples) writer.WriteLine($"  - example: {example}");
+        writer.WriteLine();
         writer.WriteLine("## 7. Outcome-shaped reporting");
         writer.WriteLine($"- {result.Reporting.Rule}");
         writer.WriteLine($"- {result.Reporting.HumanActionRule}");
@@ -433,6 +448,8 @@ internal sealed record DesignThreadGuideResult
     public required DesignThreadDelegationVerification DelegationVerification { get; init; }
     public required DesignThreadObservationBoundary ObservationBoundary { get; init; }
     public required DesignThreadTeamAndDutySplit TeamAndDutySplit { get; init; }
+    [JsonPropertyName("research_delegation")]
+    public required ResearchDelegationGuidance ResearchDelegation { get; init; }
     public required DesignThreadMonitoring Monitoring { get; init; }
     public required DesignThreadReporting Reporting { get; init; }
     public required IReadOnlyList<string> NegativeInvariants { get; init; }

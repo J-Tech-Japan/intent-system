@@ -29,6 +29,7 @@ internal sealed record NotifyPendingDelegation
     [JsonPropertyName("domain")] public required string Domain { get; init; }
     [JsonPropertyName("team")] public required string Team { get; init; }
     [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+    [JsonPropertyName("task_kind")] public string? TaskKind { get; init; }
     [JsonPropertyName("delegating_role")] public string? DelegatingRole { get; init; }
     [JsonPropertyName("recipient_role")] public required string RecipientRole { get; init; }
     [JsonPropertyName("report_to_role")] public string? ReportToRole { get; init; }
@@ -36,7 +37,10 @@ internal sealed record NotifyPendingDelegation
     [JsonPropertyName("expected_artifact")] public required string ExpectedArtifact { get; init; }
     [JsonPropertyName("expected_artifacts")] public IReadOnlyList<string>? ExpectedArtifacts { get; init; }
     [JsonPropertyName("objective")] public string? Objective { get; init; }
+    [JsonPropertyName("question")] public string? Question { get; init; }
     [JsonPropertyName("inputs")] public IReadOnlyList<string>? Inputs { get; init; }
+    [JsonPropertyName("research_findings")] public IReadOnlyList<NotifyResearchFinding>? ResearchFindings { get; init; }
+    [JsonPropertyName("direct_research")] public bool? DirectResearch { get; init; }
     [JsonPropertyName("result_nonce")] public string? ResultNonce { get; init; }
     [JsonPropertyName("dispatched_at")] public required DateTimeOffset DispatchedAt { get; init; }
     [JsonPropertyName("transport_mode")] public string? TransportMode { get; init; }
@@ -144,7 +148,10 @@ internal static class NotifyPendingDelegationStore
         string status,
         string artifact,
         string summary,
-        DateTimeOffset reportedAt)
+        DateTimeOffset reportedAt,
+        IReadOnlyList<NotifyResearchFinding>? researchFindings = null,
+        string? taskKind = null,
+        bool? directResearch = null)
     {
         var path = ResolvePath(routingRoot, record.Domain, record.Team);
         var normalizedSummary = NotifyEventWriter.NormalizeSummary(summary);
@@ -185,6 +192,9 @@ internal static class NotifyPendingDelegationStore
                 ReportArtifact = artifact,
                 ReportSummary = normalizedSummary,
                 ReportedAt = reportedAt,
+                TaskKind = taskKind ?? record.TaskKind,
+                ResearchFindings = researchFindings ?? record.ResearchFindings,
+                DirectResearch = directResearch ?? record.DirectResearch,
             });
         }
     }
@@ -202,7 +212,10 @@ internal static class NotifyPendingDelegationStore
         string artifact,
         string summary,
         DateTimeOffset reportedAt,
-        bool write = true)
+        bool write = true,
+        IReadOnlyList<NotifyResearchFinding>? researchFindings = null,
+        string? taskKind = null,
+        bool? directResearch = null)
     {
         string path;
         try
@@ -279,6 +292,9 @@ internal static class NotifyPendingDelegationStore
                 ReportArtifact = artifact,
                 ReportSummary = normalizedSummary,
                 ReportedAt = reportedAt,
+                TaskKind = taskKind ?? currentRecord.TaskKind,
+                ResearchFindings = researchFindings ?? currentRecord.ResearchFindings,
+                DirectResearch = directResearch ?? currentRecord.DirectResearch,
             };
             if (!write)
             {
@@ -495,6 +511,7 @@ internal static class NotifyPendingDelegationStore
             Domain = record.Domain,
             Team = record.Team,
             TaskId = record.TaskId,
+            TaskKind = record.TaskKind,
             DelegatingRole = record.DelegatingRole,
             RecipientRole = record.RecipientRole,
             ReportToRole = record.ReportToRole,
@@ -502,7 +519,10 @@ internal static class NotifyPendingDelegationStore
             ExpectedArtifact = record.ExpectedArtifact,
             ExpectedArtifacts = record.ExpectedArtifacts,
             Objective = record.Objective,
+            Question = record.Question,
             Inputs = record.Inputs,
+            ResearchFindings = record.ResearchFindings,
+            DirectResearch = record.DirectResearch,
             ResultNonce = record.ResultNonce,
             DispatchedAt = record.DispatchedAt,
             TransportMode = record.TransportMode,
@@ -673,6 +693,7 @@ internal static class NotifyPendingDelegationStore
         [JsonPropertyName("domain")] public required string Domain { get; init; }
         [JsonPropertyName("team")] public required string Team { get; init; }
         [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+        [JsonPropertyName("task_kind")] public string? TaskKind { get; init; }
         [JsonPropertyName("delegating_role")] public string? DelegatingRole { get; init; }
         [JsonPropertyName("recipient_role")] public required string RecipientRole { get; init; }
         [JsonPropertyName("report_to_role")] public string? ReportToRole { get; init; }
@@ -680,7 +701,10 @@ internal static class NotifyPendingDelegationStore
         [JsonPropertyName("expected_artifact")] public required string ExpectedArtifact { get; init; }
         [JsonPropertyName("expected_artifacts")] public IReadOnlyList<string>? ExpectedArtifacts { get; init; }
         [JsonPropertyName("objective")] public string? Objective { get; init; }
+        [JsonPropertyName("question")] public string? Question { get; init; }
         [JsonPropertyName("inputs")] public IReadOnlyList<string>? Inputs { get; init; }
+        [JsonPropertyName("research_findings")] public IReadOnlyList<NotifyResearchFinding>? ResearchFindings { get; init; }
+        [JsonPropertyName("direct_research")] public bool? DirectResearch { get; init; }
         [JsonPropertyName("result_nonce")] public string? ResultNonce { get; init; }
         [JsonPropertyName("dispatched_at")] public required DateTimeOffset DispatchedAt { get; init; }
         [JsonPropertyName("transport_mode")] public string? TransportMode { get; init; }
@@ -704,6 +728,7 @@ internal static class NotifyPendingDelegationStore
             Domain = Domain,
             Team = Team,
             TaskId = TaskId,
+            TaskKind = TaskKind,
             DelegatingRole = DelegatingRole,
             RecipientRole = RecipientRole,
             ReportToRole = ReportToRole,
@@ -711,7 +736,10 @@ internal static class NotifyPendingDelegationStore
             ExpectedArtifact = ExpectedArtifact,
             ExpectedArtifacts = ExpectedArtifacts,
             Objective = Objective,
+            Question = Question,
             Inputs = Inputs,
+            ResearchFindings = ResearchFindings,
+            DirectResearch = DirectResearch,
             ResultNonce = ResultNonce,
             DispatchedAt = DispatchedAt,
             TransportMode = TransportMode,

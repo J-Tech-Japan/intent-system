@@ -227,6 +227,7 @@ internal sealed record NotifyReportOutboxEntry
     [JsonPropertyName("domain")] public required string Domain { get; init; }
     [JsonPropertyName("team")] public required string Team { get; init; }
     [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+    [JsonPropertyName("task_kind")] public string? TaskKind { get; init; }
     [JsonPropertyName("entry_id")] public string? EntryId { get; init; }
     [JsonPropertyName("result_nonce")] public string? ResultNonce { get; init; }
     [JsonPropertyName("from_role")] public required string FromRole { get; init; }
@@ -234,6 +235,9 @@ internal sealed record NotifyReportOutboxEntry
     [JsonPropertyName("status")] public required string Status { get; init; }
     [JsonPropertyName("artifact")] public required string Artifact { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
+    [JsonPropertyName("question")] public string? Question { get; init; }
+    [JsonPropertyName("research_findings")] public IReadOnlyList<NotifyResearchFinding>? ResearchFindings { get; init; }
+    [JsonPropertyName("direct_research")] public bool? DirectResearch { get; init; }
     [JsonPropertyName("created_at")] public required DateTimeOffset CreatedAt { get; init; }
     [JsonPropertyName("last_attempt_at")] public DateTimeOffset? LastAttemptAt { get; init; }
     [JsonPropertyName("delivered_at")] public DateTimeOffset? DeliveredAt { get; init; }
