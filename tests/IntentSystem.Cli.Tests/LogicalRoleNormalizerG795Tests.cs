@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using Xunit.Abstractions;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -43,8 +44,11 @@ public sealed class LogicalRoleNormalizerG795Tests : IDisposable
         ("review", "reviewer"),
     ];
 
-    public LogicalRoleNormalizerG795Tests()
+    private readonly ITestOutputHelper testOutput;
+
+    public LogicalRoleNormalizerG795Tests(ITestOutputHelper testOutput)
     {
+        this.testOutput = testOutput;
         AutomationStalledWorkCommand.CandidateListerFactory = () => new EmptyCandidateLister();
         AutomationStalledWorkCommand.UtcNowFactory = () => new DateTimeOffset(2026, 9, 4, 12, 0, 0, TimeSpan.Zero);
     }
@@ -103,6 +107,7 @@ public sealed class LogicalRoleNormalizerG795Tests : IDisposable
             using var stalled = NewWorkspace("stalled-" + input).RunStalled(input);
             Assert.Equal(0, stalled.ExitCode);
             Assert.Equal(expected, stalled.Json.GetProperty("recording_role").GetString());
+            testOutput.WriteLine($"input={input}; normalized={expected}; knowledge.exit={knowledge.ExitCode}; guide.exit={guide.ExitCode}; stalled.exit={stalled.ExitCode}; knowledge.recording_role={knowledge.Json.GetProperty("recording_role").GetString()}; guide.recording_role={guide.Json.GetProperty("recording_role").GetString()}; stalled.recording_role={stalled.Json.GetProperty("recording_role").GetString()}");
         }
     }
 
@@ -148,6 +153,7 @@ public sealed class LogicalRoleNormalizerG795Tests : IDisposable
         var persisted = File.ReadAllText(canonicalPath);
         Assert.Contains("\"role\": \"architect\"", persisted, StringComparison.Ordinal);
         Assert.DoesNotContain("\"role\": \"design\"", persisted, StringComparison.Ordinal);
+        testOutput.WriteLine($"legacy-input=design; canonical-recording-role={written.Json.GetProperty("recording_role").GetString()}; persisted-role-bytes=\"role\": \"architect\"; canonical-path={Path.GetRelativePath(workspace.RootPath, canonicalPath).Replace(Path.DirectorySeparatorChar, '/')}");
 
         using var legacyWorkspace = NewWorkspace("legacy-read");
         var legacyPath = Path.Combine(
@@ -176,6 +182,7 @@ public sealed class LogicalRoleNormalizerG795Tests : IDisposable
         Assert.Equal(0, reemitted.ExitCode);
         Assert.Equal("architect", reemitted.Json.GetProperty("recording_role").GetString());
         Assert.Equal("architect", reemitted.Json.GetProperty("records")[0].GetProperty("role").GetString());
+        testOutput.WriteLine($"legacy-read-path={Path.GetRelativePath(legacyWorkspace.RootPath, legacyPath).Replace(Path.DirectorySeparatorChar, '/')}; reemitted-role={reemitted.Json.GetProperty("records")[0].GetProperty("role").GetString()}");
     }
 
     [Fact]
@@ -195,6 +202,7 @@ public sealed class LogicalRoleNormalizerG795Tests : IDisposable
         using var stalled = NewWorkspace("unknown-stalled").RunStalledText(unknown);
         Assert.Equal(1, stalled.ExitCode);
         Assert.Contains(expectedMessage, stalled.Output, StringComparison.Ordinal);
+        testOutput.WriteLine($"unknown-role={unknown}; all-three-refused=true; message={expectedMessage}");
     }
 
     [Fact]
@@ -246,6 +254,7 @@ public sealed class LogicalRoleNormalizerG795Tests : IDisposable
         var role = topology.RootElement.GetProperty("roles").GetProperty("architect");
         Assert.Equal("opencode", role.GetProperty("kind").GetString());
         Assert.Equal("herdr", role.GetProperty("resident").GetString());
+        testOutput.WriteLine("runtime=opencode; role=architect; round_trip=true; kind-preserved=true");
     }
 
     [Fact]
