@@ -4337,9 +4337,6 @@ internal sealed record NotifyOptions
     public string? Reason { get; init; }
     public string? SupersedingTaskId { get; init; }
     public string? AppliedOutcomeEvidence { get; init; }
-    public string? RulingPayload { get; init; }
-    public string? RulingOrigin { get; init; }
-    public string? RulingDigest { get; init; }
     public string? RoutingRoot { get; init; }
     public string? ReportRoot { get; init; }
     public string? Repo { get; init; }
