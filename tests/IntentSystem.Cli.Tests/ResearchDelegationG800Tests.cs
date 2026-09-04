@@ -187,6 +187,129 @@ public sealed class ResearchDelegationG800Tests : IDisposable
     }
 
     [Fact]
+    public void RenderedResearchReportCommand_IsRepeatableAndExecutesForAllFourPairs_G800()
+    {
+        using var workspace = new DirectResearchWorkspace();
+        var pairs = new[]
+        {
+            (From: "architect", To: "orchestrator", ReportTo: "architect"),
+            (From: "architect", To: "steward", ReportTo: "architect"),
+            (From: "reviewer", To: "orchestrator", ReportTo: "reviewer"),
+            (From: "reviewer", To: "steward", ReportTo: "reviewer"),
+        };
+
+        foreach (var (from, to, reportTo) in pairs)
+        {
+            var taskId = $"rendered-{from}-{to}";
+            using var delegateWriter = new StringWriter();
+            var delegateExit = NotifyCommand.ExecuteDelegate(
+                workspace.Context,
+                [
+                    "--domain", Domain, "--team", Team, "--from", from, "--to", to, "--report-to", reportTo,
+                    "--task-id", taskId, "--research", "--question", "Which symbols need review?",
+                    "--objective", "Research the recorded symbols.", "--input", "file=src/Inventory.cs symbol=Inventory",
+                    "--expected-artifact", "sourced inventory", "--result-nonce", taskId + "-nonce", "--write", "--format", "json",
+                ],
+                delegateWriter);
+            Assert.Equal(0, delegateExit);
+            using var delegateDocument = JsonDocument.Parse(delegateWriter.ToString());
+            var reportCommand = delegateDocument.RootElement.GetProperty("report_command").GetString();
+            Assert.NotNull(reportCommand);
+            Assert.Contains("--task-kind research --finding <finding> --source <source>", reportCommand, StringComparison.Ordinal);
+
+            var reportArgs = RenderReportCommand(
+                reportCommand!,
+                workspace.Root,
+                finding: "route-is-reachable",
+                source: "command=rg;output=match");
+
+            var mismatchedArgs = RemoveSourceArgument(reportArgs);
+            using var mismatchWriter = new StringWriter();
+            var mismatchExit = NotifyCommand.ExecuteReport(workspace.Context, mismatchedArgs, mismatchWriter);
+            Assert.Equal(1, mismatchExit);
+            var mismatchError = mismatchWriter.ToString();
+            Assert.Contains("finding 1", mismatchError, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("no matching source", mismatchError, StringComparison.OrdinalIgnoreCase);
+
+            using var reportWriter = new StringWriter();
+            var reportExit = NotifyCommand.ExecuteReport(workspace.Context, reportArgs, reportWriter);
+            Assert.True(reportExit == 0, reportWriter.ToString());
+            using var reportDocument = JsonDocument.Parse(reportWriter.ToString());
+            Assert.Equal("research", reportDocument.RootElement.GetProperty("task_kind").GetString());
+            var finding = Assert.Single(reportDocument.RootElement.GetProperty("research_findings").EnumerateArray());
+            Assert.Equal("route-is-reachable", finding.GetProperty("finding").GetString());
+            Assert.Equal("command=rg;output=match", finding.GetProperty("source").GetString());
+            Console.WriteLine($"G800 AC1/AC2 rendered-report {from}->{to}: command={reportCommand}; mismatch_exit={mismatchExit}; mismatch_error={mismatchError}; exit={reportExit}; findings={reportDocument.RootElement.GetProperty("research_findings").GetRawText()}");
+        }
+    }
+
+    [Fact]
+    public void OriginRulingReport_ResolvesPendingJudgementSeatAndNamesOriginatingSeat_G800()
+    {
+        using var workspace = new DirectResearchWorkspace();
+        foreach (var (from, reportTo, expectedSeat) in new[]
+        {
+            (From: "reviewer", ReportTo: "reviewer", ExpectedSeat: "Reviewer"),
+            (From: "architect", ReportTo: "architect", ExpectedSeat: "Architect"),
+        })
+        {
+            var taskId = $"ruling-{from}-steward";
+            using var delegateWriter = new StringWriter();
+            Assert.Equal(0, NotifyCommand.ExecuteDelegate(
+                workspace.Context,
+                [
+                    "--domain", Domain, "--team", Team, "--from", from, "--to", "steward", "--report-to", reportTo,
+                    "--task-id", taskId, "--research", "--question", "Which compatibility facts need review?",
+                    "--objective", "Research the compatibility facts.", "--input", "file=src/Compatibility.cs symbol=Check",
+                    "--expected-artifact", "sourced compatibility notes", "--result-nonce", taskId + "-nonce", "--write", "--format", "json",
+                ],
+                delegateWriter));
+
+            Assert.True(NotifyRuling.TryCreate($"{from} ruling", from, null, out var ruling, out var rulingError), rulingError);
+            Assert.NotNull(ruling);
+            string[] reportArgs =
+            [
+                "--domain", Domain, "--team", Team, "--from", "steward", "--to", reportTo, "--task-id", taskId,
+                "--task-kind", "research", "--status", "completed", "--artifact", "compatibility.md",
+                "--summary", "Sourced compatibility notes", "--finding", "compatibility is stable",
+                "--source", "file=src/Compatibility.cs symbol=Check", "--ruling-payload", ruling!.Payload,
+                "--ruling-origin", ruling.Origin, "--ruling-digest", ruling.Digest, "--write", "--format", "json",
+            ];
+
+            using var reportWriter = new StringWriter();
+            var reportExit = NotifyCommand.ExecuteReport(workspace.Context, reportArgs, reportWriter);
+            Assert.Equal(1, reportExit);
+            using var reportDocument = JsonDocument.Parse(reportWriter.ToString());
+            Assert.Equal("research-report-refused", reportDocument.RootElement.GetProperty("cause").GetString());
+            var error = reportDocument.RootElement.GetProperty("summary").GetString()!;
+            Assert.Contains("research-ruling-refused", error, StringComparison.Ordinal);
+            Assert.Contains(expectedSeat, error, StringComparison.Ordinal);
+            var otherSeat = expectedSeat == "Reviewer" ? "the Architect must supply" : "the Reviewer must supply";
+            Assert.DoesNotContain(otherSeat, error, StringComparison.Ordinal);
+            Console.WriteLine($"G800 AC3 {from}->steward ruling refusal: exit={reportExit}; expected_seat={expectedSeat}; result={reportDocument.RootElement.GetRawText()}");
+        }
+    }
+
+    [Fact]
+    public void MismatchedResearchFindingAndSource_NamesFirstMissingFindingIndex_G800()
+    {
+        var accepted = ResearchDelegationContract.TryValidateReport(
+            ["finding without a source"],
+            [],
+            rulingPayload: null,
+            rulingOrigin: null,
+            rulingDigest: null,
+            judgementSeat: "reviewer",
+            out _,
+            out var error);
+
+        Assert.False(accepted);
+        Assert.Contains("finding 1", error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no matching source", error, StringComparison.OrdinalIgnoreCase);
+        Console.WriteLine($"G800 AC2 mismatched finding/source refusal: {JsonSerializer.Serialize(new { accepted, error })}");
+    }
+
+    [Fact]
     public void DirectArchitectAndReviewerResearchCompletesWithoutDelegationOrFailureWarning_G800()
     {
         using var workspace = new DirectResearchWorkspace();
@@ -433,6 +556,98 @@ public sealed class ResearchDelegationG800Tests : IDisposable
             },
         },
     };
+
+    private static string[] RenderReportCommand(
+        string command,
+        string routingRoot,
+        string finding,
+        string source)
+    {
+        var rendered = command
+            .Replace("<completed|blocked|question>", "completed", StringComparison.Ordinal)
+            .Replace("<artifact>", "compatibility.md", StringComparison.Ordinal)
+            .Replace("<one-line-summary>", "sourced-notes", StringComparison.Ordinal)
+            .Replace("<role-work-root>", ShellQuote(routingRoot), StringComparison.Ordinal)
+            .Replace("<finding>", finding, StringComparison.Ordinal)
+            .Replace("<source>", source, StringComparison.Ordinal);
+        var words = SplitShellWords(rendered);
+        Assert.Equal(["intent-cli", "notify", "report"], words.Take(3));
+        return words.Skip(3).ToArray();
+    }
+
+    private static string[] RemoveSourceArgument(IReadOnlyList<string> args)
+    {
+        var result = new List<string>(args.Count);
+        for (var index = 0; index < args.Count; index++)
+        {
+            if (string.Equals(args[index], "--source", StringComparison.Ordinal))
+            {
+                index++;
+                continue;
+            }
+
+            result.Add(args[index]);
+        }
+
+        return result.ToArray();
+    }
+
+    private static string ShellQuote(string value) =>
+        $"'{value.Replace("'", "'\\''", StringComparison.Ordinal)}'";
+
+    private static string[] SplitShellWords(string command)
+    {
+        var words = new List<string>();
+        var current = new System.Text.StringBuilder();
+        var inSingleQuote = false;
+        var escaped = false;
+        foreach (var character in command)
+        {
+            if (escaped)
+            {
+                current.Append(character);
+                escaped = false;
+                continue;
+            }
+
+            if (character == '\\' && !inSingleQuote)
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (character == '\'')
+            {
+                inSingleQuote = !inSingleQuote;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(character) && !inSingleQuote)
+            {
+                if (current.Length > 0)
+                {
+                    words.Add(current.ToString());
+                    current.Clear();
+                }
+
+                continue;
+            }
+
+            current.Append(character);
+        }
+
+        if (escaped)
+        {
+            current.Append('\\');
+        }
+
+        if (current.Length > 0)
+        {
+            words.Add(current.ToString());
+        }
+
+        return words.ToArray();
+    }
 
     private sealed class DirectResearchWorkspace : IDisposable
     {

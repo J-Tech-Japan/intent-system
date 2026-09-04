@@ -2816,10 +2816,13 @@ internal static class NotifyCommand
     private static string BuildReportCommand(NotifyOptions options)
     {
         var reportRoot = ResolveRecipientReportRoot(options);
-        return $"intent-cli notify report --domain {options.Domain} --team {options.Team} --from {options.ToRole} "
+        var command = $"intent-cli notify report --domain {options.Domain} --team {options.Team} --from {options.ToRole} "
         + $"--to {options.ReportToRole} --task-id {options.TaskId} --status <completed|blocked|question> "
         + $"--artifact <artifact> --summary <one-line-summary> --routing-root {ShellQuote(options.RoutingRoot!)} --report-root {reportRoot} "
         + "--write --format json";
+        return ResearchDelegationContract.IsResearch(options.TaskKind)
+            ? command + " --task-kind research --finding <finding> --source <source>"
+            : command;
     }
 
     private static string ResolveRecipientReportRoot(NotifyOptions options)
@@ -4117,13 +4120,17 @@ internal static class NotifyCommand
 
             if (ResearchDelegationContract.IsResearch(options.TaskKind))
             {
-                if (!ResearchDelegationContract.TryValidateReport(
+                // Ruling-bearing research reports are checked after the
+                // pending task is loaded in Execute so the originating
+                // judgement seat (not the Steward transport sender) is named
+                // in the refusal. Keep source/finding validation here so
+                // malformed report arguments still fail during parsing.
+                if (options.RulingPayload is null
+                    && options.RulingOrigin is null
+                    && options.RulingDigest is null
+                    && !ResearchDelegationContract.TryBuildFindings(
                         options.Findings,
                         options.FindingSources,
-                        options.RulingPayload,
-                        options.RulingOrigin,
-                        options.RulingDigest,
-                        options.FromRole,
                         out _,
                         out error))
                 {

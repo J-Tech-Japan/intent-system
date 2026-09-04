@@ -66,7 +66,10 @@ internal static class ResearchDelegationContract
 
         if (findings.Count != sources.Count)
         {
-            error = $"research report requires one source for every finding (findings={findings.Count}, sources={sources.Count}).";
+            var firstUnpairedIndex = Math.Min(findings.Count, sources.Count) + 1;
+            error = findings.Count > sources.Count
+                ? $"research finding {firstUnpairedIndex} has no matching source (findings={findings.Count}, sources={sources.Count})."
+                : $"research source {firstUnpairedIndex} has no matching finding (findings={findings.Count}, sources={sources.Count}).";
             return false;
         }
 
