@@ -156,12 +156,12 @@ public sealed class ReleaseNotesV0280DocsTests
         var policyPath = Path.Combine(root, "eng", "version.json");
 
         Assert.Equal(
-            "{\n  \"stableVersion\": \"0.31.0\",\n  \"nextVersion\": \"0.31.1\"\n}\n",
+            "{\n  \"stableVersion\": \"0.32.0\",\n  \"nextVersion\": \"0.32.1\"\n}\n",
             File.ReadAllText(policyPath));
 
         var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.31.0", policy.StableVersion);
-        Assert.Equal("0.31.1", policy.NextVersion);
+        Assert.Equal("0.32.0", policy.StableVersion);
+        Assert.Equal("0.32.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {

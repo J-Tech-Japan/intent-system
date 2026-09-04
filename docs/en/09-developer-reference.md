@@ -2812,7 +2812,7 @@ literal:
 ```
 
 The shape is written with placeholders on purpose: **read the actual values from
-`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0311)
+`eng/version.json`**, and see [Next release readiness](#next-release-readiness-v0321)
 for the line currently being cut. A worked example here would be a second copy
 of the version pair that goes stale on the next roll — the defect G557/G560
 exist to remove.
@@ -3018,69 +3018,62 @@ rotated by this command; the result and `shrink-audit.jsonl` say so explicitly.
 out of scope. Use `--dry-run` to inspect the measured plan without writing the
 manifest, JSONL files, or audit.
 
-### Next release readiness (v0.31.1)
+### Next release readiness (v0.32.1)
 
 **RELEASE PREPARED / NOT PUBLISHED.**
 
-G792 measured the v0.31.0 preparation from the exact named product base
-`79a245c655e17ac654ac440fda31709ee38e28b8` after the four first-parent merges
-G788, G789, G791, and G790. A normal clean Release build reports
-`intent-cli 0.31.1-79a245c-G791`; this is the new `nextVersion` placeholder
-identity, **not** v0.31.0. The same base with explicit `-p:Version=0.31.0`
-reports `intent-cli 0.31.0-79a245c-G791`. Published v0.31.0 derives `VERSION`
+G802 measured the v0.32.0 preparation from the exact named product base
+`2a833a976688b3139678e4954162a9c00d32d0f4` after six first-parent merges:
+G795, G798, G796, G800, G797, and G801. A normal clean Release build reports
+`intent-cli 0.32.1-2a833a9-G801`; this is the new `nextVersion` placeholder
+identity, **not** v0.32.0. The same base with explicit `-p:Version=0.32.0`
+reports `intent-cli 0.32.0-2a833a9-G801`. Published v0.32.0 derives `VERSION`
 from the release tag's `RAW` value in `release.yml`; `eng/version.json` governs
 local builds and dry runs only.
 
-The prepared files are `release-notes-v0.31.0.md` and the
-`release-notes-v0.31.1.md` DRAFT stub. The current policy is:
+The prepared files are `release-notes-v0.32.0.md` and the
+`release-notes-v0.32.1.md` DRAFT stub. The current policy is:
 
 ```json
 {
-  "stableVersion": "0.31.0",
-  "nextVersion": "0.31.1"
+  "stableVersion": "0.32.0",
+  "nextVersion": "0.32.1"
 }
 ```
 
-`0.31.1` is a replaceable development placeholder, not the next real release
+`0.32.1` is a replaceable development placeholder, not the next real release
 number. No tag, GitHub Release, package publish, workflow change, or product
 source change belongs to this prepare-only slice.
 
-The active package-policy evidence is `stableVersion 0.31.0`, `nextVersion 0.31.1`,
-and local candidate `JTechJapan.IntentSystem.Cli.0.31.1.nupkg`.
-The host-only release-prep claim boundary is `release-prep:<owner/repo>:0.31.0`;
+The active package-policy evidence is `stableVersion 0.32.0`, `nextVersion 0.32.1`,
+and local candidate `JTechJapan.IntentSystem.Cli.0.32.1.nupkg`.
+The host-only release-prep claim boundary is `release-prep:<owner/repo>:0.32.0`;
 this child release-prep uses supplied authority and does not inspect or mutate host state.
-The exact four-unit inventory is G788, G789, G791, and G790; its EN/JA
-unit/PR/issue/merge tuple and consumer-follow-up parity is guarded by
-`ReleaseNotesV0310DocsTests`, alongside measured identities, truthfulness, and
-placeholder checks; `ReleasePackageMetadataTests` continues to guard the
-release-policy shape and demanded next-version note.
-G788's evidence sources, G789's guide blocks, and G791's nested-pointer-drift
-classification are explicitly option/behavior additions, not extra command routes.
-The current readiness record also preserves `metadata_write_branch` topology
-evidence and the `--verify`, `--accept-evidence-gap`, and `--shell-policy`
-option-level surfaces; no GitHub Release exists yet.
+The exact six-unit inventory is G795, G798, G796, G800, G797, and G801; its EN/JA
+unit/PR/issue/merge tuple is guarded by `ReleaseNotesV0320G802Tests`, alongside
+measured identities, alias promises, and placeholder checks; `ReleasePackageMetadataTests`
+continues to guard the release-policy shape and demanded next-version note.
+G796 and G800 are command-route additions and are counted for the minor bump;
+the alias table/config repair, guide rendering, and npm dist-tag behavior are
+listed but explicitly not counted as routes. The current readiness record keeps
+all existing route names and option-level surfaces unchanged; no GitHub Release exists yet.
 The policy-derived next-version placeholder boundary remains
-`release-prep:<owner/repo>:0.31.1`; the prepared release target above is
-`release-prep:<owner/repo>:0.31.0`.
+`release-prep:<owner/repo>:0.32.1`; the prepared release target above is
+`release-prep:<owner/repo>:0.32.0`.
 
-The measured minor decision uses the v0.28.0 rule: **a command-route addition is
-a minor bump; option-level additions do not count as command routes.** The
-tagged v0.30.0 tool did not expose `session-layer inspect`; the named base adds
-that one read-only command route. G788 evidence sources/informational output,
-G789 guide text, and G791 nested-pointer-drift classification are listed but
-explicitly not counted as routes.
+The readiness record also preserves the `metadata_write_branch` topology
+evidence and the `--verify`, `--accept-evidence-gap`, and `--shell-policy`
+option-level surfaces.
 
-G792 truthfulness is deliberately bounded: the delivered-never-executed finding
-counts a downstream delegation, a child report carrying the same execution-unit
-token, or a queue transition as execution evidence, still fires on a true stall,
-and lists what was checked rather than asserting absence. `session-layer inspect`
-is read-only, resolves targets only from recorded topology or explicit `--role`,
-has no focus default, exits 0 when the session layer is unavailable, and does not
-answer dialogs; `notify adjudicate` remains that path. The host guard proceeds on
-another domain's nested pointer drift only when every nested checkout is clean,
-refuses uncommitted nested content, and writes to no other domain submodule. The
-G789 design-thread Orca block is non-normative; intent-cli neither launches nor
-manages Orca.
+G802's compatibility promise is deliberately bounded: the legacy names
+`design`, `orchestration`, `implementation`, and `review` still work as aliases;
+existing roles configuration keeps loading; existing queue-state keeps reading
+and displaying; and no installed guide route changed name. These are not new
+routes. G795 canonicalizes role values and refuses unknown roles, G798 leaves
+queue role fields as read/display values, G796 keeps ruling bytes/digest/origin
+opaque, G800 requires sourced findings and refuses ruling-bearing research while
+leaving direct research ungated, and G801 derives prerelease npm tags by SemVer
+class. No size threshold, model name, or runtime check is used.
 
 ### Previous v0.29.0 release-prep evidence (retained in history only)
 

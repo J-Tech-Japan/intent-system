@@ -14,8 +14,8 @@ public sealed class ReleaseNotesV0310DocsTests
     private const string Base = "fed2bbc74449b389565b8241732fe376b7a1c421";
     private const string NormalPlaceholderIdentity = "intent-cli 0.31.1-fed2bbc-G793";
     private const string ExplicitReleaseIdentity = "intent-cli 0.31.0-fed2bbc-G793";
-    private const string DeveloperReferenceNormalIdentity = "intent-cli 0.31.1-79a245c-G791";
-    private const string DeveloperReferenceExplicitIdentity = "intent-cli 0.31.0-79a245c-G791";
+    private const string DeveloperReferenceNormalIdentity = "intent-cli 0.32.1-2a833a9-G801";
+    private const string DeveloperReferenceExplicitIdentity = "intent-cli 0.32.0-2a833a9-G801";
     private const string TaggedIdentity = "intent-cli 0.30.0-f4b01c2-G772";
 
     private static readonly (string Unit, string Pr, string Issue, string Merge)[] Units =
@@ -186,17 +186,17 @@ public sealed class ReleaseNotesV0310DocsTests
     {
         var root = RepoVersionPolicySource.RepoRoot();
         Assert.Equal(
-            "{\n  \"stableVersion\": \"0.31.0\",\n  \"nextVersion\": \"0.31.1\"\n}\n",
+            "{\n  \"stableVersion\": \"0.32.0\",\n  \"nextVersion\": \"0.32.1\"\n}\n",
             File.ReadAllText(Path.Combine(root, "eng", "version.json")));
 
         var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.31.0", policy.StableVersion);
-        Assert.Equal("0.31.1", policy.NextVersion);
+        Assert.Equal("0.32.0", policy.StableVersion);
+        Assert.Equal("0.32.1", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
             Assert.True(File.Exists(Path.Combine(root, "docs", language, "release-notes-v0.31.0.md")));
-            var stub = File.ReadAllText(Path.Combine(root, "docs", language, "release-notes-v0.31.1.md"));
+            var stub = File.ReadAllText(Path.Combine(root, "docs", language, "release-notes-v0.32.1.md"));
             Assert.Contains("DRAFT", stub, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("replaceable", stub, StringComparison.OrdinalIgnoreCase);
             Assert.Contains(language == "en" ? "not a changelog" : "changelog ではありません", stub, StringComparison.OrdinalIgnoreCase);
@@ -213,14 +213,14 @@ public sealed class ReleaseNotesV0310DocsTests
         var reference = File.ReadAllText(Path.Combine(root, "docs", language, "09-developer-reference.md"));
 
         Assert.Contains(
-            language == "en" ? "### Next release readiness (v0.31.1)" : "### 次リリース準備(v0.31.1)",
+            language == "en" ? "### Next release readiness (v0.32.1)" : "### 次リリース準備(v0.32.1)",
             reference,
             StringComparison.Ordinal);
         Assert.Contains(DeveloperReferenceNormalIdentity, reference, StringComparison.Ordinal);
         Assert.Contains(DeveloperReferenceExplicitIdentity, reference, StringComparison.Ordinal);
-        Assert.Contains("release-notes-v0.31.0.md", reference, StringComparison.Ordinal);
-        Assert.Contains("release-notes-v0.31.1.md", reference, StringComparison.Ordinal);
-        Assert.Contains("ReleaseNotesV0310DocsTests", reference, StringComparison.Ordinal);
+        Assert.Contains("release-notes-v0.32.0.md", reference, StringComparison.Ordinal);
+        Assert.Contains("release-notes-v0.32.1.md", reference, StringComparison.Ordinal);
+        Assert.Contains("ReleaseNotesV0320G802Tests", reference, StringComparison.Ordinal);
         Assert.Contains("ReleasePackageMetadataTests", reference, StringComparison.Ordinal);
     }
 
