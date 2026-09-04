@@ -96,6 +96,8 @@ public sealed class AutomationIssueRetireCommandTests : IDisposable
         Assert.Equal(QueueItemState.Retired, item.State);
         Assert.Contains("decomposed", item.RetirementReason, StringComparison.Ordinal);
         Assert.Equal(1744, item.LinkedIssue!.Number);
+        Assert.Equal(LogicalRoleNormalizer.Builder, item.WorkerRole);
+        Assert.Equal(LogicalRoleNormalizer.Reviewer, item.ReviewRole);
 
         var runsPath = workspace.Context.GetRunLogPath();
         Assert.True(File.Exists(runsPath));

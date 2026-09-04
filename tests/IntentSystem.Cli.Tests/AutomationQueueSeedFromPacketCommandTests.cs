@@ -223,12 +223,12 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
         Assert.Equal("Demo", seeded.Title); // From packet.yaml issue_title.
         // PR #830 review repair #3: role / priority fallbacks now
         // align with the established `QueueEnqueueCommand` contract
-        // — host config Roles (defaulting to "Claude" / "Codex" per
-        // CliRuntimeContracts) and priority "high". The earlier
+        // — host config roles canonicalize to builder/reviewer and
+        // priority remains "high". The earlier
         // hardcoded "coder" / "reviewer" / "normal" values were
         // out of contract with the standard queue-enqueue path.
-        Assert.Equal(CliRuntimeContracts.DefaultImplementRole, seeded.WorkerRole);
-        Assert.Equal(CliRuntimeContracts.DefaultReviewRole, seeded.ReviewRole);
+        Assert.Equal(LogicalRoleNormalizer.Builder, seeded.WorkerRole);
+        Assert.Equal(LogicalRoleNormalizer.Reviewer, seeded.ReviewRole);
         Assert.Equal("high", seeded.Priority);
 
         // runs.jsonl appended with the seed event.
@@ -656,8 +656,8 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
         // so packets seeded via this lane look identical to packets
         // enqueued via the standard path.
         using var customWorkspace = new TestWorkspace();
-        // Override the default RoleMappings (`Claude` / `Codex`) on
-        // the seeded test context with explicitly configured values
+        // Override the default RoleMappings on the seeded test context
+        // with explicitly configured values
         // so the assertion proves the seed reads from config, not
         // from a hardcoded fallback.
         var newContext = new CliContext

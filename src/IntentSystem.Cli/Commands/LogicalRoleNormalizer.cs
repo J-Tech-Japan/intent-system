@@ -70,6 +70,56 @@ internal static class LogicalRoleNormalizer
         return false;
     }
 
+    /// <summary>
+    /// Resolve a value for a newly-written role-bearing field. Known canonical
+    /// names and aliases are projected to the canonical vocabulary. Unknown
+    /// values are intentionally not treated as roles; callers receive the
+    /// trimmed legacy value so compatibility surfaces can preserve it and
+    /// report it as legacy. A missing value receives the supplied canonical
+    /// fallback (for example <c>builder</c> or <c>reviewer</c>). Existing
+    /// queue-state values are read as-is so legacy records remain displayable
+    /// and round-trippable.
+    /// </summary>
+    public static string NormalizeForWrite(string? value, string fallback)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fallback);
+
+        if (TryNormalize(fallback, out var canonicalFallback, out var fallbackError)
+            && canonicalFallback is not null)
+        {
+            if (TryNormalize(value, out var canonical, out _)
+                && canonical is not null)
+            {
+                return canonical;
+            }
+
+            return string.IsNullOrWhiteSpace(value) ? canonicalFallback : value.Trim();
+        }
+
+        throw new ArgumentException(fallbackError, nameof(fallback));
+    }
+
+    /// <summary>
+    /// Resolve a configuration value while retaining an unknown legacy value
+    /// for diagnostics. This is the compatibility path for vendor/action
+    /// values in the historical <c>[roles]</c> section; it never invents a
+    /// second role vocabulary.
+    /// </summary>
+    public static string NormalizeOrPreserveLegacy(string? value, string fallback)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fallback);
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return fallback;
+        }
+
+        return TryNormalize(value, out var canonical, out _)
+            && canonical is not null
+            ? canonical
+            : value.Trim();
+    }
+
     public static string BuildUnknownRoleMessage(string? value) =>
         $"role '{value ?? ""}' is unknown; accepted canonical roles are "
         + $"{FormatRoles(CanonicalRoles)}; accepted aliases are {FormatAliases()}.";

@@ -447,16 +447,32 @@ internal static class CliConfigLoader
             return new RoleMappings();
         }
 
+        var legacyValues = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        string ReadRole(string key, string fallback)
+        {
+            var raw = TryGetOptionalString(rolesTable, key);
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return fallback;
+            }
+
+            var value = LogicalRoleNormalizer.NormalizeOrPreserveLegacy(raw, fallback);
+            if (!LogicalRoleNormalizer.TryNormalize(raw, out _, out _))
+            {
+                legacyValues[key] = raw.Trim();
+            }
+
+            return value;
+        }
+
         return new RoleMappings
         {
-            Implement = TryGetOptionalString(rolesTable, CliRuntimeContracts.ImplementRoleKey)
-                ?? CliRuntimeContracts.DefaultImplementRole,
-            Review = TryGetOptionalString(rolesTable, CliRuntimeContracts.ReviewRoleKey)
-                ?? CliRuntimeContracts.DefaultReviewRole,
-            Interview = TryGetOptionalString(rolesTable, CliRuntimeContracts.InterviewRoleKey)
-                ?? CliRuntimeContracts.DefaultInterviewRole,
-            Clarify = TryGetOptionalString(rolesTable, CliRuntimeContracts.ClarifyRoleKey)
-                ?? CliRuntimeContracts.DefaultClarifyRole
+            Implement = ReadRole(CliRuntimeContracts.ImplementRoleKey, CliRuntimeContracts.DefaultImplementRole),
+            Review = ReadRole(CliRuntimeContracts.ReviewRoleKey, CliRuntimeContracts.DefaultReviewRole),
+            Interview = ReadRole(CliRuntimeContracts.InterviewRoleKey, CliRuntimeContracts.DefaultInterviewRole),
+            Clarify = ReadRole(CliRuntimeContracts.ClarifyRoleKey, CliRuntimeContracts.DefaultClarifyRole),
+            LegacyValues = legacyValues
         };
     }
 

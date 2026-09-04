@@ -435,8 +435,8 @@ internal static class AutomationIssueRetireCommand
                     },
                     LinkedIssue = new LinkedIssue { Repo = repo!, Number = issue, Url = snapshot.Url },
                     LinkedPr = null,
-                    WorkerRole = CliRuntimeContracts.DefaultImplementRole,
-                    ReviewRole = CliRuntimeContracts.DefaultReviewRole,
+                    WorkerRole = LogicalRoleNormalizer.Builder,
+                    ReviewRole = LogicalRoleNormalizer.Reviewer,
                     Priority = "high",
                     RetirementReason = retirementReason,
                 });

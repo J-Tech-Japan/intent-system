@@ -85,6 +85,44 @@ internal sealed record RoleMappings
     public string Interview { get; init; } = CliRuntimeContracts.DefaultInterviewRole;
 
     public string Clarify { get; init; } = CliRuntimeContracts.DefaultClarifyRole;
+
+    /// <summary>
+    /// Explicit <c>[roles]</c> values that are not logical roles. Historical
+    /// configs use this map for runtime names such as <c>Claude</c> and
+    /// <c>Codex</c>; retaining the values lets existing configs load without a
+    /// rewrite while making the legacy meaning observable to diagnostics.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> LegacyValues { get; init; }
+        = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    public bool HasLegacyValues => LegacyValues.Count > 0;
+
+    /// <summary>
+    /// Returns the value safe for a queue writer. Explicit vendor/runtime
+    /// values loaded from the historical config are not persisted into the
+    /// logical queue vocabulary; they fall back to the corresponding
+    /// responsibility. Values supplied directly by compatibility callers are
+    /// still preserved unless they are a known alias/canonical role.
+    /// </summary>
+    public string WorkerRoleForQueue => ResolveForQueue(
+        CliRuntimeContracts.ImplementRoleKey,
+        Implement,
+        LogicalRoleNormalizer.Builder);
+
+    public string ReviewRoleForQueue => ResolveForQueue(
+        CliRuntimeContracts.ReviewRoleKey,
+        Review,
+        LogicalRoleNormalizer.Reviewer);
+
+    private string ResolveForQueue(string key, string value, string fallback)
+    {
+        if (LegacyValues.ContainsKey(key))
+        {
+            return LogicalRoleNormalizer.NormalizeForWrite(null, fallback);
+        }
+
+        return LogicalRoleNormalizer.NormalizeForWrite(value, fallback);
+    }
 }
 
 internal sealed record SupervisionConfig
