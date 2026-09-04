@@ -3043,10 +3043,11 @@ public sealed class GuidePromptMatrixCommandTests
 
         var prompt = JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("prompt").GetString()!;
 
-        // Claude is the default implement role, not the default review role: it
-        // orchestrates and waits for intent-pr-approved unless it IS review_role.
+        // Runtime identity is independent of the logical review role: Claude
+        // resolves the packet assignment and waits unless assigned review.
         Assert.Contains("running as `claude`", prompt, StringComparison.Ordinal);
-        Assert.Contains("NOT the default `review` role", prompt, StringComparison.Ordinal);
+        Assert.Contains("Resolve the packet role assignment", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("default `review` role", prompt, StringComparison.Ordinal);
         Assert.Contains("WAIT for the PR to reach `intent-pr-approved`", prompt, StringComparison.Ordinal);
     }
 
@@ -3061,10 +3062,11 @@ public sealed class GuidePromptMatrixCommandTests
 
         var prompt = JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("prompt").GetString()!;
 
-        // Codex is the default review role: when review_role resolves to Codex it
-        // IS the semantic reviewer and may approve/request-update via intent-cli.
+        // Codex is a runtime identity, not a role default. The packet's
+        // canonical logical reviewer assignment permits semantic review.
         Assert.Contains("running as `codex`", prompt, StringComparison.Ordinal);
         Assert.Contains("you ARE the semantic reviewer", prompt, StringComparison.Ordinal);
+        Assert.Contains("assigned `reviewer` role", prompt, StringComparison.Ordinal);
         Assert.Contains("approved | request-update", prompt, StringComparison.Ordinal);
     }
 

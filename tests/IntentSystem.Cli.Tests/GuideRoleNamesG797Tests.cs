@@ -191,6 +191,53 @@ public sealed class GuideRoleNamesG797Tests
     }
 
     [Fact]
+    public void FullRenderedPayload_RejectsRoleVendorAndDefaultPairings_G797()
+    {
+        var context = CreateContext();
+        var surfaces = new (string Name, Func<TextWriter, int> Render)[]
+        {
+            ("guide design-thread", writer => GuideDesignThreadCommand.Execute(context, ["--format", "markdown"], writer)),
+            ("guide orchestrator-thread", writer => GuideOrchestratorThreadCommand.Execute(context, ["--format", "markdown"], writer)),
+            ("guide workflow task implementation-loop", writer => GuideWorkflowTaskImplementationLoopCommand.Execute(context, ["--format", "markdown"], writer)),
+            ("guide workflow task review-next-slice-loop", writer => GuideWorkflowTaskReviewNextSliceLoopCommand.Execute(context, ["--format", "markdown"], writer)),
+        };
+
+        // G797 AC6 is about the complete rendered payload, not only headings
+        // or direct role=vendor assignments. Keep the role markers explicit so
+        // unrelated runtime examples (for example a scheduler name) do not
+        // become false positives, while catching prose such as
+        // "review_role ... default Codex" anywhere in the payload.
+        const string vendor = @"(?:Claude|Codex|OpenCode|opencode)";
+        const string roleMarker =
+            @"(?:review_role|roles\.[a-z_]+|(?:architect|orchestrator|builder|reviewer|steward|design|orchestration|implementation|review)\s+role)";
+        var roleVendorProse = new Regex(
+            $@"(?im)(?:{roleMarker}[^\r\n]{{0,120}}\b{vendor}\b|\b{vendor}\b[^\r\n]{{0,120}}{roleMarker})",
+            RegexOptions.Compiled);
+        var defaultPairing = new Regex(
+            $@"(?im)(?:{roleMarker}[^\r\n]{{0,120}}\bdefault(?:ed|s)?\b[^\r\n]{{0,120}}\b{vendor}\b|\b{vendor}\b[^\r\n]{{0,120}}\bdefault(?:ed|s)?\b[^\r\n]{{0,120}}{roleMarker})",
+            RegexOptions.Compiled);
+
+        foreach (var (name, render) in surfaces)
+        {
+            using var writer = new StringWriter();
+            Assert.Equal(0, render(writer));
+            var output = writer.ToString();
+            var roleVendorMatches = roleVendorProse.Matches(output).Select(match => match.Value).ToArray();
+            var defaultPairingMatches = defaultPairing.Matches(output).Select(match => match.Value).ToArray();
+
+            Assert.Empty(roleVendorMatches);
+            Assert.Empty(defaultPairingMatches);
+            Assert.Contains(GuideRoleVocabulary.Reviewer, output, StringComparison.Ordinal);
+            if (name.EndsWith("review-next-slice-loop", StringComparison.Ordinal))
+            {
+                Assert.Contains("canonical logical `reviewer`", output, StringComparison.Ordinal);
+            }
+            Assert.DoesNotContain("roles.review, default Codex", output, StringComparison.OrdinalIgnoreCase);
+            Console.WriteLine($"G797 AC6 full-payload-role-vendor-scan {name}: role_vendor_matches={roleVendorMatches.Length}; default_pairings={defaultPairingMatches.Length}; matches=<none>; canonical_reviewer=present");
+        }
+    }
+
+    [Fact]
     public void RoleBearingCommandsAndJsonProjectOnlyCanonicalIdentifiers_G797()
     {
         var context = CreateContext();
