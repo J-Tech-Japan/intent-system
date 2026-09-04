@@ -223,7 +223,13 @@ public sealed class ResearchDelegationG800Tests : IDisposable
                 finding: "route-is-reachable",
                 source: "command=rg;output=match");
 
-            var mismatchedArgs = RemoveSourceArgument(reportArgs);
+            var repeatableReportArgs = reportArgs
+                .Concat([
+                    "--finding", "second-route-is-reachable",
+                    "--source", "file=src/SecondInventory.cs symbol=SecondRoute",
+                ])
+                .ToArray();
+            var mismatchedArgs = RemoveSourceArgument(repeatableReportArgs);
             using var mismatchWriter = new StringWriter();
             var mismatchExit = NotifyCommand.ExecuteReport(workspace.Context, mismatchedArgs, mismatchWriter);
             Assert.Equal(1, mismatchExit);
@@ -232,13 +238,16 @@ public sealed class ResearchDelegationG800Tests : IDisposable
             Assert.Contains("no matching source", mismatchError, StringComparison.OrdinalIgnoreCase);
 
             using var reportWriter = new StringWriter();
-            var reportExit = NotifyCommand.ExecuteReport(workspace.Context, reportArgs, reportWriter);
+            var reportExit = NotifyCommand.ExecuteReport(workspace.Context, repeatableReportArgs, reportWriter);
             Assert.True(reportExit == 0, reportWriter.ToString());
             using var reportDocument = JsonDocument.Parse(reportWriter.ToString());
             Assert.Equal("research", reportDocument.RootElement.GetProperty("task_kind").GetString());
-            var finding = Assert.Single(reportDocument.RootElement.GetProperty("research_findings").EnumerateArray());
-            Assert.Equal("route-is-reachable", finding.GetProperty("finding").GetString());
-            Assert.Equal("command=rg;output=match", finding.GetProperty("source").GetString());
+            var findings = reportDocument.RootElement.GetProperty("research_findings").EnumerateArray().ToArray();
+            Assert.Equal(2, findings.Length);
+            Assert.Equal("route-is-reachable", findings[0].GetProperty("finding").GetString());
+            Assert.Equal("command=rg;output=match", findings[0].GetProperty("source").GetString());
+            Assert.Equal("second-route-is-reachable", findings[1].GetProperty("finding").GetString());
+            Assert.Equal("file=src/SecondInventory.cs symbol=SecondRoute", findings[1].GetProperty("source").GetString());
             Console.WriteLine($"G800 AC1/AC2 rendered-report {from}->{to}: command={reportCommand}; mismatch_exit={mismatchExit}; mismatch_error={mismatchError}; exit={reportExit}; findings={reportDocument.RootElement.GetProperty("research_findings").GetRawText()}");
         }
     }
