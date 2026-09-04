@@ -13,7 +13,7 @@ public sealed class HerdrWakeSourcesG581Tests : IDisposable
     // assertion explicit so a future wake-source or route change remains
     // intentional.
     private const string G594AgmsgGuideSha256 =
-        "F5DE57CA726EBD769A902D1AEA6B2E154D097DD3625E44EEA93CD55F83E3E288";
+        "68BA4518DE8D025F4616099AB25AC0BBE2A8F2691D3CB9DDFEDAD3F988F1D852";
 
     private readonly string root = Directory.CreateTempSubdirectory("herdr-wake-g581-").FullName;
 

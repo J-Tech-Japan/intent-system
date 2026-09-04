@@ -238,6 +238,56 @@ public sealed class GuideRoleNamesG797Tests
     }
 
     [Fact]
+    public void FullRenderedPayloads_MarkdownAndJsonRejectVendorRoleFusionsAndDefaults_G797Round5()
+    {
+        var context = CreateContext();
+        var surfaces = new (string Name, Func<string, TextWriter, int> Render)[]
+        {
+            ("guide design-thread", (format, writer) => GuideDesignThreadCommand.Execute(context, ["--format", format], writer)),
+            ("guide orchestrator-thread", (format, writer) => GuideOrchestratorThreadCommand.Execute(context, ["--format", format], writer)),
+            ("guide workflow task implementation-loop", (format, writer) => GuideWorkflowTaskImplementationLoopCommand.Execute(context, ["--format", format], writer)),
+            ("guide workflow task review-next-slice-loop", (format, writer) => GuideWorkflowTaskReviewNextSliceLoopCommand.Execute(context, ["--format", format], writer)),
+        };
+
+        // AC6 is a class-level rule over the complete compiled payload. A
+        // runtime may be mentioned conditionally, but it must never become a
+        // noun phrase with a logical role (for example "Codex reviewer" or
+        // "sandboxed Codex orchestrator") or a vendor default. Keep the
+        // vendor list explicit so this guard covers every supported spelling,
+        // including the lower-case runtime names used by older guidance.
+        const string vendor = @"(?:Claude|Codex|Astra|Fable|luna|terra|sol|opencode)";
+        const string logicalRole = @"(?:architect|orchestrator|builder|reviewer|steward)";
+        const string roleMarker = @"(?:review_role|roles\.[a-z_]+|(?:architect|orchestrator|builder|reviewer|steward)\s+role)";
+        var fusedRoleVendor = new Regex(
+            $@"(?ix)\b(?:sandboxed\s+)?{vendor}\s+{logicalRole}\b|\b{logicalRole}\s+{vendor}\b",
+            RegexOptions.Compiled);
+        var vendorDefault = new Regex(
+            $@"(?ix)(?:\b{roleMarker}\b[^\r\n]{{0,120}}\bdefault(?:ed|s)?\b[^\r\n]{{0,120}}\b{vendor}\b|\b{vendor}\b[^\r\n]{{0,120}}\bdefault(?:ed|s)?\b[^\r\n]{{0,120}}\b{roleMarker}\b)",
+            RegexOptions.Compiled);
+
+        foreach (var (name, render) in surfaces)
+        {
+            foreach (var format in new[] { "markdown", "json" })
+            {
+                using var writer = new StringWriter();
+                Assert.Equal(0, render(format, writer));
+                var output = writer.ToString();
+                var fusedMatches = fusedRoleVendor.Matches(output).Select(match => match.Value).ToArray();
+                var defaultMatches = vendorDefault.Matches(output).Select(match => match.Value).ToArray();
+
+                Assert.Empty(fusedMatches);
+                Assert.Empty(defaultMatches);
+                if (name == "guide orchestrator-thread")
+                {
+                    Assert.Contains("running on a sandboxed Codex runtime", output, StringComparison.Ordinal);
+                }
+
+                Console.WriteLine($"G797 AC6 round5 full-payload-scan {name} format={format}: fused_role_vendor={fusedMatches.Length}; vendor_defaults={defaultMatches.Length}; matches=<none>");
+            }
+        }
+    }
+
+    [Fact]
     public void RoleBearingCommandsAndJsonProjectOnlyCanonicalIdentifiers_G797()
     {
         var context = CreateContext();
