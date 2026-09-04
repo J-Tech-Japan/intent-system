@@ -16,10 +16,10 @@ internal static class NotifyCommand
     private const string OperationDispose = "dispose";
     internal const string OperationStatus = "status";
     internal const string OperationSupervise = "supervise";
-    private const string CompletionEventKind = "completion";
-    private const string BlockedEventKind = "blocked";
-    private const string QuestionEventKind = "question";
-    private const string EscalationEventKind = "escalation";
+    private const string CompletionEventKind = NotifyEventKindRouting.Completion;
+    private const string BlockedEventKind = NotifyEventKindRouting.Blocked;
+    private const string QuestionEventKind = NotifyEventKindRouting.Question;
+    private const string EscalationEventKind = NotifyEventKindRouting.Escalation;
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
     private const string CopilotObservedPasteRiskProfile = "copilot-autopilot-observed-paste-risk";
@@ -35,11 +35,17 @@ internal static class NotifyCommand
         "Usage: intent-cli notify delegate --domain <d> [--team <t>] --from <role> --to <role> --report-to <role> "
         + "--task-id <id> --objective <text> [--input <value>]... --expected-artifact <value> "
         + "[--expected-artifact <value>]... --result-nonce <nonce> [--routing-root <host-root>] "
+        + "[--event-kind completion|transition|acknowledgement|escalation|question|blocked] "
+        + "[--ruling-payload <text> --ruling-origin <role> [--ruling-digest <sha256>] "
+        + "[--ruling-envelope-field <key=value>]... --downstream-delegation-reference <id>] "
         + "[--dry-run|--write] [--format markdown|json]";
 
     private const string ReportUsage =
         "Usage: intent-cli notify report --domain <d> --team <t> --from <role> --to <role> --task-id <id> "
         + "--status completed|blocked|question --artifact <value> --summary <text> "
+        + "[--event-kind completion|transition|acknowledgement|escalation|question|blocked] "
+        + "[--ruling-payload <text> --ruling-origin <role> [--ruling-digest <sha256>] "
+        + "[--ruling-envelope-field <key=value>]... --downstream-delegation-reference <id>] "
         + "[--routing-root <host-root>] [--report-root <role-work-root>] [--dry-run|--write] [--format markdown|json]";
 
     private const string CollectUsage =
@@ -56,7 +62,10 @@ internal static class NotifyCommand
 
     private const string EscalateUsage =
         "Usage: intent-cli notify escalate --domain <d> --team <t> --from <role> --task-id <id> "
-        + "--artifact <value> --summary <text> [--routing-root <host-root>] "
+        + "--artifact <value> --summary <text> [--event-kind escalation] "
+        + "[--ruling-payload <text> --ruling-origin <role> [--ruling-digest <sha256>] "
+        + "[--ruling-envelope-field <key=value>]... --downstream-delegation-reference <id>] "
+        + "[--routing-root <host-root>] "
         + "[--dry-run|--write] [--format markdown|json]";
 
     private const string DisposeUsage =
@@ -286,6 +295,151 @@ internal static class NotifyCommand
             }
 
             options = options with { Team = teamMode.ResolvedTeam };
+        }
+
+        // G796: resolve the event kind once, then route by that kind whenever
+        // the operator has recorded a Steward seat. A topology that is absent
+        // or unreadable leaves the historical caller-supplied destination in
+        // place; the existing preflight still reports that structural issue.
+        NotifyRuling? upstreamRuling = null;
+        if (operation is OperationDelegate or OperationReport or OperationEscalate)
+        {
+            var eventKind = NotifyEventKindRouting.ResolveForOperation(
+                operation,
+                options.Status,
+                options.EventKind);
+            // Keep the historical JSON/result envelope byte-stable when the
+            // caller did not ask for the new field explicitly. The resolved
+            // value is carried internally for event emission and routing.
+            options = options with
+            {
+                EventKind = options.EventKind is null ? null : eventKind,
+                ResolvedEventKind = eventKind,
+            };
+
+            var topology = NotifyRoleTopologyStore.Resolve(
+                routingRoot,
+                options.Domain!,
+                options.Team!);
+            var stewardRecorded = topology.Resolved
+                && NotifyEventKindRouting.HasRecordedSteward(topology.Topology);
+            var fallbackTarget = string.Equals(operation, OperationEscalate, StringComparison.Ordinal)
+                ? "design"
+                : null;
+            options = options with
+            {
+                ToRole = NotifyEventKindRouting.ResolveTarget(
+                    eventKind,
+                    options.ToRole,
+                    stewardRecorded,
+                    fallbackTarget),
+            };
+
+            var isStewardJudgement = LogicalRoleNormalizer.TryNormalize(
+                    options.FromRole,
+                    out var canonicalFromRole,
+                    out _)
+                && string.Equals(canonicalFromRole, LogicalRoleNormalizer.Steward, StringComparison.Ordinal)
+                && NotifyEventKindRouting.IsJudgement(eventKind);
+            var downstreamEvidenceResolved = true;
+            if (isStewardJudgement)
+            {
+                var upstreamLookup = NotifyPendingDelegationStore.Find(
+                    routingRoot,
+                    options.Domain,
+                    options.Team,
+                    options.TaskId!);
+                if (!upstreamLookup.Resolved
+                    || upstreamLookup.Record is not { } upstreamRecord)
+                {
+                    Emit(writer, options.Format, FailureResult(
+                        operation,
+                        options,
+                        SessionLayerMode.Default,
+                        "steward-boundary-refused",
+                        $"Steward judgement refused for task '{options.TaskId}': no recorded upstream Architect ruling/delegation was found."));
+                    return 1;
+                }
+
+                if (!NotifyRulingRelay.TryResolveUpstreamArchitectRuling(
+                        upstreamRecord,
+                        out upstreamRuling,
+                        out var upstreamError))
+                {
+                    Emit(writer, options.Format, FailureResult(
+                        operation,
+                        options,
+                        SessionLayerMode.Default,
+                        "steward-boundary-refused",
+                        upstreamError));
+                    return 1;
+                }
+
+                downstreamEvidenceResolved = NotifyDelegationExecutionEvidence.TryResolveDownstreamReference(
+                    routingRoot,
+                    upstreamRecord,
+                    options.DownstreamDelegationReference,
+                    out _,
+                    out var downstreamEvidenceError);
+                if (!downstreamEvidenceResolved)
+                {
+                    Emit(writer, options.Format, FailureResult(
+                        operation,
+                        options,
+                        SessionLayerMode.Default,
+                        "steward-boundary-refused",
+                        downstreamEvidenceError));
+                    return 1;
+                }
+            }
+
+            if (!NotifyRulingRelay.TryValidateStewardAnswer(
+                    options.FromRole,
+                    eventKind,
+                    options.ToRole,
+                    options.DownstreamDelegationReference,
+                    downstreamEvidenceResolved,
+                    out var stewardshipError))
+            {
+                Emit(writer, options.Format, FailureResult(
+                    operation,
+                    options,
+                    SessionLayerMode.Default,
+                    "steward-boundary-refused",
+                    stewardshipError));
+                return 1;
+            }
+
+            if (!TryPrepareRuling(options, upstreamRuling, out var ruling, out var rulingError))
+            {
+                Emit(writer, options.Format, FailureResult(
+                    operation,
+                    options,
+                    SessionLayerMode.Default,
+                    "ruling-invalid",
+                    rulingError));
+                return 1;
+            }
+
+            if (ruling is not null
+                && LogicalRoleNormalizer.TryNormalize(options.ToRole, out var routedRole, out _)
+                && string.Equals(routedRole, LogicalRoleNormalizer.Steward, StringComparison.Ordinal)
+                && !NotifyRulingRelay.TryRelay(
+                    ruling,
+                    ruling.Payload,
+                    options.RulingEnvelopeFields,
+                    out var relay))
+            {
+                Emit(writer, options.Format, FailureResult(
+                    operation,
+                    options,
+                    SessionLayerMode.Default,
+                    relay.Cause ?? "ruling-relay-refused",
+                    relay.Summary ?? "Steward ruling relay was refused."));
+                return 1;
+            }
+
+            options = options with { PreparedRuling = ruling };
         }
 
         // G691's named not-applicable NotifyCommand surface is supervision.
@@ -2218,7 +2372,7 @@ internal static class NotifyCommand
     {
         Timestamp = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
         Team = options.Team!,
-        Kind = ReaderEventKind(operation, options.Status),
+        Kind = options.ResolvedEventKind ?? options.EventKind ?? ReaderEventKind(operation, options.Status),
         Unit = options.TaskId!,
         Summary = NotifyEventWriter.NormalizeSummary(
             string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
@@ -2227,6 +2381,11 @@ internal static class NotifyCommand
         Artifact = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? options.Inputs.FirstOrDefault() ?? options.ExpectedArtifacts[0]
             : options.Artifact!,
+        Ruling = options.PreparedRuling,
+        RulingEnvelopeFields = options.RulingEnvelopeFields.Count == 0
+            ? null
+            : options.RulingEnvelopeFields,
+        DownstreamDelegationReference = options.DownstreamDelegationReference,
     };
 
     private static NotifyPendingDelegation BuildPendingDelegation(
@@ -2288,6 +2447,7 @@ internal static class NotifyCommand
             Cwd = cwd,
             Kind = kind,
             LaunchArguments = launchArguments,
+            Ruling = options.PreparedRuling,
         };
     }
 
@@ -2307,16 +2467,40 @@ internal static class NotifyCommand
             $"Report status '{status}' does not map to a documented reader-event kind.");
     }
 
+    private static void AppendRuling(StringBuilder builder, NotifyOptions options)
+    {
+        if (options.PreparedRuling is null)
+        {
+            return;
+        }
+
+        var envelope = new NotifyRulingEnvelope
+        {
+            Ruling = options.PreparedRuling,
+            Fields = options.RulingEnvelopeFields,
+        };
+        builder.AppendLine();
+        builder.Append("ruling-envelope: ");
+        builder.Append(JsonSerializer.Serialize(envelope));
+    }
+
     private static int ExecuteEscalation(
         TextWriter writer,
         NotifyOptions options,
         SessionLayerModeResolution resolution)
     {
+        var rulingPayload = options.PreparedRuling is null
+            ? null
+            : JsonSerializer.Serialize(new NotifyRulingEnvelope
+            {
+                Ruling = options.PreparedRuling,
+                Fields = options.RulingEnvelopeFields,
+            });
         var judgment = NotifyRecipientDeliveryJudgment.Resolve(
             options.RoutingRoot!,
             options.Domain!,
             options.Team!,
-            "design");
+            options.ToRole ?? "design");
         var path = judgment.UsesRecordedReaderAppend ? judgment.Target : null;
         if (path is null
             && !NotifyEventWriter.TryResolveWritePath(
@@ -2340,7 +2524,7 @@ internal static class NotifyCommand
                 resolution,
                 delivered: false,
                 eventAppended: false,
-                payload: null,
+                payload: rulingPayload,
                 reportCommand: null,
                 $"Dry-run: would append escalation to '{path}'.",
                 eventPath: path,
@@ -2352,10 +2536,15 @@ internal static class NotifyCommand
         {
             Timestamp = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
             Team = options.Team!,
-            Kind = EscalationEventKind,
+            Kind = options.ResolvedEventKind ?? options.EventKind ?? EscalationEventKind,
             Unit = options.TaskId!,
             Summary = NotifyEventWriter.NormalizeSummary(options.Summary!),
             Artifact = options.Artifact!,
+            Ruling = options.PreparedRuling,
+            RulingEnvelopeFields = options.RulingEnvelopeFields.Count == 0
+                ? null
+                : options.RulingEnvelopeFields,
+            DownstreamDelegationReference = options.DownstreamDelegationReference,
         };
         try
         {
@@ -2398,7 +2587,7 @@ internal static class NotifyCommand
             resolution,
             delivered,
             eventAppended: true,
-            payload: null,
+            payload: rulingPayload,
             reportCommand: null,
             delivered
                 ? $"Appended escalation for task '{options.TaskId}' to the recorded design reader; durable append satisfied delivery."
@@ -2444,6 +2633,24 @@ internal static class NotifyCommand
         }
         builder.AppendLine("result-prefix: ORCH_RESULT");
         builder.AppendLine($"result-nonce: {options.ResultNonce}");
+        var hasG796Extensions = options.EventKind is not null
+            || options.DownstreamDelegationReference is not null
+            || options.PreparedRuling is not null;
+        if (hasG796Extensions)
+        {
+            if (options.EventKind is not null)
+            {
+                builder.AppendLine();
+                builder.Append($"event-kind: {options.EventKind}");
+            }
+            if (options.DownstreamDelegationReference is not null)
+            {
+                builder.AppendLine();
+                builder.Append($"downstream-delegation-reference: {options.DownstreamDelegationReference}");
+            }
+            AppendRuling(builder, options);
+            builder.AppendLine();
+        }
         builder.Append("completion-marker: When the artifact is ready, concatenate result-prefix, one space, result-nonce, one space, status, one space, and artifact; use completed, blocked, or question. Do not precompose the marker in this task block.");
         return builder.ToString();
     }
@@ -2511,15 +2718,127 @@ internal static class NotifyCommand
 
     private static string ShellQuote(string value) => $"'{value.Replace("'", "'\\''", StringComparison.Ordinal)}'";
 
-    private static string BuildReportPayload(NotifyOptions options) => JsonSerializer.Serialize(new
+    private static string BuildReportPayload(NotifyOptions options)
     {
-        notification = OperationReport,
-        task_id = options.TaskId,
-        status = options.Status,
-        from_role = options.FromRole,
-        artifact = options.Artifact,
-        summary = NotifyEventWriter.NormalizeSummary(options.Summary!),
-    });
+        var summary = NotifyEventWriter.NormalizeSummary(options.Summary!);
+        if (options.EventKind is null
+            && options.PreparedRuling is null
+            && options.DownstreamDelegationReference is null
+            && options.RulingEnvelopeFields.Count == 0)
+        {
+            // Preserve the pre-G796 report envelope byte-for-byte for callers
+            // that do not opt into the new event/ruling fields.
+            return JsonSerializer.Serialize(new
+            {
+                notification = OperationReport,
+                task_id = options.TaskId,
+                status = options.Status,
+                from_role = options.FromRole,
+                artifact = options.Artifact,
+                summary,
+            });
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            notification = OperationReport,
+            task_id = options.TaskId,
+            event_kind = options.ResolvedEventKind ?? options.EventKind,
+            status = options.Status,
+            from_role = options.FromRole,
+            artifact = options.Artifact,
+            summary,
+            downstream_delegation_reference = options.DownstreamDelegationReference,
+            ruling = options.PreparedRuling,
+            ruling_envelope_fields = options.RulingEnvelopeFields.Count == 0
+                ? null
+                : options.RulingEnvelopeFields,
+        });
+    }
+
+    private static bool TryPrepareRuling(
+        NotifyOptions options,
+        NotifyRuling? upstreamRuling,
+        out NotifyRuling? ruling,
+        out string error)
+    {
+        ruling = null;
+        error = string.Empty;
+        var hasRulingMetadata = options.RulingPayload is not null
+            || options.RulingOrigin is not null
+            || options.RulingDigest is not null
+            || options.RulingEnvelopeFields.Count > 0;
+
+        if (upstreamRuling is not null)
+        {
+            // A Steward report/escalation inherits the durable Architect
+            // ruling. Envelope fields are additive; supplying a ruling
+            // payload/origin/digest asks us to prove it is the same ruling.
+            var hasRulingIdentity = options.RulingPayload is not null
+                || options.RulingOrigin is not null
+                || options.RulingDigest is not null;
+            if (!hasRulingIdentity)
+            {
+                if (!NotifyRulingEnvelope.TryCreate(
+                        upstreamRuling,
+                        options.RulingEnvelopeFields,
+                        out _,
+                        out error))
+                {
+                    return false;
+                }
+
+                ruling = upstreamRuling;
+                return true;
+            }
+
+            if (!NotifyRuling.TryCreate(
+                    options.RulingPayload,
+                    options.RulingOrigin,
+                    options.RulingDigest,
+                    out var relayedRuling,
+                    out error)
+                || relayedRuling is null)
+            {
+                return false;
+            }
+
+            if (!NotifyRulingRelay.TryRelay(
+                    upstreamRuling,
+                    relayedRuling,
+                    options.RulingEnvelopeFields,
+                    out var relay))
+            {
+                error = relay.Summary ?? "Steward ruling relay was refused.";
+                return false;
+            }
+
+            ruling = upstreamRuling;
+            return true;
+        }
+
+        if (!hasRulingMetadata)
+        {
+            return true;
+        }
+
+        if (!NotifyRuling.TryCreate(
+                options.RulingPayload,
+                options.RulingOrigin,
+                options.RulingDigest,
+                out ruling,
+                out error)
+            || ruling is null)
+        {
+            return false;
+        }
+
+        return NotifyRulingEnvelope.TryCreate(
+            ruling,
+            options.RulingEnvelopeFields,
+            out _,
+            out error);
+    }
 
     private static NotifyInlinePayloadWarning? ResolveInlinePayloadWarning(NotifyOptions options, string payload)
     {
@@ -2586,6 +2905,9 @@ internal static class NotifyCommand
             TaskId = options.TaskId!,
             Status = options.Status,
             Artifact = options.Artifact,
+            EventKind = options.EventKind,
+            Ruling = options.PreparedRuling,
+            DownstreamDelegationReference = options.DownstreamDelegationReference,
             Delivered = delivered,
             EventAppended = eventAppended,
             EventPath = eventPath,
@@ -2653,6 +2975,9 @@ internal static class NotifyCommand
             TaskId = options.TaskId!,
             Status = options.Status,
             Artifact = options.Artifact,
+            EventKind = options.EventKind,
+            Ruling = options.PreparedRuling,
+            DownstreamDelegationReference = options.DownstreamDelegationReference,
             Delivered = false,
             EventAppended = false,
             EventPath = null,
@@ -2718,6 +3043,15 @@ internal static class NotifyCommand
             }
         }
         writer.WriteLine($"- delivered: {result.Delivered.ToString().ToLowerInvariant()}");
+        if (result.EventKind is not null)
+        {
+            writer.WriteLine($"- event kind: {result.EventKind}");
+            writer.WriteLine($"- routed to role: {result.ToRole ?? "<unresolved>"}");
+        }
+        if (result.Ruling is { } ruling)
+        {
+            writer.WriteLine($"- ruling: origin={ruling.Origin}; digest={ruling.Digest}; payload-bytes={ruling.PayloadBytes.Count}");
+        }
         if (result.DeliveryBasis is not null)
         {
             writer.WriteLine($"- delivery basis: {result.DeliveryBasis}");
@@ -2904,6 +3238,11 @@ internal static class NotifyCommand
         string? status = null;
         string? artifact = null;
         string? summary = null;
+        string? eventKind = null;
+        string? rulingPayload = null;
+        string? rulingDigest = null;
+        string? rulingOrigin = null;
+        string? downstreamDelegationReference = null;
         string? dispositionKind = null;
         string? actor = null;
         string? reason = null;
@@ -2927,6 +3266,7 @@ internal static class NotifyCommand
         int? timeoutMilliseconds = null;
         var inputs = new List<string>();
         var expectedArtifacts = new List<string>();
+        var rulingEnvelopeFields = new Dictionary<string, string>(StringComparer.Ordinal);
         var preApprovalAcceptRules = new List<NotifyPreApprovalRule>();
         var preApprovalEscalateRules = new List<NotifyPreApprovalRule>();
         var scopedPolicies = new List<NotifyScopedPromptPolicy>();
@@ -2956,6 +3296,27 @@ internal static class NotifyCommand
                 case "--status": if (!ReadValue(args, ref index, argument, out status, out error)) return false; break;
                 case "--artifact": if (!ReadValue(args, ref index, argument, out artifact, out error)) return false; break;
                 case "--summary": if (!ReadValue(args, ref index, argument, out summary, out error)) return false; break;
+                case "--event-kind": if (!ReadValue(args, ref index, argument, out eventKind, out error)) return false; break;
+                case "--ruling-payload": if (!ReadValue(args, ref index, argument, out rulingPayload, out error)) return false; break;
+                case "--ruling-digest": if (!ReadValue(args, ref index, argument, out rulingDigest, out error)) return false; break;
+                case "--ruling-origin": if (!ReadValue(args, ref index, argument, out rulingOrigin, out error)) return false; break;
+                case "--downstream-delegation-reference":
+                case "--downstream-delegation":
+                case "--downstream-reference":
+                    if (!ReadValue(args, ref index, argument, out downstreamDelegationReference, out error)) return false;
+                    break;
+                case "--ruling-envelope-field":
+                    if (!ReadValue(args, ref index, argument, out var envelopeField, out error)) return false;
+                    var separator = envelopeField!.IndexOf('=');
+                    if (separator <= 0 || separator == envelopeField.Length - 1)
+                    {
+                        error = "--ruling-envelope-field requires <key=value> with a non-empty one-line value.";
+                        return false;
+                    }
+                    var envelopeKey = envelopeField[..separator];
+                    var envelopeValue = envelopeField[(separator + 1)..];
+                    rulingEnvelopeFields[envelopeKey] = envelopeValue;
+                    break;
                 case "--kind": if (!ReadValue(args, ref index, argument, out dispositionKind, out error)) return false; break;
                 case "--actor": if (!ReadValue(args, ref index, argument, out actor, out error)) return false; break;
                 case "--reason": if (!ReadValue(args, ref index, argument, out reason, out error)) return false; break;
@@ -3163,6 +3524,12 @@ internal static class NotifyCommand
             Status = status,
             Artifact = artifact,
             Summary = summary,
+            EventKind = eventKind,
+            RulingPayload = rulingPayload,
+            RulingDigest = rulingDigest,
+            RulingOrigin = rulingOrigin,
+            DownstreamDelegationReference = downstreamDelegationReference,
+            RulingEnvelopeFields = rulingEnvelopeFields,
             DispositionKind = dispositionKind,
             Actor = actor,
             Reason = reason,
@@ -3267,6 +3634,44 @@ internal static class NotifyCommand
             && operation is not OperationReport and not OperationCollect and not OperationReconcile)
         {
             error = "--report-root is supported only by notify report, notify collect, and notify reconcile.";
+            return false;
+        }
+
+        if (options.EventKind is not null
+            && !NotifyEventKindRouting.TryNormalize(options.EventKind, out _, out error))
+        {
+            return false;
+        }
+
+        if (options.EventKind is not null
+            && operation is not OperationDelegate and not OperationReport and not OperationEscalate)
+        {
+            error = "--event-kind is supported only by notify delegate, report, and escalate.";
+            return false;
+        }
+
+        var hasRulingOption = options.RulingPayload is not null
+            || options.RulingOrigin is not null
+            || options.RulingDigest is not null
+            || options.RulingEnvelopeFields.Count > 0
+            || options.DownstreamDelegationReference is not null;
+        if (hasRulingOption
+            && operation is not OperationDelegate and not OperationReport and not OperationEscalate)
+        {
+            error = "ruling and downstream-delegation options are supported only by notify delegate, report, and escalate.";
+            return false;
+        }
+
+        if (options.DownstreamDelegationReference is not null
+            && !IsSafeIdentity(options.DownstreamDelegationReference))
+        {
+            error = "--downstream-delegation-reference must be a safe delegation identity.";
+            return false;
+        }
+
+        if (options.RulingOrigin is not null && !IsSafeIdentity(options.RulingOrigin))
+        {
+            error = "--ruling-origin must be a canonical logical role or accepted role alias.";
             return false;
         }
         if (string.Equals(operation, OperationReconcile, StringComparison.Ordinal))
@@ -3578,6 +3983,15 @@ internal sealed record NotifyOptions
     public string? Status { get; init; }
     public string? Artifact { get; init; }
     public string? Summary { get; init; }
+    public string? EventKind { get; init; }
+    internal string? ResolvedEventKind { get; init; }
+    public string? RulingPayload { get; init; }
+    public string? RulingDigest { get; init; }
+    public string? RulingOrigin { get; init; }
+    public string? DownstreamDelegationReference { get; init; }
+    public IReadOnlyDictionary<string, string> RulingEnvelopeFields { get; init; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+    public NotifyRuling? PreparedRuling { get; init; }
     public string? DispositionKind { get; init; }
     public string? Actor { get; init; }
     public string? Reason { get; init; }
@@ -3627,6 +4041,9 @@ internal sealed record NotifyResult
     [JsonPropertyName("task_id")] public required string TaskId { get; init; }
     [JsonPropertyName("status")] public string? Status { get; init; }
     [JsonPropertyName("artifact")] public string? Artifact { get; init; }
+    [JsonPropertyName("event_kind")] public string? EventKind { get; init; }
+    [JsonPropertyName("ruling")] public NotifyRuling? Ruling { get; init; }
+    [JsonPropertyName("downstream_delegation_reference")] public string? DownstreamDelegationReference { get; init; }
     [JsonPropertyName("delivered")] public required bool Delivered { get; init; }
     [JsonPropertyName("event_appended")] public required bool EventAppended { get; init; }
     [JsonPropertyName("event_path")] public string? EventPath { get; init; }
@@ -4022,4 +4439,13 @@ internal sealed record NotifyDesignEvent
     [JsonPropertyName("unit")] public required string Unit { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
     [JsonPropertyName("artifact")] public required string Artifact { get; init; }
+    [JsonPropertyName("ruling")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public NotifyRuling? Ruling { get; init; }
+    [JsonPropertyName("ruling_envelope_fields")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyDictionary<string, string>? RulingEnvelopeFields { get; init; }
+    [JsonPropertyName("downstream_delegation_reference")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DownstreamDelegationReference { get; init; }
 }

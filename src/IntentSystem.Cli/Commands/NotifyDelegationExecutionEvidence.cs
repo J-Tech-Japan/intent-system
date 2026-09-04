@@ -255,6 +255,12 @@ internal sealed record NotifyDelegationExecutionEvidence
 
                         using var document = JsonDocument.Parse(line);
                         var root = document.RootElement;
+                        var eventTeam = ReadString(root, "team");
+                        if (!string.Equals(eventTeam, record.Team, StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
+
                         var eventUnit = ReadString(root, "unit");
                         var summary = ReadString(root, "summary");
                         var artifact = ReadString(root, "artifact");
@@ -425,9 +431,110 @@ internal sealed record NotifyDelegationExecutionEvidence
         return null;
     }
 
+    /// <summary>
+    /// Resolves a Steward's downstream reference against the same measured
+    /// evidence set used by G788.  A reference is accepted only when it is
+    /// present in a token-carrying pending ledger, report outbox, or
+    /// notification event (or names the measured execution-unit queue/chain
+    /// evidence).  A syntactically safe but unknown identifier therefore
+    /// cannot satisfy the Steward judgement gate.
+    /// </summary>
+    internal static bool TryResolveDownstreamReference(
+        string routingRoot,
+        NotifyPendingDelegation parent,
+        string? reference,
+        out string evidence,
+        out string error)
+    {
+        evidence = string.Empty;
+        if (string.IsNullOrWhiteSpace(reference))
+        {
+            error = "downstream delegation reference is required.";
+            return false;
+        }
+
+        var unitPattern = ResolveUnitPattern(routingRoot, parent.Domain, out var patternError);
+        if (patternError is not null)
+        {
+            error = patternError;
+            return false;
+        }
+
+        var parentToken = unitPattern is null
+            ? null
+            : ExtractExecutionUnitToken(parent.TaskId, parent.Objective, parent.Inputs, unitPattern);
+        if (parentToken is null)
+        {
+            error = $"downstream delegation reference '{reference}' could not be matched because the parent execution-unit token is absent.";
+            return false;
+        }
+
+        var measured = Resolve(routingRoot, parent, parent.DispatchedAt);
+        if (!measured.IsResolved)
+        {
+            error = measured.Error
+                ?? $"downstream delegation reference '{reference}' could not be resolved because evidence sources are unreadable.";
+            return false;
+        }
+
+        var details = measured.PendingLedgerDetails
+            .Concat(measured.ReportOutboxDetails)
+            .Concat(measured.NotificationEventDetails)
+            .Concat(measured.QueueStateDetails)
+            .Concat(measured.ContinuationChainDetails)
+            .ToArray();
+        foreach (var detail in details)
+        {
+            var taskId = ReadCarrierField(detail, TaskIdCarrierFieldPattern);
+            var unit = ReadCarrierField(detail, UnitCarrierFieldPattern);
+            var executionUnit = ReadCarrierField(detail, ExecutionUnitCarrierFieldPattern);
+            if (string.Equals(taskId, reference, StringComparison.Ordinal)
+                || string.Equals(unit, reference, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(executionUnit, reference, StringComparison.OrdinalIgnoreCase))
+            {
+                evidence = detail;
+                error = string.Empty;
+                return true;
+            }
+        }
+
+        // Queue and continuation evidence carry the configured unit token,
+        // not a child task id.  Permit that explicit token reference only
+        // when one of those non-artifact carriers was actually measured.
+        if (string.Equals(reference, parentToken, StringComparison.OrdinalIgnoreCase)
+            && (measured.QueueStateDetails.Count > 0 || measured.ContinuationChainDetails.Count > 0))
+        {
+            evidence = measured.QueueStateDetails.FirstOrDefault()
+                ?? measured.ContinuationChainDetails.First();
+            error = string.Empty;
+            return true;
+        }
+
+        error = $"downstream delegation reference '{reference}' did not resolve in G788 execution evidence ({measured.SourceCountSummary}).";
+        return false;
+    }
+
+    private static string? ReadCarrierField(string detail, Regex fieldPattern)
+    {
+        var match = fieldPattern.Match(detail);
+        return match.Success ? match.Groups["value"].Value : null;
+    }
+
     private static readonly Regex CandidateExecutionUnitPattern = new(
         @"(?<![A-Za-z0-9])(?:[A-Za-z][A-Za-z0-9]*-)?G[0-9]+(?![A-Za-z0-9])",
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex TaskIdCarrierFieldPattern = new(
+        @"(?<![A-Za-z0-9_])task_id=(?<value>[^;]+)",
+        RegexOptions.CultureInvariant);
+
+    private static readonly Regex UnitCarrierFieldPattern = new(
+        @"(?<![A-Za-z0-9_])unit=(?<value>[^;]+)",
+        RegexOptions.CultureInvariant);
+
+    private static readonly Regex ExecutionUnitCarrierFieldPattern = new(
+        @"(?<![A-Za-z0-9_])execution_unit=(?<value>[^;]+)",
+        RegexOptions.CultureInvariant);
 
     private static readonly Regex DefaultExecutionUnitPattern = new(
         @"^(?:[A-Za-z][A-Za-z0-9]*-)?G[0-9]+$",
