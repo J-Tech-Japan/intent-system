@@ -553,7 +553,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
         using var document = JsonDocument.Parse(writer.ToString());
         var prompts = document.RootElement.GetProperty("threads").EnumerateArray()
             .ToDictionary(item => item.GetProperty("role").GetString()!, item => item.GetProperty("prompt").GetString()!);
-        foreach (var role in new[] { "implementation", "review" })
+        foreach (var role in new[] { "builder", "reviewer" })
         {
             Assert.Contains("intent-cli notify report", prompts[role], StringComparison.Ordinal);
             Assert.Contains("REQUIRED FINAL STEP", prompts[role], StringComparison.Ordinal);

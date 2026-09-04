@@ -106,21 +106,21 @@ public sealed class SeatCommandGuidanceG696Tests
             workspace.Context,
             ["--pr", "1505", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
             reviewWriter));
-        AssertSeatCommandRoute(JsonDocument.Parse(reviewWriter.ToString()).RootElement);
+        AssertSeatCommandRoute(JsonDocument.Parse(reviewWriter.ToString()).RootElement, "reviewer");
 
         using var nextWriter = new StringWriter();
         Assert.Equal(0, GuideNextCommand.Execute(
             workspace.Context,
             ["--role", "review", "--format", "json"],
             nextWriter));
-        AssertSeatCommandRoute(JsonDocument.Parse(nextWriter.ToString()).RootElement);
+        AssertSeatCommandRoute(JsonDocument.Parse(nextWriter.ToString()).RootElement, "review");
 
         using var orchestratorWriter = new StringWriter();
         Assert.Equal(0, GuideOrchestratorThreadCommand.Execute(
             workspace.Context,
             ["--format", "json"],
             orchestratorWriter));
-        AssertSeatCommandRoute(JsonDocument.Parse(orchestratorWriter.ToString()).RootElement);
+        AssertSeatCommandRoute(JsonDocument.Parse(orchestratorWriter.ToString()).RootElement, "reviewer");
 
         using var markdownWriter = new StringWriter();
         Assert.Equal(0, GuideNextCommand.Execute(
@@ -198,14 +198,14 @@ public sealed class SeatCommandGuidanceG696Tests
         Assert.Contains("sekiban-domain/sekiban-workers", markdownWriter.ToString(), StringComparison.Ordinal);
     }
 
-    private static void AssertSeatCommandRoute(JsonElement root)
+    private static void AssertSeatCommandRoute(JsonElement root, string expectedRole)
     {
         var reachability = root.GetProperty("guide_reachability");
         Assert.True(reachability.GetProperty("is_declared").GetBoolean());
         Assert.False(reachability.GetProperty("no_role_facing_surface").GetBoolean());
         var route = Assert.Single(reachability.GetProperty("routes").EnumerateArray());
         Assert.Equal("guide seat-commands", route.GetProperty("guide_surface").GetString());
-        Assert.Equal("review", route.GetProperty("role").GetString());
+        Assert.Equal(expectedRole, route.GetProperty("role").GetString());
         Assert.Equal("per-kind sanctioned command forms and alternatives", route.GetProperty("target_surface").GetString());
     }
 

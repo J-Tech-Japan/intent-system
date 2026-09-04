@@ -146,17 +146,19 @@ internal static class GuidePromptMatrixCommand
             if (mode is not null)
             {
                 // Single entry
-                writer.Write(JsonSerializer.Serialize(entries[0], JsonOptions));
+                writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(JsonSerializer.Serialize(entries[0], JsonOptions)));
             }
             else
             {
-                writer.Write(JsonSerializer.Serialize(entries, JsonOptions));
+                writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(JsonSerializer.Serialize(entries, JsonOptions)));
             }
             writer.WriteLine();
         }
         else
         {
-            WriteMarkdown(writer, entries);
+            using var buffer = new StringWriter();
+            WriteMarkdown(buffer, entries);
+            writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(buffer.ToString()));
         }
 
         return 0;

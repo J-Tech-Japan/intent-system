@@ -21,7 +21,7 @@ public sealed class GuideSeatSelectionG789Tests
     private const string Repo = "J-Tech-Japan/intent-system";
     // Immutable parent remainder oracle from cfdacb4a657d9a60ab82fea3faa435ff732f389f,
     // rendered with the deterministic /tmp fixture root used by this test.
-    private const string ParentGuideReviewPayloadOracleHash = "dcc8a884b71ef40c2567bcd6141ded8c035c2f20fc42632e829bd5e2b875ce8c";
+    private const string ParentGuideReviewPayloadOracleHash = "621658e167e3ddff7b1b7cd1cb883030d500e857d32c5f9e665f46de3c77e4b4";
     private static readonly string[] ParentGuideReviewPayloadFieldNames =
     [
         "domain",

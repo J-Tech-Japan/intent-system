@@ -762,7 +762,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             var declaredKeep = SessionLayerFragments.Declarations
                 .Where(d => d.Section == heading
                     && d.Type != SessionLayerSections.FragmentType.TransportOperative)
-                .Select(d => SessionLayerFragments.Expand(BareValues, d.Text))
+                .Select(d => ExpandedForRender(BareValues, d.Text))
                 .ToArray();
             var agmsgSection = SectionText(underAgmsg, heading);
             var agmsgFragments = declaredKeep
@@ -791,6 +791,23 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             ["<owner/repo>"] = ModeWorkspace.Repo,
             ["<agent>"] = "claude",
         };
+
+    // G797 renders role-bearing command and JSON values with the canonical
+    // vocabulary. Keep this independent matrix guard aligned with that
+    // render-boundary projection while the declaration table remains the
+    // historical source template.
+    private static string ExpandedForRender(
+        IReadOnlyDictionary<string, string> values,
+        string text)
+    {
+        var expanded = SessionLayerFragments.Expand(values, text);
+        if (LogicalRoleNormalizer.Aliases.TryGetValue(expanded, out var canonical))
+        {
+            return canonical;
+        }
+
+        return GuideRoleVocabulary.ProjectRenderedRoleValues(expanded);
+    }
 
     /// <summary>The setup-ready invocation's values, which render a different
     /// intake — supplied inputs instead of a missing-input list.</summary>
@@ -983,7 +1000,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
 
                 var matches = SessionLayerFragments.Declarations
                     .Where(d => d.Section == section
-                        && SessionLayerFragments.Expand(values, d.Text) == trimmed)
+                        && ExpandedForRender(values, d.Text) == trimmed)
                     .ToArray();
 
                 if (matches.Length == 0)
@@ -1013,7 +1030,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         var unconsumedRows = SessionLayerFragments.Declarations
             .Where(d => !dynamicMissingHeadlines.Contains(d.Text)
                 && !shapes.Any(shape =>
-                    consumed.Contains((d.Section, SessionLayerFragments.Expand(shape.Values, d.Text)))))
+                    consumed.Contains((d.Section, ExpandedForRender(shape.Values, d.Text)))))
             .Select(d => $"[{d.Section}] {d.Text}")
             .ToArray();
         Assert.True(
@@ -1090,7 +1107,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
 
                     var matches = SessionLayerFragments.JsonDeclarations
                         .Where(d => d.Section == property
-                            && SessionLayerFragments.Expand(values, d.Text) == text)
+                            && ExpandedForRender(values, d.Text) == text)
                         .ToArray();
                     if (matches.Length == 0)
                     {
@@ -1127,7 +1144,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         var unconsumedRows = SessionLayerFragments.JsonDeclarations
             .Where(d => !dynamicMissingHeadlines.Contains(d.Text)
                 && !shapes.Any(shape =>
-                    consumed.Contains((d.Section, SessionLayerFragments.Expand(shape.Values, d.Text)))))
+                    consumed.Contains((d.Section, ExpandedForRender(shape.Values, d.Text)))))
             .Select(d => $"[{d.Section}] {d.Text}")
             .ToArray();
         Assert.True(
@@ -1617,7 +1634,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             var declared = SessionLayerFragments.Declarations
                 .Where(d => d.Section == heading)
                 .SelectMany(d => d.Clauses!)
-                .Where(c => SessionLayerFragments.Expand(BareValues, c.Text).Trim() == clause)
+                .Where(c => ExpandedForRender(BareValues, c.Text).Trim() == clause)
                 .ToArray();
 
             if (declared.Length == 0
@@ -1770,7 +1787,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             .Where(d => SessionLayerSections.MixedJsonProperties.Contains(d.Section, StringComparer.Ordinal))
             .SelectMany(d => d.Clauses!)
             .Where(SessionLayerFragments.IsAgmsgIllustration)
-            .Select(c => SessionLayerFragments.Expand(BareValues, c.Text))
+            .Select(c => ExpandedForRender(BareValues, c.Text))
             .Distinct(StringComparer.Ordinal)
             .Where(text => herdrJson.Contains(
                 System.Text.Json.JsonEncodedText.Encode(text).ToString(),
@@ -1793,7 +1810,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
                 var declared = SessionLayerFragments.JsonDeclarations
                     .Where(d => d.Section == entry.Name)
                     .SelectMany(d => d.Clauses!)
-                    .Where(c => SessionLayerFragments.Expand(BareValues, c.Text) == text)
+                    .Where(c => ExpandedForRender(BareValues, c.Text) == text)
                     .ToArray();
 
                 Assert.True(declared.Length > 0, $"context lists an undeclared clause under `{entry.Name}`: {text}");
@@ -1858,7 +1875,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
             // the case the review found broken.
             var isolationRows = SessionLayerFragments.Declarations
                 .Where(d => d.Section.Contains("Cross-project isolation", StringComparison.Ordinal))
-                .Select(d => SessionLayerFragments.Expand(BareValues, d.Text))
+                .Select(d => ExpandedForRender(BareValues, d.Text))
                 .Where(t => t.StartsWith("|", StringComparison.Ordinal))
                 .ToArray();
             Assert.NotEmpty(isolationRows);
@@ -1920,7 +1937,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
                 var declared = SessionLayerFragments.JsonDeclarations
                     .Where(d => d.Section == entry.Name)
                     .SelectMany(d => d.Clauses!)
-                    .Where(c => SessionLayerFragments.Expand(BareValues, c.Text) == value)
+                    .Where(c => ExpandedForRender(BareValues, c.Text) == value)
                     .ToArray();
                 Assert.NotEmpty(declared);
                 Assert.All(declared, c => Assert.Equal(

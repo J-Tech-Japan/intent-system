@@ -12,6 +12,14 @@ namespace IntentSystem.Cli.Tests;
 /// </summary>
 public sealed class GuideRoleNamesG797Tests
 {
+    private static readonly string[] RetiredAliases =
+    [
+        "design",
+        "orchestration",
+        "implementation",
+        "review",
+    ];
+
     private static readonly string[] CanonicalNames =
     [
         GuideRoleVocabulary.Architect,
@@ -45,7 +53,23 @@ public sealed class GuideRoleNamesG797Tests
             }
 
             Assert.Contains(GuideRoleVocabulary.StewardBoundarySentence, output, StringComparison.Ordinal);
-            foreach (var retiredAlias in new[] { "design", "orchestration", "implementation", "review" })
+            AssertRoleBearingValuesAreCanonical(output, name);
+            var expectedRoleCommand = name switch
+            {
+                "guide design-thread" => "--role architect",
+                "guide orchestrator-thread" => "--from architect --to orchestrator",
+                "guide workflow task implementation-loop" => "--from builder --to orchestrator",
+                // The host-loop prompt is intentionally role-neutral in its
+                // transport examples; the canonical vocabulary block and
+                // projection check above still cover its role-bearing values.
+                "guide workflow task review-next-slice-loop" => null,
+                _ => throw new InvalidOperationException($"Unexpected guide surface: {name}"),
+            };
+            if (expectedRoleCommand is not null)
+            {
+                Assert.Contains(expectedRoleCommand, output, StringComparison.Ordinal);
+            }
+            foreach (var retiredAlias in RetiredAliases)
             {
                 Assert.DoesNotContain($"role identifier is `{retiredAlias}`", output, StringComparison.Ordinal);
             }
@@ -73,6 +97,8 @@ public sealed class GuideRoleNamesG797Tests
             Assert.NotEmpty(writer.ToString());
             Assert.DoesNotContain("Unknown argument", writer.ToString(), StringComparison.Ordinal);
             Assert.DoesNotContain("Refusing to render", writer.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("\nWarning:", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("\nwarning:", writer.ToString(), StringComparison.OrdinalIgnoreCase);
             Console.WriteLine($"G797 AC2 route={name}; exit_code={exitCode}; warning=false");
         }
     }
@@ -130,9 +156,10 @@ public sealed class GuideRoleNamesG797Tests
         var rolePattern = string.Join("|", LogicalRoleNormalizer.CanonicalRoles
             .Concat(LogicalRoleNormalizer.Aliases.Keys)
             .Select(Regex.Escape));
-        var vendorHeading = new Regex(@"(?im)^#{2,6}[^\r\n]*(?:Claude|Codex)[^\r\n]*$", RegexOptions.Compiled);
-        var vendorBeforeRole = new Regex($@"(?i)(?:Claude|Codex)[^\r\n]*(?:{rolePattern})", RegexOptions.Compiled);
-        var roleBeforeVendor = new Regex($@"(?i)(?:{rolePattern})[^\r\n]*(?:Claude|Codex)", RegexOptions.Compiled);
+        var vendorHeading = new Regex(@"(?im)^#{2,6}[^\r\n]*(?:Claude|Codex|opencode)[^\r\n]*$", RegexOptions.Compiled);
+        var vendorBeforeRole = new Regex($@"(?i)(?:Claude|Codex|opencode)[^\r\n]*(?:{rolePattern})", RegexOptions.Compiled);
+        var roleBeforeVendor = new Regex($@"(?i)(?:{rolePattern})[^\r\n]*(?:Claude|Codex|opencode)", RegexOptions.Compiled);
+        var directVendorRoleAssignment = new Regex($@"(?i)\b(?:{rolePattern})\s*[=:]\s*(?:Claude|Codex|opencode)\b|\b(?:Claude|Codex|opencode)\s*[=:]\s*(?:{rolePattern})\b", RegexOptions.Compiled);
 
         foreach (var (name, render) in surfaces)
         {
@@ -154,7 +181,32 @@ public sealed class GuideRoleNamesG797Tests
                 .Where(heading => vendorBeforeRole.IsMatch(heading) || roleBeforeVendor.IsMatch(heading))
                 .ToArray();
             Assert.Empty(matches);
-            Console.WriteLine($"G797 AC6 vendor-adjacency-search {name}: vendor_headings={headings.Length}; vendor-before-role={vendorBeforeRoleMatches.Length}; role-before-vendor={roleBeforeVendorMatches.Length}; matching_headings={(matches.Length == 0 ? "<none>" : string.Join(" || ", matches))}");
+            var fullPayloadAssignments = output
+                .Split('\n')
+                .Where(line => directVendorRoleAssignment.IsMatch(line))
+                .ToArray();
+            Assert.Empty(fullPayloadAssignments);
+            Console.WriteLine($"G797 AC6 vendor-adjacency-search {name}: vendor_headings={headings.Length}; vendor-before-role={vendorBeforeRoleMatches.Length}; role-before-vendor={roleBeforeVendorMatches.Length}; full-payload-assignments={fullPayloadAssignments.Length}; matching_headings={(matches.Length == 0 ? "<none>" : string.Join(" || ", matches))}");
+        }
+    }
+
+    [Fact]
+    public void RoleBearingCommandsAndJsonProjectOnlyCanonicalIdentifiers_G797()
+    {
+        var context = CreateContext();
+        var surfaces = new (string Name, Func<TextWriter, int> Render)[]
+        {
+            ("guide design-thread", writer => GuideDesignThreadCommand.Execute(context, ["--format", "markdown"], writer)),
+            ("guide orchestrator-thread", writer => GuideOrchestratorThreadCommand.Execute(context, ["--format", "markdown"], writer)),
+            ("guide workflow task implementation-loop", writer => GuideWorkflowTaskImplementationLoopCommand.Execute(context, ["--format", "markdown"], writer)),
+            ("guide workflow task review-next-slice-loop", writer => GuideWorkflowTaskReviewNextSliceLoopCommand.Execute(context, ["--format", "markdown"], writer)),
+        };
+
+        foreach (var (name, render) in surfaces)
+        {
+            using var writer = new StringWriter();
+            Assert.Equal(0, render(writer));
+            AssertRoleBearingValuesAreCanonical(writer.ToString(), name);
         }
     }
 
@@ -254,4 +306,22 @@ public sealed class GuideRoleNamesG797Tests
             },
         },
     };
+
+    private static void AssertRoleBearingValuesAreCanonical(string output, string surface)
+    {
+        var aliases = string.Join("|", RetiredAliases.Select(Regex.Escape));
+        var cliFlag = new Regex($@"(?i)--(?:role|from|to|report-to|owner-role|owner)\s+(?:{aliases})(?=\s|`|'|""|$)", RegexOptions.Compiled);
+        var normalizedJson = output.Replace("\\\"", "\"", StringComparison.Ordinal);
+        var jsonValue = new Regex($@"(?i)""(?:role|from|to|report_to|thread|owner_role|destination_thread)""\s*:\s*""(?:{aliases})(?=@|""|\s|$)", RegexOptions.Compiled);
+        var agmsgJoin = new Regex($@"(?i)agmsg\s+join\.sh\s+\S+\s+(?:{aliases})\s+(?=\S)", RegexOptions.Compiled);
+
+        var matches = cliFlag.Matches(output)
+            .Cast<Match>()
+            .Concat(jsonValue.Matches(normalizedJson).Cast<Match>())
+            .Concat(agmsgJoin.Matches(output).Cast<Match>())
+            .Select(match => match.Value)
+            .ToArray();
+        Assert.Empty(matches);
+        Console.WriteLine($"G797 role-bearing canonical projection {surface}: retired_value_matches=0");
+    }
 }

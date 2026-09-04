@@ -213,7 +213,7 @@ public sealed class SessionLayerTopologyG736Tests(ITestOutputHelper output) : ID
         using var guide = JsonDocument.Parse(guideJson);
         var discovery = guide.RootElement.GetProperty("host_state_discovery");
         Assert.Equal("declared", discovery.GetProperty("status").GetString());
-        Assert.Equal("design", discovery.GetProperty("role").GetString());
+        Assert.Equal("architect", discovery.GetProperty("role").GetString());
         Assert.Equal(Envelope, discovery.GetProperty("envelope").GetString());
         Assert.Contains("declared design host-state role is legitimate", discovery.GetProperty("route").GetString(), StringComparison.Ordinal);
         Assert.Contains("undeclared or ad-hoc", discovery.GetProperty("route").GetString(), StringComparison.Ordinal);

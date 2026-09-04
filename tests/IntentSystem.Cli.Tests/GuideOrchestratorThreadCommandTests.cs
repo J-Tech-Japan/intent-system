@@ -119,7 +119,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         var roles = root.GetProperty("threads").EnumerateArray()
             .Select(t => t.GetProperty("role").GetString())
             .ToArray();
-        Assert.Equal(new[] { "orchestrator", "implementation", "review" }, roles);
+        Assert.Equal(new[] { "orchestrator", "builder", "reviewer" }, roles);
 
         var contract = root.GetProperty("agmsg_reply_contract");
         Assert.True(contract.TryGetProperty("accepted", out _));
@@ -493,8 +493,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         // Receiver thread prompts stay explicitly loopless.
         var prompts = doc.RootElement.GetProperty("threads").EnumerateArray()
             .ToDictionary(t => t.GetProperty("role").GetString()!, t => t.GetProperty("prompt").GetString()!);
-        Assert.Contains("LOOPLESS receiver", prompts["implementation"], StringComparison.Ordinal);
-        Assert.Contains("LOOPLESS receiver", prompts["review"], StringComparison.Ordinal);
+        Assert.Contains("LOOPLESS receiver", prompts["builder"], StringComparison.Ordinal);
+        Assert.Contains("LOOPLESS receiver", prompts["reviewer"], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -899,7 +899,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("Permission / credentials / security", output, StringComparison.Ordinal);
         Assert.Contains("Release / public publish decision", output, StringComparison.Ordinal);
         // Structured escalation message with current authoritative state + evidence + decision needed.
-        Assert.Contains("\"to\":\"design\"", output, StringComparison.Ordinal);
+        Assert.Contains("\"to\":\"architect\"", output, StringComparison.Ordinal);
         Assert.Contains("\"current_state\"", output, StringComparison.Ordinal);
         Assert.Contains("AUTHORITATIVE state", output, StringComparison.Ordinal);
         Assert.Contains("\"decision_needed\"", output, StringComparison.Ordinal);
@@ -1217,7 +1217,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         // Copy-paste agmsg join/delivery commands per role, using supplied folders + agents + team + delivery.
         Assert.Contains("agmsg join.sh intent-orch orchestrator claude /work/orch", output, StringComparison.Ordinal);
         Assert.Contains("agmsg delivery.sh set streamed-inbox-watch claude /work/impl", output, StringComparison.Ordinal);
-        Assert.Contains("agmsg join.sh intent-orch review codex /work/review", output, StringComparison.Ordinal);
+        Assert.Contains("agmsg join.sh intent-orch reviewer codex /work/review", output, StringComparison.Ordinal);
         // First role prompts for all three roles.
         Assert.Contains("#### orchestrator", output, StringComparison.Ordinal);
         Assert.Contains("#### implementation", output, StringComparison.Ordinal);
@@ -1434,7 +1434,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("design / human receiver — OPTIONAL", output, StringComparison.Ordinal);
         // Paste-ready registration/addressing setup.
         Assert.Contains("### Design receiver setup", output, StringComparison.Ordinal);
-        Assert.Contains("agmsg join.sh <team> design", output, StringComparison.Ordinal);
+        Assert.Contains("agmsg join.sh <team> architect", output, StringComparison.Ordinal);
         // Minimal manual inbox trigger prompt (the packet's example wording).
         Assert.Contains("agmsg の inbox を確認してください。あなたは `<team>` の design です。", output, StringComparison.Ordinal);
         // Pre-start manual inbox inspection.
@@ -1472,8 +1472,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         // No guidance tells implementation/review to start loops: prompts stay loopless.
         var prompts = doc.RootElement.GetProperty("threads").EnumerateArray()
             .ToDictionary(t => t.GetProperty("role").GetString()!, t => t.GetProperty("prompt").GetString()!);
-        Assert.Contains("LOOPLESS receiver", prompts["implementation"], StringComparison.Ordinal);
-        Assert.Contains("LOOPLESS receiver", prompts["review"], StringComparison.Ordinal);
+        Assert.Contains("LOOPLESS receiver", prompts["builder"], StringComparison.Ordinal);
+        Assert.Contains("LOOPLESS receiver", prompts["reviewer"], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1725,7 +1725,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("\"type\":\"packet-needed\"", output, StringComparison.Ordinal);
         // G610: a wait for design is a recorded, queryable lifecycle state.
         Assert.Contains("judgment-wait open", output, StringComparison.Ordinal);
-        Assert.Contains("--owner design", output, StringComparison.Ordinal);
+        Assert.Contains("--owner architect", output, StringComparison.Ordinal);
         Assert.Contains("judgment-wait query", output, StringComparison.Ordinal);
         Assert.Contains("judgment-wait resolve", output, StringComparison.Ordinal);
         Assert.Contains("whoever supplies the judgment MUST resolve it", output, StringComparison.Ordinal);
@@ -1754,7 +1754,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("design-owned", boundary.GetProperty("release_prep_rule").GetString()!, StringComparison.Ordinal);
         Assert.Contains("does NOT invent the packet", boundary.GetProperty("missing_packet_response").GetString()!, StringComparison.Ordinal);
         var designWait = boundary.GetProperty("missing_packet_response").GetString()!;
-        Assert.Contains("--owner design", designWait, StringComparison.Ordinal);
+        Assert.Contains("--owner architect", designWait, StringComparison.Ordinal);
         Assert.Contains("judgment-wait query", designWait, StringComparison.Ordinal);
         Assert.Contains("judgment-wait resolve", designWait, StringComparison.Ordinal);
 
@@ -1888,8 +1888,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         // AC: implementation and review thread prompts contain the required
         // completion-or-blocked report step with its expected shape.
         Assert.Contains("REQUIRED FINAL STEP of EVERY delegation", output, StringComparison.Ordinal);
-        Assert.Contains("\"status\":\"completed\",\"thread\":\"implementation\"", output, StringComparison.Ordinal);
-        Assert.Contains("\"status\":\"completed\",\"thread\":\"review\"", output, StringComparison.Ordinal);
+        Assert.Contains("\"status\":\"completed\",\"thread\":\"builder\"", output, StringComparison.Ordinal);
+        Assert.Contains("\"status\":\"completed\",\"thread\":\"reviewer\"", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1937,8 +1937,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Equal(0, exitCode);
         using var doc = JsonDocument.Parse(writer.ToString());
         var threads = doc.RootElement.GetProperty("threads").EnumerateArray().ToArray();
-        var implementation = threads.First(t => t.GetProperty("role").GetString() == "implementation").GetProperty("prompt").GetString()!;
-        var review = threads.First(t => t.GetProperty("role").GetString() == "review").GetProperty("prompt").GetString()!;
+        var implementation = threads.First(t => t.GetProperty("role").GetString() == "builder").GetProperty("prompt").GetString()!;
+        var review = threads.First(t => t.GetProperty("role").GetString() == "reviewer").GetProperty("prompt").GetString()!;
 
         Assert.Contains("REQUIRED FINAL STEP", implementation, StringComparison.Ordinal);
         Assert.Contains("REQUIRED FINAL STEP", review, StringComparison.Ordinal);
@@ -2314,8 +2314,8 @@ public sealed class GuideOrchestratorThreadCommandTests
             .ToArray();
         Assert.Equal(3, roles.Length);
         Assert.Contains(roles, r => r.Role == "orchestrator" && r.Command.Contains("<owner/host-repo>", StringComparison.Ordinal));
-        Assert.Contains(roles, r => r.Role == "review" && r.Command.Contains("<owner/host-repo>", StringComparison.Ordinal));
-        Assert.Contains(roles, r => r.Role == "implementation" && r.Command.Contains("owner/repo", StringComparison.Ordinal));
+        Assert.Contains(roles, r => r.Role == "reviewer" && r.Command.Contains("<owner/host-repo>", StringComparison.Ordinal));
+        Assert.Contains(roles, r => r.Role == "builder" && r.Command.Contains("owner/repo", StringComparison.Ordinal));
 
         var launchRules = provisioning.GetProperty("launch_rules");
         Assert.Contains("shim", launchRules.GetProperty("codex_shim_rule").GetString(), StringComparison.Ordinal);

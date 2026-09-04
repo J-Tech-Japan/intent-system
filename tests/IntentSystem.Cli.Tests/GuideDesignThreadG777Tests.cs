@@ -43,7 +43,7 @@ public sealed class GuideDesignThreadG777Tests
     // Immutable G776 parent oracle from cfdacb4a657d9a60ab82fea3faa435ff732f389f.
     // The current head is projected back to that parent by removing only the
     // G789 nested additions before this hash is computed.
-    private const string G776BaselinePayloadOracleHash = "5ebb02d016c9afec671e58184f993705d0c6e597ecf334239b19d704bfaf3294";
+    private const string G776BaselinePayloadOracleHash = "313f6eb44f538042a3818899866a40b5a8dc26c13b247573af8a7a8306248998";
 
     [Fact]
     public void RenderedLivenessGuidance_NamesTheSanctionedDryRunBeforeWriteResponse_G777()

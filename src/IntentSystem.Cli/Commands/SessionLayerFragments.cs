@@ -2332,7 +2332,9 @@ internal static class SessionLayerFragments
                 continue;
             }
 
-            if (Expand(values, declaration.Text) == trimmed)
+            var expanded = Expand(values, declaration.Text);
+            if (expanded == trimmed
+                || GuideRoleVocabulary.ProjectRenderedRoleValues(expanded) == trimmed)
             {
                 return declaration.Clauses!
                     .Select(c => c with { Text = Expand(values, c.Text) })
@@ -2354,11 +2356,16 @@ internal static class SessionLayerFragments
     {
         foreach (var declaration in JsonDeclarations)
         {
-            if (declaration.Section == property && Expand(values, declaration.Text) == value)
+            if (declaration.Section == property)
             {
-                return declaration.Clauses!
-                    .Select(c => c with { Text = Expand(values, c.Text) })
-                    .ToArray();
+                var expanded = Expand(values, declaration.Text);
+                if (expanded == value
+                    || GuideRoleVocabulary.ProjectRenderedRoleValues(expanded) == value)
+                {
+                    return declaration.Clauses!
+                        .Select(c => c with { Text = Expand(values, c.Text) })
+                        .ToArray();
+                }
             }
         }
 

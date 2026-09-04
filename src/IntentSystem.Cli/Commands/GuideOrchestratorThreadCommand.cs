@@ -150,7 +150,8 @@ internal static class GuideOrchestratorThreadCommand
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
             var json = JsonSerializer.Serialize(guide, JsonOptions);
-            writer.Write(sessionLayer.IsHerdrOnly ? SelectJsonSections(json, values) : json);
+            var selected = sessionLayer.IsHerdrOnly ? SelectJsonSections(json, values) : json;
+            writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(selected));
             writer.WriteLine();
             return 0;
         }
@@ -163,11 +164,13 @@ internal static class GuideOrchestratorThreadCommand
         {
             using var buffer = new StringWriter();
             WriteMarkdown(buffer, guide, metadataFree: !Directory.Exists(Path.Combine(context.RepoRoot, ".intent-cli")));
-            writer.Write(SelectMarkdownSections(buffer.ToString(), values));
+            writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(SelectMarkdownSections(buffer.ToString(), values)));
             return 0;
         }
 
-        WriteMarkdown(writer, guide, metadataFree: !Directory.Exists(Path.Combine(context.RepoRoot, ".intent-cli")));
+        using var markdownBuffer = new StringWriter();
+        WriteMarkdown(markdownBuffer, guide, metadataFree: !Directory.Exists(Path.Combine(context.RepoRoot, ".intent-cli")));
+        writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(markdownBuffer.ToString()));
         return 0;
     }
 
@@ -1957,7 +1960,7 @@ internal static class GuideOrchestratorThreadCommand
                     Apply("domain (`<domain>`) and target repo (`<owner/repo>`)"),
                     "host / orchestrator / implementation / review paths — each role runs from its own folder, clone, or worktree",
                     "base branch policy (e.g. direct-main)",
-                    Apply("per-role agents (e.g. orchestrator=`<agent>`, implementation=claude, review=codex)"),
+                    "per-role agent slots: architect, orchestrator, builder, reviewer, and steward are configured independently; no role is tied to a runtime/vendor.",
                     "agmsg team name",
                     "delivery mode — how each role receives messages (e.g. a streamed inbox watch per role)",
                 },

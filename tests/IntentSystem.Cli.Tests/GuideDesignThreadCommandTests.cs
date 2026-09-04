@@ -16,7 +16,7 @@ public sealed class GuideDesignThreadCommandTests
         var section = SectionFrom(output, "## External-resident Architect receive");
 
         Assert.Contains(
-            "intent-cli notify collect --domain <domain> --team <team> --role design --since <cursor> --wait --timeout-ms <timeout-ms> --format json",
+            "intent-cli notify collect --domain <domain> --team <team> --role architect --since <cursor> --wait --timeout-ms <timeout-ms> --format json",
             section,
             StringComparison.Ordinal);
         Assert.Contains("caller", section, StringComparison.OrdinalIgnoreCase);
@@ -92,7 +92,7 @@ public sealed class GuideDesignThreadCommandTests
                     writer));
 
             var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(writer.ToString())));
-            Assert.Equal("bb1537bac2880f2d6c7cb5d64f0aaec5c519aee0509f8f9b38f6ce6de235e216", hash);
+            Assert.Equal("5cf1f0a71314bec608aaa1545576ca28ff601c6ffdd29b0e7d3fd75081669616", hash);
         }
         finally
         {
