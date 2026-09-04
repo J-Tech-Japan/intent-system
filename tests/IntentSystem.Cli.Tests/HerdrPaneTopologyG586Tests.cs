@@ -17,7 +17,7 @@ public sealed class HerdrPaneTopologyG586Tests : IDisposable
     // G684 extends shared orchestrator guidance with envelope-only recipe drift.
     // G685/G686/G690/G699/G707/G708/G719/G776/G781/G797 intentionally extend the shared guide while preserving
     // the G594 preflight contract. G696/G697/G700 add structured role-facing routes.
-    private const string G594AgmsgBaselineSha256 = "970132ffd142800bb1b0e55732f607df0318828058ad98b80603f7514b3d3f74";
+    private const string G594AgmsgBaselineSha256 = "bb1537bac2880f2d6c7cb5d64f0aaec5c519aee0509f8f9b38f6ce6de235e216";
 
     private readonly string root = Directory.CreateTempSubdirectory("herdr-topology-g586-").FullName;
 

@@ -707,8 +707,8 @@ internal static class NotifyRoleTopologyStore
                 + "before retrying notify.");
         }
 
-        var acceptedName = string.Equals(canonicalRole, "orchestration", StringComparison.Ordinal)
-            ? " The coordinating seat is accepted as canonical 'orchestration' or accepted recorded alias 'orchestrator'; an existing record under either name does not need renaming."
+        var acceptedName = string.Equals(canonicalRole, LogicalRoleNormalizer.Orchestrator, StringComparison.Ordinal)
+            ? " The coordinating seat is accepted as canonical 'orchestrator' or accepted recorded alias 'orchestration'; an existing record under either name does not need renaming."
             : string.Empty;
         return RoleResolutionFailure(
             topology,
@@ -1431,8 +1431,8 @@ internal static class NotifyRoleTopologyStore
         string summary)
     {
         var canonicalRole = GuideRoleContractGuidance.Normalize(role) ?? role;
-        var roleOptions = string.Equals(canonicalRole, "orchestration", StringComparison.Ordinal)
-            ? "<orchestration|orchestrator>"
+        var roleOptions = string.Equals(canonicalRole, LogicalRoleNormalizer.Orchestrator, StringComparison.Ordinal)
+            ? "<orchestrator|orchestration>"
             : $"<{role}>";
         var domain = topology.Domain ?? "<domain>";
         var remedy = $" Record it with \u0060intent-cli session-layer topology record --domain {domain} --team "

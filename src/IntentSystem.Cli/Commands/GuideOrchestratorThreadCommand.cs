@@ -1040,8 +1040,8 @@ internal static class GuideOrchestratorThreadCommand
                 Summary =
                     "In orchestrator-message mode the normal steady state is MESSAGE-DRIVEN: implementation/review "
                     + "receivers already send accepted/progress/completed/blocked replies to the orchestrator, and those "
-                    + "replies wake the orchestrator path — routine fast polling is NOT required. An orchestrator timer "
-                    + "(Codex automation every 5m, or Claude same-thread `/loop 5m`) remains SUPPORTED but only as an "
+                    + "replies wake the orchestrator path — routine fast polling is NOT required. A dedicated fallback "
+                    + "timer (Codex automation every 5m, or Claude same-thread `/loop 5m`) remains SUPPORTED but only as an "
                     + "explicit FALLBACK/LEGACY polling option for an operator who intentionally wants scheduled "
                     + "polling instead of message-driven wakes. Either way the implementation and review threads stay "
                     + "long-lived LOOPLESS receivers. The RECOMMENDED default safety net for message-driven steady "
@@ -1054,7 +1054,7 @@ internal static class GuideOrchestratorThreadCommand
                     + "once, and waits again. Receivers are NEVER scheduled; when an explicit fallback/legacy timer is "
                     + "used (message-driven wakes are the default), the orchestrator is the only thread ever scheduled.",
                 CodexSetupPrompt = Apply(
-                    "OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the ORCHESTRATOR "
+                    "OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the coordinating "
                     + "thread, domain `<domain>` against `<owner/repo>` using `<agent>`: on each run perform exactly "
                     + "ONE orchestrator wake — check design-side progress and agmsg replies, ask intent-cli for state "
                     + "(`intent status`, `worker next-action --github-only`, `automation host-review-preflight`), "
@@ -1066,7 +1066,7 @@ internal static class GuideOrchestratorThreadCommand
                     + "the operator explicitly wants scheduled fallback/legacy polling. Do not run implementation/"
                     + "review loops; they are loopless receivers."),
                 ClaudeLoopSetupPrompt = Apply(
-                    "OPTIONAL fallback/legacy polling — Claude same-thread setup for the ORCHESTRATOR thread, domain "
+                    "OPTIONAL fallback/legacy polling — Claude same-thread setup for the coordinating thread, domain "
                     + "`<domain>` against `<owner/repo>`: in the orchestrator thread run `/loop 5m` with the "
                     + "orchestrator prompt so the same thread re-wakes every 5 minutes. Each wake does exactly one "
                     + "orchestrator pass (read replies, check intent-cli / GitHub state, send this wake's messages under "
@@ -4809,13 +4809,13 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- scheduled thread when an explicit timer is used: `{guide.Scheduling.ScheduledThread}` (the only thread ever scheduled)");
         writer.WriteLine($"- **receivers are loopless** — {guide.Scheduling.ReceiverNote}");
         writer.WriteLine();
-        writer.WriteLine("### Codex automation (5m) — orchestrator (fallback/legacy, optional)");
+        writer.WriteLine("### Codex automation (5m) — fallback/legacy polling (optional)");
         writer.WriteLine();
         writer.WriteLine("```text");
         writer.WriteLine(guide.Scheduling.CodexSetupPrompt);
         writer.WriteLine("```");
         writer.WriteLine();
-        writer.WriteLine("### Claude `/loop 5m` — orchestrator (fallback/legacy, optional)");
+        writer.WriteLine("### Claude `/loop 5m` — fallback/legacy polling (optional)");
         writer.WriteLine();
         writer.WriteLine("```text");
         writer.WriteLine(guide.Scheduling.ClaudeLoopSetupPrompt);

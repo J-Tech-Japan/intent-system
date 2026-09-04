@@ -45,7 +45,10 @@ public sealed class GuideRoleNamesG797Tests
             }
 
             Assert.Contains(GuideRoleVocabulary.StewardBoundarySentence, output, StringComparison.Ordinal);
-            Assert.DoesNotContain("--role orchestrator", output, StringComparison.Ordinal);
+            foreach (var retiredAlias in new[] { "design", "orchestration", "implementation", "review" })
+            {
+                Assert.DoesNotContain($"role identifier is `{retiredAlias}`", output, StringComparison.Ordinal);
+            }
             Console.WriteLine($"G797 AC1/AC4 {name}: canonical_names={string.Join(",", CanonicalNames)}; steward_boundary=present");
         }
     }
@@ -54,18 +57,18 @@ public sealed class GuideRoleNamesG797Tests
     public void ExistingRouteNames_StillResolveWithoutWarnings_G797()
     {
         var context = CreateContext();
-        var routes = new (string Name, Func<TextWriter, int> Render)[]
+        var routes = new (string Name, string[] Args)[]
         {
-            ("guide design-thread", writer => GuideDesignThreadCommand.Execute(context, ["--format", "json"], writer)),
-            ("guide orchestrator-thread", writer => GuideOrchestratorThreadCommand.Execute(context, ["--format", "json"], writer)),
-            ("guide workflow task implementation-loop", writer => GuideWorkflowTaskImplementationLoopCommand.Execute(context, ["--format", "json"], writer)),
-            ("guide workflow task review-next-slice-loop", writer => GuideWorkflowTaskReviewNextSliceLoopCommand.Execute(context, ["--format", "json"], writer)),
+            ("guide design-thread", ["guide", "design-thread", "--format", "json"]),
+            ("guide orchestrator-thread", ["guide", "orchestrator-thread", "--format", "json"]),
+            ("guide workflow task implementation-loop", ["guide", "workflow", "task", "implementation-loop", "--format", "json"]),
+            ("guide workflow task review-next-slice-loop", ["guide", "workflow", "task", "review-next-slice-loop", "--format", "json"]),
         };
 
-        foreach (var (name, render) in routes)
+        foreach (var (name, args) in routes)
         {
             using var writer = new StringWriter();
-            var exitCode = render(writer);
+            var exitCode = CommandRouter.Execute(args, context, writer);
             Assert.Equal(0, exitCode);
             Assert.NotEmpty(writer.ToString());
             Assert.DoesNotContain("Unknown argument", writer.ToString(), StringComparison.Ordinal);
@@ -87,21 +90,30 @@ public sealed class GuideRoleNamesG797Tests
 
         var output = writer.ToString();
         Assert.Contains("guide orchestrator-thread", output, StringComparison.Ordinal);
-        Assert.Contains("working role identifier is `orchestration`", output, StringComparison.Ordinal);
+        Assert.Contains("working role identifier is `orchestrator`", output, StringComparison.Ordinal);
         Assert.Contains("Use that identifier in role-bearing commands", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("--role orchestrator", output, StringComparison.Ordinal);
-        Console.WriteLine("G797 AC3 orchestrator_route=guide orchestrator-thread; role_identifier=orchestration; old_role_flag_present=false");
+        Assert.Contains("retired `orchestration` recording spelling belongs only in the glossary", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("working role identifier is `orchestration`", output, StringComparison.Ordinal);
+        Console.WriteLine("G797 AC3 orchestrator_route=guide orchestrator-thread; role_identifier=orchestrator; retired_alias=orchestration; projection_direction=canonical");
     }
 
     [Fact]
     public void GuideRoleIdentifier_UsesTheG795NormalizerProjection_G797()
     {
-        Assert.Equal("design", GuideRoleVocabulary.Identifier(LogicalRoleNormalizer.Architect));
-        Assert.Equal("orchestration", GuideRoleVocabulary.Identifier(LogicalRoleNormalizer.Orchestrator));
-        Assert.Equal("implementation", GuideRoleVocabulary.Identifier(LogicalRoleNormalizer.Builder));
-        Assert.Equal("review", GuideRoleVocabulary.Identifier(LogicalRoleNormalizer.Reviewer));
-        Assert.Equal("steward", GuideRoleVocabulary.Identifier(LogicalRoleNormalizer.Steward));
-        Console.WriteLine("G797 AC3 G795_identifier_projection: architect=design; orchestrator=orchestration; builder=implementation; reviewer=review; steward=steward");
+        Assert.Equal(LogicalRoleNormalizer.Architect, GuideRoleVocabulary.Identifier(LogicalRoleNormalizer.Architect));
+        Assert.Equal(LogicalRoleNormalizer.Orchestrator, GuideRoleVocabulary.Identifier(LogicalRoleNormalizer.Orchestrator));
+        Assert.Equal(LogicalRoleNormalizer.Builder, GuideRoleVocabulary.Identifier(LogicalRoleNormalizer.Builder));
+        Assert.Equal(LogicalRoleNormalizer.Reviewer, GuideRoleVocabulary.Identifier(LogicalRoleNormalizer.Reviewer));
+        Assert.Equal(LogicalRoleNormalizer.Steward, GuideRoleVocabulary.Identifier(LogicalRoleNormalizer.Steward));
+
+        foreach (var (alias, canonical) in LogicalRoleNormalizer.Aliases)
+        {
+            Assert.Equal(canonical, GuideRoleVocabulary.Identifier(alias));
+            Assert.Equal(canonical, GuideRoleContractGuidance.Normalize(alias));
+        }
+
+        Assert.Equal(LogicalRoleNormalizer.Orchestrator, GuideRoleContractGuidance.Normalize(LogicalRoleNormalizer.Orchestrator));
+        Console.WriteLine("G797 AC3 G795_identifier_projection: architect=architect; orchestrator=orchestrator; builder=builder; reviewer=reviewer; steward=steward; aliases=accepted-input-only");
     }
 
     [Fact]
@@ -115,18 +127,34 @@ public sealed class GuideRoleNamesG797Tests
             ("guide workflow task implementation-loop", writer => GuideWorkflowTaskImplementationLoopCommand.Execute(context, ["--format", "markdown"], writer)),
             ("guide workflow task review-next-slice-loop", writer => GuideWorkflowTaskReviewNextSliceLoopCommand.Execute(context, ["--format", "markdown"], writer)),
         };
-        var requiringRuntime = new Regex(
-            @"(?ix)\b(?:Architect|Orchestrator|Builder|Reviewer|Steward)\b[^.!?\r\n]{0,80}\b(?:requires?|must\s+(?:use|run|be)|only\s+works?\s+with)\b[^.!?\r\n]{0,80}\b(?:Claude|Codex)\b",
-            RegexOptions.Compiled);
+        var rolePattern = string.Join("|", LogicalRoleNormalizer.CanonicalRoles
+            .Concat(LogicalRoleNormalizer.Aliases.Keys)
+            .Select(Regex.Escape));
+        var vendorHeading = new Regex(@"(?im)^#{2,6}[^\r\n]*(?:Claude|Codex)[^\r\n]*$", RegexOptions.Compiled);
+        var vendorBeforeRole = new Regex($@"(?i)(?:Claude|Codex)[^\r\n]*(?:{rolePattern})", RegexOptions.Compiled);
+        var roleBeforeVendor = new Regex($@"(?i)(?:{rolePattern})[^\r\n]*(?:Claude|Codex)", RegexOptions.Compiled);
 
         foreach (var (name, render) in surfaces)
         {
             using var writer = new StringWriter();
             Assert.Equal(0, render(writer));
             var output = writer.ToString();
-            var matches = requiringRuntime.Matches(output).Select(match => match.Value).ToArray();
+            var headings = vendorHeading.Matches(output).Select(match => match.Value).ToArray();
+            var vendorBeforeRoleMatches = headings
+                .Where(heading => vendorBeforeRole.IsMatch(heading))
+                .ToArray();
+            var roleBeforeVendorMatches = headings
+                .Where(heading => roleBeforeVendor.IsMatch(heading))
+                .ToArray();
+            Assert.Empty(vendorBeforeRoleMatches);
+            Assert.Empty(roleBeforeVendorMatches);
+            var matches = vendorBeforeRoleMatches
+                .Concat(roleBeforeVendorMatches)
+                .Distinct(StringComparer.Ordinal)
+                .Where(heading => vendorBeforeRole.IsMatch(heading) || roleBeforeVendor.IsMatch(heading))
+                .ToArray();
             Assert.Empty(matches);
-            Console.WriteLine($"G797 AC6 vendor-adjacency-search {name}: pattern={requiringRuntime}; matches={matches.Length}; lines={(matches.Length == 0 ? "<none>" : string.Join(" || ", matches))}");
+            Console.WriteLine($"G797 AC6 vendor-adjacency-search {name}: vendor_headings={headings.Length}; vendor-before-role={vendorBeforeRoleMatches.Length}; role-before-vendor={roleBeforeVendorMatches.Length}; matching_headings={(matches.Length == 0 ? "<none>" : string.Join(" || ", matches))}");
         }
     }
 

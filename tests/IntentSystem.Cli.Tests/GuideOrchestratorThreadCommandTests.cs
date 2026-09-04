@@ -363,8 +363,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.DoesNotContain("is the SINGLE recurring driver", output, StringComparison.Ordinal);
         Assert.Contains("scheduled thread when an explicit timer is used: `orchestrator`", output, StringComparison.Ordinal);
         // Both setup prompts are present, but framed as optional fallback/legacy polling.
-        Assert.Contains("Codex automation (5m) — orchestrator (fallback/legacy, optional)", output, StringComparison.Ordinal);
-        Assert.Contains("Claude `/loop 5m` — orchestrator (fallback/legacy, optional)", output, StringComparison.Ordinal);
+        Assert.Contains("Codex automation (5m) — fallback/legacy polling (optional)", output, StringComparison.Ordinal);
+        Assert.Contains("Claude `/loop 5m` — fallback/legacy polling (optional)", output, StringComparison.Ordinal);
         Assert.Contains("OPTIONAL fallback/legacy polling", output, StringComparison.Ordinal);
         // Receivers are explicitly loopless regardless of drive mode.
         Assert.Contains("loopless receiver", output, StringComparison.Ordinal);

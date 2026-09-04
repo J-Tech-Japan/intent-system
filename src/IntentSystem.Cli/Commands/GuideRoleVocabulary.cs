@@ -47,9 +47,10 @@ internal static class GuideRoleVocabulary
     }
 
     /// <summary>
-    /// Resolve the identifier emitted in guide commands.  Route projections
-    /// are compatibility surfaces, so the existing accepted spelling is kept
-    /// (notably <c>orchestration</c> for the Orchestrator seat).
+    /// Resolve the canonical identifier emitted in guide commands. Legacy
+    /// spellings are accepted as input by the shared normalizer, but they are
+    /// never projected back into new guidance. Route names remain separate
+    /// compatibility surfaces owned by their individual guide commands.
     /// </summary>
     public static string Identifier(string role)
     {
@@ -59,7 +60,7 @@ internal static class GuideRoleVocabulary
             return role;
         }
 
-        return GuideRoleContractGuidance.Normalize(canonical) ?? canonical;
+        return canonical;
     }
 
     public static string CanonicalNamesSentence =>
@@ -68,7 +69,7 @@ internal static class GuideRoleVocabulary
     public static string OrchestratorIdentifierSentence =>
         $"The {Orchestrator} guide route remains `guide orchestrator-thread`; its working role identifier is "
         + $"`{Identifier(LogicalRoleNormalizer.Orchestrator)}`. Use that identifier in role-bearing commands; "
-        + "the retired `orchestrator` recording spelling belongs only in the glossary.";
+        + "the retired `orchestration` recording spelling belongs only in the glossary.";
 
     public static string StewardBoundarySentence =>
         $"{Steward} is a transmission boundary: it relays weight without making design judgement (that belongs to "

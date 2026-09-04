@@ -16,20 +16,20 @@ internal static class GuideRoleContractGuidance
     {
         return Normalize(role) switch
         {
-            "design" => Create(
-                "design",
+            LogicalRoleNormalizer.Architect => Create(
+                LogicalRoleNormalizer.Architect,
                 "intent-cli guide design-thread",
                 "FIRST — before acting on the rest of this output, read your role's operating guide (`intent-cli guide design-thread`) if you have not read it this session. Do not force a reread on every wake; re-read after a CLI-version or session-layer configuration change."),
-            "orchestration" => Create(
-                "orchestration",
+            LogicalRoleNormalizer.Orchestrator => Create(
+                LogicalRoleNormalizer.Orchestrator,
                 "intent-cli guide orchestrator-thread",
                 "FIRST — before acting on the rest of this output, read your role's operating guide (`intent-cli guide orchestrator-thread`) if you have not read it this session. Do not force a reread on every wake; re-read after a CLI-version or session-layer configuration change."),
-            "implementation" => Create(
-                "implementation",
+            LogicalRoleNormalizer.Builder => Create(
+                LogicalRoleNormalizer.Builder,
                 "intent-cli guide worker issue-to-pr",
                 "FIRST — before acting on the rest of this output, read your role's operating guide (`intent-cli guide worker issue-to-pr`) if you have not read it this session. Do not force a reread on every wake; re-read after a CLI-version or session-layer configuration change."),
-            "review" => Create(
-                "review",
+            LogicalRoleNormalizer.Reviewer => Create(
+                LogicalRoleNormalizer.Reviewer,
                 "intent-cli guide review",
                 "FIRST — before acting on the rest of this output, read your role's operating guide (`intent-cli guide review`) if you have not read it this session. Do not force a reread on every wake; re-read after a CLI-version or session-layer configuration change."),
             _ => null,
@@ -44,26 +44,23 @@ internal static class GuideRoleContractGuidance
         }
 
         var candidate = role.Trim().ToLowerInvariant();
-        if (LogicalRoleNormalizer.TryNormalize(candidate, out var canonical, out _))
+        if (LogicalRoleNormalizer.TryNormalize(candidate, out var canonical, out _)
+            && canonical is not null)
         {
-            // Guide route identifiers are an installed compatibility surface;
-            // keep their existing names while using the shared vocabulary to
-            // recognize both canonical and legacy role input. This is a
-            // route projection, not a second alias table.
-            return canonical switch
-            {
-                LogicalRoleNormalizer.Architect => "design",
-                LogicalRoleNormalizer.Orchestrator => "orchestration",
-                LogicalRoleNormalizer.Builder => "implementation",
-                LogicalRoleNormalizer.Reviewer => "review",
-                _ => canonical,
-            };
+            // G797: this is a vocabulary normalization, not a route
+            // projection. Canonical role identifiers stay canonical in
+            // rendered guidance; the legacy spellings accepted by
+            // LogicalRoleNormalizer are inputs only. The installed guide
+            // route names remain explicit in Resolve above.
+            return canonical;
         }
 
         return candidate switch
         {
-            "child-implementation" or "worker" => "implementation",
-            "review-runtime" => "review",
+            // Keep the older guide-facing role categories accepted while
+            // projecting them into the shared canonical vocabulary.
+            "child-implementation" or "worker" => LogicalRoleNormalizer.Builder,
+            "review-runtime" => LogicalRoleNormalizer.Reviewer,
             var normalized => normalized,
         };
     }
