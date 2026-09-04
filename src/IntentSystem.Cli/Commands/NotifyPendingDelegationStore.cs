@@ -47,6 +47,7 @@ internal sealed record NotifyPendingDelegation
     [JsonPropertyName("cwd")] public string? Cwd { get; init; }
     [JsonPropertyName("kind")] public string? Kind { get; init; }
     [JsonPropertyName("launch_args")] public IReadOnlyList<string>? LaunchArguments { get; init; }
+    [JsonPropertyName("ruling")] public NotifyRuling? Ruling { get; init; }
     [JsonPropertyName("report_arrived")] public bool ReportArrived { get; init; }
     [JsonPropertyName("report_status")] public string? ReportStatus { get; init; }
     [JsonPropertyName("report_artifact")] public string? ReportArtifact { get; init; }
@@ -512,6 +513,7 @@ internal static class NotifyPendingDelegationStore
             Cwd = record.Cwd,
             Kind = record.Kind,
             LaunchArguments = record.LaunchArguments,
+            Ruling = record.Ruling,
             ReportArrived = record.ReportArrived,
             ReportStatus = record.ReportStatus,
             ReportArtifact = record.ReportArtifact,
@@ -689,6 +691,7 @@ internal static class NotifyPendingDelegationStore
         [JsonPropertyName("cwd")] public string? Cwd { get; init; }
         [JsonPropertyName("kind")] public string? Kind { get; init; }
         [JsonPropertyName("launch_args")] public IReadOnlyList<string>? LaunchArguments { get; init; }
+        [JsonPropertyName("ruling")] public NotifyRuling? Ruling { get; init; }
         [JsonPropertyName("report_arrived")] public bool ReportArrived { get; init; }
         [JsonPropertyName("report_status")] public string? ReportStatus { get; init; }
         [JsonPropertyName("report_artifact")] public string? ReportArtifact { get; init; }
@@ -719,6 +722,7 @@ internal static class NotifyPendingDelegationStore
             Cwd = Cwd,
             Kind = Kind,
             LaunchArguments = LaunchArguments,
+            Ruling = Ruling,
             ReportArrived = ReportArrived,
             ReportStatus = ReportStatus,
             ReportArtifact = ReportArtifact,

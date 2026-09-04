@@ -1,6 +1,11 @@
+using System.Text.Json;
 using System.Text;
 using System.Text.RegularExpressions;
+using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
+using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 using Xunit.Abstractions;
 
 namespace IntentSystem.Cli.Tests;
@@ -75,11 +80,13 @@ public sealed class NotifyRoutingG796Tests
             relay.Summary);
         Assert.True(relay.Accepted);
         Assert.Equal(payload, relay.Ruling!.Payload);
+        Assert.True(
+            Encoding.UTF8.GetBytes(payload).SequenceEqual(relay.Ruling.PayloadBytes));
         Assert.Equal(ruling.Digest, relay.Ruling.Digest);
         Assert.Equal("architect", relay.Ruling.Origin);
         Assert.Equal("steward-relay-1", relay.Envelope!.Fields["relay_id"]);
         Assert.True(relay.Ruling.Verifies());
-        output.WriteLine($"G796 AC3/AC4 accepted={relay.Accepted}; payload_bytes_equal={payload == relay.Ruling.Payload}; digest_unchanged={ruling.Digest == relay.Ruling.Digest}; origin={relay.Ruling.Origin}; envelope.relay_id={relay.Envelope.Fields["relay_id"]}; verifies={relay.Ruling.Verifies()}");
+        output.WriteLine($"G796 AC3/AC4 accepted={relay.Accepted}; payload_bytes_equal={Encoding.UTF8.GetBytes(payload).SequenceEqual(relay.Ruling.PayloadBytes)}; digest_unchanged={ruling.Digest == relay.Ruling.Digest}; origin={relay.Ruling.Origin}; envelope.relay_id={relay.Envelope.Fields["relay_id"]}; verifies={relay.Ruling.Verifies()}");
     }
 
     [Fact]
@@ -152,6 +159,244 @@ public sealed class NotifyRoutingG796Tests
         output.WriteLine("G796 AC8 recognizer=NotifyDelegationExecutionEvidence.ExtractExecutionUnitToken; objective-fallback=true; earlier-token-wins=true; second-recognizer=false");
     }
 
+    [Fact]
+    public void ProductionStewardGateRejectsFabricatedReference_G796()
+    {
+        var root = NewEvidenceRoot();
+        try
+        {
+            Assert.True(NotifyRuling.TryCreate(
+                "opaque upstream ruling",
+                "architect",
+                null,
+                out var ruling,
+                out var createError), createError);
+            var parent = WriteUpstreamParent(root, ruling);
+            var context = new CliContext
+            {
+                RepoRoot = root,
+                Config = new CliConfig
+                {
+                    Project = new ProjectConfig { Domain = "intent-cli", ArtifactRoot = ".intent-cli" },
+                },
+            };
+            using var writer = new StringWriter();
+            var exit = NotifyCommand.ExecuteReport(
+                context,
+                [
+                    "--domain", "intent-cli", "--team", "intent-cli-dev",
+                    "--from", "steward", "--to", "architect", "--task-id", parent.TaskId,
+                    "--status", "question", "--artifact", "answer.txt", "--summary", "fabricated",
+                    "--event-kind", "question", "--downstream-delegation-reference", "fabricated-G796-proof",
+                    "--routing-root", root, "--report-root", root, "--dry-run", "--format", "json",
+                ],
+                writer);
+
+            Assert.Equal(1, exit);
+            using var document = JsonDocument.Parse(writer.ToString());
+            var result = document.RootElement;
+            Assert.Equal("steward-boundary-refused", result.GetProperty("cause").GetString());
+            Assert.Contains("did not resolve", result.GetProperty("summary").GetString(), StringComparison.OrdinalIgnoreCase);
+            output.WriteLine($"G796 AC6/AC8 fabricated_reference={result.GetProperty("downstream_delegation_reference").GetString()}; exit={exit}; cause={result.GetProperty("cause").GetString()}; summary={result.GetProperty("summary").GetString()}");
+        }
+        finally
+        {
+            DeleteEvidenceRoot(root);
+        }
+    }
+
+    [Fact]
+    public void RealPendingReferenceResolvesThroughTheG788EvidencePath_G796()
+    {
+        var root = NewEvidenceRoot();
+        try
+        {
+            var parent = WriteUpstreamParent(root);
+            var child = parent with
+            {
+                TaskId = "G796-child",
+                DelegatingRole = "steward",
+                RecipientRole = "architect",
+                RecipientIdentity = "role=architect",
+                DispatchedAt = parent.DispatchedAt.AddSeconds(1),
+                Ruling = null,
+            };
+            Assert.True(NotifyPendingDelegationStore.WriteDispatch(root, child).Written);
+
+            Assert.True(
+                NotifyDelegationExecutionEvidence.TryResolveDownstreamReference(
+                    root,
+                    parent,
+                    child.TaskId,
+                    out var evidence,
+                    out var error),
+                error);
+            Assert.Contains("pending-ledger", evidence, StringComparison.Ordinal);
+            output.WriteLine($"G796 AC6/AC8 real_reference={child.TaskId}; accepted=true; evidence={evidence}");
+        }
+        finally
+        {
+            DeleteEvidenceRoot(root);
+        }
+    }
+
+    [Theory]
+    [InlineData("question", "question")]
+    [InlineData("escalation", "question")]
+    [InlineData("blocked", "blocked")]
+    public void ProductionStewardGateAcceptsMeasuredPendingReferenceForEachJudgementKind_G796(
+        string eventKind,
+        string status)
+    {
+        var root = NewEvidenceRoot();
+        try
+        {
+            Assert.True(NotifyRuling.TryCreate("opaque upstream ruling", "architect", null, out var ruling, out var createError), createError);
+            var parent = WriteUpstreamParent(root, ruling);
+            var child = parent with
+            {
+                TaskId = $"G796-child-{eventKind}",
+                DelegatingRole = "steward",
+                RecipientRole = "architect",
+                RecipientIdentity = "role=architect",
+                DispatchedAt = parent.DispatchedAt.AddSeconds(1),
+                Ruling = null,
+            };
+            Assert.True(NotifyPendingDelegationStore.WriteDispatch(root, child).Written);
+
+            var context = new CliContext
+            {
+                RepoRoot = root,
+                Config = new CliConfig
+                {
+                    Project = new ProjectConfig { Domain = "intent-cli", ArtifactRoot = ".intent-cli" },
+                },
+            };
+            using var writer = new StringWriter();
+            var exit = NotifyCommand.ExecuteReport(
+                context,
+                [
+                    "--domain", "intent-cli", "--team", "intent-cli-dev",
+                    "--from", "steward", "--to", "architect", "--task-id", parent.TaskId,
+                    "--status", status, "--artifact", "answer.txt", "--summary", $"{eventKind} answer",
+                    "--event-kind", eventKind, "--downstream-delegation-reference", child.TaskId,
+                    "--routing-root", root, "--report-root", root, "--dry-run", "--format", "json",
+                ],
+                writer);
+
+            using var document = JsonDocument.Parse(writer.ToString());
+            var result = document.RootElement;
+            Assert.NotEqual("steward-boundary-refused", result.GetProperty("cause").GetString());
+            output.WriteLine($"G796 AC6/AC8 event_kind={eventKind}; reference={child.TaskId}; gate=accepted; exit={exit}; post_gate_cause={result.GetProperty("cause").GetString() ?? "<none>"}");
+        }
+        finally
+        {
+            DeleteEvidenceRoot(root);
+        }
+    }
+
+    [Theory]
+    [InlineData("pending")]
+    [InlineData("outbox")]
+    [InlineData("event")]
+    public void DownstreamReferenceMatchesEachMeasuredG788Carrier_G796(string carrier)
+    {
+        var root = NewEvidenceRoot();
+        try
+        {
+            var parent = WriteUpstreamParent(root);
+            var reference = $"G796-child-{carrier}";
+            switch (carrier)
+            {
+                case "pending":
+                    Assert.True(NotifyPendingDelegationStore.WriteDispatch(root, parent with
+                    {
+                        TaskId = reference,
+                        DelegatingRole = "steward",
+                        RecipientRole = "architect",
+                        RecipientIdentity = "role=architect",
+                        DispatchedAt = parent.DispatchedAt.AddSeconds(1),
+                        Ruling = null,
+                    }).Written);
+                    break;
+                case "outbox":
+                    Assert.True(NotifyReportOutboxStore.WriteNew(root, new NotifyReportOutboxEntry
+                    {
+                        Domain = parent.Domain,
+                        Team = parent.Team,
+                        TaskId = reference,
+                        ResultNonce = "g796-child-outbox",
+                        FromRole = "steward",
+                        ToRole = "architect",
+                        Status = "question",
+                        Artifact = "child.txt",
+                        Summary = "child G796 report",
+                        CreatedAt = parent.DispatchedAt.AddSeconds(1),
+                        DeliveryState = "delivered",
+                    }).Written);
+                    break;
+                default:
+                    Assert.True(NotifyEventWriter.TryResolveWritePath(root, parent.Domain, parent.Team, out var eventPath, out var eventError), eventError);
+                    NotifyEventWriter.Append(eventPath, new NotifyDesignEvent
+                    {
+                        Timestamp = parent.DispatchedAt.AddSeconds(1),
+                        Team = parent.Team,
+                        Kind = "question",
+                        Unit = reference,
+                        Summary = "child G796 report",
+                        Artifact = "child.txt",
+                    });
+                    break;
+            }
+
+            Assert.True(
+                NotifyDelegationExecutionEvidence.TryResolveDownstreamReference(
+                    root,
+                    parent,
+                    reference,
+                    out var evidence,
+                    out var error),
+                error);
+            Assert.Contains(carrier == "pending" ? "pending-ledger" : carrier == "outbox" ? "report-outbox" : "notification-events", evidence, StringComparison.Ordinal);
+            output.WriteLine($"G796 AC6/AC8 carrier={carrier}; reference={reference}; accepted=true; evidence={evidence}");
+        }
+        finally
+        {
+            DeleteEvidenceRoot(root);
+        }
+    }
+
+    [Fact]
+    public void StewardRelayRequiresTheRecordedUpstreamRuling_G796()
+    {
+        var root = NewEvidenceRoot();
+        try
+        {
+            var missing = WriteUpstreamParent(root);
+            Assert.False(NotifyRulingRelay.TryResolveUpstreamArchitectRuling(missing, out _, out var missingError));
+            Assert.Contains("no upstream Architect ruling", missingError, StringComparison.OrdinalIgnoreCase);
+
+            Assert.True(NotifyRuling.TryCreate("architect ruling", "architect", null, out var source, out var sourceError), sourceError);
+            var forgedOrigin = new NotifyRuling { Payload = source!.Payload, Digest = source.Digest, Origin = "steward" };
+            Assert.False(NotifyRulingRelay.TryRelay(source, forgedOrigin, null, out var forgedResult));
+            Assert.Equal("ruling-origin-mismatch", forgedResult.Cause);
+
+            var mutated = new NotifyRuling
+            {
+                Payload = source.Payload + "!",
+                Digest = NotifyRulingRelay.ComputeDigest(source.Payload + "!"),
+                Origin = source.Origin,
+            };
+            Assert.False(NotifyRulingRelay.TryRelay(source, mutated, null, out var mutatedResult));
+            Assert.Equal("ruling-digest-mismatch", mutatedResult.Cause);
+            output.WriteLine($"G796 AC3/AC4/AC5 missing_upstream=refused; forged_origin={forgedResult.Cause}; one_byte_mutation={mutatedResult.Cause}; source_digest={source.Digest}");
+        }
+        finally
+        {
+            DeleteEvidenceRoot(root);
+        }
+    }
+
     [Theory]
     [InlineData("claude")]
     [InlineData("codex")]
@@ -183,5 +428,54 @@ public sealed class NotifyRoutingG796Tests
                     fallbackTarget: "design"));
             output.WriteLine($"G796 AC10 event_kind={eventKind}; steward_recorded=false; routed_to={currentTarget}; unchanged=true");
         }
+    }
+
+    private static string NewEvidenceRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"intent-g796-routing-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private static void DeleteEvidenceRoot(string root)
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static NotifyPendingDelegation WriteUpstreamParent(
+        string root,
+        NotifyRuling? ruling = null)
+    {
+        var parent = new NotifyPendingDelegation
+        {
+            Domain = "intent-cli",
+            Team = "intent-cli-dev",
+            TaskId = "G796-parent",
+            DelegatingRole = "architect",
+            RecipientRole = "steward",
+            ReportToRole = "architect",
+            RecipientIdentity = "role=steward",
+            ExpectedArtifact = "parent-result.txt",
+            ExpectedArtifacts = ["parent-result.txt"],
+            Objective = "coordinate G796 judgement",
+            Inputs = ["fixture"],
+            ResultNonce = "g796-parent-nonce",
+            DispatchedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+            TransportMode = "herdr-only",
+            Cwd = root,
+            Kind = "steward",
+            LaunchArguments = ["fixture"],
+            Ruling = ruling,
+        };
+        var write = NotifyPendingDelegationStore.WriteDispatch(root, parent);
+        if (!write.Written)
+        {
+            throw new InvalidOperationException(write.Error);
+        }
+
+        return parent;
     }
 }

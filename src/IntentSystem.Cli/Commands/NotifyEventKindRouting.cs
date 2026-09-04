@@ -153,4 +153,3 @@ internal static class NotifyEventKindRouting
             LogicalRoleNormalizer.Steward).Resolved;
     }
 }
-

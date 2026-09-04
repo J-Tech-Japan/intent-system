@@ -301,6 +301,7 @@ internal static class NotifyCommand
         // the operator has recorded a Steward seat. A topology that is absent
         // or unreadable leaves the historical caller-supplied destination in
         // place; the existing preflight still reports that structural issue.
+        NotifyRuling? upstreamRuling = null;
         if (operation is OperationDelegate or OperationReport or OperationEscalate)
         {
             var eventKind = NotifyEventKindRouting.ResolveForOperation(
@@ -334,11 +335,70 @@ internal static class NotifyCommand
                     fallbackTarget),
             };
 
+            var isStewardJudgement = LogicalRoleNormalizer.TryNormalize(
+                    options.FromRole,
+                    out var canonicalFromRole,
+                    out _)
+                && string.Equals(canonicalFromRole, LogicalRoleNormalizer.Steward, StringComparison.Ordinal)
+                && NotifyEventKindRouting.IsJudgement(eventKind);
+            var downstreamEvidenceResolved = true;
+            if (isStewardJudgement)
+            {
+                var upstreamLookup = NotifyPendingDelegationStore.Find(
+                    routingRoot,
+                    options.Domain,
+                    options.Team,
+                    options.TaskId!);
+                if (!upstreamLookup.Resolved
+                    || upstreamLookup.Record is not { } upstreamRecord)
+                {
+                    Emit(writer, options.Format, FailureResult(
+                        operation,
+                        options,
+                        SessionLayerMode.Default,
+                        "steward-boundary-refused",
+                        $"Steward judgement refused for task '{options.TaskId}': no recorded upstream Architect ruling/delegation was found."));
+                    return 1;
+                }
+
+                if (!NotifyRulingRelay.TryResolveUpstreamArchitectRuling(
+                        upstreamRecord,
+                        out upstreamRuling,
+                        out var upstreamError))
+                {
+                    Emit(writer, options.Format, FailureResult(
+                        operation,
+                        options,
+                        SessionLayerMode.Default,
+                        "steward-boundary-refused",
+                        upstreamError));
+                    return 1;
+                }
+
+                downstreamEvidenceResolved = NotifyDelegationExecutionEvidence.TryResolveDownstreamReference(
+                    routingRoot,
+                    upstreamRecord,
+                    options.DownstreamDelegationReference,
+                    out _,
+                    out var downstreamEvidenceError);
+                if (!downstreamEvidenceResolved)
+                {
+                    Emit(writer, options.Format, FailureResult(
+                        operation,
+                        options,
+                        SessionLayerMode.Default,
+                        "steward-boundary-refused",
+                        downstreamEvidenceError));
+                    return 1;
+                }
+            }
+
             if (!NotifyRulingRelay.TryValidateStewardAnswer(
                     options.FromRole,
                     eventKind,
                     options.ToRole,
                     options.DownstreamDelegationReference,
+                    downstreamEvidenceResolved,
                     out var stewardshipError))
             {
                 Emit(writer, options.Format, FailureResult(
@@ -350,7 +410,7 @@ internal static class NotifyCommand
                 return 1;
             }
 
-            if (!TryPrepareRuling(options, out var ruling, out var rulingError))
+            if (!TryPrepareRuling(options, upstreamRuling, out var ruling, out var rulingError))
             {
                 Emit(writer, options.Format, FailureResult(
                     operation,
@@ -2387,6 +2447,7 @@ internal static class NotifyCommand
             Cwd = cwd,
             Kind = kind,
             LaunchArguments = launchArguments,
+            Ruling = options.PreparedRuling,
         };
     }
 
@@ -2697,6 +2758,7 @@ internal static class NotifyCommand
 
     private static bool TryPrepareRuling(
         NotifyOptions options,
+        NotifyRuling? upstreamRuling,
         out NotifyRuling? ruling,
         out string error)
     {
@@ -2706,6 +2768,55 @@ internal static class NotifyCommand
             || options.RulingOrigin is not null
             || options.RulingDigest is not null
             || options.RulingEnvelopeFields.Count > 0;
+
+        if (upstreamRuling is not null)
+        {
+            // A Steward report/escalation inherits the durable Architect
+            // ruling. Envelope fields are additive; supplying a ruling
+            // payload/origin/digest asks us to prove it is the same ruling.
+            var hasRulingIdentity = options.RulingPayload is not null
+                || options.RulingOrigin is not null
+                || options.RulingDigest is not null;
+            if (!hasRulingIdentity)
+            {
+                if (!NotifyRulingEnvelope.TryCreate(
+                        upstreamRuling,
+                        options.RulingEnvelopeFields,
+                        out _,
+                        out error))
+                {
+                    return false;
+                }
+
+                ruling = upstreamRuling;
+                return true;
+            }
+
+            if (!NotifyRuling.TryCreate(
+                    options.RulingPayload,
+                    options.RulingOrigin,
+                    options.RulingDigest,
+                    out var relayedRuling,
+                    out error)
+                || relayedRuling is null)
+            {
+                return false;
+            }
+
+            if (!NotifyRulingRelay.TryRelay(
+                    upstreamRuling,
+                    relayedRuling,
+                    options.RulingEnvelopeFields,
+                    out var relay))
+            {
+                error = relay.Summary ?? "Steward ruling relay was refused.";
+                return false;
+            }
+
+            ruling = upstreamRuling;
+            return true;
+        }
+
         if (!hasRulingMetadata)
         {
             return true;

@@ -157,6 +157,49 @@ internal static class NotifyRulingRelay
     public static bool IsDigest(string? value) =>
         value is { Length: 64 } && value.All(char.IsAsciiHexDigit);
 
+    /// <summary>
+    /// Relays a ruling that was reconstructed by a downstream command.  The
+    /// source record is authoritative: payload bytes, digest, and origin must
+    /// remain identical, while the envelope may add only non-reserved fields.
+    /// </summary>
+    public static bool TryRelay(
+        NotifyRuling source,
+        NotifyRuling relayedRuling,
+        IReadOnlyDictionary<string, string>? envelopeFields,
+        out NotifyRulingRelayResult result)
+    {
+        if (source is null || !source.Verifies())
+        {
+            result = Refused("ruling-digest-mismatch", "The recorded upstream ruling does not verify before Steward relay.");
+            return false;
+        }
+
+        if (relayedRuling is null || !relayedRuling.Verifies())
+        {
+            result = Refused("ruling-digest-mismatch", "Steward relay refused: the relayed ruling digest does not verify.");
+            return false;
+        }
+
+        if (!string.Equals(source.Origin, relayedRuling.Origin, StringComparison.OrdinalIgnoreCase))
+        {
+            result = Refused(
+                "ruling-origin-mismatch",
+                $"Steward relay refused: ruling origin must remain '{source.Origin}', not '{relayedRuling.Origin}'.");
+            return false;
+        }
+
+        if (!source.PayloadBytes.SequenceEqual(relayedRuling.PayloadBytes)
+            || !string.Equals(source.Digest, relayedRuling.Digest, StringComparison.OrdinalIgnoreCase))
+        {
+            result = Refused(
+                "ruling-digest-mismatch",
+                $"Steward relay refused: ruling payload bytes or digest changed (expected '{source.Digest}', relayed '{relayedRuling.Digest}').");
+            return false;
+        }
+
+        return TryRelay(source, relayedRuling.Payload, envelopeFields, out result);
+    }
+
     public static bool TryRelay(
         NotifyRuling ruling,
         string? relayedPayload,
@@ -209,6 +252,21 @@ internal static class NotifyRulingRelay
         string? toRole,
         string? downstreamDelegationReference,
         out string error)
+        => TryValidateStewardAnswer(
+            fromRole,
+            eventKind,
+            toRole,
+            downstreamDelegationReference,
+            downstreamEvidenceResolved: !string.IsNullOrWhiteSpace(downstreamDelegationReference),
+            out error);
+
+    internal static bool TryValidateStewardAnswer(
+        string? fromRole,
+        string eventKind,
+        string? toRole,
+        string? downstreamDelegationReference,
+        bool downstreamEvidenceResolved,
+        out string error)
     {
         error = string.Empty;
         if (!LogicalRoleNormalizer.TryNormalize(fromRole, out var canonicalFrom, out error)
@@ -237,6 +295,12 @@ internal static class NotifyRulingRelay
             return false;
         }
 
+        if (!downstreamEvidenceResolved)
+        {
+            error = $"Steward answer refused for {normalizedKind}: downstream delegation reference '{downstreamDelegationReference}' did not resolve in recorded G788 execution evidence.";
+            return false;
+        }
+
         if (toRole is not null
             && LogicalRoleNormalizer.TryNormalize(toRole, out var canonicalTarget, out _)
             && canonicalTarget is not null
@@ -246,6 +310,56 @@ internal static class NotifyRulingRelay
             return false;
         }
 
+        return true;
+    }
+
+    /// <summary>
+    /// Resolves the ruling that was originally delivered by Architect to the
+    /// Steward.  A Steward must relay this durable source record; it may not
+    /// manufacture a new Architect-labelled ruling of its own.
+    /// </summary>
+    internal static bool TryResolveUpstreamArchitectRuling(
+        NotifyPendingDelegation? pending,
+        out NotifyRuling? ruling,
+        out string error)
+    {
+        ruling = null;
+        if (pending is null)
+        {
+            error = "Steward judgement refused: no recorded upstream Architect ruling/delegation was found.";
+            return false;
+        }
+
+        if (!LogicalRoleNormalizer.TryNormalize(pending.DelegatingRole, out var delegatingRole, out _)
+            || !string.Equals(delegatingRole, LogicalRoleNormalizer.Architect, StringComparison.Ordinal)
+            || !LogicalRoleNormalizer.TryNormalize(pending.RecipientRole, out var recipientRole, out _)
+            || !string.Equals(recipientRole, LogicalRoleNormalizer.Steward, StringComparison.Ordinal))
+        {
+            error = $"Steward judgement refused for task '{pending.TaskId}': the recorded delegation is not an Architect-to-Steward ruling.";
+            return false;
+        }
+
+        if (pending.Ruling is null)
+        {
+            error = $"Steward judgement refused for task '{pending.TaskId}': no upstream Architect ruling was recorded.";
+            return false;
+        }
+
+        if (!pending.Ruling.Verifies())
+        {
+            error = $"Steward judgement refused for task '{pending.TaskId}': recorded upstream ruling digest does not verify.";
+            return false;
+        }
+
+        if (!LogicalRoleNormalizer.TryNormalize(pending.Ruling.Origin, out var origin, out _)
+            || !string.Equals(origin, LogicalRoleNormalizer.Architect, StringComparison.Ordinal))
+        {
+            error = $"Steward judgement refused for task '{pending.TaskId}': upstream ruling origin must be Architect.";
+            return false;
+        }
+
+        ruling = pending.Ruling;
+        error = string.Empty;
         return true;
     }
 
