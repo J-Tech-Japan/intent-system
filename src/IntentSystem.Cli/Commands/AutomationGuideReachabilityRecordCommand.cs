@@ -23,7 +23,7 @@ internal static class AutomationGuideReachabilityRecordCommand
 
     private const string UsageLine =
         "Usage: intent-cli automation guide-reachability-record --execution-unit <unit> --commit <host-commit-sha> "
-        + "[--role <design|orchestration>] [--note <text>] [--dry-run|--write] [--format json|markdown]";
+        + "[--role <architect|orchestrator|builder|reviewer|steward|design|orchestration|implementation|review>] [--note <text>] [--dry-run|--write] [--format json|markdown]";
 
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
 
@@ -414,7 +414,7 @@ internal static class AutomationGuideReachabilityRecordCommand
                 case "--role":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
-                        error = "--role requires 'design' or 'orchestration'.";
+                        error = $"--role requires one of the canonical roles or accepted aliases: {LogicalRoleNormalizer.FormatCanonicalRoles()}; aliases: {LogicalRoleNormalizer.FormatAliases()}.";
                         return false;
                     }
                     requestedRole = args[++index];
@@ -492,7 +492,7 @@ internal static class AutomationGuideReachabilityRecordCommand
         writer.WriteLine(GuideReachabilityDuty.CloseoutCheck);
         writer.WriteLine();
         writer.WriteLine("Records route evidence only; it never writes guide content and never blocks merge or closeout.");
-        writer.WriteLine("  --role design|orchestration attributes the recorder; omit it only for the compatibility default (design).");
+        writer.WriteLine($"  --role {CloseoutRecordRole.AcceptedArgument} attributes the recorder; aliases are normalized to their canonical role on disk and output.");
         writer.WriteLine("  --dry-run (default) plans only; --write persists the legacy record.json or explicit role sidecar under records/<role>.json.");
         writer.WriteLine("  An explicit no_role_facing_surface declaration is a successful no-op; an absent declaration is refused.");
     }

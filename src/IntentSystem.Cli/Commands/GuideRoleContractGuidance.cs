@@ -43,11 +43,27 @@ internal static class GuideRoleContractGuidance
             return null;
         }
 
-        return role.Trim().ToLowerInvariant() switch
+        var candidate = role.Trim().ToLowerInvariant();
+        if (LogicalRoleNormalizer.TryNormalize(candidate, out var canonical, out _))
         {
-            "orchestrator" => "orchestration",
+            // Guide route identifiers are an installed compatibility surface;
+            // keep their existing names while using the shared vocabulary to
+            // recognize both canonical and legacy role input. This is a
+            // route projection, not a second alias table.
+            return canonical switch
+            {
+                LogicalRoleNormalizer.Architect => "design",
+                LogicalRoleNormalizer.Orchestrator => "orchestration",
+                LogicalRoleNormalizer.Builder => "implementation",
+                LogicalRoleNormalizer.Reviewer => "review",
+                _ => canonical,
+            };
+        }
+
+        return candidate switch
+        {
             "child-implementation" or "worker" => "implementation",
-            "reviewer" or "review-runtime" => "review",
+            "review-runtime" => "review",
             var normalized => normalized,
         };
     }

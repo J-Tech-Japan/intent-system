@@ -635,3 +635,42 @@ closeout / automation / issue）・**child-implementation**（worker）・
   を優先する; ガイダンスはインストール済み CLI の現行コントラクトを反映している。
 - **`intent-cli` は AI プロバイダーを起動しない。** 決定論的なガイダンスを出力し、
   コントラクトを検証し、bounded な GitHub/metadata 遷移を行うだけ。AI agent がドライバーシートに留まる。
+
+## G795 role consumer inventory（role 利用箇所一覧）
+
+`role-consumer-inventory-entries: 24` は role vocabulary slice で測定した
+consumer 一覧の件数です。`LogicalRoleNormalizer` が、3 つの role-scoped
+closeout command と record の入力を通る唯一の境界です。role は責務であり
+runtime や model ではありません。したがって `opencode` は自由な runtime 値のままです。
+queue-state の `worker_role` と `review_role` は runtime/action verb の利用者として
+記載するだけで、この slice では意味も field も変更しません。
+
+| # | File と symbol | 読む値 | 分岐・永続化の責務 |
+|---:|---|---|---|
+| 1 | `Commands/LogicalRoleNormalizer.cs:LogicalRoleNormalizer` | role | canonical 5 種、alias 4 種、fail-closed 入力 |
+| 2 | `Commands/CloseoutRecordRole.cs:CloseoutRecordRole.TryNormalize/TryResolve` | role | closeout attribution の共有境界 |
+| 3 | `Commands/CloseoutRecordRole.cs:RoleScopedCloseoutRecordStore` | role | canonical role sidecar path |
+| 4 | `Commands/KnowledgeWriteBackRecord.cs:Deserialize` | role | legacy read と canonical 再出力 |
+| 5 | `Commands/GuideReachabilityRecord.cs:Deserialize` | role | legacy read と canonical 再出力 |
+| 6 | `Commands/AutomationKnowledgeWriteBackRecordCommand` | role | `knowledge-writeback-record --role` |
+| 7 | `Commands/AutomationGuideReachabilityRecordCommand` | role | `guide-reachability-record --role` |
+| 8 | `Commands/AutomationStalledWorkCommand` | role | `stalled-work --role` filter と recommendation |
+| 9 | `Commands/SessionLayerTopologyCommand` | role | topology map key（operator-supplied のまま） |
+| 10 | `Commands/NotifyRoleTopology.cs:ResolveRecordedRole` | role | recorded delivery-role lookup |
+| 11 | `Commands/NotifyCommand` | role | delegate/report/collect role 引数 |
+| 12 | `Commands/NotifySupervisor` | role | delegation sender/recipient/report role |
+| 13 | `Commands/GuideRoleContractGuidance` | role | 既存 guide-route pointer（route は不変） |
+| 14 | `Commands/GuideReachabilityDeclaration` | role | 宣言された guide route role |
+| 15 | `Commands/ReviewSeatSelectionGuidance` | role | design/review seat selection |
+| 16 | `Commands/NextSlicePacketProvenance` | role | provenance writer/readback contract |
+| 17 | `Commands/HostOwnershipModel` | role | host-role ownership resolution |
+| 18 | `Commands/HerdrStandardLayoutRegistry` | role | pane/layout seat label |
+| 19 | `Commands/GuideWorkspaceLayoutCommand` | role | workspace seat label と順序 |
+| 20 | `Commands/GuideOrchestratorThreadCommand` | role | prompt と scheduled-seat routing |
+| 21 | `Commands/CliRuntimeContracts` / `Infrastructure/CliConfigLoader` | runtime | configured implement/review runtime name |
+| 22 | `Commands/TeamModeCapabilityMatrix` | runtime/action verb | implementation/review capability mode |
+| 23 | `Commands/IntentExplainCommand` | runtime/action verb | queue-state `worker_role` / `review_role` 表示 |
+| 24 | `Commands/QueueTransitionCommand`, `DuplicateQueueItemRules`, `ClarifyDraftAnalyzer` | action verb | queue-state transition vocabulary（ここでは不変） |
+
+この一覧は説明用であり、queue-state の移行、Steward route の追加、vendor enum の導入、
+インストール済み guide route の rename は行いません。
