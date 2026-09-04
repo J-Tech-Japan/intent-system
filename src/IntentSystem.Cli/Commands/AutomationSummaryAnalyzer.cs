@@ -97,6 +97,7 @@ internal static class AutomationSummaryAnalyzer
             RunsLogPath = bindings.RunsLogPath,
             PacketRoot = bindings.PacketRoot,
             ExecutionUnitRegex = bindings.ExecutionUnitRegex,
+            LegacyRoleMappings = context.Config.Roles.LegacyValues,
             EffectiveBaseBranchPolicy = effectivePolicy,
             ImplementationBaseBranch = implementationBaseBranch,
             SameRepoTopology = sameRepoTopology,

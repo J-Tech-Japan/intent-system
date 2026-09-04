@@ -300,20 +300,15 @@ internal static class AutomationQueueSeedFromPacketCommand
         // `QueueEnqueueCommand` contract so seeded queue items look
         // the same as packets enqueued through the standard path.
         // - WorkerRole / ReviewRole default to the host's configured
-        //   roles (`context.Config.Roles.Implement` / `Review`,
-        //   which default to logical implementation / review roles per
-        //   `CliRuntimeContracts.DefaultImplementRole` /
-        //   `DefaultReviewRole`).
+        //   logical roles (`context.Config.Roles.WorkerRoleForQueue` /
+        //   `ReviewRoleForQueue`), which canonicalize aliases and keep
+        //   historical vendor values out of newly seeded records.
         // - Priority defaults to "high" to match
         //   `QueueEnqueueCommand.DefaultPriority`.
         // Packets that explicitly declare any of these still win via
         // `LookupScalar` precedence inside BuildSeedItem.
-        var defaultWorkerRole = !string.IsNullOrWhiteSpace(context.Config.Roles?.Implement)
-            ? context.Config.Roles!.Implement
-            : CliRuntimeContracts.DefaultImplementRole;
-        var defaultReviewRole = !string.IsNullOrWhiteSpace(context.Config.Roles?.Review)
-            ? context.Config.Roles!.Review
-            : CliRuntimeContracts.DefaultReviewRole;
+        var defaultWorkerRole = context.Config.Roles.WorkerRoleForQueue;
+        var defaultReviewRole = context.Config.Roles.ReviewRoleForQueue;
         const string defaultPriority = "high";
 
         var seed = BuildSeedItem(
@@ -491,14 +486,16 @@ internal static class AutomationQueueSeedFromPacketCommand
         // different from packets enqueued via the standard path.
         // Packets that DO declare any field still win via
         // LookupScalar.
-        var workerRole = LookupScalar(packetFields,
+        var workerRole = LogicalRoleNormalizer.NormalizeOrPreserveLegacy(
+            LookupScalar(packetFields,
             "worker_role",
-            "implementation_issue_packet.worker_role")
-            ?? defaultWorkerRole;
-        var reviewRole = LookupScalar(packetFields,
+            "implementation_issue_packet.worker_role"),
+            defaultWorkerRole);
+        var reviewRole = LogicalRoleNormalizer.NormalizeOrPreserveLegacy(
+            LookupScalar(packetFields,
             "review_role",
-            "implementation_issue_packet.review_role")
-            ?? defaultReviewRole;
+            "implementation_issue_packet.review_role"),
+            defaultReviewRole);
         var priority = LookupScalar(packetFields,
             "priority",
             "implementation_issue_packet.priority")

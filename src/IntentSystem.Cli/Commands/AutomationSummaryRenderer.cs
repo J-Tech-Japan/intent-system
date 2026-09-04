@@ -46,6 +46,20 @@ internal static class AutomationSummaryRenderer
         writer.WriteLine($"- execution_unit_regex: {FormatNullable(result.ExecutionUnitRegex)}");
         writer.WriteLine();
 
+        writer.WriteLine("## Role mappings");
+        if (result.LegacyRoleMappings.Count == 0)
+        {
+            writer.WriteLine("- legacy_role_mappings: (none)");
+        }
+        else
+        {
+            foreach (var mapping in result.LegacyRoleMappings.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+            {
+                writer.WriteLine($"- legacy_role_mappings.{mapping.Key}: {mapping.Value}");
+            }
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Issue workflow labels");
         WriteBulletList(writer, result.IssueWorkflowLabels);
         writer.WriteLine();

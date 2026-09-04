@@ -32,6 +32,16 @@ internal sealed record AutomationSummaryResult
     public string? ExecutionUnitRegex { get; init; }
 
     /// <summary>
+    /// G798: explicit <c>[roles]</c> entries whose values are not logical
+    /// roles (for example vendor/runtime names). They remain readable for
+    /// compatibility, but are surfaced as legacy so queue writers do not
+    /// mistake them for staffing decisions.
+    /// </summary>
+    [JsonPropertyName("legacy_role_mappings")]
+    public IReadOnlyDictionary<string, string> LegacyRoleMappings { get; init; }
+        = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>
     /// G346: the effective base branch policy for this domain/host, sourced from
     /// <c>.intent-cli/config.toml</c> <c>base_branch_policy</c> (defaults to
     /// <c>direct-main</c> when the key is absent). AI threads should derive the

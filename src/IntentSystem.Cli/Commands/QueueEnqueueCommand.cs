@@ -153,8 +153,12 @@ internal static class QueueEnqueueCommand
             ClarificationReturnPath = packet.ClarificationReturnPath,
             PacketPaths = packetPaths,
             LinkedIssue = null,
-            WorkerRole = context.Config.Roles.Implement,
-            ReviewRole = context.Config.Roles.Review,
+            // Queue-state role fields carry logical roles only. Config values
+            // that are known aliases are canonicalized; historical runtime
+            // names are not silently persisted as roles and fall back to the
+            // worker/reviewer responsibilities.
+            WorkerRole = context.Config.Roles.WorkerRoleForQueue,
+            ReviewRole = context.Config.Roles.ReviewRoleForQueue,
             Priority = DefaultPriority
         };
     }

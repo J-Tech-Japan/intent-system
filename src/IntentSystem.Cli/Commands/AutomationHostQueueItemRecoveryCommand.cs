@@ -479,8 +479,8 @@ internal static class AutomationHostQueueItemRecoveryCommand
                 },
                 LinkedIssue = newLinkedIssue,
                 LinkedPr = proposed.LinkedPrUrl,
-                WorkerRole = "coder",
-                ReviewRole = "reviewer",
+                WorkerRole = LogicalRoleNormalizer.Builder,
+                ReviewRole = LogicalRoleNormalizer.Reviewer,
                 Priority = "normal",
             });
         }

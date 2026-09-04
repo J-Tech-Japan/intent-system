@@ -2,6 +2,7 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -93,6 +94,10 @@ public sealed class AutomationHostQueueItemRecoveryCommandTests : IDisposable
         Assert.Contains(Unit, queueJson, StringComparison.Ordinal);
         Assert.Contains(PrNumber.ToString(), queueJson, StringComparison.Ordinal);
         Assert.Contains(IssueNumber.ToString(), queueJson, StringComparison.Ordinal);
+        var recovered = Assert.Single(QueueStateSerializer.Deserialize(queueJson).Items);
+        Assert.Equal(LogicalRoleNormalizer.Builder, recovered.WorkerRole);
+        Assert.Equal(LogicalRoleNormalizer.Reviewer, recovered.ReviewRole);
+        Assert.DoesNotContain("\"coder\"", queueJson, StringComparison.Ordinal);
     }
 
     [Fact]
