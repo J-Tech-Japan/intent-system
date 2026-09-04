@@ -5,7 +5,7 @@ namespace IntentSystem.Cli.Commands;
 
 /// <summary>
 /// G698: <c>intent-cli automation knowledge-writeback-record --execution-unit
-/// &lt;u&gt; --commit &lt;sha&gt; --role &lt;design|orchestration&gt;
+/// &lt;u&gt; --commit &lt;sha&gt; --role &lt;role&gt;
 /// [--target &lt;path&gt;]... [--note &lt;text&gt;] [--dry-run|--write]
 /// [--format json|markdown]</c> — records that the
 /// write-backs a packet DECLARED were performed, with the host commit as
@@ -44,7 +44,7 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
 
     private const string UsageLine =
         "Usage: intent-cli automation knowledge-writeback-record --execution-unit <unit> --commit <host-commit-sha> "
-        + "[--role <design|orchestration>] [--target <path>]... [--note <text>] [--dry-run|--write] [--format json|markdown]";
+        + "[--role <architect|orchestrator|builder|reviewer|steward|design|orchestration|implementation|review>] [--target <path>]... [--note <text>] [--dry-run|--write] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -452,7 +452,7 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
                 case "--role":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
-                        error = "--role requires 'design' or 'orchestration'.";
+                        error = $"--role requires one of the canonical roles or accepted aliases: {LogicalRoleNormalizer.FormatCanonicalRoles()}; aliases: {LogicalRoleNormalizer.FormatAliases()}.";
                         return false;
                     }
                     requestedRole = args[++index];
@@ -555,7 +555,7 @@ internal static class AutomationKnowledgeWriteBackRecordCommand
         writer.WriteLine(IntentTreeCoEvolutionDuty.CloseoutCheck);
         writer.WriteLine();
         writer.WriteLine("Records that a packet-declared knowledge write-back was performed, with the host commit as evidence.");
-        writer.WriteLine("  --role design|orchestration attributes the recorder; omit it only for the compatibility default (design).");
+        writer.WriteLine($"  --role {CloseoutRecordRole.AcceptedArgument} attributes the recorder; aliases are normalized to their canonical role on disk and output.");
         writer.WriteLine("  --dry-run (default) plans only; --write persists the legacy record.json or explicit role sidecar under records/<role>.json.");
         writer.WriteLine("  Idempotent: re-recording the SAME commit is a no-op success; a DIFFERENT commit is refused, never overwritten.");
         writer.WriteLine("  Fail-closed: an unknown execution unit (no packet) and non-SHA evidence are both refused.");

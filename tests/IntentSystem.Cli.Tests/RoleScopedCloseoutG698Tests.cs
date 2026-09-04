@@ -50,7 +50,7 @@ public sealed class RoleScopedCloseoutG698Tests : IDisposable
         var design = workspace.RunKnowledge(
             "--execution-unit", "G698", "--commit", HostCommit, "--role", "design", "--write", "--format", "json");
         Assert.Equal(0, design.ExitCode);
-        Assert.Equal("design", design.Json.GetProperty("recording_role").GetString());
+        Assert.Equal("architect", design.Json.GetProperty("recording_role").GetString());
         Assert.True(design.Json.GetProperty("applied").GetBoolean());
         Assert.True(File.Exists(workspace.KnowledgeRolePath("G698", "design")));
 
@@ -59,10 +59,10 @@ public sealed class RoleScopedCloseoutG698Tests : IDisposable
         Assert.Equal(0, orchestration.ExitCode);
         Assert.Equal(2, orchestration.Json.GetProperty("records").GetArrayLength());
         Assert.Contains(
-            "design",
+            "architect",
             orchestration.Json.GetProperty("recorded_roles").EnumerateArray().Select(value => value.GetString()));
         Assert.Contains(
-            "orchestration",
+            "orchestrator",
             orchestration.Json.GetProperty("recorded_roles").EnumerateArray().Select(value => value.GetString()));
         Assert.True(File.Exists(workspace.KnowledgeRolePath("G698", "orchestration")));
 
@@ -77,9 +77,9 @@ public sealed class RoleScopedCloseoutG698Tests : IDisposable
         Assert.Contains("--role requires", missing.Output, StringComparison.Ordinal);
 
         var wrong = workspace.RunKnowledgeText(
-            "--execution-unit", "G698", "--commit", HostCommit, "--role", "review");
+            "--execution-unit", "G698", "--commit", HostCommit, "--role", "not-a-role");
         Assert.Equal(1, wrong.ExitCode);
-        Assert.Contains("not supported", wrong.Output, StringComparison.Ordinal);
+        Assert.Contains("unknown", wrong.Output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -101,9 +101,9 @@ public sealed class RoleScopedCloseoutG698Tests : IDisposable
         // It must not clear an explicitly selected role.
         var designDebt = workspace.RunStalled("--role", "design");
         var item = Assert.Single(designDebt.GetProperty("items").EnumerateArray());
-        Assert.Equal("design", item.GetProperty("recording_role").GetString());
+        Assert.Equal("architect", item.GetProperty("recording_role").GetString());
         Assert.Contains("unattributed", item.GetProperty("recorded_roles").EnumerateArray().Select(value => value.GetString()));
-        Assert.Contains("--role design", item.GetProperty("recommended_action").GetString(), StringComparison.Ordinal);
+        Assert.Contains("--role architect", item.GetProperty("recommended_action").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public sealed class RoleScopedCloseoutG698Tests : IDisposable
         var designDebt = workspace.RunStalled("--role", "design");
         var pending = Assert.Single(designDebt.GetProperty("items").EnumerateArray());
         Assert.Equal(AutomationStalledWorkCommand.KindKnowledgeWritebackPending, pending.GetProperty("kind").GetString());
-        Assert.Equal("orchestration", Assert.Single(pending.GetProperty("recorded_roles").EnumerateArray()).GetString());
+        Assert.Equal("orchestrator", Assert.Single(pending.GetProperty("recorded_roles").EnumerateArray()).GetString());
 
         var design = workspace.RunKnowledge(
             "--execution-unit", "G698", "--commit", HostCommit, "--role", "design", "--write", "--format", "json");
@@ -142,21 +142,21 @@ public sealed class RoleScopedCloseoutG698Tests : IDisposable
         var orchestrationDebt = workspace.RunStalled("--role", "orchestration");
         var pending = Assert.Single(orchestrationDebt.GetProperty("items").EnumerateArray());
         Assert.Equal(AutomationStalledWorkCommand.KindGuideReachabilityPending, pending.GetProperty("kind").GetString());
-        Assert.Equal("orchestration", pending.GetProperty("recording_role").GetString());
-        Assert.Contains("design", pending.GetProperty("recorded_roles").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal("orchestrator", pending.GetProperty("recording_role").GetString());
+        Assert.Contains("architect", pending.GetProperty("recorded_roles").EnumerateArray().Select(value => value.GetString()));
 
         var orchestration = workspace.RunGuide(
             "--execution-unit", "G698", "--commit", HostCommit, "--role", "orchestration", "--write", "--format", "json");
         Assert.Equal(0, orchestration.ExitCode);
         Assert.Equal(2, orchestration.Json.GetProperty("records").GetArrayLength());
-        Assert.Contains("design", orchestration.Json.GetProperty("recorded_roles").EnumerateArray().Select(value => value.GetString()));
-        Assert.Contains("orchestration", orchestration.Json.GetProperty("recorded_roles").EnumerateArray().Select(value => value.GetString()));
+        Assert.Contains("architect", orchestration.Json.GetProperty("recorded_roles").EnumerateArray().Select(value => value.GetString()));
+        Assert.Contains("orchestrator", orchestration.Json.GetProperty("recorded_roles").EnumerateArray().Select(value => value.GetString()));
         Assert.Empty(workspace.RunStalled("--role", "orchestration").GetProperty("items").EnumerateArray());
 
         var wrong = workspace.RunGuideText(
-            "--execution-unit", "G698", "--commit", HostCommit, "--role", "review");
+            "--execution-unit", "G698", "--commit", HostCommit, "--role", "not-a-role");
         Assert.Equal(1, wrong.ExitCode);
-        Assert.Contains("not supported", wrong.Output, StringComparison.Ordinal);
+        Assert.Contains("unknown", wrong.Output, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -530,7 +530,7 @@ internal static class AutomationStalledWorkCommand
     };
 
     private const string UsageLine =
-        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--team <name>] [--role <design|orchestration>] [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--knowledge-writeback-since <iso-8601>] [--guide-reachability-since <iso-8601>] [--format json|markdown]";
+        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--team <name>] [--role <architect|orchestrator|builder|reviewer|steward|design|orchestration|implementation|review>] [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--knowledge-writeback-since <iso-8601>] [--guide-reachability-since <iso-8601>] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -4722,7 +4722,7 @@ internal static class AutomationStalledWorkCommand
                 case "--role":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
-                        error = "--role requires 'design' or 'orchestration'.";
+                        error = $"--role requires one of the canonical roles or accepted aliases: {LogicalRoleNormalizer.FormatCanonicalRoles()}; aliases: {LogicalRoleNormalizer.FormatAliases()}.";
                         return false;
                     }
                     recordingRole = args[++index].Trim();

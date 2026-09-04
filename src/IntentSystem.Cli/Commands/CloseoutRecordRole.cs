@@ -3,43 +3,48 @@ using System.Text.Json.Serialization;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// The two roles that may record the closeout duties introduced by G698.
+/// Role attribution for the closeout records introduced by G698.
 /// Route roles in a packet are a separate concern: this is the role of the
-/// recorder who is asserting that the host-side duty was performed.
+/// recorder who is asserting that the host-side duty was performed. G795
+/// keeps the compatibility constants for existing guide prose, while all
+/// accepted input and persisted role values go through the one shared
+/// <see cref="LogicalRoleNormalizer"/>.
 /// </summary>
 internal static class CloseoutRecordRole
 {
+    // Legacy constants remain available to guide text and compatibility
+    // callers. They are aliases, not a second vocabulary table.
     public const string Design = "design";
     public const string Orchestration = "orchestration";
 
-    public static IReadOnlyList<string> Allowed { get; } = [Design, Orchestration];
+    public const string Architect = LogicalRoleNormalizer.Architect;
+    public const string Orchestrator = LogicalRoleNormalizer.Orchestrator;
+    public const string Builder = LogicalRoleNormalizer.Builder;
+    public const string Reviewer = LogicalRoleNormalizer.Reviewer;
+    public const string Steward = LogicalRoleNormalizer.Steward;
+
+    public static IReadOnlyList<string> Allowed => LogicalRoleNormalizer.CanonicalRoles;
+    public static IReadOnlyList<string> Accepted => LogicalRoleNormalizer.AcceptedRoles;
+    public static string AcceptedArgument =>
+        string.Join('|', LogicalRoleNormalizer.AcceptedRoles);
 
     public static bool TryNormalize(string? value, out string? normalized, out string error)
     {
-        normalized = null;
-        if (string.IsNullOrWhiteSpace(value))
+        if (LogicalRoleNormalizer.TryNormalize(value, out normalized, out var roleError))
         {
-            error = "a recording role is required; use '--role design' or '--role orchestration'.";
-            return false;
+            error = string.Empty;
+            return true;
         }
 
-        var candidate = value.Trim().ToLowerInvariant();
-        if (!Allowed.Contains(candidate, StringComparer.Ordinal))
-        {
-            error = $"recording role '{value}' is not supported; use 'design' or 'orchestration'.";
-            return false;
-        }
-
-        normalized = candidate;
-        error = string.Empty;
-        return true;
+        error = $"recording {roleError}";
+        return false;
     }
 
     /// <summary>
     /// Resolves an explicit command role, an invocation-context role, or the
-    /// compatibility default used by pre-G698 callers. The default remains
-    /// design so an old command continues to write the legacy path while all
-    /// newly created records still carry a role.
+    /// compatibility default used by pre-G698 callers. The default is the
+    /// canonical Architect value; the old <c>design</c> spelling remains a
+    /// valid explicit alias and legacy files remain readable.
     /// </summary>
     public static bool TryResolve(
         string? requestedRole,
@@ -72,7 +77,7 @@ internal static class CloseoutRecordRole
             return true;
         }
 
-        role = Design;
+        role = Architect;
         source = "compatibility-default";
         error = string.Empty;
         return true;
@@ -83,7 +88,12 @@ internal static class CloseoutRecordRole
 
     public static string FormatArgument(string role) => $"--role {role}";
 
-    public static string Display(string? role) => role ?? "unattributed";
+    public static string Display(string? role) =>
+        role is null
+            ? "unattributed"
+            : TryNormalize(role, out var normalized, out _)
+                ? normalized!
+                : role;
 }
 
 /// <summary>Summary emitted by read/verification surfaces for every record.</summary>

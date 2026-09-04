@@ -694,3 +694,43 @@ to the loop-prompt generators (`guide workflow task implementation-loop` /
 - **`intent-cli` does not launch AI providers.** It emits deterministic
   guidance, validates contracts, and performs bounded GitHub/metadata
   transitions. The AI agent stays in the driver's seat.
+
+## G795 role-consumer inventory
+
+`role-consumer-inventory-entries: 24` is the measured inventory for the
+role-vocabulary slice. `LogicalRoleNormalizer` is the single input boundary
+for the three role-scoped closeout commands and their records. A role is a
+responsibility, not a runtime or model; `opencode` remains a free-form runtime
+value. The queue-state `worker_role` and `review_role` fields are deliberately
+listed as runtime/action-verb consumers only: this slice does not change their
+semantics or add fields.
+
+| # | File and symbol | Value read | Branch/persistence responsibility |
+|---:|---|---|---|
+| 1 | `Commands/LogicalRoleNormalizer.cs:LogicalRoleNormalizer` | role | canonical five, four aliases, fail-closed input |
+| 2 | `Commands/CloseoutRecordRole.cs:CloseoutRecordRole.TryNormalize/TryResolve` | role | shared closeout attribution boundary |
+| 3 | `Commands/CloseoutRecordRole.cs:RoleScopedCloseoutRecordStore` | role | canonical role sidecar path |
+| 4 | `Commands/KnowledgeWriteBackRecord.cs:Deserialize` | role | legacy read and canonical re-emission |
+| 5 | `Commands/GuideReachabilityRecord.cs:Deserialize` | role | legacy read and canonical re-emission |
+| 6 | `Commands/AutomationKnowledgeWriteBackRecordCommand` | role | `knowledge-writeback-record --role` |
+| 7 | `Commands/AutomationGuideReachabilityRecordCommand` | role | `guide-reachability-record --role` |
+| 8 | `Commands/AutomationStalledWorkCommand` | role | `stalled-work --role` filter and recommendations |
+| 9 | `Commands/SessionLayerTopologyCommand` | role | topology map keys; remains operator-supplied |
+| 10 | `Commands/NotifyRoleTopology.cs:ResolveRecordedRole` | role | recorded delivery-role lookup |
+| 11 | `Commands/NotifyCommand` | role | delegate/report/collect role arguments |
+| 12 | `Commands/NotifySupervisor` | role | delegation sender/recipient/report roles |
+| 13 | `Commands/GuideRoleContractGuidance` | role | existing guide-route pointers (routes unchanged) |
+| 14 | `Commands/GuideReachabilityDeclaration` | role | declared guide route role |
+| 15 | `Commands/ReviewSeatSelectionGuidance` | role | design/review seat selection |
+| 16 | `Commands/NextSlicePacketProvenance` | role | provenance writer/readback contract |
+| 17 | `Commands/HostOwnershipModel` | role | host-role ownership resolution |
+| 18 | `Commands/HerdrStandardLayoutRegistry` | role | pane/layout seat labels |
+| 19 | `Commands/GuideWorkspaceLayoutCommand` | role | workspace seat labels and ordering |
+| 20 | `Commands/GuideOrchestratorThreadCommand` | role | prompt and scheduled-seat role routing |
+| 21 | `Commands/CliRuntimeContracts` / `Infrastructure/CliConfigLoader` | runtime | configured implement/review runtime names |
+| 22 | `Commands/TeamModeCapabilityMatrix` | runtime/action verb | implementation/review capability mode |
+| 23 | `Commands/IntentExplainCommand` | runtime/action verb | queue-state `worker_role` / `review_role` display |
+| 24 | `Commands/QueueTransitionCommand`, `DuplicateQueueItemRules`, `ClarifyDraftAnalyzer` | action verb | queue-state transition vocabulary; unchanged here |
+
+The inventory is descriptive: it does not migrate queue-state values, add a
+Steward route, introduce a vendor enum, or rename an installed guide route.
