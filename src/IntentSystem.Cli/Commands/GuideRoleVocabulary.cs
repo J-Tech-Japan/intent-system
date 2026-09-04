@@ -85,7 +85,19 @@ internal static class GuideRoleVocabulary
                 projected = projected.Replace($"{flag} {alias}", $"{flag} {canonical}", StringComparison.Ordinal);
             }
 
-            foreach (var property in new[] { "role", "from", "to", "report_to", "thread", "owner_role" })
+            // Structured guide payloads carry role identifiers in more than
+            // the original command-envelope fields. Keep this list at the
+            // one rendering boundary so every structured role value still
+            // resolves through LogicalRoleNormalizer, while human-facing
+            // herdr pane labels remain untouched.
+            foreach (var property in new[]
+            {
+                "role", "from", "to", "report_to", "thread", "owner_role",
+                "answerable_by", "decision_actor_role", "adjudication_target_role",
+                "subject_role", "wake_target_role", "agent_role", "role_identifier",
+                "logical_role", "review_role", "worker_role", "sender_role",
+                "recipient_role", "destination_role",
+            })
             {
                 projected = projected.Replace($"\"{property}\":\"{alias}\"", $"\"{property}\":\"{canonical}\"", StringComparison.Ordinal);
                 projected = projected.Replace($"\"{property}\": \"{alias}\"", $"\"{property}\": \"{canonical}\"", StringComparison.Ordinal);

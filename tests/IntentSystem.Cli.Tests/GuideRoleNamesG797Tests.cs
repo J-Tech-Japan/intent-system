@@ -265,6 +265,15 @@ public sealed class GuideRoleNamesG797Tests
             $@"(?ix)(?:\b{roleMarker}\b[^\r\n]{{0,120}}\bdefault(?:ed|s)?\b[^\r\n]{{0,120}}\b{vendor}\b|\b{vendor}\b[^\r\n]{{0,120}}\bdefault(?:ed|s)?\b[^\r\n]{{0,120}}\b{roleMarker}\b)",
             RegexOptions.Compiled);
 
+        using (var legacyStructuredFixture = JsonDocument.Parse("{\"answerable_by\":\"orchestration\"}"))
+        {
+            var fixtureFields = new List<string>();
+            CollectStructuredRoleFields(legacyStructuredFixture.RootElement, "$", fixtureFields);
+            var fixtureLegacyFields = fixtureFields.Where(IsLegacyStructuredRoleValue).ToArray();
+            Assert.Single(fixtureLegacyFields);
+            Console.WriteLine($"G797 AC6/G803 structured-fixture: legacy_field={fixtureLegacyFields[0]}; scan_result=FAIL (expected guard)");
+        }
+
         foreach (var (name, render) in surfaces)
         {
             foreach (var format in new[] { "markdown", "json" })
@@ -277,14 +286,108 @@ public sealed class GuideRoleNamesG797Tests
 
                 Assert.Empty(fusedMatches);
                 Assert.Empty(defaultMatches);
+                string[] structuredLegacyFields;
+                if (format == "json")
+                {
+                    using var jsonDocument = JsonDocument.Parse(output);
+                    var jsonFields = new List<string>();
+                    CollectStructuredRoleFields(jsonDocument.RootElement, "$", jsonFields);
+                    structuredLegacyFields = jsonFields.Where(IsLegacyStructuredRoleValue).ToArray();
+                }
+                else
+                {
+                    structuredLegacyFields = Regex.Matches(
+                            output,
+                            @"\\?""(?:role|from|to|report_to|thread|owner_role|answerable_by|decision_actor_role|adjudication_target_role|subject_role|wake_target_role|agent_role|role_identifier|logical_role|review_role|worker_role|sender_role|recipient_role|destination_role)\\?""\s*:\s*\\?""(?:design|orchestration|implementation|review)\\?""",
+                            RegexOptions.IgnoreCase)
+                        .Select(match => match.Value)
+                        .ToArray();
+                }
+                Assert.Empty(structuredLegacyFields);
                 if (name == "guide orchestrator-thread")
                 {
                     Assert.Contains("running on a sandboxed Codex runtime", output, StringComparison.Ordinal);
                 }
 
-                Console.WriteLine($"G797 AC6 round5 full-payload-scan {name} format={format}: fused_role_vendor={fusedMatches.Length}; vendor_defaults={defaultMatches.Length}; matches=<none>");
+                Console.WriteLine($"G797 AC6/G803 round5 full-payload-scan {name} format={format}: fused_role_vendor={fusedMatches.Length}; vendor_defaults={defaultMatches.Length}; structured_legacy={structuredLegacyFields.Length}; matches=<none>");
             }
         }
+    }
+
+    [Fact]
+    public void StructuredRoleInventoryAndCanonicalProjection_G803()
+    {
+        var context = CreateContext();
+        var surfaces = new (string Name, Func<TextWriter, int> Render)[]
+        {
+            ("guide design-thread", writer => GuideDesignThreadCommand.Execute(context, ["--format", "json"], writer)),
+            ("guide orchestrator-thread", writer => GuideOrchestratorThreadCommand.Execute(context, ["--format", "json"], writer)),
+            ("guide workflow task implementation-loop", writer => GuideWorkflowTaskImplementationLoopCommand.Execute(context, ["--format", "json"], writer)),
+            ("guide workflow task review-next-slice-loop", writer => GuideWorkflowTaskReviewNextSliceLoopCommand.Execute(context, ["--format", "json"], writer)),
+        };
+
+        var expectedInventory = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "guide orchestrator-thread:$.guide_reachability.routes[].role",
+            "guide orchestrator-thread:$.topology_workspace_move.routes[].role",
+            "guide orchestrator-thread:$.herdr_standard_layout.panes[].role",
+            "guide orchestrator-thread:$.terminal_workspace_provisioning.folder_provisioning.roles[].role",
+            "guide orchestrator-thread:$.terminal_workspace_provisioning.unattended_launch_recipes.copilot_recipe.prompt_classes[].answerable_by",
+            "guide orchestrator-thread:$.terminal_workspace_provisioning.unattended_launch_recipes.codex_recipe.prompt_classes[].answerable_by",
+            "guide orchestrator-thread:$.threads[].role",
+        };
+        var actualInventory = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var (name, render) in surfaces)
+        {
+            using var writer = new StringWriter();
+            Assert.Equal(0, render(writer));
+            using var document = JsonDocument.Parse(writer.ToString());
+            var fields = new List<string>();
+            CollectStructuredRoleFields(document.RootElement, "$", fields);
+            var legacyFields = fields.Where(IsLegacyStructuredRoleValue).ToArray();
+            Assert.Empty(legacyFields);
+            foreach (var field in fields)
+            {
+                var separator = field.IndexOf('=');
+                Assert.True(separator > 0, $"Malformed structured inventory item: {field}");
+                actualInventory.Add($"{name}:{NormalizeInventoryPath(field[..separator])}");
+            }
+
+            if (name == "guide orchestrator-thread")
+            {
+                var panes = document.RootElement
+                    .GetProperty("herdr_standard_layout")
+                    .GetProperty("panes")
+                    .EnumerateArray()
+                    .Select(pane => pane.GetProperty("label").GetString() ?? string.Empty)
+                    .ToArray();
+                Assert.Equal(["orchestration", "implementation", "review"], panes);
+                var canonicalAnswerableCount = fields.Count(field => field.EndsWith(".answerable_by=orchestrator", StringComparison.Ordinal));
+                Assert.Equal(4, canonicalAnswerableCount);
+                Assert.DoesNotContain(fields, field => field.EndsWith(".answerable_by=orchestration", StringComparison.Ordinal));
+                Console.WriteLine($"G803 AC3 answerable_by: before=orchestration×4; after=orchestrator×{canonicalAnswerableCount}; legacy_after=0");
+                Console.WriteLine($"G803 AC4 herdr_pane_labels: {string.Join(",", panes)}; unchanged=true");
+            }
+
+            Console.WriteLine($"G803 AC1/AC2 inventory {name}: occurrence_count={fields.Count}; fields={(fields.Count == 0 ? "<none>" : string.Join("; ", fields))}; legacy_values={legacyFields.Length}");
+        }
+
+        Assert.Equal(expectedInventory, actualInventory);
+        Console.WriteLine($"G803 AC1 inventory_entry_count={actualInventory.Count}; expected=7; all_four_surfaces=covered");
+
+        foreach (var (alias, canonical) in LogicalRoleNormalizer.Aliases)
+        {
+            var projected = GuideRoleVocabulary.ProjectRenderedRoleValues($"{{\"answerable_by\":\"{alias}\"}}");
+            Assert.Contains($"\"answerable_by\":\"{canonical}\"", projected, StringComparison.Ordinal);
+            Assert.DoesNotContain($"\"answerable_by\":\"{alias}\"", projected, StringComparison.Ordinal);
+        }
+
+        var vocabularySource = File.ReadAllText(Path.Combine(
+            RepoVersionPolicySource.RepoRoot(), "src", "IntentSystem.Cli", "Commands", "GuideRoleVocabulary.cs"));
+        Assert.Contains("LogicalRoleNormalizer.Aliases", vocabularySource, StringComparison.Ordinal);
+        Assert.DoesNotContain("new Dictionary<string, string>", vocabularySource, StringComparison.Ordinal);
+        Console.WriteLine("G803 AC5 projection: GuideRoleVocabulary.Identifier -> LogicalRoleNormalizer; second_alias_table=false");
     }
 
     [Fact]
@@ -420,5 +523,66 @@ public sealed class GuideRoleNamesG797Tests
             .ToArray();
         Assert.Empty(matches);
         Console.WriteLine($"G797 role-bearing canonical projection {surface}: retired_value_matches=0");
+    }
+
+    private static void CollectStructuredRoleFields(JsonElement element, string path, List<string> fields)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    var propertyPath = $"{path}.{property.Name}";
+                    if (IsStructuredRoleProperty(property.Name)
+                        && property.Value.ValueKind == JsonValueKind.String
+                        && IsRecognizedRoleValue(property.Value.GetString()))
+                    {
+                        fields.Add($"{propertyPath}={property.Value.GetString()}");
+                    }
+
+                    CollectStructuredRoleFields(property.Value, propertyPath, fields);
+                }
+
+                break;
+            case JsonValueKind.Array:
+                var index = 0;
+                foreach (var item in element.EnumerateArray())
+                {
+                    CollectStructuredRoleFields(item, $"{path}[{index}]", fields);
+                    index++;
+                }
+
+                break;
+        }
+    }
+
+    private static bool IsStructuredRoleProperty(string name) =>
+        name.Contains("role", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("answerable_by", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("thread", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("destination_thread", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("from", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("to", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("report_to", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("owner", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsLegacyStructuredRoleValue(string field) =>
+        field.EndsWith("=design", StringComparison.OrdinalIgnoreCase)
+        || field.EndsWith("=orchestration", StringComparison.OrdinalIgnoreCase)
+        || field.EndsWith("=implementation", StringComparison.OrdinalIgnoreCase)
+        || field.EndsWith("=review", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeInventoryPath(string path) =>
+        Regex.Replace(path, @"\[\d+\]", "[]", RegexOptions.CultureInvariant);
+
+    private static bool IsRecognizedRoleValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var role = value.Split('@', 2)[0];
+        return LogicalRoleNormalizer.TryNormalize(role, out _, out _);
     }
 }
