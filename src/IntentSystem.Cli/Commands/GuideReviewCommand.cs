@@ -441,12 +441,14 @@ internal static class GuideReviewCommand
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
-            writer.Write(JsonSerializer.Serialize(result, JsonOptions));
+            writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(JsonSerializer.Serialize(result, JsonOptions)));
             writer.WriteLine();
         }
         else
         {
-            WriteMarkdown(writer, result);
+            using var buffer = new StringWriter();
+            WriteMarkdown(buffer, result);
+            writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(buffer.ToString()));
         }
 
         return result.Ready ? 0 : 1;

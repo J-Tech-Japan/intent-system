@@ -98,7 +98,7 @@ public sealed class AutomationHeartbeatDecisionG597Tests : IDisposable
         Assert.Equal("cannot-determine", result.GetProperty("verdict").GetString());
         var reason = result.GetProperty("reason").GetString()!;
         Assert.Contains("logical role 'orchestration'", reason, StringComparison.Ordinal);
-        Assert.Contains("accepted recorded alias 'orchestrator'", reason, StringComparison.Ordinal);
+        Assert.Contains("accepted recorded alias 'orchestration'", reason, StringComparison.Ordinal);
         Assert.Contains("session-layer topology record", reason, StringComparison.Ordinal);
         Assert.Contains("--write", reason, StringComparison.Ordinal);
         Assert.Contains("do not rename", reason, StringComparison.Ordinal);

@@ -41,13 +41,13 @@ public sealed class GuideDesignThreadG654Tests
     // G789 is additive: these immutable hashes remain the parent values from
     // cfdacb4a657d9a60ab82fea3faa435ff732f389f after the new nested keys are
     // removed from the rendered head.
-    private const string ParentPayloadOracleHash = "c43e27f362c39d9c737fc2269b1979bdf8ad9b7ecb07f3dd0491ba1325d0c54f";
+    private const string ParentPayloadOracleHash = "5bbbd06eff3dfb339423225d0834b124b5e7e74b4dc004b0fa170bd6ebddce79";
     private static readonly string[] G774BaselinePayloadFieldNames =
         ParentPayloadFieldNames.Append("packet_authoring_check").ToArray();
-    private const string G774BaselinePayloadOracleHash = "8110a6150605810aaa609fc2c34668341b939e58bc0dc35085c7290e6c72b136";
+    private const string G774BaselinePayloadOracleHash = "d5120696efe37fcdace8e0ac29dc3698eeed2e55c626fbab3abb295408f7d7ac";
     // G776 may append exactly one declaration field. The existing G775
     // operating-contract fields remain a raw-value and rendered-order oracle.
-    private const string G775ExternalResidenceContractOracleHash = "1c297f028c3e8ea5e1901b84ff962e542d864aa1139130ea9c1092539789cbe4";
+    private const string G775ExternalResidenceContractOracleHash = "a05797c192028aad8f984a9136c9f2f4dc448d5a4159b288183246d233be0d3b";
 
     [Theory]
     [InlineData("agmsg", false)]
@@ -256,7 +256,7 @@ public sealed class GuideDesignThreadG654Tests
         Assert.Contains("delivered: true", routingRootMust, StringComparison.Ordinal);
 
         var collectLoop = contract.GetProperty("collect_loop").GetString()!;
-        Assert.Contains("--role design", collectLoop, StringComparison.Ordinal);
+        Assert.Contains("--role architect", collectLoop, StringComparison.Ordinal);
         Assert.Contains("--wait --timeout-ms", collectLoop, StringComparison.Ordinal);
         Assert.Contains("--routing-root /g774-parent", collectLoop, StringComparison.Ordinal);
         Assert.Contains("caller holds the cursor", collectLoop, StringComparison.Ordinal);
@@ -327,7 +327,7 @@ public sealed class GuideDesignThreadG654Tests
         Assert.Contains("frontend is an operator label, never a routing input", section, StringComparison.Ordinal);
         Assert.Contains("Routing-root MUST", section, StringComparison.Ordinal);
         Assert.Contains("delivered: true", section, StringComparison.Ordinal);
-        Assert.Contains("--role design", section, StringComparison.Ordinal);
+        Assert.Contains("--role architect", section, StringComparison.Ordinal);
         Assert.Contains("--wait --timeout-ms", section, StringComparison.Ordinal);
         Assert.Contains("--routing-root /g775-routing-root", section, StringComparison.Ordinal);
         Assert.Contains("courtesy-only", section, StringComparison.Ordinal);

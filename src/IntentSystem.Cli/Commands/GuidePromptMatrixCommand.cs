@@ -146,17 +146,19 @@ internal static class GuidePromptMatrixCommand
             if (mode is not null)
             {
                 // Single entry
-                writer.Write(JsonSerializer.Serialize(entries[0], JsonOptions));
+                writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(JsonSerializer.Serialize(entries[0], JsonOptions)));
             }
             else
             {
-                writer.Write(JsonSerializer.Serialize(entries, JsonOptions));
+                writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(JsonSerializer.Serialize(entries, JsonOptions)));
             }
             writer.WriteLine();
         }
         else
         {
-            WriteMarkdown(writer, entries);
+            using var buffer = new StringWriter();
+            WriteMarkdown(buffer, entries);
+            writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(buffer.ToString()));
         }
 
         return 0;
@@ -286,6 +288,14 @@ internal static class GuidePromptMatrixCommand
             .Select(entry => string.Equals(entry.Target, TargetHost, StringComparison.Ordinal)
                 ? entry with { ReviewPolicySource = reviewPolicySource }
                 : entry)
+            .Select(entry => entry with
+            {
+                // G797: every generated prompt carries the same canonical
+                // role words and route-compatible identifier guidance.  This
+                // is additive prompt text; mode selection and all existing
+                // command routes remain unchanged.
+                Prompt = GuideRoleVocabulary.RenderMarkdownBlock() + "\n\n" + entry.Prompt,
+            })
             .ToList();
     }
 
@@ -484,36 +494,37 @@ $@"**Scheduler invariant (G444)**: the safe invariant is exactly ONE active wake
     /// (performing semantic code judgment when it is not the packet
     /// <c>review_role</c>) nor under-reviews (concluding "the host never
     /// reviews"). Semantic review is permitted only when the running agent
-    /// matches the packet <c>review_role</c> (host <c>roles.review</c>,
-    /// default <c>Codex</c>) or the prompt explicitly assigns review; an
-    /// direct-lane approved PR is mergeable by the orchestrator even when a
-    /// different agent performed the review; operator-merge remains human-owned. Role mismatch resolves to a
-    /// wait / <c>STOP</c> classification (never Asking UI, per G479). The lead
-    /// line is tailored to the resolved agent so the Claude host-orchestrator
-    /// and Codex semantic-reviewer variants read correctly.
+    /// resolves to the canonical logical <c>reviewer</c> role (the legacy
+    /// <c>roles.review</c> field is configuration-only) or the prompt
+    /// explicitly assigns review; a direct-lane approved PR is mergeable by
+    /// the orchestrator even when a different agent performed the review;
+    /// operator-merge remains human-owned. Role mismatch resolves to a wait /
+    /// <c>STOP</c> classification (never Asking UI, per G479). The lead line
+    /// is tailored to the resolved agent without making a runtime/vendor a
+    /// role default.
     /// </summary>
     private static string RenderHostReviewRoleBoundary(string resolvedAgent, string targetRepoPlaceholder)
     {
         var leadLine = resolvedAgent switch
         {
             AgentCodex =>
-                "You are running as `codex` — the default `review` role. When this wake's packet `review_role` resolves to `Codex` (the default) or the prompt assigns you review, you ARE the semantic reviewer for this wake and perform the semantic review here.",
+                "You are running as `codex` for this wake. Resolve the packet role assignment before deciding whether semantic review is yours.",
             AgentClaude =>
-                "You are running as `claude` — the default `implement` role, NOT the default `review` role. Treat yourself as the host-orchestrator only, UNLESS this wake's packet `review_role` resolves to `Claude` or the prompt explicitly assigns you semantic review.",
+                "You are running as `claude` for this wake. Resolve the packet role assignment before deciding whether semantic review is yours.",
             _ =>
-                "Resolve this wake's packet `review_role` before deciding whether you may perform semantic review; do not assume you are or are not the reviewer.",
+                "Resolve this wake's packet role assignment before deciding whether semantic review is yours.",
         };
 
         return
-$@"**Role boundaries (G480)**: {leadLine} Three responsibilities are distinct and MUST NOT be conflated:
+$@"**Role boundaries (G480)**: {leadLine} Legacy configuration field `roles.review` remains accepted for compatibility; use canonical logical `reviewer` in new guidance. Three responsibilities are distinct and MUST NOT be conflated:
 - **Host-orchestrator** (always this loop): run preflights and `automation host-review-diagnostics`, apply safe repairs, select review-eligible PRs, honor each immutable lane landing mode, run `closeout pr`, publish the next slice, and reconcile host metadata. The orchestrator merges an approved `direct` lane even when a DIFFERENT agent reviewed it; it NEVER merges an `operator-merge` lane, which waits patiently for a human and resumes at closeout after merge detection.
-- **Semantic-reviewer** (role-gated): inspect the diff, map the implementation to the packet / intent contract, and drive approve / request-update through `intent-cli automation pr-transition`. This loop performs semantic review ONLY when the running agent matches the packet `review_role` (host `roles.review`, default `Codex`) OR the prompt explicitly assigns you review responsibility. The host loop is NOT review-free: when you ARE the `review_role`, you perform the semantic review in this wake — do not delegate it away or conclude that host loops skip review entirely.
+- **Semantic-reviewer** (role-gated): inspect the diff, map the implementation to the packet / intent contract, and drive approve / request-update through `intent-cli automation pr-transition`. This loop performs semantic review ONLY when this wake is assigned the packet's canonical logical `reviewer` role OR the prompt explicitly assigns you review responsibility. The host loop is NOT review-free: when you ARE the semantic reviewer through the assigned `reviewer` role, you perform the semantic review in this wake — do not delegate it away or conclude that host loops skip review entirely.
 - **Child-implementer** (separate loop / agent): claims the issue / PR, writes implementation code, opens / updates the PR, and runs `worker complete`. The host loop never writes implementation code.
 
-Resolve your role every wake from `intent-cli guide review --pr <n> --repo {targetRepoPlaceholder} --domain <d> --format json` (the `review_role`) and `automation summary`:
-- If you ARE the semantic reviewer (running agent == `review_role`, or explicitly assigned): perform evidence-backed semantic review and apply `automation pr-transition --transition approved | request-update` per the `approval_summary_requirements` — never approve on ""tests passed"" alone (G316).
+Resolve your role every wake from `intent-cli guide review --pr <n> --repo {targetRepoPlaceholder} --domain <d> --format json` (the packet `review_role`, resolved to canonical logical `reviewer`) and `automation summary`:
+- If you ARE the semantic reviewer (the packet `review_role` resolves to canonical logical `reviewer`, or you are explicitly assigned): perform evidence-backed semantic review and apply `automation pr-transition --transition approved | request-update` per the `approval_summary_requirements` — never approve on ""tests passed"" alone (G316).
 - If you are NOT the semantic reviewer: do NOT approve or request-update on code judgment. Orchestrate only — WAIT for the PR to reach `intent-pr-approved` (the assigned reviewer approves), then inspect landing_mode. Direct continues merge + `closeout pr`; operator-merge enters `awaiting-operator-merge`, receives no urge/age escalation, and resumes with closeout only after the human merge. A not-yet-approved PR with no reviewer action this wake is a normal WAIT, not an operator question.
-- On role mismatch (you are asked to review but you are not the `review_role`, or a PR needs semantic review but no reviewer is assigned), do NOT open Asking UI: emit `STOP: review-role-mismatch` with exactly one next operator action, or record the wait — per the loop-wake Asking UI policy (G479).";
+- On role mismatch (you are asked to review but you are not assigned the packet's canonical logical `reviewer` role, or a PR needs semantic review but no reviewer is assigned), do NOT open Asking UI: emit `STOP: review-role-mismatch` with exactly one next operator action, or record the wait — per the loop-wake Asking UI policy (G479).";
     }
 
     private static string NormalizeAgent(string? agent)
@@ -750,7 +761,7 @@ Hard rules:
 - Never apply `intent-pr-created` to a PR.
 - Honor the WIP cap: do not cut a new child issue while any open `intent-target` issue/PR remains. **Operator-approved queue warming (G288)**: only when the operator explicitly asks to keep the child queue warm beyond the cap, pass `--allow-wip-cap-override` to `automation host-review-diagnostics`. With that flag and a complete candidate, the diagnostic returns `issue-publish-ready` with `wip-cap-overridden` in `warnings`. The override publishes at most one prepared next-slice issue per wake; clarification gates and contract completeness are still hard blockers, and the override never lands without an operator ask.
 - Stop on Hard Clarification rather than guessing when source-of-truth is ambiguous.
-- **Role-aware review (G480/G678)**: perform semantic code review ONLY when the running agent is the packet `review_role` (host `roles.review`, default `Codex`) or the prompt explicitly assigns you review; otherwise orchestrate and WAIT for `intent-pr-approved` before the lane-specific continuation. Never imply the host loop never reviews, and never perform semantic review regardless of `review_role`. An already-approved direct-lane PR remains mergeable by the orchestrator even when a different agent did the review; an operator-merge PR is never mergeable by intent-cli and waits for the human. Role mismatch is a wait / `STOP: review-role-mismatch`, never Asking UI (G479).
+- **Role-aware review (G480/G678)**: perform semantic code review ONLY when the packet `review_role` resolves to the canonical logical `reviewer` role or the prompt explicitly assigns you review; otherwise orchestrate and WAIT for `intent-pr-approved` before the lane-specific continuation. Never imply the host loop never reviews, and never perform semantic review regardless of `review_role`. An already-approved direct-lane PR remains mergeable by the orchestrator even when a different agent did the review; an operator-merge PR is never mergeable by intent-cli and waits for the human. Role mismatch is a wait / `STOP: review-role-mismatch`, never Asking UI (G479).
 - `automation reconcile --write` must come from this host loop only; child implementation loops never invoke it.
 - **Publish-artifact-backed metadata recovery (G303)**: when `closeout-plan` returns `host-metadata-blocked` because the queue item has BOTH `linked_issue` and `linked_pr` null but `.intent-cli/issues/<execution-unit>/publish.yaml` recorded a created GitHub issue, run `intent-cli automation publish-recovery --repo {targetRepoPlaceholder} --format json` (read-only) first. If the dry-run reports a single high-confidence repair, re-run with `--write` and retry the wake; if it reports unsafe stops (multiple closing PRs, repo mismatch, missing publish artifact), surface a structured operator stop. Host metadata blockers like this MUST NOT become PR repair comments.
 - **Queue-state-backed linked_pr recovery (G315)**: when `closeout-plan` returns `host-metadata-blocked` because the queue item already has `linked_issue` populated (durable host source-of-truth) but `linked_pr` is null, the same `intent-cli automation publish-recovery --repo {targetRepoPlaceholder} --format json` lane now also covers this case — publish artifact evidence is NOT required. The analyzer pairs the existing `linked_issue` with the unique open PR whose GitHub `closingIssuesReferences` (or PR body `Closes #<n>` text) closes that issue. If the dry-run reports a single high-confidence repair of type `queue-linked-issue-closing-pr-recovery`, re-run with `--write` and retry the wake. Unsafe stops in this lane (`no-closing-pr-for-linked-issue` → PR is missing a closing reference; G311 owns body repair / `multiple-closing-prs-for-linked-issue` / `multiple-queue-items-for-linked-issue` / `linked-issue-repo-mismatch`) MUST surface as a structured operator stop — never guess. Run G315 lane BEFORE falling back to `automation reconcile --lane host-review`; do not stop the wake just because the older publish-artifact lane (G303) reported `no publish artifact present`.
@@ -1493,6 +1504,8 @@ Hard rules:
     private static void WriteMarkdown(TextWriter writer, IReadOnlyList<GuidePromptMatrixEntry> entries)
     {
         writer.WriteLine("# Guide prompt matrix");
+        writer.WriteLine();
+        writer.WriteLine(GuideRoleVocabulary.RenderMarkdownBlock());
         writer.WriteLine();
         writer.WriteLine("> **PRIMARY for multi-thread setups:** the four-thread **orchestrator-message model** over the selected session transport");
         writer.WriteLine("> (design / orchestrator / implementation / review) is the practiced, maintained model — a");

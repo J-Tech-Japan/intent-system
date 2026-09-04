@@ -150,7 +150,8 @@ internal static class GuideOrchestratorThreadCommand
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
             var json = JsonSerializer.Serialize(guide, JsonOptions);
-            writer.Write(sessionLayer.IsHerdrOnly ? SelectJsonSections(json, values) : json);
+            var selected = sessionLayer.IsHerdrOnly ? SelectJsonSections(json, values) : json;
+            writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(selected));
             writer.WriteLine();
             return 0;
         }
@@ -163,11 +164,13 @@ internal static class GuideOrchestratorThreadCommand
         {
             using var buffer = new StringWriter();
             WriteMarkdown(buffer, guide, metadataFree: !Directory.Exists(Path.Combine(context.RepoRoot, ".intent-cli")));
-            writer.Write(SelectMarkdownSections(buffer.ToString(), values));
+            writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(SelectMarkdownSections(buffer.ToString(), values)));
             return 0;
         }
 
-        WriteMarkdown(writer, guide, metadataFree: !Directory.Exists(Path.Combine(context.RepoRoot, ".intent-cli")));
+        using var markdownBuffer = new StringWriter();
+        WriteMarkdown(markdownBuffer, guide, metadataFree: !Directory.Exists(Path.Combine(context.RepoRoot, ".intent-cli")));
+        writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(markdownBuffer.ToString()));
         return 0;
     }
 
@@ -858,7 +861,7 @@ internal static class GuideOrchestratorThreadCommand
             };
 
         var hostStateDutyRouting = sandboxedCodexOrchestrator
-            ? "CODEX SANDBOX DUTY ROUTE: this herdr-started Codex orchestrator uses `--sandbox workspace-write --ask-for-approval never`; the current recipe deliberately does not declare `<repo>/.git`. A live 2026-08-19 E-versus-F probe on Codex CLI 0.147.0/macOS showed `git -C work fetch origin` denied with `seatcwd, work` and succeeding with the exact `work/.git` root. We weighed both legitimate routes — declaring `<repo>/.git` for the seat, or retaining non-sandboxed host-state routing — and keep the latter for this recipe because it preserves least privilege while `git worktree add` under the corrected flags remains unmeasured. This is an explicit routing choice, not a claim that `.git` can never be granted. The non-sandboxed host-state role owns `intent-cli issue publish-flow ... --write`, `intent-cli automation issue-publish --write`, host-state pushes, and `intent-cli closeout pr ... --write`. The Codex orchestrator routes one bounded request, waits for the returned JSON, and re-verifies intent-cli/GitHub facts. "
+            ? "CODEX SANDBOX DUTY ROUTE: this herdr-started orchestrator is running on a sandboxed Codex runtime with `--sandbox workspace-write --ask-for-approval never`; the current recipe deliberately does not declare `<repo>/.git`. A live 2026-08-19 E-versus-F probe on Codex CLI 0.147.0/macOS showed `git -C work fetch origin` denied with `seatcwd, work` and succeeding with the exact `work/.git` root. We weighed both legitimate routes — declaring `<repo>/.git` for the seat, or retaining non-sandboxed host-state routing — and keep the latter for this recipe because it preserves least privilege while `git worktree add` under the corrected flags remains unmeasured. This is an explicit routing choice, not a claim that `.git` can never be granted. The non-sandboxed host-state role owns `intent-cli issue publish-flow ... --write`, `intent-cli automation issue-publish --write`, host-state pushes, and `intent-cli closeout pr ... --write`. The orchestrator routes one bounded request, waits for the returned JSON, and re-verifies intent-cli/GitHub facts. "
                 + hostStateDiscovery.Route + " If that route is unavailable, fail closed — do not widen the sandbox, add an unrecorded `.git` root, write `.git`, or improvise a clone. "
                 + qualifiedDesignRule
             : "HOST-STATE DUTY ROUTE: " + hostStateDiscovery.Route + " The recorded host-authority role performs write-bearing intent-cli/Git operations from the host repository. The orchestrator may execute a canonical write only when its own recorded envelope explicitly permits it; otherwise it routes the same bounded request to that role and verifies the returned intent-cli/GitHub facts. Never widen a seat envelope. "
@@ -1040,8 +1043,8 @@ internal static class GuideOrchestratorThreadCommand
                 Summary =
                     "In orchestrator-message mode the normal steady state is MESSAGE-DRIVEN: implementation/review "
                     + "receivers already send accepted/progress/completed/blocked replies to the orchestrator, and those "
-                    + "replies wake the orchestrator path — routine fast polling is NOT required. An orchestrator timer "
-                    + "(Codex automation every 5m, or Claude same-thread `/loop 5m`) remains SUPPORTED but only as an "
+                    + "replies wake the orchestrator path — routine fast polling is NOT required. A dedicated fallback "
+                    + "timer (Codex automation every 5m, or Claude same-thread `/loop 5m`) remains SUPPORTED but only as an "
                     + "explicit FALLBACK/LEGACY polling option for an operator who intentionally wants scheduled "
                     + "polling instead of message-driven wakes. Either way the implementation and review threads stay "
                     + "long-lived LOOPLESS receivers. The RECOMMENDED default safety net for message-driven steady "
@@ -1054,7 +1057,7 @@ internal static class GuideOrchestratorThreadCommand
                     + "once, and waits again. Receivers are NEVER scheduled; when an explicit fallback/legacy timer is "
                     + "used (message-driven wakes are the default), the orchestrator is the only thread ever scheduled.",
                 CodexSetupPrompt = Apply(
-                    "OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the ORCHESTRATOR "
+                    "OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the coordinating "
                     + "thread, domain `<domain>` against `<owner/repo>` using `<agent>`: on each run perform exactly "
                     + "ONE orchestrator wake — check design-side progress and agmsg replies, ask intent-cli for state "
                     + "(`intent status`, `worker next-action --github-only`, `automation host-review-preflight`), "
@@ -1066,7 +1069,7 @@ internal static class GuideOrchestratorThreadCommand
                     + "the operator explicitly wants scheduled fallback/legacy polling. Do not run implementation/"
                     + "review loops; they are loopless receivers."),
                 ClaudeLoopSetupPrompt = Apply(
-                    "OPTIONAL fallback/legacy polling — Claude same-thread setup for the ORCHESTRATOR thread, domain "
+                    "OPTIONAL fallback/legacy polling — Claude same-thread setup for the coordinating thread, domain "
                     + "`<domain>` against `<owner/repo>`: in the orchestrator thread run `/loop 5m` with the "
                     + "orchestrator prompt so the same thread re-wakes every 5 minutes. Each wake does exactly one "
                     + "orchestrator pass (read replies, check intent-cli / GitHub state, send this wake's messages under "
@@ -1088,7 +1091,7 @@ internal static class GuideOrchestratorThreadCommand
                     "Pair that transition with the implementation repair delegation in THIS SAME WAKE; do not leave the receiver waiting for a label change or an unscheduled future wake.",
                     "Detect stale blockers and no-reply receivers: a delegation with no accepted/progress reply within the expected window, or a thread stuck off the official workflow.",
                     "On a no-reply receiver past the threshold (default 30m), run the SAFE stale-thread health check: send one non-destructive status-request, check read-only intent-cli/GitHub facts, keep watching if there is progress, treat waiting-permission as an operator notice (never auto-clear), and only after repeated no-reply with no progress send one idempotent re-entry or escalate.",
-                    "If intent-cli reports an `issue-cut-ready` candidate and all gates pass (same-domain or routed, complete contract, no open clarification, dependencies satisfied, under WIP, clean host-sync/preflight), route ONE issue this wake to the authorized host-state role for canonical publish-flow / issue-publish, verify its result, THEN delegate that same issue to implementation in THIS SAME WAKE (G524) — do not ask the operator to create it, and do not stop after routing the publish to wait for a future wake to send the delegation. A sandboxed Codex orchestrator never performs the write-bearing host-state step itself.",
+                    "If intent-cli reports an `issue-cut-ready` candidate and all gates pass (same-domain or routed, complete contract, no open clarification, dependencies satisfied, under WIP, clean host-sync/preflight), route ONE issue this wake to the authorized host-state role for canonical publish-flow / issue-publish, verify its result, THEN delegate that same issue to implementation in THIS SAME WAKE (G524) — do not ask the operator to create it, and do not stop after routing the publish to wait for a future wake to send the delegation. An orchestrator running on a sandboxed Codex runtime never performs the write-bearing host-state step itself.",
                     "If the candidate has unmet dependencies, plan the chain instead of pausing: act on the EARLIEST unmet resolvable dependency (publish or route it), keep the dependent held, and escalate only ambiguous/cycle/cross-domain-unrouted cases.",
                     "The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER (implementation, review) — NOT at-most-one-message overall (G524): this wake's actions may include a publish plus its same-wake delegation, one repair message per stalled receiver, one operator escalation, and handling any pending receiver reports, all together.",
                     "Send workflow notifications only through `intent-cli notify`; it resolves the recorded session-layer mode and validates the recipient before delivery, failing closed on an unknown role (G524/G578).",
@@ -1176,8 +1179,8 @@ internal static class GuideOrchestratorThreadCommand
                     + "The coordination responsibility is to route one bounded publish request to the recorded host-state "
                     + "role. When intent-cli reports a candidate as `issue-cut-ready` and ALL safety gates pass, the "
                     + "orchestrator routes one bounded publish request to the recorded host-state role; that role executes "
-                    + "the canonical intent-cli commands from the host repository with its write envelope. A sandboxed "
-                    + "Codex orchestrator MUST NOT execute the write-bearing host-state step itself. Publish AT MOST ONE "
+                    + "the canonical intent-cli commands from the host repository with its write envelope. An orchestrator "
+                    + "running on a sandboxed Codex runtime MUST NOT execute the write-bearing host-state step itself. Publish AT MOST ONE "
                     + "issue per wake, then verify, THEN delegate that same issue to the implementation thread in THE SAME "
                     + "WAKE (G524) — publish and delegate complete together; never defer the delegation to an unscheduled "
                     + "\"next wake\", since no other trigger will ever wake the orchestrator to send it (this was the "
@@ -1450,7 +1453,7 @@ internal static class GuideOrchestratorThreadCommand
                     "If `intent-cli` reports the next slice `issue-cut-ready` and all publish gates pass (see Next-slice "
                     + "publication), the orchestrator routes ONE bounded publish request to the recorded host-state role. "
                     + "That role performs the canonical intent-cli commands (`issue publish-flow` / `automation issue-publish`) "
-                    + "from the host repository; a sandboxed Codex orchestrator does NOT execute the write-bearing step "
+                    + "from the host repository; an orchestrator running on a sandboxed Codex runtime does NOT execute the write-bearing step "
                     + "itself. " + qualifiedDesignRule + " At most one issue per wake; "
                     + "verify the host-state result before delegating implementation.",
                 EscalationBoundary =
@@ -1900,13 +1903,13 @@ internal static class GuideOrchestratorThreadCommand
                     "Review delegation must carry the managed-worktree policy and require design-alignment evidence up "
                     + "front — not leave the reviewer to discover it. Dogfooding showed a reviewer allocate a raw "
                     + "`/tmp/...review...` worktree and Codex correctly ask to approve a destructive `rm -rf` — the "
-                    + "RIGHT safety behavior for the WRONG workflow. For a sandboxed Codex reviewer, the host-state role "
+                    + "RIGHT safety behavior for the WRONG workflow. For a reviewer running on a sandboxed Codex runtime, the host-state role "
                     + "prepares the registered path; the fix is correct routing and a git-ignored managed root, NOT "
                     + "weakening approval settings.",
                 ManagedWorktreeRoot =
                     "The host-state role prepares each registered review worktree under the SAME managed, workspace-local "
                     + "root as the rest of orchestrated work — the `[project] worktree_root` (default `.intent-cli/worktrees/`), "
-                    + "which MUST be git-ignored, for example `.intent-cli/worktrees/review-<unit>`. A sandboxed Codex reviewer "
+                    + "which MUST be git-ignored, for example `.intent-cli/worktrees/review-<unit>`. A reviewer running on a sandboxed Codex runtime "
                     + "receives that prepared path and never runs `git worktree add`; if the delegation instead supplies an "
                     + "ordinary role-work-root checkout such as `/private/tmp/review-<unit>`, use it as a temporary checkout, "
                     + "not as a registered worktree.",
@@ -1919,7 +1922,7 @@ internal static class GuideOrchestratorThreadCommand
                 CleanupRule =
                     "The non-sandboxed host-state role performs cleanup with `git worktree remove <managed-path>` for a "
                     + "REGISTERED, CLEAN worktree only — confirmed via `git worktree list` and a clean `git status` first. "
-                    + "A sandboxed Codex reviewer reports completion or a blocker; it does not mutate `.git` or delete the "
+                    + "A reviewer running on a sandboxed Codex runtime reports completion or a blocker; it does not mutate `.git` or delete the "
                     + "path itself.",
                 UnsafeStalePathRule =
                     "A stale path that is NOT a registered git worktree, is OUTSIDE the managed root, or is dirty/"
@@ -1957,7 +1960,7 @@ internal static class GuideOrchestratorThreadCommand
                     Apply("domain (`<domain>`) and target repo (`<owner/repo>`)"),
                     "host / orchestrator / implementation / review paths — each role runs from its own folder, clone, or worktree",
                     "base branch policy (e.g. direct-main)",
-                    Apply("per-role agents (e.g. orchestrator=`<agent>`, implementation=claude, review=codex)"),
+                    "per-role agent slots: architect, orchestrator, builder, reviewer, and steward are configured independently; no role is tied to a runtime/vendor.",
                     "agmsg team name",
                     "delivery mode — how each role receives messages (e.g. a streamed inbox watch per role)",
                 },
@@ -2120,7 +2123,7 @@ internal static class GuideOrchestratorThreadCommand
                         + "repair or escalation by ownership, and escalate only stuck/ambiguous CI. If intent-cli reports "
                         + "a ready next-slice issue this wake (`issue-cut-ready` and all gates pass), publish a ready next-slice issue by routing ONE bounded "
                         + "publish request to the recorded host-state role for the canonical `intent-cli issue publish-flow` / "
-                        + "`automation issue-publish` commands. A sandboxed Codex orchestrator never executes that write-bearing "
+                        + "`automation issue-publish` commands. An orchestrator running on a sandboxed Codex runtime never executes that write-bearing "
                         + "step itself. Verify the host-state result, THEN delegate that same issue to implementation in THIS "
                         + "SAME WAKE (G524) — never stop after routing the publish to wait for an unscheduled future wake to "
                         + "send the delegation; no other "
@@ -2202,7 +2205,7 @@ internal static class GuideOrchestratorThreadCommand
                         + "`awaiting-operator-merge`; that patient state is not review debt, is never urged or "
                         + "age-escalated, and resumes at closeout only after a human merge is detected. Perform semantic review only when you are the packet `review_role` or "
                         + "explicitly assigned (G480); otherwise inspect landing_mode and orchestrate merge/closeout of an already-approved "
-                        + "direct-lane PR, or the patient wait and post-human-merge closeout-only continuation for an operator-merge PR. If you need a review worktree, use the prepared path carried by the delegation. A sandboxed Codex reviewer MUST NOT run `git worktree add` under the current recipe (the repository's `.git` root is not declared, and the operation is unmeasured under the corrected flags); reply blocked so the non-sandboxed host-state role can register `.intent-cli/worktrees/review-<unit>` under the git-ignored managed root. NEVER a raw `/tmp/...review...` path as a registered worktree. When the delegation explicitly supplies an ordinary checkout under the seat's role-work-root (for example `/private/tmp/<role>-<unit>`), use it as a temporary checkout, not as a registered worktree; never "
+                        + "direct-lane PR, or the patient wait and post-human-merge closeout-only continuation for an operator-merge PR. If you need a review worktree, use the prepared path carried by the delegation. A reviewer running on a sandboxed Codex runtime MUST NOT run `git worktree add` under the current recipe (the repository's `.git` root is not declared, and the operation is unmeasured under the corrected flags); reply blocked so the non-sandboxed host-state role can register `.intent-cli/worktrees/review-<unit>` under the git-ignored managed root. NEVER a raw `/tmp/...review...` path as a registered worktree. When the delegation explicitly supplies an ordinary checkout under the seat's role-work-root (for example `/private/tmp/<role>-<unit>`), use it as a temporary checkout, not as a registered worktree; never "
                         + "`rm -rf /tmp/... && git worktree add ...`; remove registered worktrees only with `git worktree remove` through the host-state role. A non-registered, dirty, or otherwise unsafe stale path is a "
                         + "STRUCTURED BLOCKER reply to the orchestrator, not an operator `rm -rf` approval prompt (see "
                         + "Review delegation — managed worktrees and design alignment). Your review must be grounded in "
@@ -4450,6 +4453,8 @@ internal static class GuideOrchestratorThreadCommand
         WriteSetupIntake(writer, guide.SetupIntake);
         writer.WriteLine(guide.Summary);
         writer.WriteLine();
+        writer.WriteLine(GuideRoleVocabulary.RenderMarkdownBlock());
+        writer.WriteLine();
 
         writer.WriteLine("## Guide reachability (G645/G696)");
         foreach (var route in guide.GuideReachability.Routes)
@@ -4519,6 +4524,10 @@ internal static class GuideOrchestratorThreadCommand
         {
             writer.WriteLine($"- {item}");
         }
+        writer.WriteLine();
+        writer.WriteLine($"### {GuideRoleVocabulary.Steward} boundary");
+        writer.WriteLine();
+        writer.WriteLine($"- {GuideRoleVocabulary.StewardBoundarySentence}");
         writer.WriteLine();
         writer.WriteLine($"### Host-state duty routing");
         writer.WriteLine();
@@ -4803,13 +4812,13 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- scheduled thread when an explicit timer is used: `{guide.Scheduling.ScheduledThread}` (the only thread ever scheduled)");
         writer.WriteLine($"- **receivers are loopless** — {guide.Scheduling.ReceiverNote}");
         writer.WriteLine();
-        writer.WriteLine("### Codex automation (5m) — orchestrator (fallback/legacy, optional)");
+        writer.WriteLine("### Codex automation (5m) — fallback/legacy polling (optional)");
         writer.WriteLine();
         writer.WriteLine("```text");
         writer.WriteLine(guide.Scheduling.CodexSetupPrompt);
         writer.WriteLine("```");
         writer.WriteLine();
-        writer.WriteLine("### Claude `/loop 5m` — orchestrator (fallback/legacy, optional)");
+        writer.WriteLine("### Claude `/loop 5m` — fallback/legacy polling (optional)");
         writer.WriteLine();
         writer.WriteLine("```text");
         writer.WriteLine(guide.Scheduling.ClaudeLoopSetupPrompt);

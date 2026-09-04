@@ -673,7 +673,10 @@ public sealed class KnowledgeWriteBackG564Tests : IDisposable
         var output = Render(["guide", "orchestrator-thread", "--domain", "intent-cli", "--target-repo", Repo, "--agent", "claude"]);
 
         Assert.Contains(IntentTreeCoEvolutionDuty.Duty, output, StringComparison.Ordinal);
-        Assert.Contains(IntentTreeCoEvolutionDuty.CloseoutCheck, output, StringComparison.Ordinal);
+        Assert.Contains(
+            GuideRoleVocabulary.ProjectRenderedRoleValues(IntentTreeCoEvolutionDuty.CloseoutCheck),
+            output,
+            StringComparison.Ordinal);
     }
 
     [Fact]

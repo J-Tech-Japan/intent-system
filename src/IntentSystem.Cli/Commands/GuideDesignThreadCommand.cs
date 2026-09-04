@@ -76,11 +76,13 @@ internal static class GuideDesignThreadCommand
             CreateOrcaOperatingBlock());
         if (string.Equals(format, "json", StringComparison.Ordinal))
         {
-            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            writer.WriteLine(GuideRoleVocabulary.ProjectRenderedRoleValues(JsonSerializer.Serialize(result, JsonOptions)));
         }
         else
         {
-            WriteMarkdown(writer, result);
+            using var buffer = new StringWriter();
+            WriteMarkdown(buffer, result);
+            writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(buffer.ToString()));
         }
 
         return 0;
@@ -260,12 +262,14 @@ internal static class GuideDesignThreadCommand
         writer.WriteLine($"- routing root: `{result.RoutingRoot}`");
         writer.WriteLine($"- session layers: {result.SessionLayerRule}");
         writer.WriteLine();
+        writer.WriteLine(GuideRoleVocabulary.RenderMarkdownBlock());
+        writer.WriteLine();
         writer.WriteLine("## Reachability");
         writer.WriteLine($"- command: `{result.Reachability.Command}`");
         writer.WriteLine($"- catalog: `{result.Reachability.Catalog}`");
-        writer.WriteLine($"- design-role advisor: `{result.Reachability.Advisor}` names this guide.");
+        writer.WriteLine($"- Architect-role advisor: `{result.Reachability.Advisor}` names this guide.");
         writer.WriteLine();
-        writer.WriteLine("## External-resident design receive");
+        writer.WriteLine("## External-resident Architect receive");
         writer.WriteLine($"- canonical receive: `{result.Reachability.ExternalReader.Command}`");
         writer.WriteLine($"- cursor: {result.Reachability.ExternalReader.CursorRule}");
         writer.WriteLine($"- wait: {result.Reachability.ExternalReader.WaitRule}");

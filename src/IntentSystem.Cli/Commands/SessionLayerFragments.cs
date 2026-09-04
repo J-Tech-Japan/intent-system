@@ -701,7 +701,7 @@ internal static class SessionLayerFragments
             S4,
             Descriptive("In orchestrator-message mode the normal steady state is MESSAGE-DRIVEN: implementation/review receivers already send accepted/progress/completed/blocked replies to the orchestrator, and those replies wake the orchestrator path — routine fast polling is NOT required."),
             Scaffold(" "),
-            Descriptive("An orchestrator timer (Codex automation every 5m, or Claude same-thread `/loop 5m`) remains SUPPORTED but only as an explicit FALLBACK/LEGACY polling option for an operator who intentionally wants scheduled polling instead of message-driven wakes."),
+            Descriptive("A dedicated fallback timer (Codex automation every 5m, or Claude same-thread `/loop 5m`) remains SUPPORTED but only as an explicit FALLBACK/LEGACY polling option for an operator who intentionally wants scheduled polling instead of message-driven wakes."),
             Scaffold(" "),
             Descriptive("Either way the implementation and review threads stay long-lived LOOPLESS receivers."),
             Scaffold(" "),
@@ -716,14 +716,14 @@ internal static class SessionLayerFragments
             Descriptive("Receivers are NEVER scheduled; when an explicit fallback/legacy timer is used (message-driven wakes are the default), the orchestrator is the only thread ever scheduled.")),
         Fragment(
             S4,
-            Transport("OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the ORCHESTRATOR thread, domain `__DOMAIN__` against `__OWNER__/__REPO__` using `__AGENT__`: on each run perform exactly ONE orchestrator wake — check design-side progress and agmsg replies, ask intent-cli for state (`intent status`, `worker next-action --github-only`, `automation host-review-preflight`), verify the GitHub facts (CI/approval/merge/closeout), then send this wake's messages under the G524 cap — AT MOST ONE DELEGATION PER RECEIVER (implementation, review), NOT at-most-one-message overall, so a publish plus its same-wake delegation, one repair per stalled receiver, and one operator escalation may all go out together — and exit."),
+            Transport("OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the coordinating thread, domain `__DOMAIN__` against `__OWNER__/__REPO__` using `__AGENT__`: on each run perform exactly ONE orchestrator wake — check design-side progress and agmsg replies, ask intent-cli for state (`intent status`, `worker next-action --github-only`, `automation host-review-preflight`), verify the GitHub facts (CI/approval/merge/closeout), then send this wake's messages under the G524 cap — AT MOST ONE DELEGATION PER RECEIVER (implementation, review), NOT at-most-one-message overall, so a publish plus its same-wake delegation, one repair per stalled receiver, and one operator escalation may all go out together — and exit."),
             Scaffold(" "),
             Transport("Prefer the message-driven steady state (implementation/review agmsg replies already wake the orchestrator); use this timer only when the operator explicitly wants scheduled fallback/legacy polling."),
             Scaffold(" "),
             Operative("Do not run implementation/review loops; they are loopless receivers.")),
         Fragment(
             S4,
-            Transport("OPTIONAL fallback/legacy polling — Claude same-thread setup for the ORCHESTRATOR thread, domain `__DOMAIN__` against `__OWNER__/__REPO__`: in the orchestrator thread run `/loop 5m` with the orchestrator prompt so the same thread re-wakes every 5 minutes."),
+            Transport("OPTIONAL fallback/legacy polling — Claude same-thread setup for the coordinating thread, domain `__DOMAIN__` against `__OWNER__/__REPO__`: in the orchestrator thread run `/loop 5m` with the orchestrator prompt so the same thread re-wakes every 5 minutes."),
             Scaffold(" "),
             Transport("Each wake does exactly one orchestrator pass (read replies, check intent-cli / GitHub state, send this wake's messages under the G524 cap — AT MOST ONE DELEGATION PER RECEIVER, NOT at-most-one-message overall)."),
             Scaffold(" "),
@@ -749,7 +749,7 @@ internal static class SessionLayerFragments
             S4,
             Operative("- If intent-cli reports an `issue-cut-ready` candidate and all gates pass (same-domain or routed, complete contract, no open clarification, dependencies satisfied, under WIP, clean host-sync/preflight), route ONE issue this wake to the authorized host-state role for canonical publish-flow / issue-publish, verify its result, THEN delegate that same issue to implementation in THIS SAME WAKE (G524) — do not ask the operator to create it, and do not stop after routing the publish to wait for a future wake to send the delegation."),
             Scaffold(" "),
-            Operative("A sandboxed Codex orchestrator never performs the write-bearing host-state step itself.")),
+            Operative("An orchestrator running on a sandboxed Codex runtime never performs the write-bearing host-state step itself.")),
         Fragment(S4, Operative("- If the candidate has unmet dependencies, plan the chain instead of pausing: act on the EARLIEST unmet resolvable dependency (publish or route it), keep the dependent held, and escalate only ambiguous/cycle/cross-domain-unrouted cases.")),
         Fragment(S4, Operative("- The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER (implementation, review) — NOT at-most-one-message overall (G524): this wake's actions may include a publish plus its same-wake delegation, one repair message per stalled receiver, one operator escalation, and handling any pending receiver reports, all together.")),
         Fragment(S4, Operative("- Send workflow notifications only through `intent-cli notify`; it resolves the recorded session-layer mode and validates the recipient before delivery, failing closed on an unknown role (G524/G578).")),
@@ -797,7 +797,7 @@ internal static class SessionLayerFragments
             Scaffold(" "),
             Operative("When intent-cli reports a candidate as `issue-cut-ready` and ALL safety gates pass, the orchestrator routes one bounded publish request to the recorded host-state role; that role executes the canonical intent-cli commands from the host repository with its write envelope."),
             Scaffold(" "),
-            Operative("A sandboxed Codex orchestrator MUST NOT execute the write-bearing host-state step itself."),
+            Operative("An orchestrator running on a sandboxed Codex runtime MUST NOT execute the write-bearing host-state step itself."),
             Scaffold(" "),
             Operative("Publish AT MOST ONE issue per wake, then verify, THEN delegate that same issue to the implementation thread in THE SAME WAKE (G524) — publish and delegate complete together; never defer the delegation to an unscheduled \"next wake\", since no other trigger will ever wake the orchestrator to send it (this was the single largest measured stall class in message-driven orchestration, ~60 hours across G807/G809/G810/G812).")),
         Fragment(S5, Descriptive("- one_per_wake: yes")),
@@ -846,7 +846,7 @@ internal static class SessionLayerFragments
             S7,
             Operative("- **autonomous publish** — If `intent-cli` reports the next slice `issue-cut-ready` and all publish gates pass (see Next-slice publication), the orchestrator routes ONE bounded publish request to the recorded host-state role."),
             Scaffold(" "),
-            Operative("That role performs the canonical intent-cli commands (`issue publish-flow` / `automation issue-publish`) from the host repository; a sandboxed Codex orchestrator does NOT execute the write-bearing step itself."),
+            Operative("That role performs the canonical intent-cli commands (`issue publish-flow` / `automation issue-publish`) from the host repository; an orchestrator running on a sandboxed Codex runtime does NOT execute the write-bearing step itself."),
             Scaffold(" "),
             Operative("It does NOT ask design to perform routine workflow transitions through an undeclared or ad-hoc request;"),
             Scaffold(" "),
@@ -995,14 +995,14 @@ internal static class SessionLayerFragments
             Scaffold(" "),
             Descriptive("Dogfooding showed a reviewer allocate a raw `/tmp/...review...` worktree and Codex correctly ask to approve a destructive `rm -rf` — the RIGHT safety behavior for the WRONG workflow."),
             Scaffold(" "),
-            Operative("For a sandboxed Codex reviewer, the host-state role prepares the registered path; the fix is correct routing and a git-ignored managed root, NOT weakening approval settings.")),
+            Operative("For a reviewer running on a sandboxed Codex runtime, the host-state role prepares the registered path; the fix is correct routing and a git-ignored managed root, NOT weakening approval settings.")),
         Fragment(
             S10,
             Operative("- **managed worktree root** — The host-state role prepares each registered review worktree under the SAME managed, workspace-local root as the rest of orchestrated work — the `[project] worktree_root` (default `.intent-cli/worktrees/`),"),
             Scaffold(" "),
             Operative("which MUST be git-ignored, for example `.intent-cli/worktrees/review-<unit>`."),
             Scaffold(" "),
-            Operative("A sandboxed Codex reviewer receives that prepared path and never runs `git worktree add`; if the delegation instead supplies an ordinary role-work-root checkout such as `/private/tmp/review-<unit>`, use it as a temporary checkout, not as a registered worktree.")),
+            Operative("A reviewer running on a sandboxed Codex runtime receives that prepared path and never runs `git worktree add`; if the delegation instead supplies an ordinary role-work-root checkout such as `/private/tmp/review-<unit>`, use it as a temporary checkout, not as a registered worktree.")),
         Fragment(
             S10,
             Operative("- **prohibited pattern** — PROHIBITED as the normal path: a raw `/tmp/...` path presented as a registered review worktree, a `rm -rf /tmp/... && git worktree add ...` cleanup chain, a nested clone under `.intent-cli/worktrees/`, or asking a sandboxed Codex seat to run `git worktree add`."),
@@ -1014,7 +1014,7 @@ internal static class SessionLayerFragments
             S10,
             Operative("- **cleanup rule** — The non-sandboxed host-state role performs cleanup with `git worktree remove <managed-path>` for a REGISTERED, CLEAN worktree only — confirmed via `git worktree list` and a clean `git status` first."),
             Scaffold(" "),
-            Operative("A sandboxed Codex reviewer reports completion or a blocker; it does not mutate `.git` or delete the path itself.")),
+            Operative("A reviewer running on a sandboxed Codex runtime reports completion or a blocker; it does not mutate `.git` or delete the path itself.")),
         Fragment(S10, Transport("- **unsafe/stale path rule** — A stale path that is NOT a registered git worktree, is OUTSIDE the managed root, or is dirty/unsafe is NEVER an operator `rm -rf` approval prompt — it is a STRUCTURED BLOCKER reply to the orchestrator (`status: blocked`) so the host-state role can prepare or clean up the path, not something the reviewer resolves by force-deleting an unmanaged path.")),
         Fragment(S10, Transport("Review delegation example (orchestrator → review):")),
         Fragment(S10, Transport("{\"delegate\":{\"domain\":\"<domain>\",\"execution_unit\":\"<unit>\",\"target_repo\":\"<owner/repo>\",\"pr\":\"<n>\",\"review_cwd\":\"/review/<domain>\",\"managed_worktree_policy\":\"host-prepared registered path under git-ignored [project] worktree_root; sandbox-safe ordinary role-work-root fallback only when explicitly supplied; never an arbitrary /tmp review worktree\",\"design_alignment_required\":true,\"destination_thread\":\"review@<domain>\"}}")),
@@ -1766,7 +1766,7 @@ internal static class SessionLayerFragments
             "scheduling",
             Descriptive("In orchestrator-message mode the normal steady state is MESSAGE-DRIVEN: implementation/review receivers already send accepted/progress/completed/blocked replies to the orchestrator, and those replies wake the orchestrator path — routine fast polling is NOT required."),
             Scaffold(" "),
-            Descriptive("An orchestrator timer (Codex automation every 5m, or Claude same-thread `/loop 5m`) remains SUPPORTED but only as an explicit FALLBACK/LEGACY polling option for an operator who intentionally wants scheduled polling instead of message-driven wakes."),
+            Descriptive("A dedicated fallback timer (Codex automation every 5m, or Claude same-thread `/loop 5m`) remains SUPPORTED but only as an explicit FALLBACK/LEGACY polling option for an operator who intentionally wants scheduled polling instead of message-driven wakes."),
             Scaffold(" "),
             Descriptive("Either way the implementation and review threads stay long-lived LOOPLESS receivers."),
             Scaffold(" "),
@@ -1781,14 +1781,14 @@ internal static class SessionLayerFragments
             Descriptive("Receivers are NEVER scheduled; when an explicit fallback/legacy timer is used (message-driven wakes are the default), the orchestrator is the only thread ever scheduled.")),
         Fragment(
             "scheduling",
-            Transport("OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the ORCHESTRATOR thread, domain `__DOMAIN__` against `__OWNER__/__REPO__` using `__AGENT__`: on each run perform exactly ONE orchestrator wake — check design-side progress and agmsg replies, ask intent-cli for state (`intent status`, `worker next-action --github-only`, `automation host-review-preflight`), verify the GitHub facts (CI/approval/merge/closeout), then send this wake's messages under the G524 cap — AT MOST ONE DELEGATION PER RECEIVER (implementation, review), NOT at-most-one-message overall, so a publish plus its same-wake delegation, one repair per stalled receiver, and one operator escalation may all go out together — and exit."),
+            Transport("OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the coordinating thread, domain `__DOMAIN__` against `__OWNER__/__REPO__` using `__AGENT__`: on each run perform exactly ONE orchestrator wake — check design-side progress and agmsg replies, ask intent-cli for state (`intent status`, `worker next-action --github-only`, `automation host-review-preflight`), verify the GitHub facts (CI/approval/merge/closeout), then send this wake's messages under the G524 cap — AT MOST ONE DELEGATION PER RECEIVER (implementation, review), NOT at-most-one-message overall, so a publish plus its same-wake delegation, one repair per stalled receiver, and one operator escalation may all go out together — and exit."),
             Scaffold(" "),
             Transport("Prefer the message-driven steady state (implementation/review agmsg replies already wake the orchestrator); use this timer only when the operator explicitly wants scheduled fallback/legacy polling."),
             Scaffold(" "),
             Operative("Do not run implementation/review loops; they are loopless receivers.")),
         Fragment(
             "scheduling",
-            Transport("OPTIONAL fallback/legacy polling — Claude same-thread setup for the ORCHESTRATOR thread, domain `__DOMAIN__` against `__OWNER__/__REPO__`: in the orchestrator thread run `/loop 5m` with the orchestrator prompt so the same thread re-wakes every 5 minutes."),
+            Transport("OPTIONAL fallback/legacy polling — Claude same-thread setup for the coordinating thread, domain `__DOMAIN__` against `__OWNER__/__REPO__`: in the orchestrator thread run `/loop 5m` with the orchestrator prompt so the same thread re-wakes every 5 minutes."),
             Scaffold(" "),
             Transport("Each wake does exactly one orchestrator pass (read replies, check intent-cli / GitHub state, send this wake's messages under the G524 cap — AT MOST ONE DELEGATION PER RECEIVER, NOT at-most-one-message overall)."),
             Scaffold(" "),
@@ -1814,7 +1814,7 @@ internal static class SessionLayerFragments
             "scheduling",
             Operative("If intent-cli reports an `issue-cut-ready` candidate and all gates pass (same-domain or routed, complete contract, no open clarification, dependencies satisfied, under WIP, clean host-sync/preflight), route ONE issue this wake to the authorized host-state role for canonical publish-flow / issue-publish, verify its result, THEN delegate that same issue to implementation in THIS SAME WAKE (G524) — do not ask the operator to create it, and do not stop after routing the publish to wait for a future wake to send the delegation."),
             Scaffold(" "),
-            Operative("A sandboxed Codex orchestrator never performs the write-bearing host-state step itself.")),
+            Operative("An orchestrator running on a sandboxed Codex runtime never performs the write-bearing host-state step itself.")),
         Fragment("scheduling", Operative("If the candidate has unmet dependencies, plan the chain instead of pausing: act on the EARLIEST unmet resolvable dependency (publish or route it), keep the dependent held, and escalate only ambiguous/cycle/cross-domain-unrouted cases.")),
         Fragment("scheduling", Operative("The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER (implementation, review) — NOT at-most-one-message overall (G524): this wake's actions may include a publish plus its same-wake delegation, one repair message per stalled receiver, one operator escalation, and handling any pending receiver reports, all together.")),
         Fragment("scheduling", Operative("Send workflow notifications only through `intent-cli notify`; it resolves the recorded session-layer mode and validates the recipient before delivery, failing closed on an unknown role (G524/G578).")),
@@ -1872,7 +1872,7 @@ internal static class SessionLayerFragments
             "design_handoff",
             Operative("If `intent-cli` reports the next slice `issue-cut-ready` and all publish gates pass (see Next-slice publication), the orchestrator routes ONE bounded publish request to the recorded host-state role."),
             Scaffold(" "),
-            Operative("That role performs the canonical intent-cli commands (`issue publish-flow` / `automation issue-publish`) from the host repository; a sandboxed Codex orchestrator does NOT execute the write-bearing step itself."),
+            Operative("That role performs the canonical intent-cli commands (`issue publish-flow` / `automation issue-publish`) from the host repository; an orchestrator running on a sandboxed Codex runtime does NOT execute the write-bearing step itself."),
             Scaffold(" "),
             Operative("It does NOT ask design to perform routine workflow transitions through an undeclared or ad-hoc request;"),
             Scaffold(" "),
@@ -1978,14 +1978,14 @@ internal static class SessionLayerFragments
             Scaffold(" "),
             Descriptive("Dogfooding showed a reviewer allocate a raw `/tmp/...review...` worktree and Codex correctly ask to approve a destructive `rm -rf` — the RIGHT safety behavior for the WRONG workflow."),
             Scaffold(" "),
-            Operative("For a sandboxed Codex reviewer, the host-state role prepares the registered path; the fix is correct routing and a git-ignored managed root, NOT weakening approval settings.")),
+            Operative("For a reviewer running on a sandboxed Codex runtime, the host-state role prepares the registered path; the fix is correct routing and a git-ignored managed root, NOT weakening approval settings.")),
         Fragment(
             "review_delegation_contract",
             Operative("The host-state role prepares each registered review worktree under the SAME managed, workspace-local root as the rest of orchestrated work — the `[project] worktree_root` (default `.intent-cli/worktrees/`),"),
             Scaffold(" "),
             Operative("which MUST be git-ignored, for example `.intent-cli/worktrees/review-<unit>`."),
             Scaffold(" "),
-            Operative("A sandboxed Codex reviewer receives that prepared path and never runs `git worktree add`; if the delegation instead supplies an ordinary role-work-root checkout such as `/private/tmp/review-<unit>`, use it as a temporary checkout, not as a registered worktree.")),
+            Operative("A reviewer running on a sandboxed Codex runtime receives that prepared path and never runs `git worktree add`; if the delegation instead supplies an ordinary role-work-root checkout such as `/private/tmp/review-<unit>`, use it as a temporary checkout, not as a registered worktree.")),
         Fragment(
             "review_delegation_contract",
             Operative("PROHIBITED as the normal path: a raw `/tmp/...` path presented as a registered review worktree, a `rm -rf /tmp/... && git worktree add ...` cleanup chain, a nested clone under `.intent-cli/worktrees/`, or asking a sandboxed Codex seat to run `git worktree add`."),
@@ -1997,7 +1997,7 @@ internal static class SessionLayerFragments
             "review_delegation_contract",
             Operative("The non-sandboxed host-state role performs cleanup with `git worktree remove <managed-path>` for a REGISTERED, CLEAN worktree only — confirmed via `git worktree list` and a clean `git status` first."),
             Scaffold(" "),
-            Operative("A sandboxed Codex reviewer reports completion or a blocker; it does not mutate `.git` or delete the path itself.")),
+            Operative("A reviewer running on a sandboxed Codex runtime reports completion or a blocker; it does not mutate `.git` or delete the path itself.")),
         Fragment("review_delegation_contract", Transport("A stale path that is NOT a registered git worktree, is OUTSIDE the managed root, or is dirty/unsafe is NEVER an operator `rm -rf` approval prompt — it is a STRUCTURED BLOCKER reply to the orchestrator (`status: blocked`) so the host-state role can prepare or clean up the path, not something the reviewer resolves by force-deleting an unmanaged path.")),
         Fragment("review_delegation_contract", Transport("{\"delegate\":{\"domain\":\"<domain>\",\"execution_unit\":\"<unit>\",\"target_repo\":\"<owner/repo>\",\"pr\":\"<n>\",\"review_cwd\":\"/review/<domain>\",\"managed_worktree_policy\":\"host-prepared registered path under git-ignored [project] worktree_root; sandbox-safe ordinary role-work-root fallback only when explicitly supplied; never an arbitrary /tmp review worktree\",\"design_alignment_required\":true,\"destination_thread\":\"review@<domain>\"}}")),
         Fragment("review_delegation_contract", Descriptive("packet — the authored packet content and acceptance criteria.")),
@@ -2047,7 +2047,7 @@ internal static class SessionLayerFragments
             Scaffold(" "),
             Operative("When intent-cli reports a candidate as `issue-cut-ready` and ALL safety gates pass, the orchestrator routes one bounded publish request to the recorded host-state role; that role executes the canonical intent-cli commands from the host repository with its write envelope."),
             Scaffold(" "),
-            Operative("A sandboxed Codex orchestrator MUST NOT execute the write-bearing host-state step itself."),
+            Operative("An orchestrator running on a sandboxed Codex runtime MUST NOT execute the write-bearing host-state step itself."),
             Scaffold(" "),
             Operative("Publish AT MOST ONE issue per wake, then verify, THEN delegate that same issue to the implementation thread in THE SAME WAKE (G524) — publish and delegate complete together; never defer the delegation to an unscheduled \"next wake\", since no other trigger will ever wake the orchestrator to send it (this was the single largest measured stall class in message-driven orchestration, ~60 hours across G807/G809/G810/G812).")),
         Fragment("next_slice_publication", Operative("Same-domain context (`__DOMAIN__`), or an explicitly routed multi-domain delegation (domain, target repo, destination thread) — never publish a cross-domain candidate without explicit routing.")),
@@ -2332,7 +2332,9 @@ internal static class SessionLayerFragments
                 continue;
             }
 
-            if (Expand(values, declaration.Text) == trimmed)
+            var expanded = Expand(values, declaration.Text);
+            if (expanded == trimmed
+                || GuideRoleVocabulary.ProjectRenderedRoleValues(expanded) == trimmed)
             {
                 return declaration.Clauses!
                     .Select(c => c with { Text = Expand(values, c.Text) })
@@ -2354,11 +2356,16 @@ internal static class SessionLayerFragments
     {
         foreach (var declaration in JsonDeclarations)
         {
-            if (declaration.Section == property && Expand(values, declaration.Text) == value)
+            if (declaration.Section == property)
             {
-                return declaration.Clauses!
-                    .Select(c => c with { Text = Expand(values, c.Text) })
-                    .ToArray();
+                var expanded = Expand(values, declaration.Text);
+                if (expanded == value
+                    || GuideRoleVocabulary.ProjectRenderedRoleValues(expanded) == value)
+                {
+                    return declaration.Clauses!
+                        .Select(c => c with { Text = Expand(values, c.Text) })
+                        .ToArray();
+                }
             }
         }
 

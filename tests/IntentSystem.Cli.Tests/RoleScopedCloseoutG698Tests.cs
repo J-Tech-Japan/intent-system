@@ -181,8 +181,8 @@ public sealed class RoleScopedCloseoutG698Tests : IDisposable
             bareDirectory,
             "guide", "orchestrator-thread", "--domain", "intent-cli", "--target-repo", Repo, "--agent", "claude", "--format", "json");
         Assert.Equal(0, orchestrator.ExitCode);
-        Assert.Contains("--role design", orchestrator.Output, StringComparison.Ordinal);
-        Assert.Contains("--role orchestration", orchestrator.Output, StringComparison.Ordinal);
+        Assert.Contains("--role architect", orchestrator.Output, StringComparison.Ordinal);
+        Assert.Contains("--role orchestrator", orchestrator.Output, StringComparison.Ordinal);
     }
 
     [Fact]

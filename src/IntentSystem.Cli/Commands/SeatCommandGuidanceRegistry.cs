@@ -24,7 +24,7 @@ internal static class SeatCommandGuidanceRegistry
     /// invented pointer.
     /// </summary>
     public static GuideReachabilityDeclaration ReachabilityForRole(string? role) =>
-        string.Equals(GuideRoleContractGuidance.Normalize(role), ReviewRouteRole, StringComparison.Ordinal)
+        string.Equals(GuideRoleContractGuidance.Normalize(role), LogicalRoleNormalizer.Reviewer, StringComparison.Ordinal)
             ? ReviewReachability()
             : GuideReachabilityDeclaration.Absent;
 
