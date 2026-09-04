@@ -448,11 +448,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          derive_npm_dist_tag() {
+            local version="$1"
+            if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-([0-9A-Za-z-]+)(\.[0-9A-Za-z-]+)*(\+[0-9A-Za-z.-]+)?$ ]]; then
+              printf '%s\n' "${BASH_REMATCH[1]}"
+            else
+              printf 'latest\n'
+            fi
+          }
+
+          VERSION="${{ steps.ver.outputs.version }}"
+          NPM_DIST_TAG="$(derive_npm_dist_tag "${VERSION}")"
+          echo "version=${VERSION} npm_dist_tag=${NPM_DIST_TAG}"
+
           publish_package() {
             local package_path="$1"
             local package_name="$2"
             local publish_output
-            if ! publish_output="$(npm publish "${package_path}" --access public 2>&1)"; then
+            if ! publish_output="$(npm publish "${package_path}" --access public --tag "${NPM_DIST_TAG}" 2>&1)"; then
               printf '%s\n' "${publish_output}" >&2
               classify_publish_failure "${package_name}" "${publish_output}"
               return 1
