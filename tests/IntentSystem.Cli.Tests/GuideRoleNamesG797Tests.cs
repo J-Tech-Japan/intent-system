@@ -241,13 +241,7 @@ public sealed class GuideRoleNamesG797Tests
     public void FullRenderedPayloads_MarkdownAndJsonRejectVendorRoleFusionsAndDefaults_G797Round5()
     {
         var context = CreateContext();
-        var surfaces = new (string Name, Func<string, TextWriter, int> Render)[]
-        {
-            ("guide design-thread", (format, writer) => GuideDesignThreadCommand.Execute(context, ["--format", format], writer)),
-            ("guide orchestrator-thread", (format, writer) => GuideOrchestratorThreadCommand.Execute(context, ["--format", format], writer)),
-            ("guide workflow task implementation-loop", (format, writer) => GuideWorkflowTaskImplementationLoopCommand.Execute(context, ["--format", format], writer)),
-            ("guide workflow task review-next-slice-loop", (format, writer) => GuideWorkflowTaskReviewNextSliceLoopCommand.Execute(context, ["--format", format], writer)),
-        };
+        var surfaces = CreateG797RoundFiveSurfaceRenderers(context);
 
         // AC6 is a class-level rule over the complete compiled payload. A
         // runtime may be mentioned conditionally, but it must never become a
@@ -318,13 +312,7 @@ public sealed class GuideRoleNamesG797Tests
     public void StructuredRoleInventoryAndCanonicalProjection_G803()
     {
         var context = CreateContext();
-        var surfaces = new (string Name, Func<TextWriter, int> Render)[]
-        {
-            ("guide design-thread", writer => GuideDesignThreadCommand.Execute(context, ["--format", "json"], writer)),
-            ("guide orchestrator-thread", writer => GuideOrchestratorThreadCommand.Execute(context, ["--format", "json"], writer)),
-            ("guide workflow task implementation-loop", writer => GuideWorkflowTaskImplementationLoopCommand.Execute(context, ["--format", "json"], writer)),
-            ("guide workflow task review-next-slice-loop", writer => GuideWorkflowTaskReviewNextSliceLoopCommand.Execute(context, ["--format", "json"], writer)),
-        };
+        var surfaces = CreateG797RoundFiveSurfaceRenderers(context);
 
         var expectedInventory = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -341,7 +329,7 @@ public sealed class GuideRoleNamesG797Tests
         foreach (var (name, render) in surfaces)
         {
             using var writer = new StringWriter();
-            Assert.Equal(0, render(writer));
+            Assert.Equal(0, render("json", writer));
             using var document = JsonDocument.Parse(writer.ToString());
             var fields = new List<string>();
             CollectStructuredRoleFields(document.RootElement, "$", fields);
@@ -492,6 +480,14 @@ public sealed class GuideRoleNamesG797Tests
         Assert.Contains("archived artifacts", glossary, StringComparison.Ordinal);
         Console.WriteLine("G797 AC5 retired_glossary: design→architect; orchestration→orchestrator; implementation→builder; review→reviewer; stopped=2026-09-03; archived_artifacts=stated");
     }
+
+    private static (string Name, Func<string, TextWriter, int> Render)[] CreateG797RoundFiveSurfaceRenderers(CliContext context) =>
+    [
+        ("guide design-thread", (format, writer) => GuideDesignThreadCommand.Execute(context, ["--format", format], writer)),
+        ("guide orchestrator-thread", (format, writer) => GuideOrchestratorThreadCommand.Execute(context, ["--format", format], writer)),
+        ("guide workflow task implementation-loop", (format, writer) => GuideWorkflowTaskImplementationLoopCommand.Execute(context, ["--format", format], writer)),
+        ("guide workflow task review-next-slice-loop", (format, writer) => GuideWorkflowTaskReviewNextSliceLoopCommand.Execute(context, ["--format", format], writer)),
+    ];
 
     private static CliContext CreateContext() => new()
     {
