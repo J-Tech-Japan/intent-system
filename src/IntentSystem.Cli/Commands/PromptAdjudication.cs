@@ -257,36 +257,50 @@ internal sealed record PromptDialogCasResult
 {
     public required bool Matches { get; init; }
     public required string Summary { get; init; }
+    public string? Cause { get; init; }
 }
 
 internal static class PromptDialogCas
 {
+    public const string TextHashMismatch = "text-hash-mismatch";
+    public const string DialogChangedHashMismatch = "dialog-changed-hash-mismatch";
+    public const string WrongProjectionHashMismatch = "wrong-projection-hash-mismatch";
+
     public static PromptDialogCasResult Verify(
         string expectedPane,
         string actualPane,
         long? expectedStateChangeSequence,
         long? actualStateChangeSequence,
         string expectedObservedTextHash,
-        string actualObservedTextHash)
+        string actualObservedTextHash,
+        bool expectedHashIsCanonical = false)
     {
         if (!string.Equals(expectedPane, actualPane, StringComparison.Ordinal))
         {
-            return Refused("The live dialog pane changed before execution.");
+            return Refused("pane-changed", "The live dialog pane changed before execution.");
         }
 
         if (expectedStateChangeSequence is null || actualStateChangeSequence is null)
         {
-            return Refused("The live dialog has no comparable state-change sequence; CAS refuses an unaudited answer.");
+            return Refused(
+                "state-sequence-unavailable",
+                "The live dialog has no comparable state-change sequence; derive --state-sequence from herdr agent list's state_change_seq for the pane. CAS refuses an unaudited answer.");
         }
 
         if (expectedStateChangeSequence != actualStateChangeSequence)
         {
-            return Refused($"The live dialog state-change sequence changed from {expectedStateChangeSequence} to {actualStateChangeSequence}.");
+            return Refused(
+                "dialog-changed-sequence",
+                $"The live dialog state-change sequence changed from {expectedStateChangeSequence} to {actualStateChangeSequence}; derive --state-sequence from herdr agent list's state_change_seq for the pane and refresh both CAS inputs.");
         }
 
         if (!string.Equals(expectedObservedTextHash, actualObservedTextHash, StringComparison.OrdinalIgnoreCase))
         {
-            return Refused("The live dialog text hash changed before execution.");
+            return Refused(
+                expectedHashIsCanonical ? DialogChangedHashMismatch : TextHashMismatch,
+                expectedHashIsCanonical
+                    ? "The live dialog changed before execution; refresh --state-sequence from herdr agent list's state_change_seq and --text-hash from the current trimmed detection read."
+                    : "The supplied --text-hash does not match the canonical detection projection; the caller must hash the trimmed UTF-8 output of herdr agent read for the recorded pane.");
         }
 
         return new PromptDialogCasResult
@@ -296,13 +310,34 @@ internal static class PromptDialogCas
         };
     }
 
+    public static PromptDialogCasResult ClassifyTextHashMismatch(
+        string pane,
+        long? initialStateChangeSequence,
+        long? rereadStateChangeSequence,
+        string initialCanonicalTextHash,
+        string rereadCanonicalTextHash)
+    {
+        if (initialStateChangeSequence == rereadStateChangeSequence
+            && string.Equals(initialCanonicalTextHash, rereadCanonicalTextHash, StringComparison.OrdinalIgnoreCase))
+        {
+            return Refused(
+                WrongProjectionHashMismatch,
+                $"The live dialog is unchanged, but the supplied --text-hash does not match the canonical detection projection for pane '{pane}'. Hash the trimmed UTF-8 output of herdr agent read {pane} --source detection --lines 200.");
+        }
+
+        return Refused(
+            DialogChangedHashMismatch,
+            "The live dialog changed before execution; refresh --state-sequence from herdr agent list's state_change_seq and --text-hash from the current trimmed detection read.");
+    }
+
     public static string HashText(string text) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)))
             .ToLowerInvariant();
 
-    private static PromptDialogCasResult Refused(string summary) => new()
+    private static PromptDialogCasResult Refused(string cause, string summary) => new()
     {
         Matches = false,
+        Cause = cause,
         Summary = summary,
     };
 }
