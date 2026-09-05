@@ -17,6 +17,7 @@ public sealed class ReleaseNotesV0320G802Tests
     private const string NormalPlaceholderIdentity = "intent-cli 0.32.1-16267f9-G803";
     private const string ExplicitReleaseIdentity = "intent-cli 0.32.0-16267f9-G803";
     private const string PreviousBaseFragment = "b0f5354";
+    private const string PreviousBase = "b0f5354ba9a922e1676a2e654d866c2a08f60104";
 
     private static readonly (string Unit, string Pr, string Issue, string Merge)[] Units =
     [
@@ -112,9 +113,7 @@ public sealed class ReleaseNotesV0320G802Tests
     {
         var notes = ReadNotes(language);
 
-        Assert.Contains(Base, notes, StringComparison.Ordinal);
-        Assert.Contains(NormalPlaceholderIdentity, notes, StringComparison.Ordinal);
-        Assert.Contains(ExplicitReleaseIdentity, notes, StringComparison.Ordinal);
+        Assert.True(MeasurementSegmentsAreCurrent(notes));
         Assert.Contains("dotnet build IntentSystem.sln --configuration Release", notes, StringComparison.Ordinal);
         Assert.Contains("-p:Version=0.32.0", notes, StringComparison.Ordinal);
         Assert.Contains("release.yml", notes, StringComparison.Ordinal);
@@ -124,14 +123,28 @@ public sealed class ReleaseNotesV0320G802Tests
         Assert.Contains("local builds", notes, StringComparison.Ordinal);
         Assert.Contains("dry runs", notes, StringComparison.Ordinal);
         Assert.Contains("**not** v0.32.0", Normalize(notes), StringComparison.Ordinal);
-        var identities = Regex.Matches(notes, @"(?m)^intent-cli [^\r\n]+");
-        Assert.Equal(2, identities.Count);
-        foreach (Match identity in identities)
-        {
-            Assert.DoesNotContain(PreviousBaseFragment, identity.Value, StringComparison.Ordinal);
-        }
 
-        Console.WriteLine($"G804 AC4 {language}: normal={NormalPlaceholderIdentity}; explicit={ExplicitReleaseIdentity}; published=RAW=v0.32.0 -> VERSION=0.32.0; stale_banner_fragment={PreviousBaseFragment}=0");
+        Console.WriteLine($"G804 AC4 {language}: named_base={Base}; normal={NormalPlaceholderIdentity}; explicit={ExplicitReleaseIdentity}; published=RAW=v0.32.0 -> VERSION=0.32.0; stale_measurement_fragment={PreviousBaseFragment}=0; accounting_occurrence={PreviousBaseFragment}=allowed");
+    }
+
+    [Theory]
+    [InlineData("named-base")]
+    [InlineData("normal-identity")]
+    [InlineData("explicit-identity")]
+    public void StaleMeasurementFragmentFailsTheCriterion4Guard(string segment)
+    {
+        var notes = ReadNotes("en");
+        var mutated = segment switch
+        {
+            "named-base" => notes.Replace($"`{Base}`", $"`{PreviousBase}`", StringComparison.Ordinal),
+            "normal-identity" => notes.Replace(NormalPlaceholderIdentity, "intent-cli 0.32.1-b0f5354-G803", StringComparison.Ordinal),
+            "explicit-identity" => notes.Replace(ExplicitReleaseIdentity, "intent-cli 0.32.0-b0f5354-G803", StringComparison.Ordinal),
+            _ => throw new ArgumentOutOfRangeException(nameof(segment), segment, null),
+        };
+
+        Assert.False(MeasurementSegmentsAreCurrent(mutated));
+        Assert.Contains(PreviousBaseFragment, mutated, StringComparison.Ordinal);
+        Console.WriteLine($"G804 AC4 stale mutation: segment={segment}; stale_fragment={PreviousBaseFragment}; guard_passed=False; result=FAIL (expected guard refusal)");
     }
 
     [Fact]
@@ -224,6 +237,28 @@ public sealed class ReleaseNotesV0320G802Tests
             .ToArray();
 
     private static string Normalize(string value) => Regex.Replace(value, @"\s+", " ");
+
+    private static bool MeasurementSegmentsAreCurrent(string notes)
+    {
+        var namedBase = Regex.Match(
+            notes,
+            @"(?m)^(?:The named product base is|named product base は) `(?<base>[0-9a-f]{40})`");
+        if (!namedBase.Success || namedBase.Groups["base"].Value != Base ||
+            namedBase.Value.Contains(PreviousBaseFragment, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var identities = Regex.Matches(notes, @"(?m)^intent-cli [^\r\n]+$")
+            .Select(match => match.Value)
+            .ToArray();
+        return identities.Length == 2 &&
+               identities.Contains(NormalPlaceholderIdentity, StringComparer.Ordinal) &&
+               identities.Contains(ExplicitReleaseIdentity, StringComparer.Ordinal) &&
+               identities.All(identity =>
+                   identity.Contains(Base[..7], StringComparison.Ordinal) &&
+                   !identity.Contains(PreviousBaseFragment, StringComparison.Ordinal));
+    }
 
     private static string ReadNotes(string language) => File.ReadAllText(Path.Combine(
         RepoVersionPolicySource.RepoRoot(), "docs", language, "release-notes-v0.32.0.md"));
