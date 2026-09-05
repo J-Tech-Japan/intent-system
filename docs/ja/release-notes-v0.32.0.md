@@ -1,6 +1,6 @@
 # リリースノート — intent-cli v0.32.0
 
-> **PREPARED / NOT PUBLISHED。** これは測定済み G795–G801 chain の
+> **PREPARED / NOT PUBLISHED。** これは測定済み G795–G804 chain の
 > prepare-only notes です。tag / GitHub Release / package publish、workflow または
 > publish configuration、consumer follow-up、product source の変更は行いません。
 
@@ -22,12 +22,13 @@ prepare-only slice は no tag、no GitHub Release、no workflow change、no prod
 
 ## 独自に測定した minor justification
 
-named product base は `2a833a976688b3139678e4954162a9c00d32d0f4` です。minor の判断は
+named product base は `16267f9d58af31669252186a16ce09ab0dd47ba4` です。minor の判断は
 v0.28.0 の auditable rule、**a command-route addition is a minor bump; option-level additions
 do not count as command routes.** に従います。G796 は新しい role への event-kind routing、G800 は
 research-delegation route を追加し、この二つの command-surface route additions が minor の測定済み
 理由です。alias table と config repair、guide rendering、G801 npm dist-tag behavior は列挙しますが
-routes としては **not counted** です。
+routes としては **not counted** です。G803 の structured guide-field canonicalization も列挙しますが、
+additional route としては **not counted** です。
 
 merged history から route の判断を再現できます: G796 は six-kind event routing addition、G800 は
 first-class research delegation route です。他の変更は command route として数えていません。
@@ -38,11 +39,11 @@ policy roll 後の named base を clean Release build で確認しました:
 
 ```text
 $ git rev-parse HEAD
-2a833a976688b3139678e4954162a9c00d32d0f4
+16267f9d58af31669252186a16ce09ab0dd47ba4
 $ dotnet build IntentSystem.sln --configuration Release --no-restore; echo BUILD_RC:$?
 BUILD_RC:0
 $ dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-intent-cli 0.32.1-2a833a9-G801
+intent-cli 0.32.1-16267f9-G803
 ```
 
 この normal identity は `nextVersion` placeholder であり、**v0.32.0 ではありません**。
@@ -52,7 +53,7 @@ intent-cli 0.32.1-2a833a9-G801
 $ dotnet build IntentSystem.sln --configuration Release --no-restore -p:Version=0.32.0; echo BUILD_RC:$?
 BUILD_RC:0
 $ dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-intent-cli 0.32.0-2a833a9-G801
+intent-cli 0.32.0-16267f9-G803
 ```
 
 published version の third identity は local policy file ではなく `release.yml` が tag から導出します:
@@ -66,10 +67,11 @@ VERSION=0.32.0
 release workflow は `RAW` から `-p:Version=<tag>` を供給し、`eng/version.json` は local builds と
 dry runs だけを管理します。この prepare-only slice は no tag（tag を作成していません）です。
 
-## Release inventory: 正確に六つの first-parent unit
+## Release inventory: 正確に七つの shipped first-parent unit
 
-exact first-parent range から inventory を導出しました。Git は merge order で六つの commit を測定し、
-各 commit に一つの operator-observable outcome を記録します:
+shipped inventory は exact first-parent range から導出しました。Git は八つの commit を測定し、
+以下の七つの shipped unit には一つずつ operator-observable outcome を記録します。別の G802 prep commit
+は accounting table で分類しますが、shipped unit には数えません:
 
 - G795 — PR #1740 / issue #1737; merge commit `1b3c7229cfe8c8f8565034a7e2220a94ac14785b`。
   **Operator-observable outcome:** canonical Architect, Orchestrator, Builder, Reviewer, Steward の
@@ -90,19 +92,24 @@ exact first-parent range から inventory を導出しました。Git は merge 
 - G801 — PR #1749 / issue #1748; merge commit `2a833a976688b3139678e4954162a9c00d32d0f4`。
   **Operator-observable outcome:** npm publish calls は stable version では `latest`、preview/rc/beta/
   alpha SemVer では non-default prerelease dist-tag を導出します。
+- G803 — PR #1753 / issue #1752; merge commit `16267f9d58af31669252186a16ce09ab0dd47ba4`。
+  **Operator-observable outcome:** structured guide fields の role identifier は canonical name を出力し、
+  seven-entry inventory と one shared four-surface full-payload regression を持ちます。
 
 ## First-parent accounting
 
 ```text
-$ git rev-list --first-parent --reverse v0.31.0..2a833a976688b3139678e4954162a9c00d32d0f4
+$ git rev-list --first-parent --reverse v0.31.0..16267f9d58af31669252186a16ce09ab0dd47ba4
 1b3c7229cfe8c8f8565034a7e2220a94ac14785b
 09b1f4edca51f3acbbe3e901356866996f4be29f
 67c8578090f1a53e8894aeff88abd6cd8b83ff15
 6e0bff220e2bf51308596c19ee258835ce509dd8
 11457187ad0f9c2c269b80de84b0fd9ea278dfe5
 2a833a976688b3139678e4954162a9c00d32d0f4
-$ git rev-list --first-parent --count v0.31.0..2a833a976688b3139678e4954162a9c00d32d0f4
-6
+b0f5354ba9a922e1676a2e654d866c2a08f60104
+16267f9d58af31669252186a16ce09ab0dd47ba4
+$ git rev-list --first-parent --count v0.31.0..16267f9d58af31669252186a16ce09ab0dd47ba4
+8
 ```
 
 | first-parent commit | classification | release inventory |
@@ -113,8 +120,11 @@ $ git rev-list --first-parent --count v0.31.0..2a833a976688b3139678e4954162a9c00
 | `6e0bff220e2bf51308596c19ee258835ce509dd8` | G800 / PR #1747 / issue #1745 | included |
 | `11457187ad0f9c2c269b80de84b0fd9ea278dfe5` | G797 / PR #1746 / issue #1739 | included |
 | `2a833a976688b3139678e4954162a9c00d32d0f4` | G801 / PR #1749 / issue #1748 | included |
+| `b0f5354ba9a922e1676a2e654d866c2a08f60104` | G802 / PR #1751 / issue #1750 | this release's own prep |
+| `16267f9d58af31669252186a16ce09ab0dd47ba4` | G803 / PR #1753 / issue #1752 | included |
 
-この first-parent range はこの六つの merge commit だけで、second-parent commit の changelog ではありません。
+この first-parent range はこの八つの merge commit だけで、second-parent commit の changelog ではありません。
+G802 の row は release 自身の preparation unit として明示的に分類し、省略していません。
 
 ## Alias promise and compatibility boundary
 
@@ -142,10 +152,10 @@ claim ではありません。
 ## Prepare-only verification
 
 `ReleaseNotesV0320G802Tests` は EN/JA の unit/PR/issue/merge tuples を比較し、両 mirror の四つの
-alias statements、三つの measured identities、exact six-commit inventory を guard し、一フィールドの
+alias statements、三つの measured identities、exact eight-commit accounting を guard し、一フィールドの
 mirror mutation で意図的に fail します。`ReleasePackageMetadataTests` は policy shape と demanded
 next-version placeholder を引き続き guard します。PR には各 new test の parent absence/failure actual
 output、criterion-named release-policy output、`git diff --check`、focused/full Release counts、exact-head
-CI を貼ります。diff は EN/JA v0.32.0 notes、v0.32.1 planning placeholders、`eng/version.json`、tests に
-限定され、tag / GitHub Release / package publish / workflow または publish-config / product source change
-は含みません。
+CI を貼ります。diff は EN/JA v0.32.0 notes と tests に限定され、`eng/version.json` と v0.32.1
+placeholders は untouched です。tag / GitHub Release / package publish / workflow または publish-config /
+product source change は含みません。
