@@ -121,15 +121,21 @@ namespace IntentSystem.Cli.Commands;
 ///   open count.</item>
 /// </list>
 ///
+/// G805 adds <c>review-verdict-ahead-of-label</c>: it is an informational
+/// observation of an open PR whose newest durable approval or request-update
+/// review is newer than the last <c>intent-pr-*</c> label transition. The
+/// recommended action is the existing transition command only; this command
+/// never applies it.
+///
 /// G546: <c>repair-pending</c> and <c>rereview-pending</c> stay exactly as
 /// described above INSIDE <c>--repair-silent-minutes</c>; past it they are
 /// promoted to the actionable <c>repair-stalled</c> kind above.
 ///
 /// Age is approximated from the relevant GitHub entity's `createdAt` /
-/// `updatedAt` timestamp (GitHub does not expose per-label-application
-/// timestamps, or per-issue timeline events without a dedicated per-issue
-/// fetch this slice does not add), which is the closest available proxy for
-/// "how long has this been pending" / "how long has this been silent".
+/// `updatedAt` timestamp. G805's verdict-ahead detector additionally reads
+/// the PR's durable review summaries and the issue timeline's
+/// `labeled`/`unlabeled` events for `intent-pr-*` labels; it never
+/// writes either surface.
 ///
 /// Strictly read-only: no GitHub mutation, no queue-state/runs.jsonl write,
 /// no label change, no message sent — informational kinds recommend a
@@ -259,6 +265,9 @@ internal static class AutomationStalledWorkCommand
     /// </summary>
     public const string KindDelegationSettledByOutcome = "delegation-settled-by-outcome";
 
+    /// <summary>G805: a review verdict is ahead of its workflow label.</summary>
+    public const string KindReviewVerdictAheadOfLabel = "review-verdict-ahead-of-label";
+
     /// <summary>
     /// G533: an issue claimed via <c>intent-issue-in-progress</c> (with no
     /// PR yet created) showing no observable activity for longer than the
@@ -375,6 +384,13 @@ internal static class AutomationStalledWorkCommand
     /// by more than thirtyfold).
     /// </summary>
     public const int DefaultRepairSilentMinutes = 180;
+
+    /// <summary>
+    /// G805: default quiet period after a durable review verdict before the
+    /// detector reports that the corresponding label transition is owed.
+    /// Operators may override it with <c>--review-verdict-ahead-minutes</c>.
+    /// </summary>
+    public const int DefaultReviewVerdictAheadMinutes = 5;
 
     /// <summary>
     /// G532 review repair: a title matched more than one distinct packet's
@@ -530,7 +546,7 @@ internal static class AutomationStalledWorkCommand
     };
 
     private const string UsageLine =
-        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--team <name>] [--role <architect|orchestrator|builder|reviewer|steward|design|orchestration|implementation|review>] [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--knowledge-writeback-since <iso-8601>] [--guide-reachability-since <iso-8601>] [--format json|markdown]";
+        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--team <name>] [--role <architect|orchestrator|builder|reviewer|steward|design|orchestration|implementation|review>] [--stale-minutes <m>] [--review-verdict-ahead-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--knowledge-writeback-since <iso-8601>] [--guide-reachability-since <iso-8601>] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -544,7 +560,7 @@ internal static class AutomationStalledWorkCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var domain, out var repo, out var team, out var recordingRole, out var staleMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var repairSilentMinutes, out var knowledgeWriteBackSince, out var guideReachabilitySince, out var format, out var error))
+        if (!TryParseArguments(args, out var domain, out var repo, out var team, out var recordingRole, out var staleMinutes, out var reviewVerdictAheadMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var repairSilentMinutes, out var knowledgeWriteBackSince, out var guideReachabilitySince, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -554,7 +570,7 @@ internal static class AutomationStalledWorkCommand
         AutomationStalledWorkResult result;
         try
         {
-            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes, repairSilentMinutes, knowledgeWriteBackSince, guideReachabilitySince, team, recordingRole);
+            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes, repairSilentMinutes, knowledgeWriteBackSince, guideReachabilitySince, team, recordingRole, reviewVerdictAheadMinutes);
         }
         catch (TeamModeResolutionException exception)
         {
@@ -606,7 +622,8 @@ internal static class AutomationStalledWorkCommand
         DateTimeOffset? knowledgeWriteBackSince = null,
         DateTimeOffset? guideReachabilitySince = null,
         string? team = null,
-        string? recordingRole = null)
+        string? recordingRole = null,
+        int reviewVerdictAheadMinutes = DefaultReviewVerdictAheadMinutes)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
@@ -652,6 +669,24 @@ internal static class AutomationStalledWorkCommand
             repo,
             Array.Empty<string>(),
             GitHubAutomationReadSurface.StalledWork));
+        // G805: review verdict and label-transition evidence is an explicit
+        // read-only enrichment. A failure to read this optional evidence must
+        // not erase the established stalled-work lanes; it simply suppresses
+        // this new detector and leaves a diagnostic warning.
+        if (openPrs.Count > 0)
+        {
+            try
+            {
+                openPrs = lister.EnrichPullRequestLifecycle(
+                    repo,
+                    openPrs,
+                    GitHubAutomationReadSurface.StalledWork);
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            {
+                warnings.Add($"review-verdict evidence could not be read: {exception.Message}");
+            }
+        }
         var mergedPrs = ReadGitHub(() => lister.ListMergedPullRequests(
             repo,
             Array.Empty<string>(),
@@ -731,6 +766,16 @@ internal static class AutomationStalledWorkCommand
         }
 
         CollectPrCreatedNotReviewing(context, domain, candidateDomains, openIssues, openPrs, repo, now, repairSilentMinutes, ciWaitRead.Records, items, excluded);
+        CollectReviewVerdictAheadOfLabel(
+            context,
+            domain,
+            candidateDomains,
+            repo,
+            openPrs,
+            now,
+            reviewVerdictAheadMinutes,
+            items,
+            excluded);
         CollectDraftRepairStalled(context, domain, candidateDomains, openIssues, openPrs, repo, now, repairSilentMinutes, items, excluded);
         CollectMergedNotClosedOut(context, domain, candidateDomains, repo, mergedPrs, now, items, excluded, warnings);
         CollectClaimedButSilent(context, domain, candidateDomains, openIssues, openPrs, repo, now, claimedSilentMinutes, items, excluded, warnings);
@@ -803,6 +848,7 @@ internal static class AutomationStalledWorkCommand
             Repo = repo,
             RecordingRole = recordingRole,
             StaleMinutesThreshold = staleMinutes,
+            ReviewVerdictAheadMinutesThreshold = reviewVerdictAheadMinutes,
             BacklogIdleMinutesThreshold = backlogIdleMinutes,
             // G793: the diagnostic count describes genuinely outstanding
             // delegations, so an open store record with independently
@@ -1684,6 +1730,137 @@ internal static class AutomationStalledWorkCommand
         if (match.Success)
         {
             values[key] = match.Groups["value"].Value;
+        }
+    }
+
+    /// <summary>
+    /// G805: reports an open PR when its newest durable approval or
+    /// request-update review is newer than the last <c>intent-pr-*</c> label
+    /// transition by more than the declared quiet period. This collector only
+    /// projects read evidence; the recommended transition is never executed.
+    /// </summary>
+    private static void CollectReviewVerdictAheadOfLabel(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
+        string repo,
+        IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
+        DateTimeOffset now,
+        int thresholdMinutes,
+        List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded)
+    {
+        foreach (var pr in openPrs)
+        {
+            if (!IsOpen(pr.State))
+            {
+                continue;
+            }
+
+            var verdict = pr.Reviews
+                .Where(review => string.Equals(review.State, "APPROVED", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(review.State, "CHANGES_REQUESTED", StringComparison.OrdinalIgnoreCase))
+                .Select(review =>
+                {
+                    if (!DateTimeOffset.TryParse(
+                            review.SubmittedAt,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                            out var submittedAt))
+                    {
+                        return (Valid: false, Review: review, SubmittedAt: default(DateTimeOffset));
+                    }
+
+                    return (Valid: true, Review: review, SubmittedAt: submittedAt);
+                })
+                .Where(candidate => candidate.Valid)
+                .OrderByDescending(candidate => candidate.SubmittedAt)
+                .FirstOrDefault();
+            if (!verdict.Valid)
+            {
+                // No review, a COMMENTED review, or an unusable timestamp is
+                // an active/unknown review shape, never a fabricated stall.
+                continue;
+            }
+
+            var lastTransition = pr.IntentPrLabelTransitions
+                .Where(transition => transition.Name.StartsWith("intent-pr-", StringComparison.Ordinal))
+                .Select(transition =>
+                {
+                    if (!DateTimeOffset.TryParse(
+                            transition.OccurredAt,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                            out var occurredAt))
+                    {
+                        return (Valid: false, Transition: transition, OccurredAt: default(DateTimeOffset));
+                    }
+
+                    return (Valid: true, Transition: transition, OccurredAt: occurredAt);
+                })
+                .Where(candidate => candidate.Valid)
+                .OrderByDescending(candidate => candidate.OccurredAt)
+                .FirstOrDefault();
+            if (!lastTransition.Valid || verdict.SubmittedAt <= lastTransition.OccurredAt)
+            {
+                // The label already follows the review, the label transition
+                // is newer than the review, or transition evidence is absent.
+                continue;
+            }
+
+            var lag = verdict.SubmittedAt - lastTransition.OccurredAt;
+            if (lag.TotalMinutes <= thresholdMinutes)
+            {
+                continue;
+            }
+            var lagMinutes = (int)Math.Floor(lag.TotalMinutes);
+
+            var resolution = ResolveExecutionUnit(context, pr.Title);
+            var packetDeclaredDomain = resolution.Corroborated
+                ? ReadPacketDeclaredDomain(context, resolution.ExecutionUnit)
+                : null;
+            if (!TryConfirmDomain(
+                    domain,
+                    resolution,
+                    packetDeclaredDomain,
+                    candidateDomains,
+                    repo,
+                    out var reason,
+                    out var detail))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindReviewVerdictAheadOfLabel,
+                    ExecutionUnit = resolution.ExecutionUnit,
+                    Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
+                    Reason = reason,
+                    Detail = detail,
+                });
+                continue;
+            }
+
+            var approveEquivalent = string.Equals(
+                verdict.Review.State,
+                "APPROVED",
+                StringComparison.OrdinalIgnoreCase);
+            var verdictKind = approveEquivalent ? "approve-equivalent" : "request-update";
+            var dueTransition = approveEquivalent ? "approved" : "request-update";
+            items.Add(new StalledWorkItem
+            {
+                Kind = KindReviewVerdictAheadOfLabel,
+                ExecutionUnit = resolution.ExecutionUnit,
+                Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
+                AgeMinutes = Math.Max(0, lagMinutes),
+                IsInformational = true,
+                VerdictKind = verdictKind,
+                VerdictAt = verdict.SubmittedAt,
+                LabelTransitionAt = lastTransition.OccurredAt,
+                DueTransition = dueTransition,
+                RecommendedAction =
+                    $"intent-cli automation pr-transition --repo {repo} --pr {pr.Number} "
+                    + $"--transition {dueTransition} --write --format json; this stalled-work "
+                    + "finding is read-only and never applies the transition automatically.",
+            });
         }
     }
 
@@ -4670,6 +4847,7 @@ internal static class AutomationStalledWorkCommand
         out string? team,
         out string? recordingRole,
         out int staleMinutes,
+        out int reviewVerdictAheadMinutes,
         out int claimedSilentMinutes,
         out int backlogIdleMinutes,
         out int repairSilentMinutes,
@@ -4683,6 +4861,7 @@ internal static class AutomationStalledWorkCommand
         team = null;
         recordingRole = null;
         staleMinutes = 0;
+        reviewVerdictAheadMinutes = DefaultReviewVerdictAheadMinutes;
         claimedSilentMinutes = DefaultClaimedSilentMinutes;
         backlogIdleMinutes = DefaultBacklogIdleMinutes;
         repairSilentMinutes = DefaultRepairSilentMinutes;
@@ -4742,6 +4921,18 @@ internal static class AutomationStalledWorkCommand
                         return false;
                     }
                     staleMinutes = parsedMinutes;
+                    index++;
+                    break;
+                case "--review-verdict-ahead-minutes":
+                    if (index + 1 >= args.Length
+                        || !int.TryParse(args[index + 1], System.Globalization.NumberStyles.Integer,
+                            System.Globalization.CultureInfo.InvariantCulture, out var parsedReviewVerdictAheadMinutes)
+                        || parsedReviewVerdictAheadMinutes < 0)
+                    {
+                        error = "--review-verdict-ahead-minutes requires a non-negative integer.";
+                        return false;
+                    }
+                    reviewVerdictAheadMinutes = parsedReviewVerdictAheadMinutes;
                     index++;
                     break;
                 case "--claimed-silent-minutes":
@@ -4911,6 +5102,22 @@ internal static class AutomationStalledWorkCommand
                 if (item.ClosedIssueNumber is { } closedIssueNumber)
                 {
                     writer.WriteLine($"- closed_issue_number: #{closedIssueNumber}");
+                }
+                if (item.VerdictKind is { } verdictKind)
+                {
+                    writer.WriteLine($"- verdict_kind: {verdictKind}");
+                }
+                if (item.VerdictAt is { } verdictAt)
+                {
+                    writer.WriteLine($"- verdict_at: {verdictAt:O}");
+                }
+                if (item.LabelTransitionAt is { } labelTransitionAt)
+                {
+                    writer.WriteLine($"- label_transition_at: {labelTransitionAt:O}");
+                }
+                if (item.DueTransition is { } dueTransition)
+                {
+                    writer.WriteLine($"- due_transition: {dueTransition}");
                 }
                 if (item.ReleasedVersion is { } releasedVersion)
                 {
@@ -5108,6 +5315,10 @@ internal sealed record AutomationStalledWorkResult
     [JsonPropertyName("stale_minutes_threshold")]
     public required int StaleMinutesThreshold { get; init; }
 
+    /// <summary>G805: declared quiet period for review-verdict lag.</summary>
+    [JsonIgnore]
+    public int ReviewVerdictAheadMinutesThreshold { get; init; } = AutomationStalledWorkCommand.DefaultReviewVerdictAheadMinutes;
+
     /// <summary>G544: the <c>--backlog-idle-minutes</c> threshold used to gate <c>backlog-ready-idle</c>.</summary>
     [JsonPropertyName("backlog_idle_minutes_threshold")]
     public required int BacklogIdleMinutesThreshold { get; init; }
@@ -5257,6 +5468,26 @@ internal sealed record StalledWorkItem
     [JsonPropertyName("closed_issue_number")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? ClosedIssueNumber { get; init; }
+
+    /// <summary>G805: normalized durable review outcome.</summary>
+    [JsonPropertyName("verdict_kind")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? VerdictKind { get; init; }
+
+    /// <summary>G805: timestamp of the newest durable review verdict.</summary>
+    [JsonPropertyName("verdict_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? VerdictAt { get; init; }
+
+    /// <summary>G805: timestamp of the last intent-pr label transition.</summary>
+    [JsonPropertyName("label_transition_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? LabelTransitionAt { get; init; }
+
+    /// <summary>G805: transition owed by the verdict-ahead observation.</summary>
+    [JsonPropertyName("due_transition")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DueTransition { get; init; }
 
     /// <summary>
     /// G725: the release and the two policy values required to clear the
