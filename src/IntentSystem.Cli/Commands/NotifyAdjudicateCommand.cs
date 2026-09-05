@@ -242,7 +242,14 @@ internal static class NotifyAdjudicateCommand
             return Emit(writer, options, Result(authorization, live, audited: true, executed: false)
                 with
             {
+                Decision = "escalate",
                 Rule = cas.Cause ?? "stale-dialog-cas-refused",
+                MechanicalExecutor = null,
+                AnswerableBy = null,
+                ScopeOrRuleId = null,
+                MatchedScopes = [],
+                AnswerKeys = [],
+                ExactAnswerScope = null,
                 Summary = authorization.Summary + $" No key was sent: {cas.Summary}",
             },
                 exitCode: 1);

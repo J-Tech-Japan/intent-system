@@ -116,8 +116,11 @@ public sealed class PromptAdjudicationG799Tests : IDisposable
         using var changedDocument = JsonDocument.Parse(changedWriter.ToString());
         var changedResult = changedDocument.RootElement.GetProperty("result");
         Assert.Equal(1, changedExit);
+        Assert.Equal("escalate", changedResult.GetProperty("Decision").GetString());
         Assert.Equal("dialog-changed-hash-mismatch", changedResult.GetProperty("Rule").GetString());
         Assert.Contains("changed", changedResult.GetProperty("Summary").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(changedResult.GetProperty("AnswerKeys").EnumerateArray());
+        Assert.Null(changedResult.GetProperty("MechanicalExecutor").GetString());
         Assert.DoesNotContain(changed.Runner.Calls, call => call.Arguments.Take(2).SequenceEqual(["agent", "send-keys"]));
         Assert.NotEqual(wrong.GetProperty("Rule").GetString(), changedResult.GetProperty("Rule").GetString());
         Console.WriteLine($"G799 AC4 hash diagnosis evidence:\nwrong_projection={wrongWriter}\ndialog_changed={changedWriter}");
