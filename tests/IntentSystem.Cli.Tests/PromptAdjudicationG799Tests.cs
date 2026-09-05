@@ -164,7 +164,7 @@ public sealed class PromptAdjudicationG799Tests : IDisposable
         Assert.Contains("ref", sequence.Summary, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(PromptDialogCas.TextHashMismatch, hash.Cause);
         Assert.Contains("caller must hash", hash.Summary, StringComparison.OrdinalIgnoreCase);
-        Console.WriteLine($"G799 AC5 strict CAS evidence:\nsequence={sequence.Cause}: {sequence.Summary}\nhash={hash.Cause}: {hash.Summary}");
+        Console.WriteLine($"G799 AC5 strict CAS evidence:\nforce_flag_present={writer.ToString().Contains("--force", StringComparison.Ordinal)}\nsequence={sequence.Cause}: {sequence.Summary}\nhash={hash.Cause}: {hash.Summary}");
     }
 
     private static string[] AdjudicationArguments(
