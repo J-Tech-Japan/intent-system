@@ -183,6 +183,7 @@ internal static class GuideDesignThreadCommand
                 ReviewSeatSelection = reviewSeatSelection,
             },
             ResearchDelegation = ResearchDelegationContract.CreateGuidance(),
+            NotifyDelegateAssignment = NotifyDelegateAssignmentGuidance.Create(domainArg, teamArg),
             Monitoring = new DesignThreadMonitoring
             {
                 Separation = "Supervision runs outside the design conversation and is consulted at most once per design wake.",
@@ -348,6 +349,14 @@ internal static class GuideDesignThreadCommand
         writer.WriteLine($"- size rule: {result.ResearchDelegation.NoSizeRule}");
         foreach (var example in result.ResearchDelegation.Examples) writer.WriteLine($"  - example: {example}");
         writer.WriteLine();
+        writer.WriteLine("## 6b. Explicit notify delegate assignment (G809)");
+        writer.WriteLine($"- precedence: {result.NotifyDelegateAssignment.Precedence}");
+        writer.WriteLine($"- validation: {result.NotifyDelegateAssignment.Validation}");
+        writer.WriteLine($"- dry-run: {result.NotifyDelegateAssignment.DryRun}");
+        writer.WriteLine($"- authority: {result.NotifyDelegateAssignment.Authority}");
+        writer.WriteLine($"- historical records: {result.NotifyDelegateAssignment.HistoricalRecords}");
+        foreach (var example in result.NotifyDelegateAssignment.Examples) writer.WriteLine($"  - example: {example}");
+        writer.WriteLine();
         writer.WriteLine("## 7. Outcome-shaped reporting");
         writer.WriteLine($"- {result.Reporting.Rule}");
         writer.WriteLine($"- {result.Reporting.HumanActionRule}");
@@ -454,6 +463,9 @@ internal sealed record DesignThreadGuideResult
     public required DesignThreadTeamAndDutySplit TeamAndDutySplit { get; init; }
     [JsonPropertyName("research_delegation")]
     public required ResearchDelegationGuidance ResearchDelegation { get; init; }
+    [JsonPropertyName("notify_delegate_assignment")]
+    [JsonIgnore]
+    public NotifyDelegateAssignmentGuidance NotifyDelegateAssignment { get; init; } = null!;
     public required DesignThreadMonitoring Monitoring { get; init; }
     public required DesignThreadReporting Reporting { get; init; }
     public required IReadOnlyList<string> NegativeInvariants { get; init; }

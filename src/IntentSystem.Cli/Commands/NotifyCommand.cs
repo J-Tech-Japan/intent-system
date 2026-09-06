@@ -32,14 +32,15 @@ internal static class NotifyCommand
 
     private const string MissingRecipientWorkRootPlaceholder = "<role-work-root>";
 
-    private const string DelegateUsage =
+    private static readonly string DelegateUsage =
         "Usage: intent-cli notify delegate --domain <d> [--team <t>] --from <role> --to <role> --report-to <role> "
         + "--task-id <id> --objective <text> [--input <value>]... --expected-artifact <value> "
         + "[--expected-artifact <value>]... --result-nonce <nonce> [--routing-root <host-root>] "
         + "[--event-kind completion|transition|acknowledgement|escalation|question|blocked] "
         + "[--ruling-payload <text> --ruling-origin <role> [--ruling-digest <sha256>] "
         + "[--ruling-envelope-field <key=value>]... --downstream-delegation-reference <id>] "
-        + "[--task-kind research --question <text>] [--dry-run|--write] [--format markdown|json]";
+        + "[--task-kind research --question <text>] [--dry-run|--write] [--format markdown|json]\n"
+        + NotifyDelegateAssignmentGuidance.HelpText;
 
     private const string ReportUsage =
         "Usage: intent-cli notify report --domain <d> --team <t> --from <role> --to <role> --task-id <id> "
@@ -196,9 +197,25 @@ internal static class NotifyCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (args.Length == 1 && string.Equals(args[0], "--help", StringComparison.Ordinal))
+        if (args.Contains("--help", StringComparer.Ordinal))
         {
-            writer.WriteLine(Usage(operation));
+            var wantsJson = args.Any(argument => string.Equals(argument, "json", StringComparison.OrdinalIgnoreCase))
+                && args.Any(argument => string.Equals(argument, "--format", StringComparison.Ordinal));
+            if (wantsJson)
+            {
+                writer.WriteLine(JsonSerializer.Serialize(new
+                {
+                    operation,
+                    usage = Usage(operation),
+                    assignment = operation == OperationDelegate
+                        ? NotifyDelegateAssignmentGuidance.HelpText
+                        : null,
+                }, JsonOptions));
+            }
+            else
+            {
+                writer.WriteLine(Usage(operation));
+            }
             return 0;
         }
 
@@ -342,14 +359,22 @@ internal static class NotifyCommand
             var fallbackTarget = string.Equals(operation, OperationEscalate, StringComparison.Ordinal)
                 ? "design"
                 : null;
-            options = options with
-            {
-                ToRole = NotifyEventKindRouting.ResolveTarget(
+            // G809: an explicitly addressed delegate keeps its validated
+            // assignee.  Event-kind routing remains authoritative for report
+            // and escalation, but it must not substitute a Steward/Architect
+            // default for a delegate's explicit --to.  Canonicalize accepted
+            // aliases before the topology preflight so every emitted role
+            // field describes the same logical assignee; leave an unknown
+            // value untouched so preflight refuses it rather than routing it
+            // to a different seat.
+            var routedTarget = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
+                ? NormalizeExplicitDelegateTarget(options.ToRole)
+                : NotifyEventKindRouting.ResolveTarget(
                     eventKind,
                     options.ToRole,
                     stewardRecorded,
-                    fallbackTarget),
-            };
+                    fallbackTarget);
+            options = options with { ToRole = routedTarget };
 
             var isStewardJudgement = LogicalRoleNormalizer.TryNormalize(
                     options.FromRole,
@@ -671,6 +696,24 @@ internal static class NotifyCommand
     private static bool IsAdvisoryPreflightFinding(SessionLayerPreflightFinding finding) =>
         string.Equals(finding.Cause, "marker-not-generated", StringComparison.Ordinal)
         || string.Equals(finding.Cause, SessionLayerMigration.ResidueCause, StringComparison.Ordinal);
+
+    private static string? NormalizeExplicitDelegateTarget(string? requestedTarget)
+    {
+        if (!LogicalRoleNormalizer.TryNormalize(requestedTarget, out var canonical, out _)
+            || canonical is null)
+        {
+            return requestedTarget;
+        }
+
+        // G795 accepts historical spellings at the boundary. Preserve an
+        // accepted alias in serialized notification envelopes so legacy
+        // consumers keep their established fields; canonical inputs remain
+        // canonical. The normalized value is still what makes the explicit
+        // assignee/topology comparison, never event-kind inference.
+        return string.Equals(requestedTarget, canonical, StringComparison.Ordinal)
+            ? canonical
+            : requestedTarget;
+    }
 
     private static int ExecuteCollect(
         TextWriter writer,

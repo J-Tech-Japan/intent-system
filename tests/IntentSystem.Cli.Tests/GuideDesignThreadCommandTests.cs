@@ -92,7 +92,7 @@ public sealed class GuideDesignThreadCommandTests
                     writer));
 
             var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(writer.ToString())));
-            Assert.Equal("f4684097ad587b5f849aa869a0c24d65be82d67d1731491231c7ca2cce0928ca", hash);
+            Assert.Equal("9cb6691f1a11e22966ea5d218d4c0b7ac13db7a4dc600109d19b1386cc9f0a5a", hash);
         }
         finally
         {
