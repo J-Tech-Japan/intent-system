@@ -32,6 +32,10 @@ internal static class GuideRoleContractGuidance
                 LogicalRoleNormalizer.Reviewer,
                 "intent-cli guide review",
                 "FIRST — before acting on the rest of this output, read your role's operating guide (`intent-cli guide review`) if you have not read it this session. Do not force a reread on every wake; re-read after a CLI-version or session-layer configuration change."),
+            LogicalRoleNormalizer.Steward => Create(
+                LogicalRoleNormalizer.Steward,
+                GuideStewardThreadCommand.CommandName,
+                "FIRST — before acting on the rest of this output, read your role's operating guide (`intent-cli guide steward-thread`) if you have not read it this session. The Steward relays evidence and hands judgment to the architect or reviewer; it does not decide."),
             _ => null,
         };
     }

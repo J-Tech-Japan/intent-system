@@ -333,6 +333,15 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "guide steward-thread",
+            Role = RoleHostReview,
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "G807 Steward operating contract: a metadata-free transmission boundary that relays evidence, hands design questions to architect, review questions to reviewer, dispatch to orchestrator, preserves the G796 ruling boundary, and refuses fabricated authority."
+        },
+        new CommandGroupEntry
+        {
             Name = "guide bootstrap",
             Role = RoleDesign,
             Classification = ClassificationPrimary,

@@ -327,6 +327,12 @@ internal static class GuideHelpCommand
             Purpose = "G701/G654 preview-through-1.x agent-kind-neutral design-thread operating contract: four valid wake outcomes, provenance and approval semantics, the structured `dialog-answering/v1` three-tier rule with the G690 distinction, merge-authority comparison, three-layer delegation verification, orchestration-owned recovery, record-based supervision-liveness checking, and outcome-shaped reporting.",
             Example = "intent-cli guide design-thread --domain <name> --team <team> --routing-root <host-root> --format markdown"
         },
+        new GuideSubcommandEntry
+        {
+            Name = "steward-thread",
+            Purpose = "G807 metadata-free Steward operating contract: relay evidence, hand design judgment to architect, review judgment to reviewer, dispatch to orchestrator, preserve G796 ruling bytes, and refuse fabricated authority.",
+            Example = "intent-cli guide steward-thread --format markdown"
+        },
         // G664: application conversation to herdr-only team genesis.
         new GuideSubcommandEntry
         {

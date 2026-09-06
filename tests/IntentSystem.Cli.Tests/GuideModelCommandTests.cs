@@ -48,6 +48,7 @@ public sealed class GuideModelCommandTests
         Assert.Contains("orchestrator — inspects canonical intent-cli/GitHub state", output, StringComparison.Ordinal);
         Assert.Contains("implementation — a loopless receiver", output, StringComparison.Ordinal);
         Assert.Contains("review — a loopless receiver", output, StringComparison.Ordinal);
+        Assert.Contains("steward — a loopless transmission boundary", output, StringComparison.Ordinal);
         Assert.Contains("message-driven steady state", output, StringComparison.Ordinal);
         Assert.Contains("- **alternative** —", output, StringComparison.Ordinal);
         Assert.Contains("Timer-loop mode remains fully supported", output, StringComparison.Ordinal);
@@ -144,11 +145,12 @@ public sealed class GuideModelCommandTests
         Assert.Contains("G540", model.GetProperty("summary").GetString(), StringComparison.Ordinal);
 
         var roles = model.GetProperty("roles").EnumerateArray().Select(e => e.GetString()!).ToArray();
-        Assert.Equal(4, roles.Length);
+        Assert.Equal(5, roles.Length);
         Assert.Contains(roles, r => r.StartsWith("design —", StringComparison.Ordinal));
         Assert.Contains(roles, r => r.StartsWith("orchestrator —", StringComparison.Ordinal));
         Assert.Contains(roles, r => r.StartsWith("implementation —", StringComparison.Ordinal));
         Assert.Contains(roles, r => r.StartsWith("review —", StringComparison.Ordinal));
+        Assert.Contains(roles, r => r.StartsWith("steward —", StringComparison.Ordinal));
 
         Assert.True(model.TryGetProperty("message_driven_steady_state", out _));
         Assert.Contains("Timer-loop mode remains fully supported", model.GetProperty("alternative").GetString(), StringComparison.Ordinal);
