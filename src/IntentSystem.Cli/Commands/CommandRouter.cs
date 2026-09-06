@@ -137,6 +137,7 @@ internal static class CommandRouter
             {
                 ["show"] = SessionLayerCommand.ExecuteShow,
                 ["set"] = SessionLayerCommand.ExecuteSet,
+                ["seat"] = SessionLayerSeatCommand.Execute,
                 ["team-mode"] = TeamModeCommand.Execute,
                 ["topology"] = SessionLayerTopologyCommand.Execute,
                 ["marker"] = SessionLayerMarkerCommand.Execute,

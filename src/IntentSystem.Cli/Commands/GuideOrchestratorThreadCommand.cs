@@ -797,6 +797,11 @@ internal static class GuideOrchestratorThreadCommand
             "It does NOT ask design to perform routine workflow transitions through an undeclared or ad-hoc request; "
             + "a topology-declared design host-state role is legitimate and is routed as a recorded duty. "
             + "The declaration does not supply a non-sandboxed participant or create host capability.";
+        var seatPreflightGuidance =
+            $"Before a seat's first delegation, run intent-cli session-layer seat preflight --domain {domain} --team <team> --role <role> --format json. "
+            + "It probes git writability, origin reachability, installed identity, host claim-path resolution, and a generic runtime-family marker; "
+            + "a failed probe records one actionable remedy and the command exits nonzero. The probe creates then deletes only an isolated preflight ref, "
+            + "leaves the index and branch unchanged, never launches or manages a process, and never names or grades a model.";
 
         string Apply(string template) => template
             .Replace("<domain>", domain, StringComparison.Ordinal)
@@ -870,6 +875,7 @@ internal static class GuideOrchestratorThreadCommand
         return new OrchestratorThreadGuide
         {
             HostStateDiscovery = hostStateDiscovery,
+            SeatPreflight = seatPreflightGuidance,
             SessionLayerSwitchChecklist = SessionLayerSwitchChecklist.Create(),
             SetupIntake = BuildSetupIntake(values, herdrOnly),
             // G696/G645: the orchestrator surface names the review seat's
@@ -4457,6 +4463,11 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
 
         writer.WriteLine("## Guide reachability (G645/G696)");
+        if (!string.IsNullOrWhiteSpace(guide.SeatPreflight))
+        {
+            writer.WriteLine();
+            writer.WriteLine($"- seat preflight (G808): {guide.SeatPreflight}");
+        }
         foreach (var route in guide.GuideReachability.Routes)
         {
             writer.WriteLine(
@@ -5507,6 +5518,10 @@ internal sealed record OrchestratorThreadGuide
     /// </summary>
     [JsonPropertyName("host_state_discovery")]
     public required OrchestratorHostStateDiscovery HostStateDiscovery { get; init; }
+
+    [JsonPropertyName("seat_preflight")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SeatPreflight { get; init; }
 
     /// <summary>G570: which session-layer transport this guide is rendering for, and how that was decided.</summary>
     [JsonPropertyName("session_layer")]
