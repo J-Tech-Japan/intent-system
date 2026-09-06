@@ -102,7 +102,7 @@ public sealed class AutomationStalledWorkG806Tests : IDisposable
     }
 
     [Fact]
-    public void G806_AC4_AC6_NonOrchestratorIntakeAndStalledScanPreserveBytes()
+    public void G806_AC4_AC6_MisroutedIntakeAndStalledScanPreserveBytes()
     {
         workspace.WritePacket("G806");
         var issue = BuildIssue(1805, "G806: read-only", Now.AddMinutes(-90));
@@ -113,11 +113,17 @@ public sealed class AutomationStalledWorkG806Tests : IDisposable
         var beforeFiles = SnapshotFiles(workspace.Root);
         var before = Digest(beforeFiles);
 
-        // A non-orchestrator delivery is not intake for this finding. It is
-        // still observable, but it cannot flip the queue marker.
+        // A non-orchestrator delivery is an existing intake, but it cannot
+        // flip the queue marker or trigger a second intake recommendation.
         var result = Analyze(issue, "G806");
-        Assert.DoesNotContain(result.Items, item => item.Kind == AutomationStalledWorkCommand.KindPublishedIntakeAwaitingDispatch);
-        Assert.Contains(result.Items, item => item.Kind == AutomationStalledWorkCommand.KindPublishedWithoutIntake);
+        var finding = Assert.Single(result.Items, item => item.ExecutionUnit == "G806");
+        Assert.Equal(AutomationStalledWorkCommand.KindPublishedIntakeAwaitingDispatch, finding.Kind);
+        Assert.Equal("G806-read-only-intake", finding.IntakeTaskId);
+        Assert.Equal("steward", finding.IntakeDeliveringRole);
+        Assert.Equal("builder", finding.IntakeRecipientRole);
+        Assert.Equal("delivered", finding.IntakeDeliveryState);
+        Assert.DoesNotContain("notify delegate", finding.RecommendedAction, StringComparison.Ordinal);
+        Assert.Contains("G806-read-only-intake", finding.RecommendedAction, StringComparison.Ordinal);
         var afterFiles = SnapshotFiles(workspace.Root);
         var after = Digest(afterFiles);
         if (before != after)
@@ -131,7 +137,12 @@ public sealed class AutomationStalledWorkG806Tests : IDisposable
             }
         }
         Assert.Equal(before, after);
-        output.WriteLine($"queue_state_unchanged={before == after}; non_orchestrator_intake=not-counted; bytes={before}");
+        output.WriteLine(JsonSerializer.Serialize(new
+        {
+            misrouted_intake = finding,
+            queue_state_unchanged = before == after,
+            bytes = before,
+        }, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     [Theory]
@@ -163,16 +174,25 @@ public sealed class AutomationStalledWorkG806Tests : IDisposable
     public void G806_AC7_G799PublishedFixtureUsesAwaitingDispatchAndCorrectElapsed()
     {
         workspace.WritePacket("G799");
-        var issue = BuildIssue(1744, "G799: published implementation", Now.AddMinutes(-120));
-        var pending = BuildPending("G799-implementation-v1", "G799", "orchestration", Now.AddMinutes(-90));
+        var intakeDispatchedAt = new DateTimeOffset(2026, 9, 4, 10, 29, 56, TimeSpan.Zero);
+        var runtimeObservedAt = new DateTimeOffset(2026, 9, 5, 2, 3, 16, TimeSpan.Zero);
+        AutomationStalledWorkCommand.UtcNowFactory = () => runtimeObservedAt;
+        var issue = BuildIssue(1744, "G799: published implementation", intakeDispatchedAt.AddMinutes(-10));
+        var pending = BuildPending(
+            "G799-intake-and-repair-priority-v1",
+            "G799",
+            "design",
+            intakeDispatchedAt);
         Assert.True(NotifyPendingDelegationStore.WriteDispatch(workspace.Root, pending).Written);
-        Assert.True(NotifyDelegationDeliveryStore.Write(workspace.Root, pending, Now.AddMinutes(-25)).Written);
+        Assert.True(NotifyDelegationDeliveryStore.Write(workspace.Root, pending, intakeDispatchedAt).Written);
         var result = Analyze(issue, "G799");
         var finding = Assert.Single(result.Items, item => item.ExecutionUnit == "G799");
         Assert.Equal(AutomationStalledWorkCommand.KindPublishedIntakeAwaitingDispatch, finding.Kind);
-        Assert.Equal("G799-implementation-v1", finding.IntakeTaskId);
-        Assert.Equal("orchestration", finding.IntakeDeliveringRole);
-        Assert.Equal(25, finding.IntakeMinutesElapsed);
+        Assert.Equal("G799-intake-and-repair-priority-v1", finding.IntakeTaskId);
+        Assert.Equal("design", finding.IntakeDeliveringRole);
+        Assert.Equal("orchestrator", finding.IntakeRecipientRole);
+        Assert.Equal("delivered", finding.IntakeDeliveryState);
+        Assert.InRange(finding.IntakeMinutesElapsed!.Value, 930, 935);
         output.WriteLine(JsonSerializer.Serialize(finding, new JsonSerializerOptions { WriteIndented = true }));
     }
 

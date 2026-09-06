@@ -27,10 +27,12 @@ namespace IntentSystem.Cli.Commands;
 ///   <c>intent-target</c>, has no claim label, and no delivered intake
 ///   delegation names the orchestrator. The row names the originating seat
 ///   and the canonical notify-delegate action.</item>
-/// <item><c>published-intake-awaiting-dispatch</c> — the orchestrator has a
-///   delivered intake delegation, but the queue item has not entered a
-///   runtime-dispatched state. The row carries task, delivering role,
-///   delivery timestamp, elapsed minutes, and the read-only dispatch command.</item>
+/// <item><c>published-intake-awaiting-dispatch</c> — an existing intake
+///   delegation (normally delivered to the orchestrator) has not yet led to
+///   a runtime-dispatched queue item. The row carries task, delivering role,
+///   actual recipient, delivery state, timestamp, elapsed minutes, and a
+///   read-only action; a misrouted existing intake is never replaced with a
+///   fresh delegation recommendation.</item>
 /// <item><c>pr-created-not-reviewing</c> — the source issue carries
 ///   <c>intent-pr-created</c> and its closing PR has not had the
 ///   <c>review-start</c> transition applied (no <c>intent-pr-reviewing</c> /
@@ -2192,7 +2194,7 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            var intake = FindDeliveredOrchestratorIntake(
+            var intake = FindExistingIntakeDelegation(
                 context,
                 resolution.ExecutionUnit,
                 openPendingDelegations,
@@ -2214,23 +2216,37 @@ internal static class AutomationStalledWorkCommand
                 });
             }
 
-            if (intake is { Delivery: { } delivery, Record: { } intakeRecord })
+            if (intake is { Record: { } intakeRecord })
             {
-                var deliveredAt = delivery.DeliveredAt.ToUniversalTime();
+                var delivery = intake.Delivery;
+                var deliveredAt = delivery?.DeliveredAt.ToUniversalTime();
+                var recipientRole = intakeRecord.RecipientRole;
+                var isOrchestratorRecipient = string.Equals(
+                    GuideRoleContractGuidance.Normalize(recipientRole),
+                    LogicalRoleNormalizer.Orchestrator,
+                    StringComparison.Ordinal);
+                var action = isOrchestratorRecipient && delivery is not null
+                    ? $"orchestrator must dispatch {resolution.ExecutionUnit}; run `intent-cli queue transition {resolution.ExecutionUnit} active --write --format json`"
+                    : $"existing intake {intakeRecord.TaskId} from {intakeRecord.DelegatingRole ?? "<unknown>"} to {recipientRole} has delivery state {intake.DeliveryState}; do not create a fresh intake; resolve this recorded delegation before orchestrator dispatch";
                 items.Add(new StalledWorkItem
                 {
                     Kind = KindPublishedIntakeAwaitingDispatch,
                     ExecutionUnit = resolution.ExecutionUnit,
                     Issue = new StalledWorkRef { Number = issue.Number, Url = issue.Url },
                     Pr = null,
-                    AgeMinutes = ComputeAgeMinutesFromInstant(ClampToNow(deliveredAt, now), now),
+                    AgeMinutes = deliveredAt is { } deliveryInstant
+                        ? ComputeAgeMinutesFromInstant(ClampToNow(deliveryInstant, now), now)
+                        : ComputeAgeMinutesFromInstant(ClampToNow(intakeRecord.DispatchedAt, now), now),
                     IsInformational = false,
-                    RecommendedAction =
-                        $"orchestrator must dispatch {resolution.ExecutionUnit}; run `intent-cli queue transition {resolution.ExecutionUnit} active --write --format json`",
+                    RecommendedAction = action,
                     IntakeTaskId = intakeRecord.TaskId,
                     IntakeDeliveringRole = intakeRecord.DelegatingRole ?? "<unknown>",
+                    IntakeRecipientRole = recipientRole,
+                    IntakeDeliveryState = intake.DeliveryState,
                     IntakeDeliveredAt = deliveredAt,
-                    IntakeMinutesElapsed = ComputeAgeMinutesFromInstant(ClampToNow(deliveredAt, now), now),
+                    IntakeMinutesElapsed = deliveredAt is { } deliveredInstant
+                        ? ComputeAgeMinutesFromInstant(ClampToNow(deliveredInstant, now), now)
+                        : null,
                 });
                 continue;
             }
@@ -2267,27 +2283,19 @@ internal static class AutomationStalledWorkCommand
             .FirstOrDefault();
     }
 
-    private static DeliveredOrchestratorIntake? FindDeliveredOrchestratorIntake(
+    private static ExistingIntakeDelegation? FindExistingIntakeDelegation(
         CliContext context,
         string executionUnit,
         IReadOnlyList<NotifyPendingDelegation> openPendingDelegations,
         out string? readError)
     {
         readError = null;
-        DeliveredOrchestratorIntake? best = null;
+        ExistingIntakeDelegation? best = null;
         foreach (var record in openPendingDelegations)
         {
-            if (!string.Equals(
-                    GuideRoleContractGuidance.Normalize(record.RecipientRole),
-                    LogicalRoleNormalizer.Orchestrator,
-                    StringComparison.Ordinal))
-            {
-                continue;
-            }
-
             if (!NotifyDelegationExecutionEvidence.TryExtractExecutionUnitToken(
-                    context.RepoRoot,
-                    record,
+                context.RepoRoot,
+                record,
                     out var token,
                     out var tokenError))
             {
@@ -2309,16 +2317,20 @@ internal static class AutomationStalledWorkCommand
             if (!delivery.Resolved)
             {
                 readError ??= delivery.Error;
-                continue;
             }
 
-            if (delivery.Evidence is not { DeliverySucceeded: true } evidence)
-            {
-                continue;
-            }
-
-            var candidate = new DeliveredOrchestratorIntake(record, evidence);
-            if (best is null || candidate.Delivery.DeliveredAt > best.Delivery.DeliveredAt)
+            var evidence = delivery.Evidence is { DeliverySucceeded: true } delivered
+                ? delivered
+                : null;
+            var deliveryState = !delivery.Resolved
+                ? "unreadable"
+                : evidence is not null
+                    ? "delivered"
+                    : "pending";
+            var candidate = new ExistingIntakeDelegation(record, evidence, deliveryState);
+            var candidateTime = evidence?.DeliveredAt ?? record.DispatchedAt;
+            var bestTime = best?.Delivery?.DeliveredAt ?? best?.Record.DispatchedAt;
+            if (best is null || bestTime is null || candidateTime > bestTime.Value)
             {
                 best = candidate;
             }
@@ -2361,9 +2373,10 @@ internal static class AutomationStalledWorkCommand
         return LogicalRoleNormalizer.Architect;
     }
 
-    private sealed record DeliveredOrchestratorIntake(
+    private sealed record ExistingIntakeDelegation(
         NotifyPendingDelegation Record,
-        NotifyDelegationDeliveryEvidence Delivery);
+        NotifyDelegationDeliveryEvidence? Delivery,
+        string DeliveryState);
 
     private static void CollectPrCreatedNotReviewing(
         CliContext context,
@@ -5317,6 +5330,14 @@ internal static class AutomationStalledWorkCommand
                 {
                     writer.WriteLine($"- intake_delivering_role: {intakeDeliveringRole}");
                 }
+                if (item.IntakeRecipientRole is { } intakeRecipientRole)
+                {
+                    writer.WriteLine($"- intake_recipient_role: {intakeRecipientRole}");
+                }
+                if (item.IntakeDeliveryState is { } intakeDeliveryState)
+                {
+                    writer.WriteLine($"- intake_delivery_state: {intakeDeliveryState}");
+                }
                 if (item.IntakeDeliveredAt is { } intakeDeliveredAt)
                 {
                     writer.WriteLine($"- intake_delivered_at: {intakeDeliveredAt:O}");
@@ -5704,6 +5725,14 @@ internal sealed record StalledWorkItem
     [JsonPropertyName("intake_delivering_role")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IntakeDeliveringRole { get; init; }
+
+    [JsonPropertyName("intake_recipient_role")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IntakeRecipientRole { get; init; }
+
+    [JsonPropertyName("intake_delivery_state")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IntakeDeliveryState { get; init; }
 
     [JsonPropertyName("intake_delivered_at")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
