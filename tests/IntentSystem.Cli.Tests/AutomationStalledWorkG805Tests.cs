@@ -11,7 +11,9 @@ namespace IntentSystem.Cli.Tests;
 [Collection(AutomationStalledWorkSharedStateCollection.Name)]
 public sealed class AutomationStalledWorkG805Tests : IDisposable
 {
-    private static readonly DateTimeOffset Now = new(2026, 9, 4, 15, 0, 0, TimeSpan.Zero);
+    // G805 F2: all measured fixtures use this declared observation instant.
+    private static readonly DateTimeOffset DeclaredObservationTime = new(2026, 9, 4, 15, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset Now = DeclaredObservationTime;
     private readonly ITestOutputHelper output;
 
     public AutomationStalledWorkG805Tests(ITestOutputHelper output)
@@ -81,7 +83,7 @@ public sealed class AutomationStalledWorkG805Tests : IDisposable
     public void G805_AC5_DefaultAndOperatorThresholdsAreDeclared()
     {
         using var workspace = new G805Workspace();
-        var pr = BuildPr(8057, "G805 threshold", Now.AddMinutes(-20), "APPROVED", Now.AddMinutes(-30));
+        var pr = BuildPr(8057, "G805 threshold", Now.AddMinutes(-10), "APPROVED", Now.AddMinutes(-30));
 
         var defaultResult = Analyze(workspace, [pr]);
         AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister([pr]);
@@ -108,6 +110,35 @@ public sealed class AutomationStalledWorkG805Tests : IDisposable
     }
 
     [Fact]
+    public void G805_F1_StaleVerdictFiresFreshVerdictStaysSilent()
+    {
+        using var workspace = new G805Workspace();
+        var stale = BuildPr(
+            8060,
+            "G805 stale verdict",
+            DeclaredObservationTime.AddMinutes(-25),
+            "APPROVED",
+            DeclaredObservationTime.AddMinutes(-35));
+        var fresh = BuildPr(
+            8061,
+            "G805 fresh verdict",
+            DeclaredObservationTime.AddMinutes(-4),
+            "APPROVED",
+            DeclaredObservationTime.AddMinutes(-10));
+
+        var result = Analyze(workspace, [stale, fresh], thresholdMinutes: 5);
+        var findings = result.Items
+            .Where(item => item.Kind == AutomationStalledWorkCommand.KindReviewVerdictAheadOfLabel)
+            .ToArray();
+
+        var finding = Assert.Single(findings);
+        Assert.Equal(8060, finding.Pr!.Number);
+        Assert.Equal(25, finding.AgeMinutes);
+        output.WriteLine(
+            $"observation_time={DeclaredObservationTime:O}; stale_pr=8060 age_minutes={finding.AgeMinutes}; fresh_pr=8061 findings=0");
+    }
+
+    [Fact]
     public void G805_AC6_ReadOnlyScanPreservesDurableBytes()
     {
         using var workspace = new G805Workspace();
@@ -131,10 +162,10 @@ public sealed class AutomationStalledWorkG805Tests : IDisposable
         using var workspace = new G805Workspace();
         var prs = new[]
         {
-            BuildPr(1743, "G805 measured approval one", Now.AddMinutes(-25), "APPROVED", Now.AddMinutes(-35)),
-            BuildPr(1747, "G805 measured request update", Now.AddMinutes(-32), "CHANGES_REQUESTED", Now.AddMinutes(-42)),
-            BuildPr(1748, "G805 measured approval two", Now.AddMinutes(-9), "APPROVED", Now.AddMinutes(-16)),
-            BuildPr(1746, "G805 measured approval three", Now.AddHours(-2), "APPROVED", Now.AddHours(-3)),
+            BuildPr(1743, "G805 measured approval", DeclaredObservationTime.AddMinutes(-25), "APPROVED", DeclaredObservationTime.AddMinutes(-35)),
+            BuildPr(1747, "G805 measured request update", DeclaredObservationTime.AddMinutes(-32), "CHANGES_REQUESTED", DeclaredObservationTime.AddMinutes(-42)),
+            BuildPr(1747, "G805 measured approval", DeclaredObservationTime.AddMinutes(-9), "APPROVED", DeclaredObservationTime.AddMinutes(-15)),
+            BuildPr(1746, "G805 measured approval", DeclaredObservationTime.AddMinutes(-10), "APPROVED", DeclaredObservationTime.AddMinutes(-16)),
         };
         var result = Analyze(workspace, prs, thresholdMinutes: 5);
 
@@ -143,8 +174,12 @@ public sealed class AutomationStalledWorkG805Tests : IDisposable
             .OrderBy(item => item.Pr!.Number)
             .ToArray();
         Assert.Equal(4, findings.Length);
-        Assert.Equal([1743, 1746, 1747, 1748], findings.Select(item => item.Pr!.Number).ToArray());
+        Assert.Equal([1743, 1746, 1747, 1747], findings.Select(item => item.Pr!.Number).ToArray());
+        Assert.Equal(
+            [25, 10, 32, 9],
+            findings.Select(item => item.AgeMinutes).ToArray());
         Assert.All(findings, item => Assert.True(item.AgeMinutes > 5));
+        output.WriteLine($"observation_time={DeclaredObservationTime:O}");
         output.WriteLine(JsonSerializer.Serialize(
             findings.Select(item => new
             {

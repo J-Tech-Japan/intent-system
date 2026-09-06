@@ -1736,8 +1736,9 @@ internal static class AutomationStalledWorkCommand
     /// <summary>
     /// G805: reports an open PR when its newest durable approval or
     /// request-update review is newer than the last <c>intent-pr-*</c> label
-    /// transition by more than the declared quiet period. This collector only
-    /// projects read evidence; the recommended transition is never executed.
+    /// transition and older than the declared quiet period at observation
+    /// time. This collector only projects read evidence; the recommended
+    /// transition is never executed.
     /// </summary>
     private static void CollectReviewVerdictAheadOfLabel(
         CliContext context,
@@ -1808,12 +1809,15 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            var lag = verdict.SubmittedAt - lastTransition.OccurredAt;
-            if (lag.TotalMinutes <= thresholdMinutes)
+            // The transition ordering gates the finding, but elapsed age is
+            // measured from the verdict to the observation time. A fast
+            // reviewer must become stale when the label remains parked.
+            var verdictAge = now - verdict.SubmittedAt;
+            if (verdictAge.TotalMinutes <= thresholdMinutes)
             {
                 continue;
             }
-            var lagMinutes = (int)Math.Floor(lag.TotalMinutes);
+            var verdictAgeMinutes = (int)Math.Floor(verdictAge.TotalMinutes);
 
             var resolution = ResolveExecutionUnit(context, pr.Title);
             var packetDeclaredDomain = resolution.Corroborated
@@ -1850,7 +1854,7 @@ internal static class AutomationStalledWorkCommand
                 Kind = KindReviewVerdictAheadOfLabel,
                 ExecutionUnit = resolution.ExecutionUnit,
                 Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
-                AgeMinutes = Math.Max(0, lagMinutes),
+                AgeMinutes = Math.Max(0, verdictAgeMinutes),
                 IsInformational = true,
                 VerdictKind = verdictKind,
                 VerdictAt = verdict.SubmittedAt,
