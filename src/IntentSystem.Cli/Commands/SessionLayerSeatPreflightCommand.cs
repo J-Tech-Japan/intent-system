@@ -75,6 +75,13 @@ internal static class SessionLayerSeatPreflightCommand
         }
 
         var observedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        var launchResolution = ResolveLaunchAt(context.RepoRoot, domain!, team!, role!, launchAt);
+        if (!launchResolution.Resolved)
+        {
+            writer.WriteLine(launchResolution.Error);
+            return 1;
+        }
+
         var runner = GitRunnerFactory?.Invoke(context.RepoRoot)
             ?? new CheckoutFreshnessGitCommandRunner(TimeSpan.FromSeconds(10));
         var probes = new List<SessionLayerSeatProbe>
@@ -94,7 +101,8 @@ internal static class SessionLayerSeatPreflightCommand
             Team = team!,
             Role = role!,
             ObservedAt = observedAt,
-            LaunchAt = launchAt ?? observedAt,
+            LaunchAt = launchResolution.LaunchAt!.Value,
+            LaunchSource = launchResolution.Source,
             Passed = allPassed,
             RuntimeFamily = runtime.Value,
             Probes = probes,
@@ -108,6 +116,7 @@ internal static class SessionLayerSeatPreflightCommand
             Passed = allPassed,
             ObservedAt = observedAt,
             LaunchAt = ledger.LaunchAt,
+            LaunchSource = ledger.LaunchSource,
             LedgerPath = ledgerResult.Path,
             LedgerRecorded = ledgerResult.Applied,
             RuntimeFamily = runtime.Value,
@@ -119,6 +128,67 @@ internal static class SessionLayerSeatPreflightCommand
 
         Emit(writer, format, result);
         return allPassed && ledgerResult.Applied ? 0 : 1;
+    }
+
+    private static SessionLayerSeatLaunchResolution ResolveLaunchAt(
+        string repoRoot,
+        string domain,
+        string team,
+        string role,
+        DateTimeOffset? explicitLaunchAt)
+    {
+        if (explicitLaunchAt is { } supplied)
+        {
+            return SessionLayerSeatLaunchResolution.Success(
+                supplied.ToUniversalTime(),
+                "operator --launch-at");
+        }
+
+        // G808: when the operator omits --launch-at, use the durable verified
+        // launch evidence already recorded by model-resolution.  The role's
+        // recorded kind is the join key; observed_at is never a launch-time
+        // substitute.
+        var topology = NotifyRoleTopologyStore.Resolve(repoRoot, domain, team);
+        if (topology.Resolved
+            && topology.Topology is { } resolvedTopology
+            && resolvedTopology.Roles.TryGetValue(role, out var recordedRole)
+            && !string.IsNullOrWhiteSpace(recordedRole.Kind))
+        {
+            var modelResolution = ModelResolutionLedgerStore.Read(repoRoot);
+            if (modelResolution.Resolved)
+            {
+                var verified = modelResolution.Entries
+                    .Where(entry => entry.Outcome == ModelResolutionLedgerCommand.VerifiedOutcome
+                        && string.Equals(entry.Kind, recordedRole.Kind, StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(entry => entry.RecordedAt)
+                    .FirstOrDefault();
+                if (verified is not null)
+                {
+                    return SessionLayerSeatLaunchResolution.Success(
+                        verified.RecordedAt.ToUniversalTime(),
+                        $"model-resolution verified launch ({recordedRole.Kind})");
+                }
+            }
+        }
+
+        // A repeated preflight also has a durable launch source: retain the
+        // previous record's launch_at rather than manufacturing one from the
+        // current observation.
+        var previous = SessionLayerSeatPreflightStore.Read(repoRoot, domain, team)
+            .Where(record => string.Equals(record.Role, role, StringComparison.Ordinal)
+                && record.LaunchAt != default)
+            .OrderByDescending(record => record.ObservedAt)
+            .FirstOrDefault();
+        if (previous is not null)
+        {
+            return SessionLayerSeatLaunchResolution.Success(
+                previous.LaunchAt.ToUniversalTime(),
+                previous.LaunchSource ?? "previous seat-preflight launch_at");
+        }
+
+        return SessionLayerSeatLaunchResolution.Failure(
+            $"No durable launch time is recorded for role '{role}'. Record a verified model-resolution launch, "
+            + "reuse a prior seat-preflight record, or supply --launch-at explicitly; observed_at is not used as a launch time.");
     }
 
     private static SessionLayerSeatProbe ProbeGitWritable(string repoRoot, IGitRemoteCommandRunner runner)
@@ -274,6 +344,7 @@ internal static class SessionLayerSeatPreflightCommand
         writer.WriteLine($"- team: {result.Team}");
         writer.WriteLine($"- role: {result.Role}");
         writer.WriteLine($"- verdict: {(result.Passed ? "passed" : "failed")}");
+        writer.WriteLine($"- launch source: {result.LaunchSource}");
         writer.WriteLine($"- runtime family: {result.RuntimeFamily}");
         writer.WriteLine($"- ledger: {result.LedgerPath} (recorded: {result.LedgerRecorded.ToString().ToLowerInvariant()})");
         writer.WriteLine();
@@ -393,6 +464,9 @@ internal sealed record SessionLayerSeatPreflightRecord
     [JsonPropertyName("role")] public required string Role { get; init; }
     [JsonPropertyName("observed_at")] public required DateTimeOffset ObservedAt { get; init; }
     [JsonPropertyName("launch_at")] public required DateTimeOffset LaunchAt { get; init; }
+    [JsonPropertyName("launch_source")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LaunchSource { get; init; }
     [JsonPropertyName("passed")] public required bool Passed { get; init; }
     [JsonPropertyName("runtime_family")] public required string RuntimeFamily { get; init; }
     [JsonPropertyName("probes")] public required IReadOnlyList<SessionLayerSeatProbe> Probes { get; init; }
@@ -406,6 +480,7 @@ internal sealed record SessionLayerSeatPreflightResult
     [JsonPropertyName("passed")] public required bool Passed { get; init; }
     [JsonPropertyName("observed_at")] public required DateTimeOffset ObservedAt { get; init; }
     [JsonPropertyName("launch_at")] public required DateTimeOffset LaunchAt { get; init; }
+    [JsonPropertyName("launch_source")] public required string LaunchSource { get; init; }
     [JsonPropertyName("ledger_path")] public required string LedgerPath { get; init; }
     [JsonPropertyName("ledger_recorded")] public required bool LedgerRecorded { get; init; }
     [JsonPropertyName("runtime_family")] public required string RuntimeFamily { get; init; }
@@ -414,6 +489,19 @@ internal sealed record SessionLayerSeatPreflightResult
 }
 
 internal sealed record SessionLayerSeatPreflightAppendResult(bool Applied, string Path, string? Error);
+
+internal sealed record SessionLayerSeatLaunchResolution(
+    bool Resolved,
+    DateTimeOffset? LaunchAt,
+    string Source,
+    string? Error)
+{
+    public static SessionLayerSeatLaunchResolution Success(DateTimeOffset launchAt, string source)
+        => new(true, launchAt, source, null);
+
+    public static SessionLayerSeatLaunchResolution Failure(string error)
+        => new(false, null, string.Empty, error);
+}
 
 internal static class SessionLayerSeatPreflightStore
 {
@@ -482,9 +570,16 @@ internal static class SessionLayerSeatPreflightStore
                     role,
                     "seat_preflight",
                     "seat-preflight-missing-or-stale",
-                    $"Recorded seat '{role}' has no passing seat preflight newer than its launch; run "
+                    $"Recorded seat '{role}' has no passing seat preflight newer than its durable launch time; run "
                     + "intent-cli session-layer seat preflight --domain <domain> --team <team> --role "
-                    + $"{role} --format json."));
+                    + $"{role} --format json.")
+                {
+                    // A missing preflight is an operator-visible measurement,
+                    // not a topology contract violation. Existing topology
+                    // validation must remain valid until a real seat is
+                    // explicitly enrolled in this opt-in check.
+                    IsInformational = true,
+                });
             }
         }
 

@@ -22,7 +22,6 @@ public sealed class SessionLayerTopologyG713Tests : IDisposable
     public void LiveValidate_MissingLabelIsInformational_AndClearsAfterLabelAppears_G713()
     {
         Assert.Equal(0, workspace.Run(HerdrRecord("wG713:p1")).ExitCode);
-        workspace.RecordCurrentSeatPreflight("orchestration");
         var runner = new FakeProcessRunner(PaneList("wG713:p1", label: null));
         NotifyCommand.ProcessRunnerFactory = () => runner;
 
@@ -62,7 +61,6 @@ public sealed class SessionLayerTopologyG713Tests : IDisposable
     public void LiveValidate_DoesNotChangeRecordedTopologyOrSetHerdrLabel_G713()
     {
         Assert.Equal(0, workspace.Run(HerdrRecord("wG713:p2")).ExitCode);
-        workspace.RecordCurrentSeatPreflight("orchestration");
         var before = File.ReadAllText(workspace.TopologyPath);
         var runner = new FakeProcessRunner(PaneList("wG713:p2", label: null));
         NotifyCommand.ProcessRunnerFactory = () => runner;
@@ -213,21 +211,6 @@ public sealed class SessionLayerTopologyG713Tests : IDisposable
         public string RootPath { get; }
         public CliContext Context { get; }
         public string TopologyPath => NotifyRoleTopologyStore.ResolvePath(RootPath, Domain, Team);
-
-        public void RecordCurrentSeatPreflight(string role)
-        {
-            Assert.True(SessionLayerSeatPreflightStore.Append(RootPath, new SessionLayerSeatPreflightRecord
-            {
-                Domain = Domain,
-                Team = Team,
-                Role = role,
-                ObservedAt = DateTimeOffset.UtcNow,
-                LaunchAt = DateTimeOffset.UtcNow.AddMinutes(-1),
-                Passed = true,
-                RuntimeFamily = "unmarked",
-                Probes = [],
-            }).Applied);
-        }
 
         public (int ExitCode, JsonElement Result) Run(params string[] args)
         {
