@@ -205,6 +205,51 @@ public sealed class SessionLayerSeatPreflightG808Tests : IDisposable
     }
 
     [Fact]
+    public void SharedPaneBuilderImplementationAliasPassClearsOneSeat_G808()
+    {
+        Directory.CreateDirectory(Path.Combine(root, ".intent-cli", "claims"));
+        foreach (var role in new[] { "builder", "implementation" })
+        {
+            Assert.True(SessionLayerTopologyWriter.Record(root, new SessionLayerTopologyRecordRequest
+            {
+                Domain = Domain,
+                Team = Team,
+                Role = role,
+                Resident = NotifyRecordedRole.HerdrResident,
+                WorkspaceId = "wG808",
+                PaneId = "wG808:p-builder",
+                Cwd = "/machine-local",
+                Kind = "codex",
+                Write = true,
+                Format = "json",
+            }).Applied);
+        }
+
+        var topologyResolution = NotifyRoleTopologyStore.Resolve(root, Domain, Team);
+        Assert.True(topologyResolution.Resolved);
+        Assert.NotNull(topologyResolution.Topology);
+        var topology = topologyResolution.Topology!;
+        var baseline = SessionLayerSeatPreflightStore.EvaluateLive(root, Domain, Team, topology);
+        Assert.Equal("builder", Assert.Single(baseline).Role);
+
+        SessionLayerSeatPreflightCommand.UtcNowFactory = () => DateTimeOffset.Parse("2026-09-06T09:00:00Z");
+        SessionLayerSeatPreflightCommand.GitRunnerFactory = _ => new FixtureRunner(root, writable: true);
+        using var output = new StringWriter();
+        Assert.Equal(0, SessionLayerSeatPreflightCommand.Execute(Context(),
+            ["--domain", Domain, "--team", Team, "--role", "implementation", "--launch-at", "2026-09-06T08:00:00Z", "--format", "json"],
+            output));
+
+        var after = SessionLayerSeatPreflightStore.EvaluateLive(root, Domain, Team, topology);
+        Assert.Empty(after);
+        testOutput.WriteLine("shared builder/implementation baseline:");
+        testOutput.WriteLine(JsonSerializer.Serialize(baseline));
+        testOutput.WriteLine("implementation alias preflight output:");
+        testOutput.WriteLine(output.ToString());
+        testOutput.WriteLine("shared builder/implementation after alias pass:");
+        testOutput.WriteLine(JsonSerializer.Serialize(after));
+    }
+
+    [Fact]
     public void LiveValidationPreservesMixedHerdrAndExternalSeatIdentity_G808()
     {
         var topology = new NotifyTeamTopology(
@@ -247,6 +292,72 @@ public sealed class SessionLayerSeatPreflightG808Tests : IDisposable
         Assert.Contains("representative role 'design'", external.Message, StringComparison.Ordinal);
         testOutput.WriteLine("mixed herdr architect and external design live findings:");
         testOutput.WriteLine(JsonSerializer.Serialize(findings));
+    }
+
+    [Fact]
+    public void DesignOnlyPreflightCannotClearDistinctHerdrArchitect_G808()
+    {
+        Directory.CreateDirectory(Path.Combine(root, ".intent-cli", "claims"));
+        Assert.True(SessionLayerTopologyWriter.Record(root, new SessionLayerTopologyRecordRequest
+        {
+            Domain = Domain,
+            Team = Team,
+            Role = "architect",
+            Resident = NotifyRecordedRole.HerdrResident,
+            WorkspaceId = "wG808",
+            PaneId = "wG808:p-architect",
+            Cwd = "/machine-local",
+            Kind = "codex",
+            Write = true,
+            Format = "json",
+        }).Applied);
+        Assert.True(SessionLayerTopologyWriter.Record(root, new SessionLayerTopologyRecordRequest
+        {
+            Domain = Domain,
+            Team = Team,
+            Role = "design",
+            Resident = NotifyRecordedRole.ExternalResident,
+            WorkspaceId = "wG808",
+            Reader = "readers/design.json",
+            Cwd = "/repo",
+            Write = true,
+            Format = "json",
+        }).Applied);
+
+        var topologyResolution = NotifyRoleTopologyStore.Resolve(root, Domain, Team);
+        Assert.True(topologyResolution.Resolved);
+        Assert.NotNull(topologyResolution.Topology);
+        var topology = topologyResolution.Topology!;
+        var baseline = SessionLayerSeatPreflightStore.EvaluateLive(root, Domain, Team, topology);
+        Assert.Equal(2, baseline.Count);
+        Assert.Contains(baseline, finding => finding.Role == "architect");
+        Assert.Contains(baseline, finding => finding.Role == "design");
+
+        SessionLayerSeatPreflightCommand.UtcNowFactory = () => DateTimeOffset.Parse("2026-09-06T09:00:00Z");
+        SessionLayerSeatPreflightCommand.GitRunnerFactory = _ => new FixtureRunner(root, writable: true);
+        using var designOutput = new StringWriter();
+        var designExit = SessionLayerSeatPreflightCommand.Execute(Context(),
+            ["--domain", Domain, "--team", Team, "--role", "design", "--launch-at", "2026-09-06T08:00:00Z", "--format", "json"],
+            designOutput);
+
+        Assert.Equal(0, designExit);
+        using var designJson = JsonDocument.Parse(designOutput.ToString());
+        Assert.True(designJson.RootElement.GetProperty("passed").GetBoolean());
+        var designRecord = Assert.Single(SessionLayerSeatPreflightStore.Read(root, Domain, Team));
+        Assert.Equal(NotifyRecordedRole.ExternalResident, designRecord.Resident);
+        Assert.Equal("wG808", designRecord.WorkspaceId);
+        Assert.Equal("readers/design.json", designRecord.Reader);
+
+        var afterDesignOnly = SessionLayerSeatPreflightStore.EvaluateLive(root, Domain, Team, topology);
+        var architectFinding = Assert.Single(afterDesignOnly, finding => finding.Role == "architect");
+        Assert.Equal("seat-preflight-launch-source-missing", architectFinding.Cause);
+        Assert.DoesNotContain(afterDesignOnly, finding => finding.Role == "design");
+        testOutput.WriteLine("baseline live validation findings:");
+        testOutput.WriteLine(JsonSerializer.Serialize(baseline));
+        testOutput.WriteLine("design-only seat preflight output:");
+        testOutput.WriteLine(designOutput.ToString());
+        testOutput.WriteLine("live validation after design-only pass (architect remains):");
+        testOutput.WriteLine(JsonSerializer.Serialize(afterDesignOnly));
     }
 
     [Fact]

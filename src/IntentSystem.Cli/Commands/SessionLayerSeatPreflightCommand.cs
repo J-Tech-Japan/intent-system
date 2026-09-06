@@ -75,6 +75,7 @@ internal static class SessionLayerSeatPreflightCommand
         }
 
         var observedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        var recordedSeat = ResolveRecordedSeat(context.RepoRoot, domain!, team!, role!);
         var launchResolution = ResolveLaunchAt(context.RepoRoot, domain!, team!, role!, launchAt);
         var runner = GitRunnerFactory?.Invoke(context.RepoRoot)
             ?? new CheckoutFreshnessGitCommandRunner(TimeSpan.FromSeconds(10));
@@ -94,6 +95,10 @@ internal static class SessionLayerSeatPreflightCommand
             Domain = domain!,
             Team = team!,
             Role = role!,
+            Resident = recordedSeat?.Resident,
+            WorkspaceId = recordedSeat?.WorkspaceId,
+            PaneId = recordedSeat?.PaneId,
+            Reader = recordedSeat?.Reader,
             ObservedAt = observedAt,
             LaunchAt = launchResolution.LaunchAt,
             LaunchSource = launchResolution.Source,
@@ -125,6 +130,27 @@ internal static class SessionLayerSeatPreflightCommand
 
         Emit(writer, format, result);
         return allPassed && ledgerResult.Applied && launchResolution.Resolved ? 0 : 1;
+    }
+
+    private static RecordedSeatIdentity? ResolveRecordedSeat(
+        string repoRoot,
+        string domain,
+        string team,
+        string role)
+    {
+        var topology = NotifyRoleTopologyStore.Resolve(repoRoot, domain, team);
+        if (!topology.Resolved
+            || topology.Topology is not { } resolvedTopology
+            || NotifyRoleTopologyStore.ResolveRecordedRole(resolvedTopology, role).Record is not { } recordedRole)
+        {
+            return null;
+        }
+
+        return new RecordedSeatIdentity(
+            recordedRole.Resident,
+            recordedRole.WorkspaceId ?? resolvedTopology.WorkspaceId,
+            recordedRole.PaneId,
+            recordedRole.Reader);
     }
 
     internal static SessionLayerSeatLaunchResolution ResolveLaunchAt(
@@ -171,13 +197,10 @@ internal static class SessionLayerSeatPreflightCommand
         // A repeated preflight also has a durable launch source: retain the
         // previous record's launch_at rather than manufacturing one from the
         // current observation.
+        var requestedSeat = ResolveRecordedSeat(repoRoot, domain, team, role);
         var previous = SessionLayerSeatPreflightStore.Read(repoRoot, domain, team)
             .Where(record => record.LaunchAt is not null
-                && (string.Equals(record.Role, role, StringComparison.Ordinal)
-                    || string.Equals(
-                        GuideRoleContractGuidance.Normalize(record.Role) ?? record.Role,
-                        GuideRoleContractGuidance.Normalize(role) ?? role,
-                        StringComparison.Ordinal)))
+                && SessionLayerSeatIdentityMatcher.MatchesRequested(record, role, requestedSeat))
             .OrderByDescending(record => record.ObservedAt)
             .FirstOrDefault();
         if (previous is not null)
@@ -465,6 +488,18 @@ internal sealed record SessionLayerSeatPreflightRecord
     [JsonPropertyName("domain")] public required string Domain { get; init; }
     [JsonPropertyName("team")] public required string Team { get; init; }
     [JsonPropertyName("role")] public required string Role { get; init; }
+    [JsonPropertyName("resident")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Resident { get; init; }
+    [JsonPropertyName("workspace_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkspaceId { get; init; }
+    [JsonPropertyName("pane_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PaneId { get; init; }
+    [JsonPropertyName("reader")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Reader { get; init; }
     [JsonPropertyName("observed_at")] public required DateTimeOffset ObservedAt { get; init; }
     [JsonPropertyName("launch_at")] public DateTimeOffset? LaunchAt { get; init; }
     [JsonPropertyName("launch_source")]
@@ -473,6 +508,57 @@ internal sealed record SessionLayerSeatPreflightRecord
     [JsonPropertyName("passed")] public required bool Passed { get; init; }
     [JsonPropertyName("runtime_family")] public required string RuntimeFamily { get; init; }
     [JsonPropertyName("probes")] public required IReadOnlyList<SessionLayerSeatProbe> Probes { get; init; }
+}
+
+internal sealed record RecordedSeatIdentity(
+    string Resident,
+    string? WorkspaceId,
+    string? PaneId,
+    string? Reader);
+
+internal static class SessionLayerSeatIdentityMatcher
+{
+    public static string? Build(
+        string? resident,
+        string? workspace,
+        string? pane,
+        string? reader)
+    {
+        if (string.Equals(resident, NotifyRecordedRole.HerdrResident, StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(workspace)
+            && !string.IsNullOrWhiteSpace(pane))
+        {
+            return $"seat|{resident}|{workspace}|{pane}";
+        }
+
+        if (string.Equals(resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(reader))
+        {
+            return $"reader|{workspace}|{reader}";
+        }
+
+        return null;
+    }
+
+    public static bool MatchesRequested(
+        SessionLayerSeatPreflightRecord record,
+        string requestedRole,
+        RecordedSeatIdentity? requestedSeat)
+    {
+        var requestedIdentity = requestedSeat is null
+            ? null
+            : Build(requestedSeat.Resident, requestedSeat.WorkspaceId, requestedSeat.PaneId, requestedSeat.Reader);
+        var recordedIdentity = Build(record.Resident, record.WorkspaceId, record.PaneId, record.Reader);
+        if (requestedIdentity is not null && recordedIdentity is not null)
+        {
+            return string.Equals(requestedIdentity, recordedIdentity, StringComparison.Ordinal);
+        }
+
+        // Legacy rows without identity may still serve the exact role, but
+        // their normalized spelling must never bridge distinct seats.
+        return recordedIdentity is null
+            && string.Equals(record.Role, requestedRole, StringComparison.Ordinal);
+    }
 }
 
 internal sealed record SessionLayerSeatIdentity(
@@ -579,7 +665,7 @@ internal static class SessionLayerSeatPreflightStore
         foreach (var seat in GroupSeats(topology))
         {
             var latest = records
-                .Where(record => seat.MatchesRole(record.Role))
+                .Where(seat.MatchesRecord)
                 .OrderByDescending(record => record.ObservedAt)
                 .FirstOrDefault();
             var launch = SessionLayerSeatPreflightCommand.ResolveLaunchAt(
@@ -629,16 +715,8 @@ internal static class SessionLayerSeatPreflightStore
         {
             var canonical = GuideRoleContractGuidance.Normalize(role) ?? role;
             var workspace = record.WorkspaceId ?? topology.WorkspaceId;
-            var hasHerdrSeatIdentity = string.Equals(record.Resident, NotifyRecordedRole.HerdrResident, StringComparison.Ordinal)
-                && !string.IsNullOrWhiteSpace(workspace)
-                && !string.IsNullOrWhiteSpace(record.PaneId);
-            var hasExternalReaderIdentity = string.Equals(record.Resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal)
-                && !string.IsNullOrWhiteSpace(record.Reader);
-            var identity = hasHerdrSeatIdentity
-                ? $"seat|{record.Resident}|{workspace}|{record.PaneId}"
-                : hasExternalReaderIdentity
-                    ? $"reader|{workspace}|{record.Reader}"
-                    : $"role|{canonical}";
+            var identity = SessionLayerSeatIdentityMatcher.Build(record.Resident, workspace, record.PaneId, record.Reader)
+                ?? $"role|{canonical}";
             var group = groups.FirstOrDefault(candidate =>
                 string.Equals(candidate.GroupingKey, identity, StringComparison.Ordinal));
             if (group is null)
@@ -668,10 +746,6 @@ internal static class SessionLayerSeatPreflightStore
         public NotifyRecordedRole RepresentativeRecord { get; private set; } = representativeRecord;
         public string? WorkspaceId { get; private set; } = workspaceId;
         public List<string> Roles { get; } = [.. initialRoles];
-        public bool MatchByCanonicalRole { get; } = !string.Equals(
-            representativeRecord.Resident,
-            NotifyRecordedRole.ExternalResident,
-            StringComparison.Ordinal);
         public SessionLayerSeatIdentity SeatIdentity => new(
             RepresentativeRole,
             RepresentativeRecord.Resident,
@@ -690,12 +764,28 @@ internal static class SessionLayerSeatPreflightStore
                 WorkspaceId = workspaceId;
             }
         }
-        public bool MatchesRole(string role)
+        public bool MatchesRecord(SessionLayerSeatPreflightRecord record)
         {
-            if (Roles.Contains(role, StringComparer.Ordinal)) return true;
-            if (!MatchByCanonicalRole) return false;
-            var normalized = GuideRoleContractGuidance.Normalize(role) ?? role;
+            var recordedIdentity = SessionLayerSeatIdentityMatcher.Build(
+                record.Resident,
+                record.WorkspaceId,
+                record.PaneId,
+                record.Reader);
+            if (recordedIdentity is not null
+                && !string.Equals(recordedIdentity, GroupingKey, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (recordedIdentity is null && !Roles.Contains(record.Role, StringComparer.Ordinal))
+            {
+                return false;
+            }
+
+            if (Roles.Contains(record.Role, StringComparer.Ordinal)) return true;
+            var normalized = GuideRoleContractGuidance.Normalize(record.Role) ?? record.Role;
             return string.Equals(normalized, CanonicalRole, StringComparison.Ordinal);
         }
     }
+
 }
