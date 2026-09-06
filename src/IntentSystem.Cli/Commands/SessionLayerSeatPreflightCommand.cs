@@ -76,12 +76,6 @@ internal static class SessionLayerSeatPreflightCommand
 
         var observedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var launchResolution = ResolveLaunchAt(context.RepoRoot, domain!, team!, role!, launchAt);
-        if (!launchResolution.Resolved)
-        {
-            writer.WriteLine(launchResolution.Error);
-            return 1;
-        }
-
         var runner = GitRunnerFactory?.Invoke(context.RepoRoot)
             ?? new CheckoutFreshnessGitCommandRunner(TimeSpan.FromSeconds(10));
         var probes = new List<SessionLayerSeatProbe>
@@ -101,7 +95,7 @@ internal static class SessionLayerSeatPreflightCommand
             Team = team!,
             Role = role!,
             ObservedAt = observedAt,
-            LaunchAt = launchResolution.LaunchAt!.Value,
+            LaunchAt = launchResolution.LaunchAt,
             LaunchSource = launchResolution.Source,
             Passed = allPassed,
             RuntimeFamily = runtime.Value,
@@ -117,20 +111,23 @@ internal static class SessionLayerSeatPreflightCommand
             ObservedAt = observedAt,
             LaunchAt = ledger.LaunchAt,
             LaunchSource = ledger.LaunchSource,
+            LaunchError = launchResolution.Error,
             LedgerPath = ledgerResult.Path,
             LedgerRecorded = ledgerResult.Applied,
             RuntimeFamily = runtime.Value,
             Probes = probes,
             Summary = allPassed
-                ? $"Seat preflight passed for role '{role}' in team '{team}'. All five probes passed."
+                ? launchResolution.Resolved
+                    ? $"Seat preflight passed for role '{role}' in team '{team}'. All five probes passed."
+                    : $"Seat preflight probes passed for role '{role}' in team '{team}', but no durable launch source was available."
                 : $"Seat preflight failed for role '{role}' in team '{team}'. Follow every failed probe remedy before delegating.",
         };
 
         Emit(writer, format, result);
-        return allPassed && ledgerResult.Applied ? 0 : 1;
+        return allPassed && ledgerResult.Applied && launchResolution.Resolved ? 0 : 1;
     }
 
-    private static SessionLayerSeatLaunchResolution ResolveLaunchAt(
+    internal static SessionLayerSeatLaunchResolution ResolveLaunchAt(
         string repoRoot,
         string domain,
         string team,
@@ -151,7 +148,7 @@ internal static class SessionLayerSeatPreflightCommand
         var topology = NotifyRoleTopologyStore.Resolve(repoRoot, domain, team);
         if (topology.Resolved
             && topology.Topology is { } resolvedTopology
-            && resolvedTopology.Roles.TryGetValue(role, out var recordedRole)
+            && NotifyRoleTopologyStore.ResolveRecordedRole(resolvedTopology, role).Record is { } recordedRole
             && !string.IsNullOrWhiteSpace(recordedRole.Kind))
         {
             var modelResolution = ModelResolutionLedgerStore.Read(repoRoot);
@@ -175,14 +172,18 @@ internal static class SessionLayerSeatPreflightCommand
         // previous record's launch_at rather than manufacturing one from the
         // current observation.
         var previous = SessionLayerSeatPreflightStore.Read(repoRoot, domain, team)
-            .Where(record => string.Equals(record.Role, role, StringComparison.Ordinal)
-                && record.LaunchAt != default)
+            .Where(record => record.LaunchAt is not null
+                && (string.Equals(record.Role, role, StringComparison.Ordinal)
+                    || string.Equals(
+                        GuideRoleContractGuidance.Normalize(record.Role) ?? record.Role,
+                        GuideRoleContractGuidance.Normalize(role) ?? role,
+                        StringComparison.Ordinal)))
             .OrderByDescending(record => record.ObservedAt)
             .FirstOrDefault();
         if (previous is not null)
         {
             return SessionLayerSeatLaunchResolution.Success(
-                previous.LaunchAt.ToUniversalTime(),
+                previous.LaunchAt!.Value.ToUniversalTime(),
                 previous.LaunchSource ?? "previous seat-preflight launch_at");
         }
 
@@ -345,6 +346,8 @@ internal static class SessionLayerSeatPreflightCommand
         writer.WriteLine($"- role: {result.Role}");
         writer.WriteLine($"- verdict: {(result.Passed ? "passed" : "failed")}");
         writer.WriteLine($"- launch source: {result.LaunchSource}");
+        if (result.LaunchError is not null)
+            writer.WriteLine($"- launch source note: {result.LaunchError}");
         writer.WriteLine($"- runtime family: {result.RuntimeFamily}");
         writer.WriteLine($"- ledger: {result.LedgerPath} (recorded: {result.LedgerRecorded.ToString().ToLowerInvariant()})");
         writer.WriteLine();
@@ -463,7 +466,7 @@ internal sealed record SessionLayerSeatPreflightRecord
     [JsonPropertyName("team")] public required string Team { get; init; }
     [JsonPropertyName("role")] public required string Role { get; init; }
     [JsonPropertyName("observed_at")] public required DateTimeOffset ObservedAt { get; init; }
-    [JsonPropertyName("launch_at")] public required DateTimeOffset LaunchAt { get; init; }
+    [JsonPropertyName("launch_at")] public DateTimeOffset? LaunchAt { get; init; }
     [JsonPropertyName("launch_source")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? LaunchSource { get; init; }
@@ -479,8 +482,11 @@ internal sealed record SessionLayerSeatPreflightResult
     [JsonPropertyName("role")] public required string Role { get; init; }
     [JsonPropertyName("passed")] public required bool Passed { get; init; }
     [JsonPropertyName("observed_at")] public required DateTimeOffset ObservedAt { get; init; }
-    [JsonPropertyName("launch_at")] public required DateTimeOffset LaunchAt { get; init; }
+    [JsonPropertyName("launch_at")] public DateTimeOffset? LaunchAt { get; init; }
     [JsonPropertyName("launch_source")] public required string LaunchSource { get; init; }
+    [JsonPropertyName("launch_error")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LaunchError { get; init; }
     [JsonPropertyName("ledger_path")] public required string LedgerPath { get; init; }
     [JsonPropertyName("ledger_recorded")] public required bool LedgerRecorded { get; init; }
     [JsonPropertyName("runtime_family")] public required string RuntimeFamily { get; init; }
@@ -500,7 +506,7 @@ internal sealed record SessionLayerSeatLaunchResolution(
         => new(true, launchAt, source, null);
 
     public static SessionLayerSeatLaunchResolution Failure(string error)
-        => new(false, null, string.Empty, error);
+        => new(false, null, "none", error);
 }
 
 internal static class SessionLayerSeatPreflightStore
@@ -555,24 +561,37 @@ internal static class SessionLayerSeatPreflightStore
     {
         var records = Read(repoRoot, domain, team);
         var findings = new List<SessionLayerTopologyFinding>();
-        foreach (var (role, _) in topology.Roles.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        foreach (var seat in GroupSeats(topology))
         {
             var latest = records
-                .Where(record => string.Equals(record.Role, role, StringComparison.Ordinal))
+                .Where(record => seat.MatchesRole(record.Role))
                 .OrderByDescending(record => record.ObservedAt)
                 .FirstOrDefault();
+            var launch = SessionLayerSeatPreflightCommand.ResolveLaunchAt(
+                repoRoot,
+                domain,
+                team,
+                seat.RepresentativeRole,
+                explicitLaunchAt: null);
             var current = latest is not null
                 && latest.Passed
-                && latest.ObservedAt >= latest.LaunchAt;
+                && launch.Resolved
+                && launch.LaunchAt is { } currentLaunch
+                && latest.ObservedAt >= currentLaunch;
             if (!current)
             {
+                var missingLaunchSource = !launch.Resolved || launch.LaunchAt is null;
                 findings.Add(new SessionLayerTopologyFinding(
-                    role,
+                    seat.CanonicalRole,
                     "seat_preflight",
-                    "seat-preflight-missing-or-stale",
-                    $"Recorded seat '{role}' has no passing seat preflight newer than its durable launch time; run "
+                    missingLaunchSource
+                        ? "seat-preflight-launch-source-missing"
+                        : "seat-preflight-missing-or-stale",
+                    missingLaunchSource
+                        ? $"Recorded seat '{seat.CanonicalRole}' has no durable launch source; run a verified model-resolution launch or supply --launch-at before relying on freshness."
+                        : $"Recorded seat '{seat.CanonicalRole}' has no passing seat preflight newer than its current durable launch time; run "
                     + "intent-cli session-layer seat preflight --domain <domain> --team <team> --role "
-                    + $"{role} --format json.")
+                    + $"{seat.RepresentativeRole} --format json.")
                 {
                     // A missing preflight is an operator-visible measurement,
                     // not a topology contract violation. Existing topology
@@ -584,5 +603,51 @@ internal static class SessionLayerSeatPreflightStore
         }
 
         return findings;
+    }
+
+    private static IReadOnlyList<SeatGroup> GroupSeats(NotifyTeamTopology topology)
+    {
+        var groups = new List<SeatGroup>();
+        foreach (var (role, record) in topology.Roles.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            var canonical = GuideRoleContractGuidance.Normalize(role) ?? role;
+            var workspace = record.WorkspaceId ?? topology.WorkspaceId;
+            var identity = !string.IsNullOrWhiteSpace(record.Resident)
+                && !string.IsNullOrWhiteSpace(workspace)
+                && !string.IsNullOrWhiteSpace(record.PaneId)
+                ? $"seat|{record.Resident}|{workspace}|{record.PaneId}"
+                : $"role|{canonical}";
+            var group = groups.FirstOrDefault(candidate =>
+                string.Equals(candidate.Identity, identity, StringComparison.Ordinal));
+            if (group is null)
+            {
+                groups.Add(new SeatGroup(identity, canonical, role, [role]));
+            }
+            else
+            {
+                group.Roles.Add(role);
+            }
+        }
+
+        return groups;
+    }
+
+    private sealed class SeatGroup(
+        string identity,
+        string canonicalRole,
+        string representativeRole,
+        IReadOnlyList<string> initialRoles)
+    {
+        public string Identity { get; } = identity;
+        public string CanonicalRole { get; } = canonicalRole;
+        public string RepresentativeRole { get; } = representativeRole;
+        public List<string> Roles { get; } = [.. initialRoles];
+
+        public bool MatchesRole(string role)
+        {
+            if (Roles.Contains(role, StringComparer.Ordinal)) return true;
+            var normalized = GuideRoleContractGuidance.Normalize(role) ?? role;
+            return string.Equals(normalized, CanonicalRole, StringComparison.Ordinal);
+        }
     }
 }

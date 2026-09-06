@@ -168,6 +168,105 @@ public sealed class SessionLayerSeatPreflightG808Tests : IDisposable
     }
 
     [Fact]
+    public void LiveValidationDeduplicatesAliasesByRecordedSeatIdentity_G808()
+    {
+        var topology = new NotifyTeamTopology(
+            "test",
+            Domain,
+            Team,
+            "wG808",
+            new Dictionary<string, NotifyRecordedRole>
+            {
+                ["architect"] = HerdrRole("wG808:p-architect"),
+                ["design"] = HerdrRole("wG808:p-architect"),
+                ["orchestrator"] = HerdrRole("wG808:p-orchestrator"),
+                ["orchestration"] = HerdrRole("wG808:p-orchestrator"),
+                ["builder"] = HerdrRole("wG808:p-builder"),
+                ["implementation"] = HerdrRole("wG808:p-builder"),
+                ["reviewer"] = HerdrRole("wG808:p-reviewer"),
+                ["review"] = HerdrRole("wG808:p-reviewer"),
+                ["steward"] = HerdrRole("wG808:p-steward"),
+            },
+            new Dictionary<string, AgentLaunchEnvelopeProfile>());
+
+        var findings = SessionLayerSeatPreflightStore.EvaluateLive(root, Domain, Team, topology);
+
+        Assert.Equal(5, findings.Count);
+        Assert.Equal(
+            ["architect", "builder", "orchestrator", "reviewer", "steward"],
+            findings.Select(finding => finding.Role).OrderBy(role => role, StringComparer.Ordinal));
+        Assert.All(findings, finding =>
+        {
+            Assert.Equal("seat-preflight-launch-source-missing", finding.Cause);
+            Assert.True(finding.IsInformational);
+        });
+        testOutput.WriteLine("alias-deduplicated live findings:");
+        testOutput.WriteLine(JsonSerializer.Serialize(findings));
+    }
+
+    [Fact]
+    public void ValidateUsesLaterDurableLaunchAndMarksPriorPassStaleWithoutLaunchAt_G808()
+    {
+        Directory.CreateDirectory(Path.Combine(root, ".intent-cli", "claims"));
+        var firstLaunch = DateTimeOffset.Parse("2026-09-06T10:00:00Z");
+        var laterLaunch = DateTimeOffset.Parse("2026-09-06T12:00:00Z");
+        var observedAt = DateTimeOffset.Parse("2026-09-06T11:00:00Z");
+        Assert.True(SessionLayerTopologyWriter.Record(root, new SessionLayerTopologyRecordRequest
+        {
+            Domain = Domain,
+            Team = Team,
+            Role = "architect",
+            Resident = NotifyRecordedRole.HerdrResident,
+            WorkspaceId = "wG808",
+            PaneId = "wG808:p1",
+            Cwd = "/machine-local",
+            Kind = "codex",
+            Write = true,
+            Format = "json",
+        }).Applied);
+        Assert.True(AppendVerifiedLaunch(firstLaunch).Applied);
+
+        SessionLayerSeatPreflightCommand.UtcNowFactory = () => observedAt;
+        SessionLayerSeatPreflightCommand.GitRunnerFactory = _ => new FixtureRunner(root, writable: true);
+        using var output = new StringWriter();
+        Assert.Equal(0, SessionLayerSeatPreflightCommand.Execute(Context(),
+            ["--domain", Domain, "--team", Team, "--role", "architect", "--format", "json"], output));
+
+        Assert.True(AppendVerifiedLaunch(laterLaunch).Applied);
+        var topology = NotifyRoleTopologyStore.Resolve(root, Domain, Team).Topology!;
+        var findings = SessionLayerSeatPreflightStore.EvaluateLive(root, Domain, Team, topology);
+
+        var finding = Assert.Single(findings);
+        Assert.Equal("seat-preflight-missing-or-stale", finding.Cause);
+        Assert.Equal("architect", finding.Role);
+        Assert.True(finding.IsInformational);
+        testOutput.WriteLine("later durable launch stale output:");
+        testOutput.WriteLine(JsonSerializer.Serialize(findings));
+    }
+
+    [Fact]
+    public void NoDurableLaunchSourceStillRunsProbesAndRecordsMissingOnlyFinding_G808()
+    {
+        Directory.CreateDirectory(Path.Combine(root, ".intent-cli", "claims"));
+        SessionLayerSeatPreflightCommand.GitRunnerFactory = _ => new FixtureRunner(root, writable: true);
+        using var output = new StringWriter();
+        var exitCode = SessionLayerSeatPreflightCommand.Execute(Context(),
+            ["--domain", Domain, "--team", Team, "--role", "architect", "--format", "json"], output);
+
+        Assert.Equal(1, exitCode);
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.Equal("none", json.RootElement.GetProperty("launch_source").GetString());
+        Assert.True(
+            !json.RootElement.TryGetProperty("launch_at", out var launchAt)
+            || launchAt.ValueKind == JsonValueKind.Null);
+        Assert.Equal(5, json.RootElement.GetProperty("probes").GetArrayLength());
+        Assert.True(json.RootElement.GetProperty("ledger_recorded").GetBoolean());
+        Assert.Contains("no durable launch source", json.RootElement.GetProperty("summary").GetString(), StringComparison.OrdinalIgnoreCase);
+        testOutput.WriteLine("no durable launch source output:");
+        testOutput.WriteLine(output.ToString());
+    }
+
+    [Fact]
     public void NoLaunchAtUsesDurableVerifiedLaunchRecordInsteadOfObservedAt_G808()
     {
         Directory.CreateDirectory(Path.Combine(root, ".intent-cli", "claims"));
@@ -304,6 +403,20 @@ public sealed class SessionLayerSeatPreflightG808Tests : IDisposable
             RuntimeFamily = "unmarked",
             Probes = [],
         });
+
+    private ModelResolutionLedgerWriteResult AppendVerifiedLaunch(DateTimeOffset recordedAt)
+        => ModelResolutionLedgerStore.Append(root, new ModelResolutionLedgerEntry
+        {
+            InformalName = "g808-seat",
+            Kind = "codex",
+            Outcome = ModelResolutionLedgerCommand.VerifiedOutcome,
+            FullInvocation = "codex --model g808-seat",
+            Evidence = "READY banner and running argv",
+            RecordedAt = recordedAt,
+        }, write: true);
+
+    private static NotifyRecordedRole HerdrRole(string paneId)
+        => new(NotifyRecordedRole.HerdrResident, "wG808", paneId, null, "/machine-local", "codex", null, null);
 
     private static void MakeGitReadOnly(string repository, bool readOnly)
     {
