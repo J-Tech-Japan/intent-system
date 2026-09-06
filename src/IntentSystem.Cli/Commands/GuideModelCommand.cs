@@ -72,6 +72,7 @@ internal static class GuideModelCommand
                     "orchestrator — inspects canonical intent-cli/GitHub state, publishes exactly one already-authored `issue-cut-ready` packet per wake, delegates implementation/review over agmsg, tracks CI/review, and closes out approved PRs; never authors design content unilaterally.",
                     "implementation — a loopless receiver that implements exactly the delegated execution unit via `worker next-action` / `worker claim` / `worker complete`.",
                     "review — a loopless receiver that reviews exactly the delegated PR via the canonical review surfaces.",
+                    "steward — a loopless transmission boundary that relays recorded evidence, hands design judgment to the architect, review judgment to the reviewer, and dispatch/recovery to the orchestrator; it never decides or rewrites a ruling.",
                 },
                 MessageDrivenSteadyState = "Implementation/review agmsg replies (accepted/progress/completed/blocked) "
                     + "wake the orchestrator directly, so routine fast polling is not required in steady state; an "

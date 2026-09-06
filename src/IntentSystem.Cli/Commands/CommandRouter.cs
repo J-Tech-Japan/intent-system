@@ -396,6 +396,9 @@ internal static class CommandRouter
                 ["orchestrator-thread"] = GuideOrchestratorThreadCommand.Execute,
                 // G654: agent-kind-neutral design-thread operating contract.
                 ["design-thread"] = GuideDesignThreadCommand.Execute,
+                // G807: Steward seat operating contract; render-only and
+                // metadata-free so the role has a product guide of its own.
+                ["steward-thread"] = GuideStewardThreadCommand.Execute,
                 // G664: app-conversation front-door bootstrap composition.
                 ["bootstrap"] = GuideBootstrapCommand.Execute,
                 // G637: read-only canonical team workspace layout plan.

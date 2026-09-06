@@ -239,6 +239,8 @@ internal static class Program
                 || string.Equals(args[1], "orchestrator-thread", StringComparison.Ordinal)
                 // G654: agent-kind-neutral design-thread guidance — read-only, no host state required.
                 || string.Equals(args[1], "design-thread", StringComparison.Ordinal)
+                // G807: Steward role guidance is static and metadata-free.
+                || string.Equals(args[1], "steward-thread", StringComparison.Ordinal)
                 // G664: application-front-door bootstrap guidance — renders questions and commands only.
                 || string.Equals(args[1], "bootstrap", StringComparison.Ordinal)
                 // G637: read-only workspace-layout guidance — no host state required.
