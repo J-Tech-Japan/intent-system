@@ -33,7 +33,7 @@ public sealed class SharedStaticSeamSerializationMetaTests
     }
 
     [Fact]
-    public void FiveSplitCollectionCases_AreExplicitlyProtectedByXunitDisableParallelization_G580()
+    public void SixSplitCollectionCases_AreExplicitlyProtectedByXunitDisableParallelization_G580()
     {
         var analysis = StaticSeamAnalysis.Discover();
         var splitCases = analysis.DiscoverSplitCollectionCases();
@@ -59,17 +59,21 @@ public sealed class SharedStaticSeamSerializationMetaTests
                 "IntentSystem.Cli.Commands.ClarifyOpenCommand.TimestampFactory",
                 typeof(AutomationStalledWorkCommandTests),
                 typeof(CommandRouterTests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.GhCliGitHubAutomationCandidateLister.ProcessRunner",
+                typeof(AutomationStalledWorkG805Tests),
+                typeof(GitHubApiReadG674Tests)),
         };
 
         // xUnit 2.9.3 documents CollectionDefinitionAttribute.DisableParallelization
         // as determining whether a collection runs in parallel with ANY other
-        // collection. This explicit record of the five existing cross-collection
-        // class pairs is safe only while every collection involved keeps that
-        // setting. Discovery remains independent of this accepted-case inventory.
+        // collection. This explicit record of the six cross-collection class
+        // pairs is safe only while every collection involved keeps that setting.
+        // Discovery remains independent of this accepted-case inventory.
         Assert.True(
             splitCases.SequenceEqual(expectedSplitCases)
             && splitCases.All(split => analysis.AreSerializedTogether([split.LeftClass, split.RightClass])),
-            "expected the five recorded shared-static assigning-class pairs split across distinct explicitly "
+            "expected the six recorded shared-static assigning-class pairs split across distinct explicitly "
             + "non-parallel xUnit collections, with no additions or substitutions. Every involved CollectionDefinition must keep "
             + $"DisableParallelization = true. Discovered {splitCases.Count}:\n"
             + string.Join("\n", splitCases.Select(analysis.Describe)));

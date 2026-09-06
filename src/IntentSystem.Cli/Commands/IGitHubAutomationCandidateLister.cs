@@ -27,6 +27,19 @@ internal interface IGitHubAutomationCandidateLister
         GitHubAutomationReadSurface surface)
         => ListPullRequests(repo, requiredLabels);
 
+    /// <summary>
+    /// G805: enrich the open-PR rows with the read-only review verdict and
+    /// intent-pr label-transition evidence needed to detect a verdict that
+    /// has not yet reached the workflow label. Existing fakes keep their
+    /// original behavior; only the gh-backed adapter performs the extra
+    /// GitHub reads.
+    /// </summary>
+    IReadOnlyList<GitHubAutomationPrCandidate> EnrichPullRequestLifecycle(
+        string repo,
+        IReadOnlyList<GitHubAutomationPrCandidate> candidates,
+        GitHubAutomationReadSurface surface)
+        => candidates;
+
     IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(
         string repo,
         IReadOnlyCollection<string> requiredLabels);
@@ -163,6 +176,39 @@ internal sealed record GitHubAutomationPrCandidate
     [JsonPropertyName("statusCheckRollup")]
     public IReadOnlyList<GitHubAutomationStatusCheckCandidate> StatusCheckRollup { get; init; }
         = Array.Empty<GitHubAutomationStatusCheckCandidate>();
+
+    /// <summary>G805: durable PR-level review verdicts.</summary>
+    [JsonPropertyName("reviews")]
+    public IReadOnlyList<GitHubAutomationReviewCandidate> Reviews { get; init; }
+        = Array.Empty<GitHubAutomationReviewCandidate>();
+
+    /// <summary>G805: read-only GitHub label timeline observations.</summary>
+    [JsonPropertyName("intentPrLabelTransitions")]
+    public IReadOnlyList<GitHubAutomationLabelTransitionCandidate> IntentPrLabelTransitions { get; init; }
+        = Array.Empty<GitHubAutomationLabelTransitionCandidate>();
+}
+
+/// <summary>G805: review verdict projection used by stalled-work.</summary>
+internal sealed record GitHubAutomationReviewCandidate
+{
+    [JsonPropertyName("state")]
+    public string State { get; init; } = string.Empty;
+
+    [JsonPropertyName("submittedAt")]
+    public string? SubmittedAt { get; init; }
+}
+
+/// <summary>G805: one issue-timeline label event.</summary>
+internal sealed record GitHubAutomationLabelTransitionCandidate
+{
+    [JsonPropertyName("name")]
+    public string Name { get; init; } = string.Empty;
+
+    [JsonPropertyName("action")]
+    public string Action { get; init; } = string.Empty;
+
+    [JsonPropertyName("occurredAt")]
+    public string OccurredAt { get; init; } = string.Empty;
 }
 
 /// <summary>G793: immutable merge SHA nested in GitHub's PR payload.</summary>
@@ -486,6 +532,143 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
             GitHubApiReadDependencies.GraphQlBound,
             GitHubApiReadInventory.UnverifiedFieldsFor(surface));
         return DeserializeList<GitHubAutomationPrCandidate>(stdout, $"`gh pr list` for {repo}");
+    }
+
+    /// <summary>
+    /// G805: read the review verdicts and issue-timeline label transitions
+    /// for the open PRs. This is deliberately a separate enrichment call so
+    /// the established PR-list field set remains unchanged for every other
+    /// automation surface.
+    /// </summary>
+    public IReadOnlyList<GitHubAutomationPrCandidate> EnrichPullRequestLifecycle(
+        string repo,
+        IReadOnlyList<GitHubAutomationPrCandidate> candidates,
+        GitHubAutomationReadSurface surface)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+        ArgumentNullException.ThrowIfNull(candidates);
+
+        var enriched = new List<GitHubAutomationPrCandidate>(candidates.Count);
+        foreach (var candidate in candidates)
+        {
+            var reviews = candidate.Reviews.Count > 0
+                ? candidate.Reviews
+                : ReadReviews(repo, candidate.Number);
+            var transitions = candidate.IntentPrLabelTransitions.Count > 0
+                ? candidate.IntentPrLabelTransitions
+                : ReadIntentPrLabelTransitions(repo, candidate.Number);
+            enriched.Add(candidate with
+            {
+                Reviews = reviews,
+                IntentPrLabelTransitions = transitions,
+            });
+        }
+
+        return enriched;
+    }
+
+    internal static IReadOnlyList<string> BuildPrReviewArguments(string repo, int prNumber)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+        return
+        [
+            "pr", "view", prNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "--repo", repo, "--json", "reviews",
+        ];
+    }
+
+    internal static IReadOnlyList<string> BuildPrEventsArguments(string repo, int prNumber)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+        return
+        [
+            "api", $"repos/{repo}/issues/{prNumber}/events", "--method", "GET",
+            "--paginate", "--slurp",
+        ];
+    }
+
+    private IReadOnlyList<GitHubAutomationReviewCandidate> ReadReviews(string repo, int prNumber)
+    {
+        var stdout = RunGh(
+            BuildPrReviewArguments(repo, prNumber),
+            $"`gh pr view {prNumber} --repo {repo} --json reviews");
+        try
+        {
+            var result = JsonSerializer.Deserialize<GitHubPrCommentsLookupResult>(stdout);
+            return result?.Reviews
+                .Select(review => new GitHubAutomationReviewCandidate
+                {
+                    State = review.State,
+                    SubmittedAt = review.SubmittedAt,
+                })
+                .ToArray() ?? Array.Empty<GitHubAutomationReviewCandidate>();
+        }
+        catch (JsonException exception)
+        {
+            throw new GitHubApiRequestException(
+                GitHubCliJsonBoundary.Classifications.GithubJsonInvalid,
+                $"`gh pr view {prNumber} --repo {repo} --json reviews",
+                $"could not parse review verdict JSON: {exception.Message}",
+                innerException: exception);
+        }
+    }
+
+    private IReadOnlyList<GitHubAutomationLabelTransitionCandidate> ReadIntentPrLabelTransitions(
+        string repo,
+        int prNumber)
+    {
+        var description = $"`gh api repos/{repo}/issues/{prNumber}/events`";
+        var stdout = RunGh(BuildPrEventsArguments(repo, prNumber), description);
+        var extraction = GitHubCliJsonBoundary.ExtractJsonArray(stdout, description);
+        if (!extraction.Succeeded)
+        {
+            throw GitHubApiFailureFactory.JsonInvalid(
+                description,
+                extraction.DiagnosticMessage ?? "gh stdout was not valid JSON");
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(extraction.Json);
+            var transitions = new List<GitHubAutomationLabelTransitionCandidate>();
+            foreach (var pageOrEvent in document.RootElement.EnumerateArray())
+            {
+                var events = pageOrEvent.ValueKind == JsonValueKind.Array
+                    ? pageOrEvent.EnumerateArray()
+                    : new[] { pageOrEvent }.AsEnumerable();
+                foreach (var eventElement in events)
+                {
+                    if (!eventElement.TryGetProperty("event", out var eventName)
+                        || (eventName.GetString() is not ("labeled" or "unlabeled")))
+                    {
+                        continue;
+                    }
+                    if (!eventElement.TryGetProperty("label", out var label)
+                        || !label.TryGetProperty("name", out var labelName)
+                        || !(labelName.GetString() ?? string.Empty).StartsWith("intent-pr-", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+                    if (!eventElement.TryGetProperty("created_at", out var createdAt))
+                    {
+                        continue;
+                    }
+                    transitions.Add(new GitHubAutomationLabelTransitionCandidate
+                    {
+                        Name = labelName.GetString() ?? string.Empty,
+                        Action = eventName.GetString() ?? string.Empty,
+                        OccurredAt = createdAt.GetString() ?? string.Empty,
+                    });
+                }
+            }
+            return transitions;
+        }
+        catch (JsonException exception)
+        {
+            throw GitHubApiFailureFactory.JsonInvalid(
+                description,
+                $"could not map label events: {exception.Message}");
+        }
     }
 
     public IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(
