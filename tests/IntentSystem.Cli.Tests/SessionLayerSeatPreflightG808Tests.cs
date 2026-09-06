@@ -205,6 +205,51 @@ public sealed class SessionLayerSeatPreflightG808Tests : IDisposable
     }
 
     [Fact]
+    public void LiveValidationPreservesMixedHerdrAndExternalSeatIdentity_G808()
+    {
+        var topology = new NotifyTeamTopology(
+            "test",
+            Domain,
+            Team,
+            "wG808",
+            new Dictionary<string, NotifyRecordedRole>
+            {
+                ["architect"] = HerdrRole("wG808:p-architect"),
+                ["design"] = new NotifyRecordedRole(
+                    NotifyRecordedRole.ExternalResident,
+                    null,
+                    null,
+                    "readers/design.json",
+                    "/repo",
+                    null,
+                    null,
+                    null),
+            },
+            new Dictionary<string, AgentLaunchEnvelopeProfile>());
+
+        var findings = SessionLayerSeatPreflightStore.EvaluateLive(root, Domain, Team, topology);
+
+        Assert.Equal(2, findings.Count);
+        var herdr = Assert.Single(findings, finding => finding.Role == "architect");
+        var external = Assert.Single(findings, finding => finding.Role == "design");
+        Assert.Equal("seat-preflight-launch-source-missing", herdr.Cause);
+        Assert.Equal("seat-preflight-launch-source-missing", external.Cause);
+        Assert.NotNull(herdr.SeatIdentity);
+        Assert.Equal("architect", herdr.SeatIdentity!.RepresentativeRole);
+        Assert.Equal(NotifyRecordedRole.HerdrResident, herdr.SeatIdentity.Resident);
+        Assert.Equal("wG808", herdr.SeatIdentity.WorkspaceId);
+        Assert.Equal("wG808:p-architect", herdr.SeatIdentity.PaneId);
+        Assert.NotNull(external.SeatIdentity);
+        Assert.Equal("design", external.SeatIdentity!.RepresentativeRole);
+        Assert.Equal(NotifyRecordedRole.ExternalResident, external.SeatIdentity.Resident);
+        Assert.Equal("readers/design.json", external.SeatIdentity.Reader);
+        Assert.NotEqual(herdr.SeatIdentity, external.SeatIdentity);
+        Assert.Contains("representative role 'design'", external.Message, StringComparison.Ordinal);
+        testOutput.WriteLine("mixed herdr architect and external design live findings:");
+        testOutput.WriteLine(JsonSerializer.Serialize(findings));
+    }
+
+    [Fact]
     public void ValidateUsesLaterDurableLaunchAndMarksPriorPassStaleWithoutLaunchAt_G808()
     {
         Directory.CreateDirectory(Path.Combine(root, ".intent-cli", "claims"));

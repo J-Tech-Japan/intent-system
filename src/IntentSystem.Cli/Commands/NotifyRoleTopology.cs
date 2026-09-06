@@ -76,6 +76,10 @@ internal sealed record SessionLayerTopologyFinding(
     [JsonPropertyName("is_informational")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool IsInformational { get; init; }
+
+    [JsonPropertyName("seat_identity")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SessionLayerSeatIdentity? SeatIdentity { get; init; }
 }
 
 internal sealed record SessionLayerTopologyDeclaredRole(
