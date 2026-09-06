@@ -136,6 +136,7 @@ internal static class SessionLayerSections
         new(SessionLayerSwitchChecklist.Heading, SessionLayerSwitchChecklist.JsonProperty, Applicability.ModeIndependent),
         new("## Host-state topology discovery (G736)", null, Applicability.ModeIndependent),
         new("(json) host-state topology discovery", "host_state_discovery", Applicability.ModeIndependent),
+        new("## Explicit notify delegate assignment (G809)", null, Applicability.ModeIndependent),
         new("## Guide reachability (G645/G696)", "guide_reachability", Applicability.ModeIndependent),
         new("(json) seat preflight (G808)", "seat_preflight", Applicability.ModeIndependent),
         new("## Topology workspace move reachability (G697)", "topology_workspace_move", Applicability.ModeIndependent),

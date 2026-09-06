@@ -204,9 +204,12 @@ internal static class ResearchDelegationContract
         TaskKind = TaskKind,
         SenderRoles = [LogicalRoleNormalizer.Architect, LogicalRoleNormalizer.Reviewer],
         RecipientRoles = [LogicalRoleNormalizer.Orchestrator, LogicalRoleNormalizer.Steward],
-        WhatGoesDown = "The research question, the expected artifact, and the requested context go down as a task-kind research delegation.",
+        WhatGoesDown = "The research question, the expected artifact, and the requested context go down as a task-kind research delegation. "
+            + "For notify delegate, the explicit --to assignee wins after canonical role normalization; event-kind inference never substitutes a destination. "
+            + "Use --dry-run --format json to verify the recipient without a receiver call or durable write before --write.",
         WhoReceives = "An Architect or Reviewer may send it to the Orchestrator or Steward; all four sender/recipient pairs are routable.",
-        WhatStays = "The judgement seat keeps the ruling responsibility; the recipient returns findings, each paired with its source.",
+        WhatStays = "The judgement seat keeps the ruling responsibility; the recipient returns findings, each paired with its source. "
+            + "Report/escalate routing and Steward authority guards remain unchanged, and historical misroutes are not replayed.",
         SourcedFindingRule = "Every finding names a source such as a file and symbol, a command and output, or a URL.",
         NoRulingBoundary = "A research report carrying the ruling payload is refused and names the Architect or Reviewer that must rule.",
         DirectResearchRule = "Direct Architect and Reviewer research remains an ordinary, successful path; it is never refused or turned into a failure warning.",

@@ -876,6 +876,7 @@ internal static class GuideOrchestratorThreadCommand
         {
             HostStateDiscovery = hostStateDiscovery,
             SeatPreflight = seatPreflightGuidance,
+            NotifyDelegateAssignment = NotifyDelegateAssignmentGuidance.Create(domain, values["<team>"]),
             SessionLayerSwitchChecklist = SessionLayerSwitchChecklist.Create(),
             SetupIntake = BuildSetupIntake(values, herdrOnly),
             // G696/G645: the orchestrator surface names the review seat's
@@ -1826,7 +1827,8 @@ internal static class GuideOrchestratorThreadCommand
                     "Prerequisites travel with the delegation, not with the receiver's privileges. Before delegating, "
                     + "the orchestrator identifies every workspace prerequisite the task needs, prepares it under the "
                     + "orchestrator's authority, and verifies it. A bounded receiver is never assumed able to create "
-                    + "worktrees, checkout state, or directories outside its recorded write envelope.",
+                    + "worktrees, checkout state, or directories outside its recorded write envelope. "
+                    + NotifyDelegateAssignmentGuidance.HelpText,
                 RequiredSequence = new[]
                 {
                     "Identify the task's required worktrees, checkouts, checkout state, and directories before choosing the receiver.",
@@ -4495,6 +4497,19 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine("- authority is recorded only by the explicit role+envelope declaration; resident, kind, external placement, and co-location do not authorize host-state work.");
         writer.WriteLine();
 
+        writer.WriteLine("## Explicit notify delegate assignment (G809)");
+        writer.WriteLine();
+        writer.WriteLine($"- **precedence:** {guide.NotifyDelegateAssignment.Precedence}");
+        writer.WriteLine($"- **validation:** {guide.NotifyDelegateAssignment.Validation}");
+        writer.WriteLine($"- **dry-run:** {guide.NotifyDelegateAssignment.DryRun}");
+        writer.WriteLine($"- **authority:** {guide.NotifyDelegateAssignment.Authority}");
+        writer.WriteLine($"- **historical records:** {guide.NotifyDelegateAssignment.HistoricalRecords}");
+        foreach (var example in guide.NotifyDelegateAssignment.Examples)
+        {
+            writer.WriteLine($"- example: {example}");
+        }
+        writer.WriteLine();
+
         WriteCloseoutRunsContract(writer, guide.CloseoutRunsContract);
 
         // G701: the registry and dialog rule are mode-independent guide
@@ -5518,6 +5533,10 @@ internal sealed record OrchestratorThreadGuide
     /// </summary>
     [JsonPropertyName("host_state_discovery")]
     public required OrchestratorHostStateDiscovery HostStateDiscovery { get; init; }
+
+    [JsonPropertyName("notify_delegate_assignment")]
+    [JsonIgnore]
+    public NotifyDelegateAssignmentGuidance NotifyDelegateAssignment { get; init; } = null!;
 
     [JsonPropertyName("seat_preflight")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
