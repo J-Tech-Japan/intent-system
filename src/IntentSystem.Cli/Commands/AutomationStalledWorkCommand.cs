@@ -23,11 +23,16 @@ namespace IntentSystem.Cli.Commands;
 /// deliberately names a human edit), and <see
 /// cref="StalledWorkItem.IsInformational"/> is <see langword="false"/>:
 /// <list type="bullet">
-/// <item><c>published-not-delegated</c> — an OPEN issue carries
-///   <c>intent-target</c>, has no claim label
-///   (<c>intent-issue-in-progress</c> / <c>intent-pr-created</c>), and no
-///   open PR in this repo closes it (checked independently of label state,
-///   since a label can drift out of sync with an already-created PR).</item>
+/// <item><c>published-without-intake</c> — an OPEN issue carries
+///   <c>intent-target</c>, has no claim label, and no delivered intake
+///   delegation names the orchestrator. The row names the originating seat
+///   and the canonical notify-delegate action.</item>
+/// <item><c>published-intake-awaiting-dispatch</c> — an existing intake
+///   delegation (normally delivered to the orchestrator) has not yet led to
+///   a runtime-dispatched queue item. The row carries task, delivering role,
+///   actual recipient, delivery state, timestamp, elapsed minutes, and a
+///   read-only action; a misrouted existing intake is never replaced with a
+///   fresh delegation recommendation.</item>
 /// <item><c>pr-created-not-reviewing</c> — the source issue carries
 ///   <c>intent-pr-created</c> and its closing PR has not had the
 ///   <c>review-start</c> transition applied (no <c>intent-pr-reviewing</c> /
@@ -184,7 +189,15 @@ internal static class AutomationStalledWorkCommand
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
 
-    public const string KindPublishedNotDelegated = "published-not-delegated";
+    /// <summary>G806: a published issue has no delivered intake delegation.</summary>
+    public const string KindPublishedWithoutIntake = "published-without-intake";
+
+    /// <summary>G806: orchestrator intake was delivered, but runtime dispatch has not happened.</summary>
+    public const string KindPublishedIntakeAwaitingDispatch = "published-intake-awaiting-dispatch";
+
+    // Keep the compatibility constant for existing consumers and fixtures;
+    // the published-unit surface now emits the two explicit G806 kinds.
+    public const string KindPublishedNotDelegated = KindPublishedWithoutIntake;
     public const string KindPrCreatedNotReviewing = "pr-created-not-reviewing";
     public const string KindCiPending = "ci-pending";
     public const string KindCiAllGreenNotTransitioned = "ci-all-green-not-transitioned";
@@ -727,8 +740,21 @@ internal static class AutomationStalledWorkCommand
         // result-level partial marker is applied below without losing them.
         CollectStaleClaims(context, now, staleMinutes, items, warnings);
 
-        CollectPublishedNotDelegated(context, domain, candidateDomains, openIssues, openPrs, repo, now, capabilityMatrix, items, excluded);
         var branchLaneQueueState = TryLoadQueueStateForBranchLaneRouting(context, domain, repo, warnings);
+        CollectPublishedNotDelegated(
+            context,
+            domain,
+            candidateDomains,
+            openIssues,
+            openPrs,
+            repo,
+            now,
+            capabilityMatrix,
+            openPendingDelegations,
+            branchLaneQueueState,
+            team,
+            items,
+            excluded);
         var closedPrs = branchLaneQueueState?.Items.Any(item => item.RoutingSnapshot is not null) == true
             ? ReadGitHub(() => lister.ListClosedPullRequests(
                 repo,
@@ -2078,6 +2104,9 @@ internal static class AutomationStalledWorkCommand
         string repo,
         DateTimeOffset now,
         TeamModeCapabilityMatrix capabilityMatrix,
+        IReadOnlyList<NotifyPendingDelegation> openPendingDelegations,
+        QueueState? queueState,
+        string? team,
         List<StalledWorkItem> items,
         List<StalledWorkExcluded> excluded)
     {
@@ -2153,19 +2182,201 @@ internal static class AutomationStalledWorkCommand
                 }
             }
 
+            // G806: a published unit has two materially different states. A
+            // delivered intake to the orchestrator is waiting for the
+            // runtime queue transition; absence of such delivery means the
+            // originating seat still owes the intake delegation. Neither
+            // path writes queue state: only the orchestrator's normal
+            // dispatch transition can flip the marker.
+            var queueItem = FindPublishedQueueItem(queueState, repo, issue.Number, resolution.ExecutionUnit);
+            if (queueItem is { State: QueueItemState.Active or QueueItemState.Review or QueueItemState.Fixing })
+            {
+                continue;
+            }
+
+            var intake = FindExistingIntakeDelegation(
+                context,
+                resolution.ExecutionUnit,
+                openPendingDelegations,
+                out var intakeReadError);
+            if (intakeReadError is not null)
+            {
+                // A malformed optional carrier must not be promoted to an
+                // intake finding. The no-intake state remains the honest
+                // observable result while the read error is retained in the
+                // exclusion diagnostics for operators.
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindPublishedWithoutIntake,
+                    ExecutionUnit = resolution.ExecutionUnit,
+                    Issue = new StalledWorkRef { Number = issue.Number, Url = issue.Url },
+                    Pr = null,
+                    Reason = "published-intake-evidence-unreadable",
+                    Detail = intakeReadError,
+                });
+            }
+
+            if (intake is { Record: { } intakeRecord })
+            {
+                var delivery = intake.Delivery;
+                var deliveredAt = delivery?.DeliveredAt.ToUniversalTime();
+                var recipientRole = intakeRecord.RecipientRole;
+                var isOrchestratorRecipient = string.Equals(
+                    GuideRoleContractGuidance.Normalize(recipientRole),
+                    LogicalRoleNormalizer.Orchestrator,
+                    StringComparison.Ordinal);
+                var action = isOrchestratorRecipient && delivery is not null
+                    ? $"orchestrator must dispatch {resolution.ExecutionUnit}; run `intent-cli queue transition {resolution.ExecutionUnit} active --write --format json`"
+                    : $"existing intake {intakeRecord.TaskId} from {intakeRecord.DelegatingRole ?? "<unknown>"} to {recipientRole} has delivery state {intake.DeliveryState}; do not create a fresh intake; resolve this recorded delegation before orchestrator dispatch";
+                items.Add(new StalledWorkItem
+                {
+                    Kind = KindPublishedIntakeAwaitingDispatch,
+                    ExecutionUnit = resolution.ExecutionUnit,
+                    Issue = new StalledWorkRef { Number = issue.Number, Url = issue.Url },
+                    Pr = null,
+                    AgeMinutes = deliveredAt is { } deliveryInstant
+                        ? ComputeAgeMinutesFromInstant(ClampToNow(deliveryInstant, now), now)
+                        : ComputeAgeMinutesFromInstant(ClampToNow(intakeRecord.DispatchedAt, now), now),
+                    IsInformational = false,
+                    RecommendedAction = action,
+                    IntakeTaskId = intakeRecord.TaskId,
+                    IntakeDeliveringRole = intakeRecord.DelegatingRole ?? "<unknown>",
+                    IntakeRecipientRole = recipientRole,
+                    IntakeDeliveryState = intake.DeliveryState,
+                    IntakeDeliveredAt = deliveredAt,
+                    IntakeMinutesElapsed = deliveredAt is { } deliveredInstant
+                        ? ComputeAgeMinutesFromInstant(ClampToNow(deliveredInstant, now), now)
+                        : null,
+                });
+                continue;
+            }
+
+            var originatingRole = ResolvePublishedOriginatingRole(context, domain, team);
+
             items.Add(new StalledWorkItem
             {
-                Kind = KindPublishedNotDelegated,
+                Kind = KindPublishedWithoutIntake,
                 ExecutionUnit = resolution.ExecutionUnit,
                 Issue = new StalledWorkRef { Number = issue.Number, Url = issue.Url },
                 Pr = null,
                 AgeMinutes = ComputeAgeMinutes(issue.CreatedAt, now),
                 IsInformational = false,
                 RecommendedAction =
-                    $"intent-cli worker claim --repo {repo} --kind issue --number {issue.Number} --github-only --write",
+                    $"{originatingRole} owes intake delegation to orchestrator; worker claim is not the dispatch path; run `intent-cli notify delegate --domain {domain} --from {originatingRole} --to orchestrator --report-to {originatingRole} --task-id {resolution.ExecutionUnit}-intake --objective \"deliver issue #{issue.Number} to orchestrator\" --input {issue.Url} --expected-artifact {issue.Url} --result-nonce {resolution.ExecutionUnit}-intake --write --format json`; only after delivery may `intent-cli worker claim --repo {repo} --kind issue --number {issue.Number} --github-only --write` be considered",
+                OriginatingRole = originatingRole,
             });
         }
     }
+
+    private static QueueItem? FindPublishedQueueItem(
+        QueueState? queueState,
+        string repo,
+        int issueNumber,
+        string executionUnit)
+    {
+        return queueState?.Items
+            .Where(item => string.Equals(item.ExecutionUnit, executionUnit, StringComparison.OrdinalIgnoreCase))
+            .Where(item => item.LinkedIssue is null
+                || (item.LinkedIssue.Number == issueNumber
+                    && string.Equals(item.LinkedIssue.Repo, repo, StringComparison.OrdinalIgnoreCase)))
+            .OrderByDescending(item => item.State is QueueItemState.Active or QueueItemState.Review or QueueItemState.Fixing)
+            .FirstOrDefault();
+    }
+
+    private static ExistingIntakeDelegation? FindExistingIntakeDelegation(
+        CliContext context,
+        string executionUnit,
+        IReadOnlyList<NotifyPendingDelegation> openPendingDelegations,
+        out string? readError)
+    {
+        readError = null;
+        ExistingIntakeDelegation? best = null;
+        foreach (var record in openPendingDelegations)
+        {
+            if (!NotifyDelegationExecutionEvidence.TryExtractExecutionUnitToken(
+                context.RepoRoot,
+                record,
+                    out var token,
+                    out var tokenError))
+            {
+                readError ??= tokenError;
+                continue;
+            }
+
+            if (!string.Equals(token, executionUnit, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var delivery = NotifyDelegationDeliveryStore.Find(
+                context.RepoRoot,
+                record.Domain,
+                record.Team,
+                record.TaskId,
+                record.ResultNonce);
+            if (!delivery.Resolved)
+            {
+                readError ??= delivery.Error;
+            }
+
+            var evidence = delivery.Evidence is { DeliverySucceeded: true } delivered
+                ? delivered
+                : null;
+            var deliveryState = !delivery.Resolved
+                ? "unreadable"
+                : evidence is not null
+                    ? "delivered"
+                    : "pending";
+            var candidate = new ExistingIntakeDelegation(record, evidence, deliveryState);
+            var candidateTime = evidence?.DeliveredAt ?? record.DispatchedAt;
+            var bestTime = best?.Delivery?.DeliveredAt ?? best?.Record.DispatchedAt;
+            if (best is null || bestTime is null || candidateTime > bestTime.Value)
+            {
+                best = candidate;
+            }
+        }
+
+        return best;
+    }
+
+    private static string ResolvePublishedOriginatingRole(
+        CliContext context,
+        string domain,
+        string? team)
+    {
+        // Topology is optional evidence for this read-only diagnostic. When
+        // it is readable, preserve a recorded legacy design key; otherwise
+        // teach the canonical five-role name rather than inventing a runtime.
+        var topologyTeam = team ?? "intent-cli-dev";
+        var topology = NotifyRoleTopologyStore.Resolve(context.RepoRoot, domain, topologyTeam);
+        if (topology.Topology is { Roles: { } roles })
+        {
+            if (roles.Keys.Any(key => string.Equals(key, LogicalRoleNormalizer.Architect, StringComparison.OrdinalIgnoreCase)))
+            {
+                return LogicalRoleNormalizer.Architect;
+            }
+
+            if (roles.Keys.Any(key => string.Equals(key, "design", StringComparison.OrdinalIgnoreCase)))
+            {
+                return "design";
+            }
+
+            if (roles.Keys.Any(key => string.Equals(
+                    GuideRoleContractGuidance.Normalize(key),
+                    LogicalRoleNormalizer.Architect,
+                    StringComparison.Ordinal)))
+            {
+                return LogicalRoleNormalizer.Architect;
+            }
+        }
+
+        return LogicalRoleNormalizer.Architect;
+    }
+
+    private sealed record ExistingIntakeDelegation(
+        NotifyPendingDelegation Record,
+        NotifyDelegationDeliveryEvidence? Delivery,
+        string DeliveryState);
 
     private static void CollectPrCreatedNotReviewing(
         CliContext context,
@@ -5107,6 +5318,34 @@ internal static class AutomationStalledWorkCommand
                 {
                     writer.WriteLine($"- closed_issue_number: #{closedIssueNumber}");
                 }
+                if (item.OriginatingRole is { } originatingRole)
+                {
+                    writer.WriteLine($"- originating_role: {originatingRole}");
+                }
+                if (item.IntakeTaskId is { } intakeTaskId)
+                {
+                    writer.WriteLine($"- intake_task_id: {intakeTaskId}");
+                }
+                if (item.IntakeDeliveringRole is { } intakeDeliveringRole)
+                {
+                    writer.WriteLine($"- intake_delivering_role: {intakeDeliveringRole}");
+                }
+                if (item.IntakeRecipientRole is { } intakeRecipientRole)
+                {
+                    writer.WriteLine($"- intake_recipient_role: {intakeRecipientRole}");
+                }
+                if (item.IntakeDeliveryState is { } intakeDeliveryState)
+                {
+                    writer.WriteLine($"- intake_delivery_state: {intakeDeliveryState}");
+                }
+                if (item.IntakeDeliveredAt is { } intakeDeliveredAt)
+                {
+                    writer.WriteLine($"- intake_delivered_at: {intakeDeliveredAt:O}");
+                }
+                if (item.IntakeMinutesElapsed is { } intakeMinutesElapsed)
+                {
+                    writer.WriteLine($"- intake_minutes_elapsed: {intakeMinutesElapsed}");
+                }
                 if (item.VerdictKind is { } verdictKind)
                 {
                     writer.WriteLine($"- verdict_kind: {verdictKind}");
@@ -5472,6 +5711,36 @@ internal sealed record StalledWorkItem
     [JsonPropertyName("closed_issue_number")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? ClosedIssueNumber { get; init; }
+
+    /// <summary>G806: recorded originating seat for a published unit with no intake.</summary>
+    [JsonPropertyName("originating_role")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OriginatingRole { get; init; }
+
+    /// <summary>G806: delivered intake task awaiting the orchestrator's runtime dispatch.</summary>
+    [JsonPropertyName("intake_task_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IntakeTaskId { get; init; }
+
+    [JsonPropertyName("intake_delivering_role")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IntakeDeliveringRole { get; init; }
+
+    [JsonPropertyName("intake_recipient_role")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IntakeRecipientRole { get; init; }
+
+    [JsonPropertyName("intake_delivery_state")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IntakeDeliveryState { get; init; }
+
+    [JsonPropertyName("intake_delivered_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? IntakeDeliveredAt { get; init; }
+
+    [JsonPropertyName("intake_minutes_elapsed")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? IntakeMinutesElapsed { get; init; }
 
     /// <summary>G805: normalized durable review outcome.</summary>
     [JsonPropertyName("verdict_kind")]

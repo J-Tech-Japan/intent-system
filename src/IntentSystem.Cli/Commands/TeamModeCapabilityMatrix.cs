@@ -71,7 +71,8 @@ internal sealed record TeamModeCapabilityMatrix
     /// </summary>
     public bool IsStalledKindApplicable(string kind)
     {
-        if (string.Equals(kind, AutomationStalledWorkCommand.KindPublishedNotDelegated, StringComparison.Ordinal))
+        if (kind is AutomationStalledWorkCommand.KindPublishedWithoutIntake
+            or AutomationStalledWorkCommand.KindPublishedIntakeAwaitingDispatch)
         {
             return true;
         }
@@ -117,7 +118,8 @@ internal sealed record TeamModeCapabilityMatrix
             or AutomationStalledWorkCommand.KindRereviewPending
             or AutomationStalledWorkCommand.KindRepairStalled
             => TeamModeCapabilityClasses.Review,
-        AutomationStalledWorkCommand.KindPublishedNotDelegated
+        AutomationStalledWorkCommand.KindPublishedWithoutIntake
+            or AutomationStalledWorkCommand.KindPublishedIntakeAwaitingDispatch
             => TeamModeCapabilityClasses.Delegation,
         _ => TeamModeCapabilityClasses.ContractReadiness,
     };
