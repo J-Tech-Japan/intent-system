@@ -432,6 +432,33 @@ internal sealed record NotifyDelegationExecutionEvidence
     }
 
     /// <summary>
+    /// G806: apply the same configured, ordered G788 recognizer to a pending
+    /// delegation record.  Consumers that only need the carrier identity do
+    /// not have to reimplement token parsing or manufacture a second pattern.
+    /// </summary>
+    internal static bool TryExtractExecutionUnitToken(
+        string routingRoot,
+        NotifyPendingDelegation record,
+        out string? executionUnitToken,
+        out string? error)
+    {
+        var pattern = ResolveUnitPattern(routingRoot, record.Domain, out error);
+        if (pattern is null)
+        {
+            executionUnitToken = null;
+            return false;
+        }
+
+        executionUnitToken = ExtractExecutionUnitToken(
+            record.TaskId,
+            record.Objective,
+            record.Inputs,
+            pattern);
+        error = null;
+        return true;
+    }
+
+    /// <summary>
     /// Resolves a Steward's downstream reference against the same measured
     /// evidence set used by G788.  A reference is accepted only when it is
     /// present in a token-carrying pending ledger, report outbox, or
