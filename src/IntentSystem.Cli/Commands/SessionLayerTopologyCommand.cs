@@ -159,6 +159,18 @@ internal static class SessionLayerTopologyCommand
         }
 
         var findings = validation.Findings.ToList();
+        if (live)
+        {
+            var topologyResolution = NotifyRoleTopologyStore.Resolve(context.RepoRoot, domain!, team!);
+            if (topologyResolution.Resolved && topologyResolution.Topology is not null)
+            {
+                findings.AddRange(SessionLayerSeatPreflightStore.EvaluateLive(
+                    context.RepoRoot,
+                    domain!,
+                    team!,
+                    topologyResolution.Topology));
+            }
+        }
         if (validation.Valid)
         {
             var topologyResolution = NotifyRoleTopologyStore.Resolve(context.RepoRoot, domain!, team!);

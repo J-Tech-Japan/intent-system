@@ -145,6 +145,12 @@ internal static class GuideOnboardingCommand
                     NoMutation = "Pure read; the operator owns the runtime contract that this command surfaces."
                 },
             },
+            SeatPreflight = new GuideOnboardingSeatPreflight
+            {
+                Command = "intent-cli session-layer seat preflight --domain <domain> --team <team> --role <role> --format json",
+                Purpose = "G808: discover whether a seat can write host git state, reach origin, use its installed identity, resolve its claim path, and identify a generic runtime family before the first delegation.",
+                NoMutation = "Creates then deletes one isolated refs/intent-cli/preflight ref and records a host-local result; it never changes the index, branch, sandbox, process, or remote."
+            },
             FeedbackGuidance = new GuideOnboardingFeedbackGuidance
             {
                 JsonCommand = "intent-cli guide feedback --format json",
@@ -208,6 +214,13 @@ internal static class GuideOnboardingCommand
         writer.WriteLine("## Measured incident record (G672 — preview-through-1.x)");
         writer.WriteLine();
         writer.WriteLine(result.MeasuredIncident);
+        writer.WriteLine();
+
+        writer.WriteLine("## First command for a new seat (G808)");
+        writer.WriteLine();
+        writer.WriteLine($"- command: `{result.SeatPreflight.Command}`");
+        writer.WriteLine($"- purpose: {result.SeatPreflight.Purpose}");
+        writer.WriteLine($"- no-mutation: {result.SeatPreflight.NoMutation}");
         writer.WriteLine();
 
         writer.WriteLine("## First-call sequence");
@@ -341,6 +354,9 @@ internal sealed record GuideOnboardingResult
     [JsonPropertyName("first_call_sequence")]
     public required IReadOnlyList<GuideOnboardingStep> FirstCallSequence { get; init; }
 
+    [JsonPropertyName("seat_preflight")]
+    public required GuideOnboardingSeatPreflight SeatPreflight { get; init; }
+
     [JsonPropertyName("feedback_guidance")]
     public required GuideOnboardingFeedbackGuidance FeedbackGuidance { get; init; }
 
@@ -352,6 +368,18 @@ internal sealed record GuideOnboardingResult
 
     [JsonPropertyName("hard_rules")]
     public required IReadOnlyList<string> HardRules { get; init; }
+}
+
+internal sealed record GuideOnboardingSeatPreflight
+{
+    [JsonPropertyName("command")]
+    public required string Command { get; init; }
+
+    [JsonPropertyName("purpose")]
+    public required string Purpose { get; init; }
+
+    [JsonPropertyName("no_mutation")]
+    public required string NoMutation { get; init; }
 }
 
 internal sealed record GuideOnboardingFeedbackGuidance
