@@ -9,7 +9,7 @@ namespace IntentSystem.Cli.Tests;
 
 public sealed class HerdrWakeSourcesG581Tests : IDisposable
 {
-    // G685/G686/G690/G698/G699/G700/G707/G708/G719/G776/G781/G797/G809 extend the shared orchestrator guidance; keep the snapshot
+    // G685/G686/G690/G698/G699/G700/G707/G708/G719/G776/G781/G797/G809/G811 extend the shared orchestrator guidance; keep the snapshot
     // assertion explicit so a future wake-source or route change remains
     // intentional.
     private const string G594AgmsgGuideSha256 =
@@ -140,7 +140,9 @@ public sealed class HerdrWakeSourcesG581Tests : IDisposable
     {
         var markdown = Render(herdrOnly: false, format: "markdown");
         var withoutG582Checklist = WithoutSection(markdown, SessionLayerSwitchChecklist.Heading);
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(withoutG582Checklist)));
+        Assert.Contains("G811 completion channel", withoutG582Checklist, StringComparison.Ordinal);
+        var parentProjection = RemoveG811CompletionGuidance(withoutG582Checklist);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(parentProjection)));
 
         Assert.True(
             string.Equals(G594AgmsgGuideSha256, hash, StringComparison.Ordinal),
@@ -148,6 +150,14 @@ public sealed class HerdrWakeSourcesG581Tests : IDisposable
         Assert.Contains("shared preflight verdict", markdown, StringComparison.Ordinal);
         Assert.DoesNotContain("## Herdr-only wake sources", markdown, StringComparison.Ordinal);
         Assert.DoesNotContain("pane.agent_status_changed", markdown, StringComparison.Ordinal);
+    }
+
+    private static string RemoveG811CompletionGuidance(string markdown)
+    {
+        const string marker = "\n\n- **G811 completion channel:**";
+        var index = markdown.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(index >= 0, "G811 completion guidance must be present in the rendered output.");
+        return markdown[..index];
     }
 
     private static string WithoutSection(string markdown, string heading)

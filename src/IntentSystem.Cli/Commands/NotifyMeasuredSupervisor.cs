@@ -821,6 +821,27 @@ internal sealed class NotifyMeasuredSupervisor
         var recoveryRecords = recoveryState.Resolved
             ? recoveryState.StallHistory
             : records;
+        var sweepSamples = recoveryState.Resolved
+            ? recoveryState.CycleHistory
+                .Where(item => (string.IsNullOrWhiteSpace(item.Trigger)
+                    || string.Equals(item.Trigger, "interval", StringComparison.Ordinal))
+                    && item.CompletedAt >= item.StartedAt)
+                .Where(item => !string.Equals(item.CycleId, cycle.CycleId, StringComparison.Ordinal))
+                .Select(item => Math.Max(0, (item.CompletedAt - item.StartedAt).TotalSeconds))
+                .ToList()
+            : [];
+        sweepSamples.Add(Math.Max(0, (cycle.CompletedAt - cycle.StartedAt).TotalSeconds));
+        var completionHealth = NotifyCompletionChannelHealth.Compute(
+            routingRoot,
+            domain,
+            team,
+            now,
+            intervalSeconds,
+            jitterSeconds: 0,
+            maxSweepSeconds: sweepSamples.Max(),
+            measuredSweeps: sweepSamples.Count,
+            supervisionArtifactRoot: context.ResolveSupervisionArtifactRootPath(),
+            configuredBoundSeconds: bound.BoundSeconds);
         return new NotifySupervisorPass
         {
             Actions = actions,
@@ -830,6 +851,7 @@ internal sealed class NotifyMeasuredSupervisor
             EmissionPolicy = emissionPolicy,
             PreApprovalPolicy = preApprovalPolicy,
             Liveness = liveness,
+            CompletionChannelHealth = completionHealth,
             Warnings = warnings,
         };
     }

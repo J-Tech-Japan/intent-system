@@ -15,7 +15,7 @@ public sealed class HerdrPaneTopologyG586Tests : IDisposable
     // G655/G673/G683 extend the shared guide; keep the deterministic baseline aligned
     // with the rendered guidance while preserving the hash guard.
     // G684 extends shared orchestrator guidance with envelope-only recipe drift.
-    // G685/G686/G690/G699/G707/G708/G719/G776/G781/G797/G809 intentionally extend the shared guide while preserving
+    // G685/G686/G690/G699/G707/G708/G719/G776/G781/G797/G809/G811 intentionally extend the shared guide while preserving
     // the G594 preflight contract. G696/G697/G700 add structured role-facing routes.
     private const string G594AgmsgBaselineSha256 = "9cb6691f1a11e22966ea5d218d4c0b7ac13db7a4dc600109d19b1386cc9f0a5a";
 
@@ -99,12 +99,22 @@ public sealed class HerdrPaneTopologyG586Tests : IDisposable
     public void AgmsgRendering_PinsG594NamedTeamRecordFirstPreflight_G594()
     {
         var markdown = Render(herdrOnly: false, format: "markdown");
-        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(markdown)));
+        Assert.Contains("G811 completion channel", markdown, StringComparison.Ordinal);
+        var parentProjection = RemoveG811CompletionGuidance(markdown);
+        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(parentProjection)));
 
         Assert.True(
             string.Equals(G594AgmsgBaselineSha256, hash, StringComparison.Ordinal),
             $"agmsg guide hash changed: {hash}");
         Assert.Contains("configuration-incomplete", markdown, StringComparison.Ordinal);
+    }
+
+    private static string RemoveG811CompletionGuidance(string markdown)
+    {
+        const string marker = "\n\n- **G811 completion channel:**";
+        var index = markdown.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(index >= 0, "G811 completion guidance must be present in the rendered output.");
+        return markdown[..index];
     }
 
     private string Render(bool herdrOnly, string format)

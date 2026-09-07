@@ -12,6 +12,7 @@ internal static class NotifyCommand
     private const string OperationReport = "report";
     private const string OperationCollect = "collect";
     private const string OperationReconcile = "reconcile";
+    private const string OperationAcknowledge = "acknowledge";
     private const string OperationEscalate = "escalate";
     private const string OperationDispose = "dispose";
     internal const string OperationStatus = "status";
@@ -52,8 +53,12 @@ internal static class NotifyCommand
 
     private const string CollectUsage =
         "Usage: intent-cli notify collect --domain <d> --team <t> (--task-id <id> | --role <role> "
-        + "[--since <cursor>] [--wait --timeout-ms <milliseconds>]) "
+        + "[--since <cursor>] [--wait --timeout-ms <milliseconds>] [--write]) "
         + "[--routing-root <host-root>] [--report-root <role-work-root>] [--dry-run|--write] [--format markdown|json]";
+
+    private const string AcknowledgeUsage =
+        "Usage: intent-cli notify acknowledge --domain <d> --team <t> --from steward --task-id <id> "
+        + "--result-nonce <nonce> --artifact <value> --receipt-cursor <cursor> [--write|--dry-run] [--routing-root <host-root>] [--format markdown|json]";
 
     private const int MaximumRoleCollectTimeoutMilliseconds = 300_000;
     private const int RoleCollectPollMilliseconds = 25;
@@ -141,6 +146,9 @@ internal static class NotifyCommand
 
     public static int ExecuteReconcile(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, OperationReconcile);
+
+    public static int ExecuteAcknowledge(CliContext context, string[] args, TextWriter writer) =>
+        Execute(context, args, writer, OperationAcknowledge);
 
     public static int ExecuteEscalate(CliContext context, string[] args, TextWriter writer) =>
         Execute(context, args, writer, OperationEscalate);
@@ -272,6 +280,11 @@ internal static class NotifyCommand
         if (string.Equals(operation, OperationReconcile, StringComparison.Ordinal))
         {
             return ExecuteReconcile(writer, options, routingRoot, reportRoot!);
+        }
+
+        if (string.Equals(operation, OperationAcknowledge, StringComparison.Ordinal))
+        {
+            return ExecuteAcknowledge(writer, options, routingRoot);
         }
 
         // G800's visibility surface is an aggregate read.  It deliberately
@@ -721,6 +734,30 @@ internal static class NotifyCommand
         string routingRoot,
         string reportRoot)
     {
+        if (options.TaskId is not null && options.Role is not null)
+        {
+            return ExecuteReturnAckCollect(writer, options, routingRoot);
+        }
+
+        if (options.TaskId is not null)
+        {
+            var pendingForAck = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId);
+            if (pendingForAck.Record is { ReportArrived: true, ReportArtifact: not null } ackRecord)
+            {
+                var ack = NotifyCompletionChannelStore.FindAck(
+                    routingRoot,
+                    options.Domain!,
+                    options.Team!,
+                    ackRecord.TaskId,
+                    ackRecord.ResultNonce,
+                    ackRecord.ReportArtifact!);
+                if (ack.Ack is not null)
+                {
+                    return ExecuteReturnAckCollect(writer, options with { Role = ackRecord.RecipientRole }, routingRoot);
+                }
+            }
+        }
+
         if (options.Role is not null)
         {
             return ExecuteRoleCollect(writer, options, routingRoot);
@@ -796,6 +833,256 @@ internal static class NotifyCommand
             preflight,
             existingOutbox: outbox.Entry,
             reportRoot: reportRoot);
+    }
+
+    private static int ExecuteAcknowledge(TextWriter writer, NotifyOptions options, string routingRoot)
+    {
+        var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
+        if (!pending.Resolved || pending.Record is not { } record)
+        {
+            EmitReturnAck(writer, new NotifyReturnAckResult
+            {
+                Operation = OperationAcknowledge,
+                RoutingRoot = routingRoot,
+                Domain = options.Domain!,
+                Team = options.Team!,
+                TaskId = options.TaskId!,
+                CommandMode = options.Write ? "write" : "dry-run",
+                Available = false,
+                Cause = pending.Error ?? "unknown-task-id",
+                Summary = pending.Error ?? $"No pending completion identity exists for task '{options.TaskId}'.",
+            }, options.Format);
+            return 1;
+        }
+
+        if (!string.Equals(record.ResultNonce, options.ResultNonce, StringComparison.Ordinal)
+            || !ExpectedArtifactMatches(record, options.Artifact!))
+        {
+            EmitReturnAck(writer, new NotifyReturnAckResult
+            {
+                Operation = OperationAcknowledge,
+                RoutingRoot = routingRoot,
+                Domain = options.Domain!,
+                Team = options.Team!,
+                TaskId = options.TaskId!,
+                CommandMode = options.Write ? "write" : "dry-run",
+                Available = false,
+                Cause = "completion-identity-mismatch",
+                Summary = $"Return acknowledgement refused: supplied nonce/artifact does not match the recorded completion identity for task '{options.TaskId}'.",
+            }, options.Format);
+            return 1;
+        }
+
+        if (!string.Equals(record.Resident, NotifyRecordedRole.HerdrResident, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(record.WorkspaceId)
+            || string.IsNullOrWhiteSpace(record.PaneId))
+        {
+            EmitReturnAck(writer, new NotifyReturnAckResult
+            {
+                Operation = OperationAcknowledge,
+                RoutingRoot = routingRoot,
+                Domain = options.Domain!,
+                Team = options.Team!,
+                TaskId = options.TaskId!,
+                CommandMode = options.Write ? "write" : "dry-run",
+                Available = false,
+                Cause = "resident-recipient-unresolved",
+                Summary = "Return acknowledgement refused: the original pending recipient is not a recorded herdr resident with an unambiguous workspace/pane identity.",
+            }, options.Format);
+            return 1;
+        }
+
+        var canonicalSteward = LogicalRoleNormalizer.Steward;
+        var receipt = NotifyCompletionChannelStore.FindReceipt(
+            routingRoot,
+            options.Domain!,
+            options.Team!,
+            options.TaskId!,
+            options.ResultNonce,
+            options.Artifact!,
+            canonicalSteward,
+            options.ReceiptCursor!);
+        if (!receipt.Resolved || receipt.Receipt is not { } consumption)
+        {
+            EmitReturnAck(writer, new NotifyReturnAckResult
+            {
+                Operation = OperationAcknowledge,
+                RoutingRoot = routingRoot,
+                Domain = options.Domain!,
+                Team = options.Team!,
+                TaskId = options.TaskId!,
+                CommandMode = options.Write ? "write" : "dry-run",
+                Available = false,
+                Cause = receipt.Error ?? "consumption-receipt-not-found",
+                Summary = receipt.Error ?? "Return acknowledgement requires the exact external Steward consumption receipt and cursor; event append alone is not consumption.",
+            }, options.Format);
+            return 1;
+        }
+
+        var ack = new NotifyReturnAck
+        {
+            Domain = options.Domain!,
+            Team = options.Team!,
+            TaskId = record.TaskId,
+            ResultNonce = record.ResultNonce,
+            Artifact = options.Artifact!,
+            StewardRole = canonicalSteward,
+            RecipientRole = record.RecipientRole,
+            RecipientIdentity = record.RecipientIdentity,
+            Resident = record.Resident!,
+            WorkspaceId = record.WorkspaceId,
+            PaneId = record.PaneId,
+            ConsumptionReceiptId = consumption.ReceiptId,
+            ConsumptionCursor = consumption.Cursor,
+            AvailableAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+        };
+        var write = NotifyCompletionChannelStore.WriteAck(routingRoot, ack, options.Write);
+        var convergedAck = write.AlreadyConverged
+            ? NotifyCompletionChannelStore.FindAck(routingRoot, ack.Domain, ack.Team, ack.TaskId, ack.ResultNonce, ack.Artifact).Ack ?? ack
+            : ack;
+        EmitReturnAck(writer, new NotifyReturnAckResult
+        {
+            Operation = OperationAcknowledge,
+            RoutingRoot = routingRoot,
+            Domain = ack.Domain,
+            Team = ack.Team,
+            TaskId = ack.TaskId,
+            CommandMode = options.Write ? "write" : "dry-run",
+            Available = write.Written || write.AlreadyConverged || !options.Write,
+            AlreadyConverged = write.AlreadyConverged,
+            Ack = convergedAck,
+            Written = write.Written,
+            Cause = write.Error,
+            Summary = write.Error is not null
+                ? $"Return acknowledgement was not recorded: {write.Error}"
+                : options.Write
+                    ? $"Steward recorded return acknowledgement for completion '{NotifyCompletionChannelStore.CompletionIdentity(ack.TaskId, ack.ResultNonce, ack.Artifact)}'; no pane wake or transport was attempted."
+                    : "Dry-run verified that the identity-bound return acknowledgement could be recorded; no store or transport was changed.",
+        }, options.Format);
+        return write.Error is null ? 0 : 1;
+    }
+
+    private static int ExecuteReturnAckCollect(TextWriter writer, NotifyOptions options, string routingRoot)
+    {
+        var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
+        var record = pending.Record;
+        if (!pending.Resolved || record is null || !record.ReportArrived || record.ReportArtifact is null)
+        {
+            EmitReturnAck(writer, new NotifyReturnAckResult
+            {
+                Operation = OperationCollect,
+                RoutingRoot = routingRoot,
+                Domain = options.Domain!,
+                Team = options.Team!,
+                TaskId = options.TaskId!,
+                CommandMode = options.Write ? "write" : "dry-run",
+                Available = false,
+                Cause = pending.Error ?? "return-ack-not-available",
+                Summary = pending.Error ?? "No completed pending delegation has an available resident return acknowledgement.",
+            }, options.Format);
+            return 1;
+        }
+
+        var requestedRole = LogicalRoleNormalizer.TryNormalize(options.Role, out var canonicalRole, out _)
+            ? canonicalRole
+            : options.Role;
+        var recordedRole = LogicalRoleNormalizer.TryNormalize(record.RecipientRole, out var normalizedRecordedRole, out _)
+            ? normalizedRecordedRole
+            : record.RecipientRole;
+        if (!string.Equals(requestedRole, recordedRole, StringComparison.Ordinal)
+            || !string.Equals(record.Resident, NotifyRecordedRole.HerdrResident, StringComparison.Ordinal))
+        {
+            EmitReturnAck(writer, new NotifyReturnAckResult
+            {
+                Operation = OperationCollect,
+                RoutingRoot = routingRoot,
+                Domain = options.Domain!,
+                Team = options.Team!,
+                TaskId = options.TaskId!,
+                CommandMode = options.Write ? "write" : "dry-run",
+                Available = false,
+                Cause = "recipient-binding-mismatch",
+                Summary = $"Resident collect refused: task '{options.TaskId}' is bound to recipient '{record.RecipientRole}' ({record.RecipientIdentity}), not '{options.Role}'.",
+            }, options.Format);
+            return 1;
+        }
+
+        var lookup = NotifyCompletionChannelStore.FindAck(
+            routingRoot,
+            options.Domain!,
+            options.Team!,
+            record.TaskId,
+            record.ResultNonce,
+            record.ReportArtifact);
+        if (!lookup.Resolved || lookup.Ack is not { } ack)
+        {
+            EmitReturnAck(writer, new NotifyReturnAckResult
+            {
+                Operation = OperationCollect,
+                RoutingRoot = routingRoot,
+                Domain = options.Domain!,
+                Team = options.Team!,
+                TaskId = options.TaskId!,
+                CommandMode = options.Write ? "write" : "dry-run",
+                Available = false,
+                Cause = lookup.Error ?? "return-ack-not-available",
+                Summary = lookup.Error ?? "The resident return acknowledgement is not yet available; the resident remains consumption-pending and no wake was sent.",
+            }, options.Format);
+            return 1;
+        }
+
+        var consumed = NotifyCompletionChannelStore.ConsumeAck(
+            routingRoot,
+            ack,
+            (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+            options.Write);
+        var finalAck = consumed.Written || consumed.AlreadyConverged
+            ? NotifyCompletionChannelStore.FindAck(routingRoot, ack.Domain, ack.Team, ack.TaskId, ack.ResultNonce, ack.Artifact).Ack ?? ack
+            : ack;
+        EmitReturnAck(writer, new NotifyReturnAckResult
+        {
+            Operation = OperationCollect,
+            RoutingRoot = routingRoot,
+            Domain = ack.Domain,
+            Team = ack.Team,
+            TaskId = ack.TaskId,
+            CommandMode = options.Write ? "write" : "dry-run",
+            Available = true,
+            Consumed = options.Write && (consumed.Written || consumed.AlreadyConverged),
+            AlreadyConverged = consumed.AlreadyConverged,
+            Ack = finalAck,
+            Written = consumed.Written,
+            Cause = consumed.Error,
+            Summary = consumed.Error is not null
+                ? $"Resident return acknowledgement consumption failed: {consumed.Error}"
+                : options.Write
+                    ? "Resident consumed the identity-bound return acknowledgement on its canonical task-scoped turn; no transport or pane wake was attempted."
+                    : "Dry-run found the resident return acknowledgement available; no store was changed and status alone did not consume it.",
+        }, options.Format);
+        return consumed.Error is null ? 0 : 1;
+    }
+
+    private static bool ExpectedArtifactMatches(NotifyPendingDelegation record, string artifact) =>
+        (record.ExpectedArtifacts ?? record.ExpectedArtifact.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            .Any(expected => string.Equals(expected, artifact, StringComparison.Ordinal));
+
+    private static void EmitReturnAck(TextWriter writer, NotifyReturnAckResult result, string format)
+    {
+        if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+        {
+            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            return;
+        }
+
+        writer.WriteLine($"# notify {result.Operation} — {result.TaskId}");
+        writer.WriteLine();
+        writer.WriteLine($"- command mode: {result.CommandMode}");
+        writer.WriteLine($"- available: {result.Available.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"- consumed: {result.Consumed.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"- already converged: {result.AlreadyConverged.ToString().ToLowerInvariant()}");
+        if (result.Cause is not null) writer.WriteLine($"- cause: {result.Cause}");
+        writer.WriteLine();
+        writer.WriteLine(result.Summary);
     }
 
     private static int ExecuteRoleCollect(
@@ -888,6 +1175,9 @@ internal static class NotifyCommand
 
             if (read.Events.Count > 0)
             {
+                var receipts = options.Write
+                    ? RecordConsumptionReceipts(routingRoot, options, recordedReaderPath, readerPath, read)
+                    : [];
                 EmitRoleCollect(writer, options.Format, RoleCollectSuccess(
                     options,
                     readerPath,
@@ -895,8 +1185,9 @@ internal static class NotifyCommand
                     outcome: "events",
                     cause: null,
                     timedOut: false,
-                    summary: $"Collected {read.Events.Count} event(s) for external logical role '{options.Role}' from the effective reader."));
-                return 0;
+                    summary: $"Collected {read.Events.Count} event(s) for external logical role '{options.Role}' from the effective reader.",
+                    receipts: receipts));
+                return receipts.Any(receipt => receipt.Error is not null) ? 1 : 0;
             }
 
             if (!options.Wait)
@@ -942,7 +1233,8 @@ internal static class NotifyCommand
         string outcome,
         string? cause,
         bool timedOut,
-        string summary) => new()
+        string summary,
+        IReadOnlyList<NotifyConsumptionReceiptOutcome>? receipts = null) => new()
         {
             Operation = OperationCollect,
             RoutingRoot = options.RoutingRoot!,
@@ -958,8 +1250,51 @@ internal static class NotifyCommand
             Wait = options.Wait,
             TimedOut = timedOut,
             Cause = cause,
+            ConsumptionReceipts = receipts ?? [],
             Summary = summary,
         };
+
+    private static IReadOnlyList<NotifyConsumptionReceiptOutcome> RecordConsumptionReceipts(
+        string routingRoot,
+        NotifyOptions options,
+        string recordedReaderPath,
+        string readerPath,
+        NotifyRoleCollectReadResult read)
+    {
+        var canonicalRole = LogicalRoleNormalizer.TryNormalize(options.Role, out var normalized, out _)
+            ? normalized ?? options.Role!
+            : options.Role!;
+        return read.Events
+            .Where(item => !string.IsNullOrWhiteSpace(item.Unit))
+            .Select(item =>
+            {
+                var receipt = new NotifyConsumptionReceipt
+                {
+                    ReceiptId = NotifyCompletionChannelStore.BuildReceiptId(item.Unit, item.ResultNonce, item.Artifact, canonicalRole, read.NextCursor),
+                    Domain = options.Domain!,
+                    Team = options.Team!,
+                    Role = canonicalRole,
+                    TaskId = item.Unit,
+                    ResultNonce = item.ResultNonce,
+                    Artifact = item.Artifact,
+                    Cursor = read.NextCursor,
+                    ReaderPath = readerPath,
+                    ConsumedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+                };
+                var result = NotifyCompletionChannelStore.WriteReceipt(routingRoot, receipt, write: true);
+                return new NotifyConsumptionReceiptOutcome
+                {
+                    ReceiptId = receipt.ReceiptId,
+                    TaskId = receipt.TaskId,
+                    Cursor = receipt.Cursor,
+                    Written = result.Written,
+                    AlreadyConverged = result.AlreadyConverged,
+                    Error = result.Error,
+                };
+            })
+            .ToArray();
+
+    }
 
     private static NotifyRoleCollectResult RoleCollectFailure(
         NotifyOptions options,
@@ -1008,6 +1343,7 @@ internal static class NotifyCommand
         writer.WriteLine($"- wait: {result.Wait.ToString().ToLowerInvariant()}");
         writer.WriteLine($"- timed out: {result.TimedOut.ToString().ToLowerInvariant()}");
         writer.WriteLine($"- events: {result.Events.Count}");
+        writer.WriteLine($"- consumption receipts: {result.ConsumptionReceipts.Count}");
         if (result.Cause is not null)
         {
             writer.WriteLine($"- cause: {result.Cause}");
@@ -1635,6 +1971,26 @@ internal static class NotifyCommand
         }
 
         var record = lookup.Record;
+        var supervisionForHealth = NotifySupervisionStore.Read(
+            context.ResolveSupervisionArtifactRootPath(),
+            record.Domain,
+            record.Team);
+        var completionAck = record.ReportArtifact is null
+            ? null
+            : NotifyCompletionChannelStore.FindAck(
+                routingRoot,
+                record.Domain,
+                record.Team,
+                record.TaskId,
+                record.ResultNonce,
+                record.ReportArtifact).Ack;
+        var completionHealth = NotifyCompletionChannelHealth.Compute(
+            routingRoot,
+            record.Domain,
+            record.Team,
+            (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+            supervisionArtifactRoot: context.ResolveSupervisionArtifactRootPath(),
+            configuredBoundSeconds: supervisionForHealth.Resolved ? supervisionForHealth.Bound?.BoundSeconds : null);
         var researchMetrics = ResearchDelegationContract.Measure(
             routingRoot,
             record.Domain,
@@ -1660,6 +2016,9 @@ internal static class NotifyCommand
                 ResearchDelegationsIssued = researchMetrics.ResearchDelegationsIssued,
                 JudgementSeatTurnsWithoutDelegation = researchMetrics.JudgementSeatTurnsWithoutDelegation,
                 SettlementBasis = "disposition",
+                ReturnAckAvailable = completionAck is { ConsumedAt: null },
+                ReturnAckConsumed = completionAck?.ConsumedAt is not null,
+                CompletionChannelHealth = completionHealth,
                 Disposition = disposition,
                 LateReportDisagreement = record.ReportArrived
                     ? BuildLateReportDisagreement(record)
@@ -1727,10 +2086,7 @@ internal static class NotifyCommand
         var activityKey = record.WorkspaceId is not null && record.PaneId is not null
             ? $"activity:{record.WorkspaceId}:{record.PaneId}"
             : $"activity:{record.RecipientIdentity}";
-        var supervision = NotifySupervisionStore.Read(
-            context.ResolveSupervisionArtifactRootPath(),
-            record.Domain,
-            record.Team);
+        var supervision = supervisionForHealth;
         long? priorStateChangeSequence = null;
         if (supervision.LastCycle?.LastObservedStateChangeSequences.TryGetValue(activityKey, out var observedSequence) == true)
         {
@@ -1799,6 +2155,9 @@ internal static class NotifyCommand
             Summary = liveness.Summary + (record.ReportArrived
                 ? $" Matching report status '{record.ReportStatus}' arrived."
                 : $" No matching report has arrived; verdict is '{verdict}'."),
+            ReturnAckAvailable = completionAck is { ConsumedAt: null },
+            ReturnAckConsumed = completionAck?.ConsumedAt is not null,
+            CompletionChannelHealth = completionHealth,
         });
         return 0;
     }
@@ -1911,6 +2270,7 @@ internal static class NotifyCommand
                 emission_policy = pass.EmissionPolicy,
                 pre_approval_policy = pass.PreApprovalPolicy,
                 liveness = pass.Liveness,
+                completion_channel_health = pass.CompletionChannelHealth,
                 actions = pass.Actions,
                 findings = pass.Findings,
                 recovery_records = pass.RecoveryRecords,
@@ -1952,6 +2312,10 @@ internal static class NotifyCommand
         if (pass.Liveness is { } liveness)
         {
             writer.WriteLine($"- supervisor liveness: running={liveness.Running.ToString().ToLowerInvariant()}; absent since last cycle={liveness.AbsentSinceLastCycle.ToString().ToLowerInvariant()}; gap={liveness.GapSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<unknown>"}s");
+        }
+        if (pass.CompletionChannelHealth is { } completionHealth)
+        {
+            writer.WriteLine($"- completion-channel health: {completionHealth.State}; bound={completionHealth.BoundSeconds}s; configured-bound={completionHealth.ConfiguredBoundSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}s; measured-P={completionHealth.MaxSweepSeconds.ToString(CultureInfo.InvariantCulture)}s; qualification={completionHealth.QualificationReason}; delivered-unreconciled={completionHealth.DeliveredUnreconciledCount}; missing-return-ack-age={completionHealth.MissingReturnAckAgeSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}s; resident-pending-age={completionHealth.ResidentConsumptionPendingAgeSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}s; next-action={completionHealth.NextAction ?? "none"}");
         }
         if (pass.Error is not null)
         {
@@ -2006,6 +2370,12 @@ internal static class NotifyCommand
         writer.WriteLine($"- activity verdict: {result.ActivityVerdict ?? "<unknown>"}");
         writer.WriteLine($"- activity inputs: {result.ActivityInputs ?? "<unknown>"}");
         writer.WriteLine($"- report arrived: {result.ReportArrived?.ToString().ToLowerInvariant() ?? "<unknown>"}");
+        writer.WriteLine($"- return ack available: {result.ReturnAckAvailable.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"- return ack consumed: {result.ReturnAckConsumed.ToString().ToLowerInvariant()}");
+        if (result.CompletionChannelHealth is { } completionHealth)
+        {
+            writer.WriteLine($"- completion-channel health: {completionHealth.State}; bound={completionHealth.BoundSeconds}s; configured-bound={completionHealth.ConfiguredBoundSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}s; measured-P={completionHealth.MaxSweepSeconds.ToString(CultureInfo.InvariantCulture)}s; qualification={completionHealth.QualificationReason}; delivered-unreconciled={completionHealth.DeliveredUnreconciledCount}; next-action={completionHealth.NextAction ?? "none"}");
+        }
         writer.WriteLine($"- research delegations issued: {result.ResearchDelegationsIssued}");
         writer.WriteLine($"- judgement-seat turns without delegation: {result.JudgementSeatTurnsWithoutDelegation}");
         writer.WriteLine($"- settlement basis: {result.SettlementBasis ?? "<unknown>"}");
@@ -2540,6 +2910,8 @@ internal static class NotifyCommand
         Artifact = string.Equals(operation, OperationDelegate, StringComparison.Ordinal)
             ? options.Inputs.FirstOrDefault() ?? options.ExpectedArtifacts[0]
             : options.Artifact!,
+        ResultNonce = options.ResultNonce,
+        CompletionIdentity = ContinuationChainStore.BuildCompletionSignalId(options.TaskId!, options.ResultNonce),
         TaskKind = options.TaskKind,
         Question = options.Question,
         ResearchFindings = BuildResearchFindings(options),
@@ -2730,6 +3102,8 @@ internal static class NotifyCommand
             Unit = options.TaskId!,
             Summary = NotifyEventWriter.NormalizeSummary(options.Summary!),
             Artifact = options.Artifact!,
+            ResultNonce = options.ResultNonce,
+            CompletionIdentity = ContinuationChainStore.BuildCompletionSignalId(options.TaskId!, options.ResultNonce),
             Ruling = options.PreparedRuling,
             RulingEnvelopeFields = options.RulingEnvelopeFields.Count == 0
                 ? null
@@ -3481,6 +3855,7 @@ internal static class NotifyCommand
         string? rulingDigest = null;
         string? rulingOrigin = null;
         string? downstreamDelegationReference = null;
+        string? receiptCursor = null;
         string? dispositionKind = null;
         string? actor = null;
         string? reason = null;
@@ -3552,6 +3927,10 @@ internal static class NotifyCommand
                 case "--downstream-delegation":
                 case "--downstream-reference":
                     if (!ReadValue(args, ref index, argument, out downstreamDelegationReference, out error)) return false;
+                    break;
+                case "--receipt-cursor":
+                case "--consumption-cursor":
+                    if (!ReadValue(args, ref index, argument, out receiptCursor, out error)) return false;
                     break;
                 case "--ruling-envelope-field":
                     if (!ReadValue(args, ref index, argument, out var envelopeField, out error)) return false;
@@ -3799,6 +4178,7 @@ internal static class NotifyCommand
             Summary = summary,
             EventKind = eventKind,
             DownstreamDelegationReference = downstreamDelegationReference,
+            ReceiptCursor = receiptCursor,
             RulingEnvelopeFields = rulingEnvelopeFields,
             Findings = findings,
             FindingSources = findingSources,
@@ -3868,6 +4248,8 @@ internal static class NotifyCommand
                     : new[] { ("--domain", options.Domain), ("--team", options.Team), ("--task-id", options.TaskId) }
             : string.Equals(operation, OperationReconcile, StringComparison.Ordinal)
                 ? new[] { ("--domain", options.Domain), ("--team", options.Team), ("--task-id", options.TaskId) }
+            : string.Equals(operation, OperationAcknowledge, StringComparison.Ordinal)
+                ? new[] { ("--domain", options.Domain), ("--team", options.Team), ("--from", options.FromRole), ("--task-id", options.TaskId) }
             : string.Equals(operation, OperationSupervise, StringComparison.Ordinal)
                 ? new[] { ("--domain", options.Domain), ("--team", options.Team) }
             : string.Equals(operation, OperationDispose, StringComparison.Ordinal)
@@ -3903,6 +4285,13 @@ internal static class NotifyCommand
                 || options.TimeoutMilliseconds is not null))
         {
             error = "--role, --since, --wait, and --timeout-ms are supported only by notify collect.";
+            return false;
+        }
+
+        if (options.ReceiptCursor is not null
+            && operation is not OperationAcknowledge and not OperationCollect)
+        {
+            error = "--receipt-cursor is supported only by notify acknowledge or acknowledgement collect.";
             return false;
         }
 
@@ -4188,9 +4577,15 @@ internal static class NotifyCommand
         }
         else if (string.Equals(operation, OperationCollect, StringComparison.Ordinal))
         {
-            if ((options.TaskId is null) == (options.Role is null))
+            if (options.TaskId is null && options.Role is null)
             {
-                error = "collect requires exactly one of --task-id or --role.";
+                error = "collect requires --task-id or --role.";
+                return false;
+            }
+
+            if (options.TaskId is not null && !IsSafeIdentity(options.TaskId))
+            {
+                error = "--task-id must be a safe task id.";
                 return false;
             }
 
@@ -4233,9 +4628,26 @@ internal static class NotifyCommand
                 }
             }
 
-            if (options.Role is not null && options.TaskId is not null)
+            // A task-scoped collect is the originating resident's canonical
+            // turn.  It must accept every recorded resident role (builder,
+            // reviewer, implementation, etc.); limiting this to the
+            // orchestration/Steward seats would make a valid return ack
+            // unconsumable by the seat it names.
+        }
+        else if (string.Equals(operation, OperationAcknowledge, StringComparison.Ordinal))
+        {
+            if (!LogicalRoleNormalizer.TryNormalize(options.FromRole, out var canonicalFrom, out _)
+                || !string.Equals(canonicalFrom, LogicalRoleNormalizer.Steward, StringComparison.Ordinal))
             {
-                error = "collect requires exactly one of --task-id or --role; do not supply both.";
+                error = "acknowledge requires --from steward; only the Steward may issue a return acknowledgement.";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(options.ResultNonce)
+                || string.IsNullOrWhiteSpace(options.Artifact)
+                || string.IsNullOrWhiteSpace(options.ReceiptCursor))
+            {
+                error = "acknowledge requires --result-nonce, --artifact, and --receipt-cursor.";
                 return false;
             }
         }
@@ -4337,6 +4749,7 @@ internal static class NotifyCommand
         OperationReport => ReportUsage,
         OperationCollect => CollectUsage,
         OperationReconcile => ReconcileUsage,
+        OperationAcknowledge => AcknowledgeUsage,
         OperationStatus => StatusUsage,
         OperationResearchStatus => ResearchStatusUsage,
         OperationSupervise => SuperviseUsage,
@@ -4372,6 +4785,7 @@ internal sealed record NotifyOptions
     public string? RulingDigest { get; init; }
     public string? RulingOrigin { get; init; }
     public string? DownstreamDelegationReference { get; init; }
+    public string? ReceiptCursor { get; init; }
     public IReadOnlyDictionary<string, string> RulingEnvelopeFields { get; init; } =
         new Dictionary<string, string>(StringComparer.Ordinal);
     public NotifyRuling? PreparedRuling { get; init; }
@@ -4487,6 +4901,34 @@ internal sealed record NotifyRoleCollectResult
     [JsonPropertyName("outcome")] public required string Outcome { get; init; }
     [JsonPropertyName("wait")] public bool Wait { get; init; }
     [JsonPropertyName("timed_out")] public bool TimedOut { get; init; }
+    [JsonPropertyName("cause")] public string? Cause { get; init; }
+    [JsonPropertyName("consumption_receipts")] public IReadOnlyList<NotifyConsumptionReceiptOutcome> ConsumptionReceipts { get; init; } = [];
+    [JsonPropertyName("summary")] public required string Summary { get; init; }
+}
+
+internal sealed record NotifyConsumptionReceiptOutcome
+{
+    [JsonPropertyName("receipt_id")] public required string ReceiptId { get; init; }
+    [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+    [JsonPropertyName("cursor")] public required string Cursor { get; init; }
+    [JsonPropertyName("written")] public bool Written { get; init; }
+    [JsonPropertyName("already_converged")] public bool AlreadyConverged { get; init; }
+    [JsonPropertyName("error")] public string? Error { get; init; }
+}
+
+internal sealed record NotifyReturnAckResult
+{
+    [JsonPropertyName("operation")] public required string Operation { get; init; }
+    [JsonPropertyName("routing_root")] public required string RoutingRoot { get; init; }
+    [JsonPropertyName("domain")] public required string Domain { get; init; }
+    [JsonPropertyName("team")] public required string Team { get; init; }
+    [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+    [JsonPropertyName("command_mode")] public required string CommandMode { get; init; }
+    [JsonPropertyName("available")] public bool Available { get; init; }
+    [JsonPropertyName("consumed")] public bool Consumed { get; init; }
+    [JsonPropertyName("already_converged")] public bool AlreadyConverged { get; init; }
+    [JsonPropertyName("written")] public bool Written { get; init; }
+    [JsonPropertyName("ack")] public NotifyReturnAck? Ack { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
 }
@@ -4641,6 +5083,9 @@ internal sealed record NotifyStatusResult
     [JsonPropertyName("verdict")] public string? Verdict { get; init; }
     [JsonPropertyName("cause")] public string? Cause { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
+    [JsonPropertyName("return_ack_available")] public bool ReturnAckAvailable { get; init; }
+    [JsonPropertyName("return_ack_consumed")] public bool ReturnAckConsumed { get; init; }
+    [JsonPropertyName("completion_channel_health")] public NotifyCompletionChannelHealth? CompletionChannelHealth { get; init; }
 
     public static NotifyStatusResult Failure(
         string routingRoot,
@@ -4835,6 +5280,12 @@ internal sealed record NotifyDesignEvent
     [JsonPropertyName("unit")] public required string Unit { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
     [JsonPropertyName("artifact")] public required string Artifact { get; init; }
+    [JsonPropertyName("result_nonce")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResultNonce { get; init; }
+    [JsonPropertyName("completion_identity")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CompletionIdentity { get; init; }
     [JsonPropertyName("ruling")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public NotifyRuling? Ruling { get; init; }

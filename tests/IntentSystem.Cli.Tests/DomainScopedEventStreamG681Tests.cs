@@ -171,13 +171,14 @@ public sealed class DomainScopedEventStreamG681Tests : IDisposable
     {
         using var document = JsonDocument.Parse(jsonLine);
         var record = document.RootElement;
-        Assert.Equal(6, record.EnumerateObject().Count());
+        Assert.Equal(7, record.EnumerateObject().Count());
         Assert.True(record.TryGetProperty("timestamp", out _));
         Assert.Equal(Team, record.GetProperty("team").GetString());
         Assert.Equal("escalation", record.GetProperty("kind").GetString());
         Assert.Equal(unit, record.GetProperty("unit").GetString());
         Assert.Equal("design decision", record.GetProperty("summary").GetString());
         Assert.Equal("approval", record.GetProperty("artifact").GetString());
+        Assert.Equal($"{unit}:report", record.GetProperty("completion_identity").GetString());
     }
 
     private static string FindRepoRoot()

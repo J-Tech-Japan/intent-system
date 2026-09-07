@@ -91,7 +91,10 @@ public sealed class GuideDesignThreadCommandTests
                     context,
                     writer));
 
-            var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(writer.ToString())));
+            var rendered = writer.ToString();
+            Assert.Contains("G811 completion channel", rendered, StringComparison.Ordinal);
+            var parentProjection = RemoveG811CompletionGuidance(rendered);
+            var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(parentProjection)));
             Assert.Equal("9cb6691f1a11e22966ea5d218d4c0b7ac13db7a4dc600109d19b1386cc9f0a5a", hash);
         }
         finally
@@ -125,6 +128,14 @@ public sealed class GuideDesignThreadCommandTests
         Assert.True(start >= 0, $"missing section heading: {heading}");
         var next = output.IndexOf("\n## ", start + heading.Length, StringComparison.Ordinal);
         return next < 0 ? output[start..] : output[start..next];
+    }
+
+    private static string RemoveG811CompletionGuidance(string markdown)
+    {
+        const string marker = "\n\n- **G811 completion channel:**";
+        var index = markdown.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(index >= 0, "G811 completion guidance must be present in the rendered output.");
+        return markdown[..index];
     }
 
     private static CliContext CreateContext(string root) => new()
