@@ -48,6 +48,9 @@ public sealed class G810RepairAcceptanceTests : IDisposable
         Assert.True(result.ExactIdentityVersionDestinationEffectTiming);
         Assert.True(result.EventLossCrossProduct);
         Assert.Equal(4, result.CrashBoundariesCovered);
+        Assert.Equal(15, result.IndependentFloorEvents);
+        Assert.Equal(20, result.CrashBoundaryCrossings);
+        Assert.True(result.StoreInjections >= 45);
         Assert.True(result.SuppressedFindingMutationRejected);
         Assert.True(result.DisabledFloorMutationRejected);
         Assert.True(result.ShrinkIdentitySetPreserved);
@@ -55,9 +58,11 @@ public sealed class G810RepairAcceptanceTests : IDisposable
         Assert.True(result.DetectionBoundSeconds <= 60);
         output.WriteLine(
             $"G810 AC9 synthetic-e2e expected_event_ledger={result.ExpectedEvents}; observed={result.ObservedEvents}; transport_attempts={result.TransportAttempts}; "
-            + $"loss_cross_product={result.EventLossCrossProduct}; crash_boundaries={result.CrashBoundariesCovered}; exact_identity_version_destination_effect_timing={result.ExactIdentityVersionDestinationEffectTiming}; "
+            + $"loss_cross_product={result.EventLossCrossProduct}; crash_boundaries={result.CrashBoundariesCovered}; crash_boundary_crossings={result.CrashBoundaryCrossings}; exact_identity_version_destination_effect_timing={result.ExactIdentityVersionDestinationEffectTiming}; "
+            + $"independent_floor_events={result.IndependentFloorEvents}; store_injections={result.StoreInjections}; "
             + $"suppressed_finding_mutation_rejected={result.SuppressedFindingMutationRejected}; disabled_floor_mutation_rejected={result.DisabledFloorMutationRejected}; "
-            + $"shrink={result.ShrinkBefore}->{result.ShrinkAfter}; identity_set_preserved={result.ShrinkIdentitySetPreserved}; remeasured={result.RemeasuredAfterShrink}; D={result.DetectionBoundSeconds}s");
+            + $"shrink={result.ShrinkBefore}->{result.ShrinkAfter}; identity_set_preserved={result.ShrinkIdentitySetPreserved}; remeasured={result.RemeasuredAfterShrink}; D={result.DetectionBoundSeconds}s; "
+            + "injections=all-events-lost->independent-floor,blocked-wait->independent-floor,crash-restart->durable-journal,lost-ack->retry,corruption-before-valid->tolerant-read,prolonged-idle->floor");
     }
 
     [Fact]
@@ -122,12 +127,36 @@ public sealed class G810RepairAcceptanceTests : IDisposable
         var continuation = NotifyCostAwareSettlementInspector.Reconcile(routingRoot, reportRoot, Domain, Team, pending, write: true);
         Assert.True(continuation.AlreadyConverged);
         Assert.True(continuation.ContinuationAlreadyConverged);
-        Assert.Equal(8, NotifyCostAwareSettlementInspector.InjectedFailureShapes.Count);
+        Assert.Equal(
+            new[]
+            {
+                "delivered-unreconciled", "duplicate-retry", "lost-owner-wake", "wrong-role-g796-routing",
+                "restart", "wrong-nonce-or-report-root", "corrupt-outbox", "partial-store-write-failure",
+            },
+            NotifyCostAwareSettlementInspector.InjectedFailureShapes);
+        var failures = NotifyCostAwareSettlementFailureHarness.Run();
+        Assert.Equal(8, failures.Count);
+        Assert.All(failures, failure =>
+        {
+            Assert.True(failure.IsFailure, failure.Shape);
+            Assert.False(string.IsNullOrWhiteSpace(failure.Reason), failure.Shape);
+        });
+        var fixtures = NotifyCostAwareSettlementFailureHarness.RunNamedFixtures();
+        Assert.Equal(2, fixtures.Count);
+        Assert.All(fixtures, fixture =>
+        {
+            Assert.True(fixture.IsFailure, fixture.Fixture);
+            Assert.Equal(NotifyCostAwareSettlementInspector.AwaitingHostReconciliation, fixture.Classification);
+            Assert.False(fixture.BeforeRepairPassed, fixture.Fixture);
+            Assert.True(fixture.AfterRepairPassed, fixture.Fixture);
+        });
         output.WriteLine(
             $"G810 AC13 classification={health.Settlement.Classification}; task={health.Settlement.TaskId}; nonce={health.Settlement.ResultNonce}; entry={health.Settlement.EntryIdentity}; "
             + $"owner={health.Settlement.Owner}; report_root_validated={health.Settlement.ReportRootValidated}; next_action={health.Settlement.CanonicalNextAction}; "
             + $"write_reconciled={first.Reconciled}; report_arrived={first.ReportArrived}; continuation_already_converged={continuation.ContinuationAlreadyConverged}; "
-            + $"failure_shapes={string.Join(",", NotifyCostAwareSettlementInspector.InjectedFailureShapes)}");
+            + $"failure_shapes={string.Join(",", NotifyCostAwareSettlementInspector.InjectedFailureShapes)}; "
+            + $"failure_results={string.Join(",", failures.Select(failure => $"{failure.Shape}:{failure.IsFailure}:{failure.Classification}"))}; "
+            + $"named_fixtures={string.Join(",", fixtures.Select(fixture => $"{fixture.Fixture}:{fixture.Classification}:before=FAIL:after=PASS"))}");
     }
 
     [Fact]
