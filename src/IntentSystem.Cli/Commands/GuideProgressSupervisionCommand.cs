@@ -110,7 +110,8 @@ internal static class GuideProgressSupervisionCommand
         IncidentLearning = "Every failure records an incident identity, evidence or known unknowns, owner, correction, verification and reusable lesson. Learning closes only after a content-bearing knowledge-writeback commit/path/digest is verified, or remains open as an owned linked learning task with deadline.",
         RoleContracts = RoleContracts(),
         Handoff = "G811 completion/return-ack/reconcile primitives carry completion to reviewer, orchestrator and steward. Each edge records event, normalized recipient identity, delivery, receipt and consumption separately; fanout is idempotent and a missing edge remains pending without repeating completed work.",
-        ReviewDrift = "A current-head attributed canonical reviewer verdict outranks a stale selector wait. Repository/unit/head, reviewer, artifact, findings, verdict time and label-transition evidence are checked; obsolete, forged, superseded or unavailable verdicts refuse repair. GitHub review state is corroboration only.",
+        ReviewDrift = "A current-head attributed canonical reviewer verdict outranks a stale selector wait. Repository/unit/head, reviewer, artifact, findings, verdict time and label-transition evidence are checked; obsolete, forged, superseded or unavailable verdicts refuse repair. A verified request-update starts T=60s from its durable verdict time and is actioned by T+D+30; GitHub review state is corroboration only.",
+        FaultMatrix = ProgressFaultMatrix.All.Select(fault => fault.ToString()).ToArray(),
         NegativeBoundaries = new[]
         {
             "No model call, pane read, process start, shell command, focus, key send or external-owner herdr operation is part of deterministic detection or recovery.",
@@ -168,6 +169,7 @@ internal static class GuideProgressSupervisionCommand
         writer.WriteLine("## Completion-driven handoff and review drift");
         writer.WriteLine($"- {guide.Handoff}");
         writer.WriteLine($"- {guide.ReviewDrift}");
+        writer.WriteLine($"- fault matrix: `{string.Join("`, `", guide.FaultMatrix)}`; every fault retains an open owner/deadline and cannot complete a unit by delivery or liveness alone.");
         writer.WriteLine();
         writer.WriteLine("## Commands");
         foreach (var command in guide.Commands) writer.WriteLine($"- `{command}`");
@@ -228,6 +230,7 @@ internal sealed record ProgressSupervisionGuide
     [JsonPropertyName("role_contracts")] public IReadOnlyList<ProgressRoleContract> RoleContracts { get; init; } = [];
     [JsonPropertyName("handoff")] public required string Handoff { get; init; }
     [JsonPropertyName("review_drift")] public required string ReviewDrift { get; init; }
+    [JsonPropertyName("fault_matrix")] public IReadOnlyList<string> FaultMatrix { get; init; } = [];
     [JsonPropertyName("commands")] public IReadOnlyList<string> Commands { get; init; } = [];
     [JsonPropertyName("negative_boundaries")] public IReadOnlyList<string> NegativeBoundaries { get; init; } = [];
 }

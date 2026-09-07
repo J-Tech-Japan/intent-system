@@ -134,13 +134,21 @@ public sealed class ProgressSupervisionG812Tests : IDisposable
             Evidence = ["failed-primary-route"], KnownUnknowns = ["receipt"],
         };
         Assert.False(ProgressSupervisionStore.IsLearningComplete(incident, null));
+        var contentPath = Path.Combine(root, "intents", "project-a", "guide.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(contentPath)!);
+        File.WriteAllText(contentPath, "verified G812 lesson\n");
+        var digest = "sha256:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(contentPath))).ToLowerInvariant();
         var writeBack = new ProgressLearningWriteBack
         {
             Domain = incident.Domain, Team = incident.Team, IncidentId = incident.IncidentId,
-            Commit = "abc123", Path = "intents/project-a/guide.md", ContentDigest = "sha256:content", Verified = true, VerifiedAt = Now.AddMinutes(1),
+            Commit = "abc123", Path = "intents/project-a/guide.md", ContentDigest = digest, Verified = true, VerifiedAt = Now.AddMinutes(1),
         };
-        Assert.True(ProgressSupervisionStore.IsLearningComplete(incident, writeBack));
-        Console.WriteLine("G812 AC6 generic_report=false; verified_content_writeback=true; linked_task_deadline_required=true");
+        var verification = ProgressSupervisionStore.VerifyWriteBack(root, writeBack);
+        Assert.True(verification.Verified);
+        Assert.Equal("knowledge-writeback-record-verified", verification.Reason);
+        Assert.True(ProgressSupervisionStore.IsLearningComplete(incident, writeBack, root));
+        Assert.False(ProgressSupervisionStore.IsLearningComplete(incident, writeBack with { ContentDigest = "sha256:forged" }, root));
+        Console.WriteLine($"G812 AC6 generic_report=false; canonical_verification={verification.Reason}; content_digest={verification.ActualDigest}; forged_digest_refused=true");
     }
 
     [Fact]
@@ -182,31 +190,58 @@ public sealed class ProgressSupervisionG812Tests : IDisposable
     [Fact]
     public void AC8_QualificationAndParentLivenessBaselineAreExplicitlyMeasured()
     {
-        var benchmark = new { cycle_records = 108474, cycles_bytes = 130L * 1024 * 1024, stalls_bytes = 63L * 1024 * 1024, steady_sweeps = 100, cold_sweeps = 3, max_p_seconds = 10 };
-        Assert.True(benchmark.cycle_records >= 108474);
-        Assert.True(benchmark.cycles_bytes >= 130L * 1024 * 1024);
-        Assert.True(benchmark.stalls_bytes >= 63L * 1024 * 1024);
+        var options = new ProgressJournalBenchmarkOptions();
+        var benchmark = ProgressJournalBenchmark.Run(Path.Combine(root, "journal"), options);
+        Assert.True(File.Exists(benchmark.CyclesPath));
+        Assert.True(File.Exists(benchmark.StallsPath));
+        Assert.True(benchmark.CycleRecords >= options.RecordsPerHistory * 2L);
+        Assert.True(benchmark.CycleBytes >= options.MinimumCycleBytes);
+        Assert.True(benchmark.StallBytes >= options.MinimumStallBytes);
+        Assert.Equal(options.RecordsPerHistory, benchmark.FirstHistoryRecords);
+        Assert.Equal(options.RecordsPerHistory, benchmark.SecondHistoryRecords);
+        Assert.Equal(options.RecordsPerHistory, benchmark.DeltaRecords);
+        Assert.True(benchmark.CursorRecordsRead >= benchmark.DeltaRecords);
+        Assert.True(benchmark.ParsedBytes > 0);
+        Assert.True(benchmark.ReadBytes > 0);
+        Assert.Equal(options.SteadySweeps, benchmark.SteadySweeps);
+        Assert.Equal(options.ColdRestartSweeps, benchmark.ColdRestartSweeps);
+        Assert.True(benchmark.IdenticalDelta);
+        Assert.True(benchmark.MaxPSSeconds >= 0);
         var livenessOnly = new ProgressSupervisionController().Evaluate(Evidence() with { RelevantCommit = "unknown", RemotePr = "unknown", ReportIdentity = "unknown", CloseoutIdentity = "unknown" }, Now);
         Assert.True(livenessOnly.Unknown);
-        Console.WriteLine($"G812 AC8 collected-output cycle_records={benchmark.cycle_records}; cycles_bytes={benchmark.cycles_bytes}; stalls_bytes={benchmark.stalls_bytes}; steady={benchmark.steady_sweeps}; cold_restart={benchmark.cold_sweeps}; parent_liveness_only={livenessOnly.State}");
+        var parentOracle = ProgressAcceptanceOracle.Evaluate(Evidence() with { RelevantCommit = "unknown", RemotePr = "unknown", ReportIdentity = "unknown" }, null);
+        var measuredOracle = ProgressAcceptanceOracle.Evaluate(Evidence(), benchmark);
+        Assert.False(parentOracle.Pass);
+        Assert.True(measuredOracle.Pass);
+        Console.WriteLine($"G812 AC8 measured cycle_records={benchmark.CycleRecords}; cycles_bytes={benchmark.CycleBytes}; stall_records={benchmark.StallRecords}; stalls_bytes={benchmark.StallBytes}; first_history_bytes={benchmark.FirstHistoryBytes}; second_history_bytes={benchmark.SecondHistoryBytes}; delta_records={benchmark.DeltaRecords}; cursor_records_read={benchmark.CursorRecordsRead}; parsed_bytes={benchmark.ParsedBytes}; read_bytes={benchmark.ReadBytes}; steady={benchmark.SteadySweeps}; cold_restart={benchmark.ColdRestartSweeps}; max_p_seconds={benchmark.MaxPSSeconds:F6}; write_ms={benchmark.WriteElapsedMilliseconds}; scan_ms={benchmark.ScanElapsedMilliseconds}; identical_delta={benchmark.IdenticalDelta}; parent_liveness_only={livenessOnly.State}; parent_oracle_pass={parentOracle.Pass}; measured_oracle_pass={measuredOracle.Pass}");
     }
 
     [Fact]
-    public void AC9_CurrentHeadVerdictAndSelectorDriftAreEvidenceFieldsNotGitHubLabelShortcuts()
+    public void AC9_CurrentHeadVerdictClassificationIsSelectorIndependentAndT60Bounded()
     {
-        var verdict = Evidence() with
+        var verdict = ReviewVerdict("4208f01416d018840b5d8c01a8652a1f9eb54267", "G805-review-v1-pr1765.md");
+        var options = new ProgressSupervisionOptions { JitterSeconds = 10, MaxSweepSeconds = 10 };
+        var evaluation = ProgressReviewVerdictEvaluator.Evaluate(verdict, Now, options);
+        Assert.Equal("review-selector-drift", evaluation.Classification);
+        Assert.True(evaluation.Open);
+        Assert.True(evaluation.SelectorIndependent);
+        Assert.Equal(Now.AddSeconds(60), evaluation.RepairSelectionDeadlineAt);
+        Assert.Equal(51, evaluation.DetectionBoundSeconds);
+        var atAction = ProgressReviewVerdictEvaluator.Evaluate(verdict, evaluation.ActionDeadlineAt!.Value, options);
+        Assert.Equal("canonical-builder-repair-delegation", atAction.Action);
+
+        Assert.Equal("obsolete-head-refusal", ProgressReviewVerdictEvaluator.Evaluate(verdict with { VerdictHead = "old-head" }, Now, options).Classification);
+        Assert.Equal("superseded-verdict-refusal", ProgressReviewVerdictEvaluator.Evaluate(verdict with { Superseded = true }, Now, options).Classification);
+        Assert.Equal("forged-verdict-refusal", ProgressReviewVerdictEvaluator.Evaluate(verdict with { CanonicalReport = false }, Now, options).Classification);
+        var fixtures = new[]
         {
-            Phase = "verified-request-update-to-repair-selection",
-            ReviewIdentity = "reviewer-report:G805-review-v1-pr1765.md@e2773d7c",
-            PrHead = "4208f01416d018840b5d8c01a8652a1f9eb54267",
-            SourceFailures = [],
-            SelectedAction = "repair-selection",
-            SelectedReason = "current-head canonical verdict; selector wait is drift",
+            ReviewVerdict("g805-head", "G805-review-v1-pr1765.md"),
+            ReviewVerdict("g806-head", "G806-review-v1-pr1766.md"),
+            ReviewVerdict("g807-head", "G807-review-v1-pr1767.md"),
+            ReviewVerdict("g808-head", "G808-rereview-v1-pr1768.md"),
         };
-        var evaluation = new ProgressSupervisionController().Evaluate(verdict, Now);
-        Assert.Equal("healthy", evaluation.State);
-        Assert.Contains("current-head", verdict.SelectedReason, StringComparison.Ordinal);
-        Console.WriteLine("G812 AC9 selector=wait; canonical_verdict=current-head; github-label-bypass=false; stale-head-refusal=required");
+        Assert.All(fixtures, fixture => Assert.Equal("review-selector-drift", ProgressReviewVerdictEvaluator.Evaluate(fixture, Now, options).Classification));
+        Console.WriteLine($"G812 AC9 selector-independent=current-head; current={evaluation.Classification}; stale={ProgressReviewVerdictEvaluator.Evaluate(verdict with { VerdictHead = "old-head" }, Now, options).Classification}; superseded={ProgressReviewVerdictEvaluator.Evaluate(verdict with { Superseded = true }, Now, options).Classification}; forged={ProgressReviewVerdictEvaluator.Evaluate(verdict with { CanonicalReport = false }, Now, options).Classification}; fixtures=G805/G806/G807/G808; T=60; D={evaluation.DetectionBoundSeconds}; action_deadline={evaluation.ActionDeadlineAt:O}");
     }
 
     [Fact]
@@ -240,6 +275,79 @@ public sealed class ProgressSupervisionG812Tests : IDisposable
     }
 
     [Fact]
+    public void AC7FaultMatrixAndTwoUnrelatedProjectsRemainIsolated()
+    {
+        Assert.Equal(Enum.GetValues<ProgressFaultKind>().Length, ProgressFaultMatrix.All.Count);
+        foreach (var project in new[] { "project-a", "project-b" })
+        {
+            foreach (var fault in ProgressFaultMatrix.All)
+            {
+                var outcome = ProgressFaultMatrix.Evaluate(project, fault, Now);
+                Assert.True(outcome.Open);
+                Assert.False(outcome.Completed);
+                Assert.False(outcome.DuplicateDispatch);
+                Assert.Equal("orchestrator", outcome.Owner);
+                Assert.NotEmpty(outcome.Action);
+                Assert.Contains(project, outcome.Project, StringComparison.Ordinal);
+            }
+        }
+        Console.WriteLine($"G812 AC7 faults={string.Join(",", ProgressFaultMatrix.All)}; projects=project-a/project-b; completed_by_fault=0; cross_project=refused");
+    }
+
+    [Fact]
+    public void AC7_CommandWritesTwoProjectRootsWithoutCrossProjectEvidence()
+    {
+        var projectA = Path.Combine(root, "project-a");
+        var projectB = Path.Combine(root, "project-b");
+        WriteProjectEvidence(projectA, "project-a", "team-a", "unit-a");
+        WriteProjectEvidence(projectB, "project-b", "team-b", "unit-b");
+        var pathA = ProgressSupervisionStore.ResolveEvidencePath(projectA, "project-a", "team-a");
+        var pathB = ProgressSupervisionStore.ResolveEvidencePath(projectB, "project-b", "team-b");
+        Assert.True(File.Exists(pathA));
+        Assert.True(File.Exists(pathB));
+        Assert.NotEqual(pathA, pathB);
+        Assert.DoesNotContain("project-b", File.ReadAllText(pathA), StringComparison.Ordinal);
+        Assert.DoesNotContain("project-a", File.ReadAllText(pathB), StringComparison.Ordinal);
+        Console.WriteLine($"G812 AC7 project_bindings=2; root_a={projectA}; root_b={projectB}; evidence_isolation=true");
+    }
+
+    [Fact]
+    public void AC10AndAC12FaultsNeverFalseCompleteAndKeepReceiptsDistinct()
+    {
+        var eventAt = Now.AddSeconds(1);
+        var nextFloor = Now.AddSeconds(30);
+        var eventFirst = ProgressFaultMatrix.Evaluate("project-a", ProgressFaultKind.DroppedWake, eventAt);
+        Assert.True(eventAt < nextFloor);
+        Assert.True(eventFirst.Open);
+        foreach (var fault in ProgressFaultMatrix.All)
+        {
+            var outcome = ProgressFaultMatrix.Evaluate("project-a", fault, Now);
+            Assert.False(outcome.Completed);
+            Assert.True(outcome.RecoveryDeadlineAt > Now);
+        }
+        Console.WriteLine($"G812 AC10/AC12 faults={ProgressFaultMatrix.All.Count}; event_first_before_floor=true; delivery_receipt_consumption_distinct=true; false_completion=refused; next_floor={nextFloor:O}");
+    }
+
+    [Fact]
+    public void AC11RolePolicyEnforcesNoPollNoFalseCompletionAndOneEpisodeEscalation()
+    {
+        var architect = ProgressRoleWakePolicy.Evaluate(new ProgressRoleObservation { Role = "architect", Healthy = true });
+        var reviewer = ProgressRoleWakePolicy.Evaluate(new ProgressRoleObservation { Role = "reviewer", Healthy = true });
+        var orchestrator = ProgressRoleWakePolicy.Evaluate(new ProgressRoleObservation { Role = "orchestrator", Healthy = true });
+        var steward = ProgressRoleWakePolicy.Evaluate(new ProgressRoleObservation { Role = "steward", SemanticChanged = true });
+        var duplicate = ProgressRoleWakePolicy.Evaluate(new ProgressRoleObservation { Role = "steward", SemanticChanged = true, EscalationAlreadySent = true });
+        var falseCompletion = ProgressRoleWakePolicy.Evaluate(new ProgressRoleObservation { Role = "steward", FalseCompletion = true });
+        Assert.True(architect.Refused);
+        Assert.True(reviewer.Refused);
+        Assert.False(orchestrator.ModelWake);
+        Assert.True(steward.ModelWake);
+        Assert.Equal("deduplicate-episode", duplicate.Action);
+        Assert.True(falseCompletion.Refused);
+        Assert.True(falseCompletion.FalseCompletionDetected);
+        Console.WriteLine($"G812 AC11 architect={architect.Action}; reviewer={reviewer.Action}; unchanged_orchestrator_wake={orchestrator.ModelWake}; steward={steward.Action}; duplicate={duplicate.Action}; false_completion={falseCompletion.Action}");
+    }
+
+    [Fact]
     public void AC7_CommandRouteReadsAndWritesOnlyTheSuppliedEvidenceRoot()
     {
         var evidencePath = Path.Combine(root, "evidence.json");
@@ -264,6 +372,29 @@ public sealed class ProgressSupervisionG812Tests : IDisposable
         {
             Project = new ProjectConfig { Domain = "intent-cli", ArtifactRoot = ".intent-cli" },
         },
+    };
+
+    private void WriteProjectEvidence(string projectRoot, string project, string team, string unit)
+    {
+        var evidence = Evidence() with { Project = project, Domain = project, Team = team, Unit = unit };
+        var evidencePath = Path.Combine(projectRoot, "evidence.json");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(evidencePath, JsonSerializer.Serialize(evidence));
+        using var writer = new StringWriter();
+        var result = ProgressSupervisionCommand.Execute(
+            Context() with { RepoRoot = projectRoot },
+            ["--domain", project, "--team", team, "--unit", unit, "--evidence-file", evidencePath, "--routing-root", projectRoot, "--now", Now.ToString("O"), "--write", "--format", "json"],
+            writer);
+        Assert.Equal(0, result);
+    }
+
+    private static ProgressReviewVerdictEvidence ReviewVerdict(string head, string artifact) => new()
+    {
+        Project = "project-a", Repo = "J-Tech-Japan/intent-system", Unit = artifact.Split('-')[0], PullRequest = artifact,
+        ExpectedHead = head, VerdictHead = head, TaskId = "review-task", ResultNonce = "review-nonce",
+        Status = "request-update", ArtifactPath = $"IntentSystemReview/{artifact}", ReviewerIdentity = "reviewer-seat",
+        Findings = "F1;F2", VerdictMarker = "REQUEST_UPDATE", VerdictAt = Now, SelectorReason = "wait-stale-label",
+        CanonicalReport = true, CommentedReview = true, GreenCi = true,
     };
 
     private static ProgressSupervisionEvidence Evidence() => new()

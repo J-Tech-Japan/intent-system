@@ -118,6 +118,62 @@ internal static class ProgressSupervisionStore
             && !string.Equals(task.Status, "resolved", StringComparison.OrdinalIgnoreCase);
     }
 
+    public static ProgressLearningVerification VerifyWriteBack(
+        string routingRoot,
+        ProgressLearningWriteBack writeBack)
+    {
+        ArgumentNullException.ThrowIfNull(writeBack);
+        if (!writeBack.Verified || string.IsNullOrWhiteSpace(writeBack.Commit)
+            || string.IsNullOrWhiteSpace(writeBack.Path)
+            || string.IsNullOrWhiteSpace(writeBack.ContentDigest))
+        {
+            return new ProgressLearningVerification { Verified = false, Reason = "write-back-record-is-not-verified" };
+        }
+
+        var root = Path.GetFullPath(routingRoot);
+        var relative = writeBack.Path.Trim();
+        if (Path.IsPathRooted(relative) || relative.Split('/', '\\').Any(segment => segment is "." or ".."))
+        {
+            return new ProgressLearningVerification { Verified = false, Reason = "write-back-path-is-not-relative" };
+        }
+
+        var path = Path.GetFullPath(Path.Combine(root, relative));
+        if (!path.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            return new ProgressLearningVerification { Verified = false, Reason = "write-back-path-escapes-routing-root" };
+        }
+        if (!File.Exists(path))
+        {
+            return new ProgressLearningVerification { Verified = false, Reason = "write-back-content-missing", Path = path };
+        }
+
+        var digest = "sha256:" + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+        var matches = string.Equals(digest, writeBack.ContentDigest.Trim(), StringComparison.OrdinalIgnoreCase);
+        return new ProgressLearningVerification
+        {
+            Verified = matches,
+            Reason = matches ? "knowledge-writeback-record-verified" : "write-back-content-digest-mismatch",
+            Path = path,
+            ActualDigest = digest,
+        };
+    }
+
+    public static bool IsLearningComplete(
+        ProgressIncidentRecord incident,
+        ProgressLearningWriteBack? writeBack,
+        string routingRoot)
+    {
+        if (writeBack is not null && VerifyWriteBack(routingRoot, writeBack).Verified)
+        {
+            return true;
+        }
+
+        return incident.LinkedLearningTask is { } task
+            && !string.IsNullOrWhiteSpace(task.Owner)
+            && task.Deadline > incident.OpenedAt
+            && !string.Equals(task.Status, "resolved", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string Segment(string value)
     {
         if (string.IsNullOrWhiteSpace(value)) throw new ArgumentException("Routing identity is required.", nameof(value));
@@ -167,4 +223,12 @@ internal sealed record ProgressLearningWriteBack
     [JsonPropertyName("content_digest")] public string? ContentDigest { get; init; }
     [JsonPropertyName("verified")] public bool Verified { get; init; }
     [JsonPropertyName("verified_at")] public DateTimeOffset? VerifiedAt { get; init; }
+}
+
+internal sealed record ProgressLearningVerification
+{
+    public bool Verified { get; init; }
+    public required string Reason { get; init; }
+    public string? Path { get; init; }
+    public string? ActualDigest { get; init; }
 }
