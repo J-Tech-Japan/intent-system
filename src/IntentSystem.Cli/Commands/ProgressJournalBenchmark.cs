@@ -12,6 +12,12 @@ namespace IntentSystem.Cli.Commands;
 internal sealed record ProgressJournalBenchmarkOptions
 {
     public int RecordsPerHistory { get; init; } = 108_474;
+    /// <summary>
+    /// Number of newly appended records represented by the cursor delta.  The
+    /// journal can be scaled independently while retaining the same appended
+    /// delta for an incremental-read comparison.
+    /// </summary>
+    public int? AppendedDeltaRecords { get; init; }
     public long MinimumCycleBytes { get; init; } = 130L * 1024 * 1024;
     public long MinimumStallBytes { get; init; } = 63L * 1024 * 1024;
     public int SteadySweeps { get; init; } = 100;
@@ -35,6 +41,11 @@ internal sealed record ProgressJournalBenchmarkResult
     public long CursorRecordsRead { get; init; }
     public long ParsedBytes { get; init; }
     public long ReadBytes { get; init; }
+    public long SteadyRecordsParsed { get; init; }
+    public long SteadyBytesRead { get; init; }
+    public long SteadyOverlapRecords { get; init; }
+    public bool SteadyReadBoundedByDelta { get; init; }
+    public long ColdRestartBytesRead { get; init; }
     public int SteadySweeps { get; init; }
     public int ColdRestartSweeps { get; init; }
     public bool IdenticalDelta { get; init; }
@@ -61,6 +72,11 @@ internal static class ProgressJournalBenchmark
         Directory.CreateDirectory(root);
         var cyclesPath = Path.Combine(root, "cycles.jsonl");
         var stallsPath = Path.Combine(root, "stalls.jsonl");
+        var appendedDeltaRecords = options.AppendedDeltaRecords ?? options.RecordsPerHistory;
+        if (appendedDeltaRecords <= 0 || appendedDeltaRecords > options.RecordsPerHistory)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "appended delta must be positive and no greater than one history");
+        }
         var writeClock = Stopwatch.StartNew();
         var cycleWrite = WriteJournal(cyclesPath, options.RecordsPerHistory, payloadBytes: 768, "cycle");
         var stallWrite = WriteJournal(stallsPath, options.RecordsPerHistory, payloadBytes: 384, "stall");
@@ -71,15 +87,17 @@ internal static class ProgressJournalBenchmark
         var cycleSecond = Scan(cyclesPath, cycleFirst.ByteOffsetAfterHistory, options.RecordsPerHistory);
         var stallFirst = Scan(stallsPath, 0, options.RecordsPerHistory);
         var stallSecond = Scan(stallsPath, stallFirst.ByteOffsetAfterHistory, options.RecordsPerHistory);
-        var cursorOffset = cycleWrite.FirstHistoryStartOffset +
-            Math.Max(0, options.RecordsPerHistory - options.CursorOverlapRecords) * cycleWrite.LineBytes;
+        var cursorOffset = cycleWrite.SecondHistoryStartOffset +
+            Math.Max(0, options.RecordsPerHistory - appendedDeltaRecords - options.CursorOverlapRecords) * cycleWrite.LineBytes;
         var cursor = Scan(cyclesPath, cursorOffset);
 
         var maxP = 0d;
         for (var i = 0; i < options.SteadySweeps; i++)
         {
             var sweep = Stopwatch.StartNew();
-            _ = Scan(cyclesPath, cursorOffset + cycleWrite.LineBytes * Math.Max(0, options.RecordsPerHistory - 1), options.CursorOverlapRecords + 1);
+            var steadyOffset = cycleWrite.SecondHistoryStartOffset
+                + cycleWrite.LineBytes * Math.Max(0, options.RecordsPerHistory - options.CursorOverlapRecords - 1);
+            _ = Scan(cyclesPath, steadyOffset, options.CursorOverlapRecords + 1);
             sweep.Stop();
             maxP = Math.Max(maxP, sweep.Elapsed.TotalSeconds);
         }
@@ -112,13 +130,18 @@ internal static class ProgressJournalBenchmark
             SecondHistoryBytes = firstDeltaBytes,
             FirstHistoryRecords = cycleFirst.Records,
             SecondHistoryRecords = cycleSecond.Records,
-            DeltaRecords = cycleSecond.Records,
+            DeltaRecords = appendedDeltaRecords,
             CursorRecordsRead = cursor.Records,
             ParsedBytes = cursor.BytesRead + cycleFirst.BytesRead + cycleSecond.BytesRead + stallFirst.BytesRead + stallSecond.BytesRead,
             ReadBytes = cursor.BytesRead + cycleFirst.BytesRead + cycleSecond.BytesRead + stallFirst.BytesRead + stallSecond.BytesRead,
+            SteadyRecordsParsed = cursor.Records,
+            SteadyBytesRead = cursor.BytesRead,
+            SteadyOverlapRecords = options.CursorOverlapRecords,
+            SteadyReadBoundedByDelta = cursor.Records <= appendedDeltaRecords + options.CursorOverlapRecords,
+            ColdRestartBytesRead = cycleFirst.BytesRead,
             SteadySweeps = options.SteadySweeps,
             ColdRestartSweeps = options.ColdRestartSweeps,
-            IdenticalDelta = identicalDelta,
+            IdenticalDelta = identicalDelta && cycleSecond.Records == options.RecordsPerHistory,
             MaxPSSeconds = maxP,
             WriteElapsedMilliseconds = writeClock.ElapsedMilliseconds,
             ScanElapsedMilliseconds = scanClock.ElapsedMilliseconds,
@@ -128,13 +151,13 @@ internal static class ProgressJournalBenchmark
     private static JournalWriteResult WriteJournal(string path, int recordsPerHistory, int payloadBytes, string kind)
     {
         var lineBytes = 0L;
-        var firstHistoryStart = 0L;
+        var secondHistoryStart = 0L;
         using (var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read))
         using (var writer = new StreamWriter(stream, Utf8, bufferSize: 64 * 1024, leaveOpen: true))
         {
             for (var history = 0; history < 2; history++)
             {
-                if (history == 1) firstHistoryStart = 0;
+                if (history == 1) secondHistoryStart = lineBytes * recordsPerHistory;
                 for (var index = 0; index < recordsPerHistory; index++)
                 {
                     var sequence = index.ToString("D8", CultureInfo.InvariantCulture);
@@ -146,7 +169,7 @@ internal static class ProgressJournalBenchmark
             writer.Flush();
             stream.Flush(flushToDisk: false);
         }
-        return new JournalWriteResult(firstHistoryStart, lineBytes);
+        return new JournalWriteResult(secondHistoryStart, lineBytes);
     }
 
     private static JournalScanResult Scan(string path, long offset, long? maxRecords = null)
@@ -170,7 +193,7 @@ internal static class ProgressJournalBenchmark
         return new JournalScanResult(records, bytes, offset + bytes);
     }
 
-    private readonly record struct JournalWriteResult(long FirstHistoryStartOffset, long LineBytes);
+    private readonly record struct JournalWriteResult(long SecondHistoryStartOffset, long LineBytes);
 
     private readonly record struct JournalScanResult(long Records, long BytesRead, long ByteOffsetAfterHistory);
 }

@@ -119,12 +119,14 @@ internal static class GuideProgressSupervisionCommand
             "No manual labels, claim/WIP bypass, duplicate intake, topology mutation, or deadline widening to save cost.",
             "Benchmark and live qualification are evidence requirements; this guide does not claim that a live scheduler is installed or qualified.",
         },
+        CostAwareContract = NotifyCostAwareSupervisionContract.BuildGuide(),
         Commands = new[]
         {
             "intent-cli guide progress-supervision --format markdown|json",
             "intent-cli guide progress-supervision --section role-contracts --format markdown|json",
             "intent-cli automation progress-supervision --domain <d> --team <t> --unit <u> --format json",
             "intent-cli automation progress-supervision --domain <d> --team <t> --unit <u> --evidence-file <file> --write --format json",
+            "intent-cli notify supervise --event-mode --once --format json",
         },
     };
 
@@ -161,6 +163,20 @@ internal static class GuideProgressSupervisionCommand
         writer.WriteLine($"- {guide.Evidence}");
         writer.WriteLine($"- {guide.Health}");
         writer.WriteLine($"- {guide.IncidentLearning}");
+        writer.WriteLine();
+        writer.WriteLine("## G810 cost-aware supervision");
+        if (guide.CostAwareContract is { } costAware)
+        {
+            writer.WriteLine($"- contract: `{costAware.ContractVersion}`");
+            writer.WriteLine($"- timing: {costAware.Timing}");
+            writer.WriteLine($"- cost: {costAware.Cost}");
+            writer.WriteLine($"- recovery: {costAware.Recovery}");
+            writer.WriteLine($"- corruption: {costAware.Corruption}");
+            writer.WriteLine($"- safety: {costAware.Safety}");
+            writer.WriteLine($"- transferability: {costAware.Transferability}");
+            foreach (var coverage in costAware.Coverage)
+                writer.WriteLine($"- source `{coverage.Kind}`: source={coverage.AuthoritativeSource}; identity={coverage.Identity}; eligibility={coverage.Eligibility}; owner={coverage.Owner}; next={coverage.NextAction}");
+        }
         writer.WriteLine();
         writer.WriteLine("## Role contracts");
         foreach (var contract in guide.RoleContracts)
@@ -233,6 +249,7 @@ internal sealed record ProgressSupervisionGuide
     [JsonPropertyName("fault_matrix")] public IReadOnlyList<string> FaultMatrix { get; init; } = [];
     [JsonPropertyName("commands")] public IReadOnlyList<string> Commands { get; init; } = [];
     [JsonPropertyName("negative_boundaries")] public IReadOnlyList<string> NegativeBoundaries { get; init; } = [];
+    [JsonPropertyName("cost_aware_contract")] public NotifyCostAwareGuide? CostAwareContract { get; init; }
 }
 
 internal sealed record ProgressRoleContract

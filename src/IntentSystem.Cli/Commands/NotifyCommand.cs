@@ -2273,6 +2273,7 @@ internal static class NotifyCommand
                 pre_approval_policy = pass.PreApprovalPolicy,
                 liveness = pass.Liveness,
                 completion_channel_health = pass.CompletionChannelHealth,
+                cost_aware = pass.CostAware,
                 actions = pass.Actions,
                 findings = pass.Findings,
                 recovery_records = pass.RecoveryRecords,
@@ -2318,6 +2319,10 @@ internal static class NotifyCommand
         if (pass.CompletionChannelHealth is { } completionHealth)
         {
             writer.WriteLine($"- completion-channel health: {completionHealth.State}; bound={completionHealth.BoundSeconds}s; configured-bound={completionHealth.ConfiguredBoundSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}s; measured-P={completionHealth.MaxSweepSeconds.ToString(CultureInfo.InvariantCulture)}s; qualification={completionHealth.QualificationReason}; delivered-unreconciled={completionHealth.DeliveredUnreconciledCount}; missing-return-ack-age={completionHealth.MissingReturnAckAgeSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}s; resident-pending-age={completionHealth.ResidentConsumptionPendingAgeSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}s; next-action={completionHealth.NextAction ?? "none"}");
+        }
+        if (pass.CostAware is { } costAware)
+        {
+            writer.WriteLine($"- G810 cost-aware supervision: state={costAware.State}; read-only={costAware.ReadOnly.ToString().ToLowerInvariant()}; event={costAware.EventFloor.Action}; D={costAware.Timing.DetectionBoundSeconds}s; P={costAware.Timing.MeasuredMaximumSweepSeconds.ToString(CultureInfo.InvariantCulture)}s; coverage-lossless={costAware.CoverageLossless.ToString().ToLowerInvariant()}; recovery={costAware.Recovery.Action}; ordinary-wakes={costAware.Budget.Summary}");
         }
         if (pass.Error is not null)
         {
