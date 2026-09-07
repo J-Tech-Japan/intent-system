@@ -1971,6 +1971,10 @@ internal static class NotifyCommand
         }
 
         var record = lookup.Record;
+        var supervisionForHealth = NotifySupervisionStore.Read(
+            context.ResolveSupervisionArtifactRootPath(),
+            record.Domain,
+            record.Team);
         var completionAck = record.ReportArtifact is null
             ? null
             : NotifyCompletionChannelStore.FindAck(
@@ -1985,7 +1989,8 @@ internal static class NotifyCommand
             record.Domain,
             record.Team,
             (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
-            supervisionArtifactRoot: context.ResolveSupervisionArtifactRootPath());
+            supervisionArtifactRoot: context.ResolveSupervisionArtifactRootPath(),
+            configuredBoundSeconds: supervisionForHealth.Resolved ? supervisionForHealth.Bound?.BoundSeconds : null);
         var researchMetrics = ResearchDelegationContract.Measure(
             routingRoot,
             record.Domain,
@@ -2081,10 +2086,7 @@ internal static class NotifyCommand
         var activityKey = record.WorkspaceId is not null && record.PaneId is not null
             ? $"activity:{record.WorkspaceId}:{record.PaneId}"
             : $"activity:{record.RecipientIdentity}";
-        var supervision = NotifySupervisionStore.Read(
-            context.ResolveSupervisionArtifactRootPath(),
-            record.Domain,
-            record.Team);
+        var supervision = supervisionForHealth;
         long? priorStateChangeSequence = null;
         if (supervision.LastCycle?.LastObservedStateChangeSequences.TryGetValue(activityKey, out var observedSequence) == true)
         {
@@ -2313,7 +2315,7 @@ internal static class NotifyCommand
         }
         if (pass.CompletionChannelHealth is { } completionHealth)
         {
-            writer.WriteLine($"- completion-channel health: {completionHealth.State}; bound={completionHealth.BoundSeconds}s; delivered-unreconciled={completionHealth.DeliveredUnreconciledCount}; missing-return-ack-age={completionHealth.MissingReturnAckAgeSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}s; resident-pending-age={completionHealth.ResidentConsumptionPendingAgeSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}s; next-action={completionHealth.NextAction ?? "none"}");
+            writer.WriteLine($"- completion-channel health: {completionHealth.State}; bound={completionHealth.BoundSeconds}s; configured-bound={completionHealth.ConfiguredBoundSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}s; measured-P={completionHealth.MaxSweepSeconds.ToString(CultureInfo.InvariantCulture)}s; qualification={completionHealth.QualificationReason}; delivered-unreconciled={completionHealth.DeliveredUnreconciledCount}; missing-return-ack-age={completionHealth.MissingReturnAckAgeSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}s; resident-pending-age={completionHealth.ResidentConsumptionPendingAgeSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}s; next-action={completionHealth.NextAction ?? "none"}");
         }
         if (pass.Error is not null)
         {
@@ -2372,7 +2374,7 @@ internal static class NotifyCommand
         writer.WriteLine($"- return ack consumed: {result.ReturnAckConsumed.ToString().ToLowerInvariant()}");
         if (result.CompletionChannelHealth is { } completionHealth)
         {
-            writer.WriteLine($"- completion-channel health: {completionHealth.State}; bound={completionHealth.BoundSeconds}s; delivered-unreconciled={completionHealth.DeliveredUnreconciledCount}; next-action={completionHealth.NextAction ?? "none"}");
+            writer.WriteLine($"- completion-channel health: {completionHealth.State}; bound={completionHealth.BoundSeconds}s; configured-bound={completionHealth.ConfiguredBoundSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}s; measured-P={completionHealth.MaxSweepSeconds.ToString(CultureInfo.InvariantCulture)}s; qualification={completionHealth.QualificationReason}; delivered-unreconciled={completionHealth.DeliveredUnreconciledCount}; next-action={completionHealth.NextAction ?? "none"}");
         }
         writer.WriteLine($"- research delegations issued: {result.ResearchDelegationsIssued}");
         writer.WriteLine($"- judgement-seat turns without delegation: {result.JudgementSeatTurnsWithoutDelegation}");

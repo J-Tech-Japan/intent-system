@@ -821,6 +821,16 @@ internal sealed class NotifyMeasuredSupervisor
         var recoveryRecords = recoveryState.Resolved
             ? recoveryState.StallHistory
             : records;
+        var sweepSamples = recoveryState.Resolved
+            ? recoveryState.CycleHistory
+                .Where(item => (string.IsNullOrWhiteSpace(item.Trigger)
+                    || string.Equals(item.Trigger, "interval", StringComparison.Ordinal))
+                    && item.CompletedAt >= item.StartedAt)
+                .Where(item => !string.Equals(item.CycleId, cycle.CycleId, StringComparison.Ordinal))
+                .Select(item => Math.Max(0, (item.CompletedAt - item.StartedAt).TotalSeconds))
+                .ToList()
+            : [];
+        sweepSamples.Add(Math.Max(0, (cycle.CompletedAt - cycle.StartedAt).TotalSeconds));
         var completionHealth = NotifyCompletionChannelHealth.Compute(
             routingRoot,
             domain,
@@ -828,9 +838,10 @@ internal sealed class NotifyMeasuredSupervisor
             now,
             intervalSeconds,
             jitterSeconds: 0,
-            maxSweepSeconds: 0,
-            measuredSweeps: previousCycle is null ? 1 : 3,
-            supervisionArtifactRoot: context.ResolveSupervisionArtifactRootPath());
+            maxSweepSeconds: sweepSamples.Max(),
+            measuredSweeps: sweepSamples.Count,
+            supervisionArtifactRoot: context.ResolveSupervisionArtifactRootPath(),
+            configuredBoundSeconds: bound.BoundSeconds);
         return new NotifySupervisorPass
         {
             Actions = actions,

@@ -24,7 +24,9 @@ internal sealed record NotifyCompletionChannelHealth
     [JsonPropertyName("jitter_seconds")] public int JitterSeconds { get; init; }
     [JsonPropertyName("max_sweep_seconds")] public double MaxSweepSeconds { get; init; }
     [JsonPropertyName("bound_seconds")] public int BoundSeconds { get; init; }
+    [JsonPropertyName("configured_bound_seconds")] public int? ConfiguredBoundSeconds { get; init; }
     [JsonPropertyName("qualified")] public bool Qualified { get; init; }
+    [JsonPropertyName("qualification_reason")] public required string QualificationReason { get; init; }
     [JsonPropertyName("measured_sweeps")] public int MeasuredSweeps { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
 
@@ -37,7 +39,8 @@ internal sealed record NotifyCompletionChannelHealth
         int jitterSeconds = 0,
         double maxSweepSeconds = 0,
         int measuredSweeps = 0,
-        string? supervisionArtifactRoot = null)
+        string? supervisionArtifactRoot = null,
+        int? configuredBoundSeconds = null)
     {
         var pending = NotifyPendingDelegationStore.ReadAll(routingRoot, domain, team, out var pendingError);
         var outbox = NotifyReportOutboxStore.ReadAll(routingRoot, domain, team, out var outboxError);
@@ -67,8 +70,22 @@ internal sealed record NotifyCompletionChannelHealth
             .OrderBy(ack => ack.AvailableAt)
             .FirstOrDefault();
         var settlements = completed.Select(record => record.ReportedAt).Where(value => value.HasValue).Select(value => value!.Value).ToArray();
-        var bound = (int)Math.Ceiling(floorSeconds + jitterSeconds + maxSweepSeconds) + 1;
-        var qualified = !hasError && measuredSweeps >= 3 && maxSweepSeconds <= Math.Max(0, bound - floorSeconds - jitterSeconds);
+        var measuredSweep = Math.Max(0, maxSweepSeconds);
+        var bound = (int)Math.Ceiling(floorSeconds + jitterSeconds + measuredSweep) + 1;
+        var configuredBound = configuredBoundSeconds is > 0 ? configuredBoundSeconds : null;
+        var qualificationReason = hasError
+            ? "evidence-unreadable"
+            : measuredSweeps < 3
+                ? "insufficient-complete-sweeps"
+                : configuredBound is null
+                    ? "no-configured-bound"
+                    : measuredSweep > configuredBound.Value
+                        ? "measured-sweep-exceeds-configured-bound"
+                        : "measured-sweep-within-configured-bound";
+        var qualified = !hasError
+            && measuredSweeps >= 3
+            && configuredBound is not null
+            && measuredSweep <= configuredBound.Value;
         var state = hasError ? "unknown"
             : !qualified ? "degraded"
             : deliveredUnreconciled.Length > 0 || missingAck is not null ? "failed"
@@ -103,11 +120,13 @@ internal sealed record NotifyCompletionChannelHealth
             JitterSeconds = jitterSeconds,
             MaxSweepSeconds = maxSweepSeconds,
             BoundSeconds = bound,
+            ConfiguredBoundSeconds = configuredBound,
             Qualified = qualified,
+            QualificationReason = qualificationReason,
             MeasuredSweeps = measuredSweeps,
             Summary = hasError
                 ? $"Completion-channel health is unknown because durable evidence could not be read: {pendingError ?? outboxError ?? ackError ?? supervisionError}"
-                : $"Completion-channel health is {state}; B=ceil(F+J+P)+1 = ceil({floorSeconds}+{jitterSeconds}+{maxSweepSeconds:0.###})+1 = {bound}s from {measuredSweeps} measured sweep(s).",
+                : $"Completion-channel health is {state}; B=ceil(F+J+P)+1 = ceil({floorSeconds}+{jitterSeconds}+{measuredSweep:0.###})+1 = {bound}s from {measuredSweeps} measured sweep(s); qualification={qualificationReason}; configured_bound={configuredBound?.ToString() ?? "<none>"}s.",
         };
     }
 
