@@ -183,6 +183,8 @@ internal static class NotifyCommand
                 NotifySuperviseRepairUnreadableCommand.Execute(context, args[1..], writer),
             NotifySuperviseInstallCommand.Operation =>
                 NotifySuperviseInstallCommand.Execute(context, args[1..], writer),
+            NotifyProgressSupervisionCommand.Operation =>
+                NotifyProgressSupervisionCommand.Execute(context, args[1..], writer),
             NotifySuperviseReconcileCommand.ReconcileOperation =>
                 NotifySuperviseReconcileCommand.Execute(
                     context,

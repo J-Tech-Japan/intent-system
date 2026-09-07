@@ -133,6 +133,7 @@ internal static class Program
                 || string.Equals(args[1], "same-repo-metadata-preflight", StringComparison.Ordinal)
                 || string.Equals(args[1], "stalled-work", StringComparison.Ordinal)
                 || string.Equals(args[1], "summary", StringComparison.Ordinal)
+                || string.Equals(args[1], "progress-supervision", StringComparison.Ordinal)
                 || string.Equals(args[1], "workspace-guard", StringComparison.Ordinal));
     }
 
@@ -241,6 +242,9 @@ internal static class Program
                 || string.Equals(args[1], "design-thread", StringComparison.Ordinal)
                 // G807: Steward role guidance is static and metadata-free.
                 || string.Equals(args[1], "steward-thread", StringComparison.Ordinal)
+                // G812: correctness-first progress supervision is a static,
+                // metadata-free guide and must work from a child checkout.
+                || string.Equals(args[1], "progress-supervision", StringComparison.Ordinal)
                 // G664: application-front-door bootstrap guidance — renders questions and commands only.
                 || string.Equals(args[1], "bootstrap", StringComparison.Ordinal)
                 // G637: read-only workspace-layout guidance — no host state required.

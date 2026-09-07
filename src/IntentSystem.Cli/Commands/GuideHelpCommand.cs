@@ -181,6 +181,12 @@ internal static class GuideHelpCommand
             Purpose = "First-call sequence for a fresh agent. With optional --role, a role that has an installed contract receives its pointer before the unchanged ordered list of guide / automation surfaces to read before any mutation.",
             Example = "intent-cli guide onboarding --role implementation --format json"
         },
+        new GuideSubcommandEntry
+        {
+            Name = "progress-supervision",
+            Purpose = "G812 metadata-free progress supervision guidance: typed phase/deadline contracts, bounded recovery, canonical bootstrap, evidence, health, role contracts, and G811 handoff boundaries.",
+            Example = "intent-cli guide progress-supervision --format markdown"
+        },
         // G705: render-only public project-feedback guidance.
         new GuideSubcommandEntry
         {
