@@ -256,7 +256,8 @@ internal static class NotifyCommand
         string? reportRoot = null;
         if (string.Equals(operation, OperationReport, StringComparison.Ordinal)
             || string.Equals(operation, OperationCollect, StringComparison.Ordinal)
-            || string.Equals(operation, OperationReconcile, StringComparison.Ordinal))
+            || string.Equals(operation, OperationReconcile, StringComparison.Ordinal)
+            || string.Equals(operation, OperationStatus, StringComparison.Ordinal))
         {
             try
             {
@@ -1992,7 +1993,8 @@ internal static class NotifyCommand
             record.Team,
             (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
             supervisionArtifactRoot: context.ResolveSupervisionArtifactRootPath(),
-            configuredBoundSeconds: supervisionForHealth.Resolved ? supervisionForHealth.Bound?.BoundSeconds : null);
+            configuredBoundSeconds: supervisionForHealth.Resolved ? supervisionForHealth.Bound?.BoundSeconds : null,
+            reportRoot: options.ReportRoot ?? routingRoot);
         var researchMetrics = ResearchDelegationContract.Measure(
             routingRoot,
             record.Domain,
@@ -2021,6 +2023,7 @@ internal static class NotifyCommand
                 ReturnAckAvailable = completionAck is { ConsumedAt: null },
                 ReturnAckConsumed = completionAck?.ConsumedAt is not null,
                 CompletionChannelHealth = completionHealth,
+                Settlement = completionHealth.Settlement,
                 Disposition = disposition,
                 LateReportDisagreement = record.ReportArrived
                     ? BuildLateReportDisagreement(record)
@@ -2160,6 +2163,7 @@ internal static class NotifyCommand
             ReturnAckAvailable = completionAck is { ConsumedAt: null },
             ReturnAckConsumed = completionAck?.ConsumedAt is not null,
             CompletionChannelHealth = completionHealth,
+            Settlement = completionHealth.Settlement,
         });
         return 0;
     }
@@ -2382,6 +2386,10 @@ internal static class NotifyCommand
         if (result.CompletionChannelHealth is { } completionHealth)
         {
             writer.WriteLine($"- completion-channel health: {completionHealth.State}; bound={completionHealth.BoundSeconds}s; configured-bound={completionHealth.ConfiguredBoundSeconds?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}s; measured-P={completionHealth.MaxSweepSeconds.ToString(CultureInfo.InvariantCulture)}s; qualification={completionHealth.QualificationReason}; delivered-unreconciled={completionHealth.DeliveredUnreconciledCount}; next-action={completionHealth.NextAction ?? "none"}");
+        }
+        if (result.Settlement is { } settlement)
+        {
+            writer.WriteLine($"- settlement: {settlement.Classification}; task={settlement.TaskId}; nonce={settlement.ResultNonce ?? "<none>"}; entry={settlement.EntryIdentity}; owner={settlement.Owner}; report-root-validated={settlement.ReportRootValidated.ToString().ToLowerInvariant()}; report_arrived={settlement.ReportArrived.ToString().ToLowerInvariant()}; already_converged={settlement.AlreadyConverged.ToString().ToLowerInvariant()}; next-action={settlement.CanonicalNextAction}");
         }
         writer.WriteLine($"- research delegations issued: {result.ResearchDelegationsIssued}");
         writer.WriteLine($"- judgement-seat turns without delegation: {result.JudgementSeatTurnsWithoutDelegation}");
@@ -5093,6 +5101,7 @@ internal sealed record NotifyStatusResult
     [JsonPropertyName("return_ack_available")] public bool ReturnAckAvailable { get; init; }
     [JsonPropertyName("return_ack_consumed")] public bool ReturnAckConsumed { get; init; }
     [JsonPropertyName("completion_channel_health")] public NotifyCompletionChannelHealth? CompletionChannelHealth { get; init; }
+    [JsonPropertyName("settlement")] public NotifyCostAwareSettlementEvidence? Settlement { get; init; }
 
     public static NotifyStatusResult Failure(
         string routingRoot,

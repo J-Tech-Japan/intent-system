@@ -29,6 +29,7 @@ internal sealed record NotifyCompletionChannelHealth
     [JsonPropertyName("qualification_reason")] public required string QualificationReason { get; init; }
     [JsonPropertyName("measured_sweeps")] public int MeasuredSweeps { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
+    [JsonPropertyName("settlement")] public NotifyCostAwareSettlementEvidence? Settlement { get; init; }
 
     internal static NotifyCompletionChannelHealth Compute(
         string routingRoot,
@@ -40,10 +41,12 @@ internal sealed record NotifyCompletionChannelHealth
         double maxSweepSeconds = 0,
         int measuredSweeps = 0,
         string? supervisionArtifactRoot = null,
-        int? configuredBoundSeconds = null)
+        int? configuredBoundSeconds = null,
+        string? reportRoot = null)
     {
         var pending = NotifyPendingDelegationStore.ReadAll(routingRoot, domain, team, out var pendingError);
-        var outbox = NotifyReportOutboxStore.ReadAll(routingRoot, domain, team, out var outboxError);
+        var resolvedReportRoot = reportRoot ?? routingRoot;
+        var outbox = NotifyReportOutboxStore.ReadAll(resolvedReportRoot, domain, team, out var outboxError);
         var acks = NotifyCompletionChannelStore.ReadAllAcks(routingRoot, domain, team, out var ackError);
         var supervision = supervisionArtifactRoot is null
             ? null
@@ -57,6 +60,14 @@ internal sealed record NotifyCompletionChannelHealth
                 && string.Equals(entry.DeliveryState, "delivered", StringComparison.Ordinal)))
             .OrderBy(record => record.DispatchedAt)
             .ToArray();
+        var settlement = deliveredUnreconciled
+            .Select(record => NotifyCostAwareSettlementInspector.Find(
+                routingRoot,
+                resolvedReportRoot,
+                domain,
+                team,
+                record))
+            .FirstOrDefault(value => value is not null);
         var completed = pending.Where(record => record.ReportArrived && record.ReportArtifact is not null).ToArray();
         var missingAck = completed
             .Where(record => string.Equals(record.Resident, NotifyRecordedRole.HerdrResident, StringComparison.Ordinal))
@@ -94,7 +105,7 @@ internal sealed record NotifyCompletionChannelHealth
         var nextAction = hasError
             ? "repair unreadable completion-channel evidence before relying on health"
             : deliveredUnreconciled.Length > 0
-                ? "orchestration must run notify reconcile --write for the delivered report"
+                ? settlement?.CanonicalNextAction ?? "orchestration must run notify reconcile --write for the delivered report"
                 : missingAck is not null
                     ? "Steward must record the identity-bound return acknowledgement"
                     : pendingConsumption is not null
@@ -124,6 +135,7 @@ internal sealed record NotifyCompletionChannelHealth
             Qualified = qualified,
             QualificationReason = qualificationReason,
             MeasuredSweeps = measuredSweeps,
+            Settlement = settlement,
             Summary = hasError
                 ? $"Completion-channel health is unknown because durable evidence could not be read: {pendingError ?? outboxError ?? ackError ?? supervisionError}"
                 : $"Completion-channel health is {state}; B=ceil(F+J+P)+1 = ceil({floorSeconds}+{jitterSeconds}+{measuredSweep:0.###})+1 = {bound}s from {measuredSweeps} measured sweep(s); qualification={qualificationReason}; configured_bound={configuredBound?.ToString() ?? "<none>"}s.",

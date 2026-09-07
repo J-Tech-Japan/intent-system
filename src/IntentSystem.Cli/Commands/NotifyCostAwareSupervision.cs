@@ -78,6 +78,25 @@ internal static class NotifyCostAwareSupervisionContract
         },
     ];
 
+    /// <summary>
+    /// The normative timing contract is rendered as data as well as prose so
+    /// callers can inspect defaults, permitted overrides, and validation
+    /// rules without reverse engineering the bound formula.
+    /// </summary>
+    public static IReadOnlyList<NotifyCostAwareTimingRow> TimingTable { get; } =
+    [
+        new() { Name = "independent-floor", DefaultSeconds = IndependentFloorSeconds, Override = "--interval-seconds (floor remains independent)", Validation = "must be positive and never disables the floor" },
+        new() { Name = "jitter", DefaultSeconds = DefaultJitterSeconds, Override = "recorded measured jitter", Validation = "non-negative and included in D" },
+        new() { Name = "complete-sweep-P", DefaultSeconds = 0, Override = "measured maximum complete sweep", Validation = "must come from complete readable sweeps; no literal claim" },
+        new() { Name = "detection-D", DefaultSeconds = 0, Override = "ceil(F+J+P)+1", Validation = "qualified only when D<=60 after 100 steady and 3 cold/restart sweeps at both scales" },
+        new() { Name = "receipt-ack", DefaultSeconds = ReceiptAckTimeoutSeconds, Override = "none", Validation = "identity-bound acknowledgement; timeout does not settle work" },
+        new() { Name = "delegation-execution-window", DefaultSeconds = DelegationExecutionWindowSeconds, Override = "operator-declared packet window", Validation = "expiry routes to reconciliation; it never fabricates completion" },
+        new() { Name = "published-stall", DefaultSeconds = PublishedStallSeconds, Override = "recorded release policy", Validation = "stall evidence is observational and source-bound" },
+        new() { Name = "review-verdict-gap", DefaultSeconds = ReviewVerdictGapSeconds, Override = "recorded review policy", Validation = "only a newer current-head verdict qualifies" },
+        new() { Name = "recovery-escalation", DefaultSeconds = RecoveryEscalationSeconds, Override = "none", Validation = "identity/version/reason required before escalation" },
+        new() { Name = "escalation-dispatch", DefaultSeconds = EscalationDispatchSeconds, Override = "none", Validation = "dispatch deadline is measured, not a wake guarantee" },
+    ];
+
     public static NotifyCostAwareResult Evaluate(NotifyCostAwareObservation observation)
     {
         ArgumentNullException.ThrowIfNull(observation);
@@ -246,10 +265,40 @@ internal static class NotifyCostAwareSupervisionContract
     public static int ComputeDetectionBound(int floorSeconds, int jitterSeconds, double measuredSweepSeconds) =>
         Math.Max(1, (int)Math.Ceiling(Math.Max(0, floorSeconds) + Math.Max(0, jitterSeconds) + Math.Max(0, measuredSweepSeconds)) + 1);
 
+    public static bool ValidateTimingOverride(
+        int floorSeconds,
+        int jitterSeconds,
+        double measuredSweepSeconds,
+        out string reason)
+    {
+        if (floorSeconds <= 0)
+        {
+            reason = "independent floor must remain positive";
+            return false;
+        }
+
+        if (jitterSeconds < 0 || measuredSweepSeconds < 0 || double.IsNaN(measuredSweepSeconds))
+        {
+            reason = "jitter and measured sweep must be non-negative finite values";
+            return false;
+        }
+
+        var bound = ComputeDetectionBound(floorSeconds, jitterSeconds, measuredSweepSeconds);
+        if (bound > 60)
+        {
+            reason = $"D={bound}s exceeds the 60s qualification target";
+            return false;
+        }
+
+        reason = $"validated F={floorSeconds}s,J={jitterSeconds}s,P={measuredSweepSeconds:F6}s,D={bound}s";
+        return true;
+    }
+
     public static NotifyCostAwareGuide BuildGuide() => new()
     {
         ContractVersion = SchemaVersion,
-        Timing = "F=30s independent floor; J=5s; P is the measured maximum complete sweep; D=ceil(F+J+P)+1; qualify D<=60 only after 100 steady and 3 cold/restart sweeps at baseline and doubled journal scale.",
+        Timing = "F=30s independent floor (default); J=5s jitter (default); P is the measured maximum complete sweep; D=ceil(F+J+P)+1; defaults may be overridden only by recorded, validated policy; qualify D<=60 only after 100 steady and 3 cold/restart sweeps at baseline and doubled journal scale.",
+        TimingTable = TimingTable,
         Coverage = CoverageManifest,
         Cost = "ordinary supervision-originated specialist wakes are limited to two per role per rolling 60 minutes; changed critical findings and due recovery bypass that ordinary budget with an identity/version/reason exception; no hard global cap is claimed under arbitrary critical load.",
         Recovery = "receipt ack is separate from execution completion; retry 5/10/20/30 seconds, escalate after two failed authorized attempts or 120 seconds unresolved, and dispatch escalation within 30 seconds.",
@@ -282,6 +331,14 @@ internal sealed record NotifyCostAwareCoverageDefinition
     [JsonPropertyName("eligibility")] public required string Eligibility { get; init; }
     [JsonPropertyName("owner")] public required string Owner { get; init; }
     [JsonPropertyName("next_action")] public required string NextAction { get; init; }
+}
+
+internal sealed record NotifyCostAwareTimingRow
+{
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("default_seconds")] public required int DefaultSeconds { get; init; }
+    [JsonPropertyName("override")] public required string Override { get; init; }
+    [JsonPropertyName("validation")] public required string Validation { get; init; }
 }
 
 internal sealed record NotifyCostAwareCoverageObservation
@@ -546,6 +603,7 @@ internal sealed record NotifyCostAwareGuide
 {
     [JsonPropertyName("contract_version")] public required string ContractVersion { get; init; }
     [JsonPropertyName("timing")] public required string Timing { get; init; }
+    [JsonPropertyName("timing_table")] public IReadOnlyList<NotifyCostAwareTimingRow> TimingTable { get; init; } = [];
     [JsonPropertyName("coverage")] public IReadOnlyList<NotifyCostAwareCoverageDefinition> Coverage { get; init; } = [];
     [JsonPropertyName("cost")] public required string Cost { get; init; }
     [JsonPropertyName("recovery")] public required string Recovery { get; init; }
