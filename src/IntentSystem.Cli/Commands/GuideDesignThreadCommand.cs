@@ -83,8 +83,8 @@ internal static class GuideDesignThreadCommand
         {
             using var buffer = new StringWriter();
             WriteMarkdown(buffer, result);
-            writer.Write(CompletionChannelGuidance.AppendMarkdown(
-                GuideRoleVocabulary.ProjectRenderedRoleValues(buffer.ToString())));
+            writer.Write(ProgressSupervisionGuidance.AppendMarkdown(CompletionChannelGuidance.AppendMarkdown(
+                GuideRoleVocabulary.ProjectRenderedRoleValues(buffer.ToString()))));
         }
 
         return 0;

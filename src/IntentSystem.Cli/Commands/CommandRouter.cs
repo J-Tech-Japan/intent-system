@@ -88,6 +88,7 @@ internal static class CommandRouter
         "automation intent-target-gap-recovery --repo <r> [--write]",
         "automation issue-publish --issue <n> --write",
         "automation queue-dependency-reconcile [--execution-unit <u>] [--dry-run|--write]",
+        "automation progress-supervision --domain <d> --team <t> --unit <u> [--evidence-file <path>] [--routing-root <root>] [--write] [--format markdown|json]",
         "automation knowledge-writeback-record --execution-unit <u> --commit <host-sha> [--role design|orchestration] [--target <path>]... [--dry-run|--write]",
         "automation guide-reachability-record --execution-unit <u> --commit <host-sha> [--role design|orchestration] [--dry-run|--write]",
         "automation branch-lane-propose-record --execution-unit <u> --actor <actor> --rationale <text> --evidence <text> [--domain <d>] [--team <t>] [--write]",
@@ -166,6 +167,7 @@ internal static class CommandRouter
                 ["status"] = NotifyCommand.ExecuteStatus,
                 ["research-status"] = NotifyCommand.ExecuteResearchStatus,
                 ["supervise"] = NotifyCommand.ExecuteSupervise,
+                ["progress-supervision"] = NotifyProgressSupervisionCommand.Execute,
                 ["adjudicate"] = NotifyAdjudicateCommand.Execute
             },
             ["prompt-class"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
@@ -303,7 +305,8 @@ internal static class CommandRouter
                 ["stalled-work"] = AutomationStalledWorkCommand.Execute,
                 ["state-doctor"] = AutomationStateDoctorCommand.Execute,
                 ["summary"] = AutomationSummaryCommand.Execute,
-                ["workspace-guard"] = AutomationWorkspaceGuardCommand.Execute
+                ["workspace-guard"] = AutomationWorkspaceGuardCommand.Execute,
+                ["progress-supervision"] = ProgressSupervisionCommand.Execute
             },
             ["safety"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
@@ -407,7 +410,8 @@ internal static class CommandRouter
                 // G637: read-only canonical team workspace layout plan.
                 ["workspace-layout"] = GuideWorkspaceLayoutCommand.Execute,
                 // G488: thin, portable agent skill pack bootstrap (ADR-013 / spec-27).
-                ["skill-pack"] = GuideSkillPackCommand.Execute
+                ["skill-pack"] = GuideSkillPackCommand.Execute,
+                ["progress-supervision"] = GuideProgressSupervisionCommand.Execute
             },
             ["intent"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
@@ -697,7 +701,7 @@ internal static class CommandRouter
             ["interview"] = "`intent-cli interview next-question --domain <d> --format json` then `intent-cli interview record-answer ...`.",
             ["packet"] = "`intent-cli packet draft --execution-unit <id> --target-repo <r> --format markdown`.",
             ["issue"] = "`intent-cli issue publish-flow <id> --repo <r> --write --format json` then `intent-cli automation issue-publish --write`.",
-            ["automation"] = "`intent-cli automation summary --domain <d> --format json` (capability JSON), `intent-cli automation doctor --format json` (CLI freshness).",
+            ["automation"] = "`intent-cli automation summary --domain <d> --format json` (capability JSON), `intent-cli automation doctor --format json` (CLI freshness), and `intent-cli automation progress-supervision --domain <d> --team <t> --unit <u> --format json` (G812 deterministic progress health).",
             ["session-layer"] = "`intent-cli session-layer show --domain <d> [--team <t>]` (which transport is in force), `session-layer set` to change it, `session-layer topology record|show|validate|move --domain <d> --team <t>` for the delivery mapping, `session-layer inspect --domain <d> --team <t>` for read-only live pane/agent observation, and `session-layer model-resolution record|query` for the host-local measured launch ledger. Use `intent-cli guide topology-workspace-move` for the dry-run-first move recipe.",
             ["team-mode"] = "`intent-cli team-mode show --domain <d> [--team <t>]`, `team-mode set --mode delivery|authoring-only --write`, and `team-mode validate` (G691 durable team shape; orthogonal to session-layer transport).",
             ["notify"] = "`intent-cli notify delegate|report|collect|reconcile|acknowledge|escalate|dispose|status|supervise|adjudicate --domain <d> --team <t> ...`; `notify reconcile` is the orchestration-owned consumer for a delivered sender-local report and idempotently closes host pending plus continuation state; `notify acknowledge` records the identity-bound Steward return acknowledgement without waking a pane; `notify adjudicate` is the canonical capability-checked design prompt surface and requires a live pane CAS; use `intent-cli notify supervise install ...` to emit a current-GUI-session scheduler artifact, `notify supervise shrink --domain <d> --team <t> --write` to compact existing supervision state while retaining readable evidence, then use `intent-cli notify supervise archive --domain <d> --team <t> [--live-window-days <days>] --write` to move older cycle history into period-named archives, use `notify supervise repair-cycle-history --domain <d> --team <t> --write` to preserve and untrack existing cycle history, or use `notify supervise reconcile|uninstall --write` to unload and remove drifted jobs and legacy login-persistent artifacts.",

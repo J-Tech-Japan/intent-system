@@ -43,14 +43,14 @@ internal static class GuideOnboardingCommand
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
-            writer.Write(CompletionChannelGuidance.AppendJson(JsonSerializer.Serialize(result, JsonOptions)));
+            writer.Write(ProgressSupervisionGuidance.AppendJson(CompletionChannelGuidance.AppendJson(JsonSerializer.Serialize(result, JsonOptions))));
             writer.WriteLine();
         }
         else
         {
             using var markdown = new StringWriter();
             WriteMarkdown(markdown, result);
-            writer.Write(CompletionChannelGuidance.AppendMarkdown(markdown.ToString()));
+            writer.Write(ProgressSupervisionGuidance.AppendMarkdown(CompletionChannelGuidance.AppendMarkdown(markdown.ToString())));
         }
 
         return 0;

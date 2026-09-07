@@ -165,15 +165,15 @@ internal static class GuideOrchestratorThreadCommand
         {
             using var buffer = new StringWriter();
             WriteMarkdown(buffer, guide, metadataFree: !Directory.Exists(Path.Combine(context.RepoRoot, ".intent-cli")));
-            writer.Write(CompletionChannelGuidance.AppendMarkdown(
-                GuideRoleVocabulary.ProjectRenderedRoleValues(SelectMarkdownSections(buffer.ToString(), values))));
+            writer.Write(ProgressSupervisionGuidance.AppendMarkdown(CompletionChannelGuidance.AppendMarkdown(
+                GuideRoleVocabulary.ProjectRenderedRoleValues(SelectMarkdownSections(buffer.ToString(), values)))));
             return 0;
         }
 
         using var markdownBuffer = new StringWriter();
         WriteMarkdown(markdownBuffer, guide, metadataFree: !Directory.Exists(Path.Combine(context.RepoRoot, ".intent-cli")));
-        writer.Write(CompletionChannelGuidance.AppendMarkdown(
-            GuideRoleVocabulary.ProjectRenderedRoleValues(markdownBuffer.ToString())));
+        writer.Write(ProgressSupervisionGuidance.AppendMarkdown(CompletionChannelGuidance.AppendMarkdown(
+            GuideRoleVocabulary.ProjectRenderedRoleValues(markdownBuffer.ToString()))));
         return 0;
     }
 

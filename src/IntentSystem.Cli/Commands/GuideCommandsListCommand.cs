@@ -376,6 +376,15 @@ internal static class GuideCommandsListCommand
             RecommendedCaller = CallerChatAgent,
             Purpose = "G712 metadata-free supervision setup route: `intent-cli guide workflow task supervision-setup --format json|markdown` renders the shipped session-scoped install, current-GUI registration, reconcile, and uninstall contract without reading host metadata or executing lifecycle commands."
         },
+        new CommandGroupEntry
+        {
+            Name = "guide progress-supervision",
+            Role = RoleHostReview,
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "G812 correctness-first, metadata-free progress controller guide: durable transition deadlines, bounded recovery/bootstrap, compact health, incident learning, completion-driven receipts, and machine-readable role contracts."
+        },
     };
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
