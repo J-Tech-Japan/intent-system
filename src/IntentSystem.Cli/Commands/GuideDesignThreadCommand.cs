@@ -76,13 +76,15 @@ internal static class GuideDesignThreadCommand
             CreateOrcaOperatingBlock());
         if (string.Equals(format, "json", StringComparison.Ordinal))
         {
-            writer.WriteLine(GuideRoleVocabulary.ProjectRenderedRoleValues(JsonSerializer.Serialize(result, JsonOptions)));
+            writer.WriteLine(CompletionChannelGuidance.AppendJson(
+                GuideRoleVocabulary.ProjectRenderedRoleValues(JsonSerializer.Serialize(result, JsonOptions))));
         }
         else
         {
             using var buffer = new StringWriter();
             WriteMarkdown(buffer, result);
-            writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(buffer.ToString()));
+            writer.Write(CompletionChannelGuidance.AppendMarkdown(
+                GuideRoleVocabulary.ProjectRenderedRoleValues(buffer.ToString())));
         }
 
         return 0;

@@ -821,6 +821,16 @@ internal sealed class NotifyMeasuredSupervisor
         var recoveryRecords = recoveryState.Resolved
             ? recoveryState.StallHistory
             : records;
+        var completionHealth = NotifyCompletionChannelHealth.Compute(
+            routingRoot,
+            domain,
+            team,
+            now,
+            intervalSeconds,
+            jitterSeconds: 0,
+            maxSweepSeconds: 0,
+            measuredSweeps: previousCycle is null ? 1 : 3,
+            supervisionArtifactRoot: context.ResolveSupervisionArtifactRootPath());
         return new NotifySupervisorPass
         {
             Actions = actions,
@@ -830,6 +840,7 @@ internal sealed class NotifyMeasuredSupervisor
             EmissionPolicy = emissionPolicy,
             PreApprovalPolicy = preApprovalPolicy,
             Liveness = liveness,
+            CompletionChannelHealth = completionHealth,
             Warnings = warnings,
         };
     }

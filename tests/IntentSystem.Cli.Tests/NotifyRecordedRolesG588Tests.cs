@@ -72,13 +72,15 @@ public sealed class NotifyRecordedRolesG588Tests : IDisposable
         var line = Assert.Single(File.ReadAllLines(workspace.EventPath));
         using var document = JsonDocument.Parse(line);
         Assert.Equal(
-            ["timestamp", "team", "kind", "unit", "summary", "artifact"],
+            ["timestamp", "team", "kind", "unit", "summary", "artifact", "result_nonce", "completion_identity"],
             document.RootElement.EnumerateObject().Select(property => property.Name));
         Assert.Equal(FixedNow, document.RootElement.GetProperty("timestamp").GetDateTimeOffset());
         Assert.Equal("question", document.RootElement.GetProperty("kind").GetString());
         Assert.Equal("G588-demo", document.RootElement.GetProperty("unit").GetString());
         Assert.Equal("Implement external routing", document.RootElement.GetProperty("summary").GetString());
         Assert.Equal("issue #1279", document.RootElement.GetProperty("artifact").GetString());
+        Assert.Equal("g588-nonce", document.RootElement.GetProperty("result_nonce").GetString());
+        Assert.Equal("G588-demo:g588-nonce", document.RootElement.GetProperty("completion_identity").GetString());
         Assert.Empty(runner.Calls);
     }
 

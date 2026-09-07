@@ -151,7 +151,8 @@ internal static class GuideOrchestratorThreadCommand
         {
             var json = JsonSerializer.Serialize(guide, JsonOptions);
             var selected = sessionLayer.IsHerdrOnly ? SelectJsonSections(json, values) : json;
-            writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(selected));
+            writer.Write(CompletionChannelGuidance.AppendJson(
+                GuideRoleVocabulary.ProjectRenderedRoleValues(selected)));
             writer.WriteLine();
             return 0;
         }
@@ -164,13 +165,15 @@ internal static class GuideOrchestratorThreadCommand
         {
             using var buffer = new StringWriter();
             WriteMarkdown(buffer, guide, metadataFree: !Directory.Exists(Path.Combine(context.RepoRoot, ".intent-cli")));
-            writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(SelectMarkdownSections(buffer.ToString(), values)));
+            writer.Write(CompletionChannelGuidance.AppendMarkdown(
+                GuideRoleVocabulary.ProjectRenderedRoleValues(SelectMarkdownSections(buffer.ToString(), values))));
             return 0;
         }
 
         using var markdownBuffer = new StringWriter();
         WriteMarkdown(markdownBuffer, guide, metadataFree: !Directory.Exists(Path.Combine(context.RepoRoot, ".intent-cli")));
-        writer.Write(GuideRoleVocabulary.ProjectRenderedRoleValues(markdownBuffer.ToString()));
+        writer.Write(CompletionChannelGuidance.AppendMarkdown(
+            GuideRoleVocabulary.ProjectRenderedRoleValues(markdownBuffer.ToString())));
         return 0;
     }
 

@@ -122,6 +122,7 @@ internal static class SessionLayerSections
         new(DocumentTitle.HerdrOnly, null, Applicability.HerdrOnly),
         new("## Canonical role vocabulary (G797)", null, Applicability.ModeIndependent, Descriptive: true),
         new("(json) guide summary", "summary", Applicability.ModeIndependentWithTransportMechanics, Descriptive: true),
+        new("(json) G811 completion channel", "completion_channel", Applicability.ModeIndependent, Descriptive: true),
         new(ReplacementHeadingValue, "herdr_only_replaced_sections", Applicability.HerdrOnly),
         new("(json) herdr-only replacement note", "herdr_only_replacement_note", Applicability.HerdrOnly),
         new("(json) herdr-only descriptive context", "herdr_only_descriptive_agmsg_context", Applicability.HerdrOnly),

@@ -480,7 +480,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
         using var document = JsonDocument.Parse(lines[0]);
         var root = document.RootElement;
         Assert.Equal(
-            ["timestamp", "team", "kind", "unit", "summary", "artifact"],
+            ["timestamp", "team", "kind", "unit", "summary", "artifact", "completion_identity"],
             root.EnumerateObject().Select(property => property.Name));
         Assert.Equal(FixedNow, root.GetProperty("timestamp").GetDateTimeOffset());
         Assert.Equal(NotifyWorkspace.Team, root.GetProperty("team").GetString());
@@ -488,6 +488,7 @@ public sealed class NotifyCommandG578Tests : IDisposable
         Assert.Equal("G578-demo", root.GetProperty("unit").GetString());
         Assert.Equal("needs a design decision", root.GetProperty("summary").GetString());
         Assert.Equal("notes/blocker.md", root.GetProperty("artifact").GetString());
+        Assert.Equal("G578-demo:report", root.GetProperty("completion_identity").GetString());
     }
 
     [Fact]
