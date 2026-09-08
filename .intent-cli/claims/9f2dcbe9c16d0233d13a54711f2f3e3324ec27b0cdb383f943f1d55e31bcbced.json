@@ -1,0 +1,8 @@
+{
+  "schema_version": "1",
+  "scope": "execution-unit:G815",
+  "actor": "builder",
+  "team": "intent-cli-dev",
+  "claimed_at": "2026-09-08T19:09:43.834188+00:00",
+  "base_commit": "ebb7f21745a24d985c3ffdc7b370195506c1338c"
+}
