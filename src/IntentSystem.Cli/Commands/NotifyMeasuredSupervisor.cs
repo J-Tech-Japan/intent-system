@@ -842,6 +842,32 @@ internal sealed class NotifyMeasuredSupervisor
             measuredSweeps: sweepSamples.Count,
             supervisionArtifactRoot: context.ResolveSupervisionArtifactRootPath(),
             configuredBoundSeconds: bound.BoundSeconds);
+        var costAware = NotifyCostAwareSupervisionContract.Evaluate(new NotifyCostAwareObservation
+        {
+            Now = now,
+            Trigger = trigger,
+            FloorSeconds = NotifyCostAwareSupervisionContract.IndependentFloorSeconds,
+            JitterSeconds = NotifyCostAwareSupervisionContract.DefaultJitterSeconds,
+            MeasuredMaxSweepSeconds = sweepSamples.DefaultIfEmpty(0).Max(),
+            SweepSamplesSeconds = sweepSamples,
+            SteadySweepCount = sweepSamples.Count,
+            DeclaredBoundSeconds = bound.BoundSeconds,
+            FloorDueAt = previousIntervalCycle?.CompletedAt.AddSeconds(NotifyCostAwareSupervisionContract.IndependentFloorSeconds),
+            EventObserved = string.Equals(trigger, "event", StringComparison.OrdinalIgnoreCase),
+            EventStreamAvailable = !transportUnavailable,
+            PendingRecovery = findings.Count > 0,
+            SourceOutage = transportUnavailable || state.UnreadableRecords.Count > 0,
+            CorruptEvidence = state.UnreadableRecords.Count > 0,
+            StorageWritable = cycleWrite.Error is null,
+            ObservedSourceKinds = CostAwareSourceKinds(observations),
+            CurrentSemanticFields = findings
+                .OrderBy(finding => finding.Key, StringComparer.Ordinal)
+                .ToDictionary(
+                    finding => finding.Key,
+                    finding => $"{finding.Kind}|{finding.OwnerRole}|{finding.Summary}",
+                    StringComparer.Ordinal),
+            CurrentSemanticVersion = cycleId,
+        });
         return new NotifySupervisorPass
         {
             Actions = actions,
@@ -852,8 +878,47 @@ internal sealed class NotifyMeasuredSupervisor
             PreApprovalPolicy = preApprovalPolicy,
             Liveness = liveness,
             CompletionChannelHealth = completionHealth,
+            CostAware = costAware,
             Warnings = warnings,
         };
+    }
+
+    private static IReadOnlySet<string> CostAwareSourceKinds(
+        IReadOnlyList<NotifySupervisionObservation> observations)
+    {
+        var kinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var observation in observations)
+        {
+            var source = $"{observation.Source} {observation.Kind}";
+            if (source.Contains("delegation", StringComparison.OrdinalIgnoreCase)
+                || source.Contains("pending", StringComparison.OrdinalIgnoreCase))
+            {
+                kinds.Add("delegation-dispatch-delivery");
+            }
+            if (source.Contains("completion", StringComparison.OrdinalIgnoreCase)
+                || source.Contains("report", StringComparison.OrdinalIgnoreCase)
+                || source.Contains("outbox", StringComparison.OrdinalIgnoreCase))
+            {
+                kinds.Add("completion");
+            }
+            if (source.Contains("review", StringComparison.OrdinalIgnoreCase)
+                || source.Contains("verdict", StringComparison.OrdinalIgnoreCase))
+            {
+                kinds.Add("review-verdict");
+            }
+            if (source.Contains("prompt", StringComparison.OrdinalIgnoreCase)
+                || source.Contains("blocked", StringComparison.OrdinalIgnoreCase))
+            {
+                kinds.Add("blocked-prompt");
+            }
+            if (source.Contains("stall", StringComparison.OrdinalIgnoreCase)
+                || source.Contains("publish", StringComparison.OrdinalIgnoreCase)
+                || source.Contains("intake", StringComparison.OrdinalIgnoreCase))
+            {
+                kinds.Add("published-unit-stall");
+            }
+        }
+        return kinds;
     }
 
     public int RunLoop(TextWriter writer, CancellationToken cancellationToken, bool once)

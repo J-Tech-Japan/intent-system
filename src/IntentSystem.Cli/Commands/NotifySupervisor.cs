@@ -31,6 +31,7 @@ internal sealed record NotifySupervisorPass
     public NotifyPreApprovalPolicyStatus? PreApprovalPolicy { get; init; }
     public NotifySupervisionLiveness? Liveness { get; init; }
     public NotifyCompletionChannelHealth? CompletionChannelHealth { get; init; }
+    public NotifyCostAwareResult? CostAware { get; init; }
     public IReadOnlyList<string> Warnings { get; init; } = [];
     public string? Error { get; init; }
     public bool Silent => Actions.Count == 0
