@@ -2,7 +2,7 @@
   "schema_version": "1",
   "scope": "execution-unit:G815",
   "actor": "builder",
-  "team": "intent-cli-dev",
-  "claimed_at": "2026-09-08T19:09:43.834188+00:00",
-  "base_commit": "ebb7f21745a24d985c3ffdc7b370195506c1338c"
+  "team": "aic",
+  "claimed_at": "2026-09-08T23:03:06.191158+00:00",
+  "base_commit": "3262d7c543f3663a8ce83fb8a2e86018162d6962"
 }

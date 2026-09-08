@@ -1,0 +1,13 @@
+{
+  "schema_version": "1",
+  "operation": "takeover",
+  "scope": "execution-unit:G815",
+  "actor": "builder",
+  "team": "aic",
+  "recorded_at": "2026-09-08T23:03:06.191158+00:00",
+  "reason": "Operator explicitly approved existing AIC team takeover of G815 remaining tests review and CLI recovery; preserve existing work; no AIC merge or Azure changes.",
+  "displaced_holder": "builder",
+  "displaced_team": "intent-cli-dev",
+  "displaced_claimed_at": "2026-09-08T19:09:43.834188+00:00",
+  "base_commit": "3262d7c543f3663a8ce83fb8a2e86018162d6962"
+}
