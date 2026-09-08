@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
@@ -40,6 +41,10 @@ public sealed class G815WorkerClaimTeamTests : IDisposable
         Assert.True(matching.ExitCode == 0, string.Join(" | ", matching.Result.Errors));
         Assert.True(matching.Result.Proceed);
         Assert.False(matching.Result.Applied);
+        Assert.Equal(
+            new[] { WorkerNextActionConstants.Labels.IntentIssueInProgress },
+            matching.Result.AddLabels);
+        Assert.Empty(matching.Result.RemoveLabels);
         Assert.Empty(mutator.Transitions);
 
         var omitted = ExecuteClaim(fixture.Context);
@@ -55,6 +60,46 @@ public sealed class G815WorkerClaimTeamTests : IDisposable
         Assert.Contains(wrong.Result.Errors, error =>
             error.Contains("does not hold it", StringComparison.Ordinal));
         Assert.Empty(mutator.Transitions);
+    }
+
+    [Fact]
+    public void MatchingTeamWriteAppliesExactlyTheCanonicalTransition_RefusalsRemainNoOp()
+    {
+        using var fixture = new ClaimFixture();
+        fixture.WriteClaim("G815", "builder", "intent-cli-dev");
+        var mutator = new RecordingMutator("intent-target");
+        WorkerClaimCommand.MutatorFactory = () => mutator;
+        WorkerClaimCommand.IssueLookupFactory = () => new IssueLookup("G815 isolated write fixture");
+
+        var matching = ExecuteWriteClaim(fixture.Context, "--team", "intent-cli-dev");
+        Assert.Equal(0, matching.ExitCode);
+        Assert.True(matching.Result.Proceed);
+        Assert.True(matching.Result.Applied);
+        Assert.Equal(
+            new[] { WorkerNextActionConstants.Labels.IntentIssueInProgress },
+            matching.Result.AddLabels);
+        Assert.Empty(matching.Result.RemoveLabels);
+        Assert.Single(mutator.Transitions);
+        Assert.Equal(
+            new[] { WorkerNextActionConstants.Labels.IntentIssueInProgress },
+            mutator.Transitions[0].Add);
+        Assert.Empty(mutator.Transitions[0].Remove);
+
+        var omitted = ExecuteWriteClaim(fixture.Context);
+        Assert.Equal(2, omitted.ExitCode);
+        Assert.False(omitted.Result.Proceed);
+        Assert.False(omitted.Result.Applied);
+        Assert.Contains(omitted.Result.Errors, error =>
+            error.Contains("--team is required", StringComparison.Ordinal));
+
+        var wrong = ExecuteWriteClaim(fixture.Context, "--team", "other-team");
+        Assert.Equal(2, wrong.ExitCode);
+        Assert.False(wrong.Result.Proceed);
+        Assert.False(wrong.Result.Applied);
+        Assert.Contains(wrong.Result.Errors, error =>
+            error.Contains("does not hold it", StringComparison.Ordinal));
+
+        Assert.Single(mutator.Transitions);
     }
 
     [Fact]
@@ -94,6 +139,28 @@ public sealed class G815WorkerClaimTeamTests : IDisposable
         Assert.False(result.Result.Proceed);
         Assert.Contains(result.Result.Errors, error =>
             error.Contains(WorkerClaimCompleteConstants.ErrorCodes.ClaimRegistryRefused, StringComparison.Ordinal));
+        Assert.Empty(mutator.Transitions);
+    }
+
+    [Fact]
+    public void CanonicalUnavailableThroughWorkerClaimRefusesWithoutMutation()
+    {
+        using var fixture = new ClaimFixture();
+        fixture.InitializeBrokenOrigin();
+        var mutator = new RecordingMutator("intent-target");
+        WorkerClaimCommand.MutatorFactory = () => mutator;
+        WorkerClaimCommand.IssueLookupFactory = () => new IssueLookup("G815 unavailable authority");
+
+        var result = ExecuteClaim(fixture.Context, "--team", "intent-cli-dev");
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.False(result.Result.Proceed);
+        Assert.False(result.Result.Applied);
+        Assert.Empty(result.Result.AddLabels);
+        Assert.Empty(result.Result.RemoveLabels);
+        Assert.Contains(result.Result.Errors, error =>
+            error.StartsWith(WorkerClaimCompleteConstants.ErrorCodes.ClaimRegistryRefused, StringComparison.Ordinal)
+            && error.Contains("canonical Git evidence is unavailable", StringComparison.Ordinal));
         Assert.Empty(mutator.Transitions);
     }
 
@@ -190,13 +257,24 @@ public sealed class G815WorkerClaimTeamTests : IDisposable
     private static (int ExitCode, WorkerClaimResult Result) ExecuteClaim(
         CliContext context,
         params string[] extra)
+        => ExecuteClaimWithMode(context, WorkerClaimCompleteConstants.Modes.DryRun, extra);
+
+    private static (int ExitCode, WorkerClaimResult Result) ExecuteWriteClaim(
+        CliContext context,
+        params string[] extra)
+        => ExecuteClaimWithMode(context, WorkerClaimCompleteConstants.Modes.Write, extra);
+
+    private static (int ExitCode, WorkerClaimResult Result) ExecuteClaimWithMode(
+        CliContext context,
+        string mode,
+        params string[] extra)
     {
         var args = new List<string>
         {
             "--repo", "J-Tech-Japan/intent-system",
             "--kind", "issue",
             "--number", "815",
-            "--dry-run",
+            mode == WorkerClaimCompleteConstants.Modes.Write ? "--write" : "--dry-run",
             "--github-only",
             "--format", "json",
         };
@@ -299,6 +377,34 @@ public sealed class G815WorkerClaimTeamTests : IDisposable
             var path = Path.Combine(root, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, json);
+        }
+
+        public void InitializeBrokenOrigin()
+        {
+            RunGit(root, "init", "--quiet");
+            RunGit(root, "remote", "add", "origin", Path.Combine(root, "missing-origin.git"));
+        }
+
+        private static void RunGit(string workingDirectory, params string[] arguments)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "git",
+                WorkingDirectory = workingDirectory,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            foreach (var argument in arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+
+            using var process = Process.Start(startInfo);
+            Assert.NotNull(process);
+            var error = process!.StandardError.ReadToEnd();
+            process.WaitForExit();
+            Assert.True(process.ExitCode == 0, error);
         }
 
         public void Dispose()
