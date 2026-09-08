@@ -58,6 +58,28 @@ public sealed class G815WorkerClaimTeamTests : IDisposable
     }
 
     [Fact]
+    public void LegacyImplementationActorRecord_MatchingTeamProceeds_DifferentTeamRefuses_WithoutLabelEffects()
+    {
+        using var fixture = new ClaimFixture();
+        fixture.WriteClaim("G815", "implementation", "intent-cli-dev");
+        var mutator = new RecordingMutator("intent-target");
+        WorkerClaimCommand.MutatorFactory = () => mutator;
+        WorkerClaimCommand.IssueLookupFactory = () => new IssueLookup("G815 legacy implementation actor");
+
+        var matching = ExecuteClaim(fixture.Context, "--team", "intent-cli-dev");
+        Assert.Equal(0, matching.ExitCode);
+        Assert.True(matching.Result.Proceed);
+        Assert.False(matching.Result.Applied);
+        Assert.Empty(mutator.Transitions);
+
+        var differing = ExecuteClaim(fixture.Context, "--team", "other-team");
+        Assert.Equal(2, differing.ExitCode);
+        Assert.False(differing.Result.Proceed);
+        Assert.False(differing.Result.Applied);
+        Assert.Empty(mutator.Transitions);
+    }
+
+    [Fact]
     public void InvalidAuthorityRefusesClosedWithoutMutation()
     {
         using var fixture = new ClaimFixture();
