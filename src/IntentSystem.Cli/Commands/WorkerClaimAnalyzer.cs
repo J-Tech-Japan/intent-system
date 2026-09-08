@@ -179,12 +179,22 @@ internal static class WorkerClaimAnalyzer
 
     private static bool IsActiveOrUnavailableClaim(ClaimOwnershipVerification claim) =>
         claim.StoreConfigured
-        && (claim.Status == ClaimOwnershipVerification.StatusOwned
+        && ((claim.Status == ClaimOwnershipVerification.StatusOwned
+                && !SameInvokingTeamOwnsClaim(claim))
             || claim.Status == ClaimOwnershipVerification.StatusHeldByOtherTeam
             || claim.Status == ClaimOwnershipVerification.StatusTeamRequired
             || claim.Status == ClaimOwnershipVerification.StatusCanonicalUnavailable
             || claim.Status == ClaimOwnershipVerification.StatusMetadataBranchOnly
             || claim.Status == ClaimOwnershipVerification.StatusInvalid);
+
+    // G815: the host execution-unit claim is the authority that permits the
+    // matching child worker to perform its lifecycle transition. A matching
+    // invoking team is therefore an ownership success, while another team,
+    // omitted context, and unavailable evidence remain hard refusals above.
+    private static bool SameInvokingTeamOwnsClaim(ClaimOwnershipVerification claim) =>
+        claim.Status == ClaimOwnershipVerification.StatusOwned
+        && !string.IsNullOrWhiteSpace(claim.InvokingTeam)
+        && string.Equals(claim.InvokingTeam, claim.HolderTeam, StringComparison.Ordinal);
 
     /// <summary>
     /// G211: Pure data record returned by

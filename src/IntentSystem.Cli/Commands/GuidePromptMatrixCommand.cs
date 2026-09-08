@@ -79,7 +79,7 @@ internal static class GuidePromptMatrixCommand
     private const string TopologySameRepo = "same-repo";
 
     private const string UsageLine =
-        "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--topology same-repo] [--domain <name>] [--target-repo <owner/repo>] [--agent claude|codex|generic|copilot|copilot-cloud|copilot-local] [--frequency <NNm|NNh>] [--base-branch-policy direct-main|main-ai] [--implementation-base <branch>] [--allow-base-branch-override] [--format markdown|json]";
+        "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--topology same-repo] [--domain <name>] [--team <name>] [--target-repo <owner/repo>] [--agent claude|codex|generic|copilot|copilot-cloud|copilot-local] [--frequency <NNm|NNh>] [--base-branch-policy direct-main|main-ai] [--implementation-base <branch>] [--allow-base-branch-override] [--format markdown|json]";
 
     private static readonly string[] ForbiddenSources =
     [
@@ -112,7 +112,7 @@ internal static class GuidePromptMatrixCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var mode, out var format, out var domain, out var targetRepo, out var agent, out var frequency, out var baseBranchPolicy, out var topology, out var implementationBase, out var allowBaseBranchOverride, out var error))
+        if (!TryParseArguments(args, out var mode, out var format, out var domain, out var team, out var targetRepo, out var agent, out var frequency, out var baseBranchPolicy, out var topology, out var implementationBase, out var allowBaseBranchOverride, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -139,7 +139,7 @@ internal static class GuidePromptMatrixCommand
             return 1;
         }
 
-        var entries = BuildEntries(context, mode, domain, targetRepo, agent, frequency, baseBranchPolicy, topology, branchDecision, policyDefaultBranch);
+        var entries = BuildEntries(context, mode, domain, team, targetRepo, agent, frequency, baseBranchPolicy, topology, branchDecision, policyDefaultBranch);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -209,6 +209,7 @@ internal static class GuidePromptMatrixCommand
         CliContext context,
         string? mode,
         string? domain,
+        string? team,
         string? targetRepo,
         string? agent,
         string? frequency,
@@ -218,6 +219,7 @@ internal static class GuidePromptMatrixCommand
         string policyDefaultBranch)
     {
         var domainPlaceholder = string.IsNullOrWhiteSpace(domain) ? "<DOMAIN>" : domain;
+        var teamPlaceholder = string.IsNullOrWhiteSpace(team) ? "<TEAM>" : team;
         var targetRepoPlaceholder = string.IsNullOrWhiteSpace(targetRepo) ? "<TARGET-REPO>" : targetRepo;
         var resolvedPolicy = ResolveEffectivePolicy(context, baseBranchPolicy);
 
@@ -237,7 +239,7 @@ internal static class GuidePromptMatrixCommand
                 ? BuildCopilotChildLoop(resolvedPolicy)
                 : isCopilotLocal
                     ? BuildCopilotLocalChildLoop(resolvedPolicy, isSameRepo)
-                    : BuildChildLoop(domainPlaceholder, agent, frequency, resolvedPolicy, isSameRepo),
+                    : BuildChildLoop(domainPlaceholder, teamPlaceholder, agent, frequency, resolvedPolicy, isSameRepo),
 
             // host-loop: copilot-local CAN run intent-cli in host cwd.
             isCopilotCloud
@@ -251,7 +253,7 @@ internal static class GuidePromptMatrixCommand
                 ? BuildCopilotChildOneshot(resolvedPolicy)
                 : isCopilotLocal
                     ? BuildCopilotLocalChildOneshot(resolvedPolicy, isSameRepo)
-                    : BuildChildOneshot(domainPlaceholder, resolvedPolicy, isSameRepo),
+                    : BuildChildOneshot(domainPlaceholder, teamPlaceholder, resolvedPolicy, isSameRepo),
 
             // host-oneshot: copilot-local CAN run intent-cli host steps.
             isCopilotCloud
@@ -586,7 +588,7 @@ $@"Base branch policy: `{baseBranchPolicy}` (expected base branch: `{expected}`)
 - Base-branch policy enforcement is HOST / operator-owned. Copilot does NOT invoke any `intent-cli` command from the implementation side; the host's intent review loop runs the mismatch check on its own cadence.";
     }
 
-    private static GuidePromptMatrixEntry BuildChildLoop(string domainPlaceholder, string? agent, string? frequency, string baseBranchPolicy, bool isSameRepo = false)
+    private static GuidePromptMatrixEntry BuildChildLoop(string domainPlaceholder, string teamPlaceholder, string? agent, string? frequency, string baseBranchPolicy, bool isSameRepo = false)
     {
         var resolvedAgent = NormalizeAgent(agent);
         var frequencyBlock = RenderFrequencyBlock(agent, frequency);
@@ -615,10 +617,10 @@ Loop body (single wake; the operator drives subsequent wakes if any):
 1. Save the child worktree path: `CHILD_WORKTREE=""$PWD""`. Confirm it is a git worktree root. Stop with `wrong-worktree` if not.
 2. Resolve `<OWNER>/<REPO>` from the child cwd: `gh repo view --json nameWithOwner --jq .nameWithOwner` (fall back to `git remote get-url origin`).
 3. `git fetch --all --prune` and `git status --short`. If dirty in a dedicated automation worktree, clean local residue (`git reset --hard`, `git clean -fd`, submodule reset). Never `git clean -fdx`. Never clean a personal/shared checkout.
-4. From the child cwd (the child implementation loop does NOT require parent host root access — G333 child-cwd / GitHub-contract-only mode), run `intent-cli worker next-action --repo <OWNER>/<REPO> --github-only --format json`. Pass `--github-only` so the selector is pinned to the label-only data path and the result records the binding (`github_only: true`). Dispatch on `action`:
+4. From the child cwd (the child implementation loop does NOT require parent host root access — G333 child-cwd / GitHub-contract-only mode), run `intent-cli worker next-action --repo <OWNER>/<REPO> --team {teamPlaceholder} --github-only --format json`. Pass `--github-only` so the selector is pinned to the label-only data path and the result records the binding (`github_only: true`). On a claims-enabled host, `{teamPlaceholder}` is required and must be the invoking team; never infer a team. Dispatch on `action`:
    - `none` → stop with `idle`.
-   - `issue-to-pr` → claim with `intent-cli worker claim --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --write --format json`, run the issue-to-PR workflow on the returned URL only, classify outcome, then `worker result-summary --kind issue-to-pr --repo <OWNER>/<REPO> ...` and `worker complete --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --outcome <outcome> --write --format json`.
-   - `pr-comment-fix` → claim with `intent-cli worker claim --kind pr --number <n> --repo <OWNER>/<REPO> --github-only --write --format json`, repair only the narrow requested change on the PR branch, classify outcome, then `worker result-summary --kind pr-comment-fix --repo <OWNER>/<REPO> ...` and `worker complete --kind pr --number <n> --repo <OWNER>/<REPO> --github-only --outcome <outcome> --write --format json`.
+   - `issue-to-pr` → claim with `intent-cli worker claim --kind issue --number <n> --repo <OWNER>/<REPO> --team {teamPlaceholder} --github-only --write --format json`, run the issue-to-PR workflow on the returned URL only, classify outcome, then `worker result-summary --kind issue-to-pr --repo <OWNER>/<REPO> ...` and `worker complete --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --outcome <outcome> --write --format json`.
+   - `pr-comment-fix` → claim with `intent-cli worker claim --kind pr --number <n> --repo <OWNER>/<REPO> --team {teamPlaceholder} --github-only --write --format json`, repair only the narrow requested change on the PR branch, classify outcome, then `worker result-summary --kind pr-comment-fix --repo <OWNER>/<REPO> ...` and `worker complete --kind pr --number <n> --repo <OWNER>/<REPO> --github-only --outcome <outcome> --write --format json`.
 
 Host metadata gaps surfaced by `worker complete` (e.g. `linked_pr_synced: false` from child-cwd mode, G330) are HOST-owned blockers, not child instructions to enter the host repo. The child loop records the gap and moves on; parent host metadata reconciliation runs on the host/review-runtime loop via `intent-cli review closeout-plan --pr <n> --repo <OWNER>/<REPO> --write-recovered-linkage` (G329) — never from the child cwd.
 
@@ -795,7 +797,7 @@ Hard rules:
         };
     }
 
-    private static GuidePromptMatrixEntry BuildChildOneshot(string domainPlaceholder, string baseBranchPolicy, bool isSameRepo = false)
+    private static GuidePromptMatrixEntry BuildChildOneshot(string domainPlaceholder, string teamPlaceholder, string baseBranchPolicy, bool isSameRepo = false)
     {
         var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Honor");
         var sameRepoBlock = isSameRepo ? $"\n{RenderSameRepoTopologyBlock()}" : string.Empty;
@@ -816,10 +818,10 @@ Loop body (single wake only — do not repeat):
 1. Save the child worktree path: `CHILD_WORKTREE=""$PWD""`. Confirm it is a git worktree root. Stop with `wrong-worktree` if not.
 2. Resolve `<OWNER>/<REPO>` from the child cwd: `gh repo view --json nameWithOwner --jq .nameWithOwner` (fall back to `git remote get-url origin`).
 3. `git fetch --all --prune` and `git status --short`. If dirty in a dedicated automation worktree, clean local residue (`git reset --hard`, `git clean -fd`, submodule reset). Never `git clean -fdx`. Never clean a personal/shared checkout.
-4. From the child cwd (the child one-shot does NOT require parent host root access — G333 child-cwd / GitHub-contract-only mode), run `intent-cli worker next-action --repo <OWNER>/<REPO> --github-only --format json`. Pass `--github-only` so the selector is pinned to the label-only data path. Dispatch on `action`:
+4. From the child cwd (the child one-shot does NOT require parent host root access — G333 child-cwd / GitHub-contract-only mode), run `intent-cli worker next-action --repo <OWNER>/<REPO> --team {teamPlaceholder} --github-only --format json`. Pass `--github-only` so the selector is pinned to the label-only data path. On a claims-enabled host, `{teamPlaceholder}` is required and must be the invoking team; never infer a team. Dispatch on `action`:
    - `none` → stop with `idle`.
-   - `issue-to-pr` → claim with `intent-cli worker claim --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --write --format json`, run the issue-to-PR workflow on the returned URL only, classify outcome, then `worker result-summary --kind issue-to-pr --repo <OWNER>/<REPO> ...` and `worker complete --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --outcome <outcome> --write --format json`.
-   - `pr-comment-fix` → claim with `intent-cli worker claim --kind pr --number <n> --repo <OWNER>/<REPO> --github-only --write --format json`, repair only the narrow requested change on the PR branch, classify outcome, then `worker result-summary --kind pr-comment-fix --repo <OWNER>/<REPO> ...` and `worker complete --kind pr --number <n> --repo <OWNER>/<REPO> --github-only --outcome <outcome> --write --format json`.
+   - `issue-to-pr` → claim with `intent-cli worker claim --kind issue --number <n> --repo <OWNER>/<REPO> --team {teamPlaceholder} --github-only --write --format json`, run the issue-to-PR workflow on the returned URL only, classify outcome, then `worker result-summary --kind issue-to-pr --repo <OWNER>/<REPO> ...` and `worker complete --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --outcome <outcome> --write --format json`.
+   - `pr-comment-fix` → claim with `intent-cli worker claim --kind pr --number <n> --repo <OWNER>/<REPO> --team {teamPlaceholder} --github-only --write --format json`, repair only the narrow requested change on the PR branch, classify outcome, then `worker result-summary --kind pr-comment-fix --repo <OWNER>/<REPO> ...` and `worker complete --kind pr --number <n> --repo <OWNER>/<REPO> --github-only --outcome <outcome> --write --format json`.
 
 Host metadata gaps surfaced by `worker complete` (e.g. `linked_pr_synced: false` from child-cwd mode, G330) are HOST-owned blockers, not child instructions to enter the host repo.
 
@@ -1556,6 +1558,7 @@ Hard rules:
         out string? mode,
         out string format,
         out string? domain,
+        out string? team,
         out string? targetRepo,
         out string? agent,
         out string? frequency,
@@ -1568,6 +1571,7 @@ Hard rules:
         mode = null;
         format = FormatMarkdown;
         domain = null;
+        team = null;
         targetRepo = null;
         agent = null;
         frequency = null;
@@ -1630,6 +1634,17 @@ Hard rules:
                     }
 
                     domain = args[index + 1];
+                    index++;
+                    break;
+
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a value.";
+                        return false;
+                    }
+
+                    team = args[index + 1];
                     index++;
                     break;
 
@@ -1755,7 +1770,7 @@ Hard rules:
         writer.WriteLine($"- {ModeHostOneshot}  one-shot host review/next-slice");
         writer.WriteLine();
         writer.WriteLine("Omit --mode to get all four entries.");
-        writer.WriteLine("--domain, --target-repo, --agent, --frequency, and --topology are optional; provide them to render a concrete paste-ready prompt instead of one with placeholders.");
+        writer.WriteLine("--domain, --team, --target-repo, --agent, --frequency, and --topology are optional; provide them to render a concrete paste-ready prompt instead of one with placeholders.");
         writer.WriteLine("--agent values: claude (same-thread `/loop`), codex (current-thread heartbeat), generic, copilot / copilot-cloud (G345 — cloud/assignment-oriented; supported for child-oneshot, returns structured unsupported-loop guidance for child-loop, structured host-oneshot-human-driven guidance for host-oneshot, and structured unsupported-mode-agent-combination for host-loop), copilot-local (G349 — local Copilot coding-agent in a host cwd; can exec intent-cli for host operations; child cwd usage remains host-state-free).");
         writer.WriteLine("--frequency examples: 5m, 20m, 1h. Omit to keep the rendered prompt's ask-the-operator instruction.");
         writer.WriteLine($"--base-branch-policy values: {CliRuntimeContracts.DirectMainBaseBranchPolicy} (default; child PRs target `{CliRuntimeContracts.DirectMainBaseBranch}`), {CliRuntimeContracts.MainAiBaseBranchPolicy} (child PRs target `{CliRuntimeContracts.MainAiIntegrationBaseBranch}`).");
