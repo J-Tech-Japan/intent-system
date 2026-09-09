@@ -526,22 +526,12 @@ internal static class CloseoutPrCommand
 
     private static QueueItem UpdateItemState(QueueItem item, QueueItemState state, string? recoveredLinkedPr = null)
     {
-        return new QueueItem
+        return item with
         {
-            ExecutionUnit = item.ExecutionUnit,
-            Title = item.Title,
             State = state,
-            Dependencies = item.Dependencies,
-            BlockedBy = item.BlockedBy,
-            ClarificationReturnPath = item.ClarificationReturnPath,
-            PacketPaths = item.PacketPaths,
-            LinkedIssue = item.LinkedIssue,
             // G477: recover the missing linked_pr projection when GitHub facts
             // deterministically identified this item; otherwise preserve it.
-            LinkedPr = recoveredLinkedPr ?? item.LinkedPr,
-            WorkerRole = item.WorkerRole,
-            ReviewRole = item.ReviewRole,
-            Priority = item.Priority
+            LinkedPr = recoveredLinkedPr ?? item.LinkedPr
         };
     }
 

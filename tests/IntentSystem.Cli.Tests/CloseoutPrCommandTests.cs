@@ -35,6 +35,40 @@ public sealed class CloseoutPrCommandTests : IDisposable
         public IReadOnlyList<int> Fetch(string repo, int prNumber) => _closingIssues;
     }
 
+    [Fact]
+    public void Execute_GivenWrite_PreservesAllOtherQueueFieldsAndIsIdempotent()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        var before = System.Text.Json.Nodes.JsonNode.Parse(BuildQueueWithTwoItems(
+            ("G324", "review", "595"), ("UNRELATED", "queued", "999")))!;
+        var target = before["items"]![0]!;
+        target["routing_snapshot"] = System.Text.Json.Nodes.JsonNode.Parse("""
+            {"lane_id":"hotfix","definition_revision":"aic-r1",
+             "start_branch":"main","pr_base_branch":"main","landing_mode":"operator-merge"}
+            """);
+        target["retirement_reason"] = "preserve-existing-reason";
+        target["priority_revision"] = 7;
+        before = System.Text.Json.Nodes.JsonNode.Parse(QueueStateSerializer.Serialize(
+            QueueStateSerializer.Deserialize(before.ToJsonString())))!;
+        workspace.WriteQueueState(before.ToJsonString());
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            using var writer = new StringWriter();
+            Assert.Equal(0, CloseoutPrCommand.Execute(workspace.Context,
+                ["--repo", "J-Tech-Japan/intent-system", "--pr", "595", "--write", "--format", "json"], writer));
+            var after = System.Text.Json.Nodes.JsonNode.Parse(workspace.QueueStateOnDisk())!;
+            var expected = before["items"]![0]!.DeepClone();
+            expected["state"] = "completed";
+            Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(expected, after["items"]![0]));
+            Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(before["items"]![1], after["items"]![1]));
+            var lines = workspace.RunsLines();
+            Assert.Equal(2, lines.Length);
+            Assert.Equal("pr-merged", RunLogSerializer.DeserializeLine(lines[0]).Event);
+            Assert.Equal("closeout-recorded", RunLogSerializer.DeserializeLine(lines[1]).Event);
+        }
+    }
+
     // --- G324: durable writes use current RunEvent schema + auto-commit safe ---
 
     [Fact]
