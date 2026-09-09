@@ -2,6 +2,7 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -1024,10 +1025,27 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             () => new FakePrClosingIssuesFetcher(new[] { 759 });
 
         using var workspace = new ReviewCloseoutPlanWorkspace();
-        workspace.WriteQueueState(BuildQueueState("G329", "review",
-            linkedPr: null,
-            linkedIssue: ("J-Tech-Japan/intent-system", 759,
-                "https://github.com/J-Tech-Japan/intent-system/issues/759")));
+        var queueBefore = System.Text.Json.Nodes.JsonNode.Parse(BuildQueueStateWithTwoItems(
+            ("G329", "review", null,
+                ("J-Tech-Japan/intent-system", 759,
+                    "https://github.com/J-Tech-Japan/intent-system/issues/759")),
+            ("UNRELATED", "queued", null,
+                ("J-Tech-Japan/intent-system", 900,
+                    "https://github.com/J-Tech-Japan/intent-system/issues/900"))))!;
+        var itemsBefore = queueBefore["items"]!.AsArray();
+        var targetBefore = itemsBefore[0]!;
+        targetBefore["routing_snapshot"] = System.Text.Json.Nodes.JsonNode.Parse("""
+            {"lane_id":"hotfix","definition_revision":"aic-r1",
+             "start_branch":"main","pr_base_branch":"main","landing_mode":"operator-merge"}
+            """);
+        targetBefore["retirement_reason"] = "preserve-existing-reason";
+        targetBefore["priority_revision"] = 7;
+        // Compare canonical queue representations, including default fields.
+        queueBefore = System.Text.Json.Nodes.JsonNode.Parse(QueueStateSerializer.Serialize(
+            QueueStateSerializer.Deserialize(queueBefore.ToJsonString())))!;
+        itemsBefore = queueBefore["items"]!.AsArray();
+        targetBefore = itemsBefore[0]!;
+        workspace.WriteQueueState(queueBefore.ToJsonString());
         workspace.WriteFile(".intent-cli/issues/G329/github-body.md", BuildContractBody());
 
         using var writer = new StringWriter();
@@ -1056,6 +1074,14 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             .Single(e => e.GetProperty("execution_unit").GetString() == "G329");
         Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/760",
             matchedAfter.GetProperty("linked_pr").GetString());
+        var afterNode = System.Text.Json.Nodes.JsonNode.Parse(queueAfter)!;
+        var itemsAfter = afterNode["items"]!.AsArray();
+        Assert.Equal(2, itemsAfter.Count);
+        Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(itemsBefore[1], itemsAfter[1]));
+        // Only the recovered link may change; all present and future queue
+        // policy fields must survive this command's record update.
+        targetBefore["linked_pr"] = "https://github.com/J-Tech-Japan/intent-system/pull/760";
+        Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(targetBefore, itemsAfter[0]));
 
         // runs.jsonl was appended with a `linkage-recovered` event.
         var runsLines = File.ReadAllLines(

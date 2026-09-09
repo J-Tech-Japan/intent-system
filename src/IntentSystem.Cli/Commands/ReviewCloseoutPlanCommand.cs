@@ -795,21 +795,7 @@ internal static class ReviewCloseoutPlanCommand
         // Future migration to scoped state is independent of this fix.
         var updatedItems = queueState.Items
             .Select(item => string.Equals(item.ExecutionUnit, recovered.ExecutionUnit, StringComparison.Ordinal)
-                ? new QueueItem
-                {
-                    ExecutionUnit = item.ExecutionUnit,
-                    Title = item.Title,
-                    State = item.State,
-                    Dependencies = item.Dependencies,
-                    BlockedBy = item.BlockedBy,
-                    ClarificationReturnPath = item.ClarificationReturnPath,
-                    PacketPaths = item.PacketPaths,
-                    LinkedIssue = item.LinkedIssue,
-                    LinkedPr = recovered.LinkedPrUrl,
-                    WorkerRole = item.WorkerRole,
-                    ReviewRole = item.ReviewRole,
-                    Priority = item.Priority
-                }
+                ? item with { LinkedPr = recovered.LinkedPrUrl }
                 : item)
             .ToArray();
         var updatedState = new QueueState
