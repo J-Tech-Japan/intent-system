@@ -1,0 +1,13 @@
+{
+  "schema_version": "1",
+  "operation": "takeover",
+  "scope": "execution-unit:G815",
+  "actor": "builder",
+  "team": "intent-cli-dev",
+  "recorded_at": "2026-09-09T00:23:47.711205+00:00",
+  "reason": "Operator correction: G815 is hosted by intent-cli-dev; reverse erroneous team=aic takeover 540c6efdf63300d05fe79e8020574c1bc3f96ad7; preserve PR1776 and G813",
+  "displaced_holder": "builder",
+  "displaced_team": "intent-cli-dev",
+  "displaced_claimed_at": "2026-09-09T00:23:36.157086+00:00",
+  "base_commit": "f9a91a61edb3ed6291750a19e0247212fccad270"
+}
