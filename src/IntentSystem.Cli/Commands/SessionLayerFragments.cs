@@ -716,7 +716,7 @@ internal static class SessionLayerFragments
             Descriptive("Receivers are NEVER scheduled; when an explicit fallback/legacy timer is used (message-driven wakes are the default), the orchestrator is the only thread ever scheduled.")),
         Fragment(
             S4,
-            Transport("OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the coordinating thread, domain `__DOMAIN__` against `__OWNER__/__REPO__` using `__AGENT__`: on each run perform exactly ONE orchestrator wake — check design-side progress and agmsg replies, ask intent-cli for state (`intent status`, `worker next-action --github-only`, `automation host-review-preflight`), verify the GitHub facts (CI/approval/merge/closeout), then send this wake's messages under the G524 cap — AT MOST ONE DELEGATION PER RECEIVER (implementation, review), NOT at-most-one-message overall, so a publish plus its same-wake delegation, one repair per stalled receiver, and one operator escalation may all go out together — and exit."),
+            Transport("OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the coordinating thread, domain `__DOMAIN__` against `__OWNER__/__REPO__` using `__AGENT__`: on each run perform exactly ONE orchestrator wake — check design-side progress and agmsg replies, ask intent-cli for state (`intent status`, `worker next-action --team __G815_TEAM__ --github-only`, `automation host-review-preflight`), verify the GitHub facts (CI/approval/merge/closeout), then send this wake's messages under the G524 cap — AT MOST ONE DELEGATION PER RECEIVER (implementation, review), NOT at-most-one-message overall, so a publish plus its same-wake delegation, one repair per stalled receiver, and one operator escalation may all go out together — and exit."),
             Scaffold(" "),
             Transport("Prefer the message-driven steady state (implementation/review agmsg replies already wake the orchestrator); use this timer only when the operator explicitly wants scheduled fallback/legacy polling."),
             Scaffold(" "),
@@ -733,7 +733,11 @@ internal static class SessionLayerFragments
         Fragment(S4, Transport("- A wake is triggered either by an incoming agmsg reply from implementation/review (the message-driven steady state) or by the optional fallback/legacy timer firing — either trigger runs exactly one orchestrator pass below.")),
         Fragment(S4, Operative("- Check design-side progress: newly published packets/issues and intent status changes via `intent-cli intent status --domain __DOMAIN__ --format json`.")),
         Fragment(S4, Transport("- Read pending agmsg replies from the implementation/review receivers (signals only — re-verify against intent-cli / GitHub).")),
-        Fragment(S4, Operative("- Ask intent-cli for worker state: `intent-cli worker next-action --repo __OWNER__/__REPO__ --github-only --format json`.")),
+        Fragment(
+            S4,
+            Operative("- Ask intent-cli for worker state: `intent-cli worker next-action --repo __OWNER__/__REPO__ --team __G815_TEAM__ --github-only --format json`."),
+            Scaffold(" "),
+            Operative("On a claims-enabled host, the invoking team is required; never infer it.")),
         Fragment(S4, Operative("- Check host review readiness: `intent-cli automation host-review-preflight --repo __OWNER__/__REPO__ --format json`.")),
         Fragment(S4, Operative("- Verify GitHub facts directly: open PRs, CI conclusion, approvals, merge state, and closeout/label state.")),
         Fragment(
@@ -1045,7 +1049,9 @@ internal static class SessionLayerFragments
             S11,
             Descriptive("1."),
             Scaffold(" "),
-            Operative("Ask intent-cli for the real state: `intent-cli intent status --domain __DOMAIN__ --format json` and `intent-cli worker next-action --repo __OWNER__/__REPO__ --github-only --format json`.")),
+            Operative("Ask intent-cli for the real state: `intent-cli intent status --domain __DOMAIN__ --format json` and `intent-cli worker next-action --repo __OWNER__/__REPO__ --team __G815_TEAM__ --github-only --format json`."),
+            Scaffold(" "),
+            Operative("On a claims-enabled host, the invoking team is required; never infer it.")),
         Fragment(
             S11,
             Descriptive("1."),
@@ -1781,7 +1787,7 @@ internal static class SessionLayerFragments
             Descriptive("Receivers are NEVER scheduled; when an explicit fallback/legacy timer is used (message-driven wakes are the default), the orchestrator is the only thread ever scheduled.")),
         Fragment(
             "scheduling",
-            Transport("OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the coordinating thread, domain `__DOMAIN__` against `__OWNER__/__REPO__` using `__AGENT__`: on each run perform exactly ONE orchestrator wake — check design-side progress and agmsg replies, ask intent-cli for state (`intent status`, `worker next-action --github-only`, `automation host-review-preflight`), verify the GitHub facts (CI/approval/merge/closeout), then send this wake's messages under the G524 cap — AT MOST ONE DELEGATION PER RECEIVER (implementation, review), NOT at-most-one-message overall, so a publish plus its same-wake delegation, one repair per stalled receiver, and one operator escalation may all go out together — and exit."),
+            Transport("OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the coordinating thread, domain `__DOMAIN__` against `__OWNER__/__REPO__` using `__AGENT__`: on each run perform exactly ONE orchestrator wake — check design-side progress and agmsg replies, ask intent-cli for state (`intent status`, `worker next-action --team __G815_TEAM__ --github-only`, `automation host-review-preflight`), verify the GitHub facts (CI/approval/merge/closeout), then send this wake's messages under the G524 cap — AT MOST ONE DELEGATION PER RECEIVER (implementation, review), NOT at-most-one-message overall, so a publish plus its same-wake delegation, one repair per stalled receiver, and one operator escalation may all go out together — and exit."),
             Scaffold(" "),
             Transport("Prefer the message-driven steady state (implementation/review agmsg replies already wake the orchestrator); use this timer only when the operator explicitly wants scheduled fallback/legacy polling."),
             Scaffold(" "),
@@ -1798,7 +1804,11 @@ internal static class SessionLayerFragments
         Fragment("scheduling", Transport("A wake is triggered either by an incoming agmsg reply from implementation/review (the message-driven steady state) or by the optional fallback/legacy timer firing — either trigger runs exactly one orchestrator pass below.")),
         Fragment("scheduling", Operative("Check design-side progress: newly published packets/issues and intent status changes via `intent-cli intent status --domain __DOMAIN__ --format json`.")),
         Fragment("scheduling", Transport("Read pending agmsg replies from the implementation/review receivers (signals only — re-verify against intent-cli / GitHub).")),
-        Fragment("scheduling", Operative("Ask intent-cli for worker state: `intent-cli worker next-action --repo __OWNER__/__REPO__ --github-only --format json`.")),
+        Fragment(
+            "scheduling",
+            Operative("Ask intent-cli for worker state: `intent-cli worker next-action --repo __OWNER__/__REPO__ --team __G815_TEAM__ --github-only --format json`."),
+            Scaffold(" "),
+            Operative("On a claims-enabled host, the invoking team is required; never infer it.")),
         Fragment("scheduling", Operative("Check host review readiness: `intent-cli automation host-review-preflight --repo __OWNER__/__REPO__ --format json`.")),
         Fragment("scheduling", Operative("Verify GitHub facts directly: open PRs, CI conclusion, approvals, merge state, and closeout/label state.")),
         Fragment(
@@ -2012,7 +2022,11 @@ internal static class SessionLayerFragments
             Scaffold(" "),
             Descriptive("Visibility is not authorization, and an execution-unit prefix mismatch alone is not a wrong-repo signal.")),
         Fragment("orchestrator_first_wake", Transport("Read pending agmsg replies from the implementation/review threads (signals only — do not trust them as state).")),
-        Fragment("orchestrator_first_wake", Operative("Ask intent-cli for the real state: `intent-cli intent status --domain __DOMAIN__ --format json` and `intent-cli worker next-action --repo __OWNER__/__REPO__ --github-only --format json`.")),
+        Fragment(
+            "orchestrator_first_wake",
+            Operative("Ask intent-cli for the real state: `intent-cli intent status --domain __DOMAIN__ --format json` and `intent-cli worker next-action --repo __OWNER__/__REPO__ --team __G815_TEAM__ --github-only --format json`."),
+            Scaffold(" "),
+            Operative("On a claims-enabled host, the invoking team is required; never infer it.")),
         Fragment("orchestrator_first_wake", Transport("Verify every GitHub fact an agmsg reply claims (PR merged, CI concluded, labels) before acting on it.")),
         Fragment("orchestrator_first_wake", Operative("The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER, not at-most-one-message overall (G524): a publish this wake must be delegated to implementation in this SAME wake — never defer that delegation to an unscheduled next wake — alongside any repair requests (one per stalled receiver) or one operator escalation.")),
         Fragment("orchestrator_first_wake", Operative("Send workflow notifications only through `intent-cli notify`; it resolves the recorded transport and validates the recipient before delivery, failing closed on an unknown role (G524/G578).")),
@@ -2172,6 +2186,7 @@ internal static class SessionLayerFragments
         ("__REVIEWPATH__", "<review-path>"),
         ("__DELIVERY__", "<delivery-mode>"),
         ("__DOMAIN__", "<domain>"),
+        ("__G815_TEAM__", "<team>"),
         ("__OAGENT__", "<orchestrator-agent>"),
         ("__IAGENT__", "<implementer-agent>"),
         ("__RAGENT__", "<reviewer-agent>"),
@@ -2208,6 +2223,12 @@ internal static class SessionLayerFragments
         foreach (var (sentinel, key) in Interpolations)
         {
             values.TryGetValue(key, out var value);
+            if (value is null && string.Equals(sentinel, "__G815_TEAM__", StringComparison.Ordinal))
+            {
+                // Team is optional on the unscoped renderer; keep the literal
+                // placeholder so declarations still match that safe output.
+                value = "<team>";
+            }
             if (string.IsNullOrWhiteSpace(value) && RoleAgentSentinels.Contains(sentinel))
             {
                 value = agent;

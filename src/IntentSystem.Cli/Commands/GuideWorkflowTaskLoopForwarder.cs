@@ -17,7 +17,7 @@ internal static class GuideWorkflowTaskLoopForwarder
     /// Flags both task wrappers accept and forward verbatim to
     /// <see cref="GuidePromptMatrixCommand"/>. Mirror exactly the
     /// `--target-repo` / `--agent` / `--frequency` /
-    /// `--base-branch-policy` / `--domain` / `--format` set that
+    /// `--base-branch-policy` / `--domain` / `--team` / `--format` set that
     /// the underlying prompt-matrix parser knows about. Listed as
     /// an explicit allow-list so an unknown flag is rejected with
     /// the wrapper's own usage line (not the prompt-matrix one).
@@ -29,6 +29,7 @@ internal static class GuideWorkflowTaskLoopForwarder
         "--frequency",
         "--base-branch-policy",
         "--domain",
+        "--team",
         "--format",
         "--help"
     };

@@ -809,7 +809,8 @@ internal static class GuideOrchestratorThreadCommand
         string Apply(string template) => template
             .Replace("<domain>", domain, StringComparison.Ordinal)
             .Replace("<owner/repo>", repo, StringComparison.Ordinal)
-            .Replace("<agent>", agent, StringComparison.Ordinal);
+            .Replace("<agent>", agent, StringComparison.Ordinal)
+            .Replace("<team>", values["<team>"], StringComparison.Ordinal);
 
         // G589: a CI wait is only survivable when the rendered mode names the
         // thing that will observe the exact head becoming terminal. intent-cli
@@ -1070,7 +1071,7 @@ internal static class GuideOrchestratorThreadCommand
                     "OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the coordinating "
                     + "thread, domain `<domain>` against `<owner/repo>` using `<agent>`: on each run perform exactly "
                     + "ONE orchestrator wake — check design-side progress and agmsg replies, ask intent-cli for state "
-                    + "(`intent status`, `worker next-action --github-only`, `automation host-review-preflight`), "
+                    + "(`intent status`, `worker next-action --team <team> --github-only`, `automation host-review-preflight`), "
                     + "verify the GitHub facts (CI/approval/merge/closeout), then send this wake's messages under the "
                     + "G524 cap — AT MOST ONE DELEGATION PER RECEIVER (implementation, review), NOT at-most-one-message "
                     + "overall, so a publish plus its same-wake delegation, one repair per stalled receiver, and one "
@@ -1093,7 +1094,7 @@ internal static class GuideOrchestratorThreadCommand
                     "A wake is triggered either by an incoming agmsg reply from implementation/review (the message-driven steady state) or by the optional fallback/legacy timer firing — either trigger runs exactly one orchestrator pass below.",
                     Apply("Check design-side progress: newly published packets/issues and intent status changes via `intent-cli intent status --domain <domain> --format json`."),
                     "Read pending agmsg replies from the implementation/review receivers (signals only — re-verify against intent-cli / GitHub).",
-                    Apply("Ask intent-cli for worker state: `intent-cli worker next-action --repo <owner/repo> --github-only --format json`."),
+                    Apply("Ask intent-cli for worker state: `intent-cli worker next-action --repo <owner/repo> --team <team> --github-only --format json`. On a claims-enabled host, the invoking team is required; never infer it."),
                     Apply("Check host review readiness: `intent-cli automation host-review-preflight --repo <owner/repo> --format json`."),
                     "Verify GitHub facts directly: open PRs, CI conclusion, approvals, merge state, and closeout/label state.",
                     "Classify each open PR's CI: pending = wait using the named mode-specific CI re-check producer (no message); green = delegate review/closeout; red = repair or escalate by ownership; stuck = escalate. Pending CI is normal progress, not a reason to message the operator.",
@@ -1521,7 +1522,7 @@ internal static class GuideOrchestratorThreadCommand
                 Checks = new[]
                 {
                     "Check the design/HITL inbox for unread human-facing escalations or unanswered questions (`inbox.sh` on the design role).",
-                    Apply("Check orchestrator staleness: read-only intent-cli / GitHub facts (`worker next-action --repo <owner/repo> --github-only --format json`, open PR/CI/label state) compared against the last known orchestrator activity."),
+                    Apply("Check orchestrator staleness: read-only intent-cli / GitHub facts (`worker next-action --repo <owner/repo> --team <team> --github-only --format json`, open PR/CI/label state) compared against the last known orchestrator activity."),
                     Apply("Run `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json` — the RECOMMENDED primary check; it wraps `automation stalled-work` (G523) and returns a ready-to-send `message_body` naming every stale item and its canonical next command."),
                 },
                 Action =
@@ -2126,7 +2127,7 @@ internal static class GuideOrchestratorThreadCommand
                         + "perform semantic review, or mutate GitHub/intent-cli workflow state yourself. agmsg is a "
                         + "signal layer only — intent-cli and GitHub are authoritative. Per wake: read pending agmsg "
                         + "replies, ask intent-cli for the real state (`intent-cli intent status --domain <domain> "
-                        + "--format json`, `intent-cli worker next-action --repo <owner/repo> --github-only --format "
+                        + "--format json`, `intent-cli worker next-action --repo <owner/repo> --team <team> --github-only --format "
                         + "json`, `intent-cli automation host-review-preflight --repo <owner/repo> --format json`), "
                         + "verify the GitHub facts that an agmsg reply claims (merged PR, CI, labels). Treat pending/"
                         + "running CI as an active wait state — re-check it on a later wake rather than asking the "
@@ -2276,7 +2277,7 @@ internal static class GuideOrchestratorThreadCommand
                 "Confirm you are the ONLY orchestrator for this domain/repo; if a second is detected, STOP and escalate (fail closed).",
                 Apply("Confirm domain scope: in single-domain mode, treat other-domain items visible in the host repo as OUT OF SCOPE (escalate, never delegate); in multi-domain mode, attach full routing metadata (domain, execution unit, target repo, implementation + review cwd/worktree, base branch policy, destination thread) before each delegation. Visibility is not authorization, and an execution-unit prefix mismatch alone is not a wrong-repo signal."),
                 "Read pending agmsg replies from the implementation/review threads (signals only — do not trust them as state).",
-                Apply("Ask intent-cli for the real state: `intent-cli intent status --domain <domain> --format json` and `intent-cli worker next-action --repo <owner/repo> --github-only --format json`."),
+                Apply("Ask intent-cli for the real state: `intent-cli intent status --domain <domain> --format json` and `intent-cli worker next-action --repo <owner/repo> --team <team> --github-only --format json`. On a claims-enabled host, the invoking team is required; never infer it."),
                 "Verify every GitHub fact an agmsg reply claims (PR merged, CI concluded, labels) before acting on it.",
                 "The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER, not at-most-one-message overall (G524): a publish this wake must be delegated to implementation in this SAME wake — never defer that delegation to an unscheduled next wake — alongside any repair requests (one per stalled receiver) or one operator escalation.",
                 "Send workflow notifications only through `intent-cli notify`; it resolves the recorded transport and validates the recipient before delivery, failing closed on an unknown role (G524/G578).",

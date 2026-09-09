@@ -20,7 +20,7 @@ internal static class GuideWorkflowTaskImplementationLoopCommand
     internal const string Mode = "child-loop";
 
     internal const string UsageLine =
-        "Usage: intent-cli guide workflow task implementation-loop [--target-repo <owner/repo>] [--agent claude|codex|generic] [--frequency <NNm|NNh>] [--base-branch-policy direct-main|main-ai] [--domain <name>] [--format markdown|json]";
+        "Usage: intent-cli guide workflow task implementation-loop [--target-repo <owner/repo>] [--agent claude|codex|generic] [--frequency <NNm|NNh>] [--base-branch-policy direct-main|main-ai] [--domain <name>] [--team <name>] [--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -71,6 +71,7 @@ internal static class GuideWorkflowTaskImplementationLoopCommand
         writer.WriteLine("- --frequency <NNm|NNh>          schedule cadence (e.g. 5m, 20m, 1h); otherwise the prompt asks the operator.");
         writer.WriteLine("- --base-branch-policy direct-main|main-ai  base-branch enforcement; defaults to direct-main.");
         writer.WriteLine("- --domain <name>                hint for prompt placeholders; child loop does not require host-side domain metadata.");
+        writer.WriteLine("- --team <name>                  invoking team for claim-aware worker selector/claim; omitted renders an explicit <TEAM> prerequisite.");
         writer.WriteLine("- --format markdown|json         output format; markdown is the default.");
     }
 }
