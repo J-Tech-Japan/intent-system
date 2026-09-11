@@ -93,6 +93,7 @@ internal static class NotifyCommand
     internal static IEnumerable<string> SupportedReportStatuses => ReportReaderEventKinds.Keys;
 
     internal static Func<INotifyProcessRunner>? ProcessRunnerFactory { get; set; }
+    internal static Func<string, (bool Writable, string Observed)>? WritabilityProbeOverride { get; set; }
 
     internal static Func<string>? AgmsgScriptsDirectoryFactory { get; set; }
 
@@ -611,7 +612,7 @@ internal static class NotifyCommand
                 ReportDeliveryState = report.DeliveryState,
                 PendingRecordPath = pending.Path,
                 Cause = "sender-local-report-not-delivered",
-                Summary = $"Sender-local report for task '{options.TaskId}' is '{report.DeliveryState}', not delivered; the local handoff remains available for its delivery-level recovery path.",
+                Summary = $"Sender-local report for task '{options.TaskId}' is '{report.DeliveryState}', not delivered; recover it with '{NotifyReportOutboxStore.BuildCollectCommand(reportRoot, report)}'.",
             });
             return 1;
         }
@@ -1323,6 +1324,11 @@ internal static class NotifyCommand
         NotifyReportOutboxEntry? reportOutbox = existingOutbox;
         ContinuationChainRecord? continuationChain = null;
         string? outboxEntryPath = null;
+        var recoverSenderLocalReport = senderLocalReport
+            && options.Write
+            && reportPendingRecord is not null
+            && reportOutbox is not null
+            && string.Equals(reportOutbox.DeliveryState, "undelivered", StringComparison.Ordinal);
         if (isReport)
         {
             outboxEntryPath = NotifyReportOutboxStore.ResolvePath(resolvedReportRoot, options.Domain!, options.Team!);
@@ -1349,8 +1355,8 @@ internal static class NotifyCommand
                     Emit(writer, options.Format, FailureResult(operation, options, resolution.Mode,
                         "report-outbox-write-failed", $"Could not persist report task '{options.TaskId}' before transport: {outboxWrite.Error} No transport was attempted.",
                         modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default", preflight: preflight,
-                        outboxEntryPath: outboxEntryPath));
-                    return 1;
+                    outboxEntryPath: outboxEntryPath));
+                return 1;
                 }
                 reportOutbox = outboxWrite.Entry ?? reportOutbox;
             }
@@ -1503,29 +1509,33 @@ internal static class NotifyCommand
 
         if (delivery.ReaderPath is not null && senderLocalReport && options.Write)
         {
-            if (reportOutbox is not null)
+            var writabilityProbe = ProbeExternalReaderAppendWritability(delivery.ReaderPath);
+            if (!writabilityProbe.Writable)
             {
-                NotifyReportOutboxStore.MarkUndelivered(
-                    resolvedReportRoot,
-                    reportOutbox,
-                    "report-routing-root-write-required");
-            }
+                if (reportOutbox is not null)
+                {
+                    NotifyReportOutboxStore.MarkUndelivered(
+                        resolvedReportRoot,
+                        reportOutbox,
+                        "report-routing-root-write-required");
+                }
 
-            Emit(writer, options.Format, FailureResult(
-                operation,
-                options,
-                resolution.Mode,
-                "report-routing-root-write-required",
-                $"Report delivery resolved an external reader at '{delivery.ReaderPath}', which is under the host routing root and cannot be written from this sandboxed seat. Provision the recipient through herdr/agmsg or route a narrowly writable reader root; the sender-local report handoff is retained at '{outboxEntryPath}'. This is a delegation-level routing fault, not an implementation-seat stall.",
-                payload,
-                reportCommand,
-                modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
-                preflight: deliveryPreflight,
-                deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
-                taskFile: envelopeDelivery.TaskFile,
-                deliveryPointer: envelopeDelivery.ResultPointer,
-                outboxEntryPath: outboxEntryPath));
-            return 1;
+                Emit(writer, options.Format, FailureResult(
+                    operation,
+                    options,
+                    resolution.Mode,
+                    "report-routing-root-write-required",
+                    $"Report delivery resolved an external reader at '{delivery.ReaderPath}'. A write probe against that exact file was denied: {writabilityProbe.Observed} The sandboxed seat cannot write it, so the sender-local report handoff is retained at '{outboxEntryPath}'. Run the named recovery from a context that can write the reader file: {BuildCollectCommandForReaderRecovery(options)}. This is a delegation-level routing fault, not an implementation-seat stall.",
+                    payload,
+                    reportCommand,
+                    modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
+                    preflight: deliveryPreflight,
+                    deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
+                    taskFile: envelopeDelivery.TaskFile,
+                    deliveryPointer: envelopeDelivery.ResultPointer,
+                    outboxEntryPath: outboxEntryPath));
+                return 1;
+            }
         }
 
         var eventAppended = false;
@@ -1574,7 +1584,8 @@ internal static class NotifyCommand
         if (isReport
             && options.Write
             && reportPendingRecord is not null
-            && !senderLocalReport)
+            && !senderLocalReport
+            && !recoverSenderLocalReport)
         {
             var reportWrite = NotifyPendingDelegationStore.WriteReport(
                 options.RoutingRoot!,
@@ -1615,7 +1626,7 @@ internal static class NotifyCommand
         // completion-signal chain. Record it before the outbox is marked
         // delivered so a chain-write failure remains visible to collection and
         // cannot be mistaken for a fully settled signal.
-        if (isReport && options.Write && !senderLocalReport)
+        if (isReport && options.Write && (!senderLocalReport || recoverSenderLocalReport))
         {
             var chainWrite = ContinuationChainStore.RecordReportReceived(
                 options.RoutingRoot!,
@@ -1689,9 +1700,12 @@ internal static class NotifyCommand
                     ? $"Delivered {operation} to external logical role '{options.ToRole}' in team '{options.Team}' "
                       + $"through recorded reader '{delivery.ReaderPath}'."
                     : delivery.Summary,
-                senderLocalReport,
+                senderLocalReport && !recoverSenderLocalReport,
                 resolvedReportRoot,
-                options.RoutingRoot!),
+                options.RoutingRoot!)
+            + (recoverSenderLocalReport
+                ? $" Recovered sender-local undelivered report for task '{options.TaskId}' from '{resolvedReportRoot}': a write probe against reader '{delivery.ReaderPath}' was allowed, the delivery event was appended to it, the outbox entry is marked delivered, and the host continuation chain was recorded."
+                : string.Empty),
             eventPath: delivery.ReaderPath,
             preflight: deliveryPreflight,
             receiverStateOutcome: delivery.ReceiverStateOutcome,
@@ -1724,6 +1738,64 @@ internal static class NotifyCommand
         string routingRoot) => senderLocalReport
             ? $"{summary} Sender-local report handoff persisted under '{reportRoot}'; no host-root write was required. Host routing state at '{routingRoot}' remains for orchestration reconciliation."
             : summary;
+
+    /// <summary>
+    /// G731: decides the sender-local report refusal by measuring whether the
+    /// exact external reader events file can actually be appended from this
+    /// execution context — not by comparing whether two roots differ. A write
+    /// probe (append, then remove the probe line) is the only evidence here;
+    /// path shape is not evidence of a sandbox.
+    /// </summary>
+    internal static (bool Writable, string Observed) ProbeExternalReaderAppendWritability(string readerPath)
+    {
+        if (WritabilityProbeOverride is { } probeOverride)
+        {
+            return probeOverride(readerPath);
+        }
+
+        try
+        {
+            NotifyEventWriter.Append(readerPath, new NotifyDesignEvent
+            {
+                Timestamp = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+                Team = string.Empty,
+                Kind = "write-probe",
+                Unit = "notify-write-probe",
+                Summary = "notify-write-probe",
+                Artifact = readerPath,
+            });
+            RemoveProbeLine(readerPath);
+            return (true, "A write probe appended to and removed a line from the reader file successfully.");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return (false, $"the write probe was denied: {exception.Message}");
+        }
+    }
+
+    private static void RemoveProbeLine(string readerPath)
+    {
+        try
+        {
+            var lines = File.ReadAllLines(readerPath).ToList();
+            for (var i = lines.Count - 1; i >= 0; i--)
+            {
+                if (lines[i].Contains("notify-write-probe", StringComparison.Ordinal))
+                {
+                    lines.RemoveAt(i);
+                    break;
+                }
+            }
+
+            File.WriteAllLines(readerPath, lines, new UTF8Encoding(false));
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    private static string BuildCollectCommandForReaderRecovery(NotifyOptions options) =>
+        $"intent-cli notify collect --domain {options.Domain} --team {options.Team} --task-id {options.TaskId} --report-root {options.ReportRoot ?? options.RoutingRoot} --routing-root {options.RoutingRoot} --write";
 
     private static bool PathsEqual(string left, string right) =>
         string.Equals(

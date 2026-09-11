@@ -112,6 +112,25 @@ internal static class NotifyReportOutboxStore
         }
     }
 
+    public static IReadOnlyList<NotifyReportOutboxEntry> FindEntriesByDeliveryError(
+        string routingRoot,
+        string domain,
+        string team,
+        string deliveryError)
+    {
+        var path = ResolvePath(routingRoot, domain, team);
+        lock (Sync)
+        {
+            var current = ReadCurrent(path, out var readError);
+            return readError is not null
+                ? []
+                : current.Values
+                    .Where(entry => string.Equals(entry.DeliveryState, "undelivered", StringComparison.Ordinal)
+                        && string.Equals(entry.DeliveryError, deliveryError, StringComparison.Ordinal))
+                    .ToArray();
+        }
+    }
+
     public static IReadOnlyList<NotifyReportOutboxEntry> ReadUndelivered(string routingRoot, string domain, string team, out string? error)
     {
         var path = ResolvePath(routingRoot, domain, team);
