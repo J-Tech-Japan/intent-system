@@ -1601,7 +1601,12 @@ new-pane map for herdr roles, holds a CAS lock, compares the topology digest,
 and atomically updates the team and role workspace/pane ids while preserving
 all other role fields. It never queries herdr, creates panes, changes
 membership, or repairs a per-role conflict; that refusal names this move
-command as its sanctioned whole-team transition.
+command as its sanctioned whole-team transition. G735 fixes the pane-map
+ambiguity on the old-pane side: the map is keyed by recorded pane, so several
+roles sharing one recorded pane travel together to that pane's new pane, and
+only two different recorded panes collapsing onto one new pane stays refused.
+A shared-pane team is therefore rebuilt by this same move command, and the
+per-role record refusal names a route that works for it.
 
 Agent kind is whatever herdr can start: Claude, Codex, Copilot, Cursor, OpenCode,
 and others are examples, not a supported-set restriction. Logical role defaults

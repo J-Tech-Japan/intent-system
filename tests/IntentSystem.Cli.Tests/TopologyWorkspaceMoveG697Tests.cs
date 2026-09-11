@@ -230,6 +230,34 @@ public sealed class TopologyWorkspaceMoveG697Tests
     }
 
     [Fact]
+    public void OperatingGuide_StatesSharedPaneTravelRule_G735()
+    {
+        var markdown = HerdrOnlyOperatingGuide.RenderMarkdown([]);
+        Assert.Contains(
+            "roles that share one recorded pane travel together to that pane's new pane",
+            markdown,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "mapping two different recorded panes to one new pane stays refused as genuinely ambiguous",
+            markdown,
+            StringComparison.Ordinal);
+
+        using var document = JsonDocument.Parse(HerdrOnlyOperatingGuide.CreateJson([]).ToJsonString());
+        var dispatchTopology = document.RootElement
+            .GetProperty("dispatch")
+            .GetProperty("topology")
+            .GetString();
+        Assert.Contains(
+            "roles that share one recorded pane travel together to that pane's new pane",
+            dispatchTopology,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "mapping two different recorded panes to one new pane stays refused as genuinely ambiguous",
+            dispatchTopology,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task InstalledRecipe_RunsFromBareDirectoryWithoutIntentCliConfig_G697()
     {
         // G697: exercise the actual CLI entry point from a directory that is
@@ -291,6 +319,14 @@ public sealed class TopologyWorkspaceMoveG697Tests
         Assert.Contains("topology move", commands.GetProperty("apply").GetString(), StringComparison.Ordinal);
         Assert.Contains("notify delegate", commands.GetProperty("notify_preflight").GetString(), StringComparison.Ordinal);
         Assert.Contains("CAS", root.GetProperty("cas_contract").GetString(), StringComparison.Ordinal);
+        Assert.Contains(
+            "Roles that share one recorded pane travel together to that pane's new pane",
+            root.GetProperty("pane_map_contract").GetString(),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "mapping two different recorded panes to one new pane stays refused as genuinely ambiguous",
+            root.GetProperty("pane_map_contract").GetString(),
+            StringComparison.Ordinal);
     }
 
     private static CliContext CreateFixture()
