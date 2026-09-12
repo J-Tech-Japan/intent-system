@@ -140,6 +140,7 @@ internal static class WorkerClaimCommand
         {
             Kind = kind!,
             Repo = repo!,
+            Team = invokingTeam,
             Number = number,
             Mode = mode,
             Proceed = decision.Proceed,

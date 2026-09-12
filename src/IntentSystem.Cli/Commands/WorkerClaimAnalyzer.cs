@@ -187,10 +187,11 @@ internal static class WorkerClaimAnalyzer
             || claim.Status == ClaimOwnershipVerification.StatusMetadataBranchOnly
             || claim.Status == ClaimOwnershipVerification.StatusInvalid);
 
-    // G815: the host execution-unit claim is the authority that permits the
-    // matching child worker to perform its lifecycle transition. A matching
-    // invoking team is therefore an ownership success, while another team,
-    // omitted context, and unavailable evidence remain hard refusals above.
+    // G813/G815: the host execution-unit claim is the authority that permits
+    // the matching child worker to perform its lifecycle transition. An
+    // explicit invoking team may consume an owned claim only when it matches
+    // the holder team; another team, omitted context, and unavailable evidence
+    // remain hard refusals above.
     private static bool SameInvokingTeamOwnsClaim(ClaimOwnershipVerification claim) =>
         claim.Status == ClaimOwnershipVerification.StatusOwned
         && !string.IsNullOrWhiteSpace(claim.InvokingTeam)
