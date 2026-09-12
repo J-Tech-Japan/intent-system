@@ -179,12 +179,21 @@ internal static class WorkerClaimAnalyzer
 
     private static bool IsActiveOrUnavailableClaim(ClaimOwnershipVerification claim) =>
         claim.StoreConfigured
-        && (claim.Status == ClaimOwnershipVerification.StatusOwned
+        && ((claim.Status == ClaimOwnershipVerification.StatusOwned
+                && !SameInvokingTeamOwnsClaim(claim))
             || claim.Status == ClaimOwnershipVerification.StatusHeldByOtherTeam
             || claim.Status == ClaimOwnershipVerification.StatusTeamRequired
             || claim.Status == ClaimOwnershipVerification.StatusCanonicalUnavailable
             || claim.Status == ClaimOwnershipVerification.StatusMetadataBranchOnly
             || claim.Status == ClaimOwnershipVerification.StatusInvalid);
+
+    // G813: an explicit invoking team is part of the ownership identity. A
+    // matching team may consume an owned execution-unit claim; omitted or
+    // different teams remain fail-closed in ClaimOwnershipVerifier above.
+    private static bool SameInvokingTeamOwnsClaim(ClaimOwnershipVerification claim) =>
+        claim.Status == ClaimOwnershipVerification.StatusOwned
+        && !string.IsNullOrWhiteSpace(claim.InvokingTeam)
+        && string.Equals(claim.InvokingTeam, claim.HolderTeam, StringComparison.Ordinal);
 
     /// <summary>
     /// G211: Pure data record returned by

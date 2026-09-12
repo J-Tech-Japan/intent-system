@@ -66,6 +66,7 @@ internal static class WorkerClaimCommand
                 out var repo,
                 out var kind,
                 out var number,
+                out var invokingTeam,
                 out var mode,
                 out var githubOnly,
                 out var format,
@@ -107,7 +108,8 @@ internal static class WorkerClaimCommand
             context,
             repo!,
             kind!,
-            number);
+            number,
+            invokingTeam);
         var decision = WorkerClaimAnalyzer.Analyze(
             kind!,
             currentNames,
@@ -138,6 +140,7 @@ internal static class WorkerClaimCommand
         {
             Kind = kind!,
             Repo = repo!,
+            Team = invokingTeam,
             Number = number,
             Mode = mode,
             Proceed = decision.Proceed,
@@ -185,7 +188,8 @@ internal static class WorkerClaimCommand
         CliContext context,
         string repo,
         string kind,
-        int number)
+        int number,
+        string? invokingTeam)
     {
         if (!string.Equals(kind, GhCliGitHubLabelMutator.Kinds.Issue, StringComparison.Ordinal))
         {
@@ -219,7 +223,7 @@ internal static class WorkerClaimCommand
             return ClaimOwnershipVerifier.Verify(
                 context.RepoRoot,
                 $"execution-unit:{match.Value}",
-                invokingTeam: null,
+                invokingTeam,
                 allowUnheld: true);
         }
         catch (Exception exception) when (
@@ -283,6 +287,7 @@ internal static class WorkerClaimCommand
         out string? repo,
         out string? kind,
         out int number,
+        out string? invokingTeam,
         out string mode,
         out bool githubOnly,
         out string format,
@@ -291,6 +296,7 @@ internal static class WorkerClaimCommand
         repo = null;
         kind = null;
         number = 0;
+        invokingTeam = null;
         mode = WorkerClaimCompleteConstants.Modes.DryRun;
         githubOnly = false;
         format = FormatText;
@@ -333,6 +339,16 @@ internal static class WorkerClaimCommand
                     index++;
                     break;
 
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a non-empty value.";
+                        return false;
+                    }
+                    invokingTeam = args[index + 1];
+                    index++;
+                    break;
+
                 case "--write":
                     mode = WorkerClaimCompleteConstants.Modes.Write;
                     break;
@@ -369,7 +385,7 @@ internal static class WorkerClaimCommand
 
                 default:
                     error =
-                        $"Unknown argument '{argument}'. Supported: --repo <owner/repo> --kind <issue|pr> --number <N> [--write] [--dry-run] [--github-only] [--format text|json].";
+                        $"Unknown argument '{argument}'. Supported: --repo <owner/repo> --kind <issue|pr> --number <N> [--team <team>] [--write] [--dry-run] [--github-only] [--format text|json].";
                     return false;
             }
         }

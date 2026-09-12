@@ -22,6 +22,16 @@ internal sealed record WorkerClaimResult
     [JsonPropertyName("repo")]
     public required string Repo { get; init; }
 
+    /// <summary>
+    /// G813: the invoking team is an explicit part of the ownership
+    /// identity. Null preserves the legacy unqualified invocation shape.
+    /// </summary>
+    [JsonPropertyName("team")]
+    public string? Team { get; init; }
+
+    [JsonPropertyName("invoking_team")]
+    public string? InvokingTeam => Team;
+
     [JsonPropertyName("number")]
     public required int Number { get; init; }
 

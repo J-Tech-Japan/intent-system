@@ -8,7 +8,9 @@ namespace IntentSystem.Cli.Commands;
 
 /// <summary>
 /// G308: <c>intent-cli automation host-loop-next-action --repo
-/// &lt;owner/repo&gt; [--format markdown|json]</c> — read-only
+/// &lt;owner/repo&gt; [--domain &lt;domain&gt;] [--team &lt;team&gt;]
+/// [--task-id &lt;task&gt;] [--result-nonce &lt;nonce&gt;]
+/// [--routing-root &lt;root&gt;] [--format markdown|json]</c> — read-only
 /// aggregator that captures the highest-priority host loop signal from
 /// the candidate lister (review PR / WIP cap / lease) plus optional
 /// preflight inputs, calls
@@ -30,6 +32,15 @@ internal static class AutomationHostLoopNextActionCommand
     private const string FormatMarkdown = "markdown";
 
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
+
+    /// <summary>
+    /// G813: source-bound identity capture is injectable so tests can prove
+    /// the team/task/nonce envelope without consulting a host store. The
+    /// production capture is read-only and only observes cwd and Git facts.
+    /// </summary>
+    public static Func<CliContext, HostLoopIdentityCapture>? IdentityCaptureFactory { get; set; }
+
+    public const string ClassificationIdentityUnresolved = "identity-unresolved";
 
     /// <summary>
     /// G318: testability seam for the automatic <c>intent next-slice --dry-run</c>
@@ -155,6 +166,98 @@ internal static class AutomationHostLoopNextActionCommand
             return 0;
         }
 
+        // G813: a team-scoped request must establish its immutable identity
+        // and restrictive host preflight before remote GitHub enumeration.
+        // Legacy callers (which do not provide any identity fields) retain
+        // the existing result shape and ordering.
+        HostLoopIdentityCapture? identityCapture = null;
+        if (parsed.RequiresIdentity)
+        {
+            try
+            {
+                identityCapture = IdentityCaptureFactory?.Invoke(context)
+                    ?? HostLoopIdentityCapture.Capture(context);
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                or InvalidOperationException
+                or UnauthorizedAccessException)
+            {
+                // Identity capture is an observation boundary. A missing or
+                // unreadable source fact is reported as unresolved rather
+                // than allowing the request to reach GitHub enumeration.
+                identityCapture = new HostLoopIdentityCapture
+                {
+                    Cwd = null,
+                    Origin = null,
+                    Ref = null,
+                    Head = null,
+                    DispatchGeneration = null,
+                    DispatchDigest = null,
+                };
+            }
+        }
+        var preflightSyncClassification = parsed.SyncClassification;
+        var preflightSafeStashRequired = parsed.SafeStashRequired;
+        if (parsed.RequiresIdentity
+            && string.IsNullOrWhiteSpace(preflightSyncClassification)
+            && !preflightSafeStashRequired)
+        {
+            var syncProbe = HostSyncPreflightProbeFactory?.Invoke(context)
+                ?? new IntentCliHostSyncPreflightProbe(context);
+            var syncProbed = syncProbe.Probe();
+            if (syncProbed is not null)
+            {
+                preflightSyncClassification = syncProbed.Classification;
+                if (string.Equals(
+                        syncProbed.Classification,
+                        HostSyncPreflightAnalyzer.ClassificationDirtyUnrelatedSubmodule,
+                        StringComparison.Ordinal))
+                {
+                    preflightSafeStashRequired = true;
+                }
+            }
+        }
+
+        var identityResolution = parsed.RequiresIdentity
+            ? ResolveIdentity(parsed, identityCapture!)
+            : null;
+        if (parsed.RequiresIdentity
+            && IsRestrictiveSyncClassification(preflightSyncClassification))
+        {
+            var dirtyEvidence = new List<string>
+            {
+                $"host-sync-preflight classification: {preflightSyncClassification} (caller-supplied or locally observed).",
+                "G304/G306 dirty-host-state is a hard stop; remote GitHub enumeration was not attempted."
+            };
+            if (identityResolution is { Qualified: false })
+            {
+                dirtyEvidence.AddRange(identityResolution.MissingEvidence);
+            }
+            EmitIdentityBoundary(
+                writer,
+                parsed,
+                identityCapture,
+                identityResolution,
+                HostLoopNextActionAnalyzer.ClassificationDirtyHostState,
+                dirtyEvidence,
+                "Dirty durable host-state present — refusing to mutate or select a candidate (G304/G306).");
+            return 0;
+        }
+
+        if (parsed.RequiresIdentity && identityResolution is { Qualified: false })
+        {
+            EmitIdentityBoundary(
+                writer,
+                parsed,
+                identityCapture,
+                identityResolution,
+                ClassificationIdentityUnresolved,
+                identityResolution.MissingEvidence,
+                "Team-scoped host-loop identity is unresolved — no candidate or mutation is permitted.");
+            return 0;
+        }
+
         IReadOnlyList<GitHubAutomationPrCandidate> openPrs;
         IReadOnlyList<GitHubAutomationIssueCandidate> openIssues;
         try
@@ -172,6 +275,10 @@ internal static class AutomationHostLoopNextActionCommand
         catch (GitHubApiRequestException exception)
         {
             var degraded = BuildGitHubUnavailableResult(parsed.Repo, parsed.Domain, exception);
+            if (parsed.RequiresIdentity)
+            {
+                degraded = ApplyIdentity(degraded, parsed, identityCapture!, identityResolution!);
+            }
             if (string.Equals(parsed.Format, FormatJson, StringComparison.Ordinal))
             {
                 writer.Write(JsonSerializer.Serialize(degraded, JsonOptions));
@@ -310,9 +417,11 @@ internal static class AutomationHostLoopNextActionCommand
         // `dirty-host-durable-state` and `dirty-mixed` flip to the
         // `dirty-host-state` block-and-surface lane so the host loop
         // never silently publishes on top of dirty durable state.
-        var syncClassification = parsed.SyncClassification;
-        var safeStashRequired = parsed.SafeStashRequired;
-        if (string.IsNullOrWhiteSpace(syncClassification) && !safeStashRequired)
+        var syncClassification = preflightSyncClassification;
+        var safeStashRequired = preflightSafeStashRequired;
+        if (!parsed.RequiresIdentity
+            && string.IsNullOrWhiteSpace(syncClassification)
+            && !safeStashRequired)
         {
             var syncProbe = HostSyncPreflightProbeFactory?.Invoke(context)
                 ?? new IntentCliHostSyncPreflightProbe(context);
@@ -411,6 +520,11 @@ internal static class AutomationHostLoopNextActionCommand
             Summary = result.Summary
         };
 
+        if (parsed.RequiresIdentity)
+        {
+            emitted = ApplyIdentity(emitted, parsed, identityCapture!, identityResolution!);
+        }
+
         if (string.Equals(parsed.Format, FormatJson, StringComparison.Ordinal))
         {
             writer.Write(JsonSerializer.Serialize(emitted, JsonOptions));
@@ -422,6 +536,153 @@ internal static class AutomationHostLoopNextActionCommand
         }
         return 0;
     }
+
+    private static bool IsRestrictiveSyncClassification(string? classification) =>
+        string.Equals(classification, "dirty-host-durable-state", StringComparison.Ordinal)
+        || string.Equals(classification, "dirty-mixed", StringComparison.Ordinal)
+        || string.Equals(classification, "unsafe", StringComparison.Ordinal)
+        || string.Equals(classification, "ff-blocked", StringComparison.Ordinal)
+        || string.Equals(classification, "diverged", StringComparison.Ordinal);
+
+    private static HostLoopIdentityResolution ResolveIdentity(
+        ParsedArgs parsed,
+        HostLoopIdentityCapture capture)
+    {
+        var missing = new List<string>();
+        if (string.IsNullOrWhiteSpace(parsed.Team)) missing.Add("team");
+        if (string.IsNullOrWhiteSpace(parsed.TaskId)) missing.Add("task_id");
+        if (string.IsNullOrWhiteSpace(parsed.ResultNonce)) missing.Add("result_nonce");
+        if (string.IsNullOrWhiteSpace(parsed.RoutingRoot)) missing.Add("routing_root");
+        if (string.IsNullOrWhiteSpace(capture.Cwd)) missing.Add("captured_cwd");
+        if (string.IsNullOrWhiteSpace(capture.Origin)) missing.Add("captured_origin");
+        if (string.IsNullOrWhiteSpace(capture.Ref)) missing.Add("captured_ref");
+        if (string.IsNullOrWhiteSpace(capture.Head)) missing.Add("captured_head");
+        if (string.IsNullOrWhiteSpace(capture.DispatchGeneration)) missing.Add("dispatch_generation");
+        if (string.IsNullOrWhiteSpace(capture.DispatchDigest)) missing.Add("dispatch_digest");
+
+        if (missing.Count == 0)
+        {
+            return new HostLoopIdentityResolution(
+                Qualified: true,
+                MissingEvidence: Array.Empty<string>(),
+                Source: "authoritative-dispatch-identity");
+        }
+
+        return new HostLoopIdentityResolution(
+            Qualified: false,
+            MissingEvidence: new[]
+            {
+                "identity-unresolved: authoritative team-scoped dispatch identity is incomplete.",
+                $"missing_fields: {string.Join(", ", missing)}.",
+                "Legacy/no-team host-loop output remains readable but cannot certify modern ownership or mutation."
+            },
+            Source: "identity-unresolved");
+    }
+
+    private static void EmitIdentityBoundary(
+        TextWriter writer,
+        ParsedArgs parsed,
+        HostLoopIdentityCapture? capture,
+        HostLoopIdentityResolution? identity,
+        string classification,
+        IReadOnlyList<string> evidence,
+        string summary)
+    {
+        var result = new HostLoopNextActionEmittedResult
+        {
+            Repo = parsed.Repo,
+            Domain = parsed.Domain,
+            Classification = classification,
+            MutationAllowed = false,
+            RecommendedCommand = null,
+            CandidateExecutionUnit = null,
+            Evidence = evidence,
+            Summary = summary,
+        };
+        if (parsed.RequiresIdentity && capture is not null && identity is not null)
+        {
+            result = ApplyIdentity(result, parsed, capture, identity);
+        }
+
+        if (string.Equals(parsed.Format, FormatJson, StringComparison.Ordinal))
+        {
+            writer.Write(JsonSerializer.Serialize(result, JsonOptions));
+            writer.WriteLine();
+        }
+        else
+        {
+            WriteMarkdown(writer, result);
+        }
+    }
+
+    private static HostLoopNextActionEmittedResult ApplyIdentity(
+        HostLoopNextActionEmittedResult result,
+        ParsedArgs parsed,
+        HostLoopIdentityCapture capture,
+        HostLoopIdentityResolution identity)
+    {
+        var observedAt = DateTimeOffset.UtcNow;
+        DateTimeOffset? expiresAt = parsed.TimeoutSeconds is int timeout
+            ? observedAt.AddSeconds(timeout)
+            : null;
+        return result with
+        {
+            Operation = "automation host-loop-next-action",
+            Version = "1",
+            RequestedRepo = parsed.Repo,
+            ResolvedRepo = parsed.Repo,
+            RequestedDomain = parsed.Domain,
+            ResolvedDomain = parsed.Domain,
+            RequestedTeam = parsed.Team,
+            ResolvedTeam = parsed.Team,
+            Team = parsed.Team,
+            TaskId = parsed.TaskId,
+            ResultNonce = parsed.ResultNonce,
+            IdentityQualification = identity.Qualified ? "qualified" : ClassificationIdentityUnresolved,
+            IdentitySource = identity.Source,
+            CompletionIdentity = identity.Qualified
+                ? BuildCompletionIdentity(parsed, capture)
+                : null,
+            RecipientContext = capture.RecipientContext,
+            DispatchGeneration = capture.DispatchGeneration,
+            DispatchDigest = capture.DispatchDigest,
+            RoutingRoot = parsed.RoutingRoot,
+            CapturedCwd = capture.Cwd,
+            CapturedOrigin = capture.Origin,
+            CapturedRef = capture.Ref,
+            CapturedHead = capture.Head,
+            ObservedAt = observedAt.ToUniversalTime().ToString("O"),
+            ExpiresAt = expiresAt?.ToUniversalTime().ToString("O"),
+            TimeoutSeconds = parsed.TimeoutSeconds,
+            UpstreamTimeout = false,
+            Owner = capture.Owner,
+            Action = capture.Action,
+            Deadline = capture.Deadline,
+            GateEvidence = result.Evidence,
+            Provenance = identity.Qualified
+                ? new[] { "authoritative-dispatch-identity", "read-only-source-observation" }
+                : new[] { "identity-unresolved", "read-only-source-observation" },
+            ElapsedMilliseconds = null,
+        };
+    }
+
+    private static string BuildCompletionIdentity(
+        ParsedArgs parsed,
+        HostLoopIdentityCapture capture) =>
+        string.Join("/", [
+            parsed.Repo,
+            parsed.Domain ?? string.Empty,
+            parsed.Team ?? string.Empty,
+            parsed.TaskId ?? string.Empty,
+            parsed.ResultNonce ?? string.Empty,
+            capture.DispatchGeneration ?? string.Empty,
+            capture.DispatchDigest ?? string.Empty,
+        ]);
+
+    private sealed record HostLoopIdentityResolution(
+        bool Qualified,
+        IReadOnlyList<string> MissingEvidence,
+        string Source);
 
     private static HostLoopNextActionEmittedResult BuildGitHubUnavailableResult(
         string repo,
@@ -830,6 +1091,24 @@ internal static class AutomationHostLoopNextActionCommand
     {
         writer.WriteLine($"# automation host-loop-next-action (G308) — `{result.Repo}`");
         writer.WriteLine();
+        if (result.Operation is not null)
+        {
+            writer.WriteLine($"- operation: `{result.Operation}` (v{result.Version})");
+            writer.WriteLine($"- team: `{result.Team ?? "(unresolved)"}`");
+            writer.WriteLine($"- task_id: `{result.TaskId ?? "(unresolved)"}`");
+            writer.WriteLine($"- result_nonce: `{result.ResultNonce ?? "(unresolved)"}`");
+            writer.WriteLine($"- identity_qualification: `{result.IdentityQualification ?? "(unresolved)"}`");
+            writer.WriteLine($"- completion_identity: `{result.CompletionIdentity ?? "(none)"}`");
+            writer.WriteLine($"- recipient_context: `{result.RecipientContext ?? "(none)"}`");
+            writer.WriteLine($"- captured_cwd: `{result.CapturedCwd ?? "(unresolved)"}`");
+            writer.WriteLine($"- captured_origin: `{result.CapturedOrigin ?? "(unresolved)"}`");
+            writer.WriteLine($"- captured_ref: `{result.CapturedRef ?? "(unresolved)"}`");
+            writer.WriteLine($"- captured_head: `{result.CapturedHead ?? "(unresolved)"}`");
+            if (result.Provenance is { Count: > 0 })
+            {
+                writer.WriteLine($"- provenance: `{string.Join(", ", result.Provenance)}`");
+            }
+        }
         writer.WriteLine($"- classification: **{result.Classification}**");
         writer.WriteLine($"- mutation_allowed: {(result.MutationAllowed ? "yes" : "no")}");
         if (!string.IsNullOrEmpty(result.RecommendedCommand))
@@ -856,6 +1135,11 @@ internal static class AutomationHostLoopNextActionCommand
 
         string? repo = null;
         string? domain = null;
+        string? team = null;
+        string? taskId = null;
+        string? resultNonce = null;
+        string? routingRoot = null;
+        int? timeoutSeconds = null;
         var staleCli = false;
         string? syncClassification = null;
         var safeStashRequired = false;
@@ -887,6 +1171,45 @@ internal static class AutomationHostLoopNextActionCommand
                         error = "--domain requires a value."; return false;
                     }
                     domain = args[++index].Trim();
+                    break;
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a non-empty value."; return false;
+                    }
+                    team = args[++index].Trim();
+                    break;
+                case "--task-id":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--task-id requires a non-empty value."; return false;
+                    }
+                    taskId = args[++index].Trim();
+                    break;
+                case "--result-nonce":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--result-nonce requires a non-empty value."; return false;
+                    }
+                    resultNonce = args[++index].Trim();
+                    break;
+                case "--routing-root":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--routing-root requires a non-empty value."; return false;
+                    }
+                    routingRoot = args[++index].Trim();
+                    break;
+                case "--timeout-seconds":
+                    if (index + 1 >= args.Length
+                        || !int.TryParse(args[index + 1], out var timeout)
+                        || timeout <= 0
+                        || timeout > 30)
+                    {
+                        error = "--timeout-seconds requires an integer from 1 through 30."; return false;
+                    }
+                    timeoutSeconds = timeout;
+                    index++;
                     break;
                 case "--stale-cli":
                     staleCli = true;
@@ -979,7 +1302,7 @@ internal static class AutomationHostLoopNextActionCommand
                     format = requested;
                     break;
                 default:
-                    error = $"Unknown argument '{args[index]}'."; return false;
+                    error = $"Unknown argument '{args[index]}'. Supported: --repo <owner/repo> [--domain <domain>] [--team <team>] [--task-id <task>] [--result-nonce <nonce>] [--routing-root <root>] [--timeout-seconds <1..30>] [--format markdown|json]."; return false;
             }
         }
 
@@ -993,6 +1316,11 @@ internal static class AutomationHostLoopNextActionCommand
         {
             Repo = repo!,
             Domain = domain,
+            Team = team,
+            TaskId = taskId,
+            ResultNonce = resultNonce,
+            RoutingRoot = routingRoot,
+            TimeoutSeconds = timeoutSeconds,
             StaleCli = staleCli,
             SyncClassification = syncClassification,
             SafeStashRequired = safeStashRequired,
@@ -1035,6 +1363,16 @@ internal static class AutomationHostLoopNextActionCommand
     {
         public required string Repo { get; init; }
         public string? Domain { get; init; }
+        public string? Team { get; init; }
+        public string? TaskId { get; init; }
+        public string? ResultNonce { get; init; }
+        public string? RoutingRoot { get; init; }
+        public int? TimeoutSeconds { get; init; }
+        public bool RequiresIdentity => Team is not null
+            || TaskId is not null
+            || ResultNonce is not null
+            || RoutingRoot is not null
+            || TimeoutSeconds is not null;
         public required bool StaleCli { get; init; }
         public string? SyncClassification { get; init; }
         public required bool SafeStashRequired { get; init; }
@@ -1053,6 +1391,40 @@ internal static class AutomationHostLoopNextActionCommand
 
 internal sealed record HostLoopNextActionEmittedResult
 {
+    /// <summary>G813: versioned, read-only identity envelope.</summary>
+    [JsonPropertyName("operation")] public string? Operation { get; init; }
+    [JsonPropertyName("version")] public string? Version { get; init; }
+    [JsonPropertyName("requested_repo")] public string? RequestedRepo { get; init; }
+    [JsonPropertyName("resolved_repo")] public string? ResolvedRepo { get; init; }
+    [JsonPropertyName("requested_domain")] public string? RequestedDomain { get; init; }
+    [JsonPropertyName("resolved_domain")] public string? ResolvedDomain { get; init; }
+    [JsonPropertyName("requested_team")] public string? RequestedTeam { get; init; }
+    [JsonPropertyName("resolved_team")] public string? ResolvedTeam { get; init; }
+    [JsonPropertyName("team")] public string? Team { get; init; }
+    [JsonPropertyName("task_id")] public string? TaskId { get; init; }
+    [JsonPropertyName("result_nonce")] public string? ResultNonce { get; init; }
+    [JsonPropertyName("identity_qualification")] public string? IdentityQualification { get; init; }
+    [JsonPropertyName("identity_source")] public string? IdentitySource { get; init; }
+    [JsonPropertyName("completion_identity")] public string? CompletionIdentity { get; init; }
+    [JsonPropertyName("recipient_context")] public string? RecipientContext { get; init; }
+    [JsonPropertyName("dispatch_generation")] public string? DispatchGeneration { get; init; }
+    [JsonPropertyName("dispatch_digest")] public string? DispatchDigest { get; init; }
+    [JsonPropertyName("routing_root")] public string? RoutingRoot { get; init; }
+    [JsonPropertyName("captured_cwd")] public string? CapturedCwd { get; init; }
+    [JsonPropertyName("captured_origin")] public string? CapturedOrigin { get; init; }
+    [JsonPropertyName("captured_ref")] public string? CapturedRef { get; init; }
+    [JsonPropertyName("captured_head")] public string? CapturedHead { get; init; }
+    [JsonPropertyName("observed_at")] public string? ObservedAt { get; init; }
+    [JsonPropertyName("expires_at")] public string? ExpiresAt { get; init; }
+    [JsonPropertyName("timeout_seconds")] public int? TimeoutSeconds { get; init; }
+    [JsonPropertyName("upstream_timeout")] public bool? UpstreamTimeout { get; init; }
+    [JsonPropertyName("owner")] public string? Owner { get; init; }
+    [JsonPropertyName("action")] public string? Action { get; init; }
+    [JsonPropertyName("deadline")] public string? Deadline { get; init; }
+    [JsonPropertyName("gate_evidence")] public IReadOnlyList<string>? GateEvidence { get; init; }
+    [JsonPropertyName("provenance")] public IReadOnlyList<string>? Provenance { get; init; }
+    [JsonPropertyName("elapsed_ms")] public long? ElapsedMilliseconds { get; init; }
+
     [JsonPropertyName("repo")] public required string Repo { get; init; }
     [JsonPropertyName("domain")] public string? Domain { get; init; }
     [JsonPropertyName("classification")] public required string Classification { get; init; }
