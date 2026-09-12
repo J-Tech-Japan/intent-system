@@ -75,10 +75,10 @@ public sealed class WorkerEvidencePasteG785Tests : IDisposable
         // only the new rendered rule. This prevents an evidence-guide change
         // from smuggling unrelated prompt or workflow edits into G785.
         Assert.Equal(
-            "a4b127234b70964de16278fc333a3a507121f2c9aaa1e3019167d3647d8785b2",
+            "20107b6986c7aa0c1846bd8137796c77ea34fe84e838b55de8c1d0612c0258e3",
             Sha256(RemoveEvidenceRuleFromJson(issueJson)));
         Assert.Equal(
-            "9e053b805cab22020fa59ee024e8bbab83a5b179d8dd19d002a6d53717dc3e25",
+            "48f5273ec19d0656980751c8f7780e3d300d239654f303f45906a44b3eeec667",
             Sha256(RemoveEvidenceRuleFromMarkdown(issueMarkdown)));
         Assert.Equal(
             "5d8aec25a1111a1fcdaaee52ed8f04a9d6debc9f68900b4f3fbbf222c64cfbc8",

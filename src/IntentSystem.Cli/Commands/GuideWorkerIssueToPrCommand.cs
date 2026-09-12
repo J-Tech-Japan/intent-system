@@ -19,7 +19,7 @@ internal static class GuideWorkerIssueToPrCommand
     private const string FormatMarkdown = "markdown";
 
     private const string UsageLine =
-        "Usage: intent-cli guide worker issue-to-pr [--repo <owner/repo>] [--domain <name>] [--format markdown|json]";
+        "Usage: intent-cli guide worker issue-to-pr [--repo <owner/repo>] [--domain <name>] [--team <name>] [--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -33,14 +33,14 @@ internal static class GuideWorkerIssueToPrCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var repo, out var domain, out var format, out var error))
+        if (!TryParseArguments(args, out var repo, out var domain, out var team, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
             return 1;
         }
 
-        var result = BuildIssueToPr(repo, domain);
+        var result = BuildIssueToPr(repo, domain, team);
         return EmitResult(writer, format, result);
     }
 
@@ -59,10 +59,11 @@ internal static class GuideWorkerIssueToPrCommand
         return 0;
     }
 
-    private static GuideWorkerIssueToPrResult BuildIssueToPr(string? repo, string? domain)
+    private static GuideWorkerIssueToPrResult BuildIssueToPr(string? repo, string? domain, string? team)
     {
         var repoLabel = string.IsNullOrWhiteSpace(repo) ? "the repo in the current worktree" : $"`{repo}`";
         var domainPlaceholder = string.IsNullOrWhiteSpace(domain) ? "<DOMAIN>" : domain;
+        var teamPlaceholder = string.IsNullOrWhiteSpace(team) ? "<TEAM>" : team;
 
         var seatHostBoundary = ChildHostDutyBoundaryGuidance.Build(domainPlaceholder);
         var prompt =
@@ -93,7 +94,7 @@ If any required section is missing or if the real contract lives only in linked 
 G717 claim precedence remains in force: the claim registry is authoritative over lifecycle labels; stale shadow state never overrides it, and an active or unavailable claim remains an ownership stop. Follow the worker surface without adding/removing that label by hand; no raw GitHub label mutation is permitted.
 
 Implementation steps:
-1. From the child cwd, select with `intent-cli worker next-action --repo <OWNER>/<REPO> --github-only --format json` and use its returned issue URL/number. Claim only the target-repository lifecycle label with `intent-cli worker claim --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --write --format json`. These GitHub-only worker calls do not acquire the execution-unit claim and do not read host metadata.
+1. From the child cwd, select with `intent-cli worker next-action --repo <OWNER>/<REPO> --team {teamPlaceholder} --github-only --format json` and use its returned issue URL/number. Claim only the target-repository lifecycle label with `intent-cli worker claim --kind issue --number <n> --repo <OWNER>/<REPO> --team {teamPlaceholder} --github-only --write --format json`. On a claims-enabled host, `{teamPlaceholder}` is required and MUST be the invoking team; never infer or substitute a team. These GitHub-only worker calls do not acquire the execution-unit claim and do not read host metadata.
    Execution-unit claim acquisition is a host duty. Before editing, consume the host-provided JSON evidence: `status=acquired`, `push_succeeded=true`, matching scope/actor/team and pushed `commit`, followed by `intent-cli claim verify ...` with `passed=true` and `status=owned`. If that evidence is missing, send the exact G733 `intent-cli notify report ... --status question ...` host-duty request above. Never run host claim acquire from the seat, widen roots, or treat `intent-issue-in-progress`, a local claim file, or `worker issue-preflight` as ownership. If a canonical child preflight refuses because it cannot reach host `FETCH_HEAD`, record the exact refusal and route the duty; do not retry by entering the host repo.
 2. Fetch origin/main: `git fetch origin main`. Create a new branch `claude/<slug>` from `origin/main`. Never reuse an existing unrelated branch.
 3. Read only the source files needed to implement the issue correctly. Match the repository's existing style and patterns.
@@ -140,6 +141,7 @@ Repeated-stall recovery (G408: when the same issue has stalled without progress 
             Kind = "issue-to-pr",
             Repo = string.IsNullOrWhiteSpace(repo) ? null : repo,
             Domain = string.IsNullOrWhiteSpace(domain) ? null : domain,
+            Team = string.IsNullOrWhiteSpace(team) ? null : team,
             Prompt = prompt,
             FirstCalls = new[]
             {
@@ -210,6 +212,10 @@ Repeated-stall recovery (G408: when the same issue has stalled without progress 
         if (!string.IsNullOrWhiteSpace(result.Domain))
         {
             writer.WriteLine($"- domain: {result.Domain}");
+        }
+        if (!string.IsNullOrWhiteSpace(result.Team))
+        {
+            writer.WriteLine($"- team: {result.Team}");
         }
         writer.WriteLine();
 
@@ -321,11 +327,13 @@ Repeated-stall recovery (G408: when the same issue has stalled without progress 
         string[] args,
         out string? repo,
         out string? domain,
+        out string? team,
         out string format,
         out string error)
     {
         repo = null;
         domain = null;
+        team = null;
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -353,6 +361,17 @@ Repeated-stall recovery (G408: when the same issue has stalled without progress 
                     }
 
                     domain = args[index + 1];
+                    index++;
+                    break;
+
+                case "--team":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a value.";
+                        return false;
+                    }
+
+                    team = args[index + 1];
                     index++;
                     break;
 
@@ -392,6 +411,7 @@ Repeated-stall recovery (G408: when the same issue has stalled without progress 
         writer.WriteLine();
         writer.WriteLine("  --repo is optional; omit to derive the repo from the current child worktree.");
         writer.WriteLine("  --domain is optional; omit to emit a <DOMAIN> placeholder in the generated prompt.");
+        writer.WriteLine("  --team is optional; omit to emit a <TEAM> prerequisite for claims-enabled hosts. Never infer a team.");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -412,6 +432,9 @@ internal sealed record GuideWorkerIssueToPrResult
 
     [JsonPropertyName("domain")]
     public string? Domain { get; init; }
+
+    [JsonPropertyName("team")]
+    public string? Team { get; init; }
 
     [JsonPropertyName("prompt")]
     public required string Prompt { get; init; }
