@@ -2207,7 +2207,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
     {
         var model = workspace.Render(["guide", "model"]);
 
-        Assert.Contains("## Session layer (transport for the four threads)", model, StringComparison.Ordinal);
+        Assert.Contains("## Session layer (transport for the threads)", model, StringComparison.Ordinal); // G831: four or five threads
         Assert.Contains("herdr-only (preferred — fewer dependencies)", model, StringComparison.Ordinal);
         Assert.Contains("agmsg + herdr (deprecated)", model, StringComparison.Ordinal); // G829: supersedes "supported, not retired"
         Assert.DoesNotContain("agmsg (PRIMARY)", model, StringComparison.Ordinal);
