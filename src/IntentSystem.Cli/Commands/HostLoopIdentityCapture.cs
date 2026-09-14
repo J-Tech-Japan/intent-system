@@ -1,6 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
-
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
@@ -44,29 +41,6 @@ internal sealed record HostLoopIdentityCapture
             Ref = reference,
             Head = head,
         };
-    }
-
-    internal static string ComputeDigest(
-        string repo,
-        string? domain,
-        string? team,
-        string? taskId,
-        string? resultNonce,
-        HostLoopIdentityCapture capture)
-    {
-        var canonical = string.Join("\n", [
-            repo,
-            domain ?? string.Empty,
-            team ?? string.Empty,
-            taskId ?? string.Empty,
-            resultNonce ?? string.Empty,
-            capture.DispatchGeneration ?? string.Empty,
-            capture.Cwd ?? string.Empty,
-            capture.Origin ?? string.Empty,
-            capture.Ref ?? string.Empty,
-            capture.Head ?? string.Empty,
-        ]);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
     }
 
     private static string? ReadGit(
