@@ -261,7 +261,8 @@ public sealed class NotifyEventSupervisionG659Tests : IDisposable
         Config = new CliConfig
         {
             Project = new ProjectConfig { Domain = Domain, ArtifactRoot = ".intent-cli" },
-            Supervision = new SupervisionConfig { ArtifactRoot = ".intent-cli/supervision" },
+            // G828: supervision is opt-in; this test pins the opted-in recommendation.
+            Supervision = new SupervisionConfig { ArtifactRoot = ".intent-cli/supervision", OptInTeams = [$"{Domain}/{Team}"] },
         },
     };
 
