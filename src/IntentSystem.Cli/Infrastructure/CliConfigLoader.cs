@@ -513,10 +513,27 @@ internal static class CliConfigLoader
     private static IReadOnlyList<string> ReadSupervisionOptInTeams(TomlTable supervisionTable)
     {
         var key = CliRuntimeContracts.SupervisionOptInTeamsKey;
-        var entries = TryGetOptionalStringArray(supervisionTable, key);
-        if (entries is null)
+        if (!supervisionTable.TryGetValue(key, out var rawValue))
         {
             return [];
+        }
+
+        if (rawValue is not TomlArray array)
+        {
+            throw new InvalidOperationException(
+                $"CLI config value 'supervision.{key}' must be an array of '<domain>/<team>' strings.");
+        }
+
+        var entries = new List<string>(array.Count);
+        foreach (var item in array)
+        {
+            if (item is not string entry)
+            {
+                throw new InvalidOperationException(
+                    $"CLI config value 'supervision.{key}' entry '{item}' must be a '<domain>/<team>' string.");
+            }
+
+            entries.Add(entry);
         }
 
         foreach (var entry in entries)

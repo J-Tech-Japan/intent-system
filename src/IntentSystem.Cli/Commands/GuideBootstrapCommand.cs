@@ -84,7 +84,9 @@ internal static class GuideBootstrapCommand
             TriggerPhrases = new BootstrapTriggerPhrases { English = TriggerEnglish, Japanese = TriggerJapanese },
             SessionLayerCoverage = ["agmsg", "herdr-only"],
             TargetSessionLayer = "herdr-only",
-            TeamFormula = "four judgment-bearing threads plus one supervision process",
+            TeamFormula = state.SupervisionOptedIn
+                ? "four judgment-bearing threads plus one supervision process"
+                : "four judgment-bearing threads (a supervision process is opt-in and not declared for this team)",
             State = state,
             Flow = state.TopologyRecorded ? "join-and-delegate" : "create-and-delegate",
             Reachability = new BootstrapReachability

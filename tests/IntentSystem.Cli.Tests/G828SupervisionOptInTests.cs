@@ -58,6 +58,8 @@ public sealed class G828SupervisionOptInTests : IDisposable
     [InlineData(" intent-cli/intent-cli-dev")]
     [InlineData("intent-cli/intent cli")]
     [InlineData("../intent-cli-dev")]
+    [InlineData("")]
+    [InlineData("  ")]
     public void Config_RejectsMalformedEntries_NamingKeyAndEntry(string entry)
     {
         var exception = Assert.Throws<InvalidOperationException>(() => CliConfigLoader.Load($"""
@@ -69,6 +71,79 @@ public sealed class G828SupervisionOptInTests : IDisposable
             """));
         Assert.Contains("supervision.opt_in_teams", exception.Message, StringComparison.Ordinal);
         Assert.Contains($"'{entry}'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("opt_in_teams = [1]", "entry '1'")]
+    [InlineData("opt_in_teams = \"intent-cli/intent-cli-dev\"", "must be an array")]
+    public void Config_RejectsNonStringShapes_NamingTheKey(string line, string expected)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() => CliConfigLoader.Load($"""
+            default_domain = "intent-cli"
+            artifact_root = ".intent-cli"
+
+            [supervision]
+            {line}
+            """));
+        Assert.Contains("supervision.opt_in_teams", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("installed-supervisor")]
+    [InlineData("cycle")]
+    public void GuideNext_NotOptedIn_OtherLeftoverSignalsDoNotOptIn(string signal)
+    {
+        var context = CreateContext(optInTeams: []);
+        if (signal == "cycle")
+        {
+            var cyclePath = NotifySupervisionStore.ResolveCyclePath(SupervisionRoot(), Domain, Team);
+            var now = DateTimeOffset.UtcNow;
+            Assert.True(NotifySupervisionStore.RecordCycle(cyclePath, new NotifySupervisionCycle { CycleId = "g828-leftover", StartedAt = now, CompletedAt = now, IntervalSeconds = 300 }, write: true).Applied);
+        }
+        else
+        {
+            var record = NotifySupervisionStore.RecordInstalledSupervisor(
+                SupervisionRoot(),
+                new NotifySupervisionInstalledSupervisor
+                {
+                    Domain = Domain,
+                    Team = Team,
+                    Label = "intent-cli.supervise.intent-cli.intent-cli-dev",
+                    ArtifactPath = Path.Combine(root, "artifact.plist"),
+                    Writer = NotifySupervisionWriterIdentity.Current(),
+                    StartupBoundSeconds = 120,
+                    RecordedAt = DateTimeOffset.UtcNow,
+                },
+                write: true);
+            Assert.Null(record.Error);
+        }
+
+        WriteFullRoster();
+        var next = RunGuideNext(context);
+        Assert.True(!next.GetProperty("supervision").TryGetProperty("error", out var error) || error.ValueKind == JsonValueKind.Null, error.ToString());
+        Assert.False(next.GetProperty("supervision").GetProperty("opted_in").GetBoolean());
+        Assert.False(next.GetProperty("supervision").GetProperty("setup_recommended").GetBoolean());
+
+        var bootstrap = RunBootstrap(context);
+        Assert.False(bootstrap.GetProperty("state").GetProperty("supervision_opted_in").GetBoolean());
+        Assert.True(bootstrap.GetProperty("state").GetProperty("complete").GetBoolean());
+        Assert.DoesNotContain("plus one supervision process", bootstrap.GetProperty("team_formula").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GuideNext_NotOptedIn_MarkdownCarriesNoUnconditionalSupervisionInstruction()
+    {
+        using var writer = new StringWriter();
+        Assert.Equal(0, GuideNextCommand.Execute(
+            CreateContext(optInTeams: []),
+            ["--domain", Domain, "--team", Team, "--target-repo", "example/repo", "--format", "markdown"],
+            writer));
+        var text = writer.ToString();
+        Assert.DoesNotContain("when no cycle is recorded", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("when its check is missing", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("without a completed cycle/handoff", text, StringComparison.Ordinal);
+        Assert.Contains("opt_in_teams", text, StringComparison.Ordinal);
     }
 
     [Fact]
