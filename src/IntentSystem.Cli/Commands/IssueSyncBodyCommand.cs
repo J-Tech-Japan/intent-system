@@ -149,7 +149,7 @@ internal static class IssueSyncBodyCommand
         {
             remoteBody = client.ReadBody(repo!, issueNumber);
         }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        catch (Exception exception) when (IsAdapterFailure(exception))
         {
             return Emit(writer, format, Refuse(result, "remote-read-failed", $"could not read issue #{issueNumber} body: {exception.Message}"));
         }
@@ -204,15 +204,23 @@ internal static class IssueSyncBodyCommand
             });
         }
 
+        // Upload the exact bytes that passed validation, not the packet file,
+        // so an edit to github-body.md after the gate cannot reach GitHub.
+        var uploadPath = Path.Combine(Path.GetTempPath(), $"intent-cli-sync-body-{Guid.NewGuid():N}.md");
         try
         {
-            client.UpdateBody(repo!, issueNumber, bodyPath);
+            File.WriteAllBytes(uploadPath, localBytes);
+            client.UpdateBody(repo!, issueNumber, uploadPath);
         }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        catch (Exception exception) when (IsAdapterFailure(exception))
         {
             // The update request may or may not have reached GitHub.
             return Emit(writer, format, Unverified(result, runLogPath, unit!, repo!, artifact.CreatedIssueUrl, localSha, remoteSha, afterSha: null,
                 $"the body update reported an error ({exception.Message}); the body may or may not have changed."));
+        }
+        finally
+        {
+            File.Delete(uploadPath);
         }
 
         string afterBody;
@@ -220,7 +228,7 @@ internal static class IssueSyncBodyCommand
         {
             afterBody = client.ReadBody(repo!, issueNumber);
         }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        catch (Exception exception) when (IsAdapterFailure(exception))
         {
             return Emit(writer, format, Unverified(result, runLogPath, unit!, repo!, artifact.CreatedIssueUrl, localSha, remoteSha, afterSha: null,
                 $"the body was sent but could not be read back ({exception.Message})."));
@@ -243,6 +251,18 @@ internal static class IssueSyncBodyCommand
             Summary = $"applied: issue #{issueNumber} body replaced ({remoteSha} -> {afterSha}) and verified by read-back.",
         });
     }
+
+    /// <summary>
+    /// Failures of the <c>gh</c> adapter: a nonzero exit, an unreadable or
+    /// unexpected JSON reply, or a missing executable. After an update was
+    /// sent, each of these must still end as <c>verification-failed</c>.
+    /// </summary>
+    private static bool IsAdapterFailure(Exception exception) =>
+        exception is InvalidOperationException
+            or IOException
+            or JsonException
+            or KeyNotFoundException
+            or System.ComponentModel.Win32Exception;
 
     private static IssueSyncBodyResult Unverified(
         IssueSyncBodyResult result,

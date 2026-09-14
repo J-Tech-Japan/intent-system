@@ -220,6 +220,45 @@ public sealed class G825IssueSyncBodyCommandTests : IDisposable
     }
 
     [Fact]
+    public void Write_UploadsTheValidatedBytes_NotAPacketFileEditedAfterTheGate()
+    {
+        Publish(ValidBody("v2"));
+        var client = Install(new FakeBodyClient(ValidBody("v1"))
+        {
+            // Simulates an edit to github-body.md after validation passed.
+            OnFirstRead = () => File.WriteAllText(BodyPath, "not a valid contract body\n"),
+        });
+
+        var result = Run(write: true);
+
+        Assert.Equal(0, result.Exit);
+        Assert.Equal(IssueSyncBodyCommand.OutcomeApplied, result.Json.GetProperty("outcome").GetString());
+        Assert.Equal(ValidBody("v2"), client.Body);
+        Assert.NotEqual(BodyPath, client.UploadedPath);
+        Assert.False(File.Exists(client.UploadedPath), "the temporary upload file must be removed");
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("missing-key")]
+    public void Write_ReadBackAdapterFailure_IsVerificationFailedWithEvent(string failure)
+    {
+        Publish(ValidBody("v2"));
+        Exception thrown = failure == "json"
+            ? new System.Text.Json.JsonException("gh returned unexpected output")
+            : new KeyNotFoundException("body");
+        var client = Install(new FakeBodyClient(ValidBody("v1")) { ThrowOnReadAfterUpdate = thrown });
+
+        var result = Run(write: true);
+
+        Assert.Equal(1, result.Exit);
+        Assert.Equal(IssueSyncBodyCommand.OutcomeVerificationFailed, result.Json.GetProperty("outcome").GetString());
+        Assert.True(result.Json.GetProperty("may_have_applied").GetBoolean());
+        Assert.Equal(1, client.Updates);
+        Assert.Contains($"\"event\":\"{IssueSyncBodyCommand.EventUnverified}\"", Assert.Single(RunsLines()), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Write_ReadBackDiffersOnlyByTrailingNewline_IsVerified_AndSaysSo()
     {
         Publish(ValidBody("v2"));
@@ -378,6 +417,12 @@ public sealed class G825IssueSyncBodyCommandTests : IDisposable
 
         public bool ThrowOnUpdate { get; init; }
 
+        public Exception? ThrowOnReadAfterUpdate { get; init; }
+
+        public Action? OnFirstRead { get; init; }
+
+        public string? UploadedPath { get; private set; }
+
         public int Reads { get; private set; }
 
         public int Updates { get; private set; }
@@ -387,6 +432,16 @@ public sealed class G825IssueSyncBodyCommandTests : IDisposable
             Assert.Equal(Repo, repo);
             Assert.Equal(IssueNumber, issueNumber);
             Reads++;
+            if (Reads == 1)
+            {
+                OnFirstRead?.Invoke();
+            }
+
+            if (Updates > 0 && ThrowOnReadAfterUpdate is not null)
+            {
+                throw ThrowOnReadAfterUpdate;
+            }
+
             return Body;
         }
 
@@ -395,6 +450,7 @@ public sealed class G825IssueSyncBodyCommandTests : IDisposable
             Assert.Equal(Repo, repo);
             Assert.Equal(IssueNumber, issueNumber);
             Updates++;
+            UploadedPath = bodyFilePath;
             if (ThrowOnUpdate)
             {
                 throw new InvalidOperationException("simulated network failure after send");
