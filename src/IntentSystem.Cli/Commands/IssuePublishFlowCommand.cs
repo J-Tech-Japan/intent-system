@@ -1505,46 +1505,48 @@ internal static class IssuePublishFlowCommand
     /// scanning for the first `title:` line that has a non-empty value, with
     /// optional surrounding quotes stripped.
     /// </summary>
+    /// <summary>
+    /// G826: the packet keys that carry the issue title, in the same order
+    /// <see cref="AutomationQueueSeedFromPacketCommand"/> uses, so both commands
+    /// derive one title from one packet. The scaffold writes
+    /// <c>implementation_issue_packet.issue_title</c>; bare <c>title</c> stays
+    /// last for legacy packets.
+    /// </summary>
+    internal static readonly IReadOnlyList<string> PacketTitleKeys =
+    [
+        "implementation_issue_packet.issue_title",
+        "implementation_issue.issue_title",
+        "issue_title",
+        "title",
+    ];
+
     private static string? TryReadPacketTitle(string packetYamlPath)
     {
+        // G826: this used to scan for a line starting with "title:", which the
+        // scaffold never writes, so canonically scaffolded packets published as
+        // "<id> (untitled)". Parse through PacketYamlDocument (YAML and JSON
+        // packet forms) like queue-seed-from-packet does.
+        string text;
         try
         {
-            using var reader = new StreamReader(packetYamlPath);
-            string? line;
-            while ((line = reader.ReadLine()) is not null)
+            text = File.ReadAllText(packetYamlPath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        if (!PacketYamlDocument.TryParse(text, out var document, out _) || document is null)
+        {
+            return null;
+        }
+
+        foreach (var key in PacketTitleKeys)
+        {
+            if (document.Fields.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
             {
-                var trimmed = line.TrimStart();
-                if (!trimmed.StartsWith("title:", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var value = trimmed["title:".Length..].Trim();
-                if (value.Length == 0)
-                {
-                    continue;
-                }
-
-                if (value.Length >= 2
-                    && ((value[0] == '"' && value[^1] == '"')
-                        || (value[0] == '\'' && value[^1] == '\'')))
-                {
-                    value = value[1..^1];
-                }
-
-                if (!string.IsNullOrWhiteSpace(value))
-                {
-                    return value;
-                }
+                return value.Trim();
             }
-        }
-        catch (IOException)
-        {
-            // Unreadable packet.yaml — fall through to body H1 / untitled.
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Permission denied — fall through.
         }
 
         return null;
