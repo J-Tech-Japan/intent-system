@@ -112,10 +112,10 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
 1. Check the evidence (below) — current intents, open questions, packet backlog, open PRs / review state, and CLI / queue health — before recommending.
 2. Use `{GuideDesignThreadCommand.CommandName}` as the design-role operating contract. Its four-outcome wake rule governs whether this wake has an outcome at all.
 3. Before starting a named execution unit, acquire `execution-unit:<EU>` with `intent-cli claim acquire`; before authoring release preparation, acquire `release-prep:{repoArg}:<version>`. Then run the shared `intent-cli claim verify --scope <scope> --team {teamArg}` judgment used by every start surface. Start only when acquisition reports `status=acquired` and `push_succeeded=true` and verification reports `passed=true`; a local file or commit is not ownership.
-4. When a domain and team are supplied, inspect recorded topology plus the supervision cycle. A recorded topology without a completed cycle/handoff includes `bootstrap-resume` first; absent topology is silent because bootstrap has not started; a completed cycle clears the recommendation.
-5. Inspect the recorded supervision cycle independently and include `supervision-setup` when no cycle is recorded.
+4. When a domain and team are supplied, inspect recorded topology and bootstrap completeness. A recorded topology whose bootstrap is incomplete (missing seats, or for a team opted in to supervision a missing completed cycle/handoff) includes `bootstrap-resume` first; absent topology is silent because bootstrap has not started; a complete bootstrap clears the recommendation.
+5. Inspect supervision independently: include `supervision-setup` only when the team is declared in `[supervision] opt_in_teams` and no cycle is recorded (G828: supervision is opt-in).
 6. When a domain is supplied, inspect the independently declared realignment window and latest durable improve-run record. If no run falls within that window, include `realignment`; judge timestamp recency only, never review quality. With no window declaration, do not invent a cadence.
-7. Match the situation to exactly one action in the decision set (bootstrap-resume for a half-done bootstrap, supervision-setup when its check is missing, then realignment when its declared window is lapsed, then grill / stack / improve / inspect / issue-publish / review / recovery / idle).
+7. Match the situation to exactly one action in the decision set (bootstrap-resume for a half-done bootstrap, supervision-setup when an opted-in team has no recorded cycle, then realignment when its declared window is lapsed, then grill / stack / improve / inspect / issue-publish / review / recovery / idle).
 8. Return the recommendation output shape: the recommended action, the reason tied to the evidence you actually checked, the evidence checked, a paste-ready suggested prompt for that action, and the safety boundary.
 9. Stop there — the user decides whether to run the suggested prompt. next never auto-executes the chosen action.";
 
@@ -138,8 +138,8 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             $"Open PRs and review state — `intent-cli guide review` inputs / GitHub PR labels for {repoArg}: a PR awaiting review pushes toward review; a request-update pushes toward recovery/comment-fix.",
             "CLI / queue health — `intent-cli automation doctor`: a stale CLI or dirty queue pushes toward recovery before anything else.",
             "Drift / short-term-loop signals — repeated corrective packets on the same surface push toward improve.",
-            $"Recorded supervision cycle — when `--domain {domainArg} --team {teamArg}` is supplied, read the team's append-only supervision state; no recorded cycle is a setup gap, while an existing cycle keeps the setup recommendation silent.",
-            $"Bootstrap completion — when `--domain {domainArg} --team {teamArg}` is supplied, read the recorded topology and supervision cycle. Topology with no completed cycle/handoff is half-done and routes to `{GuideBootstrapCommand.CommandName}`; absent topology and a completed cycle are silent.",
+            $"Recorded supervision cycle — when `--domain {domainArg} --team {teamArg}` is supplied, read the team's append-only supervision state; for a team declared in `[supervision] opt_in_teams`, no recorded cycle is a setup gap and an existing cycle keeps the setup recommendation silent; for any other team supervision is opt-in and no recommendation is made (G828).",
+            $"Bootstrap completion — when `--domain {domainArg} --team {teamArg}` is supplied, read the recorded topology and supervision cycle. Topology with an incomplete bootstrap (missing seats, or a missing completed cycle/handoff for a team opted in to supervision) is half-done and routes to `{GuideBootstrapCommand.CommandName}`; absent topology and a complete bootstrap are silent.",
             $"Improve-run recency — when `--domain {domainArg}` is supplied, read `.intent-cli/improve/{domainArg}/window.json` and `runs.jsonl`; compare only the latest run timestamp with the independently declared realignment window. A missing/aged run recommends realignment; a fresh record is immediately silent. Never infer quality from age.",
         };
 
@@ -200,7 +200,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             decisionSet.Insert(0, new GuideNextAction
             {
                 Action = ActionSupervisionSetup,
-                WhenToChoose = $"No completed supervision cycle is recorded for team `{team}`. Set up the team's standing supervision loop before relying on bounded recovery; the setup guidance states who owns it and where it runs. {SupervisionGuideText.DeploymentBasis}",
+                WhenToChoose = $"Team `{domain}/{team}` opted in to supervision and no completed supervision cycle is recorded. {SupervisionGuideText.OptInRule} Set up the team's standing supervision loop before relying on bounded recovery; the setup guidance states who owns it and where it runs. {SupervisionGuideText.DeploymentBasis}",
                 SuggestedPrompt = SupervisionGuideText.NextAction(domainArg, teamArg, repoArg),
             });
         }
@@ -210,7 +210,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             decisionSet.Insert(0, new GuideNextAction
             {
                 Action = ActionBootstrapResume,
-                WhenToChoose = $"Team `{team}` has recorded topology but no completed supervision cycle and application-front-door handoff. Resume from named state `{bootstrap.StateName}`; preserve recorded facts and emit only missing steps.",
+                WhenToChoose = $"Team `{team}` has recorded topology but its bootstrap is incomplete (missing facts are named by `guide bootstrap`; a completed supervision cycle is required only for teams opted in to supervision). Resume from named state `{bootstrap.StateName}`; preserve recorded facts and emit only missing steps.",
                 SuggestedPrompt = $"`{GuideBootstrapCommand.CommandName} --domain {domainArg} --team {teamArg} --target-repo {repoArg} --routing-root {context?.RepoRoot ?? "<routing-root>"} --format markdown`",
             });
         }
@@ -244,7 +244,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             ReadOnly = true,
             Summary =
                 "next is the design-side action advisor: ask it what to do next and it lays out the catalog of design-side "
-                + "processes (bootstrap-resume for recorded-topology half-done state, supervision-setup when no recorded cycle, realignment when a declared improve window lapses, grill, stack, improve, inspect, issue-publish, review, recovery, idle), the evidence to check first, "
+                + "processes (bootstrap-resume for recorded-topology half-done state, supervision-setup when an opted-in team has no recorded cycle, realignment when a declared improve window lapses, grill, stack, improve, inspect, issue-publish, review, recovery, idle), the evidence to check first, "
                 + "and the recommendation output shape. It recommends ONE process tied to the evidence; it is read-only by default "
                 + "and never auto-executes the chosen action — the user decides whether to run the suggested prompt.",
             MeasuredIncident = GuideRoleContractGuidance.MeasuredIncident,
@@ -270,7 +270,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             DecisionSet = decisionSet,
             RecommendationOutputShape = new[]
             {
-                new GuideNextOutputField { Field = "recommended_action", Meaning = "Exactly one action id from the decision set (bootstrap-resume for a half-done bootstrap, supervision-setup when no cycle is recorded, realignment when a declared window lapses, or grill / stack / improve / inspect / issue-publish / review / recovery / idle)." },
+                new GuideNextOutputField { Field = "recommended_action", Meaning = "Exactly one action id from the decision set (bootstrap-resume for a half-done bootstrap, supervision-setup when an opted-in team has no recorded cycle, realignment when a declared window lapses, or grill / stack / improve / inspect / issue-publish / review / recovery / idle)." },
                 new GuideNextOutputField { Field = "reason", Meaning = "Why this action, tied to the specific evidence checked (cite the intent / packet / PR / health signal that drove it)." },
                 new GuideNextOutputField { Field = "evidence_checked", Meaning = "The evidence actually inspected this run, so the recommendation is auditable." },
                 new GuideNextOutputField { Field = "suggested_prompt", Meaning = "The paste-ready prompt / command for the recommended action that the user can run as-is." },
@@ -484,6 +484,8 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 ? "- supervision: **not-applicable-team-mode** (authoring-only has no supervision process)"
                 : result.Supervision.CycleRecorded
                 ? $"- recorded cycle: yes for `{result.Supervision.Team}`; supervision setup recommendation: silent"
+                : !result.Supervision.OptedIn && result.Supervision.Error is null
+                    ? $"- supervision: not opted in for `{result.Supervision.Domain}/{result.Supervision.Team}`; recommendation: silent. {SupervisionGuideText.OptInRule}"
                 : result.Supervision.Error is null
                     ? $"- recorded cycle: no for `{result.Supervision.Team}`; supervision setup recommendation: **supervision-setup**"
                     : $"- recorded cycle: unavailable for `{result.Supervision.Team}`; repair the state read before deciding");
@@ -512,11 +514,11 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             }
             else if (result.Bootstrap.ResumeRecommended)
             {
-                writer.WriteLine($"- topology recorded: yes; named state: `{result.Bootstrap.StateName}`; completed cycle/handoff: no; recommendation: **bootstrap-resume**");
+                writer.WriteLine($"- topology recorded: yes; named state: `{result.Bootstrap.StateName}`; bootstrap complete: no; recommendation: **bootstrap-resume**");
             }
             else
             {
-                writer.WriteLine("- topology recorded: yes; completed cycle/handoff: yes; bootstrap-resume recommendation: silent");
+                writer.WriteLine("- topology recorded: yes; bootstrap complete: yes; bootstrap-resume recommendation: silent");
             }
             writer.WriteLine();
         }
@@ -723,13 +725,19 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 context.ResolveSupervisionArtifactRootPath(),
                 domain.Trim(),
                 team.Trim());
+            // G828: supervision is opt-in. Only an explicit [supervision]
+            // opt_in_teams declaration makes a team a recommendation target;
+            // leftover bound/install files or cycles never do.
+            var optedIn = context.Config.Supervision.IsOptedIn(domain, team);
             return new GuideNextSupervisionStatus
             {
                 Checked = true,
                 Domain = domain.Trim(),
                 Team = team.Trim(),
                 CycleRecorded = state.LastCycle is not null,
-                SetupRecommended = state.Resolved && state.LastCycle is null,
+                SetupRecommended = optedIn && state.Resolved && state.LastCycle is null,
+                OptedIn = optedIn,
+                OptInSource = optedIn ? IntentSystem.Cli.Models.SupervisionConfig.OptInSource : null,
                 StateDirectory = state.Directory,
                 Error = state.Resolved ? null : state.Error,
             };
@@ -772,7 +780,8 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 TopologyRecorded = state.TopologyRecorded,
                 CycleRecorded = state.SupervisionCycleRecorded,
                 Complete = state.Complete,
-                ResumeRecommended = state.TopologyRecorded && !state.SupervisionCycleRecorded,
+                // G828: resume follows completeness, which requires a cycle only for opted-in teams.
+                ResumeRecommended = state.TopologyRecorded && !state.Complete,
                 StateName = state.Name,
                 TopologyPath = state.TopologyPath,
                 Error = state.ReadError,
@@ -1026,6 +1035,13 @@ internal sealed record GuideNextSupervisionStatus
 
     [JsonPropertyName("setup_recommended")]
     public bool SetupRecommended { get; init; }
+
+    /// <summary>G828: the team is declared in <c>[supervision] opt_in_teams</c>.</summary>
+    [JsonPropertyName("opted_in")]
+    public bool OptedIn { get; init; }
+
+    [JsonPropertyName("opt_in_source")]
+    public string? OptInSource { get; init; }
 
     [JsonPropertyName("not_applicable")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]

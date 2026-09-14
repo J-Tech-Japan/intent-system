@@ -518,6 +518,25 @@ file を disk 上に保持し、obsolete な root-level supervision rule を除�
 shared policy/manifest state が trackable であることを結果に表示します。operator は repository state を
 手編集せず、この named command を使います。supervision が何を read/write するかは変更しません。
 
+## supervision は opt-in (G828 — preview-through-1.x)
+
+standing supervision は任意です。実行チームは herdr の messaging と timer、design や Steward の席は
+Orca Run mailbox、app 型の design 席は canonical inbox を定期的に pull する形で動けます。
+supervisor を使うチームは host config で明示的に宣言します。
+
+```toml
+[supervision]
+opt_in_teams = ["<domain>/<team>"]
+```
+
+宣言したチームだけが `intent-cli guide next` から `supervision-setup` の推奨を受け、
+`intent-cli guide bootstrap` の完了条件に supervision cycle が含まれます。それ以外のチームは
+roster が揃えば bootstrap 完了で、step 4 は install command を出しません。根拠は宣言だけです。
+追跡されている `bound.json`・`installed-supervisor.json` や runtime-local な cycle は supervisor を
+止めても残るため、そこから opt-in を推定すると supervision を勧め続けてしまいます。各 entry は
+`<domain>/<team>` 形式で、team 名だけの entry は config の読み込みで失敗します。supervision の
+コマンド自体は変わらず、どのチームでも使えます。
+
 ## runtime-local supervision cycle history (G750 — preview-through-1.x)
 
 supervision cycle history は CLI-owned runtime-local state です。すべての reader は同じ host 上の

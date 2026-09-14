@@ -268,7 +268,8 @@ public sealed class NotifySuperviseInstallG658Tests : IDisposable
                 ArtifactRoot = ".intent-cli",
                 WorktreeRoot = ".intent-cli/worktrees",
             },
-            Supervision = new SupervisionConfig { ArtifactRoot = ".intent-cli/supervision" },
+            // G828: supervision is opt-in; these tests pin the opted-in behavior.
+            Supervision = new SupervisionConfig { ArtifactRoot = ".intent-cli/supervision", OptInTeams = [$"{Domain}/{Team}"] },
         },
     };
 }

@@ -107,7 +107,7 @@ internal static class GuideWorkflowTaskSupervisionSetupCommand
             ContractVersion = ContractVersion,
             MetadataFree = true,
             ReadOnly = true,
-            Summary = "G712 session-scoped supervision setup: emit an artifact, explicitly bootstrap the current GUI session only when wanted, and use reconcile/uninstall for bounded drift removal.",
+            Summary = SupervisionGuideText.OptInRule + " G712 session-scoped supervision setup for an opted-in team: emit an artifact, explicitly bootstrap the current GUI session only when wanted, and use reconcile/uninstall for bounded drift removal.",
             ContractStatements = ContractStatements,
             Commands = Commands,
             ArtifactLocation = "Artifacts remain under `.intent-cli/supervision/<domain>/<team>/install/`; no managed artifact is emitted to `~/Library/LaunchAgents`.",

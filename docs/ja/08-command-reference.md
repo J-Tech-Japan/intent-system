@@ -332,8 +332,11 @@ reason・確認した evidence・paste 可能な suggested prompt・safety bound
 `--domain` と `--team` を指定すると、`next` は team に記録された topology と supervision cycle
 も読み取ります。recorded topology があり completed cycle / front-door handoff がなければ
 `bootstrap-resume` と render-only の `intent-cli guide bootstrap` を示し、topology がない場合と
-cycle 完了後は silent です。cycle が未記録なら独立して `supervision-setup` を推奨し、cycle があれば
-その推奨を静かにします。host-init と design-side loop の guide が deployment の手順を
+cycle 完了後は silent です。supervision は opt-in です(G828)。`.intent-cli/config.toml` に
+`[supervision] opt_in_teams = ["<domain>/<team>"]` と宣言した team だけが、cycle 未記録のときに
+`supervision-setup` の推奨を受け、bootstrap の完了条件にも cycle が含まれます。残っている `bound.json`・
+`installed-supervisor.json`・cycle は opt-in の根拠になりません。JSON は `supervision.opted_in` と
+`supervision.opt_in_source` を返し、cycle があれば推奨は静かなままです。host-init と design-side loop の guide が deployment の手順を
 示し、[オーケストレーションのリファレンス](12-agent-message-orchestration.md)へ
 リンクします。この command は未記録を検出するだけで、background process を start・
 manage しません。

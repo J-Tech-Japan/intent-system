@@ -189,6 +189,8 @@ public sealed class GuideSupervisionDiscoverabilityG644Tests : IDisposable
             Supervision = new SupervisionConfig
             {
                 ArtifactRoot = ".intent-cli/supervision",
+                // G828: supervision is opt-in; these tests pin the opted-in behavior.
+                OptInTeams = ["intent-cli/intent-cli-dev"],
             },
         },
     };
