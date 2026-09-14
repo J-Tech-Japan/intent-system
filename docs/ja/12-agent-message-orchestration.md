@@ -493,14 +493,17 @@ root-level repository ignore ではなく、CLI が所有する directory-local 
 # .intent-cli/supervision/.gitignore
 **/cycles.jsonl
 **/cycles-archive/
+**/stalls.jsonl
 ```
 
-runtime-local なのは cycle history だけです。team ごとの `stalls.jsonl`、`bound.json`、
+runtime-local なのは cycle history と host ごとの stall log です。team ごとの `bound.json`、
 `emission-policy.json`、`evidence-definitions.json`、`pre-approval-policy.json`、
 `shrink-audit.jsonl` は shared な policy/manifest state として trackable のままです。
 以前の root-level entry `.intent-cli/supervision/**/cycles.jsonl` と
-`.intent-cli/supervision/**/stalls.jsonl` は legacy path であり、現在の ownership policy ではありません。
-特に stalls は trackable に残します。
+`.intent-cli/supervision/**/stalls.jsonl` は legacy path であり、上の directory-local rule が置き換えます。
+G827 は `stalls.jsonl` を runtime-local にし、「stalls は trackable に残す」という G750 の規則を
+置き換えました。stall log は 1 台の host の supervisor が append するもので、実際の host で GitHub の
+100 MB file 上限を超え、supervision が opt-in になった現在はその host の診断 state であって shared policy ではありません。
 
 すでに初期化済みで cycle history を追跡している host は `intent init` だけでは移行しません。
 domain と team を指定して、次の canonical repair を実行します。
@@ -509,7 +512,8 @@ domain と team を指定して、次の canonical repair を実行します。
 intent-cli notify supervise repair-cycle-history --domain <domain> --team <team> --write --format json
 ```
 
-この repair は directory-local rule を追加し、cycle-history path だけを index から外しながら
+この repair は directory-local rule を追加し、cycle-history path と team の `stalls.jsonl` だけを index から外しながら
+(`tracked_stall_history_before` / `preserved_stall_paths` として報告)
 file を disk 上に保持し、obsolete な root-level supervision rule を除去します。preserved path と
 shared policy/manifest state が trackable であることを結果に表示します。operator は repository state を
 手編集せず、この named command を使います。supervision が何を read/write するかは変更しません。
@@ -518,12 +522,12 @@ shared policy/manifest state が trackable であることを結果に表示し�
 
 supervision cycle history は CLI-owned runtime-local state です。すべての reader は同じ host 上の
 consumer であり、各 cycle record には OS process id が含まれるため、別 checkout と共有して merge
-する policy state ではありません。この境界は “all supervision telemetry” より狭く、`stalls.jsonl`、
+する policy state ではありません。この境界は “all supervision telemetry” より狭く、
 `bound.json`、`emission-policy.json`、`evidence-definitions.json`、`pre-approval-policy.json`、
-`shrink-audit.jsonl` は shared、trackable、reviewable なままです。
+`shrink-audit.jsonl` は shared、trackable、reviewable なままです。G827 以降は host ごとの `stalls.jsonl` も runtime-local です。
 
 fresh host の `intent init --write` は `.intent-cli/supervision/.gitignore` を作り、`**/cycles.jsonl`
-と `**/cycles-archive/` だけを記載します。CLI は cycle history を書くときもこの file を維持します。
+と `**/cycles-archive/`、(G827) `**/stalls.jsonl` だけを記載します。CLI は cycle history を書くときもこの file を維持します。
 この ignore は emission rate、event mode、archive semantics、supervision の read/write contract を変更
 しません。既存 host では上記の `notify supervise repair-cycle-history` が全 cycle file を保持したまま
 repository tracking を修復します。

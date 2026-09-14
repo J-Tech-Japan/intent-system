@@ -7,7 +7,8 @@ namespace IntentSystem.Cli.Commands;
 /// <summary>
 /// G750: migrate supervision cycle history to the directory-local ignore
 /// owned by the CLI. The files remain on disk and the shared supervision
-/// policy/manifest files stay trackable.
+/// policy/manifest files stay trackable. G827: the per-host stall log
+/// (<c>stalls.jsonl</c>) is runtime-local too and is migrated the same way.
 /// </summary>
 internal static class NotifySuperviseRepairCycleHistoryCommand
 {
@@ -96,11 +97,20 @@ internal static class NotifySuperviseRepairCycleHistoryCommand
             return 1;
         }
 
-        var trackedCyclePaths = ParseNulSeparatedPaths(trackedResult.StdOut)
+        var trackedPaths = ParseNulSeparatedPaths(trackedResult.StdOut);
+        var trackedCyclePaths = trackedPaths
             .Where(path => IsCycleHistoryPath(path, teamRelativePath))
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
-        var wouldChange = ignore.WouldChange || legacy.RemovedLines.Count > 0 || trackedCyclePaths.Length > 0;
+        var trackedStallPaths = trackedPaths
+            .Where(path => IsStallHistoryPath(path, teamRelativePath))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        var trackedRuntimeLocalPaths = trackedCyclePaths
+            .Concat(trackedStallPaths)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        var wouldChange = ignore.WouldChange || legacy.RemovedLines.Count > 0 || trackedRuntimeLocalPaths.Length > 0;
         var removedFromIndex = Array.Empty<string>();
         var legacyRemoved = Array.Empty<string>();
         var applied = false;
@@ -122,7 +132,7 @@ internal static class NotifySuperviseRepairCycleHistoryCommand
                 }
             }
 
-            if (commandError is null && trackedCyclePaths.Length > 0)
+            if (commandError is null && trackedRuntimeLocalPaths.Length > 0)
             {
                 var removeArguments = new List<string>
                 {
@@ -131,7 +141,7 @@ internal static class NotifySuperviseRepairCycleHistoryCommand
                     "--ignore-unmatch",
                     "--",
                 };
-                removeArguments.AddRange(trackedCyclePaths);
+                removeArguments.AddRange(trackedRuntimeLocalPaths);
                 var removeResult = GitProcessRunner.Run(
                     context.RepoRoot,
                     removeArguments,
@@ -144,7 +154,7 @@ internal static class NotifySuperviseRepairCycleHistoryCommand
                 }
                 else
                 {
-                    removedFromIndex = trackedCyclePaths;
+                    removedFromIndex = trackedRuntimeLocalPaths;
                     applied = true;
                 }
             }
@@ -169,6 +179,8 @@ internal static class NotifySuperviseRepairCycleHistoryCommand
             TrackedCycleHistoryBefore = trackedCyclePaths,
             RemovedFromIndex = removedFromIndex,
             PreservedCyclePaths = trackedCyclePaths,
+            TrackedStallHistoryBefore = trackedStallPaths,
+            PreservedStallPaths = trackedStallPaths,
             LegacyRootRulesBefore = legacy.ExistingLines,
             LegacyRootRulesRemoved = options.Write ? legacyRemoved : legacy.RemovedLines.ToArray(),
             Error = commandError,
@@ -197,6 +209,8 @@ internal static class NotifySuperviseRepairCycleHistoryCommand
             tracked_cycle_history_before = result.TrackedCycleHistoryBefore,
             removed_from_index = result.RemovedFromIndex,
             preserved_cycle_paths = result.PreservedCyclePaths,
+            tracked_stall_history_before = result.TrackedStallHistoryBefore,
+            preserved_stall_paths = result.PreservedStallPaths,
             legacy_root_rules_before = result.LegacyRootRulesBefore,
             legacy_root_rules_removed = result.LegacyRootRulesRemoved,
             preserved_files = true,
@@ -220,8 +234,10 @@ internal static class NotifySuperviseRepairCycleHistoryCommand
         writer.WriteLine($"- tracked cycle history before: {FormatPaths(result.TrackedCycleHistoryBefore)}");
         writer.WriteLine($"- removed from index: {FormatPaths(result.RemovedFromIndex)}");
         writer.WriteLine($"- preserved cycle files: {FormatPaths(result.PreservedCyclePaths)}");
+        writer.WriteLine($"- tracked stall history before: {FormatPaths(result.TrackedStallHistoryBefore)}");
+        writer.WriteLine($"- preserved stall files: {FormatPaths(result.PreservedStallPaths)}");
         writer.WriteLine($"- legacy root rules removed: {FormatPaths(result.LegacyRootRulesRemoved)}");
-        writer.WriteLine("- shared supervision state: trackable (stalls and policy/manifest files were not ignored)");
+        writer.WriteLine("- shared supervision state: trackable (policy/manifest files were not ignored; cycle and stall history are runtime-local)");
         writer.WriteLine($"- summary: {BuildSummary(result)}");
         if (result.Error is not null)
         {
@@ -233,10 +249,10 @@ internal static class NotifySuperviseRepairCycleHistoryCommand
         ? $"The canonical cycle-history repair did not finish: {result.Error}"
         : result.CommandMode == "write"
             ? result.Applied
-                ? $"Added the directory-local cycle-history ignore and removed {result.RemovedFromIndex.Count} tracked cycle-history path(s) from the index without deleting files; shared policy state remains trackable."
+                ? $"Added the directory-local runtime-local supervision ignore and removed {result.RemovedFromIndex.Count} tracked cycle/stall history path(s) from the index without deleting files; shared policy state remains trackable."
                 : "Cycle-history ownership was already repaired; no files or index entries changed."
             : result.WouldChange
-                ? $"Dry-run would add the directory-local cycle-history ignore and remove {result.TrackedCycleHistoryBefore.Count} tracked cycle-history path(s) from the index while preserving files."
+                ? $"Dry-run would add the directory-local runtime-local supervision ignore and remove {result.TrackedCycleHistoryBefore.Count + result.TrackedStallHistoryBefore.Count} tracked cycle/stall history path(s) from the index while preserving files."
                 : "Dry-run found canonical cycle-history ownership already in place; no files or index entries would change.";
 
     private static bool TryGetRepositoryRelativePath(
@@ -260,6 +276,16 @@ internal static class NotifySuperviseRepairCycleHistoryCommand
 
         error = string.Empty;
         return true;
+    }
+
+    private static bool IsStallHistoryPath(string path, string teamRelativePath)
+    {
+        var normalizedPath = path.Replace('\\', '/');
+        var normalizedTeam = teamRelativePath.TrimEnd('/');
+        return string.Equals(
+            normalizedPath,
+            normalizedTeam + "/" + NotifySupervisionStore.StallFileName,
+            StringComparison.Ordinal);
     }
 
     private static bool IsCycleHistoryPath(string path, string teamRelativePath)
@@ -416,6 +442,8 @@ internal static class NotifySuperviseRepairCycleHistoryCommand
         public required IReadOnlyList<string> TrackedCycleHistoryBefore { get; init; }
         public required IReadOnlyList<string> RemovedFromIndex { get; init; }
         public required IReadOnlyList<string> PreservedCyclePaths { get; init; }
+        public required IReadOnlyList<string> TrackedStallHistoryBefore { get; init; }
+        public required IReadOnlyList<string> PreservedStallPaths { get; init; }
         public required IReadOnlyList<string> LegacyRootRulesBefore { get; init; }
         public required IReadOnlyList<string> LegacyRootRulesRemoved { get; init; }
         public string? Error { get; init; }
