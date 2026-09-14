@@ -266,6 +266,20 @@ internal static class AutomationPrTransitionCommand
         return 0;
     }
 
+    /// <summary>
+    /// G824: the add/remove label sets each transition executes, exposed so
+    /// automation summary reports exactly what the command applies instead of
+    /// a hand-maintained copy.
+    /// </summary>
+    internal static (IReadOnlyList<string> AddLabels, IReadOnlyList<string> RemoveLabels) PlannedLabels(string transition)
+    {
+        var plan = PlanTransition(transition);
+        return (plan.AddLabels, plan.RemoveLabels);
+    }
+
+    internal static IReadOnlyList<string> SupportedTransitions { get; } =
+        [TransitionReviewStart, TransitionRequestUpdate, TransitionApproved, TransitionReviewRelease];
+
     private static TransitionPlan PlanTransition(string transition) =>
         transition switch
         {
@@ -309,6 +323,11 @@ internal static class AutomationPrTransitionCommand
             // supersedes pending rereview-readiness, so rereview-ready (and
             // its legacy string form) is cleared alongside the pre-existing
             // intent-pr-reviewing removal.
+            // G824 (#1782): a repair request issued after an approval withdraws
+            // that approval. approved already supersedes request-update; without
+            // the reverse, a corrected approval left both labels on the PR and
+            // the child loop waited on approved-or-merged with no canonical
+            // recovery. The G535 atomic replacement removes it in the same write.
             TransitionRequestUpdate => new TransitionPlan(
                 AddLabels:
                 [
@@ -319,6 +338,7 @@ internal static class AutomationPrTransitionCommand
                     WorkerPrReviewPreflightConstants.Labels.IntentPrReviewing,
                     WorkerNextActionConstants.Labels.IntentPrRereviewReady,
                     "rereview-ready",
+                    WorkerPrReviewPreflightConstants.Labels.IntentPrApproved,
                 ]),
             // G292: release the reviewer lease without claiming an
             // implementation-side repair is needed. Removes

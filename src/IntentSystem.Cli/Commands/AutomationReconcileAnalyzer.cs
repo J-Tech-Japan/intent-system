@@ -119,14 +119,48 @@ internal static class AutomationReconcileAnalyzer
             // removable (approved supersedes them).
             if (prLabels.Contains(WorkerPrReviewPreflightConstants.Labels.IntentPrApproved, StringComparer.Ordinal))
             {
-                var staleReviewLabels = new[]
+                // G824 (#1782): request-update and update-in-progress can follow an
+                // approval (a reviewer withdrawing it), so their presence beside
+                // approved is a conflict between two review decisions, not a stale
+                // label. A snapshot has no chronology: removing either side would
+                // guess. Report it and let the operator rerun the intended transition.
+                var conflictingDecisionLabels = new[]
                 {
-                    WorkerNextActionConstants.Labels.IntentPrRereviewReady,
                     WorkerPrReviewPreflightConstants.Labels.IntentPrRequestUpdate,
                     WorkerPrReviewPreflightConstants.Labels.IntentPrUpdateInProgress,
                 }
                     .Where(label => prLabels.Contains(label, StringComparer.Ordinal))
                     .ToArray();
+
+                if (conflictingDecisionLabels.Length > 0)
+                {
+                    unsafeStops.Add(new AutomationReconcileUnsafeStop
+                    {
+                        Kind = AutomationReconcileUnsafeStopKinds.ConflictingReviewDecision,
+                        TargetKind = GhCliGitHubLabelMutator.Kinds.Pr,
+                        TargetNumber = pr.Number,
+                        TargetUrl = pr.Url,
+                        Reason = $"PR #{pr.Number} carries intent-pr-approved together with {string.Join(", ", conflictingDecisionLabels)}. "
+                            + "The label snapshot cannot show which review decision is newer, so reconcile removes neither. "
+                            + $"If the latest decision is a repair request, run `intent-cli automation pr-transition --repo {repo} --pr {pr.Number} --transition request-update --write`; "
+                            + $"if it is an approval, run `intent-cli automation pr-transition --repo {repo} --pr {pr.Number} --transition approved --write`.",
+                        MissingEvidence =
+                        [
+                            "chronology of the approved and request-update/update-in-progress decisions",
+                        ],
+                    });
+                }
+
+                // rereview-ready never follows an approval in the canonical flow, so
+                // beside approved it remains a mechanically removable stale label.
+                var staleReviewLabels = conflictingDecisionLabels.Length > 0
+                    ? Array.Empty<string>()
+                    : new[]
+                    {
+                        WorkerNextActionConstants.Labels.IntentPrRereviewReady,
+                    }
+                        .Where(label => prLabels.Contains(label, StringComparer.Ordinal))
+                        .ToArray();
 
                 if (staleReviewLabels.Length > 0)
                 {

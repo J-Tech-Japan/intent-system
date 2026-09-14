@@ -157,12 +157,20 @@ internal static class AutomationSummaryConstants
         "Apply intent-target only after parent source-of-truth state is durable"
     ];
 
+    // G824: derived from the executed transition plans. The previous hand-written
+    // lines said request-update and approved removed only intent-pr-reviewing.
     public static readonly IReadOnlyList<string> HostPrTransitionCommands =
     [
-        "intent-cli automation pr-transition --transition review-start --write adds intent-target and intent-pr-reviewing, and removes intent-pr-rereview-ready plus legacy rereview-ready",
-        "intent-cli automation pr-transition --transition request-update --write removes intent-pr-reviewing and adds intent-pr-request-update",
-        "intent-cli automation pr-transition --transition approved --write removes intent-pr-reviewing and adds intent-pr-approved"
+        DescribeTransition("review-start"),
+        DescribeTransition("request-update"),
+        DescribeTransition("approved"),
     ];
+
+    private static string DescribeTransition(string transition)
+    {
+        var (add, remove) = AutomationPrTransitionCommand.PlannedLabels(transition);
+        return $"intent-cli automation pr-transition --transition {transition} --write adds {string.Join(", ", add)} and removes {string.Join(", ", remove)} when present";
+    }
 
     public static readonly IReadOnlyList<AutomationCommandCapability> AutomationCommandCapabilities =
     [
@@ -187,8 +195,8 @@ internal static class AutomationSummaryConstants
             Transition = "review-start",
             DryRunSupported = true,
             WriteSupported = true,
-            AddLabels = ["intent-target", "intent-pr-reviewing"],
-            RemoveLabels = ["intent-pr-rereview-ready", "rereview-ready"]
+            AddLabels = AutomationPrTransitionCommand.PlannedLabels("review-start").AddLabels,
+            RemoveLabels = AutomationPrTransitionCommand.PlannedLabels("review-start").RemoveLabels
         },
         new()
         {
@@ -199,8 +207,8 @@ internal static class AutomationSummaryConstants
             Transition = "request-update",
             DryRunSupported = true,
             WriteSupported = true,
-            AddLabels = ["intent-pr-request-update"],
-            RemoveLabels = ["intent-pr-reviewing"]
+            AddLabels = AutomationPrTransitionCommand.PlannedLabels("request-update").AddLabels,
+            RemoveLabels = AutomationPrTransitionCommand.PlannedLabels("request-update").RemoveLabels
         },
         new()
         {
@@ -211,8 +219,8 @@ internal static class AutomationSummaryConstants
             Transition = "approved",
             DryRunSupported = true,
             WriteSupported = true,
-            AddLabels = ["intent-pr-approved"],
-            RemoveLabels = ["intent-pr-reviewing"]
+            AddLabels = AutomationPrTransitionCommand.PlannedLabels("approved").AddLabels,
+            RemoveLabels = AutomationPrTransitionCommand.PlannedLabels("approved").RemoveLabels
         }
     ];
 

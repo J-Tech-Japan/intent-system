@@ -74,6 +74,62 @@ public sealed class WorkerNextActionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G824_AfterRequestUpdateSupersedesApproval_SelectsPrCommentFix()
+    {
+        // Labels the fixed transition produces from the #1782 deadlock state,
+        // computed from the plan the command executes.
+        var converged = ConvergeRequestUpdate("intent-target", "intent-pr-approved", "intent-pr-request-update");
+        Assert.DoesNotContain("intent-pr-approved", converged);
+
+        using var workspace = new WorkerNextActionWorkspace();
+        WorkerNextActionCommand.CandidateListerFactory = () => new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(1782, "G824 PR", "https://github.com/J-Tech-Japan/intent-system/pull/1782",
+                    createdAt: "2026-09-12T00:00:00Z", labels: converged),
+            },
+        };
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, WorkerNextActionCommand.Execute(
+            workspace.Context, new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" }, writer));
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.PrCommentFix, result.Action);
+        Assert.Equal(1782, result.Number);
+    }
+
+    [Fact]
+    public void Execute_G824_PrStillCarryingApprovedAndRequestUpdate_StaysFailClosed()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        WorkerNextActionCommand.CandidateListerFactory = () => new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(1782, "G824 PR", "https://github.com/J-Tech-Japan/intent-system/pull/1782",
+                    createdAt: "2026-09-12T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-approved", "intent-pr-request-update" }),
+            },
+        };
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, WorkerNextActionCommand.Execute(
+            workspace.Context, new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" }, writer));
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.NotEqual(WorkerNextActionConstants.Actions.PrCommentFix, result.Action);
+    }
+
+    private static string[] ConvergeRequestUpdate(params string[] current)
+    {
+        var (add, remove) = AutomationPrTransitionCommand.PlannedLabels("request-update");
+        return current.Where(label => !remove.Contains(label, StringComparer.Ordinal))
+            .Concat(add)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    [Fact]
     public void Execute_G392_RequestUpdatePrWithoutSourceIssue_IsNotSelectedAsPrCommentFix()
     {
         // AIC #3648 shape: intent-pr-request-update but no source issue (no

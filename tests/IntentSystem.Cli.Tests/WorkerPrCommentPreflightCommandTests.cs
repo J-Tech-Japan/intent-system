@@ -396,6 +396,59 @@ public sealed class WorkerPrCommentPreflightCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G824_AfterRequestUpdateSupersedesApproval_ClassifiesAsRepairRequired()
+    {
+        var (add, remove) = AutomationPrTransitionCommand.PlannedLabels("request-update");
+        var converged = new[] { "intent-target", "intent-pr-approved" }
+            .Where(label => !remove.Contains(label, StringComparer.Ordinal))
+            .Concat(add)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        var result = RunApprovalCorrection(converged);
+
+        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.RepairRequired, result.Classification);
+        Assert.True(result.Actionable);
+    }
+
+    [Fact]
+    public void Execute_G824_PrStillCarryingApprovedAndRequestUpdate_StaysApprovedOrMerged()
+    {
+        var result = RunApprovalCorrection(new[] { "intent-target", "intent-pr-approved", "intent-pr-request-update" });
+
+        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.ApprovedOrMerged, result.Classification);
+        Assert.False(result.Actionable);
+    }
+
+    private static WorkerPrCommentPreflightResult RunApprovalCorrection(string[] labels)
+    {
+        using var workspace = new WorkerPrCommentPreflightWorkspace();
+        WorkerPrCommentPreflightCommand.PrLookupFactory = () => new FakePrLookup(BuildPr(
+            number: 1782, state: "OPEN", title: "approval corrected",
+            body: "Closes #100",
+            labelNames: labels,
+            closingIssueNumbers: new[] { 100 }));
+        WorkerPrCommentPreflightCommand.IssueLookupFactory = () => new FakeIssueLookup(BuildIssue(
+            number: 100, state: "OPEN", title: "Source", body: string.Empty,
+            labelNames: new[] { "intent-target", "intent-pr-created" }));
+        WorkerPrCommentPreflightCommand.CommentsLookupFactory = () => new FakeCommentsLookup(BuildComments(
+            reviewThreads: new[]
+            {
+                BuildThread(id: "t1", isResolved: false, comments: new[]
+                {
+                    BuildThreadComment(id: "c1", author: "reviewer", body: "The earlier approval was wrong; please fix.")
+                })
+            }));
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, WorkerPrCommentPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "1782", "--format", "json" },
+            writer));
+        return JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
+    }
+
+    [Fact]
     public void Execute_GivenPrWithoutIntentTarget_ClassifiesAsMissingTargetLabel()
     {
         using var workspace = new WorkerPrCommentPreflightWorkspace();

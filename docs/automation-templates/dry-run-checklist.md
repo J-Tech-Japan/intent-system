@@ -173,8 +173,8 @@ Expected:
   "capabilities": [
     {"capability": "issue-publish", "transition": null, "addLabels": ["intent-target"], "removeLabels": []},
     {"capability": "pr-transition.review-start", "transition": "review-start", "addLabels": ["intent-target", "intent-pr-reviewing"], "removeLabels": ["intent-pr-rereview-ready", "rereview-ready"]},
-    {"capability": "pr-transition.request-update", "transition": "request-update", "addLabels": ["intent-pr-request-update"], "removeLabels": ["intent-pr-reviewing"]},
-    {"capability": "pr-transition.approved", "transition": "approved", "addLabels": ["intent-pr-approved"], "removeLabels": ["intent-pr-reviewing"]}
+    {"capability": "pr-transition.request-update", "transition": "request-update", "addLabels": ["intent-pr-request-update"], "removeLabels": ["intent-pr-reviewing", "intent-pr-rereview-ready", "rereview-ready", "intent-pr-approved"]},
+    {"capability": "pr-transition.approved", "transition": "approved", "addLabels": ["intent-pr-approved"], "removeLabels": ["intent-pr-reviewing", "intent-pr-rereview-ready", "rereview-ready", "intent-pr-request-update", "intent-pr-update-in-progress"]}
   ],
   "commands": [
     {"command": "intent-cli automation summary", "transition": null, "available": true},
