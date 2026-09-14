@@ -12,7 +12,7 @@ namespace IntentSystem.Cli.Commands;
 /// append-only: a cycle, prompt audit, newly observed stall, and cleared stall
 /// are facts that remain inspectable after the observing process exits.
 /// </summary>
-internal static class NotifySupervisionStore
+internal static partial class NotifySupervisionStore
 {
     public const string BoundFileName = "bound.json";
     public const string EmissionPolicyFileName = "emission-policy.json";
@@ -27,10 +27,16 @@ internal static class NotifySupervisionStore
     public const string CycleArchiveDirectoryName = "cycles-archive";
     public const string ArchiveTransactionFileName = "archive-transaction.json";
     public const string LocalIgnoreFileName = ".gitignore";
+    /// <summary>
+    /// The CLI-managed <c>.intent-cli/supervision/.gitignore</c> rules for
+    /// runtime-local supervision history: cycle history (G750) and, since
+    /// G827, the per-host stall log. The name is kept for compatibility.
+    /// </summary>
     public static readonly IReadOnlyList<string> CycleHistoryIgnoreLines =
     [
         "**/cycles.jsonl",
         "**/cycles-archive/",
+        "**/stalls.jsonl",
     ];
     public const int DefaultLiveWindowDays = 7;
     private const string LockFileName = ".supervision.lock";
@@ -113,7 +119,24 @@ internal static class NotifySupervisionStore
     public static string ResolveShrinkTransactionPath(string artifactRoot, string domain, string team) =>
         Path.Combine(ResolveDirectory(artifactRoot, domain, team), ShrinkTransactionFileName);
 
-    public static NotifySupervisionReadResult Read(string artifactRoot, string domain, string team)
+    public static NotifySupervisionReadResult Read(string artifactRoot, string domain, string team) =>
+        Read(artifactRoot, domain, team, includeCycleHistory: true);
+
+    /// <summary>
+    /// G827: with <paramref name="includeCycleHistory"/> false the cycle files
+    /// are streamed only to find the last cycle and last interval cycle, so a
+    /// caller that needs just the supervisor's identity (shrink, archive) does
+    /// not materialize the whole history. Everything else — including every
+    /// failure that makes the result unresolved — is identical;
+    /// <see cref="NotifySupervisionReadResult.CycleHistory"/> and prompt audits
+    /// are then empty, and <see cref="NotifySupervisionReadResult.UnreadableRecords"/>
+    /// omits cycle and prompt-audit lines.
+    /// </summary>
+    internal static NotifySupervisionReadResult Read(
+        string artifactRoot,
+        string domain,
+        string team,
+        bool includeCycleHistory)
     {
         string directory;
         try
@@ -142,8 +165,24 @@ internal static class NotifySupervisionStore
                 var installedSupervisor = ReadInstalledSupervisor(Path.Combine(directory, InstalledSupervisorFileName));
                 var cyclePaths = ResolveCycleHistoryPaths(directory);
                 var unreadableRecords = new List<NotifySupervisionUnreadableRecord>();
-                var cycles = ReadCycles(cyclePaths, directory, unreadableRecords);
-                var promptAudits = ReadPromptAudits(cyclePaths, directory, unreadableRecords);
+                IReadOnlyList<NotifySupervisionCycle> cycles;
+                IReadOnlyList<NotifyPromptAudit> promptAudits;
+                NotifySupervisionCycle? lastCycle;
+                NotifySupervisionCycle? lastIntervalCycle;
+                if (includeCycleHistory)
+                {
+                    cycles = ReadCycles(cyclePaths, directory, unreadableRecords);
+                    promptAudits = ReadPromptAudits(cyclePaths, directory, unreadableRecords);
+                    lastCycle = cycles.LastOrDefault();
+                    lastIntervalCycle = cycles.LastOrDefault(IsIntervalCycle);
+                }
+                else
+                {
+                    cycles = [];
+                    promptAudits = [];
+                    (lastCycle, lastIntervalCycle) = ReadLastCycles(cyclePaths, directory);
+                }
+
                 var stalls = ReadStalls(
                     Path.Combine(directory, StallFileName),
                     directory,
@@ -156,10 +195,8 @@ internal static class NotifySupervisionStore
                     Bound = bound,
                     EmissionPolicy = emissionPolicy,
                     InstalledSupervisor = installedSupervisor,
-                    LastCycle = cycles.LastOrDefault(),
-                    LastIntervalCycle = cycles.LastOrDefault(cycle =>
-                        string.IsNullOrWhiteSpace(cycle.Trigger)
-                        || string.Equals(cycle.Trigger, "interval", StringComparison.Ordinal)),
+                    LastCycle = lastCycle,
+                    LastIntervalCycle = lastIntervalCycle,
                     CycleHistory = cycles,
                     ActiveStalls = stalls.Where(item => item.ClearedAt is null)
                         .ToDictionary(item => item.Key, StringComparer.Ordinal),
@@ -542,6 +579,65 @@ internal static class NotifySupervisionStore
 
         return JsonSerializer.Deserialize<NotifySupervisionInstalledSupervisor>(File.ReadAllText(path), JsonOptions)
             ?? throw new InvalidDataException("The installed supervisor record was empty.");
+    }
+
+    private static bool IsIntervalCycle(NotifySupervisionCycle cycle) =>
+        string.IsNullOrWhiteSpace(cycle.Trigger)
+        || string.Equals(cycle.Trigger, "interval", StringComparison.Ordinal);
+
+    /// <summary>
+    /// G827: the streamed equivalent of <c>ReadCycles(...).LastOrDefault()</c>
+    /// and its interval-cycle filter. <see cref="ReadCycles"/> orders by
+    /// <c>CompletedAt</c> with a stable sort, so the last element is the
+    /// latest completion and, on a tie, the one read last; <c>&gt;=</c> keeps
+    /// exactly that record.
+    /// </summary>
+    private static (NotifySupervisionCycle? Last, NotifySupervisionCycle? LastInterval) ReadLastCycles(
+        IEnumerable<string> paths,
+        string directory)
+    {
+        NotifySupervisionCycle? last = null;
+        NotifySupervisionCycle? lastInterval = null;
+        var ignoredUnreadable = new List<NotifySupervisionUnreadableRecord>();
+        foreach (var path in paths)
+        {
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            var lineNumber = 0;
+            foreach (var line in File.ReadLines(path))
+            {
+                lineNumber++;
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                ignoredUnreadable.Clear();
+                if (!TryReadEvent(path, directory, lineNumber, "cycles", line, ignoredUnreadable, out var entry)
+                    || !string.Equals(entry!.Kind, "cycle", StringComparison.Ordinal)
+                    || entry.Cycle is null)
+                {
+                    continue;
+                }
+
+                var cycle = entry.Cycle;
+                if (last is null || cycle.CompletedAt >= last.CompletedAt)
+                {
+                    last = cycle;
+                }
+
+                if (IsIntervalCycle(cycle)
+                    && (lastInterval is null || cycle.CompletedAt >= lastInterval.CompletedAt))
+                {
+                    lastInterval = cycle;
+                }
+            }
+        }
+
+        return (last, lastInterval);
     }
 
     private static IReadOnlyList<NotifySupervisionCycle> ReadCycles(
@@ -1080,7 +1176,7 @@ internal static class NotifySupervisionStore
                 var plan = PlanCycleArchive(directory, cutoff);
                 if (write && plan.WouldChange)
                 {
-                    ExecuteCycleArchiveTransaction(directory, plan);
+                    ExecuteCycleArchiveTransaction(directory, cutoff, plan);
                 }
 
                 return new NotifySupervisionArchiveResult
@@ -1878,9 +1974,22 @@ internal static class NotifySupervisionStore
         }
     }
 
+    /// <summary>
+    /// G827: one streamed pass over the live file. With no stage directory it
+    /// only counts and hashes (dry-run, and the first pass of a write); with a
+    /// stage directory the same pass writes the new live file and each
+    /// period's new archive file into it. Memory is bounded by the longest
+    /// record. Output bytes are identical to the former string implementation:
+    /// retained lines joined with the file's newline (CRLF when any CRLF
+    /// exists), a trailing newline kept only when lines remain, and each
+    /// archive rewritten as its existing text, a separator newline when that
+    /// text does not already end with the newline, then every moved line
+    /// followed by the newline.
+    /// </summary>
     private static NotifySupervisionArchivePlan PlanCycleArchive(
         string directory,
-        DateTimeOffset cutoff)
+        DateTimeOffset cutoff,
+        string? stageDirectory = null)
     {
         var livePath = Path.Combine(directory, CycleFileName);
         var archiveDirectory = Path.Combine(directory, CycleArchiveDirectoryName);
@@ -1889,155 +1998,262 @@ internal static class NotifySupervisionStore
             return NotifySupervisionArchivePlan.Empty(livePath, archiveDirectory);
         }
 
-        var original = File.ReadAllText(livePath, Utf8NoBom);
-        var lines = SplitCycleLines(original, out var newline, out var trailingNewline);
-        var retained = new List<string>(lines.Count);
-        var grouped = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        var beforeRecordCount = 0;
-        var recordsMoved = 0;
-
-        foreach (var line in lines)
+        var newline = TextFileContainsCrLf(livePath) ? "\r\n" : "\n";
+        var beforeBytes = new FileInfo(livePath).Length;
+        var periods = new SortedDictionary<string, ArchivePeriodOutput>(StringComparer.Ordinal);
+        SupervisionTextSink? liveSink = null;
+        try
         {
-            if (!string.IsNullOrWhiteSpace(line))
+            liveSink = stageDirectory is null
+                ? SupervisionTextSink.Counting()
+                : SupervisionTextSink.Staging(Path.Combine(stageDirectory, LiveArchiveStageName));
+            var beforeRecordCount = 0;
+            var retainedLines = 0;
+            var retainedRecords = 0;
+            var recordsMoved = 0;
+            bool trailingNewline;
+            using (var reader = new SupervisionLineReader(livePath))
             {
-                beforeRecordCount++;
-            }
-
-            if (TryGetCycleArchiveTimestamp(line, out var timestamp)
-                && timestamp < cutoff)
-            {
-                var period = timestamp.ToString("yyyy-MM", CultureInfo.InvariantCulture);
-                if (!grouped.TryGetValue(period, out var periodLines))
+                while (reader.TryReadLine(out var line))
                 {
-                    periodLines = [];
-                    grouped.Add(period, periodLines);
+                    var blank = string.IsNullOrWhiteSpace(line);
+                    if (!blank)
+                    {
+                        beforeRecordCount++;
+                    }
+
+                    if (TryGetCycleArchiveTimestamp(line, out var timestamp)
+                        && timestamp < cutoff)
+                    {
+                        var period = timestamp.ToString("yyyy-MM", CultureInfo.InvariantCulture);
+                        if (!periods.TryGetValue(period, out var output))
+                        {
+                            output = ArchivePeriodOutput.Open(archiveDirectory, period, newline, stageDirectory);
+                            periods.Add(period, output);
+                        }
+
+                        output.AppendMoved(line);
+                        recordsMoved++;
+                        continue;
+                    }
+
+                    if (retainedLines > 0)
+                    {
+                        liveSink.Write(newline);
+                    }
+
+                    liveSink.Write(line);
+                    retainedLines++;
+                    if (!blank)
+                    {
+                        retainedRecords++;
+                    }
                 }
 
-                periodLines.Add(line);
-                recordsMoved++;
+                trailingNewline = reader.TrailingNewline;
             }
-            else
+
+            if (recordsMoved == 0)
             {
-                retained.Add(line);
+                return new NotifySupervisionArchivePlan
+                {
+                    WouldChange = false,
+                    LivePath = livePath,
+                    ArchiveDirectory = archiveDirectory,
+                    BeforeLiveBytes = beforeBytes,
+                    AfterLiveBytes = beforeBytes,
+                    BeforeLiveRecordCount = beforeRecordCount,
+                    AfterLiveRecordCount = beforeRecordCount,
+                    RecordsMoved = 0,
+                    RecordsRetained = beforeRecordCount,
+                    Replacements = [],
+                    Archives = [],
+                };
             }
-        }
 
-        var beforeBytes = new FileInfo(livePath).Length;
-        if (recordsMoved == 0)
-        {
-            return new NotifySupervisionArchivePlan
+            if (retainedLines > 0 && trailingNewline)
             {
-                WouldChange = false,
-                LivePath = livePath,
-                ArchiveDirectory = archiveDirectory,
-                LiveContent = original,
-                BeforeLiveBytes = beforeBytes,
-                AfterLiveBytes = beforeBytes,
-                BeforeLiveRecordCount = beforeRecordCount,
-                AfterLiveRecordCount = beforeRecordCount,
-                RecordsMoved = 0,
-                RecordsRetained = beforeRecordCount,
-                Replacements = [],
-                Archives = [],
-            };
-        }
+                liveSink.Write(newline);
+            }
 
-        var liveContent = JoinCycleLines(retained, newline, trailingNewline);
-        var replacements = new List<NotifySupervisionArchiveReplacement>();
-        var archives = new List<NotifySupervisionArchiveFileMeasurement>();
-        foreach (var group in grouped.OrderBy(item => item.Key, StringComparer.Ordinal))
-        {
-            var fileName = group.Key + ".jsonl";
-            var targetPath = Path.Combine(archiveDirectory, fileName);
-            var existingContent = File.Exists(targetPath)
-                ? File.ReadAllText(targetPath, Utf8NoBom)
-                : string.Empty;
-            var archiveContent = AppendArchiveLines(existingContent, group.Value, newline);
-            var beforeArchiveBytes = File.Exists(targetPath)
-                ? new FileInfo(targetPath).Length
-                : 0L;
-            var beforeArchiveRecords = CountNonBlankLines(
-                SplitCycleLines(existingContent, out _, out _));
-            archives.Add(new NotifySupervisionArchiveFileMeasurement
+            var replacements = new List<NotifySupervisionArchiveReplacement>();
+            var archives = new List<NotifySupervisionArchiveFileMeasurement>();
+            foreach (var (period, output) in periods)
             {
-                Period = group.Key,
-                Path = targetPath,
-                BeforeBytes = beforeArchiveBytes,
-                AfterBytes = Utf8NoBom.GetByteCount(archiveContent),
-                BeforeRecordCount = beforeArchiveRecords,
-                AfterRecordCount = beforeArchiveRecords + group.Value.Count,
-                MovedRecordCount = group.Value.Count,
-            });
+                var (afterArchiveBytes, afterArchiveSha256) = output.Sink.Complete();
+                archives.Add(new NotifySupervisionArchiveFileMeasurement
+                {
+                    Period = period,
+                    Path = output.TargetPath,
+                    BeforeBytes = output.BeforeBytes,
+                    AfterBytes = afterArchiveBytes,
+                    BeforeRecordCount = output.BeforeRecordCount,
+                    AfterRecordCount = output.BeforeRecordCount + output.MovedRecordCount,
+                    MovedRecordCount = output.MovedRecordCount,
+                });
+                replacements.Add(new NotifySupervisionArchiveReplacement
+                {
+                    TargetName = $"{CycleArchiveDirectoryName}/{period}.jsonl",
+                    TargetPath = output.TargetPath,
+                    StageName = output.Sink.StagePath is null ? null : Path.GetFileName(output.Sink.StagePath),
+                    AfterBytes = afterArchiveBytes,
+                    AfterSha256 = afterArchiveSha256,
+                });
+            }
+
+            var (afterLiveBytes, afterLiveSha256) = liveSink.Complete();
             replacements.Add(new NotifySupervisionArchiveReplacement
             {
-                TargetName = $"{CycleArchiveDirectoryName}/{fileName}",
-                TargetPath = targetPath,
-                Content = archiveContent,
+                TargetName = CycleFileName,
+                TargetPath = livePath,
+                StageName = liveSink.StagePath is null ? null : Path.GetFileName(liveSink.StagePath),
+                AfterBytes = afterLiveBytes,
+                AfterSha256 = afterLiveSha256,
             });
+
+            return new NotifySupervisionArchivePlan
+            {
+                WouldChange = true,
+                LivePath = livePath,
+                ArchiveDirectory = archiveDirectory,
+                BeforeLiveBytes = beforeBytes,
+                AfterLiveBytes = afterLiveBytes,
+                BeforeLiveRecordCount = beforeRecordCount,
+                AfterLiveRecordCount = retainedRecords,
+                RecordsMoved = recordsMoved,
+                RecordsRetained = retainedRecords,
+                Replacements = replacements,
+                Archives = archives,
+            };
         }
-
-        replacements.Add(new NotifySupervisionArchiveReplacement
+        finally
         {
-            TargetName = CycleFileName,
-            TargetPath = livePath,
-            Content = liveContent,
-        });
-
-        return new NotifySupervisionArchivePlan
-        {
-            WouldChange = true,
-            LivePath = livePath,
-            ArchiveDirectory = archiveDirectory,
-            LiveContent = liveContent,
-            BeforeLiveBytes = beforeBytes,
-            AfterLiveBytes = Utf8NoBom.GetByteCount(liveContent),
-            BeforeLiveRecordCount = beforeRecordCount,
-            AfterLiveRecordCount = CountNonBlankLines(retained),
-            RecordsMoved = recordsMoved,
-            RecordsRetained = CountNonBlankLines(retained),
-            Replacements = replacements,
-            Archives = archives,
-        };
+            liveSink?.Dispose();
+            foreach (var output in periods.Values)
+            {
+                output.Sink.Dispose();
+            }
+        }
     }
 
-    private static List<string> SplitCycleLines(
-        string content,
-        out string newline,
-        out bool trailingNewline)
+    private const string LiveArchiveStageName = "live.jsonl";
+
+    /// <summary>
+    /// One period's new archive file: the existing archive text streamed in
+    /// first (decoded and re-encoded, as the string implementation did), then
+    /// the moved lines as they are read from the live file.
+    /// </summary>
+    private sealed class ArchivePeriodOutput
     {
-        newline = content.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
-        var lines = content.Split(["\r\n", "\n"], StringSplitOptions.None).ToList();
-        trailingNewline = lines.Count > 0 && lines[^1].Length == 0;
-        if (trailingNewline)
+        private readonly string newline;
+
+        private ArchivePeriodOutput(string targetPath, string newline, SupervisionTextSink sink)
         {
-            lines.RemoveAt(lines.Count - 1);
+            TargetPath = targetPath;
+            this.newline = newline;
+            Sink = sink;
         }
 
-        return lines;
-    }
+        public string TargetPath { get; }
+        public SupervisionTextSink Sink { get; }
+        public long BeforeBytes { get; private set; }
+        public int BeforeRecordCount { get; private set; }
+        public int MovedRecordCount { get; private set; }
 
-    private static string JoinCycleLines(
-        IReadOnlyList<string> lines,
-        string newline,
-        bool trailingNewline) =>
-        lines.Count == 0
-            ? string.Empty
-            : string.Join(newline, lines) + (trailingNewline ? newline : string.Empty);
-
-    private static string AppendArchiveLines(
-        string existing,
-        IReadOnlyList<string> additions,
-        string newline)
-    {
-        var builder = new StringBuilder(existing);
-        if (builder.Length > 0 && !existing.EndsWith(newline, StringComparison.Ordinal))
+        public static ArchivePeriodOutput Open(
+            string archiveDirectory,
+            string period,
+            string newline,
+            string? stageDirectory)
         {
-            builder.Append(newline);
+            var targetPath = Path.Combine(archiveDirectory, period + ".jsonl");
+            var sink = stageDirectory is null
+                ? SupervisionTextSink.Counting()
+                : SupervisionTextSink.Staging(Path.Combine(stageDirectory, $"archive-{period}.jsonl"));
+            var output = new ArchivePeriodOutput(targetPath, newline, sink);
+            try
+            {
+                output.CopyExisting();
+            }
+            catch
+            {
+                sink.Dispose();
+                throw;
+            }
+
+            return output;
         }
 
-        builder.Append(string.Join(newline, additions));
-        builder.Append(newline);
-        return builder.ToString();
+        public void AppendMoved(string line)
+        {
+            Sink.Write(line);
+            Sink.Write(newline);
+            MovedRecordCount++;
+        }
+
+        private void CopyExisting()
+        {
+            if (!File.Exists(TargetPath))
+            {
+                return;
+            }
+
+            BeforeBytes = new FileInfo(TargetPath).Length;
+            using var reader = OpenSupervisionTextReader(TargetPath);
+            var buffer = new char[StreamBufferSize];
+            var copied = 0L;
+            var previous = '\0';
+            var last = '\0';
+            var segmentHasContent = false;
+            int read;
+            while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                var span = buffer.AsSpan(0, read);
+                Sink.Write(span);
+                foreach (var character in span)
+                {
+                    if (character == '\n')
+                    {
+                        if (segmentHasContent)
+                        {
+                            BeforeRecordCount++;
+                        }
+
+                        segmentHasContent = false;
+                    }
+                    else if (!char.IsWhiteSpace(character))
+                    {
+                        segmentHasContent = true;
+                    }
+                }
+
+                if (read >= 2)
+                {
+                    previous = span[^2];
+                    last = span[^1];
+                }
+                else
+                {
+                    previous = last;
+                    last = span[0];
+                }
+
+                copied += read;
+            }
+
+            if (segmentHasContent)
+            {
+                BeforeRecordCount++;
+            }
+
+            var endsWithNewline = newline.Length == 1
+                ? copied >= 1 && last == '\n'
+                : copied >= 2 && previous == '\r' && last == '\n';
+            if (copied > 0 && !endsWithNewline)
+            {
+                Sink.Write(newline);
+            }
+        }
     }
 
     private static bool TryGetCycleArchiveTimestamp(
@@ -2086,6 +2302,7 @@ internal static class NotifySupervisionStore
 
     private static void ExecuteCycleArchiveTransaction(
         string directory,
+        DateTimeOffset cutoff,
         NotifySupervisionArchivePlan plan)
     {
         var transactionId = Guid.NewGuid().ToString("N");
@@ -2093,20 +2310,32 @@ internal static class NotifySupervisionStore
         var stageDirectory = Path.Combine(directory, stageDirectoryName);
         Directory.CreateDirectory(stageDirectory);
 
-        var transactionFiles = new List<NotifySupervisionArchiveTransactionFile>(
-            plan.Replacements.Count);
-        for (var index = 0; index < plan.Replacements.Count; index++)
+        NotifySupervisionArchivePlan staged;
+        try
         {
-            var replacement = plan.Replacements[index];
-            var stageName = $"replacement-{index}.jsonl";
-            var stagePath = ResolveArchiveStagePath(stageDirectory, stageName);
-            ReplaceAtomically(stagePath, replacement.Content);
+            // G827: the counting pass measured; this pass writes the same
+            // bytes into the stage. Both ran under the directory lock, so any
+            // difference means the plan cannot be trusted.
+            staged = PlanCycleArchive(directory, cutoff, stageDirectory);
+            EnsureStagedArchiveMatchesPlan(plan, staged);
+        }
+        catch
+        {
+            Directory.Delete(stageDirectory, recursive: true);
+            throw;
+        }
+
+        var transactionFiles = new List<NotifySupervisionArchiveTransactionFile>(
+            staged.Replacements.Count);
+        foreach (var replacement in staged.Replacements)
+        {
             transactionFiles.Add(new NotifySupervisionArchiveTransactionFile
             {
                 TargetName = replacement.TargetName,
-                StageName = stageName,
+                StageName = replacement.StageName
+                    ?? throw new InvalidOperationException("archive staging produced no stage file."),
                 BeforeSha256 = HashFileOrNull(replacement.TargetPath),
-                AfterSha256 = HashContent(replacement.Content),
+                AfterSha256 = replacement.AfterSha256,
             });
         }
 
@@ -2126,13 +2355,30 @@ internal static class NotifySupervisionStore
             var targetPath = ResolveArchiveTransactionTargetPath(directory, transactionFile.TargetName);
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
             var stagePath = ResolveArchiveStagePath(stageDirectory, transactionFile.StageName);
-            ReplaceAtomically(targetPath, File.ReadAllText(stagePath, Utf8NoBom));
+            ReplaceFileAtomicallyFrom(targetPath, stagePath);
             transaction = transaction with { Phase = $"replaced:{transactionFile.TargetName}" };
             PersistArchiveTransaction(directory, transaction);
             ArchiveFaultInjector?.Invoke(ResolveArchiveFaultPoint(transactionFile.TargetName));
         }
 
         DeleteArchiveTransactionArtifacts(directory, transaction);
+    }
+
+    private static void EnsureStagedArchiveMatchesPlan(
+        NotifySupervisionArchivePlan plan,
+        NotifySupervisionArchivePlan staged)
+    {
+        var planned = plan.Replacements
+            .Select(item => (item.TargetName, item.AfterBytes, item.AfterSha256));
+        var written = staged.Replacements
+            .Select(item => (item.TargetName, item.AfterBytes, item.AfterSha256));
+        if (!planned.SequenceEqual(written)
+            || plan.RecordsMoved != staged.RecordsMoved
+            || plan.RecordsRetained != staged.RecordsRetained)
+        {
+            throw new InvalidDataException(
+                "archive-stage-mismatch: the staged archive differs from the measured plan; nothing was replaced.");
+        }
     }
 
     private static void RecoverPendingArchiveTransaction(string directory)
@@ -2176,15 +2422,14 @@ internal static class NotifySupervisionStore
                     $"archive-recovery-invalid: staged replacement for '{transactionFile.TargetName}' is missing.");
             }
 
-            var content = File.ReadAllText(stagePath, Utf8NoBom);
-            if (!string.Equals(HashContent(content), transactionFile.AfterSha256, StringComparison.Ordinal))
+            if (!string.Equals(HashFileOrNull(stagePath), transactionFile.AfterSha256, StringComparison.Ordinal))
             {
                 throw new InvalidDataException(
                     $"archive-recovery-invalid: staged replacement for '{transactionFile.TargetName}' is corrupt.");
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-            ReplaceAtomically(targetPath, content);
+            ReplaceFileAtomicallyFrom(targetPath, stagePath);
             if (!string.Equals(HashFileOrNull(targetPath), transactionFile.AfterSha256, StringComparison.Ordinal))
             {
                 throw new InvalidDataException(
@@ -2439,7 +2684,7 @@ internal static class NotifySupervisionStore
                             {
                                 TargetName = plan.Name,
                                 TargetPath = plan.Path,
-                                Content = plan.Content,
+                                Plan = plan,
                             }));
 
                     if (replacements.Count == 0)
@@ -2448,7 +2693,7 @@ internal static class NotifySupervisionStore
                     }
                     else
                     {
-                        ExecuteShrinkTransaction(directory, transactionId!, replacements, audit);
+                        ExecuteShrinkTransaction(directory, transactionId!, replacements, audit, definitions);
                     }
                 }
 
@@ -2493,65 +2738,100 @@ internal static class NotifySupervisionStore
         }
     }
 
+    /// <summary>
+    /// G827: one streamed pass that compacts stall lines and copies cycle
+    /// lines. Without a stage path it only measures (dry-run and the fail-closed
+    /// planning boundary); with one, the same pass writes the replacement.
+    /// Output bytes equal the former string implementation: lines joined with
+    /// the file's newline (CRLF when any CRLF exists) plus a trailing newline
+    /// whenever the source had one — including for an empty file.
+    /// </summary>
     private static FileCompactionPlan PlanFile(
         string path,
         bool transformStalls,
-        IReadOnlyDictionary<string, string> definitions)
+        IReadOnlyDictionary<string, string> definitions,
+        string? stagePath = null)
     {
         if (!File.Exists(path))
         {
             return FileCompactionPlan.Absent(path, transformStalls);
         }
 
-        var original = File.ReadAllText(path);
-        var lines = original
-            .Split(["\r\n", "\n"], StringSplitOptions.None)
-            .ToList();
-        var trailingNewline = lines.Count > 0 && lines[^1].Length == 0;
-        if (trailingNewline)
-        {
-            lines.RemoveAt(lines.Count - 1);
-        }
-
-        var transformed = new List<string>(lines.Count);
+        var newline = TextFileContainsCrLf(path) ? "\r\n" : "\n";
+        var beforeBytes = new FileInfo(path).Length;
         var changed = false;
         var invariantBytesSavedInChangedLines = 0L;
-        foreach (var line in lines)
+        var beforeRecords = 0;
+        var afterRecords = 0;
+        var literalBefore = 0L;
+        var literalAfter = 0L;
+        var referenceBefore = 0L;
+        var referenceAfter = 0L;
+        var lineCount = 0;
+        using var sink = stagePath is null
+            ? SupervisionTextSink.Counting()
+            : SupervisionTextSink.Staging(stagePath);
+        using (var reader = new SupervisionLineReader(path))
         {
-            if (!transformStalls || string.IsNullOrWhiteSpace(line))
+            while (reader.TryReadLine(out var line))
             {
-                transformed.Add(line);
-                continue;
+                var output = line;
+                if (!string.IsNullOrWhiteSpace(line))
+                {
+                    beforeRecords++;
+                    if (transformStalls)
+                    {
+                        var entry = JsonSerializer.Deserialize<NotifySupervisionEvent>(line, JsonOptions)
+                            ?? throw new InvalidDataException($"The supervision event in '{path}' was empty.");
+                        if (entry.Stall?.EvidenceReference is not null)
+                        {
+                            // Resolve every retained reference while the shared lock is
+                            // held, before any manifest, JSONL file, or audit write.
+                            _ = ResolveStoredStall(entry.Stall, definitions);
+                        }
+
+                        var compacted = PrepareEventForStorage(
+                            entry,
+                            Path.GetDirectoryName(path)!,
+                            ensureDefinitions: false);
+                        output = JsonSerializer.Serialize(compacted, JsonOptions);
+                        if (!string.Equals(line, output, StringComparison.Ordinal))
+                        {
+                            changed = true;
+                            invariantBytesSavedInChangedLines +=
+                                Utf8NoBom.GetByteCount(line) - Utf8NoBom.GetByteCount(output);
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(output))
+                {
+                    afterRecords++;
+                }
+
+                // Neither needle contains a newline, so per-line counts sum to
+                // the whole-text counts the string implementation took.
+                literalBefore += CountOccurrences(line, HerdrRegistrationDefinition);
+                literalAfter += CountOccurrences(output, HerdrRegistrationDefinition);
+                referenceBefore += CountOccurrences(line, HerdrRegistrationEvidenceKey);
+                referenceAfter += CountOccurrences(output, HerdrRegistrationEvidenceKey);
+
+                if (lineCount > 0)
+                {
+                    sink.Write(newline);
+                }
+
+                sink.Write(output);
+                lineCount++;
             }
 
-            var entry = JsonSerializer.Deserialize<NotifySupervisionEvent>(line, JsonOptions)
-                ?? throw new InvalidDataException($"The supervision event in '{path}' was empty.");
-            if (entry.Stall?.EvidenceReference is not null)
+            if (reader.TrailingNewline)
             {
-                // Resolve every retained reference while the shared lock is
-                // held, before any manifest, JSONL file, or audit write.
-                _ = ResolveStoredStall(entry.Stall, definitions);
-            }
-
-            var compacted = PrepareEventForStorage(
-                entry,
-                Path.GetDirectoryName(path)!,
-                ensureDefinitions: false);
-            var compactLine = JsonSerializer.Serialize(compacted, JsonOptions);
-            transformed.Add(compactLine);
-            if (!string.Equals(line, compactLine, StringComparison.Ordinal))
-            {
-                changed = true;
-                invariantBytesSavedInChangedLines +=
-                    Utf8NoBom.GetByteCount(line) - Utf8NoBom.GetByteCount(compactLine);
+                sink.Write(newline);
             }
         }
 
-        var newline = original.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
-        var content = string.Join(newline, transformed) + (trailingNewline ? newline : string.Empty);
-        var beforeBytes = new FileInfo(path).Length;
-        var beforeRecords = lines.Count(line => !string.IsNullOrWhiteSpace(line));
-        var afterRecords = transformed.Count(line => !string.IsNullOrWhiteSpace(line));
+        var (afterBytes, afterSha256) = sink.Complete();
         return new FileCompactionPlan
         {
             Name = Path.GetFileName(path),
@@ -2559,21 +2839,17 @@ internal static class NotifySupervisionStore
             Exists = true,
             TransformStalls = transformStalls,
             Changed = changed,
-            Content = content,
+            AfterSha256 = afterSha256,
             BeforeBytes = beforeBytes,
-            AfterBytes = Utf8NoBom.GetByteCount(content),
+            AfterBytes = afterBytes,
             BeforeRecords = beforeRecords,
             AfterRecords = afterRecords,
-            InvariantLiteralBytesBefore = CountOccurrences(original, HerdrRegistrationDefinition)
-                * Utf8NoBom.GetByteCount(HerdrRegistrationDefinition),
-            InvariantLiteralBytesAfter = CountOccurrences(content, HerdrRegistrationDefinition)
-                * Utf8NoBom.GetByteCount(HerdrRegistrationDefinition),
-            InvariantReferenceBytesBefore = CountOccurrences(original, HerdrRegistrationEvidenceKey)
-                * Utf8NoBom.GetByteCount(HerdrRegistrationEvidenceKey),
-            InvariantReferenceBytesAfter = CountOccurrences(content, HerdrRegistrationEvidenceKey)
-                * Utf8NoBom.GetByteCount(HerdrRegistrationEvidenceKey),
+            InvariantLiteralBytesBefore = literalBefore * Utf8NoBom.GetByteCount(HerdrRegistrationDefinition),
+            InvariantLiteralBytesAfter = literalAfter * Utf8NoBom.GetByteCount(HerdrRegistrationDefinition),
+            InvariantReferenceBytesBefore = referenceBefore * Utf8NoBom.GetByteCount(HerdrRegistrationEvidenceKey),
+            InvariantReferenceBytesAfter = referenceAfter * Utf8NoBom.GetByteCount(HerdrRegistrationEvidenceKey),
             InvariantBytesSavedInChangedLines = invariantBytesSavedInChangedLines,
-            EvidenceReferencesAfter = CountOccurrences(content, HerdrRegistrationEvidenceKey),
+            EvidenceReferencesAfter = (int)referenceAfter,
         };
     }
 
@@ -2584,7 +2860,8 @@ internal static class NotifySupervisionStore
         string directory,
         string transactionId,
         IReadOnlyList<NotifySupervisionShrinkReplacement> replacements,
-        NotifySupervisionShrinkAudit audit)
+        NotifySupervisionShrinkAudit audit,
+        IReadOnlyDictionary<string, string> definitions)
     {
         var stageDirectoryName = ShrinkTransactionStagePrefix + transactionId;
         var stageDirectory = Path.Combine(directory, stageDirectoryName);
@@ -2594,13 +2871,36 @@ internal static class NotifySupervisionStore
         foreach (var replacement in replacements)
         {
             var stagePath = ResolveTransactionChildPath(stageDirectory, replacement.TargetName);
-            ReplaceAtomically(stagePath, replacement.Content);
+            string afterSha256;
+            if (replacement.Content is { } content)
+            {
+                ReplaceAtomically(stagePath, content);
+                afterSha256 = HashContent(content);
+            }
+            else
+            {
+                // G827: stream the same compaction the plan measured into the
+                // stage and refuse if it does not reproduce the measured bytes.
+                var planned = replacement.Plan
+                    ?? throw new InvalidOperationException("shrink replacement has neither content nor a plan.");
+                var staged = PlanFile(planned.Path, planned.TransformStalls, definitions, stagePath);
+                if (staged.AfterBytes != planned.AfterBytes
+                    || !string.Equals(staged.AfterSha256, planned.AfterSha256, StringComparison.Ordinal))
+                {
+                    Directory.Delete(stageDirectory, recursive: true);
+                    throw new InvalidDataException(
+                        $"shrink-stage-mismatch: the staged '{replacement.TargetName}' differs from the measured plan; nothing was replaced.");
+                }
+
+                afterSha256 = staged.AfterSha256;
+            }
+
             transactionFiles.Add(new NotifySupervisionShrinkTransactionFile
             {
                 TargetName = replacement.TargetName,
                 StageName = replacement.TargetName,
                 BeforeSha256 = HashFileOrNull(replacement.TargetPath),
-                AfterSha256 = HashContent(replacement.Content),
+                AfterSha256 = afterSha256,
             });
         }
 
@@ -2618,7 +2918,17 @@ internal static class NotifySupervisionStore
 
         foreach (var replacement in replacements)
         {
-            ReplaceAtomically(replacement.TargetPath, replacement.Content);
+            if (replacement.Content is { } content)
+            {
+                ReplaceAtomically(replacement.TargetPath, content);
+            }
+            else
+            {
+                ReplaceFileAtomicallyFrom(
+                    replacement.TargetPath,
+                    ResolveTransactionChildPath(stageDirectory, replacement.TargetName));
+            }
+
             transaction = transaction with { Phase = $"replaced:{replacement.TargetName}" };
             PersistShrinkTransaction(directory, transaction);
             ShrinkFaultInjector?.Invoke(ResolveFaultPoint(replacement.TargetName));
@@ -2684,8 +2994,7 @@ internal static class NotifySupervisionStore
                 return;
             }
 
-            var stagedContent = File.ReadAllText(stagePath);
-            if (!string.Equals(HashContent(stagedContent), transactionFile.AfterSha256, StringComparison.Ordinal))
+            if (!string.Equals(HashFileOrNull(stagePath), transactionFile.AfterSha256, StringComparison.Ordinal))
             {
                 AbortShrinkTransaction(
                     directory,
@@ -2694,7 +3003,7 @@ internal static class NotifySupervisionStore
                 return;
             }
 
-            ReplaceAtomically(targetPath, stagedContent);
+            ReplaceFileAtomicallyFrom(targetPath, stagePath);
             if (!string.Equals(HashFileOrNull(targetPath), transactionFile.AfterSha256, StringComparison.Ordinal))
             {
                 AbortShrinkTransaction(
@@ -2843,11 +3152,6 @@ internal static class NotifySupervisionStore
 
     private static string HashBytes(byte[] content) =>
         Convert.ToHexString(SHA256.HashData(content));
-
-    private static string? HashFileOrNull(string path) =>
-        File.Exists(path)
-            ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))
-            : null;
 
     private static void DeleteShrinkTransactionArtifacts(
         string directory,
@@ -3015,7 +3319,10 @@ internal sealed record NotifySupervisionArchiveReplacement
 {
     public required string TargetName { get; init; }
     public required string TargetPath { get; init; }
-    public required string Content { get; init; }
+    /// <summary>The staged file name inside the transaction stage directory; null for a counting pass.</summary>
+    public string? StageName { get; init; }
+    public required long AfterBytes { get; init; }
+    public required string AfterSha256 { get; init; }
 }
 
 internal sealed record NotifySupervisionArchivePlan
@@ -3023,7 +3330,6 @@ internal sealed record NotifySupervisionArchivePlan
     public required bool WouldChange { get; init; }
     public required string LivePath { get; init; }
     public required string ArchiveDirectory { get; init; }
-    public required string LiveContent { get; init; }
     public required long BeforeLiveBytes { get; init; }
     public required long AfterLiveBytes { get; init; }
     public required int BeforeLiveRecordCount { get; init; }
@@ -3038,7 +3344,6 @@ internal sealed record NotifySupervisionArchivePlan
         WouldChange = false,
         LivePath = livePath,
         ArchiveDirectory = archiveDirectory,
-        LiveContent = string.Empty,
         BeforeLiveBytes = 0,
         AfterLiveBytes = 0,
         BeforeLiveRecordCount = 0,
@@ -3152,7 +3457,10 @@ internal sealed record NotifySupervisionShrinkReplacement
 {
     public required string TargetName { get; init; }
     public required string TargetPath { get; init; }
-    public required string Content { get; init; }
+    /// <summary>Small in-memory replacement (the evidence definition manifest).</summary>
+    public string? Content { get; init; }
+    /// <summary>G827: a JSONL replacement is re-streamed from its measured plan, never held in memory.</summary>
+    public FileCompactionPlan? Plan { get; init; }
 }
 
 internal sealed record NotifySupervisionEvidenceDefinitions
@@ -3305,7 +3613,7 @@ internal sealed record FileCompactionPlan
     public required bool Exists { get; init; }
     public required bool TransformStalls { get; init; }
     public required bool Changed { get; init; }
-    public required string Content { get; init; }
+    public required string AfterSha256 { get; init; }
     public required long BeforeBytes { get; init; }
     public required long AfterBytes { get; init; }
     public required int BeforeRecords { get; init; }
@@ -3324,7 +3632,7 @@ internal sealed record FileCompactionPlan
         Exists = false,
         TransformStalls = transformStalls,
         Changed = false,
-        Content = string.Empty,
+        AfterSha256 = string.Empty,
         BeforeBytes = 0,
         AfterBytes = 0,
         BeforeRecords = 0,

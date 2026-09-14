@@ -51,7 +51,8 @@ internal static class NotifySuperviseArchiveCommand
             return 1;
         }
 
-        var state = NotifySupervisionStore.Read(artifactRoot, options.Domain, options.Team);
+        // G827: only the supervisor identity is needed; do not materialize the cycle history.
+        var state = NotifySupervisionStore.Read(artifactRoot, options.Domain, options.Team, includeCycleHistory: false);
         var supervisorWriter = state.LastCycle?.Writer;
         var supervisorState = ResolveSupervisorState(state, supervisorWriter);
         var occurredAt = (NotifyCommand.UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();

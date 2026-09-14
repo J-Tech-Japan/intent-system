@@ -46,10 +46,11 @@ public sealed class NotifySupervisionRuntimeLocalG750Tests : IDisposable
         {
             Path.Combine(".intent-cli", "supervision", Domain, Team, "cycles.jsonl"),
             Path.Combine(".intent-cli", "supervision", Domain, Team, "cycles-archive", "2026-08.jsonl"),
+            // G827 supersedes G750 here: the per-host stall log is runtime-local.
+            Path.Combine(".intent-cli", "supervision", Domain, Team, "stalls.jsonl"),
         };
         var shared = new[]
         {
-            Path.Combine(".intent-cli", "supervision", Domain, Team, "stalls.jsonl"),
             Path.Combine(".intent-cli", "supervision", Domain, Team, "bound.json"),
             Path.Combine(".intent-cli", "supervision", Domain, Team, "emission-policy.json"),
             Path.Combine(".intent-cli", "supervision", Domain, Team, "evidence-definitions.json"),
@@ -143,8 +144,13 @@ public sealed class NotifySupervisionRuntimeLocalG750Tests : IDisposable
             {
                 Normalize(Path.GetRelativePath(root, cyclePath)),
                 Normalize(Path.GetRelativePath(root, archivePath)),
+                // G827: the stall log is runtime-local and is untracked too.
+                Normalize(Path.GetRelativePath(root, stallsPath)),
             }.Order(StringComparer.Ordinal).ToArray(),
             payload.GetProperty("removed_from_index").EnumerateArray().Select(item => item.GetString()!).Order(StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+            [Normalize(Path.GetRelativePath(root, stallsPath))],
+            payload.GetProperty("tracked_stall_history_before").EnumerateArray().Select(item => item.GetString()!).ToArray());
         Assert.Contains(".intent-cli/supervision/**/cycles.jsonl", output.ToString(), StringComparison.Ordinal);
         Assert.Contains(".intent-cli/supervision/**/stalls.jsonl", output.ToString(), StringComparison.Ordinal);
 
@@ -152,17 +158,21 @@ public sealed class NotifySupervisionRuntimeLocalG750Tests : IDisposable
         Assert.Equal("archive-content\n", File.ReadAllText(archivePath));
         Assert.Empty(RunGit("ls-files", "--", Path.GetRelativePath(root, cyclePath)).StdOut);
         Assert.Empty(RunGit("ls-files", "--", Path.GetRelativePath(root, archivePath)).StdOut);
-        Assert.Contains(
-            Normalize(Path.GetRelativePath(root, stallsPath)),
-            RunGit("ls-files", "--", Path.Combine(".intent-cli", "supervision", Domain, Team)).StdOut.Replace('\\', '/'),
-            StringComparison.Ordinal);
+        Assert.Equal("shared-stall-content\n", File.ReadAllText(stallsPath));
+        Assert.Empty(RunGit("ls-files", "--", Path.GetRelativePath(root, stallsPath)).StdOut);
+        var stillTracked = RunGit("ls-files", "--", Path.Combine(".intent-cli", "supervision", Domain, Team)).StdOut.Replace('\\', '/');
+        foreach (var shared in new[] { "bound.json", "emission-policy.json", "evidence-definitions.json", "pre-approval-policy.json", "shrink-audit.jsonl" })
+        {
+            Assert.Contains($"{Domain}/{Team}/{shared}", stillTracked, StringComparison.Ordinal);
+        }
+
         Assert.Equal(0, RunGit("check-ignore", "-q", "--", Path.GetRelativePath(root, cyclePath)).ExitCode);
-        Assert.NotEqual(0, RunGit("check-ignore", "-q", "--", Path.GetRelativePath(root, stallsPath)).ExitCode);
+        Assert.Equal(0, RunGit("check-ignore", "-q", "--", Path.GetRelativePath(root, stallsPath)).ExitCode);
         var rootIgnore = File.ReadAllText(Path.Combine(root, ".gitignore"));
         Assert.DoesNotContain(".intent-cli/supervision/**/cycles.jsonl", rootIgnore, StringComparison.Ordinal);
         Assert.DoesNotContain(".intent-cli/supervision/**/stalls.jsonl", rootIgnore, StringComparison.Ordinal);
         Assert.Contains("keep-local.txt", rootIgnore, StringComparison.Ordinal);
-        Console.WriteLine($"G750 repair inventory: before=cycles.jsonl, cycles-archive/2026-08.jsonl, stalls.jsonl; after-index=stalls.jsonl; files-preserved=true; result={output}");
+        Console.WriteLine($"G750 repair inventory: before=cycles.jsonl, cycles-archive/2026-08.jsonl, stalls.jsonl; after-index=policy/manifest only; files-preserved=true; result={output}");
     }
 
     [Fact]

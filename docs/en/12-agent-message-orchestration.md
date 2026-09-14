@@ -543,14 +543,19 @@ repository ignore:
 # .intent-cli/supervision/.gitignore
 **/cycles.jsonl
 **/cycles-archive/
+**/stalls.jsonl
 ```
 
-Only cycle history is runtime-local. The per-team `stalls.jsonl`, `bound.json`,
-`emission-policy.json`, `evidence-definitions.json`, `pre-approval-policy.json`,
-and `shrink-audit.jsonl` remain trackable shared policy/manifest state. The
-former root-level entries `.intent-cli/supervision/**/cycles.jsonl` and
-`.intent-cli/supervision/**/stalls.jsonl` are legacy paths, not the current
-ownership policy; in particular, stalls must remain trackable.
+Cycle history and the per-host stall log are runtime-local. The per-team
+`bound.json`, `emission-policy.json`, `evidence-definitions.json`,
+`pre-approval-policy.json`, and `shrink-audit.jsonl` remain trackable shared
+policy/manifest state. The former root-level entries
+`.intent-cli/supervision/**/cycles.jsonl` and
+`.intent-cli/supervision/**/stalls.jsonl` are legacy paths; the directory-local
+rules above replace them. G827 made `stalls.jsonl` runtime-local, superseding
+G750's rule that stalls stay trackable: the stall log is appended by one host's
+supervisor, grew past GitHub's 100 MB file limit on real hosts, and with
+supervision opt-in it is diagnostic state for that host, not shared policy.
 
 For an already initialised host, `intent init` does not migrate tracked data.
 Run the canonical named repair for the domain and team instead:
@@ -559,8 +564,9 @@ Run the canonical named repair for the domain and team instead:
 intent-cli notify supervise repair-cycle-history --domain <domain> --team <team> --write --format json
 ```
 
-The repair adds the directory-local rule, removes only cycle-history paths from
-the git index while preserving the files on disk, and removes the obsolete
+The repair adds the directory-local rules, removes only cycle-history paths and
+the team's `stalls.jsonl` from the git index while preserving the files on disk
+(reported as `tracked_stall_history_before` / `preserved_stall_paths`), and removes the obsolete
 root-level supervision rules. It reports preserved paths and leaves shared
 policy/manifest state trackable. Operators should use this command rather than
 hand-editing repository state. The repair does not change what supervision
@@ -572,12 +578,13 @@ Supervision cycle history is CLI-owned runtime-local state because all readers
 are same-host readers and each cycle record includes the OS process id. A
 different checkout or host does not need to merge this per-process history as
 shared policy. This ownership boundary is intentionally narrower than “all
-supervision telemetry”: `stalls.jsonl`, `bound.json`, `emission-policy.json`,
+supervision telemetry”: `bound.json`, `emission-policy.json`,
 `evidence-definitions.json`, `pre-approval-policy.json`, and `shrink-audit.jsonl`
-remain shared, trackable, and reviewable.
+remain shared, trackable, and reviewable. Since G827 the per-host `stalls.jsonl`
+is runtime-local as well.
 
 Fresh `intent init --write` creates `.intent-cli/supervision/.gitignore` with
-only `**/cycles.jsonl` and `**/cycles-archive/`. The CLI also maintains that
+only `**/cycles.jsonl`, `**/cycles-archive/`, and (G827) `**/stalls.jsonl`. The CLI also maintains that
 file when it writes cycle history. The ignore does not change emission rate,
 event mode, archive semantics, or the supervision read/write contract. A host
 that already tracks cycle history uses the canonical
