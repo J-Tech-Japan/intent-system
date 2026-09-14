@@ -43,13 +43,17 @@ internal static class AutomationHostLoopNextActionCommand
     public const string ClassificationIdentityUnresolved = "identity-unresolved";
 
     /// <summary>
-    /// G822: every flag the argument parser accepts. The Unknown argument
-    /// message and the automation usage line both list all of them, so the
-    /// advertised surface cannot silently fall behind the parser.
+    /// G822: the single usage string for this command, shared by the Unknown
+    /// argument message and the automation help list in CommandRouter.
     /// </summary>
     internal const string Usage =
         "automation host-loop-next-action --repo <r> [--domain <d>] [--team <t> --task-id <id> --result-nonce <nonce> --routing-root <root> --timeout-seconds <1..30>] [--stale-cli] [--sync-classification <c>] [--safe-stash-required] [--publish-recovery-repairs <N>] [--publish-lifecycle-drift <N>] [--next-slice-issue-cut-ready] [--publish-next-execution-unit <u>] [--hard-clarification-open] [--approved-pr-merge-state <s>] [--approved-pr-metadata-blocked] [--prepared-packet-commit-ready] [--prepared-packet-execution-unit <u>] [--format markdown|json]";
 
+    /// <summary>
+    /// G822: every flag the argument parser accepts. The Unknown argument
+    /// message and the automation usage line both list all of them, so the
+    /// advertised surface cannot silently fall behind the parser.
+    /// </summary>
     internal static readonly IReadOnlyList<string> AcceptedFlags =
     [
         "--repo", "--domain", "--team", "--task-id", "--result-nonce", "--routing-root",
