@@ -143,6 +143,7 @@ public sealed class G828SupervisionOptInTests : IDisposable
         Assert.DoesNotContain("when no cycle is recorded", text, StringComparison.Ordinal);
         Assert.DoesNotContain("when its check is missing", text, StringComparison.Ordinal);
         Assert.DoesNotContain("without a completed cycle/handoff", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("no recorded cycle is a setup gap, while", text, StringComparison.Ordinal);
         Assert.Contains("opt_in_teams", text, StringComparison.Ordinal);
     }
 
