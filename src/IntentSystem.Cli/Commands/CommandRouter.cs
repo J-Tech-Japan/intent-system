@@ -238,6 +238,7 @@ internal static class CommandRouter
                 ["validate-body"] = IssueValidateBodyCommand.Execute,
                 ["prepare"] = IssuePrepareCommand.Execute,
                 ["publish-reviewed"] = IssuePublishReviewedCommand.Execute,
+                ["sync-body"] = IssueSyncBodyCommand.Execute,
                 ["plan-candidate"] = IssuePlanCandidateCommand.Execute,
                 ["publish-flow"] = IssuePublishFlowCommand.Execute
             },
