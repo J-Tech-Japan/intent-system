@@ -195,7 +195,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
 
         Assert.Contains("join.sh", output, StringComparison.Ordinal);
         Assert.DoesNotContain("HERDR-ONLY MODE", output, StringComparison.Ordinal);
-        Assert.Contains("Session layer: agmsg + herdr (supported, not retired)", output, StringComparison.Ordinal);
+        Assert.Contains("Session layer: agmsg + herdr (deprecated)", output, StringComparison.Ordinal); // G829: supersedes "supported, not retired"
     }
 
     /// <summary>
@@ -2209,7 +2209,7 @@ public sealed class SessionLayerModeG570Tests : IDisposable
 
         Assert.Contains("## Session layer (transport for the four threads)", model, StringComparison.Ordinal);
         Assert.Contains("herdr-only (preferred — fewer dependencies)", model, StringComparison.Ordinal);
-        Assert.Contains("agmsg + herdr (supported, not retired)", model, StringComparison.Ordinal);
+        Assert.Contains("agmsg + herdr (deprecated)", model, StringComparison.Ordinal); // G829: supersedes "supported, not retired"
         Assert.DoesNotContain("agmsg (PRIMARY)", model, StringComparison.Ordinal);
         Assert.Contains("Prefer herdr-only", model, StringComparison.Ordinal);
         // The positioning paragraph says when herdr-only is the right call.

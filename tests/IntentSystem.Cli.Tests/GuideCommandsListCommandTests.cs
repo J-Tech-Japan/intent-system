@@ -72,7 +72,7 @@ public sealed class GuideCommandsListCommandTests
 
         var sessionLayerPurpose = byName["session-layer"].GetProperty("purpose").GetString()!;
         Assert.Contains("fewer dependencies", sessionLayerPurpose, StringComparison.Ordinal);
-        Assert.Contains("supported, non-retired", sessionLayerPurpose, StringComparison.Ordinal);
+        Assert.Contains("deprecated `agmsg` + herdr", sessionLayerPurpose, StringComparison.Ordinal); // G829: supersedes "supported, non-retired"
         Assert.DoesNotContain("`agmsg` remains PRIMARY", sessionLayerPurpose, StringComparison.Ordinal);
     }
 

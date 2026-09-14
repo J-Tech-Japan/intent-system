@@ -9,8 +9,8 @@ namespace IntentSystem.Cli.Commands;
 /// Operator ruling (2026-08-01, host node 08): the session layer is SELECTABLE
 /// rather than agmsg-replaced. G624 graduates <see cref="HerdrOnly"/> as the
 /// preferred transport because it has fewer dependencies, while <see cref="Agmsg"/>
-/// remains a supported, non-retired choice for distributed teams and existing
-/// agmsg investments. G540 ruled that design / orchestrator / implementation /
+/// is deprecated (G829) but still works and remains the unrecorded default for
+/// distributed teams and existing agmsg investments. G540 ruled that design / orchestrator / implementation /
 /// review is the PRIMARY model in both transports; neither transport is primary.
 /// </summary>
 internal static class SessionLayerMode
@@ -28,9 +28,28 @@ internal static class SessionLayerMode
     /// preference without mistaking it for the four-thread model's PRIMARY
     /// designation.
     /// </summary>
+    /// <summary>
+    /// G829: agmsg + herdr is deprecated as a disposition only. It keeps working
+    /// and remains the unrecorded default so no host switches transport
+    /// silently; the default change and removal are separate later decisions.
+    /// </summary>
+    public const string AgmsgDeprecationNotice =
+        "agmsg + herdr is deprecated (G829): it still works and remains the unrecorded default so no host switches "
+        + "transport silently, but new teams should record herdr-only; removal is planned for a later release after "
+        + "consumers are checked and needs a retire-before-1.0 ledger decision.";
+
+    public static bool IsDeprecated(string? mode) => string.Equals(mode, Agmsg, StringComparison.Ordinal);
+
+    /// <summary>G829: the exact command that moves a scope off the unrecorded default.</summary>
+    public static string RecordHerdrOnlyCommand(string domain, string? team) =>
+        $"`intent-cli session-layer set --domain {domain}"
+        + (string.IsNullOrWhiteSpace(team) ? string.Empty : $" --team {team}")
+        + " --mode herdr-only --write`";
+
     public const string TransportPreferenceSentence =
-        "herdr-only is the preferred transport because it has fewer dependencies. agmsg + herdr remains supported "
-        + "and is not retired for distributed teams or an existing agmsg investment. The four-thread model itself "
+        "herdr-only is the preferred transport because it has fewer dependencies. "
+        + AgmsgDeprecationNotice
+        + " The four-thread model itself "
         + "(design / orchestrator / implementation / review) is PRIMARY and unqualified in both modes; no transport "
         + "is primary.";
 
@@ -45,7 +64,7 @@ internal static class SessionLayerMode
     /// <summary>Human-facing label for the recorded transport.</summary>
     public static string Describe(string mode) => mode switch
     {
-        Agmsg => "agmsg + herdr (supported, not retired)",
+        Agmsg => "agmsg + herdr (deprecated)",
         HerdrOnly => "herdr-only (preferred — fewer dependencies)",
         _ => mode,
     };

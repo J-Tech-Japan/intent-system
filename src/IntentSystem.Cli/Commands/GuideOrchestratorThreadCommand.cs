@@ -212,7 +212,9 @@ internal static class GuideOrchestratorThreadCommand
                     + "because no team scope was supplied; team-scoped records are disclosed below."
                 : sessionLayer.Source == SessionLayerModeSource.Recorded
                     ? $"Session layer: {SessionLayerMode.Describe(sessionLayer.Mode)} — recorded for this domain/team."
-                    : $"Session layer: {SessionLayerMode.Describe(SessionLayerMode.Default)} — no selection recorded, so the default is in force.",
+                    : $"Session layer: {SessionLayerMode.Describe(SessionLayerMode.Default)} — no selection recorded, so the default is in force. "
+                        + $"{SessionLayerMode.AgmsgDeprecationNotice} Record herdr-only with "
+                        + SessionLayerMode.RecordHerdrOnlyCommand(values["<domain>"], string.IsNullOrWhiteSpace(values["<team>"]) || values["<team>"] == "<team>" ? null : values["<team>"]) + ".",
             Exclusivity = SessionLayerMode.ExclusivitySentence,
             PreviewScoping = SessionLayerMode.TransportPreferenceSentence,
             Selection =

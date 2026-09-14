@@ -816,7 +816,7 @@ operator ruling of 2026-08-01 it is now selectable rather than fixed.
 - **`herdr-only` (preferred — fewer dependencies)** — the preferred choice when
   every team agent is collocated on one machine: herdr is the terminal
   controller and no separate message bridge runs.
-- **`agmsg` + herdr (supported, not retired)** — the supported choice when team
+- **`agmsg` + herdr (deprecated, G829)** — still works when team
   members are distributed across machines or the team already invests in agmsg.
   `agmsg` remains the default when nothing is recorded.
 - **The four-thread model is PRIMARY** and unqualified in both modes, exactly

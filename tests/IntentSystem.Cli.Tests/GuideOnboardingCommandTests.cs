@@ -96,7 +96,7 @@ public sealed class GuideOnboardingCommandTests
             .StartsWith("intent-cli session-layer show", StringComparison.Ordinal));
         var sessionPurpose = sessionStep.GetProperty("purpose").GetString()!;
         Assert.Contains("fewer dependencies", sessionPurpose, StringComparison.Ordinal);
-        Assert.Contains("supported, non-retired", sessionPurpose, StringComparison.Ordinal);
+        Assert.Contains("deprecated `agmsg` + herdr", sessionPurpose, StringComparison.Ordinal); // G829: supersedes "supported, non-retired"
         Assert.DoesNotContain("agmsg` (PRIMARY", sessionPurpose, StringComparison.Ordinal);
     }
 

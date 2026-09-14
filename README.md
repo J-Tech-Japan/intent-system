@@ -77,7 +77,7 @@ metadata live, and are you starting a new project or adding intent-cli to one?
 
 Each pattern is self-contained and gives two paste-ready initial prompts: prefer
 `herdr-only` for a collocated single-machine team because it has fewer
-dependencies, or choose supported, non-retired `agmsg` + herdr for a
+dependencies, or choose deprecated `agmsg` + herdr (still works; removal planned after consumers are checked) for a
 distributed/multi-machine team or an existing agmsg investment. Record the
 choice with `intent-cli session-layer set`; the **four-thread model**, not a
 transport, is primary.

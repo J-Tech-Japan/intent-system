@@ -6,7 +6,7 @@
 review）と、特に 1 つのホストリポジトリが **複数の intent ドメイン** を保持する場合に
 それを安全に保つ方法を説明します。1 台のマシンに同居するチームは、依存関係が少ない
 `herdr-only` トランスポートを優先します。分散したチームまたは既存の agmsg 投資があるチームには、
-サポート対象で廃止されない `agmsg` + herdr を選びます。選択は
+非推奨（G829。引き続き動作し、利用者確認後に削除予定）の `agmsg` + herdr を選びます。選択は
 `session-layer set` で記録し、どちらのトランスポートも主要ではありません。正本となる
 貼り付け可能なプロンプトはインストール済みの intent-cli ガイダンスから生成され、このページの
 プロンプトを手で写してはいけません。現在のプロンプトは次で生成します:
@@ -1723,7 +1723,7 @@ pane は再作成ではなく付け替えられ、稼働中の 17 agent process 
 
 この節はチームが `herdr-only` を記録している場合だけ operative です。agmsg の
 provisioning / receiver 節に対する具体的な counterpart です。依存関係が少ないため優先しますが、
-agmsg + herdr はサポート対象で廃止されません。1 チームでは transport を 1 つだけ動かし、
+agmsg + herdr は非推奨（G829）ですが引き続き動作します。1 チームでは transport を 1 つだけ動かし、
 agmsg と herdr の mixed delivery は contract violation です。
 
 ### human の seat-kind intake と実測 registry (G647)

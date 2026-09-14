@@ -136,7 +136,7 @@ public sealed class OnboardingTransportPresentationG608Tests
         Assert.Contains("agmsg", presentation, StringComparison.Ordinal);
         Assert.Contains("preferred", presentation, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("fewer dependencies", presentation, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("not retired", presentation, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("deprecated", presentation, StringComparison.OrdinalIgnoreCase); // G829: supersedes "not retired"
         Assert.DoesNotContain("PREVIEW", presentation, StringComparison.Ordinal);
         Assert.DoesNotContain("agmsg (PRIMARY)", presentation, StringComparison.Ordinal);
         Assert.DoesNotContain("`agmsg` is PRIMARY", presentation, StringComparison.Ordinal);

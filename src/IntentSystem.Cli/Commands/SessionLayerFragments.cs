@@ -134,28 +134,28 @@ internal static class SessionLayerFragments
     [
         Fragment(
             S0,
-            Descriptive("- session layer: Recorded session layer for this setup: agmsg + herdr (supported, not retired) (recorded)."),
+            Descriptive("- session layer: Recorded session layer for this setup: agmsg + herdr (deprecated) (recorded)."),
             Scaffold(" "),
             Operative("Record or change it with `intent-cli session-layer set --domain __DOMAIN__ --team <team> --mode agmsg|herdr-only --write`."),
             Scaffold(" "),
             Descriptive("A herdr-only request made at first setup is honoured from then on; the choice is reversible in both directions.")),
         Fragment(
             S0,
-            Descriptive("- session layer: Recorded session layer for this setup: agmsg + herdr (supported, not retired) (recorded)."),
+            Descriptive("- session layer: Recorded session layer for this setup: agmsg + herdr (deprecated) (recorded)."),
             Scaffold(" "),
             Operative("Record or change it with `intent-cli session-layer set --domain __DOMAIN__ --team __TEAM__ --mode agmsg|herdr-only --write`."),
             Scaffold(" "),
             Descriptive("A herdr-only request made at first setup is honoured from then on; the choice is reversible in both directions.")),
         Fragment(
             S0,
-            Descriptive("- session layer: Recorded session layer for this setup: agmsg + herdr (supported, not retired) (default — nothing recorded yet)."),
+            Descriptive("- session layer: Recorded session layer for this setup: agmsg + herdr (deprecated) (default — nothing recorded yet)."),
             Scaffold(" "),
             Operative("Record or change it with `intent-cli session-layer set --domain __DOMAIN__ --team <team> --mode agmsg|herdr-only --write`."),
             Scaffold(" "),
             Descriptive("A herdr-only request made at first setup is honoured from then on; the choice is reversible in both directions.")),
         Fragment(
             S0,
-            Descriptive("- session layer: Recorded session layer for this setup: agmsg + herdr (supported, not retired) (default — nothing recorded yet)."),
+            Descriptive("- session layer: Recorded session layer for this setup: agmsg + herdr (deprecated) (default — nothing recorded yet)."),
             Scaffold(" "),
             Operative("Record or change it with `intent-cli session-layer set --domain __DOMAIN__ --team __TEAM__ --mode agmsg|herdr-only --write`."),
             Scaffold(" "),

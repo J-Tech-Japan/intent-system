@@ -10,7 +10,7 @@ Start by choosing one [self-contained onboarding pattern](02a-getting-started-or
 separate host repository or same-repository metadata branch, crossed with a
 brand-new or existing project. Each pattern has two paste-ready initial prompts.
 For a collocated single-machine team, prefer `herdr-only` because it has fewer
-dependencies; choose supported, non-retired `agmsg` + herdr for distributed
+dependencies; choose deprecated `agmsg` + herdr (still works; removal planned after consumers are checked) for distributed
 teams or an existing agmsg investment. The primary thing is the four-thread
 model, not either transport.
 
