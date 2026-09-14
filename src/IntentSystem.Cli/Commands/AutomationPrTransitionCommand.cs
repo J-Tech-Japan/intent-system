@@ -277,9 +277,6 @@ internal static class AutomationPrTransitionCommand
         return (plan.AddLabels, plan.RemoveLabels);
     }
 
-    internal static IReadOnlyList<string> SupportedTransitions { get; } =
-        [TransitionReviewStart, TransitionRequestUpdate, TransitionApproved, TransitionReviewRelease];
-
     private static TransitionPlan PlanTransition(string transition) =>
         transition switch
         {

@@ -158,14 +158,20 @@ internal static class AutomationDoctorCommand
             "intent-cli automation summary" => "Read-only installed command contract summary used by host runbooks.",
             "intent-cli automation host-review-preflight" => "Read-only host review preflight before any host-owned PR label transition.",
             "intent-cli automation issue-publish" => "Host issue-publish transition: add intent-target to a child issue.",
-            "intent-cli automation pr-transition" when string.Equals(transition, "review-start", StringComparison.Ordinal) =>
-                "Host review-start transition: add intent-target and intent-pr-reviewing, remove intent-pr-rereview-ready and legacy rereview-ready",
-            "intent-cli automation pr-transition" when string.Equals(transition, "request-update", StringComparison.Ordinal) =>
-                "Host request-update transition: remove intent-pr-reviewing and add intent-pr-request-update",
-            "intent-cli automation pr-transition" when string.Equals(transition, "approved", StringComparison.Ordinal) =>
-                "Host approved transition: remove intent-pr-reviewing and add intent-pr-approved",
+            // G824: derived from the executed plans so the purpose never disagrees
+            // with the remove_labels reported beside it.
+            "intent-cli automation pr-transition" when transition is "review-start" or "request-update" or "approved" =>
+                DescribePrTransition(transition),
             _ => "Required host automation command surface.",
         };
+
+    private static string DescribePrTransition(string transition)
+    {
+        var (add, remove) = AutomationPrTransitionCommand.PlannedLabels(transition);
+        // The bare "rereview-ready" is the legacy short form; say so.
+        var removeDescription = remove.Select(label => label == "rereview-ready" ? "legacy rereview-ready" : label);
+        return $"Host {transition} transition: add {string.Join(", ", add)}; remove {string.Join(", ", removeDescription)} when present";
+    }
 
     private static bool TryParseArguments(
         string[] args,

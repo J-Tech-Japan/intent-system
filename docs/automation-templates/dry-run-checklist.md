@@ -294,10 +294,12 @@ Expected assertions:
 - every object has `"mode": "dry-run"` and `"applied": false`,
 - `review-start` plans to add `intent-target` and
   `intent-pr-reviewing`,
-- `request-update` plans to add `intent-pr-request-update` and remove
-  `intent-pr-reviewing`,
+- `request-update` plans to add `intent-pr-request-update` and remove the
+  present members of `intent-pr-reviewing`, `intent-pr-rereview-ready`,
+  `rereview-ready`, and `intent-pr-approved`,
 - `approved` plans to add `intent-pr-approved` and remove
-  `intent-pr-reviewing`,
+  `intent-pr-reviewing`, `intent-pr-rereview-ready`, `rereview-ready`,
+  `intent-pr-request-update`, and `intent-pr-update-in-progress`,
 - no PR transition add/remove plan contains `intent-pr-created`.
 
 Use `--write` only when the host loop has selected that exact PR and

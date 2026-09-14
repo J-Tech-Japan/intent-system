@@ -41,13 +41,19 @@ intent-target + intent-pr-approved（PR 側）
 → PR が承認済みで、マージを待っています。
 ```
 
-`intent-pr-approved` は **review の terminal state** です: `intent-pr-rereview-ready`
-（「再レビュー待ち」）を supersede し、他の active な review ラベルと排他です。PR が approved に
-遷移するとき、intent-cli は stale な `intent-pr-rereview-ready`・`intent-pr-request-update`・
-`intent-pr-update-in-progress` を除去するため、approved の PR が in-flight な review ラベルを
-同時に可視に持つことはありません。両方を持つ PR が見つかった場合（例: 再レビュー承認後）、
-`intent-cli automation reconcile` がそれを安全な high-confidence な repair として検出し、stale な
-ラベルを intent-cli 所有の振る舞いで除去します — 生の `gh label` 編集ではありません。
+`intent-pr-approved` は、**それが最新の review 判断である間の terminal state** です。
+`intent-pr-rereview-ready`（「再レビュー待ち」）を supersede し、他の active な review ラベルと排他です。
+PR が approved に遷移するとき、intent-cli は stale な `intent-pr-rereview-ready`・
+`intent-pr-request-update`・`intent-pr-update-in-progress` を除去します。
+
+後から出た修正要求は承認を取り消します: `automation pr-transition --transition request-update` は、
+`intent-pr-request-update` を追加する同じ atomic なラベル置き換えの中で `intent-pr-approved` を除去します（G824）。
+
+`intent-pr-approved` と `intent-pr-request-update` または `intent-pr-update-in-progress` を同時に持つ PR は、
+ラベルだけではどちらの判断が新しいか分かりません。`intent-cli automation reconcile` は
+`conflicting-review-decision` の unsafe stop を報告し、どちらのラベルも除去しません。意図した正規の遷移
+（`request-update` か `approved`）を実行し直してください。approved と `intent-pr-rereview-ready` だけの組み合わせは、
+引き続き安全な high-confidence な repair です。生の `gh label` 編集は使いません。
 
 ## ラベルについての注意
 
