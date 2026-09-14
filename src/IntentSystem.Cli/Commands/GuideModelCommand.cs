@@ -179,15 +179,15 @@ internal static class GuideModelCommand
             "herdr-only (preferred — fewer dependencies) — the preferred choice when every agent in the team is "
                 + "herdr-resident on ONE machine: herdr is the terminal controller and no separate message bridge runs. "
                 + SessionLayerMode.TransportPreferenceSentence,
-            "agmsg + herdr (supported, not retired) — the supported choice when team members are distributed across "
+            "agmsg + herdr (deprecated) — still works when team members are distributed across "
                 + "machines or the team already invests in agmsg: threads register as agmsg roles and exchange delegation / "
                 + "progress / completion / blocker messages.",
         },
         WhenToChooseHerdrOnly =
             "Prefer herdr-only when every agent in the team is herdr-resident on ONE machine because it has fewer "
             + "dependencies: no message-bridge process to keep alive, and the terminal controller you already run carries "
-            + "the delegations. Choose the supported, non-retired agmsg + herdr transport when threads live on different "
-            + "machines or the team already invests in agmsg.",
+            + "the delegations. agmsg + herdr still works when threads live on different "
+            + "machines or the team already invests in agmsg, but it is deprecated (G829); see the session-layer preference above.",
         Exclusivity = SessionLayerMode.ExclusivitySentence,
         Selection =
             "`intent-cli session-layer show --domain <d> [--team <t>]` reports the mode in force; "

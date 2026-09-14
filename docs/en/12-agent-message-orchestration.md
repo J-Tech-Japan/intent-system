@@ -6,7 +6,7 @@ This page describes the **primary four-thread model** (design / orchestrator /
 implementation / review) and, in particular, how it stays safe when a single
 host repository holds **several intent domains**. Choose the supported
 `herdr-only` transport for a collocated single-machine team because it has
-fewer dependencies, or choose supported, non-retired `agmsg` + herdr for a
+fewer dependencies, or choose deprecated `agmsg` + herdr (still works; removal planned after consumers are checked) for a
 distributed team or an existing agmsg investment. Record the choice with
 `session-layer set`; neither transport is primary. The authoritative,
 paste-ready prompts come from installed intent-cli guidance — do not copy
@@ -2001,7 +2001,7 @@ workspace has no arrangement to standardise and is outside this convention.
 This section is operative only when the team has recorded `herdr-only`. It is
 the concrete counterpart to the agmsg provisioning/receiver sections. It is
 the preferred transport because it has fewer dependencies; agmsg + herdr
-remains supported and is not retired. Exactly one transport runs per team;
+is deprecated (G829) but still works. Exactly one transport runs per team;
 mixed agmsg and herdr delivery is a contract violation.
 
 ### Human seat-kind intake and measured registry (G647)

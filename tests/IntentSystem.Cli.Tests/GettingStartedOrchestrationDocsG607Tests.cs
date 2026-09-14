@@ -93,7 +93,7 @@ public sealed class GettingStartedOrchestrationDocsG607Tests
         Assert.Contains("Separate host × brand-new", root, StringComparison.Ordinal);
         Assert.Contains("Same repo × existing", root, StringComparison.Ordinal);
         Assert.Contains("`herdr-only` for a collocated single-machine team", root, StringComparison.Ordinal);
-        Assert.Contains("supported, non-retired `agmsg` + herdr", root, StringComparison.Ordinal);
+        Assert.Contains("deprecated `agmsg` + herdr", root, StringComparison.Ordinal); // G829: supersedes "supported, non-retired"
         Assert.DoesNotContain("**PREVIEW** label is a maturity note", root, StringComparison.Ordinal);
         Assert.Contains("Timer-loop alternative", root, StringComparison.Ordinal);
     }

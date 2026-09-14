@@ -219,7 +219,8 @@ internal static class SessionLayerCommand
         var scope = team is null ? $"domain `{domain}`" : $"team `{team}` in domain `{domain}`";
         var summary = resolution.Source == SessionLayerModeSource.Recorded
             ? $"{scope}: session layer is {SessionLayerMode.Describe(resolution.Mode)} (recorded)."
-            : $"{scope}: no session layer recorded, so the default {SessionLayerMode.Describe(SessionLayerMode.Default)} is in force.";
+            : $"{scope}: no session layer recorded, so the default {SessionLayerMode.Describe(SessionLayerMode.Default)} is in force. "
+                + $"{SessionLayerMode.AgmsgDeprecationNotice} Record herdr-only with {SessionLayerMode.RecordHerdrOnlyCommand(domain, team)}.";
 
         return new SessionLayerResult
         {
@@ -254,6 +255,10 @@ internal static class SessionLayerCommand
         writer.WriteLine($"# Session layer — {(result.Team is null ? result.Domain : $"{result.Domain} / {result.Team}")}");
         writer.WriteLine();
         writer.WriteLine($"- mode: {SessionLayerMode.Describe(result.Mode)}");
+        if (result.DeprecationNotice is not null)
+        {
+            writer.WriteLine($"- deprecation: {result.DeprecationNotice}");
+        }
         writer.WriteLine($"- source: {result.Source}");
         writer.WriteLine($"- record: `{result.RecordPath}`");
         if (result.RequestedMode is not null)
@@ -426,6 +431,13 @@ internal sealed record SessionLayerResult
 
     [JsonPropertyName("mode")]
     public required string Mode { get; init; }
+
+    /// <summary>G829: the resolved mode (recorded or default) is deprecated.</summary>
+    [JsonPropertyName("mode_deprecated")]
+    public bool ModeDeprecated => SessionLayerMode.IsDeprecated(Mode);
+
+    [JsonPropertyName("deprecation_notice")]
+    public string? DeprecationNotice => ModeDeprecated ? SessionLayerMode.AgmsgDeprecationNotice : null;
 
     [JsonPropertyName("source")]
     public required string Source { get; init; }

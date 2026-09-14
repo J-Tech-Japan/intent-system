@@ -88,7 +88,7 @@ public sealed class GuideModelCommandTests
         var output = writer.ToString();
 
         Assert.Contains("herdr-only (preferred — fewer dependencies)", output, StringComparison.Ordinal);
-        Assert.Contains("agmsg + herdr (supported, not retired)", output, StringComparison.Ordinal);
+        Assert.Contains("agmsg + herdr (deprecated)", output, StringComparison.Ordinal); // G829: supersedes "supported, not retired"
         Assert.Contains("Prefer herdr-only", output, StringComparison.Ordinal);
         Assert.DoesNotContain("agmsg (PRIMARY)", output, StringComparison.Ordinal);
         Assert.DoesNotContain("Use this unless", output, StringComparison.Ordinal);

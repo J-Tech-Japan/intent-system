@@ -15,7 +15,7 @@ you never combine instructions from two patterns.
 
 Each pattern starts with exactly two coexisting paste-ready initial prompts.
 Prefer `herdr-only` when all four agents are collocated on one machine because
-it has fewer dependencies. Choose the supported, non-retired `agmsg` + herdr
+it has fewer dependencies. Choose deprecated `agmsg` + herdr (still works; removal planned after consumers are checked)
 transport for a distributed team or an existing agmsg investment. Both are
 recorded with `session-layer set`; the **four-thread model** is primary, never
 either transport. After the initial prompt, follow the recorded mode and the
@@ -39,7 +39,8 @@ The four-thread model is the **primary** model: design authors intent,
 orchestration coordinates, implementation delivers the child PR, and review
 checks it. For a collocated team on one machine, this route recommends the
 `herdr-only` transport because it has fewer dependencies. `agmsg` + herdr
-remains supported and is not retired for its distributed/existing-agmsg fit;
+is deprecated (G829): it still works for distributed/existing-agmsg teams and
+removal is planned after consumers are checked;
 the four-thread model is primary, not either transport.
 
 ## 1. Choose repositories and folders
