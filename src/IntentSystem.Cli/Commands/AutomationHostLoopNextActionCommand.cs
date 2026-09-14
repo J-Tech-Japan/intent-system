@@ -43,6 +43,21 @@ internal static class AutomationHostLoopNextActionCommand
     public const string ClassificationIdentityUnresolved = "identity-unresolved";
 
     /// <summary>
+    /// G822: every flag the argument parser accepts. The Unknown argument
+    /// message and the automation usage line both list all of them, so the
+    /// advertised surface cannot silently fall behind the parser.
+    /// </summary>
+    internal static readonly IReadOnlyList<string> AcceptedFlags =
+    [
+        "--repo", "--domain", "--team", "--task-id", "--result-nonce", "--routing-root",
+        "--timeout-seconds", "--stale-cli", "--sync-classification", "--safe-stash-required",
+        "--publish-recovery-repairs", "--publish-lifecycle-drift", "--next-slice-issue-cut-ready",
+        "--publish-next-execution-unit", "--hard-clarification-open", "--approved-pr-merge-state",
+        "--approved-pr-metadata-blocked", "--prepared-packet-commit-ready",
+        "--prepared-packet-execution-unit", "--format",
+    ];
+
+    /// <summary>
     /// G318: testability seam for the automatic <c>intent next-slice --dry-run</c>
     /// probe. Production uses <see cref="IntentCliNextSliceDryRunProbe"/>
     /// (in-process invocation of <see cref="IntentNextSliceCommand"/>) so
@@ -544,39 +559,108 @@ internal static class AutomationHostLoopNextActionCommand
         || string.Equals(classification, "ff-blocked", StringComparison.Ordinal)
         || string.Equals(classification, "diverged", StringComparison.Ordinal);
 
+    /// <summary>
+    /// G822: caller-suppliable context, keyed by the field name reported in
+    /// evidence and mapped to the CLI flag a caller passes to supply it.
+    /// </summary>
+    private static readonly IReadOnlyList<(string Field, string Flag)> CallerContextFields =
+    [
+        ("team", "--team"),
+        ("task_id", "--task-id"),
+        ("result_nonce", "--result-nonce"),
+        ("routing_root", "--routing-root"),
+    ];
+
+    public const string ReasonCallerContextMissing = "caller-context-missing";
+    public const string ReasonSourceFactUnobservable = "source-fact-unobservable";
+    public const string ReasonDispatchIdentitySourceUnavailable = "dispatch-identity-source-unavailable";
+
     private static HostLoopIdentityResolution ResolveIdentity(
         ParsedArgs parsed,
         HostLoopIdentityCapture capture)
     {
-        var missing = new List<string>();
-        if (string.IsNullOrWhiteSpace(parsed.Team)) missing.Add("team");
-        if (string.IsNullOrWhiteSpace(parsed.TaskId)) missing.Add("task_id");
-        if (string.IsNullOrWhiteSpace(parsed.ResultNonce)) missing.Add("result_nonce");
-        if (string.IsNullOrWhiteSpace(parsed.RoutingRoot)) missing.Add("routing_root");
-        if (string.IsNullOrWhiteSpace(capture.Cwd)) missing.Add("captured_cwd");
-        if (string.IsNullOrWhiteSpace(capture.Origin)) missing.Add("captured_origin");
-        if (string.IsNullOrWhiteSpace(capture.Ref)) missing.Add("captured_ref");
-        if (string.IsNullOrWhiteSpace(capture.Head)) missing.Add("captured_head");
-        if (string.IsNullOrWhiteSpace(capture.DispatchGeneration)) missing.Add("dispatch_generation");
-        if (string.IsNullOrWhiteSpace(capture.DispatchDigest)) missing.Add("dispatch_digest");
+        var callerValues = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["team"] = parsed.Team,
+            ["task_id"] = parsed.TaskId,
+            ["result_nonce"] = parsed.ResultNonce,
+            ["routing_root"] = parsed.RoutingRoot,
+        };
+        var missingCallerFields = new List<string>();
+        var missingCallerArguments = new List<string>();
+        foreach (var (field, flag) in CallerContextFields)
+        {
+            if (string.IsNullOrWhiteSpace(callerValues[field]))
+            {
+                missingCallerFields.Add(field);
+                missingCallerArguments.Add(flag);
+            }
+        }
 
-        if (missing.Count == 0)
+        // G822: checkout facts come from the read-only capture. The caller
+        // can resolve them by running from a checkout that has them.
+        var unobservableSourceFacts = new List<string>();
+        if (string.IsNullOrWhiteSpace(capture.Cwd)) unobservableSourceFacts.Add("captured_cwd");
+        if (string.IsNullOrWhiteSpace(capture.Origin)) unobservableSourceFacts.Add("captured_origin");
+        if (string.IsNullOrWhiteSpace(capture.Ref)) unobservableSourceFacts.Add("captured_ref");
+        if (string.IsNullOrWhiteSpace(capture.Head)) unobservableSourceFacts.Add("captured_head");
+
+        // G822: dispatch identity has no production source in this build.
+        // HostLoopIdentityCapture never assigns it and no CLI argument
+        // supplies it, so its absence is not something the caller omitted.
+        var unavailableDispatchFields = new List<string>();
+        if (string.IsNullOrWhiteSpace(capture.DispatchGeneration)) unavailableDispatchFields.Add("dispatch_generation");
+        if (string.IsNullOrWhiteSpace(capture.DispatchDigest)) unavailableDispatchFields.Add("dispatch_digest");
+
+        if (missingCallerFields.Count == 0
+            && unobservableSourceFacts.Count == 0
+            && unavailableDispatchFields.Count == 0)
         {
             return new HostLoopIdentityResolution(
                 Qualified: true,
                 MissingEvidence: Array.Empty<string>(),
-                Source: "authoritative-dispatch-identity");
+                Source: "authoritative-dispatch-identity",
+                Reasons: Array.Empty<string>(),
+                MissingCallerArguments: Array.Empty<string>(),
+                UnobservableSourceFacts: Array.Empty<string>());
         }
+
+        var reasons = new List<string>();
+        var evidence = new List<string>
+        {
+            "identity-unresolved: authoritative team-scoped dispatch identity is incomplete."
+        };
+        if (missingCallerFields.Count > 0)
+        {
+            reasons.Add(ReasonCallerContextMissing);
+            evidence.Add(
+                $"{ReasonCallerContextMissing}: {string.Join(", ", missingCallerFields)} not supplied; "
+                + $"pass {string.Join(" ", missingCallerArguments)} on the invocation.");
+        }
+        if (unobservableSourceFacts.Count > 0)
+        {
+            reasons.Add(ReasonSourceFactUnobservable);
+            evidence.Add(
+                $"{ReasonSourceFactUnobservable}: {string.Join(", ", unobservableSourceFacts)} could not be read; "
+                + "run from a git checkout that has an origin remote and a named branch.");
+        }
+        if (unavailableDispatchFields.Count > 0)
+        {
+            reasons.Add(ReasonDispatchIdentitySourceUnavailable);
+            evidence.Add(
+                $"{ReasonDispatchIdentitySourceUnavailable}: this build has no source for {string.Join(", ", unavailableDispatchFields)}, "
+                + "and no CLI argument or checkout change can supply it. Team-scoped host-loop cannot reach qualified "
+                + "until the Orca Run mailbox binding (#1774) provides dispatch identity.");
+        }
+        evidence.Add("Legacy/no-team host-loop output remains readable but cannot certify modern ownership or mutation.");
 
         return new HostLoopIdentityResolution(
             Qualified: false,
-            MissingEvidence: new[]
-            {
-                "identity-unresolved: authoritative team-scoped dispatch identity is incomplete.",
-                $"missing_fields: {string.Join(", ", missing)}.",
-                "Legacy/no-team host-loop output remains readable but cannot certify modern ownership or mutation."
-            },
-            Source: "identity-unresolved");
+            MissingEvidence: evidence,
+            Source: "identity-unresolved",
+            Reasons: reasons,
+            MissingCallerArguments: missingCallerArguments,
+            UnobservableSourceFacts: unobservableSourceFacts);
     }
 
     private static void EmitIdentityBoundary(
@@ -640,6 +724,9 @@ internal static class AutomationHostLoopNextActionCommand
             ResultNonce = parsed.ResultNonce,
             IdentityQualification = identity.Qualified ? "qualified" : ClassificationIdentityUnresolved,
             IdentitySource = identity.Source,
+            IdentityUnresolvedReasons = identity.Qualified ? null : identity.Reasons,
+            MissingCallerArguments = identity.Qualified ? null : identity.MissingCallerArguments,
+            UnobservableSourceFacts = identity.Qualified ? null : identity.UnobservableSourceFacts,
             CompletionIdentity = identity.Qualified
                 ? BuildCompletionIdentity(parsed, capture)
                 : null,
@@ -682,7 +769,10 @@ internal static class AutomationHostLoopNextActionCommand
     private sealed record HostLoopIdentityResolution(
         bool Qualified,
         IReadOnlyList<string> MissingEvidence,
-        string Source);
+        string Source,
+        IReadOnlyList<string> Reasons,
+        IReadOnlyList<string> MissingCallerArguments,
+        IReadOnlyList<string> UnobservableSourceFacts);
 
     private static HostLoopNextActionEmittedResult BuildGitHubUnavailableResult(
         string repo,
@@ -1098,6 +1188,18 @@ internal static class AutomationHostLoopNextActionCommand
             writer.WriteLine($"- task_id: `{result.TaskId ?? "(unresolved)"}`");
             writer.WriteLine($"- result_nonce: `{result.ResultNonce ?? "(unresolved)"}`");
             writer.WriteLine($"- identity_qualification: `{result.IdentityQualification ?? "(unresolved)"}`");
+            if (result.IdentityUnresolvedReasons is { Count: > 0 })
+            {
+                writer.WriteLine($"- identity_unresolved_reasons: `{string.Join(", ", result.IdentityUnresolvedReasons)}`");
+            }
+            if (result.MissingCallerArguments is { Count: > 0 })
+            {
+                writer.WriteLine($"- missing_caller_arguments: `{string.Join(" ", result.MissingCallerArguments)}`");
+            }
+            if (result.UnobservableSourceFacts is { Count: > 0 })
+            {
+                writer.WriteLine($"- unobservable_source_facts: `{string.Join(", ", result.UnobservableSourceFacts)}`");
+            }
             writer.WriteLine($"- completion_identity: `{result.CompletionIdentity ?? "(none)"}`");
             writer.WriteLine($"- recipient_context: `{result.RecipientContext ?? "(none)"}`");
             writer.WriteLine($"- captured_cwd: `{result.CapturedCwd ?? "(unresolved)"}`");
@@ -1302,7 +1404,7 @@ internal static class AutomationHostLoopNextActionCommand
                     format = requested;
                     break;
                 default:
-                    error = $"Unknown argument '{args[index]}'. Supported: --repo <owner/repo> [--domain <domain>] [--team <team>] [--task-id <task>] [--result-nonce <nonce>] [--routing-root <root>] [--timeout-seconds <1..30>] [--format markdown|json]."; return false;
+                    error = $"Unknown argument '{args[index]}'. Supported: {string.Join(" ", AcceptedFlags)}."; return false;
             }
         }
 
@@ -1405,6 +1507,9 @@ internal sealed record HostLoopNextActionEmittedResult
     [JsonPropertyName("result_nonce")] public string? ResultNonce { get; init; }
     [JsonPropertyName("identity_qualification")] public string? IdentityQualification { get; init; }
     [JsonPropertyName("identity_source")] public string? IdentitySource { get; init; }
+    [JsonPropertyName("identity_unresolved_reasons")] public IReadOnlyList<string>? IdentityUnresolvedReasons { get; init; }
+    [JsonPropertyName("missing_caller_arguments")] public IReadOnlyList<string>? MissingCallerArguments { get; init; }
+    [JsonPropertyName("unobservable_source_facts")] public IReadOnlyList<string>? UnobservableSourceFacts { get; init; }
     [JsonPropertyName("completion_identity")] public string? CompletionIdentity { get; init; }
     [JsonPropertyName("recipient_context")] public string? RecipientContext { get; init; }
     [JsonPropertyName("dispatch_generation")] public string? DispatchGeneration { get; init; }
