@@ -4,20 +4,21 @@ using IntentSystem.Cli.Infrastructure;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G804: v0.32.0 preview.2 is a measured, prepare-only release line. These
-/// guards keep the seven shipped units, the eight-commit first-parent
-/// accounting (including the G802 prep), the alias compatibility promise, the
-/// three version identities, EN/JA parity, and the unchanged version policy
-/// durable.
+/// G804 / G830: v0.32.0 is a measured, prepare-only release line, remeasured
+/// for preview.3 at the post-G829 base. These guards keep the twenty-six
+/// shipped units, the thirty-three-commit first-parent accounting (G802/G804
+/// prior prep, five claim state commits, G813 partial), the alias
+/// compatibility promise, the three version identities, EN/JA parity, and the
+/// unchanged version policy durable.
 /// </summary>
 public sealed class ReleaseNotesV0320G802Tests
 {
-    private const string Base = "16267f9d58af31669252186a16ce09ab0dd47ba4";
-    private const string Range = "v0.31.0..16267f9d58af31669252186a16ce09ab0dd47ba4";
-    private const string NormalPlaceholderIdentity = "intent-cli 0.32.1-16267f9-G803";
-    private const string ExplicitReleaseIdentity = "intent-cli 0.32.0-16267f9-G803";
-    private const string PreviousBaseFragment = "b0f5354";
-    private const string PreviousBase = "b0f5354ba9a922e1676a2e654d866c2a08f60104";
+    private const string Base = "e78b27d1e99247380fa7518d67470304fb1d7e7b";
+    private const string Range = "v0.31.0..e78b27d1e99247380fa7518d67470304fb1d7e7b";
+    private const string NormalPlaceholderIdentity = "intent-cli 0.32.1-e78b27d-G829";
+    private const string ExplicitReleaseIdentity = "intent-cli 0.32.0-e78b27d-G829";
+    private const string PreviousBaseFragment = "16267f9";
+    private const string PreviousBase = "16267f9d58af31669252186a16ce09ab0dd47ba4";
 
     private static readonly (string Unit, string Pr, string Issue, string Merge)[] Units =
     [
@@ -28,6 +29,25 @@ public sealed class ReleaseNotesV0320G802Tests
         ("G797", "#1746", "#1739", "11457187ad0f9c2c269b80de84b0fd9ea278dfe5"),
         ("G801", "#1749", "#1748", "2a833a976688b3139678e4954162a9c00d32d0f4"),
         ("G803", "#1753", "#1752", "16267f9d58af31669252186a16ce09ab0dd47ba4"),
+        ("G799", "#1756", "#1744", "d4645e2f02aea6a7969804a156df176cc2122a4a"),
+        ("G805", "#1765", "#1757", "5ffcea48b0060569112efee06ad12baa5d8c9b59"),
+        ("G806", "#1766", "#1758", "8e1ded058aeb6738c9419ce584f8da0d9fa59888"),
+        ("G807", "#1767", "#1759", "ea5959f83f528675072b8f034f5c3fc30cbb07b8"),
+        ("G808", "#1768", "#1760", "80270af5c54bf4e89dfbb8eb5f4a93e7142e8e36"),
+        ("G809", "#1769", "#1763", "3d604981865a04c2875fde06d76cf5b60d41fda0"),
+        ("G811", "#1770", "#1762", "828e19815e0bd8356298e5c49ae3c90bd8a1751d"),
+        ("G812", "#1772", "#1764", "cf40ac8f3211925339134f5fa8bb91bc722e549b"),
+        ("G810", "#1773", "#1761", "0f7cb50b0f7d42da120fe04bc4421807dcf5da16"),
+        ("G815", "#1776", "#1775", "7003e08b0152e91f89069a67b5ca299bef7cd6de"),
+        ("G813", "#1781", "#1774", "3d91a8004c97ab800f365d89189c12def8a39980"),
+        ("G822", "#1786", "#1785", "9d521ebc4ef45c7aea52527e77bb21aa34f1c9a5"),
+        ("G823", "#1788", "#1778, #1787", "01944a5ed47139b47276ef2fcbc951183f8e442b"),
+        ("G824", "#1791", "#1782, #1789", "20ef0a6caa184b91e4c3cd2378bd37d941e0de7a"),
+        ("G825", "#1793", "#1777, #1790", "ca7272f4b88e00577e7c423d41a888f0f0defaf6"),
+        ("G826", "#1795", "#1792", "71ca5da979f549b9f4f1f4c4ebb45ddd0696fb44"),
+        ("G827", "#1796", "#1794", "0762312ddccf14009d3252c5101d0b893ca7be6b"),
+        ("G828", "#1799", "#1798", "227a981d42cee28924ba34cbde3f45d12717a202"),
+        ("G829", "#1802", "#1801", "e78b27d1e99247380fa7518d67470304fb1d7e7b"),
     ];
 
     private static readonly string[] FirstParentCommits =
@@ -39,13 +59,38 @@ public sealed class ReleaseNotesV0320G802Tests
         "11457187ad0f9c2c269b80de84b0fd9ea278dfe5",
         "2a833a976688b3139678e4954162a9c00d32d0f4",
         "b0f5354ba9a922e1676a2e654d866c2a08f60104",
+        "16267f9d58af31669252186a16ce09ab0dd47ba4",
+        "1f4f94155914c9f6097ec8f6bbad916f13e7817b",
+        "d4645e2f02aea6a7969804a156df176cc2122a4a",
+        "5ffcea48b0060569112efee06ad12baa5d8c9b59",
+        "8e1ded058aeb6738c9419ce584f8da0d9fa59888",
+        "ea5959f83f528675072b8f034f5c3fc30cbb07b8",
+        "80270af5c54bf4e89dfbb8eb5f4a93e7142e8e36",
+        "3d604981865a04c2875fde06d76cf5b60d41fda0",
+        "828e19815e0bd8356298e5c49ae3c90bd8a1751d",
+        "cf40ac8f3211925339134f5fa8bb91bc722e549b",
+        "0f7cb50b0f7d42da120fe04bc4421807dcf5da16",
+        "ebb7f21745a24d985c3ffdc7b370195506c1338c",
+        "3262d7c543f3663a8ce83fb8a2e86018162d6962",
+        "540c6efdf63300d05fe79e8020574c1bc3f96ad7",
+        "f9a91a61edb3ed6291750a19e0247212fccad270",
+        "baef0f3534c0a7a0de7dac0e0f1b4a7946c7c0a9",
+        "7003e08b0152e91f89069a67b5ca299bef7cd6de",
+        "3d91a8004c97ab800f365d89189c12def8a39980",
+        "9d521ebc4ef45c7aea52527e77bb21aa34f1c9a5",
+        "01944a5ed47139b47276ef2fcbc951183f8e442b",
+        "20ef0a6caa184b91e4c3cd2378bd37d941e0de7a",
+        "ca7272f4b88e00577e7c423d41a888f0f0defaf6",
+        "71ca5da979f549b9f4f1f4c4ebb45ddd0696fb44",
+        "0762312ddccf14009d3252c5101d0b893ca7be6b",
+        "227a981d42cee28924ba34cbde3f45d12717a202",
         Base,
     ];
 
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void NotesCoverExactlyTheSevenShippedUnitsIncludingG803(string language)
+    public void NotesCoverExactlyTheTwentySixShippedUnitsThroughG829(string language)
     {
         var notes = ReadNotes(language);
         var listed = Regex.Matches(notes, @"(?m)^- (G\d+) —")
@@ -53,7 +98,7 @@ public sealed class ReleaseNotesV0320G802Tests
             .ToArray();
 
         Assert.Equal(Units.Select(unit => unit.Unit), listed);
-        Assert.Equal(7, listed.Length);
+        Assert.Equal(26, listed.Length);
 
         foreach (var unit in Units)
         {
@@ -64,27 +109,35 @@ public sealed class ReleaseNotesV0320G802Tests
             Assert.Contains("Operator-observable outcome", entry, StringComparison.Ordinal);
         }
 
-        Console.WriteLine($"G804 AC1 {language}: seven_shipped_units={string.Join(',', listed)}; base={Base}; operator_outcomes=7");
+        Console.WriteLine($"G830 AC3 {language}: shipped_units={listed.Length}; units={string.Join(',', listed)}; base={Base}; operator_outcomes={listed.Length}");
     }
 
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void NotesPinTheEightCommitRangeAndClassifyTheG802Prep(string language)
+    public void NotesPinTheThirtyThreeCommitRangeAndClassifyEveryCommit(string language)
     {
         var notes = ReadNotes(language);
 
         Assert.Contains($"$ git rev-list --first-parent --reverse {Range}", notes, StringComparison.Ordinal);
-        Assert.Contains($"$ git rev-list --first-parent --count {Range}\n8", notes, StringComparison.Ordinal);
+        Assert.Contains($"$ git rev-list --first-parent --count {Range}\n33", notes, StringComparison.Ordinal);
+        Assert.Equal(33, FirstParentCommits.Length);
         foreach (var commit in FirstParentCommits)
         {
             Assert.Contains(commit, notes, StringComparison.Ordinal);
         }
 
+        var tableRows = Regex.Matches(notes, @"(?m)^\| `([0-9a-f]{40})` \| (.+?) \| (.+?) \|$")
+            .Select(match => (Commit: match.Groups[1].Value, Classification: match.Groups[3].Value))
+            .ToArray();
+        Assert.Equal(FirstParentCommits, tableRows.Select(row => row.Commit));
+        Assert.Equal(26, tableRows.Count(row => row.Classification is "included" or "partial unit, included"));
+        Assert.Equal(2, tableRows.Count(row => row.Classification == "prior release prep"));
+        Assert.Equal(5, tableRows.Count(row => row.Classification == "claim state commit, not a unit"));
         Assert.Contains("G802 / PR #1751 / issue #1750", notes, StringComparison.Ordinal);
-        Assert.Contains("this release's own prep", notes, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("G803 / PR #1753 / issue #1752", notes, StringComparison.Ordinal);
-        Console.WriteLine($"G804 AC2/AC3 {language}: first_parent_count=8; commits={string.Join(',', FirstParentCommits)}; prep=b0f5354b classified=this release's own prep");
+        Assert.Contains("G804 / PR #1755", notes, StringComparison.Ordinal);
+        Assert.Contains("G813 / PR #1781 / linkage issue #1774 (not closed)", notes, StringComparison.Ordinal);
+        Console.WriteLine($"G830 AC2 {language}: first_parent_count={tableRows.Length}; included=26; prior_prep=2; claim_state=5; unclassified=0");
     }
 
     [Theory]
@@ -137,8 +190,8 @@ public sealed class ReleaseNotesV0320G802Tests
         var mutated = segment switch
         {
             "named-base" => notes.Replace($"`{Base}`", $"`{PreviousBase}`", StringComparison.Ordinal),
-            "normal-identity" => notes.Replace(NormalPlaceholderIdentity, "intent-cli 0.32.1-b0f5354-G803", StringComparison.Ordinal),
-            "explicit-identity" => notes.Replace(ExplicitReleaseIdentity, "intent-cli 0.32.0-b0f5354-G803", StringComparison.Ordinal),
+            "normal-identity" => notes.Replace(NormalPlaceholderIdentity, "intent-cli 0.32.1-16267f9-G803", StringComparison.Ordinal),
+            "explicit-identity" => notes.Replace(ExplicitReleaseIdentity, "intent-cli 0.32.0-16267f9-G803", StringComparison.Ordinal),
             _ => throw new ArgumentOutOfRangeException(nameof(segment), segment, null),
         };
 
@@ -219,6 +272,32 @@ public sealed class ReleaseNotesV0320G802Tests
         Console.WriteLine("G804 AC6 policy: stableVersion=0.32.0; nextVersion=0.32.1; placeholders=en,ja; version_policy_diff=empty");
     }
 
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void Preview3SectionNamesTheRouteDecisionAndActionableBehaviorChanges_G830(string language)
+    {
+        var notes = Normalize(ReadNotes(language));
+
+        foreach (var route in new[]
+        {
+            "automation progress-supervision", "guide progress-supervision", "guide steward-thread", "issue sync-body",
+            "notify ack", "notify acknowledge", "notify progress-supervision", "session-layer seat",
+        })
+        {
+            Assert.Contains($"`{route}`", notes, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("v0.32.0-preview.3", notes, StringComparison.Ordinal);
+        Assert.Contains("2026-09-14", notes, StringComparison.Ordinal);
+        Assert.Contains("[supervision] opt_in_teams", notes, StringComparison.Ordinal);
+        Assert.Contains("intent-cli notify supervise repair-cycle-history --domain <d> --team <t> --write", notes, StringComparison.Ordinal);
+        Assert.Contains("--mode herdr-only --write", notes, StringComparison.Ordinal);
+        Assert.Contains("bootstrap.resume_recommended", notes, StringComparison.Ordinal);
+        Assert.Contains("read-compare-write-verified", notes, StringComparison.Ordinal);
+        Console.WriteLine($"G830 AC4 {language}: routes=8; opt_in=declared; stalls_repair=named; herdr_only=named; resume_change=disclosed");
+    }
+
     private static string FindEntry(string notes, string unit)
     {
         var match = Regex.Match(notes, $"(?ms)^- {Regex.Escape(unit)} —.*?(?=^- |^## |\\z)");
@@ -228,7 +307,7 @@ public sealed class ReleaseNotesV0320G802Tests
     private static IReadOnlyList<(string Unit, string Pr, string Issue, string Merge)> ParseInventory(string notes) =>
         Regex.Matches(
                 notes,
-                @"(?ms)^- (G\d+) — PR (#\d+) / issue (#\d+); merge commit `([0-9a-f]{40})`.*?(?=^- |^## |\z)")
+                @"(?ms)^- (G\d+) — PR (#\d+) / issue (#\d+(?:, #\d+)*); merge commit `([0-9a-f]{40})`.*?(?=^- |^## |\z)")
             .Select(match => (
                 match.Groups[1].Value,
                 match.Groups[2].Value,
