@@ -210,6 +210,18 @@ internal static class IssueSyncBodyCommand
         try
         {
             File.WriteAllBytes(uploadPath, localBytes);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            TryDeleteUpload(uploadPath);
+            return Emit(writer, format, Refuse(result, "upload-staging-failed", string.Empty) with
+            {
+                Summary = $"refused (upload-staging-failed): could not stage the validated body for upload ({exception.Message}). The issue body was read, but no update was sent.",
+            });
+        }
+
+        try
+        {
             client.UpdateBody(repo!, issueNumber, uploadPath);
         }
         catch (Exception exception) when (IsAdapterFailure(exception))
@@ -220,7 +232,7 @@ internal static class IssueSyncBodyCommand
         }
         finally
         {
-            File.Delete(uploadPath);
+            TryDeleteUpload(uploadPath);
         }
 
         string afterBody;
@@ -250,6 +262,19 @@ internal static class IssueSyncBodyCommand
             RunsEvent = EventSynced,
             Summary = $"applied: issue #{issueNumber} body replaced ({remoteSha} -> {afterSha}) and verified by read-back.",
         });
+    }
+
+    private static void TryDeleteUpload(string uploadPath)
+    {
+        try
+        {
+            File.Delete(uploadPath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A leftover temp copy of an already-validated body is harmless and
+            // must not turn a sent update into an unreported crash.
+        }
     }
 
     /// <summary>
