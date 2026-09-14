@@ -166,15 +166,6 @@ internal static class GuideModelCommand
     }
 
     /// <summary>
-    /// G570: the session layer is the TRANSPORT the four threads talk over, and
-    /// it is now selectable. This section exists so an unfamiliar agent can tell
-    /// the two questions apart: "which model?" (answered above — four threads,
-    /// PRIMARY, unqualified) and "which transport?" (answered here).
-    ///
-    /// G624 presents the preferred transport separately from G540's PRIMARY
-    /// model designation, because neither transport is primary.
-    /// </summary>
-    /// <summary>
     /// G831: both supported thread shapes, derived from the canonical role
     /// vocabulary. The four-thread model is every canonical role except the
     /// optional Steward relay seat; the five-thread model is all of them.
@@ -197,7 +188,7 @@ internal static class GuideModelCommand
                 Name = "four-thread",
                 Roles = judgmentRoles,
                 Aliases = AliasesFor(judgmentRoles),
-                Summary = "The four judgment-bearing threads; legacy names are accepted aliases.",
+                Summary = "The four core threads; legacy names are accepted aliases.",
             },
             new GuideModelThreadModel
             {
@@ -209,6 +200,15 @@ internal static class GuideModelCommand
         ];
     }
 
+    /// <summary>
+    /// G570: the session layer is the TRANSPORT the four threads talk over, and
+    /// it is now selectable. This section exists so an unfamiliar agent can tell
+    /// the two questions apart: "which model?" (answered above — four threads,
+    /// PRIMARY, unqualified) and "which transport?" (answered here).
+    ///
+    /// G624 presents the preferred transport separately from G540's PRIMARY
+    /// model designation, because neither transport is primary.
+    /// </summary>
     internal static GuideModelSessionLayer BuildSessionLayer() => new()
     {
         Summary =
@@ -274,6 +274,7 @@ internal static class GuideModelCommand
             writer.WriteLine($"- {role}");
         }
         writer.WriteLine();
+        writer.WriteLine("Supported thread models:");
         writer.WriteLine();
         foreach (var threadModel in model.ExecutionOrchestrationModel.ThreadModels)
         {
