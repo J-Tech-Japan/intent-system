@@ -5,6 +5,9 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+// G823: both classes replace the command's static lister and lookup seams,
+// so they must not run in parallel.
+[Collection("PublishLifecycleRepairSharedState")]
 public sealed class AutomationPublishLifecycleRepairCommandTests : IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new()

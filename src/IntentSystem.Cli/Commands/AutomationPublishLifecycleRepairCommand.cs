@@ -33,6 +33,20 @@ internal static class AutomationPublishLifecycleRepairCommand
     private const string UsageLine =
         "Usage: intent-cli automation publish-lifecycle-repair --repo <owner/repo> [--issue <n>|--execution-unit <unit>] [--write|--dry-run] [--format markdown|json]";
 
+    /// <summary>
+    /// G823: a unit whose issue lives in a repository other than --repo is
+    /// excluded before any evidence lookup. A bare issue number is not an
+    /// identifier on a host shared by several repositories (node 03, G603).
+    /// </summary>
+    internal const string ExclusionForeignRepository = "foreign-repository";
+
+    /// <summary>
+    /// G823: a unit that has an issue number but whose repository cannot be
+    /// proven from created_issue_url is excluded rather than assumed to
+    /// belong to --repo.
+    /// </summary>
+    internal const string ExclusionIssueRepositoryUnproven = "issue-repository-unproven";
+
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
     public static Func<IGitHubAutomationIssueLookup>? IssueLookupFactory { get; set; }
 
@@ -113,6 +127,7 @@ internal static class AutomationPublishLifecycleRepairCommand
         var nowIso = ResolveNow().ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture);
 
         var candidates = new List<PublishLifecycleCandidate>();
+        var excluded = new List<PublishLifecycleExclusion>();
         foreach (var unitDir in Directory.EnumerateDirectories(issuesDir).OrderBy(p => p, StringComparer.Ordinal))
         {
             var unit = Path.GetFileName(unitDir)!;
@@ -140,6 +155,37 @@ internal static class AutomationPublishLifecycleRepairCommand
                 && artifact?.CreatedIssueNumber != requestedIssue)
             {
                 continue;
+            }
+
+            // G823: bind the unit to the repository its issue lives in before
+            // reading any evidence. Evidence below is looked up by number
+            // against --repo, so a unit bound elsewhere would otherwise be
+            // judged on a different issue that happens to share its number.
+            if (artifact?.CreatedIssueNumber is not null)
+            {
+                if (!TryBindIssueRepository(artifact, out var boundRepository))
+                {
+                    excluded.Add(new PublishLifecycleExclusion
+                    {
+                        ExecutionUnit = unit,
+                        Reason = ExclusionIssueRepositoryUnproven,
+                        BoundRepository = null,
+                        CreatedIssueUrl = artifact.CreatedIssueUrl
+                    });
+                    continue;
+                }
+
+                if (!RepositoryEquals(boundRepository!, repo!))
+                {
+                    excluded.Add(new PublishLifecycleExclusion
+                    {
+                        ExecutionUnit = unit,
+                        Reason = ExclusionForeignRepository,
+                        BoundRepository = boundRepository,
+                        CreatedIssueUrl = artifact.CreatedIssueUrl
+                    });
+                    continue;
+                }
             }
 
             var queueItem = queueState?.Items.FirstOrDefault(i => string.Equals(i.ExecutionUnit, unit, StringComparison.Ordinal));
@@ -212,7 +258,7 @@ internal static class AutomationPublishLifecycleRepairCommand
                 }
                 try
                 {
-                    ApplyRepair(entry);
+                    ApplyRepair(entry, repo!);
                     applied.Add(entry.ExecutionUnit);
                 }
                 catch (Exception exception) when (exception is IOException or InvalidOperationException)
@@ -234,8 +280,10 @@ internal static class AutomationPublishLifecycleRepairCommand
             AppliedCount = applied.Count,
             AppliedUnits = applied,
             Entries = analysis.Entries,
+            ExcludedCount = excluded.Count,
+            Excluded = excluded,
             Warnings = failures,
-            Summary = BuildSummary(analysis, applied.Count, failures.Count, write, scope)
+            Summary = BuildSummary(analysis, applied.Count, failures.Count, write, scope, excluded.Count)
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -250,9 +298,28 @@ internal static class AutomationPublishLifecycleRepairCommand
         return failures.Count == 0 ? 0 : 1;
     }
 
-    private static void ApplyRepair(PublishLifecycleEntry entry)
+    internal static void ApplyRepair(PublishLifecycleEntry entry, string repo)
     {
         var existing = IssuePublishArtifactYaml.Deserialize(File.ReadAllText(entry.ArtifactPath));
+
+        // G823 / G603: the write path re-derives the repository from the file it
+        // is about to change, so a future regression in selection still cannot
+        // rewrite another repository's unit.
+        if (existing.CreatedIssueNumber is not null)
+        {
+            if (!TryBindIssueRepository(existing, out var boundRepository))
+            {
+                throw new InvalidOperationException(
+                    $"refusing to write {entry.ExecutionUnit}: its issue repository cannot be proven from created_issue_url '{existing.CreatedIssueUrl}', and --repo is '{repo}'.");
+            }
+
+            if (!RepositoryEquals(boundRepository!, repo))
+            {
+                throw new InvalidOperationException(
+                    $"refusing to write {entry.ExecutionUnit}: it is bound to '{boundRepository}', not --repo '{repo}'.");
+            }
+        }
+
         var updated = existing with
         {
             LifecycleState = entry.RecommendedLifecycleState,
@@ -262,6 +329,52 @@ internal static class AutomationPublishLifecycleRepairCommand
         };
         File.WriteAllText(entry.ArtifactPath, IssuePublishArtifactYaml.Serialize(updated));
     }
+
+    /// <summary>
+    /// G823: binds a published unit to the repository named by its
+    /// created_issue_url. Succeeds only for
+    /// https://github.com/&lt;owner&gt;/&lt;repo&gt;/issues/&lt;n&gt; where n equals
+    /// created_issue_number.
+    /// </summary>
+    internal static bool TryBindIssueRepository(IssuePublishArtifact artifact, out string? repository)
+    {
+        repository = null;
+        if (artifact.CreatedIssueNumber is not { } number
+            || string.IsNullOrWhiteSpace(artifact.CreatedIssueUrl)
+            || !Uri.TryCreate(artifact.CreatedIssueUrl.Trim(), UriKind.Absolute, out var uri)
+            || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length != 4
+            || !string.Equals(segments[2], "issues", StringComparison.Ordinal)
+            || !int.TryParse(segments[3], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var urlNumber)
+            || urlNumber != number)
+        {
+            return false;
+        }
+
+        repository = $"{segments[0]}/{NormalizeRepositoryName(segments[1])}";
+        return true;
+    }
+
+    internal static bool RepositoryEquals(string left, string right) =>
+        string.Equals(NormalizeRepository(left), NormalizeRepository(right), StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeRepository(string value)
+    {
+        var trimmed = value.Trim().TrimEnd('/');
+        var slash = trimmed.IndexOf('/');
+        return slash < 0
+            ? trimmed
+            : $"{trimmed[..slash]}/{NormalizeRepositoryName(trimmed[(slash + 1)..])}";
+    }
+
+    private static string NormalizeRepositoryName(string name) =>
+        name.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name;
 
     private static int? ExtractTrailingInteger(string value)
     {
@@ -279,18 +392,22 @@ internal static class AutomationPublishLifecycleRepairCommand
         int appliedCount,
         int failureCount,
         bool write,
-        string scope)
+        string scope,
+        int excludedCount)
     {
+        var excludedSuffix = excludedCount == 0
+            ? string.Empty
+            : $" {excludedCount} excluded (other or unproven repository).";
         var scopeSuffix = string.Equals(scope, "all", StringComparison.Ordinal)
             ? string.Empty
             : $" ({scope})";
         if (write)
         {
-            return $"publish-lifecycle-repair{scopeSuffix}: applied {appliedCount} repair(s) ({analysis.CoherentCount} coherent, {analysis.DriftCount} drift, {analysis.UnsafeCount} unsafe, {analysis.MissingArtifactCount} missing-artifact, {failureCount} failure(s)).";
+            return $"publish-lifecycle-repair{scopeSuffix}: applied {appliedCount} repair(s) ({analysis.CoherentCount} coherent, {analysis.DriftCount} drift, {analysis.UnsafeCount} unsafe, {analysis.MissingArtifactCount} missing-artifact, {failureCount} failure(s)).{excludedSuffix}";
         }
         return string.Equals(scope, "all", StringComparison.Ordinal)
-            ? $"publish-lifecycle-repair (dry-run): {analysis.DriftCount} repairable drift(s); {analysis.CoherentCount} coherent, {analysis.UnsafeCount} unsafe, {analysis.MissingArtifactCount} missing-artifact."
-            : $"publish-lifecycle-repair (dry-run, {scope}): {analysis.DriftCount} repairable drift(s); {analysis.CoherentCount} coherent, {analysis.UnsafeCount} unsafe, {analysis.MissingArtifactCount} missing-artifact.";
+            ? $"publish-lifecycle-repair (dry-run): {analysis.DriftCount} repairable drift(s); {analysis.CoherentCount} coherent, {analysis.UnsafeCount} unsafe, {analysis.MissingArtifactCount} missing-artifact.{excludedSuffix}"
+            : $"publish-lifecycle-repair (dry-run, {scope}): {analysis.DriftCount} repairable drift(s); {analysis.CoherentCount} coherent, {analysis.UnsafeCount} unsafe, {analysis.MissingArtifactCount} missing-artifact.{excludedSuffix}";
     }
 
     private static void EmitEmpty(
@@ -313,6 +430,8 @@ internal static class AutomationPublishLifecycleRepairCommand
             AppliedCount = 0,
             AppliedUnits = Array.Empty<string>(),
             Entries = Array.Empty<PublishLifecycleEntry>(),
+            ExcludedCount = 0,
+            Excluded = Array.Empty<PublishLifecycleExclusion>(),
             Warnings = Array.Empty<string>(),
             Summary = summary
         };
@@ -340,6 +459,7 @@ internal static class AutomationPublishLifecycleRepairCommand
         writer.WriteLine($"- unsafe (operator stop): {result.UnsafeCount}");
         writer.WriteLine($"- missing publish artifact: {result.MissingArtifactCount}");
         writer.WriteLine($"- applied: {result.AppliedCount}");
+        writer.WriteLine($"- excluded (other or unproven repository): {result.ExcludedCount}");
         writer.WriteLine();
         writer.WriteLine(result.Summary);
         if (result.Entries.Count > 0)
@@ -353,6 +473,16 @@ internal static class AutomationPublishLifecycleRepairCommand
                 {
                     writer.WriteLine($"  - {ev}");
                 }
+            }
+        }
+        if (result.Excluded.Count > 0)
+        {
+            writer.WriteLine();
+            writer.WriteLine("## Excluded");
+            foreach (var exclusion in result.Excluded)
+            {
+                var bound = exclusion.BoundRepository is null ? string.Empty : $" bound to `{exclusion.BoundRepository}`";
+                writer.WriteLine($"- **`{exclusion.ExecutionUnit}`** [{exclusion.Reason}]{bound} — `{exclusion.CreatedIssueUrl ?? "(no created_issue_url)"}`");
             }
         }
     }
@@ -480,7 +610,7 @@ internal static class AutomationPublishLifecycleRepairCommand
     {
         writer.WriteLine("automation publish-lifecycle-repair");
         writer.WriteLine(UsageLine);
-        writer.WriteLine("Repairs deterministic publish.yaml lifecycle drift; scope with one issue or execution unit to leave other domains untouched.");
+        writer.WriteLine("Repairs deterministic publish.yaml lifecycle drift for units whose issue belongs to --repo. Units whose created_issue_url names another repository, or whose repository cannot be proven, are excluded and reported in every scope; scope with one issue or execution unit to limit the change further.");
     }
 }
 
@@ -496,8 +626,19 @@ internal sealed record PublishLifecycleRepairResult
     [JsonPropertyName("applied_count")] public required int AppliedCount { get; init; }
     [JsonPropertyName("applied_units")] public required IReadOnlyList<string> AppliedUnits { get; init; }
     [JsonPropertyName("entries")] public required IReadOnlyList<PublishLifecycleEntry> Entries { get; init; }
+    [JsonPropertyName("excluded_count")] public required int ExcludedCount { get; init; }
+    [JsonPropertyName("excluded")] public required IReadOnlyList<PublishLifecycleExclusion> Excluded { get; init; }
     [JsonPropertyName("warnings")] public required IReadOnlyList<string> Warnings { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
+}
+
+/// <summary>G823: a unit left out because its issue repository is not --repo.</summary>
+internal sealed record PublishLifecycleExclusion
+{
+    [JsonPropertyName("execution_unit")] public required string ExecutionUnit { get; init; }
+    [JsonPropertyName("reason")] public required string Reason { get; init; }
+    [JsonPropertyName("bound_repository")] public string? BoundRepository { get; init; }
+    [JsonPropertyName("created_issue_url")] public string? CreatedIssueUrl { get; init; }
 }
 
 internal interface IGitHubAutomationIssueLookup
