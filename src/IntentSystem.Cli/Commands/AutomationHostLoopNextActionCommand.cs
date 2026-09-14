@@ -47,6 +47,9 @@ internal static class AutomationHostLoopNextActionCommand
     /// message and the automation usage line both list all of them, so the
     /// advertised surface cannot silently fall behind the parser.
     /// </summary>
+    internal const string Usage =
+        "automation host-loop-next-action --repo <r> [--domain <d>] [--team <t> --task-id <id> --result-nonce <nonce> --routing-root <root> --timeout-seconds <1..30>] [--stale-cli] [--sync-classification <c>] [--safe-stash-required] [--publish-recovery-repairs <N>] [--publish-lifecycle-drift <N>] [--next-slice-issue-cut-ready] [--publish-next-execution-unit <u>] [--hard-clarification-open] [--approved-pr-merge-state <s>] [--approved-pr-metadata-blocked] [--prepared-packet-commit-ready] [--prepared-packet-execution-unit <u>] [--format markdown|json]";
+
     internal static readonly IReadOnlyList<string> AcceptedFlags =
     [
         "--repo", "--domain", "--team", "--task-id", "--result-nonce", "--routing-root",
@@ -1404,7 +1407,7 @@ internal static class AutomationHostLoopNextActionCommand
                     format = requested;
                     break;
                 default:
-                    error = $"Unknown argument '{args[index]}'. Supported: {string.Join(" ", AcceptedFlags)}."; return false;
+                    error = $"Unknown argument '{args[index]}'. Usage: {Usage}"; return false;
             }
         }
 
@@ -1507,9 +1510,17 @@ internal sealed record HostLoopNextActionEmittedResult
     [JsonPropertyName("result_nonce")] public string? ResultNonce { get; init; }
     [JsonPropertyName("identity_qualification")] public string? IdentityQualification { get; init; }
     [JsonPropertyName("identity_source")] public string? IdentitySource { get; init; }
-    [JsonPropertyName("identity_unresolved_reasons")] public IReadOnlyList<string>? IdentityUnresolvedReasons { get; init; }
-    [JsonPropertyName("missing_caller_arguments")] public IReadOnlyList<string>? MissingCallerArguments { get; init; }
-    [JsonPropertyName("unobservable_source_facts")] public IReadOnlyList<string>? UnobservableSourceFacts { get; init; }
+    // G822: omitted when null so legacy (no-identity) and qualified results
+    // keep their existing JSON shape; present only on identity-unresolved.
+    [JsonPropertyName("identity_unresolved_reasons")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? IdentityUnresolvedReasons { get; init; }
+    [JsonPropertyName("missing_caller_arguments")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? MissingCallerArguments { get; init; }
+    [JsonPropertyName("unobservable_source_facts")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? UnobservableSourceFacts { get; init; }
     [JsonPropertyName("completion_identity")] public string? CompletionIdentity { get; init; }
     [JsonPropertyName("recipient_context")] public string? RecipientContext { get; init; }
     [JsonPropertyName("dispatch_generation")] public string? DispatchGeneration { get; init; }

@@ -78,7 +78,7 @@ internal static class CommandRouter
         "automation durable-state-preflight [--format markdown|json]",
         "automation heartbeat --domain <d> --repo <r> [--stale-minutes <m, default 45>] [--format json|markdown]",
         "automation ci-wait record|clear|show [--domain <d>] --repo <r> --pr <n> [--head <sha>] [--transition <t>] [--dry-run|--write] [--format json|markdown]",
-        "automation host-loop-next-action --repo <r> [--domain <d>] [--team <t> --task-id <id> --result-nonce <nonce> --routing-root <root> --timeout-seconds <1..30>] [--stale-cli] [--sync-classification <c>] [--safe-stash-required] [--publish-recovery-repairs <N>] [--publish-lifecycle-drift <N>] [--next-slice-issue-cut-ready] [--publish-next-execution-unit <u>] [--hard-clarification-open] [--approved-pr-merge-state <s>] [--approved-pr-metadata-blocked] [--prepared-packet-commit-ready] [--prepared-packet-execution-unit <u>] [--format markdown|json]",
+        AutomationHostLoopNextActionCommand.Usage,
         "automation host-loop-wake --repo <r> [--domain <d>] [--team <t>] [--completion-signal-id <id>|--task-id <id>] [--write] [--format json|markdown]",
         "automation continuation-chain --domain <d> --team <t> [--task-id <id>|--completion-signal-id <id>|--chain-id <id>] [--format json|markdown]",
         "automation host-queue-item-recovery --repo <r> [--unit <u>] [--issue <n>] [--pr <m>] [--write]",

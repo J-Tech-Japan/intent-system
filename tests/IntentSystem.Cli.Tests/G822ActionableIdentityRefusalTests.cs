@@ -159,9 +159,9 @@ public sealed class G822ActionableIdentityRefusalTests : IDisposable
         Assert.Equal(
             "J-Tech-Japan/intent-system/intent-cli/intent-cli-dev/G822-task/G822-NONCE/generation-1/digest-1",
             root.GetProperty("completion_identity").GetString());
-        Assert.Equal(JsonValueKind.Null, root.GetProperty("identity_unresolved_reasons").ValueKind);
-        Assert.Equal(JsonValueKind.Null, root.GetProperty("missing_caller_arguments").ValueKind);
-        Assert.Equal(JsonValueKind.Null, root.GetProperty("unobservable_source_facts").ValueKind);
+        Assert.False(root.TryGetProperty("identity_unresolved_reasons", out _));
+        Assert.False(root.TryGetProperty("missing_caller_arguments", out _));
+        Assert.False(root.TryGetProperty("unobservable_source_facts", out _));
     }
 
     [Fact]
@@ -223,9 +223,35 @@ public sealed class G822ActionableIdentityRefusalTests : IDisposable
             Assert.Contains($"Unknown argument '{sentinel}'.", output, StringComparison.Ordinal);
             Assert.DoesNotContain($"Unknown argument '{flag}'", output, StringComparison.Ordinal);
 
-            var supported = output[(output.IndexOf("Supported:", StringComparison.Ordinal) + "Supported:".Length)..];
-            Assert.Contains(" " + flag, " " + supported.Replace(".", " "), StringComparison.Ordinal);
-            Assert.Contains(flag, usage, StringComparison.Ordinal);
+            Assert.Contains("Usage: " + AutomationHostLoopNextActionCommand.Usage, output, StringComparison.Ordinal);
+            // Match the flag as a whole token: preceded by a space or "[" and
+            // followed by a space or "]", so --repo cannot match inside --repo-x.
+            Assert.Matches($@"(?:^|[\s\[]){System.Text.RegularExpressions.Regex.Escape(flag)}(?=[\s\]]|$)", usage);
+        }
+    }
+
+    [Fact]
+    public void LegacyInvocation_DoesNotEmitTheNewReasonProperties()
+    {
+        var lister = new CountingLister();
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => lister;
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FixedNextSliceProbe();
+        AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = _ => new FixedRecoveryProbe();
+        AutomationHostLoopNextActionCommand.CloseoutDriftCheckProbeFactory = _ => new FixedDriftProbe();
+
+        foreach (var sync in new[] { "clean", "dirty-mixed" })
+        {
+            var root = RunJson(
+            [
+                "--repo", "J-Tech-Japan/intent-system",
+                "--domain", "intent-cli",
+                "--sync-classification", sync,
+                "--format", "json",
+            ]);
+
+            Assert.False(root.TryGetProperty("identity_unresolved_reasons", out _), sync);
+            Assert.False(root.TryGetProperty("missing_caller_arguments", out _), sync);
+            Assert.False(root.TryGetProperty("unobservable_source_facts", out _), sync);
         }
     }
 
@@ -261,7 +287,7 @@ public sealed class G822ActionableIdentityRefusalTests : IDisposable
         RunGit(checkoutRoot, "init", "-q", "-b", branch);
         File.WriteAllText(Path.Combine(checkoutRoot, "README.md"), "g822\n");
         RunGit(checkoutRoot, "add", "README.md");
-        RunGit(checkoutRoot, "-c", "user.email=g822@example.invalid", "-c", "user.name=g822", "commit", "-q", "-m", "init");
+        RunGit(checkoutRoot, "-c", "user.email=g822@example.invalid", "-c", "user.name=g822", "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", "init");
         RunGit(checkoutRoot, "remote", "add", "origin", origin);
     }
 
