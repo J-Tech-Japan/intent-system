@@ -818,7 +818,8 @@ operator ruling of 2026-08-01 it is now selectable rather than fixed.
   controller and no separate message bridge runs.
 - **`agmsg` + herdr (deprecated, G829)** — still works when team
   members are distributed across machines or the team already invests in agmsg.
-  `agmsg` remains the default when nothing is recorded.
+  `agmsg` remains the default when nothing is recorded; removal is planned for a
+  later release after consumers are checked.
 - **The four-thread model is PRIMARY** and unqualified in both modes, exactly
   as G540 ruled; neither transport is primary.
 - **One mode per team.** Mixing agmsg and herdr-only delivery inside one team is

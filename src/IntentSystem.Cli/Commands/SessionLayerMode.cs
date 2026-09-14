@@ -24,11 +24,6 @@ internal static class SessionLayerMode
     public static readonly IReadOnlyList<string> All = [Agmsg, HerdrOnly];
 
     /// <summary>
-    /// The sentence every transport chooser carries so a reader sees the
-    /// preference without mistaking it for the four-thread model's PRIMARY
-    /// designation.
-    /// </summary>
-    /// <summary>
     /// G829: agmsg + herdr is deprecated as a disposition only. It keeps working
     /// and remains the unrecorded default so no host switches transport
     /// silently; the default change and removal are separate later decisions.
@@ -46,6 +41,11 @@ internal static class SessionLayerMode
         + (string.IsNullOrWhiteSpace(team) ? string.Empty : $" --team {team}")
         + " --mode herdr-only --write`";
 
+    /// <summary>
+    /// The sentence every transport chooser carries so a reader sees the
+    /// preference without mistaking it for the four-thread model's PRIMARY
+    /// designation.
+    /// </summary>
     public const string TransportPreferenceSentence =
         "herdr-only is the preferred transport because it has fewer dependencies. "
         + AgmsgDeprecationNotice
