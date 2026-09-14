@@ -121,7 +121,7 @@ public sealed class GuideWorkflowTaskIssuePublishCommandTests
         var publishFlowStage = GuideWorkflowTaskIssuePublishCommand.Stages
             .First(s => string.Equals(s.Stage, "publish-flow", StringComparison.Ordinal));
         var flagPattern = new System.Text.RegularExpressions.Regex(
-            @"--[a-z][a-z-]*",
+            @"--[a-z][a-z0-9-]*", // G825: flags may contain digits (e.g. --expected-remote-sha256)
             System.Text.RegularExpressions.RegexOptions.Compiled);
 
         var repoRoot = FindRepoRoot();
@@ -142,7 +142,7 @@ public sealed class GuideWorkflowTaskIssuePublishCommandTests
         var stage = GuideWorkflowTaskIssuePublishCommand.Stages
             .First(s => string.Equals(s.Stage, "automation issue-publish", StringComparison.Ordinal));
         var flagPattern = new System.Text.RegularExpressions.Regex(
-            @"--[a-z][a-z-]*",
+            @"--[a-z][a-z0-9-]*", // G825: flags may contain digits (e.g. --expected-remote-sha256)
             System.Text.RegularExpressions.RegexOptions.Compiled);
 
         var repoRoot = FindRepoRoot();
@@ -179,6 +179,7 @@ public sealed class GuideWorkflowTaskIssuePublishCommandTests
         {
             ("issue publish-flow", "IssuePublishFlowCommand.cs"),
             ("issue validate-body", "IssueValidateBodyCommand.cs"),
+            ("issue sync-body", "IssueSyncBodyCommand.cs"),
             ("automation host-sync-preflight", "AutomationHostSyncPreflightCommand.cs"),
             ("automation publish-recovery", "AutomationPublishRecoveryCommand.cs"),
             ("automation issue-publish", "AutomationIssuePublishCommand.cs"),
@@ -189,7 +190,7 @@ public sealed class GuideWorkflowTaskIssuePublishCommandTests
             "`([^`]+)`",
             System.Text.RegularExpressions.RegexOptions.Compiled);
         var flagPattern = new System.Text.RegularExpressions.Regex(
-            @"--[a-z][a-z-]*",
+            @"--[a-z][a-z0-9-]*", // G825: flags may contain digits (e.g. --expected-remote-sha256)
             System.Text.RegularExpressions.RegexOptions.Compiled);
 
         foreach (var stopCondition in GuideWorkflowTaskIssuePublishCommand.StopConditions)

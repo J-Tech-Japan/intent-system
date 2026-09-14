@@ -230,7 +230,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationSupport,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerOperator,
-            Purpose = "GitHub issue surfaces incl. publish-flow (validate packet → create issue → durable-state next-step), draft / create / status / validate-body / prepare / publish-reviewed / plan-candidate."
+            Purpose = "GitHub issue surfaces incl. publish-flow (validate packet → create issue → durable-state next-step), draft / create / status / validate-body / prepare / publish-reviewed / plan-candidate, and sync-body (G825: validate-gated update of an already-published body; read-compare-write-verified, not atomic)."
         },
         new CommandGroupEntry
         {
