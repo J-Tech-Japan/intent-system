@@ -187,6 +187,49 @@ public sealed class AutomationReconcileCommandTests : IDisposable
             string.Equals(repair.Type, AutomationReconcileRepairTypes.ApprovedPrStaleReviewLabel, StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("intent-pr-request-update")]
+    [InlineData("intent-pr-update-in-progress")]
+    public void Execute_DryRun_ApprovedWithLaterReviewDecisionLabel_IsUnsafeConflictNotRepair_G824(string decisionLabel)
+    {
+        // G824 (#1782): a snapshot cannot show whether the approval or the repair
+        // request is newer, so reconcile must not remove either label.
+        using var workspace = new ReconcileWorkspace();
+        var lister = new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(1782, "approval later withdrawn",
+                    "https://github.com/J-Tech-Japan/intent-system/pull/1782",
+                    body: "Closes #563",
+                    labels: ["intent-target", "intent-pr-approved", decisionLabel, "intent-pr-rereview-ready"]),
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(563, "G231", "https://github.com/J-Tech-Japan/intent-system/issues/563",
+                    labels: ["intent-target", "intent-pr-created"]),
+            ],
+        };
+        AutomationReconcileCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationReconcileCommand.Execute(
+            workspace.Context,
+            ["--lane", "host-review", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
+        Assert.DoesNotContain(result.SafeRepairs, repair => repair.TargetNumber == 1782);
+        var stop = Assert.Single(result.UnsafeStops, stop =>
+            string.Equals(stop.Kind, AutomationReconcileUnsafeStopKinds.ConflictingReviewDecision, StringComparison.Ordinal));
+        Assert.Equal(1782, stop.TargetNumber);
+        Assert.Contains("intent-pr-approved", stop.Reason, StringComparison.Ordinal);
+        Assert.Contains(decisionLabel, stop.Reason, StringComparison.Ordinal);
+        Assert.Contains("--transition request-update --write", stop.Reason, StringComparison.Ordinal);
+        Assert.Contains("--transition approved --write", stop.Reason, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Execute_NoDriftReturnsCleanPlanWithSummaryAndZeroExit()
     {

@@ -42,15 +42,23 @@ intent-target + intent-pr-approved (on the PR)
 → The PR is approved and waiting for merge.
 ```
 
-`intent-pr-approved` is the **terminal review state**: it supersedes
-`intent-pr-rereview-ready` ("waiting for another review pass") and is mutually
-exclusive with the other active review labels. When a PR transitions to approved,
-intent-cli removes any stale `intent-pr-rereview-ready`, `intent-pr-request-update`,
-and `intent-pr-update-in-progress` so an approved PR never visibly carries both
-approved and an in-flight review label. If a PR is found with both (e.g. after a
-re-review approval), `intent-cli automation reconcile` flags it as a safe,
-high-confidence repair and clears the stale label through intent-cli-owned
-behavior — never a raw `gh label` edit.
+`intent-pr-approved` is the **terminal review state while it is the latest review
+decision**. It supersedes `intent-pr-rereview-ready` ("waiting for another review
+pass") and is mutually exclusive with the other active review labels. When a PR
+transitions to approved, intent-cli removes any stale `intent-pr-rereview-ready`,
+`intent-pr-request-update`, and `intent-pr-update-in-progress`.
+
+A later repair request withdraws an approval: `automation pr-transition
+--transition request-update` removes `intent-pr-approved` in the same atomic label
+replacement that adds `intent-pr-request-update` (G824).
+
+If a PR is found carrying `intent-pr-approved` together with
+`intent-pr-request-update` or `intent-pr-update-in-progress`, the labels alone
+cannot show which decision is newer. `intent-cli automation reconcile` reports a
+`conflicting-review-decision` unsafe stop and removes neither label; rerun the
+intended canonical transition (`request-update` or `approved`). Approved together
+with only `intent-pr-rereview-ready` is still a safe, high-confidence repair.
+Never use a raw `gh label` edit.
 
 ## Important notes about labels
 

@@ -983,6 +983,80 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
             "AutomationPrTransitionCommand must never invoke NestedProviderLauncher.");
     }
 
+    [Fact]
+    public void Execute_RequestUpdate_SupersedesApprovedInOneAtomicReplacement_G824()
+    {
+        // G824 (#1782): a repair request after an approval withdraws the approval,
+        // in the same single G535 replacement that adds request-update.
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-approved", "priority-high", "domain-billing" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "1782", "--transition", "request-update", "--write", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(mutator.AppliedTransitions);
+        var replacedSet = Assert.Single(mutator.ReplacedLabelSets);
+        Assert.Equal(
+            new[] { "domain-billing", "intent-pr-request-update", "intent-target", "priority-high" },
+            replacedSet.OrderBy(label => label, StringComparer.Ordinal));
+        var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
+        Assert.True(result.Applied);
+        Assert.Contains("intent-pr-approved", result.RemoveLabels);
+    }
+
+    [Fact]
+    public void Execute_RequestUpdate_RecoversAnExistingApprovedAndRequestUpdateConflict_G824()
+    {
+        // Rerunning the transition on the deadlocked state from #1782 converges it.
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-approved", "intent-pr-request-update", "priority-high" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "1782", "--transition", "request-update", "--write", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var replacedSet = Assert.Single(mutator.ReplacedLabelSets);
+        Assert.Equal(
+            new[] { "intent-pr-request-update", "intent-target", "priority-high" },
+            replacedSet.OrderBy(label => label, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_RequestUpdate_DryRunNamesApprovedAsSupersededWithoutWriting_G824()
+    {
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator { Labels = new[] { "intent-target", "intent-pr-approved" } };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "1782", "--transition", "request-update", "--dry-run", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
+        Assert.False(result.Applied);
+        Assert.Contains("intent-pr-approved", result.RemoveLabels);
+        Assert.Empty(mutator.ReplacedLabelSets);
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
     private sealed class FakeMutator : IGitHubLabelMutator, IGitHubLabelSetReplacer
     {
         public IReadOnlyList<string> Labels { get; set; } = Array.Empty<string>();

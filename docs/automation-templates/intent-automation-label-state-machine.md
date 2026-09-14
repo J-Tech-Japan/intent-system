@@ -70,7 +70,9 @@ This document explains the label contract used by the target-scoped automation f
 
 - Meaning: review-closeout accepted the PR and completed its closeout path.
 - Applied when: review-closeout finishes with acceptance.
-- This is the terminal PR-side automation marker for the current model.
+- This is the terminal PR-side automation marker while it is the latest review
+  decision. A later request-update withdraws it (G824); if both labels are
+  present, reconcile reports a conflict rather than guessing which is newer.
 
 ## Transition Summary
 
@@ -154,8 +156,8 @@ Expected flow:
 4. If accepted:
    - PR removes `intent-pr-reviewing`
    - PR adds `intent-pr-approved`
-5. If repair is required:
-   - PR removes `intent-pr-reviewing`
+5. If repair is required (including after an earlier approval is withdrawn):
+   - PR removes `intent-pr-reviewing`, rereview-ready, and any `intent-pr-approved`
    - PR adds `intent-pr-request-update`
 
 ## 3. Request-Update Runner

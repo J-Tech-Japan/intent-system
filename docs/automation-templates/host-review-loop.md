@@ -177,7 +177,7 @@ hand-apply those labels.
 | Verdict                | Label transition                                                                          |
 |------------------------|--------------------------------------------------------------------------------------------|
 | accept-and-merge       | remove `intent-pr-reviewing`; add `intent-pr-approved`; the PR is then merged via the host's merge step. |
-| request-update         | remove `intent-pr-reviewing` (if present); add `intent-pr-request-update` with comment(s).|
+| request-update         | remove `intent-pr-reviewing`, rereview-ready, and a present `intent-pr-approved`; add `intent-pr-request-update` with comment(s).|
 | accept-as-rereview-ready | (post-repair) remove `intent-pr-update-in-progress`; add `intent-pr-rereview-ready`.   |
 | reject-clarification   | leave a host clarification comment with the cooldown marker; do NOT flip review labels.    |
 
@@ -226,9 +226,12 @@ intent-cli automation pr-transition \
 clearing stale `intent-pr-rereview-ready` and legacy `rereview-ready`.
 Those rereview-ready labels are optional cleanup labels; if either is
 already absent, the installed command treats it as already cleared.
-`request-update` removes `intent-pr-reviewing` and adds
-`intent-pr-request-update`. `approved` removes `intent-pr-reviewing` and
-adds `intent-pr-approved`. These commands are the supported installed
+`request-update` adds `intent-pr-request-update` and removes the present
+members of `intent-pr-reviewing`, `intent-pr-rereview-ready`,
+`rereview-ready`, and `intent-pr-approved` (a repair request withdraws an
+earlier approval, G824). `approved` adds `intent-pr-approved` and removes
+`intent-pr-reviewing`, `intent-pr-rereview-ready`, `rereview-ready`,
+`intent-pr-request-update`, and `intent-pr-update-in-progress`. These commands are the supported installed
 path for those host-owned PR label transitions.
 
 ## Step 5: write the review verdict comment

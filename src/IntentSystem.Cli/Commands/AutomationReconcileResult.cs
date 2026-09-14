@@ -233,6 +233,14 @@ internal static class AutomationReconcileUnsafeStopKinds
     public const string MissingPublishedIssueEvidence = "missing-published-issue-evidence";
     public const string ChildLoopProhibited = "child-loop-prohibited";
 
+    /// <summary>
+    /// G824 (#1782): a PR carries intent-pr-approved together with
+    /// intent-pr-request-update or intent-pr-update-in-progress. A label
+    /// snapshot cannot show which review decision is newer, so neither label
+    /// is removed; the operator reruns the intended canonical transition.
+    /// </summary>
+    public const string ConflictingReviewDecision = "conflicting-review-decision";
+
     /// <summary>G284: more than one queue item references the same source issue, so the
     /// host loop cannot deterministically pick which queue row should receive linked_pr.</summary>
     public const string AmbiguousQueueLinkage = "ambiguous-queue-linkage";
