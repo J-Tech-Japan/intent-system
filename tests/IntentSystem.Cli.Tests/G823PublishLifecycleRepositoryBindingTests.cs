@@ -51,7 +51,8 @@ public sealed class G823PublishLifecycleRepositoryBindingTests : IDisposable
         Assert.Equal("SDT-G69", yExcluded.ExecutionUnit);
         Assert.Equal(RepoX, yExcluded.BoundRepository);
 
-        Assert.DoesNotContain(lookups.Calls, call => call.Repo != RepoX && call.Repo != RepoY);
+        // Each run reads evidence only from its own repository.
+        Assert.Equal([(RepoX, 133), (RepoY, 133)], lookups.Calls);
     }
 
     [Fact]
