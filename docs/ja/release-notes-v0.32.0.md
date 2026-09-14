@@ -1,7 +1,7 @@
 # リリースノート — intent-cli v0.32.0
 
 > **PREPARED / NOT PUBLISHED。** これは `v0.32.0-preview.3` prerelease のための、測定済み
-> G795–G830 chain の prepare-only notes です。tag / GitHub Release / package publish、workflow または
+> G795–G830 の units（この範囲のすべての番号ではありません）の prepare-only notes です。tag / GitHub Release / package publish、workflow または
 > publish configuration、consumer follow-up、product source の変更は行いません。
 
 v0.32.0 の stable GitHub Release はまだ存在せず、この notes は preparation evidence だけです。
@@ -24,7 +24,7 @@ prepare-only slice は no tag、no GitHub Release、no workflow change、no prod
 
 preview.2（`v0.32.0-preview.2`、2026-09-05）には deadlock がありました。claims-enabled host で claim
 verifier は `--team` を要求する一方、`worker claim` はそれを受け付けず、team 所有の unit を worker claim
-できませんでした。preview.3 はその修正（G815）と、それ以降に merge したすべてを含みます。preview.2 の
+できませんでした。preview.3 はその修正（G815）と、preview.2 以降に merge したそのほかのすべてを含みます。preview.2 の
 利用者が対応すべき変更:
 
 - **supervision は opt-in（G828）。** `guide next` の `supervision-setup` 推奨と、`guide bootstrap` の
@@ -262,8 +262,9 @@ claim ではありません。
   runtime condition は使いません。
 - G825 の `issue sync-body` は `read-compare-write-verified; not atomic` と明記し、GitHub の issue 本文に
   存在しない compare-and-swap を主張しません。
-- G828 と G829 が変えるのは guidance と説明だけです。supervision の command はどの team でも動き、
-  `agmsg` は引き続き動作して記録なしの既定値のままです。
+- G828 と G829 は supervision と transport の command を制限・変更しません。supervision の command は
+  どの team でも動き、`agmsg` は引き続き動作して記録なしの既定値のままです。ただし G828 は `opt_in_teams` の
+  config validation を追加し、上記のとおり `bootstrap.resume_recommended` を変えます。
 - この prepare-only slice には tag、GitHub Release、package publish、workflow/publish configuration、
   consumer follow-up、product source の変更はありません。
 

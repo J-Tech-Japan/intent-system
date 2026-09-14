@@ -1,7 +1,7 @@
 # Release Notes — intent-cli v0.32.0
 
 > **PREPARED / NOT PUBLISHED.** This prepare-only note set records the measured
-> G795–G830 chain for the `v0.32.0-preview.3` prerelease. It does not create a tag
+> G795–G830 units (not every number in that span) for the `v0.32.0-preview.3` prerelease. It does not create a tag
 > or GitHub Release, publish a package, change a workflow or publish
 > configuration, or change product source.
 
@@ -27,7 +27,7 @@ change, and no product source change.
 preview.2 (`v0.32.0-preview.2`, 2026-09-05) shipped with a deadlock: the claim
 verifier required `--team` on a claims-enabled host while `worker claim` could
 not accept it, so a team-owned unit could not be worker-claimed. preview.3
-carries that fix (G815) and everything merged after it. Changes a preview.2 user
+carries that fix (G815) and everything else merged since preview.2. Changes a preview.2 user
 must act on:
 
 - **Supervision is opt-in (G828).** `guide next` recommends `supervision-setup`,
@@ -282,9 +282,10 @@ in new guidance.
   or runtime condition is used.
 - G825's `issue sync-body` states `read-compare-write-verified; not atomic`;
   it does not claim compare-and-swap, which GitHub issue bodies do not offer.
-- G828 and G829 change guidance and descriptions only: supervision commands
-  keep working for any team, and `agmsg` keeps working and remains the
-  unrecorded default.
+- G828 and G829 do not gate or change the supervision and transport commands:
+  supervision commands keep working for any team, and `agmsg` keeps working and
+  remains the unrecorded default. G828 does add config validation for
+  `opt_in_teams` and changes `bootstrap.resume_recommended` as described above.
 - No tag, GitHub Release, package publish, workflow or publish-configuration
   change, consumer follow-up, or product-source change belongs to this
   prepare-only slice.
