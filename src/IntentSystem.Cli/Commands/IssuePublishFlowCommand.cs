@@ -208,7 +208,7 @@ internal static class IssuePublishFlowCommand
             executionUnit!, githubBodyPath, githubBody);
         var missing = publishGateReadiness.MissingContractSections;
 
-        // G290: prefer `packet.yaml` `title:` over the body H1 fallback so a
+        // G290/G826: prefer the packet.yaml title (issue_title, or legacy title) over the body H1 fallback so a
         // packet with valid metadata never publishes as `<id> (untitled)`.
         // Body H1 remains a fallback for older packets / Sekiban-style
         // bodies that start at `## Goal`. Title source is reported on the
@@ -1419,7 +1419,7 @@ internal static class IssuePublishFlowCommand
     public const string TitleSourceFallbackUntitled = "fallback-untitled";
 
     /// <summary>
-    /// G290: resolves the title in priority order: `packet.yaml` `title:` →
+    /// G290: resolves the title in priority order: packet.yaml title (G826: `issue_title`, then legacy `title`) →
     /// body H1 (`# Title`) → fallback `<execution-unit> (untitled)`. Returns
     /// both the title and a structured source string so the caller can
     /// report which path resolved it (and emit a warning when the fallback
@@ -1499,52 +1499,47 @@ internal static class IssuePublishFlowCommand
     }
 
     /// <summary>
-    /// G290: reads the top-level <c>title:</c> scalar from packet.yaml. The
-    /// packet schema places the field at the root (older packets) or under
-    /// `implementation_issue_packet:` (Sekiban-style); we accept either by
-    /// scanning for the first `title:` line that has a non-empty value, with
-    /// optional surrounding quotes stripped.
+    /// G826: the packet keys that carry the issue title, in the same order
+    /// <see cref="AutomationQueueSeedFromPacketCommand"/> uses, so both commands
+    /// derive one title from one packet. The scaffold writes
+    /// <c>implementation_issue_packet.issue_title</c>; bare <c>title</c> stays
+    /// last for legacy packets.
     /// </summary>
+    internal static readonly IReadOnlyList<string> PacketTitleKeys =
+    [
+        "implementation_issue_packet.issue_title",
+        "implementation_issue.issue_title",
+        "issue_title",
+        "title",
+    ];
+
     private static string? TryReadPacketTitle(string packetYamlPath)
     {
+        // G826: this used to scan for a line starting with "title:", which the
+        // scaffold never writes, so canonically scaffolded packets published as
+        // "<id> (untitled)". Parse through PacketYamlDocument (YAML and JSON
+        // packet forms) like queue-seed-from-packet does.
+        string text;
         try
         {
-            using var reader = new StreamReader(packetYamlPath);
-            string? line;
-            while ((line = reader.ReadLine()) is not null)
+            text = File.ReadAllText(packetYamlPath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        if (!PacketYamlDocument.TryParse(text, out var document, out _) || document is null)
+        {
+            return null;
+        }
+
+        foreach (var key in PacketTitleKeys)
+        {
+            if (document.Fields.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
             {
-                var trimmed = line.TrimStart();
-                if (!trimmed.StartsWith("title:", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var value = trimmed["title:".Length..].Trim();
-                if (value.Length == 0)
-                {
-                    continue;
-                }
-
-                if (value.Length >= 2
-                    && ((value[0] == '"' && value[^1] == '"')
-                        || (value[0] == '\'' && value[^1] == '\'')))
-                {
-                    value = value[1..^1];
-                }
-
-                if (!string.IsNullOrWhiteSpace(value))
-                {
-                    return value;
-                }
+                return value.Trim();
             }
-        }
-        catch (IOException)
-        {
-            // Unreadable packet.yaml — fall through to body H1 / untitled.
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Permission denied — fall through.
         }
 
         return null;
