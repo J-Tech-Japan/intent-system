@@ -611,7 +611,7 @@ internal static class NotifyCommand
                 ReportDeliveryState = report.DeliveryState,
                 PendingRecordPath = pending.Path,
                 Cause = "sender-local-report-not-delivered",
-                Summary = $"Sender-local report for task '{options.TaskId}' is '{report.DeliveryState}', not delivered; the local handoff remains available for its delivery-level recovery path.",
+                Summary = $"Sender-local report for task '{options.TaskId}' is '{report.DeliveryState}', not delivered; the local handoff remains available for delivery recovery. Recover it with '{NotifyReportOutboxStore.BuildCollectCommand(routingRoot, report)} --report-root {reportRoot}'; do not re-delegate the task.",
             });
             return 1;
         }
@@ -1501,33 +1501,6 @@ internal static class NotifyCommand
             return 1;
         }
 
-        if (delivery.ReaderPath is not null && senderLocalReport && options.Write)
-        {
-            if (reportOutbox is not null)
-            {
-                NotifyReportOutboxStore.MarkUndelivered(
-                    resolvedReportRoot,
-                    reportOutbox,
-                    "report-routing-root-write-required");
-            }
-
-            Emit(writer, options.Format, FailureResult(
-                operation,
-                options,
-                resolution.Mode,
-                "report-routing-root-write-required",
-                $"Report delivery resolved an external reader at '{delivery.ReaderPath}', which is under the host routing root and cannot be written from this sandboxed seat. Provision the recipient through herdr/agmsg or route a narrowly writable reader root; the sender-local report handoff is retained at '{outboxEntryPath}'. This is a delegation-level routing fault, not an implementation-seat stall.",
-                payload,
-                reportCommand,
-                modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
-                preflight: deliveryPreflight,
-                deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
-                taskFile: envelopeDelivery.TaskFile,
-                deliveryPointer: envelopeDelivery.ResultPointer,
-                outboxEntryPath: outboxEntryPath));
-            return 1;
-        }
-
         var eventAppended = false;
         if (delivery.ReaderPath is not null && options.Write)
         {
@@ -1538,17 +1511,25 @@ internal static class NotifyCommand
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
+                var appendCause = senderLocalReport ? "report-routing-root-write-required" : "event-append-failed";
                 if (reportOutbox is not null)
                 {
-                    NotifyReportOutboxStore.MarkUndelivered(resolvedReportRoot, reportOutbox, "event-append-failed");
+                    NotifyReportOutboxStore.MarkUndelivered(resolvedReportRoot, reportOutbox, appendCause);
                 }
+                var appendSummary = senderLocalReport
+                    ? $"Report delivery resolved an external reader at '{delivery.ReaderPath}', and the append to "
+                      + $"that host-root reader was refused: {exception.Message} Provision the recipient through "
+                      + "herdr/agmsg or route a narrowly writable reader root; the sender-local report handoff is "
+                      + $"retained at '{outboxEntryPath}'. This is a delegation-level routing fault, not an "
+                      + "implementation-seat stall."
+                    : $"Could not append notification to external role '{options.ToRole}' through recorded reader "
+                      + $"'{delivery.ReaderPath}': {exception.Message} Fix reader access and retry notify.";
                 Emit(writer, options.Format, FailureResult(
                     operation,
                     options,
                     resolution.Mode,
-                    "event-append-failed",
-                    $"Could not append notification to external role '{options.ToRole}' through recorded reader "
-                    + $"'{delivery.ReaderPath}': {exception.Message} Fix reader access and retry notify.",
+                    appendCause,
+                    appendSummary,
                     payload,
                     reportCommand,
                     modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",

@@ -187,6 +187,100 @@ public sealed class NotifyG719Tests : IDisposable
     }
 
     [Fact]
+    public void HostCollectRecoversUndeliveredSenderLocalReport_G731()
+    {
+        RequireUnixNonRoot();
+        var runner = new FakeTransportRunner(workspace.HerdrAgents());
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        workspace.WriteTopology(externalOrchestration: true);
+        var (delegateExit, delegateResult) = workspace.Run(workspace.DelegateArgs("G731-recover", "g731-recover-nonce"));
+        Assert.Equal(0, delegateExit);
+        var readerPath = workspace.ExternalReaderPath;
+        var generatedCommand = delegateResult.GetProperty("report_command").GetString()!;
+        var exactCommand = workspace.MaterializeReportCommand(
+            generatedCommand,
+            "https://example.test/pr/1585-recover",
+            "sender-local-recovery-verified");
+
+        workspace.MakeHostReadOnly();
+        try
+        {
+            var reportProcess = workspace.RunExactCommand(exactCommand);
+            Assert.True(reportProcess.ExitCode == 1, reportProcess.StandardOutput + reportProcess.StandardError);
+            using var document = JsonDocument.Parse(reportProcess.StandardOutput);
+            Assert.Equal("report-routing-root-write-required", document.RootElement.GetProperty("cause").GetString());
+            Assert.Contains(
+                "the append to that host-root reader was refused",
+                document.RootElement.GetProperty("summary").GetString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            workspace.MakeHostWritable();
+        }
+
+        var readerBeforeRecovery = File.ReadAllText(readerPath);
+        var (collectExit, collected) = workspace.RunHost(workspace.CollectArgs("G731-recover"));
+        Assert.Equal(0, collectExit);
+        Assert.True(collected.GetProperty("delivered").GetBoolean());
+        Assert.True(collected.GetProperty("event_appended").GetBoolean());
+        Assert.Contains(
+            "G731-recover",
+            File.ReadAllText(readerPath),
+            StringComparison.Ordinal);
+        Assert.NotEqual(readerBeforeRecovery, File.ReadAllText(readerPath));
+
+        var outbox = NotifyReportOutboxStore.Find(
+            workspace.SeatRoot,
+            Domain,
+            Team,
+            "G731-recover",
+            "g731-recover-nonce");
+        Assert.True(outbox.Resolved);
+        Assert.Equal("delivered", outbox.Entry!.DeliveryState);
+
+        var (reconcileExitAfterRecovery, reconcileAfterRecovery) = workspace.RunHost(workspace.ReconcileArgs("G731-recover"));
+        Assert.Equal(0, reconcileExitAfterRecovery);
+        Assert.True(reconcileAfterRecovery.GetProperty("reconciled").GetBoolean());
+    }
+
+    [Fact]
+    public void ReconcileOnUndeliveredSenderLocalReportNamesCollectRecovery_G731()
+    {
+        RequireUnixNonRoot();
+        var runner = new FakeTransportRunner(workspace.HerdrAgents());
+        NotifyCommand.ProcessRunnerFactory = () => runner;
+        workspace.WriteTopology(externalOrchestration: true);
+        var (delegateExit, delegateResult) = workspace.Run(workspace.DelegateArgs("G731-reconcile", "g731-reconcile-nonce"));
+        Assert.Equal(0, delegateExit);
+        var generatedCommand = delegateResult.GetProperty("report_command").GetString()!;
+        var exactCommand = workspace.MaterializeReportCommand(
+            generatedCommand,
+            "https://example.test/pr/1585-reconcile",
+            "reconcile-names-recovery");
+
+        workspace.MakeHostReadOnly();
+        try
+        {
+            var reportProcess = workspace.RunExactCommand(exactCommand);
+            Assert.Equal(1, reportProcess.ExitCode);
+        }
+        finally
+        {
+            workspace.MakeHostWritable();
+        }
+
+        var (reconcileExit, reconcile) = workspace.RunHost(workspace.ReconcileArgs("G731-reconcile"));
+        Assert.Equal(1, reconcileExit);
+        Assert.Equal("sender-local-report-not-delivered", reconcile.GetProperty("cause").GetString());
+        var summary = reconcile.GetProperty("summary").GetString()!;
+        Assert.Contains("intent-cli notify collect", summary, StringComparison.Ordinal);
+        Assert.Contains($"--report-root {workspace.SeatRoot}", summary, StringComparison.Ordinal);
+        Assert.Contains("--routing-root", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("delivery-level recovery path", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RegistrationLossNamesMissingAgentSessionAndTheBoundedOperatorAct_G719()
     {
         var record = new NotifyPendingDelegation
@@ -359,6 +453,12 @@ public sealed class NotifyG719Tests : IDisposable
         public string[] ReconcileArgs(string taskId) =>
         [
             "notify", "reconcile", "--domain", Domain, "--team", Team, "--task-id", taskId,
+            "--routing-root", HostRoot, "--report-root", SeatRoot, "--write", "--format", "json",
+        ];
+
+        public string[] CollectArgs(string taskId) =>
+        [
+            "notify", "collect", "--domain", Domain, "--team", Team, "--task-id", taskId,
             "--routing-root", HostRoot, "--report-root", SeatRoot, "--write", "--format", "json",
         ];
 

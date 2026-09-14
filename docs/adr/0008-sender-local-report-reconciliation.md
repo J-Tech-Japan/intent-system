@@ -3,7 +3,7 @@
 - Status: Accepted (preview-through-1.x)
 - Date: 2026-08-20
 - Deciders: Orchestration and implementation seats, recorded by G719
-- Related: G300 seat boundaries, G330 host authority, G719 / #1560 / #1562
+- Related: G300 seat boundaries, G330 host authority, G719 / #1560 / #1562, G731 / #1585
 
 ## Context
 
@@ -82,3 +82,12 @@ separate Unix seat with host paths mode-denied. It proves local outbox
 persistence, denied queue/runs/packet writes, unchanged host state, one-time
 host reconciliation, idempotent replay, and the external-reader
 `report-routing-root-write-required` outcome with the local handoff retained.
+
+G731 corrected that external-reader outcome from a structural gate to a
+measured one: the append is attempted, and `report-routing-root-write-required`
+is emitted only when the append is actually refused. `NotifyG719Tests` now also
+proves the host half: a host that can write the reader runs the named
+`notify collect --report-root <role-work-root> --routing-root <host> --write`,
+completes the append, and marks the previously `undelivered` entry `delivered`.
+`notify reconcile` names that command for an undelivered entry instead of
+pointing at an unnamed recovery path.
