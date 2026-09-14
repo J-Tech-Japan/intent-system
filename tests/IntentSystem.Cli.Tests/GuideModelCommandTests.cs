@@ -43,12 +43,13 @@ public sealed class GuideModelCommandTests
         Assert.Equal(0, exitCode);
         var output = writer.ToString();
         Assert.Contains("## Execution orchestration model (PRIMARY for autonomous multi-thread execution)", output, StringComparison.Ordinal);
-        Assert.Contains("### Four threads", output, StringComparison.Ordinal);
-        Assert.Contains("design — authors intent", output, StringComparison.Ordinal);
-        Assert.Contains("orchestrator — inspects canonical intent-cli/GitHub state", output, StringComparison.Ordinal);
-        Assert.Contains("implementation — a loopless receiver", output, StringComparison.Ordinal);
-        Assert.Contains("review — a loopless receiver", output, StringComparison.Ordinal);
-        Assert.Contains("steward — a loopless transmission boundary", output, StringComparison.Ordinal);
+        // G831: canonical role names lead, with their legacy aliases; Steward is the optional fifth seat.
+        Assert.Contains("### Threads (four-thread and five-thread models)", output, StringComparison.Ordinal);
+        Assert.Contains("architect (legacy: design) — authors intent", output, StringComparison.Ordinal);
+        Assert.Contains("orchestrator (legacy: orchestration) — inspects canonical intent-cli/GitHub state", output, StringComparison.Ordinal);
+        Assert.Contains("builder (legacy: implementation) — a loopless receiver", output, StringComparison.Ordinal);
+        Assert.Contains("reviewer (legacy: review) — a loopless receiver", output, StringComparison.Ordinal);
+        Assert.Contains("steward (optional fifth seat in the five-thread model; no legacy name) — a loopless transmission boundary", output, StringComparison.Ordinal);
         Assert.Contains("message-driven steady state", output, StringComparison.Ordinal);
         Assert.Contains("- **alternative** —", output, StringComparison.Ordinal);
         Assert.Contains("Timer-loop mode remains fully supported", output, StringComparison.Ordinal);
@@ -58,7 +59,7 @@ public sealed class GuideModelCommandTests
         var modelSection = SectionBetween(
             output,
             "## Execution orchestration model (PRIMARY for autonomous multi-thread execution)",
-            "## Session layer (transport for the four threads)");
+            "## Session layer (transport for the threads)");
         Assert.DoesNotContain("opt-in", modelSection, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("preview", modelSection, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("experimental", modelSection, StringComparison.OrdinalIgnoreCase);
@@ -74,7 +75,7 @@ public sealed class GuideModelCommandTests
         Assert.Equal(0, GuideModelCommand.Execute(CreateContext(), [], writer));
         var output = writer.ToString();
 
-        Assert.Contains("## Session layer (transport for the four threads)", output, StringComparison.Ordinal);
+        Assert.Contains("## Session layer (transport for the threads)", output, StringComparison.Ordinal);
         Assert.DoesNotContain("preview", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(SessionLayerMode.TransportPreferenceSentence, output, StringComparison.Ordinal);
         Assert.Contains("PRIMARY and unqualified in both modes", output, StringComparison.Ordinal);
@@ -146,11 +147,12 @@ public sealed class GuideModelCommandTests
 
         var roles = model.GetProperty("roles").EnumerateArray().Select(e => e.GetString()!).ToArray();
         Assert.Equal(5, roles.Length);
-        Assert.Contains(roles, r => r.StartsWith("design —", StringComparison.Ordinal));
-        Assert.Contains(roles, r => r.StartsWith("orchestrator —", StringComparison.Ordinal));
-        Assert.Contains(roles, r => r.StartsWith("implementation —", StringComparison.Ordinal));
-        Assert.Contains(roles, r => r.StartsWith("review —", StringComparison.Ordinal));
-        Assert.Contains(roles, r => r.StartsWith("steward —", StringComparison.Ordinal));
+        // G831: canonical names lead, followed by the legacy alias.
+        Assert.Contains(roles, r => r.StartsWith("architect (legacy: design) —", StringComparison.Ordinal));
+        Assert.Contains(roles, r => r.StartsWith("orchestrator (legacy: orchestration) —", StringComparison.Ordinal));
+        Assert.Contains(roles, r => r.StartsWith("builder (legacy: implementation) —", StringComparison.Ordinal));
+        Assert.Contains(roles, r => r.StartsWith("reviewer (legacy: review) —", StringComparison.Ordinal));
+        Assert.Contains(roles, r => r.StartsWith("steward (optional fifth seat in the five-thread model; no legacy name) —", StringComparison.Ordinal));
 
         Assert.True(model.TryGetProperty("message_driven_steady_state", out _));
         Assert.Contains("Timer-loop mode remains fully supported", model.GetProperty("alternative").GetString(), StringComparison.Ordinal);

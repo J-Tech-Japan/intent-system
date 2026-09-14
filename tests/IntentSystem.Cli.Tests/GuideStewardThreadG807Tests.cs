@@ -120,7 +120,7 @@ public sealed class GuideStewardThreadG807Tests
             .EnumerateArray()
             .Select(role => role.GetString() ?? string.Empty)
             .ToArray();
-        Assert.Contains(orchestrationRoles, role => role.StartsWith("steward —", StringComparison.Ordinal));
+        Assert.Contains(orchestrationRoles, role => role.StartsWith("steward (", StringComparison.Ordinal) && role.Contains(" — a loopless transmission boundary", StringComparison.Ordinal)); // G831: canonical name plus its model qualifier
 
         using var listWriter = new StringWriter();
         Assert.Equal(0, GuideCommandsListCommand.Execute(CreateContext(), ["--format", "json"], listWriter));

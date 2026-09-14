@@ -60,23 +60,29 @@ internal static class GuideModelCommand
             ExecutionOrchestrationModel = new GuideModelExecutionOrchestration
             {
                 Summary = "G540: for autonomous, multi-thread execution once intents are authored, the PRIMARY "
-                    + "collaboration model is FOUR-THREAD agmsg orchestration — design / orchestrator / "
-                    + "implementation / review coordinate over agmsg, with the orchestrator pacing loopless "
-                    + "implementation/review receivers instead of independent timers. This is the practiced, "
-                    + "maintained model (G520-G539: wake contract, stalled-work, heartbeat, issue-retire, "
-                    + "priority override, publish reliability). Full setup/reference: "
-                    + "`intent-cli guide orchestrator-thread --domain <d> --target-repo <owner/repo> --agent <a> --format markdown`.",
+                    + "collaboration model is the transport-neutral role model, supported in two shapes. The "
+                    + "four-thread model is Architect / Orchestrator / Builder / Reviewer (legacy names design / "
+                    + "orchestration / implementation / review are accepted aliases). The five-thread model adds an "
+                    + "optional Steward relay seat to those four; Steward never decides design or review questions. "
+                    + "The threads coordinate over the recorded session layer (herdr-only preferred; agmsg + herdr "
+                    + "deprecated but still working), with the orchestrator pacing loopless builder/reviewer receivers "
+                    + "instead of independent timers. This is the practiced, maintained model (G520-G539: wake "
+                    + "contract, stalled-work, heartbeat, issue-retire, priority override, publish reliability; G795: "
+                    + "canonical roles and aliases; G807: Steward contract). Full setup/reference: "
+                    + "`intent-cli guide orchestrator-thread --domain <d> --target-repo <owner/repo> --agent <a> --format markdown`; "
+                    + "Steward: `intent-cli guide steward-thread --format markdown`.",
                 Roles = new[]
                 {
-                    "design — authors intent, packet content and acceptance criteria, release scope, and prioritization rulings; consulted by the orchestrator before any of those take effect (double-check rule).",
-                    "orchestrator — inspects canonical intent-cli/GitHub state, publishes exactly one already-authored `issue-cut-ready` packet per wake, delegates implementation/review over agmsg, tracks CI/review, and closes out approved PRs; never authors design content unilaterally.",
-                    "implementation — a loopless receiver that implements exactly the delegated execution unit via `worker next-action` / `worker claim` / `worker complete`.",
-                    "review — a loopless receiver that reviews exactly the delegated PR via the canonical review surfaces.",
-                    "steward — a loopless transmission boundary that relays recorded evidence, hands design judgment to the architect, review judgment to the reviewer, and dispatch/recovery to the orchestrator; it never decides or rewrites a ruling.",
+                    "architect (legacy: design) — authors intent, packet content and acceptance criteria, release scope, and prioritization rulings; consulted by the orchestrator before any of those take effect (double-check rule).",
+                    "orchestrator (legacy: orchestration) — inspects canonical intent-cli/GitHub state, publishes exactly one already-authored `issue-cut-ready` packet per wake, delegates builder/reviewer work over the recorded session layer, tracks CI/review, and closes out approved PRs; never authors design content unilaterally.",
+                    "builder (legacy: implementation) — a loopless receiver that implements exactly the delegated execution unit via `worker next-action` / `worker claim` / `worker complete`.",
+                    "reviewer (legacy: review) — a loopless receiver that reviews exactly the delegated PR via the canonical review surfaces.",
+                    "steward (optional fifth seat in the five-thread model; no legacy name) — a loopless transmission boundary that relays recorded evidence, hands design judgment to the architect, review judgment to the reviewer, and dispatch/recovery to the orchestrator; it is not a judgment seat and never decides or rewrites a ruling.",
                 },
-                MessageDrivenSteadyState = "Implementation/review agmsg replies (accepted/progress/completed/blocked) "
-                    + "wake the orchestrator directly, so routine fast polling is not required in steady state; an "
-                    + "explicit orchestrator timer remains supported only as a fallback/legacy option.",
+                ThreadModels = BuildThreadModels(),
+                MessageDrivenSteadyState = "Builder/reviewer replies (accepted/progress/completed/blocked) delivered over the "
+                    + "recorded session layer wake the orchestrator directly, so routine fast polling is not required in "
+                    + "steady state; an explicit orchestrator timer remains supported only as a fallback/legacy option.",
                 Alternative = "Timer-loop mode remains fully supported as the simpler ALTERNATIVE for a domain/repo "
                     + "that does not run an orchestrator thread: implementation and review threads self-schedule on "
                     + "recurring timers instead. Exactly one mode per domain/repo — the two must never run "
@@ -160,6 +166,41 @@ internal static class GuideModelCommand
     }
 
     /// <summary>
+    /// G831: both supported thread shapes, derived from the canonical role
+    /// vocabulary. The four-thread model is every canonical role except the
+    /// optional Steward relay seat; the five-thread model is all of them.
+    /// </summary>
+    internal static IReadOnlyList<GuideModelThreadModel> BuildThreadModels()
+    {
+        var judgmentRoles = LogicalRoleNormalizer.CanonicalRoles
+            .Where(role => !string.Equals(role, LogicalRoleNormalizer.Steward, StringComparison.Ordinal))
+            .ToArray();
+        IReadOnlyDictionary<string, string> AliasesFor(IReadOnlyCollection<string> roles) =>
+            LogicalRoleNormalizer.Aliases
+                .Where(alias => roles.Contains(alias.Value, StringComparer.Ordinal))
+                .OrderBy(alias => Array.IndexOf(LogicalRoleNormalizer.CanonicalRoles.ToArray(), alias.Value))
+                .ToDictionary(alias => alias.Key, alias => alias.Value, StringComparer.Ordinal);
+
+        return
+        [
+            new GuideModelThreadModel
+            {
+                Name = "four-thread",
+                Roles = judgmentRoles,
+                Aliases = AliasesFor(judgmentRoles),
+                Summary = "The four core threads; legacy names are accepted aliases.",
+            },
+            new GuideModelThreadModel
+            {
+                Name = "five-thread",
+                Roles = LogicalRoleNormalizer.CanonicalRoles,
+                Aliases = AliasesFor(LogicalRoleNormalizer.CanonicalRoles.ToArray()),
+                Summary = "The same four plus an optional Steward relay seat that relays evidence and never decides design or review questions.",
+            },
+        ];
+    }
+
+    /// <summary>
     /// G570: the session layer is the TRANSPORT the four threads talk over, and
     /// it is now selectable. This section exists so an unfamiliar agent can tell
     /// the two questions apart: "which model?" (answered above — four threads,
@@ -171,9 +212,9 @@ internal static class GuideModelCommand
     internal static GuideModelSessionLayer BuildSessionLayer() => new()
     {
         Summary =
-            "G570: the four threads above talk to each other over a SESSION LAYER, and that layer is selectable per "
-            + "domain (team-scoped where teams are modeled). It is a transport choice, not a change of model — the "
-            + "same four threads, the same authority boundaries, the same wake contract in either mode.",
+            "G570: the threads above (four, or five with the optional Steward) talk to each other over a SESSION LAYER, "
+            + "and that layer is selectable per domain (team-scoped where teams are modeled). It is a transport choice, "
+            + "not a change of model — the same threads, the same authority boundaries, the same wake contract in either mode.",
         Modes = new[]
         {
             "herdr-only (preferred — fewer dependencies) — the preferred choice when every agent in the team is "
@@ -197,7 +238,7 @@ internal static class GuideModelCommand
 
     private static void WriteSessionLayer(TextWriter writer, GuideModelSessionLayer sessionLayer)
     {
-        writer.WriteLine("## Session layer (transport for the four threads)");
+        writer.WriteLine("## Session layer (transport for the threads)");
         writer.WriteLine();
         writer.WriteLine(sessionLayer.Summary);
         writer.WriteLine();
@@ -226,11 +267,19 @@ internal static class GuideModelCommand
         writer.WriteLine();
         writer.WriteLine(model.ExecutionOrchestrationModel.Summary);
         writer.WriteLine();
-        writer.WriteLine("### Four threads");
+        writer.WriteLine("### Threads (four-thread and five-thread models)");
         writer.WriteLine();
         foreach (var role in model.ExecutionOrchestrationModel.Roles)
         {
             writer.WriteLine($"- {role}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("Supported thread models:");
+        writer.WriteLine();
+        foreach (var threadModel in model.ExecutionOrchestrationModel.ThreadModels)
+        {
+            var aliases = string.Join(", ", threadModel.Aliases.Select(alias => $"`{alias.Key}` → `{alias.Value}`"));
+            writer.WriteLine($"- **{threadModel.Name}** — roles: {string.Join(" / ", threadModel.Roles.Select(role => $"`{role}`"))}; legacy aliases: {aliases}. {threadModel.Summary}");
         }
         writer.WriteLine();
         writer.WriteLine($"- **message-driven steady state** — {model.ExecutionOrchestrationModel.MessageDrivenSteadyState}");
@@ -360,6 +409,22 @@ internal sealed record GuideModelRole
     public required IReadOnlyList<string> Responsibilities { get; init; }
 }
 
+internal sealed record GuideModelThreadModel
+{
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("roles")]
+    public required IReadOnlyList<string> Roles { get; init; }
+
+    /// <summary>Legacy role name → canonical role, for the roles in this shape.</summary>
+    [JsonPropertyName("aliases")]
+    public required IReadOnlyDictionary<string, string> Aliases { get; init; }
+
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+}
+
 internal sealed record GuideModelExecutionOrchestration
 {
     [JsonPropertyName("summary")]
@@ -367,6 +432,10 @@ internal sealed record GuideModelExecutionOrchestration
 
     [JsonPropertyName("roles")]
     public required IReadOnlyList<string> Roles { get; init; }
+
+    /// <summary>G831: the supported thread shapes, generated from <see cref="LogicalRoleNormalizer"/> so they cannot drift from accepted roles.</summary>
+    [JsonPropertyName("thread_models")]
+    public required IReadOnlyList<GuideModelThreadModel> ThreadModels { get; init; }
 
     [JsonPropertyName("message_driven_steady_state")]
     public required string MessageDrivenSteadyState { get; init; }
