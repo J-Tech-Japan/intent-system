@@ -51,7 +51,7 @@ internal static class TopologyWorkspaceMoveGuidance
                     + "--objective <bounded-outcome> --input <reference> --expected-artifact <artifact> "
                     + "--result-nonce <nonce> --dry-run --format json",
             },
-            PaneMapContract = "Supply one old-pane=new-pane pair for every recorded herdr role. New pane ids must belong to the supplied new workspace; external roles have no pane mapping.",
+            PaneMapContract = "Supply one old-pane=new-pane pair for every recorded herdr pane. New pane ids must belong to the supplied new workspace; external roles have no pane mapping. Several roles sharing one old pane are not ambiguous: they travel with that pane and need only that pane's single mapping. Two different recorded old panes mapping to the same new pane remain refused, because the CLI cannot tell which old pane's roles belong where.",
             PreservationContract = "The move changes only the team workspace id and recorded herdr role workspace_id/pane_id values. Role membership, cwd, kind, delivery_method, reader, frontend, launch arguments, profiles, and all other JSON fields remain unchanged.",
             CasContract = "The write holds the topology CAS lock and compares the recorded digest before replacement. Pass --current-digest from a prior preview when an operator wants an explicit stale-snapshot refusal; a changed record is never silently overwritten.",
             AuthorityBoundary = "The move is an explicit operator-supplied transition. It never queries herdr, discovers a workspace, provisions panes, changes role membership, or repairs a per-role record refusal. A per-role workspace mismatch remains fail-closed and points here as the sanctioned whole-team operation.",
