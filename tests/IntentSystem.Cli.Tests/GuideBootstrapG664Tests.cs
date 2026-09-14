@@ -201,7 +201,8 @@ public sealed class GuideBootstrapG664Tests : IDisposable
         Config = new CliConfig
         {
             Project = new ProjectConfig { Domain = "intent-cli", ArtifactRoot = ".intent-cli", WorktreeRoot = ".intent-cli/worktrees" },
-            Supervision = new SupervisionConfig { ArtifactRoot = ".intent-cli/supervision" },
+            // G828: supervision is opt-in; these tests pin the opted-in behavior.
+            Supervision = new SupervisionConfig { ArtifactRoot = ".intent-cli/supervision", OptInTeams = ["intent-cli/intent-cli-dev"] },
         },
     };
 

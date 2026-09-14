@@ -152,10 +152,12 @@ internal static class GuideBootstrapCommand
                 {
                     Number = 4,
                     Id = "emit-supervision-install",
-                    Instruction = state.SupervisionCycleRecorded
+                    Instruction = !state.SupervisionOptedIn
+                        ? $"Skip: supervision is not enabled for this team. {SupervisionGuideText.OptInRule} Add the team to `[supervision] opt_in_teams` and re-run this guide only if the operator wants standing supervision."
+                        : state.SupervisionCycleRecorded
                         ? "Keep the existing per-team supervision installation; do not emit or register a duplicate."
                         : $"Emit the current-platform supervision artifact and exact current-session registration/unregistration commands. {SupervisionGuideText.SessionLifetimeRule} {SupervisionGuideText.InstallBoundRule} {SupervisionGuideText.InstallArtifactRule} {SupervisionGuideText.InstallEvidenceRule} The human may register it for the current GUI session; use reconcile/uninstall to unload and remove drift.",
-                    EmittedCommands = state.SupervisionCycleRecorded
+                    EmittedCommands = !state.SupervisionOptedIn || state.SupervisionCycleRecorded
                         ? []
                         : [$"intent-cli notify supervise install --domain {domainArg} --team {teamArg} --repo {repoArg} --owner-role orchestration --bound <seconds> --interval <seconds> --startup-bound <seconds> --write --format json"],
                 },
@@ -319,7 +321,7 @@ internal static class GuideBootstrapCommand
                 SupervisionCycleRecorded = false,
                 Complete = false,
                 ExistingFacts = [],
-                MissingFacts = ["explicit domain and team", "recorded topology", "completed supervision cycle", "explicit handoff"],
+                MissingFacts = ["explicit domain and team", "recorded topology", "completed supervision cycle (opted-in teams only)", "explicit handoff"],
             };
         }
 
@@ -338,6 +340,9 @@ internal static class GuideBootstrapCommand
         var missingRoles = ExpectedRoles.Where(role => !roles.Contains(role)).ToArray();
         var supervision = NotifySupervisionStore.Read(context.ResolveSupervisionArtifactRootPath(), domainValue, teamValue);
         var cycleRecorded = supervision.Resolved && supervision.LastCycle is not null;
+        // G828: a supervision cycle is part of completeness only for a team
+        // declared in [supervision] opt_in_teams.
+        var supervisionOptedIn = context.Config.Supervision.IsOptedIn(domainValue, teamValue);
 
         var existing = new List<string>();
         if (topologyRecorded) existing.Add($"topology record `{topologyPath}`");
@@ -347,15 +352,15 @@ internal static class GuideBootstrapCommand
         var missing = new List<string>();
         if (!topologyRecorded) missing.Add("recorded topology");
         foreach (var role in missingRoles) missing.Add($"recorded `{role}` seat");
-        if (!cycleRecorded) missing.Add("completed supervision cycle and explicit application-front-door handoff");
+        if (supervisionOptedIn && !cycleRecorded) missing.Add("completed supervision cycle and explicit application-front-door handoff");
 
         var rosterComplete = resolution.Resolved && missingRoles.Length == 0;
-        var complete = rosterComplete && cycleRecorded;
+        var complete = rosterComplete && (!supervisionOptedIn || cycleRecorded);
         var name = !topologyRecorded
             ? "new-team"
             : !rosterComplete
                 ? "topology-recorded-seats-missing"
-                : !cycleRecorded
+                : supervisionOptedIn && !cycleRecorded
                     ? "topology-recorded-supervision-and-handoff-missing"
                     : "complete-join-and-delegate";
 
@@ -366,6 +371,7 @@ internal static class GuideBootstrapCommand
             TopologyRecorded = topologyRecorded,
             TopologyResolved = resolution.Resolved,
             SupervisionCycleRecorded = cycleRecorded,
+            SupervisionOptedIn = supervisionOptedIn,
             Complete = complete,
             TopologyPath = topologyPath,
             ExistingFacts = existing,
@@ -521,6 +527,8 @@ internal sealed record BootstrapGuideState
     public required bool TopologyRecorded { get; init; }
     public bool TopologyResolved { get; init; }
     public required bool SupervisionCycleRecorded { get; init; }
+    /// <summary>G828: the team is declared in <c>[supervision] opt_in_teams</c>.</summary>
+    public bool SupervisionOptedIn { get; init; }
     public required bool Complete { get; init; }
     public string? CompletionBasis { get; init; }
     public string? TopologyPath { get; init; }

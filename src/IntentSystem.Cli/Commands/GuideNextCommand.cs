@@ -200,7 +200,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             decisionSet.Insert(0, new GuideNextAction
             {
                 Action = ActionSupervisionSetup,
-                WhenToChoose = $"No completed supervision cycle is recorded for team `{team}`. Set up the team's standing supervision loop before relying on bounded recovery; the setup guidance states who owns it and where it runs. {SupervisionGuideText.DeploymentBasis}",
+                WhenToChoose = $"Team `{domain}/{team}` opted in to supervision and no completed supervision cycle is recorded. {SupervisionGuideText.OptInRule} Set up the team's standing supervision loop before relying on bounded recovery; the setup guidance states who owns it and where it runs. {SupervisionGuideText.DeploymentBasis}",
                 SuggestedPrompt = SupervisionGuideText.NextAction(domainArg, teamArg, repoArg),
             });
         }
@@ -484,6 +484,8 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 ? "- supervision: **not-applicable-team-mode** (authoring-only has no supervision process)"
                 : result.Supervision.CycleRecorded
                 ? $"- recorded cycle: yes for `{result.Supervision.Team}`; supervision setup recommendation: silent"
+                : !result.Supervision.OptedIn && result.Supervision.Error is null
+                    ? $"- supervision: not opted in for `{result.Supervision.Domain}/{result.Supervision.Team}`; recommendation: silent. {SupervisionGuideText.OptInRule}"
                 : result.Supervision.Error is null
                     ? $"- recorded cycle: no for `{result.Supervision.Team}`; supervision setup recommendation: **supervision-setup**"
                     : $"- recorded cycle: unavailable for `{result.Supervision.Team}`; repair the state read before deciding");
@@ -723,13 +725,19 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 context.ResolveSupervisionArtifactRootPath(),
                 domain.Trim(),
                 team.Trim());
+            // G828: supervision is opt-in. Only an explicit [supervision]
+            // opt_in_teams declaration makes a team a recommendation target;
+            // leftover bound/install files or cycles never do.
+            var optedIn = context.Config.Supervision.IsOptedIn(domain, team);
             return new GuideNextSupervisionStatus
             {
                 Checked = true,
                 Domain = domain.Trim(),
                 Team = team.Trim(),
                 CycleRecorded = state.LastCycle is not null,
-                SetupRecommended = state.Resolved && state.LastCycle is null,
+                SetupRecommended = optedIn && state.Resolved && state.LastCycle is null,
+                OptedIn = optedIn,
+                OptInSource = optedIn ? IntentSystem.Cli.Models.SupervisionConfig.OptInSource : null,
                 StateDirectory = state.Directory,
                 Error = state.Resolved ? null : state.Error,
             };
@@ -772,7 +780,8 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
                 TopologyRecorded = state.TopologyRecorded,
                 CycleRecorded = state.SupervisionCycleRecorded,
                 Complete = state.Complete,
-                ResumeRecommended = state.TopologyRecorded && !state.SupervisionCycleRecorded,
+                // G828: resume follows completeness, which requires a cycle only for opted-in teams.
+                ResumeRecommended = state.TopologyRecorded && !state.Complete,
                 StateName = state.Name,
                 TopologyPath = state.TopologyPath,
                 Error = state.ReadError,
@@ -1026,6 +1035,13 @@ internal sealed record GuideNextSupervisionStatus
 
     [JsonPropertyName("setup_recommended")]
     public bool SetupRecommended { get; init; }
+
+    /// <summary>G828: the team is declared in <c>[supervision] opt_in_teams</c>.</summary>
+    [JsonPropertyName("opted_in")]
+    public bool OptedIn { get; init; }
+
+    [JsonPropertyName("opt_in_source")]
+    public string? OptInSource { get; init; }
 
     [JsonPropertyName("not_applicable")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]

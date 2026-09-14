@@ -499,8 +499,42 @@ internal static class CliConfigLoader
                 CliRuntimeContracts.RetryDelayMinutesKey)
                 ?? CliRuntimeContracts.DefaultSupervisionRetryDelayMinutes,
             RetryBudget = TryGetOptionalInt32(supervisionTable, CliRuntimeContracts.RetryBudgetKey)
-                ?? CliRuntimeContracts.DefaultSupervisionRetryBudget
+                ?? CliRuntimeContracts.DefaultSupervisionRetryBudget,
+            OptInTeams = ReadSupervisionOptInTeams(supervisionTable),
         };
+    }
+
+    /// <summary>
+    /// G828: each entry must be exactly <c>&lt;domain&gt;/&lt;team&gt;</c> with two
+    /// non-empty, whitespace-free segments that are safe path segments (the same
+    /// rule supervision state directories use). A bare team name is refused
+    /// because team names are not identifiers across domains (node 03, G603).
+    /// </summary>
+    private static IReadOnlyList<string> ReadSupervisionOptInTeams(TomlTable supervisionTable)
+    {
+        var key = CliRuntimeContracts.SupervisionOptInTeamsKey;
+        var entries = TryGetOptionalStringArray(supervisionTable, key);
+        if (entries is null)
+        {
+            return [];
+        }
+
+        foreach (var entry in entries)
+        {
+            var segments = entry.Split('/');
+            if (segments.Length != 2
+                || segments.Any(segment =>
+                    segment.Length == 0
+                    || segment is "." or ".."
+                    || segment.Any(char.IsWhiteSpace)
+                    || segment.Contains('\\')))
+            {
+                throw new InvalidOperationException(
+                    $"CLI config value 'supervision.{key}' entry '{entry}' must be '<domain>/<team>' with two non-empty segments and no whitespace.");
+            }
+        }
+
+        return entries.Distinct(StringComparer.Ordinal).ToArray();
     }
 
     private static RunConfig ReadRun(TomlTable rootTable)

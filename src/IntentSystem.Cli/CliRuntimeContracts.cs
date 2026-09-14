@@ -30,6 +30,8 @@ internal static class CliRuntimeContracts
     public const string StaleHeartbeatTimeoutMinutesKey = "stale_heartbeat_timeout_minutes";
     public const string RetryDelayMinutesKey = "retry_delay_minutes";
     public const string RetryBudgetKey = "retry_budget";
+    // G828: explicit per-team supervision opt-in, as "<domain>/<team>" entries.
+    public const string SupervisionOptInTeamsKey = "opt_in_teams";
     public const string PostFixWorktreeProgressPolicyKey = "post_fix_worktree_progress_policy";
     public const string BaseBranchPolicyKey = "base_branch_policy";
     // G668: named branch-lane registry keys.

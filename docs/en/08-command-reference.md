@@ -355,9 +355,14 @@ to run the suggested prompt.
 When `--domain` and `--team` are supplied, `next` also reads the team's recorded
 topology and supervision cycle. Recorded topology with no completed cycle/front-door
 handoff adds `bootstrap-resume` and links the render-only
-`intent-cli guide bootstrap`; no topology and a completed cycle are silent. No
-recorded cycle independently adds the `supervision-setup` recommendation;
-an existing cycle leaves that recommendation silent. The host-init and
+`intent-cli guide bootstrap`; no topology and a completed cycle are silent.
+Supervision is opt-in (G828): only a team declared in `.intent-cli/config.toml`
+as `[supervision] opt_in_teams = ["<domain>/<team>"]` gets the
+`supervision-setup` recommendation when no cycle is recorded, and only for such a
+team does bootstrap completeness require a cycle. Leftover `bound.json`,
+`installed-supervisor.json`, or cycles never opt a team in. The JSON reports
+`supervision.opted_in` and `supervision.opt_in_source`; an existing cycle leaves
+the recommendation silent. The host-init and
 design-side loop guides carry the deployment step and link the
 [orchestration reference](12-agent-message-orchestration.md); this command only
 detects the missing record and never starts or manages the background process.

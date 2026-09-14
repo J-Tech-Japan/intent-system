@@ -135,6 +135,22 @@ internal sealed record SupervisionConfig
     public int RetryDelayMinutes { get; init; } = CliRuntimeContracts.DefaultSupervisionRetryDelayMinutes;
 
     public int RetryBudget { get; init; } = CliRuntimeContracts.DefaultSupervisionRetryBudget;
+
+    /// <summary>
+    /// G828: teams that opted in to standing supervision, as exact
+    /// <c>&lt;domain&gt;/&lt;team&gt;</c> entries from
+    /// <c>[supervision] opt_in_teams</c>. Supervision is opt-in: guidance
+    /// recommends it and bootstrap requires it only for these teams. No file,
+    /// cycle, or install record opts a team in.
+    /// </summary>
+    public IReadOnlyList<string> OptInTeams { get; init; } = [];
+
+    public const string OptInSource = "config:supervision.opt_in_teams";
+
+    public bool IsOptedIn(string? domain, string? team) =>
+        !string.IsNullOrWhiteSpace(domain)
+        && !string.IsNullOrWhiteSpace(team)
+        && OptInTeams.Contains($"{domain.Trim()}/{team.Trim()}", StringComparer.Ordinal);
 }
 
 internal sealed record RunConfig

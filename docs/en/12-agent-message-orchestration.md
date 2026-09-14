@@ -572,6 +572,28 @@ policy/manifest state trackable. Operators should use this command rather than
 hand-editing repository state. The repair does not change what supervision
 reads or writes.
 
+## Supervision is opt-in (G828 — preview-through-1.x)
+
+Standing supervision is optional. Execution teams can rely on herdr messaging and
+timers, and design or Steward seats on Orca Run mailboxes. App-based design seats
+use a scheduled pull of the canonical inbox. Declare the teams that want a
+supervisor explicitly in host config:
+
+```toml
+[supervision]
+opt_in_teams = ["<domain>/<team>"]
+```
+
+Only declared teams get the `supervision-setup` recommendation from
+`intent-cli guide next` and have a completed supervision cycle in
+`intent-cli guide bootstrap` completeness. For every other team, bootstrap is
+complete once the roster is complete and step 4 emits no install command. The
+declaration is the only signal: tracked `bound.json` or
+`installed-supervisor.json` and runtime-local cycles survive a stopped supervisor,
+so inferring opt-in from them would keep recommending supervision forever. Each
+entry must be `<domain>/<team>`; a bare team name fails config load. The
+supervision commands themselves are unchanged and still work for any team.
+
 ## Runtime-local supervision cycle history (G750 — preview-through-1.x)
 
 Supervision cycle history is CLI-owned runtime-local state because all readers
