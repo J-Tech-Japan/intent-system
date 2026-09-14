@@ -129,7 +129,8 @@ internal static partial class NotifySupervisionStore
     /// not materialize the whole history. Everything else — including every
     /// failure that makes the result unresolved — is identical;
     /// <see cref="NotifySupervisionReadResult.CycleHistory"/> and prompt audits
-    /// are then empty.
+    /// are then empty, and <see cref="NotifySupervisionReadResult.UnreadableRecords"/>
+    /// omits cycle and prompt-audit lines.
     /// </summary>
     internal static NotifySupervisionReadResult Read(
         string artifactRoot,

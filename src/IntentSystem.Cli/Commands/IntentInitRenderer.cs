@@ -43,7 +43,7 @@ internal static class IntentInitRenderer
         {
             writer.WriteLine($"  - `{line}`");
         }
-        writer.WriteLine("- supervision ignore scope: cycle history only; stalls and policy/manifest state remain trackable.");
+        writer.WriteLine("- supervision ignore scope: cycle history and the per-host stall log (stalls.jsonl); policy/manifest state remains trackable.");
         writer.WriteLine($"- existing-host rule: {result.ExistingHostGuidance}");
 
         writer.WriteLine();

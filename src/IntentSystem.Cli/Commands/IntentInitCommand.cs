@@ -275,7 +275,7 @@ internal static class IntentInitCommand
         steps.Add($"Use `intent-cli interview record-answer --write` (chat-first) to durably record durable Q/A for '{domain}'.");
         steps.Add($"Use `intent-cli intent next-slice --domain {domain} --dry-run` to plan the first publishable slice.");
         steps.Add(freshHost
-            ? "Fresh-host git defaults include merge=union for append-only .intent-cli JSONL stores, then .intent-cli/claims/** -merge so claims never union-merge. The directory-local .intent-cli/supervision/.gitignore ignores cycle history only; shared stalls and policy manifests remain trackable."
+            ? "Fresh-host git defaults include merge=union for append-only .intent-cli JSONL stores, then .intent-cli/claims/** -merge so claims never union-merge. The directory-local .intent-cli/supervision/.gitignore ignores cycle history and the per-host stall log (stalls.jsonl); shared policy manifests remain trackable."
             : "Existing host detected: no supervision migration was performed by intent init. Run `intent-cli notify supervise repair-cycle-history --domain <domain> --team <team> --write --format json` for the canonical cycle-history migration; intent-cli preserves the files and shared policy state.");
         steps.Add("Run this command from the parent host repository, never inside `.intent-cli/worktrees/**`.");
 
