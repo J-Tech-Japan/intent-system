@@ -280,6 +280,22 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         Assert.Equal(digest, result.RootElement.GetProperty("packet_digest").GetString());
     }
 
+    [Fact]
+    public void DesignRequest_EmbedsAPacketFileContainingFences_WithALongerFence()
+    {
+        var bodyPath = Path.Combine(PacketDir(Unit), "github-body.md");
+        File.AppendAllText(bodyPath, "\n```toml\n[[cross_runtime_review.teams]]\n```\n\n````text\nfour\n````\n");
+        var outDir = Path.Combine(root, "design-out-fence");
+        var (exit, output) = Route(["review", "cross-runtime", .. DesignRequestArgs("cursor", outDir), "--format", "json"]);
+        Assert.True(exit == 0, output);
+
+        var prompt = File.ReadAllText(Path.Combine(outDir, "prompt.md"));
+        var body = File.ReadAllText(bodyPath);
+        Assert.Equal(4, ReviewCrossRuntimeCommand.LongestBacktickRun(body));
+        Assert.Contains("`````github-body.md\n" + body + "`````\n", prompt, StringComparison.Ordinal);
+        Assert.Contains("```packet.yaml\n", prompt, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("--repo")]
     [InlineData("--pr")]

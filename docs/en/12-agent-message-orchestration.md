@@ -240,8 +240,10 @@ G835 extends the declared-team cross-runtime review surface in two ways:
   `issue publish-flow --write` creates the GitHub issue. Records are bound to the
   packet digest over `packet.yaml`, `github-body.md`, `review-context.md`, and
   `implementation.md`. The canonical publish path refuses until that evidence is
-  complete. `issue draft` / `issue create` and recovery from an existing GitHub
-  issue bypass this gate.
+  complete. Other routes that create issues bypass this gate and are not part of
+  the canonical loop: `issue draft` / `issue create`, `issue publish-reviewed`,
+  `queue dispatch`, `bug implementation-issue`, and recovery from an existing
+  GitHub issue.
 - **Model selection.** `request` and `record` accept optional `--model <name>` for
   both implementation and design kinds. The value is POSIX single-quoted in the
   rendered invocation (`-m` for codex, `--model` for claude and cursor). Records

@@ -461,17 +461,35 @@ internal static class ReviewCrossRuntimeCommand
 
     private static void AppendEmbeddedFile(StringBuilder builder, string fileName, byte[] bytes)
     {
+        var content = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(bytes);
+        // A fence longer than any backtick run in the file keeps the embedded
+        // bytes verbatim and the boundary unambiguous (CommonMark).
+        var fence = new string('`', Math.Max(3, LongestBacktickRun(content) + 1));
         builder.Append($"### {fileName}\n\n");
-        builder.Append("```");
+        builder.Append(fence);
         builder.Append(fileName);
         builder.Append('\n');
-        builder.Append(new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(bytes));
+        builder.Append(content);
         if (bytes.Length == 0 || bytes[^1] != (byte)'\n')
         {
             builder.Append('\n');
         }
 
-        builder.Append("```\n\n");
+        builder.Append(fence);
+        builder.Append("\n\n");
+    }
+
+    internal static int LongestBacktickRun(string content)
+    {
+        var longest = 0;
+        var current = 0;
+        foreach (var character in content)
+        {
+            current = character == '`' ? current + 1 : 0;
+            longest = Math.Max(longest, current);
+        }
+
+        return longest;
     }
 
     // ── record ─────────────────────────────────────────────────────────

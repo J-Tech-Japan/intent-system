@@ -220,8 +220,9 @@ G835 は宣言済み team の cross-runtime review を次の 2 点で拡張し�
 - **design 査読 gate。** 宣言済み team では、packet は `issue publish-flow --write` が
   GitHub issue を作る前に査読されます。record は `packet.yaml`、`github-body.md`、
   `review-context.md`、`implementation.md` の packet digest に束縛されます。canonical
-  publish path は evidence が揃うまで拒否します。`issue draft` / `issue create` と、既存
-  GitHub issue からの recovery はこの gate を通りません。
+  publish path は evidence が揃うまで拒否します。`issue draft` / `issue create`、
+  `issue publish-reviewed`、`queue dispatch`、`bug implementation-issue`、既存 GitHub
+  issue からの recovery はこの gate を通らず、canonical loop にも含まれません。
 - **model 選択。** `request` と `record` は implementation / design の両 kind で任意の
   `--model <name>` を受け付けます。値は rendered invocation 内で POSIX の単一引用符で
   囲まれます（codex は `-m`、claude / cursor は `--model`）。record は `--model` を渡したときだけ
