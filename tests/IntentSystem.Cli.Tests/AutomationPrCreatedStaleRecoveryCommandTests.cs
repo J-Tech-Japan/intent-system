@@ -688,6 +688,29 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
     }
 
     [Fact]
+    public void ClosedThenLabelRemoved_CloserWithDifferentRepoCasing_StillClosesStarted()
+    {
+        using var workspace = CreateProceedWorkspace();
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, Pr));
+        var aborted = BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventAborted, Pr,
+            ts: FixedNow.AddMinutes(-5), reason: "re-check refused: label-changed");
+        workspace.AppendRunEvent(aborted with
+        {
+            Repo = Repo.ToUpperInvariant(),
+            LinkedIssue = IssueUrl(Issue).ToUpperInvariant(),
+            LinkedPr = PrUrl(Pr).ToUpperInvariant(),
+        });
+        AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
+            new FakeIssueLookup(OpenIssue("intent-target"));
+
+        var (exitCode, result) = Execute(workspace, write: true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("closed-then-label-removed", result.Outcome);
+        Assert.Equal(2, workspace.ReadRunEvents().Count);
+    }
+
+    [Fact]
     public void SupersededKeyOnly_LabelPresent_ProceedsWithNewStarted()
     {
         const int oldPr = 163;

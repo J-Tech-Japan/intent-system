@@ -1362,7 +1362,9 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         }
 
         private static string KeyText(RecoveryKey key) =>
-            $"{key.Repo}|{key.ExecutionUnit}|{key.IssueNumber}|{key.PrNumber}";
+            // Repositories compare case-insensitively (contract section 2), so a
+            // closer recorded with different repo casing still closes its started.
+            $"{key.Repo.ToLowerInvariant()}|{key.ExecutionUnit}|{key.IssueNumber}|{key.PrNumber}";
     }
 
     private enum LabelRecoveryOutcomeKind
