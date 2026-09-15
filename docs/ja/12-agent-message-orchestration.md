@@ -168,7 +168,7 @@ read-only の強制範囲は runtime ごとに異なります（2026-09-14 に�
   コマンドを実行でき、shell コマンド経由の書き込みは sandbox で強制されません。
 - cursor の `-p --mode ask --sandbox enabled` は shell コマンドを含む read-only 以外の
   すべての tool を拒否するため、Cursor reviewer はファイルを読めますが git や test は
-  実行できません。`--mode plan` は使いません。実測では plan mode の agent が自分で
+  実行できません。echo する head は git ではなく `.git/HEAD` などのファイルから読みます。`--mode plan` は使いません。実測では plan mode の agent が自分で
   agent mode に切り替え、workspace の内外にファイルを書き込み、`--sandbox enabled` は
   その書き込みを止めませんでした。
 

@@ -549,9 +549,9 @@ public sealed class G834CrossRuntimeReviewTests : IDisposable
     // ── record ─────────────────────────────────────────────────────────
 
     [Fact]
-    public void Record_AcceptsTheCodexBareVerdictAndTheMeasuredClaudeEnvelope_FromRealRunFixtures()
+    public void Record_AcceptsTheCodexBareVerdictAndTheMeasuredClaudeAndCursorEnvelopes_FromRealRunFixtures()
     {
-        foreach (var (runtime, fixture) in new[] { ("codex", "codex-verdict.json"), ("claude", "claude-envelope.json") })
+        foreach (var (runtime, fixture) in new[] { ("codex", "codex-verdict.json"), ("claude", "claude-envelope.json"), ("cursor", "cursor-envelope.json") })
         {
             var content = File.ReadAllText(Fixture(fixture));
             Assert.True(CrossRuntimeReviewVerdict.TryParse(runtime, content, out var verdict, out var error), $"{runtime}: {error}");
@@ -566,11 +566,27 @@ public sealed class G834CrossRuntimeReviewTests : IDisposable
     }
 
     [Fact]
-    public void Record_CursorEnvelope_ResultTextCarriesTheVerdict_AndBareObjectsAreRefusedForEnvelopeRuntimes()
+    public void Record_CursorEnvelope_MeasuredShape_NarrationThenVerdict_AndBareObjectsAreRefusedForEnvelopeRuntimes()
     {
-        var envelope = JsonSerializer.Serialize(new { type = "result", subtype = "success", is_error = false, result = Verdict("approve", H1), session_id = "s" });
-        Assert.True(CrossRuntimeReviewVerdict.TryParse("cursor", envelope, out var cursor, out var cursorError), cursorError);
+        // The real cursor-agent run's envelope: these keys, and a result text whose
+        // progress narration precedes the verdict object.
+        using (var measured = JsonDocument.Parse(File.ReadAllText(Fixture("cursor-envelope.json"))))
+        {
+            Assert.Equal(
+                ["duration_api_ms", "duration_ms", "is_error", "request_id", "result", "session_id", "subtype", "type"],
+                measured.RootElement.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal));
+            var text = measured.RootElement.GetProperty("result").GetString()!;
+            Assert.False(text.TrimStart().StartsWith('{'));
+            Assert.EndsWith("}", text.TrimEnd(), StringComparison.Ordinal);
+        }
+
+        var narrated = CursorEnvelope("Confirming HEAD and gathering review guidance {braces in prose}." + Verdict("approve", H1));
+        Assert.True(CrossRuntimeReviewVerdict.TryParse("cursor", narrated, out var cursor, out var cursorError), cursorError);
         Assert.Equal(H1, cursor.HeadSha);
+        Assert.True(CrossRuntimeReviewVerdict.TryParse("cursor", CursorEnvelope(Verdict("approve", H1)), out _, out _));
+        Assert.False(CrossRuntimeReviewVerdict.TryParse("cursor", CursorEnvelope(Verdict("approve", H1) + " done."), out _, out var trailingError));
+        Assert.Contains("does not end with a verdict JSON object", trailingError, StringComparison.Ordinal);
+        Assert.False(CrossRuntimeReviewVerdict.TryParse("cursor", CursorEnvelope("no verdict at all"), out _, out _));
 
         foreach (var runtime in new[] { "claude", "cursor" })
         {
@@ -1237,8 +1253,12 @@ public sealed class G834CrossRuntimeReviewTests : IDisposable
         return node.ToJsonString();
     }
 
-    private static string CursorEnvelope(string verdict) =>
-        JsonSerializer.Serialize(new { type = "result", subtype = "success", is_error = false, result = verdict, session_id = "s" });
+    private static string CursorEnvelope(string resultText)
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Fixture("cursor-envelope.json")))!.AsObject();
+        node["result"] = resultText;
+        return node.ToJsonString();
+    }
 
     private static bool Validate(string json)
     {

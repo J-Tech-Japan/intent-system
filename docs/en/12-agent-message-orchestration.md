@@ -184,7 +184,7 @@ Read-only enforcement differs by runtime, as measured on 2026-09-14:
   sandbox-enforced.
 - cursor `-p --mode ask --sandbox enabled` refuses every non-read-only tool,
   including all shell commands, so the Cursor reviewer reads files but cannot run
-  git or tests. `--mode plan` is not used: in a measured run a plan-mode agent
+  git or tests; the head it echoes is read from files such as `.git/HEAD`. `--mode plan` is not used: in a measured run a plan-mode agent
   switched itself to agent mode and wrote files inside and outside its workspace,
   and `--sandbox enabled` did not stop those writes.
 

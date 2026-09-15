@@ -41,7 +41,7 @@ internal static class CrossRuntimeReviewRuntimes
         {
             [Codex] = "codex `-s read-only` is sandbox-enforced: the reviewer can read and run commands, but the sandbox refuses file writes.",
             [Claude] = "claude `--permission-mode plan --disallowedTools Edit,Write,NotebookEdit` removes the file-writing tools only. Command execution (for example building and running tests) is allowed, and writes made through shell commands are not sandbox-enforced.",
-            [Cursor] = "cursor `--mode ask` refuses every non-read-only tool, including all shell commands, so the reviewer reads files but cannot run git or tests. `--mode plan` was not used because a measured plan-mode run switched itself to agent mode and wrote files inside and outside the workspace; `--sandbox enabled` did not stop those writes.",
+            [Cursor] = "cursor `--mode ask` refuses every non-read-only tool, including all shell commands, so the reviewer reads files but cannot run git or tests; the head it echoes is read from files such as `.git/HEAD`, not checked with git. `--mode plan` was not used because a measured plan-mode run switched itself to agent mode and wrote files inside and outside the workspace; `--sandbox enabled` did not stop those writes.",
         };
 
     /// <summary>The first line of <c>invocation.txt</c>: who runs it.</summary>
