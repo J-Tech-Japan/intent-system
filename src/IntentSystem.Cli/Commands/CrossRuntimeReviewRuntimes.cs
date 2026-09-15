@@ -101,6 +101,7 @@ internal static class CrossRuntimeReviewCauses
     public const string VerdictInvalid = "cross-runtime-review-verdict-invalid";
     public const string RuntimeInvalid = "cross-runtime-review-runtime-invalid";
     public const string RecordCollision = "cross-runtime-review-record-collision";
+    public const string HeadSuperseded = "cross-runtime-review-head-superseded";
     public const string Blocked = "cross-runtime-review-blocked";
     public const string Missing = "cross-runtime-review-missing";
     public const string RereviewMissing = "cross-runtime-review-rereview-missing";

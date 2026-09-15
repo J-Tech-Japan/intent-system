@@ -354,6 +354,22 @@ internal static class ReviewCrossRuntimeCommand
                 "re-run the review against a clone checked out at the gated head.");
         }
 
+        // G834 review: a verdict for a head the PR has already moved past is
+        // refused, so a slow run on an older head can never be recorded after a
+        // newer head's block and clear that block's re-review requirement.
+        var existing = CrossRuntimeReviewStore.Read(context.RepoRoot, repo, pr).Records;
+        if (existing.Count > 0)
+        {
+            var newestHead = existing[^1].Record.HeadSha;
+            var headSeenBefore = existing.Any(item => string.Equals(item.Record.HeadSha, head, StringComparison.OrdinalIgnoreCase));
+            if (headSeenBefore && !string.Equals(newestHead, head, StringComparison.OrdinalIgnoreCase))
+            {
+                return Refuse(writer, format, "record", CrossRuntimeReviewCauses.HeadSuperseded,
+                    $"head '{head}' already has records on this PR, and a newer head '{newestHead}' was recorded after them; a verdict for a superseded head is not recorded.",
+                    "review the current PR head and record that verdict instead.");
+            }
+        }
+
         var recordedAt = (Clock ?? (() => DateTimeOffset.UtcNow))().ToUniversalTime();
         var draft = new CrossRuntimeReviewRecord
         {

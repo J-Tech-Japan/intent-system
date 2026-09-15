@@ -704,6 +704,35 @@ public sealed class G834CrossRuntimeReviewTests : IDisposable
         Assert.Equal(2, Directory.EnumerateFiles(Path.GetDirectoryName(recordPath)!).Count());
     }
 
+    [Fact]
+    public void Record_RefusesAVerdictForASupersededHead_SoALateOlderApproveCannotClearANewerBlock()
+    {
+        var clock = new DateTimeOffset(2026, 9, 14, 13, 0, 0, TimeSpan.Zero);
+        ReviewCrossRuntimeCommand.Clock = () => clock;
+        var h1Approve = WriteVerdictFile("claude", ClaudeEnvelope(Verdict("approve", H1)));
+        Assert.Equal(0, Route(["review", "cross-runtime", .. RecordArgs("claude", h1Approve, H1, write: true), "--format", "json"]).Item1);
+
+        clock = clock.AddMinutes(1);
+        var h2Block = WriteVerdictFile("codex", Verdict("request-changes", H2));
+        Assert.Equal(0, Route(["review", "cross-runtime", .. RecordArgs("codex", h2Block, H2, write: true), "--format", "json"]).Item1);
+
+        // A slow codex run on H1 finishes after the H2 block.
+        clock = clock.AddMinutes(1);
+        var lateH1 = WriteVerdictFile("codex", Verdict("approve", H1));
+        foreach (var write in new[] { false, true })
+        {
+            var (exit, output) = Route(["review", "cross-runtime", .. RecordArgs("codex", lateH1, H1, write), "--format", "json"]);
+            Assert.Equal(1, exit);
+            Assert.Contains(CrossRuntimeReviewCauses.HeadSuperseded, output, StringComparison.Ordinal);
+        }
+
+        // A head never recorded before is a new head and is accepted.
+        clock = clock.AddMinutes(1);
+        var h3Approve = WriteVerdictFile("claude", ClaudeEnvelope(Verdict("approve", H3)));
+        Assert.Equal(0, Route(["review", "cross-runtime", .. RecordArgs("claude", h3Approve, H3, write: true), "--format", "json"]).Item1);
+        Assert.Equal(3, CrossRuntimeReviewStore.Read(root, Repo, Pr).Records.Count);
+    }
+
     // ── gate ───────────────────────────────────────────────────────────
 
     [Fact]

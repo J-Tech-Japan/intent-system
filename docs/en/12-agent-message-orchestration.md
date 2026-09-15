@@ -209,10 +209,13 @@ latest record on the gated head decides. The gate refuses with
 `cross-runtime-review-blocked` when any runtime's latest record on the head is
 request-changes, `cross-runtime-review-missing` when the head lacks a same-runtime
 approve or a cross-runtime approve, `cross-runtime-review-rereview-missing` when a
-runtime that requested changes on an earlier head has no record on this head, and
+runtime whose most recent record on an earlier head is request-changes has no record on
+this head, and
 `cross-runtime-review-record-unreadable` (fail closed) when any record of the PR
 fails validation. A later approve from the same runtime on the same head
-supersedes its request-changes; it must come from a fresh reviewer run.
+supersedes its request-changes; it must come from a fresh reviewer run. When the PR
+already has records for a newer head, `record` refuses a verdict for a previously
+recorded head as `cross-runtime-review-head-superseded`.
 
 `automation pr-transition` gains optional `--head-sha` and `--execution-unit`.
 For a PR outside every declared `repos`, and for a PR that resolves to an

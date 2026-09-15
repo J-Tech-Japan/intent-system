@@ -191,11 +191,13 @@ relation は宣言された conductor runtime から再計算します。runtime
 head 上の最新 record が判定を決めます。head 上でいずれかの runtime の最新 record が
 request-changes なら `cross-runtime-review-blocked`、head に same-runtime の approve
 または cross-runtime の approve がなければ `cross-runtime-review-missing`、以前の
-head で request-changes を出した runtime がこの head に record を持たなければ
+head での最新 record が request-changes の runtime がこの head に record を持たなければ
 `cross-runtime-review-rereview-missing`、PR の record のいずれかが検証に失敗すれば
 `cross-runtime-review-record-unreadable`（fail closed）で拒否します。同じ runtime が
 同じ head で後から出した approve はその request-changes を上書きしますが、新しい
-reviewer run から出たものでなければなりません。
+reviewer run から出たものでなければなりません。PR に後の head の record がすでにある
+とき、以前に record 済みの head への verdict は `cross-runtime-review-head-superseded` で
+記録を拒否します。
 
 `automation pr-transition` は任意の `--head-sha` と `--execution-unit` を受け付けます。
 宣言された `repos` のいずれにも含まれない PR と、未宣言 team に解決される PR では、
