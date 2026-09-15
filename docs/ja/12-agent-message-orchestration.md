@@ -118,6 +118,101 @@ subagent を起動できない runtime では使わない）を出力します�
 その host のすべての team に影響します。mode を記録する前に、その host を読む
 すべての intent-cli を更新してください。
 
+## cross-runtime implementation review（G834 — preview-through-1.x）
+
+team は、各 implementation PR を別 runtime（Codex、Claude Code、Cursor agent を
+headless で実行）の reviewer にも review させることを要求できます。要求は host の
+`.intent-cli/config.toml` で宣言し、推定はしません:
+
+```toml
+[[cross_runtime_review.teams]]
+team = "<domain>/<team>"
+conductor_runtime = "codex|claude|cursor"
+repos = ["<owner/repo>"]
+```
+
+未記載なら宣言された team はありません。不正な entry、未知の runtime、重複した
+team、`repos` の欠落や不正は config の読み込みを失敗させ、
+`cross_runtime_review.teams`、entry、field を名指しします。conductor runtime は
+宣言であり自己申告ではありません。同じ team の seat が異なる runtime で動く場合は
+別の team として宣言します。repository 名は大文字小文字を区別せずに比較します。
+
+PR の team は引数で渡さず解決します。host の `queue-state.json` で `linked_pr` が
+一致する item が execution unit を、packet の `implementation_issue_packet.domain`
+が domain を、保持中の execution-unit claim が team を与えます。解決できない PR は
+`cross-runtime-review-team-unresolved` となり、refusal は修正方法（
+`worker complete ... --pr <n>` で PR を link する、`--execution-unit <unit>` を渡す、
+`--team` 付きで claim を取得する）を示します。
+
+```text
+intent-cli review cross-runtime request --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --runtime codex|claude|cursor --clone <read-only-clone> --out-dir <dir>
+intent-cli review cross-runtime record --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --kind implementation --runtime <runtime> --runtime-version <text> --verdict-file <file> [--comment-out <file>] --write
+intent-cli review cross-runtime status --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit>
+intent-cli automation pr-transition --repo <owner/repo> --pr <n> --transition approved --head-sha <sha> --write
+```
+
+`request` は空の `--out-dir` に `prompt.md`、`verdict.schema.json`、
+`invocation.txt` の 3 ファイルだけを書きます。invocation は固定の read-only
+allow-list から作られ、seat が実行するものとしてラベル付けされます。埋め込む path は
+すべて POSIX の single quote で囲み、改行や NUL を含む path は拒否します。schema は
+object、array、string、integer、enum、`required`、`additionalProperties: false`
+だけを使い、Claude Code の `--json-schema` が draft 2020-12 の URI を拒否するため
+`$schema` keyword を持ちません。
+
+read-only の強制範囲は runtime ごとに異なります（2026-09-14 に実測）:
+
+- codex の `exec -s read-only` は sandbox で強制されます。reviewer はファイルを
+  読みコマンドを実行できますが、sandbox がファイル書き込みを拒否します。
+- claude の `-p --permission-mode plan --disallowedTools Edit,Write,NotebookEdit`
+  はファイル書き込み用の tool を外すだけです。Claude reviewer は build や test などの
+  コマンドを実行でき、shell コマンド経由の書き込みは sandbox で強制されません。
+- cursor の `-p --mode ask --sandbox enabled` は shell コマンドを含む read-only 以外の
+  すべての tool を拒否するため、Cursor reviewer はファイルを読めますが git や test は
+  実行できません。echo する head は git ではなく `.git/HEAD` などのファイルから読みます。`--mode plan` は使いません。実測では plan mode の agent が自分で
+  agent mode に切り替え、workspace の内外にファイルを書き込み、`--sandbox enabled` は
+  その書き込みを止めませんでした。
+
+intent-cli は request を出力し verdict を記録する
+だけで、reviewer を起動・管理しません。各 vendor の automation terms の確認は
+operator の責任です。
+
+`record` は codex では bare な verdict object を、claude と cursor では runtime の
+JSON envelope を受け付けます。verdict が返す head が `--head-sha` と異なる verdict、
+blocking finding を持つ `approve`、finding のない `request-changes` は拒否します。
+`--write` は `.intent-cli/cross-runtime-reviews/<owner>__<repo>/pr-<n>/` に新しい
+record と raw verdict の byte copy を作り、どちらも上書きしません。record はコミット
+してプッシュするまでその checkout にしか存在しません。reviewer を
+「cross-runtime review」または「independent same-runtime subagent review」と明記した
+PR comment body も出力し、seat が `gh pr review --comment --body-file` で投稿します。
+
+`status` と approved transition は同じ gate を使います。execution unit、domain、
+team、kind が一致する record だけを数え、それ以外は `foreign` として表示します。
+relation は宣言された conductor runtime から再計算します。runtime ごとに、gate 対象
+head 上の最新 record が判定を決めます。head 上でいずれかの runtime の最新 record が
+request-changes なら `cross-runtime-review-blocked`、head に same-runtime の approve
+または cross-runtime の approve がなければ `cross-runtime-review-missing`、以前の
+head での最新 record が request-changes の runtime がこの head に record を持たなければ
+`cross-runtime-review-rereview-missing`、PR の record のいずれかが検証に失敗すれば
+`cross-runtime-review-record-unreadable`（fail closed）で拒否します。同じ runtime が
+同じ head で後から出した approve はその request-changes を上書きしますが、新しい
+reviewer run から出たものでなければなりません。PR に後の head の record がすでにある
+とき、以前に record 済みの head への verdict は `cross-runtime-review-head-superseded` で
+記録を拒否します。
+
+`automation pr-transition` は任意の `--head-sha` と `--execution-unit` を受け付けます。
+宣言された `repos` のいずれにも含まれない PR と、未宣言 team に解決される PR では、
+すべての transition の結果出力は変わりません。宣言済み team の `approved` では
+`--head-sha` を必須とし（`cross-runtime-review-head-required`）、
+`gh pr view <n> --json headRefOid` と比較し（`cross-runtime-review-head-stale`）、gate を
+評価します。refusal は label を変えず CI wait を残します。結果 JSON はこれらの場合に
+だけ `cross_runtime_review` を持ちます。host root から実行してください。host config の
+ない checkout では gate を評価せず、`gh pr merge` には gate がかからないため、gate は正直な
+seat のための guard であり security boundary ではありません。
+
+**前方互換性。** G834 を含まない intent-cli は `[[cross_runtime_review.teams]]` を
+無視し、gate を適用しません。宣言済み team の PR を transition するすべての
+intent-cli を更新してから gate に依存してください。
+
 ## completion continuation chain の永続記録（G695 — preview-through-1.x）
 
 G695 は、誰が実行権限を持つかを変更せずに completion から次の action までの境界を観測可能にします。

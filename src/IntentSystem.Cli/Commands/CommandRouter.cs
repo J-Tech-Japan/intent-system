@@ -105,6 +105,19 @@ internal static class CommandRouter
         "automation workspace-guard --mode plan|begin|end [--write]"
     ];
 
+    /// <summary>
+    /// G834: the nested subcommands the single <c>review cross-runtime</c>
+    /// handler dispatches. Kept beside the router table so routed command text
+    /// (for example in <c>guide solo-conductor</c>) resolves to a real route.
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<string, Func<CliContext, string[], TextWriter, int>> ReviewCrossRuntimeSubcommands =
+        new Dictionary<string, Func<CliContext, string[], TextWriter, int>>(StringComparer.Ordinal)
+        {
+            ["request"] = ReviewCrossRuntimeCommand.ExecuteRequest,
+            ["record"] = ReviewCrossRuntimeCommand.ExecuteRecord,
+            ["status"] = ReviewCrossRuntimeCommand.ExecuteStatus,
+        };
+
     private static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, CommandHandler>> ImplementedCommands =
         new Dictionary<string, IReadOnlyDictionary<string, CommandHandler>>(StringComparer.Ordinal)
         {
@@ -122,7 +135,9 @@ internal static class CommandRouter
                 ["closeout-plan"] = ReviewCloseoutPlanCommand.Execute,
                 // G374: host-side structured worker-signal collection / convergence.
                 ["collect-signals"] = ReviewCollectSignalsCommand.Execute,
-                ["signal-handled"] = ReviewSignalHandledCommand.Execute
+                ["signal-handled"] = ReviewSignalHandledCommand.Execute,
+                // G834: one handler; it dispatches ReviewCrossRuntimeSubcommands itself.
+                ["cross-runtime"] = ReviewCrossRuntimeCommand.Execute
             },
             ["interview"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {

@@ -239,7 +239,7 @@ internal static class GuideHelpCommand
         new GuideSubcommandEntry
         {
             Name = "review",
-            Purpose = "Review-side prompts. Subcommand: run (G316 packet/intent-aware review).",
+            Purpose = "Review-side prompts. Subcommand: run (G316 packet/intent-aware review). For declared teams (G834) it names `intent-cli review cross-runtime request`, `intent-cli review cross-runtime record`, and `intent-cli review cross-runtime status` for cross-runtime implementation review.",
             Example = "intent-cli guide review --pr <n> --repo <owner/repo> --domain <d> --format json"
         },
         // G696: per-kind command-form guidance is an installed, read-only
@@ -428,7 +428,7 @@ internal static class GuideHelpCommand
         writer.WriteLine("Pick the surface by what you are trying to do. `intent-cli guide commands list` carries the same `role` category on every command group.");
         writer.WriteLine();
         writer.WriteLine("- **Design-side planning** — shape intent and cut work: `intent-cli improve` (realignment), `intent-cli grill` (persistent interview), `intent-cli stack` (packet backlog + first issue), `intent-cli inspect` (evidence-backed observation), `intent-cli next` (which of these to run), plus `intent` / `interview` / `packet` / `clarify`.");
-        writer.WriteLine("- **Host review / next-slice** — review PRs and plan the next slice: `intent-cli guide review`, `intent-cli review closeout-plan`, `intent-cli automation host-review-preflight`, `intent-cli closeout pr`, `intent-cli issue publish-flow`, and the `guide workflow task review-next-slice-loop` prompt generator.");
+        writer.WriteLine("- **Host review / next-slice** — review PRs and plan the next slice: `intent-cli guide review`, `intent-cli review closeout-plan`, `intent-cli review cross-runtime request|record|status` (G834, declared teams), `intent-cli automation host-review-preflight`, `intent-cli closeout pr`, `intent-cli issue publish-flow`, and the `guide workflow task review-next-slice-loop` prompt generator.");
         writer.WriteLine("- **Child implementation** — implement an issue into a PR: `intent-cli worker next-action / claim / complete / result-summary` (GitHub-contract-only with `--github-only`), and the `guide workflow task implementation-loop` prompt generator.");
         writer.WriteLine("- **Recovery / diagnostics** — repair operational state: `intent-cli automation doctor`, `intent-cli automation reconcile`, `intent-cli automation publish-recovery`, plus `metadata` / `queue` inspection.");
         writer.WriteLine("- **Loop-prompt creation** — turn a minimal user ask into a paste-ready loop prompt: `intent-cli guide prompt-template` / `prompt-matrix` (catalog) and `intent-cli guide workflow task implementation-loop|review-next-slice-loop` (generators with current fixed conditions).");

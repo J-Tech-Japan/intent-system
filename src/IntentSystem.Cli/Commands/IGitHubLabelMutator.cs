@@ -381,6 +381,35 @@ internal sealed class GhCliGitHubLabelMutator : IGitHubLabelMutator, IGitHubLabe
         public required IReadOnlyList<string> Labels { get; init; }
     }
 
+    /// <summary>
+    /// G834: read a PR's current head commit with
+    /// <c>gh pr view &lt;n&gt; --repo &lt;repo&gt; --json headRefOid</c>. Read-only; used
+    /// by the approved transition to bind the cross-runtime review gate to the
+    /// exact head.
+    /// </summary>
+    public static string ReadPullRequestHeadSha(string repo, int number)
+    {
+        var stdout = RunGh(
+            ["pr", "view", number.ToString(System.Globalization.CultureInfo.InvariantCulture), "--repo", repo, "--json", "headRefOid"],
+            $"read the head of PR #{number} in {repo}");
+        try
+        {
+            using var document = JsonDocument.Parse(stdout);
+            if (document.RootElement.TryGetProperty("headRefOid", out var head)
+                && head.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(head.GetString()))
+            {
+                return head.GetString()!;
+            }
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidOperationException($"`gh pr view #{number} --json headRefOid` for {repo} returned invalid JSON: {exception.Message}", exception);
+        }
+
+        throw new InvalidOperationException($"`gh pr view #{number} --json headRefOid` for {repo} returned no headRefOid.");
+    }
+
     public IReadOnlyList<GitHubAutomationLabel> ReadLabels(string repo, string kind, int number)
     {
         var args = BuildViewArguments(repo, kind, number);

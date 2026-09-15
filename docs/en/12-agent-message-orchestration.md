@@ -132,6 +132,106 @@ must not use the model).
 affects every team on that host because the whole file fails to load. Refresh
 every intent-cli that reads the host before recording the mode.
 
+## Cross-runtime implementation review (G834 — preview-through-1.x)
+
+A team can require that each implementation PR is also reviewed by a reviewer on
+a different runtime (Codex, Claude Code, or Cursor agent, run headless). The
+requirement is declared, never inferred, in the host `.intent-cli/config.toml`:
+
+```toml
+[[cross_runtime_review.teams]]
+team = "<domain>/<team>"
+conductor_runtime = "codex|claude|cursor"
+repos = ["<owner/repo>"]
+```
+
+Absent means no team is declared. A malformed entry, an unknown runtime, a
+duplicate team, or a missing or malformed `repos` fails the config load and names
+`cross_runtime_review.teams`, the entry, and the field. The conductor runtime is
+declared, not self-reported; seats of one team on different runtimes are declared
+as separate teams. Repository names compare case-insensitively.
+
+The team of a PR is resolved, never passed: the host `queue-state.json` item whose
+`linked_pr` matches gives the execution unit, the packet's
+`implementation_issue_packet.domain` gives the domain, and the held
+execution-unit claim gives the team. A PR that cannot be resolved is
+`cross-runtime-review-team-unresolved`, and the refusal names the fix (link the PR
+with `worker complete ... --pr <n>`, pass `--execution-unit <unit>`, or acquire the
+claim with `--team`).
+
+```text
+intent-cli review cross-runtime request --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --runtime codex|claude|cursor --clone <read-only-clone> --out-dir <dir>
+intent-cli review cross-runtime record --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --kind implementation --runtime <runtime> --runtime-version <text> --verdict-file <file> [--comment-out <file>] --write
+intent-cli review cross-runtime status --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit>
+intent-cli automation pr-transition --repo <owner/repo> --pr <n> --transition approved --head-sha <sha> --write
+```
+
+`request` renders exactly `prompt.md`, `verdict.schema.json`, and
+`invocation.txt` into an empty `--out-dir`. The invocation comes from a pinned
+read-only allow-list and is labeled as run by the seat; every interpolated path is
+POSIX single-quoted, and a path with a newline or NUL is refused. The schema uses
+only object, array, string, integer, enum, `required`, and
+`additionalProperties: false`, and declares no `$schema` keyword because Claude
+Code rejects the draft 2020-12 URI in `--json-schema`.
+
+Read-only enforcement differs by runtime, as measured on 2026-09-14:
+
+- codex `exec -s read-only` is sandbox-enforced: the reviewer reads and runs
+  commands, and the sandbox refuses file writes.
+- claude `-p --permission-mode plan --disallowedTools Edit,Write,NotebookEdit`
+  removes the file-writing tools only. The Claude reviewer may run commands such as
+  builds and tests, and writes made through shell commands are not
+  sandbox-enforced.
+- cursor `-p --mode ask --sandbox enabled` refuses every non-read-only tool,
+  including all shell commands, so the Cursor reviewer reads files but cannot run
+  git or tests; the head it echoes is read from files such as `.git/HEAD`. `--mode plan` is not used: in a measured run a plan-mode agent
+  switched itself to agent mode and wrote files inside and outside its workspace,
+  and `--sandbox enabled` did not stop those writes.
+
+intent-cli renders the
+request and records verdicts; it does not start, launch, or manage the reviewer.
+Confirming each vendor's automation terms is the operator's responsibility.
+
+`record` accepts codex's bare verdict object, and the runtime JSON envelope for
+claude and cursor. It refuses a verdict whose echoed head differs from
+`--head-sha`, an `approve` with blocking findings, and a `request-changes` without
+any. With `--write` it creates a new record under
+`.intent-cli/cross-runtime-reviews/<owner>__<repo>/pr-<n>/` plus a byte copy of the
+raw verdict, never overwriting either; the record exists only in that checkout
+until it is committed and pushed. It also renders the PR comment body that names
+"cross-runtime review" or "independent same-runtime subagent review"; the seat
+posts it with `gh pr review --comment --body-file`.
+
+`status` and the approved transition share one gate. Only records whose execution
+unit, domain, team, and kind match count; others are listed as `foreign`. The
+relation is recomputed from the declared conductor runtime. For each runtime its
+latest record on the gated head decides. The gate refuses with
+`cross-runtime-review-blocked` when any runtime's latest record on the head is
+request-changes, `cross-runtime-review-missing` when the head lacks a same-runtime
+approve or a cross-runtime approve, `cross-runtime-review-rereview-missing` when a
+runtime whose most recent record on an earlier head is request-changes has no record on
+this head, and
+`cross-runtime-review-record-unreadable` (fail closed) when any record of the PR
+fails validation. A later approve from the same runtime on the same head
+supersedes its request-changes; it must come from a fresh reviewer run. When the PR
+already has records for a newer head, `record` refuses a verdict for a previously
+recorded head as `cross-runtime-review-head-superseded`.
+
+`automation pr-transition` gains optional `--head-sha` and `--execution-unit`.
+For a PR outside every declared `repos`, and for a PR that resolves to an
+undeclared team, every transition's result output is unchanged. For `approved` of
+a declared team it requires `--head-sha` (`cross-runtime-review-head-required`),
+compares it with `gh pr view <n> --json headRefOid`
+(`cross-runtime-review-head-stale`), and evaluates the gate. Refusals change no
+labels and keep the CI wait; the result JSON gains `cross_runtime_review` only in
+these cases. Run it from the host root: a checkout without the host config
+evaluates no gate, and `gh pr merge` is not gated, so the gate guards an honest
+seat rather than acting as a security boundary.
+
+**Forward compatibility.** An intent-cli without G834 ignores
+`[[cross_runtime_review.teams]]` and applies no gate. Refresh every intent-cli
+that transitions PRs for a declared team before relying on the gate.
+
 ## Durable completion continuation chain (G695 — preview-through-1.x)
 
 G695 makes the completion-to-next-action boundary observable without changing

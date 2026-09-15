@@ -5,6 +5,7 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection(AutomationPrTransitionSharedStateCollection.Name)]
 public sealed class AutomationPrTransitionCommandTests : IDisposable
 {
     public AutomationPrTransitionCommandTests()

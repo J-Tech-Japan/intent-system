@@ -212,7 +212,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationSupport,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerHostLoop,
-            Purpose = "Review-side surfaces: closeout-plan (read-only), collect-signals / signal-handled (G374 worker-signal convergence)."
+            Purpose = "Review-side surfaces: closeout-plan (read-only), collect-signals / signal-handled (G374 worker-signal convergence), and `review cross-runtime request|record|status` (G834 cross-runtime implementation review for teams declared in `[[cross_runtime_review.teams]]`: render a reviewer request the seat runs, record a head-bound verdict, and read the approval gate; intent-cli never runs a reviewer)."
         },
         new CommandGroupEntry
         {
