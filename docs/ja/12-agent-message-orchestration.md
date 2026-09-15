@@ -22,7 +22,7 @@ canonical command だけで書き込みます:
 
 ```text
 intent-cli team-mode show --domain <domain> --team <team> --format json
-intent-cli team-mode set --domain <domain> --team <team> --mode delivery|authoring-only --write --format json
+intent-cli team-mode set --domain <domain> --team <team> --mode delivery|authoring-only|solo-conductor --write --format json
 intent-cli team-mode validate --domain <domain> --team <team> --format json
 ```
 
@@ -80,6 +80,43 @@ team-mode capability matrix を使います。authoring-only では worker、rev
 class を明示的に not applicable とし、authoring、contract/readiness、branch-lane、branch-routing、
 publish の永続状態 drift、knowledge/guide-writeback は active のままです。delivery は全 class と既存の
 output を保持します。これは diagnostic judgment だけであり、publish、claim、ownership gate を弱めません。
+
+## solo conductor team mode（G833 — preview-through-1.x）
+
+`solo-conductor` は 3 つ目の team mode で、four-thread / five-thread model と並ぶ
+3 つの supported thread shape の 1 つです。1 つの conductor seat が architect、
+orchestrator、builder を担い、execution unit の各 phase を順に進めます。reviewer は
+review と re-review のたびに新しく起動する independent reviewer subagent が担い、
+verdict は independent subagent review として記録します。subagent を起動するのは
+conductor で、intent-cli が agent を起動・管理することはありません。
+
+```text
+intent-cli team-mode set --domain <domain> --team <team> --mode solo-conductor --write --format json
+intent-cli guide solo-conductor --format markdown
+```
+
+mode は明示的に記録し、topology から推定しません。`solo-conductor` が記録された
+team では、`guide bootstrap --domain <d> --team <t>` が
+`solo-conductor-team-bootstrap` を state `solo-conductor-complete` で出力します。
+seat roster も supervision cycle も必要ありません。`guide next` は
+`team_mode: solo-conductor` を返し、bootstrap を complete とみなし、roster がない
+ことを理由に `bootstrap-resume` を勧めず、それ以外は delivery と同じ decision set
+を保ちます。supervision は opt-in のままです（G828）。`[supervision] opt_in_teams`
+で宣言された solo team には `supervision-setup` が引き続き出ます。
+
+delivery の gate はすべて delivery の挙動のままです。capability matrix は全 class
+を active に保つので、記録済みの pending delegation は `automation stalled-work`
+に表示されます。`issue publish-flow` は delivery の authorization path を使い、
+`notify supervise` と `session-layer topology` は拒否されません。
+`guide solo-conductor` は、`intent-cli` / `gh` / `git` のラベル付き command を持つ
+10 step の per-unit loop、blocking な reviewer independence rule、pacing、operator
+への質問、host discipline、handoff durability、limit（parallelism 1、isolated
+subagent を起動できない runtime では使わない）を出力します。
+
+**前方互換性。** G833 を含まない intent-cli は `solo-conductor` を含む
+`.intent-cli/team-mode.json` を拒否します。ファイル全体の読み込みが失敗するため、
+その host のすべての team に影響します。mode を記録する前に、その host を読む
+すべての intent-cli を更新してください。
 
 ## completion continuation chain の永続記録（G695 — preview-through-1.x）
 

@@ -167,7 +167,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationSupport,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerOperator,
-            Purpose = "G691 durable team shape, independent of session-layer transport: `intent-cli team-mode show|validate --domain <d> [--team <t>]` reads the command-produced record and `team-mode set --mode delivery|authoring-only --write` records explicit, reversible transitions. Delivery is the default and byte-identical; authoring-only is the zero-herdr front-door shape with authoring-only guide next/bootstrap and named not-applicable supervision."
+            Purpose = "G691 durable team shape, independent of session-layer transport: `intent-cli team-mode show|validate --domain <d> [--team <t>]` reads the command-produced record and `team-mode set --mode delivery|authoring-only|solo-conductor --write` records explicit, reversible transitions. Delivery is the default and byte-identical; authoring-only is the zero-herdr front-door shape with authoring-only guide next/bootstrap and named not-applicable supervision; solo-conductor (G833) is one conductor seat plus a fresh independent reviewer subagent, keeps every delivery gate, and needs no seat roster (`intent-cli guide solo-conductor`)."
         },
         new CommandGroupEntry
         {
@@ -339,6 +339,15 @@ internal static class GuideCommandsListCommand
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerChatAgent,
             Purpose = "G807 Steward operating contract: a metadata-free transmission boundary that relays evidence, hands design questions to architect, review questions to reviewer, dispatch to orchestrator, preserves the G796 ruling boundary, and refuses fabricated authority."
+        },
+        new CommandGroupEntry
+        {
+            Name = "guide solo-conductor",
+            Role = RoleDesign,
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "G833 preview-through-1.x solo conductor contract: one conductor seat (architect, orchestrator, builder) runs the ten-step per-unit loop with labeled intent-cli/gh/git commands; a fresh independent reviewer subagent, started by the conductor, reviews every head. Metadata-free and render-only."
         },
         new CommandGroupEntry
         {

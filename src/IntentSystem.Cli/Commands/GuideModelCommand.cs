@@ -60,10 +60,13 @@ internal static class GuideModelCommand
             ExecutionOrchestrationModel = new GuideModelExecutionOrchestration
             {
                 Summary = "G540: for autonomous, multi-thread execution once intents are authored, the PRIMARY "
-                    + "collaboration model is the transport-neutral role model, supported in two shapes. The "
+                    + "collaboration model is the transport-neutral role model, supported in three shapes. The "
                     + "four-thread model is Architect / Orchestrator / Builder / Reviewer (legacy names design / "
                     + "orchestration / implementation / review are accepted aliases). The five-thread model adds an "
                     + "optional Steward relay seat to those four; Steward never decides design or review questions. "
+                    + "The solo-conductor model (G833) has one conductor seat carry Architect, Orchestrator, and Builder "
+                    + "while a fresh independent reviewer subagent carries Reviewer for every review "
+                    + "(`intent-cli guide solo-conductor`). "
                     + "The threads coordinate over the recorded session layer (herdr-only preferred; agmsg + herdr "
                     + "deprecated but still working), with the orchestrator pacing loopless builder/reviewer receivers "
                     + "instead of independent timers. This is the practiced, maintained model (G520-G539: wake "
@@ -169,6 +172,8 @@ internal static class GuideModelCommand
     /// G831: both supported thread shapes, derived from the canonical role
     /// vocabulary. The four-thread model is every canonical role except the
     /// optional Steward relay seat; the five-thread model is all of them.
+    /// G833: the solo-conductor model uses the four judgment roles, with one
+    /// conductor seat carrying three of them and a reviewer subagent the fourth.
     /// </summary>
     internal static IReadOnlyList<GuideModelThreadModel> BuildThreadModels()
     {
@@ -196,6 +201,13 @@ internal static class GuideModelCommand
                 Roles = LogicalRoleNormalizer.CanonicalRoles,
                 Aliases = AliasesFor(LogicalRoleNormalizer.CanonicalRoles.ToArray()),
                 Summary = "The same four plus an optional Steward relay seat that relays evidence and never decides design or review questions.",
+            },
+            new GuideModelThreadModel
+            {
+                Name = "solo-conductor",
+                Roles = judgmentRoles,
+                Aliases = AliasesFor(judgmentRoles),
+                Summary = "One conductor seat carries architect, orchestrator, and builder; a fresh independent subagent carries reviewer for every review and re-review, recorded as an independent subagent review. Record it with `team-mode set --mode solo-conductor`; run it with `intent-cli guide solo-conductor`.",
             },
         ];
     }

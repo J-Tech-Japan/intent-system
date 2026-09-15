@@ -176,7 +176,7 @@ internal static class AutomationStateDoctorCommand
             Repo = repo!,
             Mode = mode,
             HostOnly = true,
-            CapabilityMatrix = capabilityMatrix.IsAuthoringOnly ? capabilityMatrix : null,
+            CapabilityMatrix = capabilityMatrix.EmittedInJson ? capabilityMatrix : null,
             Findings = findings,
             UnsafeFindings = analysis.UnsafeFindings,
             Warnings = warnings,

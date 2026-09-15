@@ -103,7 +103,7 @@ internal static class StatusBriefAnalyzer
         return new StatusBriefSummary
         {
             Domain = domain,
-            CapabilityMatrix = capabilityMatrix.IsAuthoringOnly ? capabilityMatrix : null,
+            CapabilityMatrix = capabilityMatrix.EmittedInJson ? capabilityMatrix : null,
             QueueStatePath = queueStatePath,
             QueueStatePresent = queueStatePresent,
             QueueStateReadable = queueStateReadable,

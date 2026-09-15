@@ -296,7 +296,7 @@ internal static class BranchLaneDecisionStore
         }
         if (record.TeamMode is not null && !TeamMode.IsKnown(record.TeamMode))
         {
-            problems.Add($"team_mode is '{record.TeamMode}', expected delivery or authoring-only");
+            problems.Add($"team_mode is '{record.TeamMode}', expected delivery, authoring-only, or solo-conductor");
         }
         if (record is BranchLaneProposeRecord propose && string.IsNullOrWhiteSpace(propose.Rationale))
         {

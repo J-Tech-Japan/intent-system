@@ -23,7 +23,7 @@ written through the canonical command:
 
 ```text
 intent-cli team-mode show --domain <domain> --team <team> --format json
-intent-cli team-mode set --domain <domain> --team <team> --mode delivery|authoring-only --write --format json
+intent-cli team-mode set --domain <domain> --team <team> --mode delivery|authoring-only|solo-conductor --write --format json
 intent-cli team-mode validate --domain <domain> --team <team> --format json
 ```
 
@@ -92,6 +92,45 @@ branch-routing, publish-durable-state-drift, and knowledge/guide-writeback
 remain active. Delivery retains every class and its existing output. This is
 a diagnostic judgment only and never weakens publish, claim, or ownership
 gates.
+
+## Solo conductor team mode (G833 — preview-through-1.x)
+
+`solo-conductor` is the third team mode and one of the three supported thread
+shapes, next to the four-thread and five-thread models. One conductor seat
+carries architect, orchestrator, and builder and runs every execution-unit
+phase in order. A fresh independent reviewer subagent carries reviewer for
+every review and re-review, and its verdict is recorded as an independent
+subagent review. The conductor starts that subagent; intent-cli never starts
+or manages an agent.
+
+```text
+intent-cli team-mode set --domain <domain> --team <team> --mode solo-conductor --write --format json
+intent-cli guide solo-conductor --format markdown
+```
+
+The mode is recorded, never inferred from topology. For a recorded
+`solo-conductor` team, `guide bootstrap --domain <d> --team <t>` renders the
+`solo-conductor-team-bootstrap` shape with the state `solo-conductor-complete`:
+no seat roster and no supervision cycle are required. `guide next` reports
+`team_mode: solo-conductor`, treats the bootstrap as complete, never
+recommends `bootstrap-resume` for a missing roster, and otherwise keeps the
+delivery decision set. Supervision stays opt-in (G828): a solo team declared
+in `[supervision] opt_in_teams` still gets `supervision-setup`.
+
+Every delivery gate keeps its delivery behavior. The capability matrix keeps
+every class active, so a recorded pending delegation still surfaces in
+`automation stalled-work`; `issue publish-flow` uses the delivery
+authorization path; `notify supervise` and `session-layer topology` are not
+refused. `guide solo-conductor` renders the ten-step per-unit loop with
+labeled `intent-cli` / `gh` / `git` commands, the blocking reviewer
+independence rules, pacing, operator questions, host discipline, handoff
+durability, and limits (parallelism 1; a runtime without isolated subagents
+must not use the model).
+
+**Forward compatibility.** An intent-cli without G833 rejects a
+`.intent-cli/team-mode.json` that contains `solo-conductor`, and the refusal
+affects every team on that host because the whole file fails to load. Refresh
+every intent-cli that reads the host before recording the mode.
 
 ## Durable completion continuation chain (G695 — preview-through-1.x)
 

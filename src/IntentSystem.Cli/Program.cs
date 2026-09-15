@@ -242,6 +242,8 @@ internal static class Program
                 || string.Equals(args[1], "design-thread", StringComparison.Ordinal)
                 // G807: Steward role guidance is static and metadata-free.
                 || string.Equals(args[1], "steward-thread", StringComparison.Ordinal)
+                // G833: the solo conductor contract is static and metadata-free.
+                || string.Equals(args[1], "solo-conductor", StringComparison.Ordinal)
                 // G812: correctness-first progress supervision is a static,
                 // metadata-free guide and must work from a child checkout.
                 || string.Equals(args[1], "progress-supervision", StringComparison.Ordinal)

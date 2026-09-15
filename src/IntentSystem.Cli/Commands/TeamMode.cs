@@ -14,15 +14,26 @@ internal static class TeamMode
 {
     public const string Delivery = "delivery";
     public const string AuthoringOnly = "authoring-only";
+
+    /// <summary>
+    /// G833: one conductor seat carries architect, orchestrator and builder,
+    /// and a fresh independent reviewer subagent carries the reviewer seat for
+    /// every review. It is a delivery shape (every delivery gate applies) that
+    /// needs no seat roster; it is only ever recorded, never inferred.
+    /// </summary>
+    public const string SoloConductor = "solo-conductor";
     public const string Default = Delivery;
 
-    public static readonly IReadOnlyList<string> All = [Delivery, AuthoringOnly];
+    public static readonly IReadOnlyList<string> All = [Delivery, AuthoringOnly, SoloConductor];
 
     public static bool IsKnown(string? mode) =>
         mode is not null && All.Contains(mode, StringComparer.Ordinal);
 
     public static bool IsAuthoringOnly(string? mode) =>
         string.Equals(mode, AuthoringOnly, StringComparison.Ordinal);
+
+    public static bool IsSoloConductor(string? mode) =>
+        string.Equals(mode, SoloConductor, StringComparison.Ordinal);
 }
 
 internal enum TeamModeSource
@@ -50,6 +61,8 @@ internal sealed record TeamModeResolution
     public bool UsedUniqueTeamFallback { get; init; }
 
     public bool IsAuthoringOnly => TeamMode.IsAuthoringOnly(Mode);
+
+    public bool IsSoloConductor => TeamMode.IsSoloConductor(Mode);
 }
 
 /// <summary>

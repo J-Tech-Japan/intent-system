@@ -14,7 +14,7 @@ internal static class TeamModeCommand
     private const string FormatMarkdown = "markdown";
 
     private const string Usage =
-        "Usage: intent-cli team-mode show|set|validate --domain <name> [--team <name>] [--mode delivery|authoring-only] "
+        "Usage: intent-cli team-mode show|set|validate --domain <name> [--team <name>] [--mode delivery|authoring-only|solo-conductor] "
         + "[--dry-run|--write] [--format markdown|json]";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -338,7 +338,7 @@ internal static class TeamModeCommand
 
         if (requireMode && !TeamMode.IsKnown(mode))
         {
-            error = "--mode must be 'delivery' or 'authoring-only'.";
+            error = "--mode must be 'delivery', 'authoring-only', or 'solo-conductor'.";
             options = default!;
             return false;
         }
