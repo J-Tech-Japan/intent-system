@@ -33,6 +33,7 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
         AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = () => new ThrowingPrLookup();
         AutomationPrCreatedStaleRecoveryCommand.CandidateListerFactory = () => new ThrowingLister();
         AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () => new ThrowingLabelMutator();
+        AutomationPrCreatedStaleRecoveryCommand.ClaimVerifierFactory = null;
         AutomationPrCreatedStaleRecoveryCommand.UtcNowFactory = () => FixedNow;
     }
 
@@ -42,6 +43,7 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
         AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = null;
         AutomationPrCreatedStaleRecoveryCommand.CandidateListerFactory = null;
         AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = null;
+        AutomationPrCreatedStaleRecoveryCommand.ClaimVerifierFactory = null;
         AutomationPrCreatedStaleRecoveryCommand.UtcNowFactory = null;
         WorkerClaimCommand.MutatorFactory = null;
         WorkerClaimCommand.IssueLookupFactory = null;
@@ -189,6 +191,32 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
         using var workspace = CreateProceedWorkspace(includeQueueItem: false);
         var (exitCode, result) = Execute(workspace, write: false);
         AssertRefusal(exitCode, result, "queue-item-missing", workspace);
+    }
+
+    [Fact]
+    public void Refuse_IssueNotOpen_PrecedesQueueItemMissing()
+    {
+        using var workspace = CreateProceedWorkspace(includeQueueItem: false);
+        AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
+            new FakeIssueLookup(ClosedIssue());
+        var (exitCode, result) = Execute(workspace, write: false);
+        AssertRefusal(exitCode, result, "issue-not-open", workspace);
+    }
+
+    [Fact]
+    public void SameKeyWriteResume_QueueItemMissing_NoAbortBecauseCurrentKeyUnresolved()
+    {
+        using var workspace = CreateProceedWorkspace(includeQueueItem: false);
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, Pr));
+        AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
+            new FakeIssueLookup(OpenIssue("intent-target", "intent-pr-created"));
+
+        var before = workspace.ReadRunEvents().Count;
+        var (exitCode, result) = Execute(workspace, write: true);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("queue-item-missing", result.Cause);
+        Assert.Equal(before, workspace.ReadRunEvents().Count);
     }
 
     [Fact]
@@ -387,6 +415,17 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
         AssertRefusal(exitCode, result, "started-ambiguous", workspace);
     }
 
+    [Fact]
+    public void Refuse_StartedAmbiguous_MultipleOpenStartedForSameKey()
+    {
+        using var workspace = CreateProceedWorkspace();
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, Pr));
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, Pr,
+            ts: FixedNow.AddMinutes(1)));
+        var (exitCode, result) = Execute(workspace, write: false);
+        AssertRefusal(exitCode, result, "started-ambiguous", workspace);
+    }
+
     // ── write re-check refusals (exactly one aborted) ─────────────────────
 
     [Theory]
@@ -422,31 +461,34 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
     public void WriteRecheckRefusal_ClaimHeld_AppendsAborted()
     {
         using var workspace = CreateProceedWorkspace();
-        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, Pr));
-        workspace.WriteClaim("builder", Team);
         var labelMutator = new RecordingLabelMutator("intent-target", "intent-pr-created");
         AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () => labelMutator;
+        BindClaimVerifier(new SequencedClaimVerifier(UnheldClaim(), HeldClaim()));
 
         var (exitCode, result) = Execute(workspace, write: true);
         Assert.Equal(1, exitCode);
         Assert.Equal("claim-held", result.Cause);
         Assert.Empty(labelMutator.Transitions);
-        Assert.Equal(AutomationPrCreatedStaleRecoveryCommand.EventAborted,
-            workspace.ReadRunEvents().Last().Event);
+        var events = workspace.ReadRunEvents();
+        Assert.Equal(2, events.Count);
+        Assert.Equal(AutomationPrCreatedStaleRecoveryCommand.EventStarted, events[0].Event);
+        Assert.Equal(AutomationPrCreatedStaleRecoveryCommand.EventAborted, events[1].Event);
     }
 
     [Fact]
     public void WriteRecheckRefusal_ClaimUnavailable_AppendsAborted()
     {
         using var workspace = CreateProceedWorkspace();
-        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, Pr));
-        workspace.WriteRawClaim("not-json\n");
         var labelMutator = new RecordingLabelMutator("intent-target", "intent-pr-created");
         AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () => labelMutator;
+        BindClaimVerifier(new SequencedClaimVerifier(
+            UnheldClaim(),
+            ClaimUnavailable(ClaimOwnershipVerification.StatusNotConfigured)));
 
         var (exitCode, result) = Execute(workspace, write: true);
         Assert.Equal(1, exitCode);
         Assert.Equal("claim-unavailable", result.Cause);
+        Assert.Empty(labelMutator.Transitions);
         Assert.Equal(AutomationPrCreatedStaleRecoveryCommand.EventAborted,
             workspace.ReadRunEvents().Last().Event);
     }
@@ -492,7 +534,10 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
         AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () => labelMutator;
         BindLister(new SequencedLister(
             Array.Empty<GitHubAutomationPrCandidate>(),
-            failure: new InvalidOperationException("open closing enumeration failed")));
+            failure: new GitHubApiRequestException(
+                "github-transport-error",
+                $"list PRs in {Repo}",
+                $"[github-transport-error] `gh` failed to list PRs in {Repo} with exit 1: fake gh refused")));
 
         var (exitCode, result) = Execute(workspace, write: true);
         Assert.Equal(1, exitCode);
@@ -516,6 +561,225 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
         Assert.Equal(AutomationPrCreatedStaleRecoveryCommand.EventAborted, events[^1].Event);
         Assert.Equal(1, events.Count(e =>
             e.Event == AutomationPrCreatedStaleRecoveryCommand.EventStarted));
+    }
+
+    [Theory]
+    [InlineData("issue-unavailable")]
+    [InlineData("issue-not-open")]
+    [InlineData("target-absent")]
+    [InlineData("queue-item-ambiguous")]
+    [InlineData("unit-mismatch")]
+    [InlineData("repo-mismatch-created-issue-url")]
+    [InlineData("pr-state-unavailable")]
+    [InlineData("pr-open")]
+    [InlineData("pr-merged")]
+    [InlineData("open-closing-pr")]
+    [InlineData("open-pr-list-unavailable")]
+    [InlineData("claim-held")]
+    [InlineData("claim-unavailable")]
+    [InlineData("in-progress-present")]
+    public void SameKeyWriteResume_Checks5Through11_AppendsExactlyOneAborted(string cause)
+    {
+        using var workspace = CreateSameKeyResumeWorkspace(cause);
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, Pr));
+        ConfigureSameKeyResumeScenario(workspace, cause);
+
+        var beforeCount = workspace.ReadRunEvents().Count;
+        var (exitCode, result) = Execute(workspace, write: true);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(cause switch
+        {
+            "repo-mismatch-created-issue-url" => "repo-mismatch",
+            _ => cause,
+        }, result.Cause);
+        var events = workspace.ReadRunEvents();
+        Assert.Equal(beforeCount + 1, events.Count);
+        Assert.Equal(AutomationPrCreatedStaleRecoveryCommand.EventAborted, events[^1].Event);
+        workspace.AssertHostArtifactsUnchanged();
+    }
+
+    [Theory]
+    [InlineData("issue-unavailable")]
+    [InlineData("issue-not-open")]
+    [InlineData("target-absent")]
+    [InlineData("pr-state-unavailable")]
+    [InlineData("pr-merged")]
+    [InlineData("claim-held")]
+    [InlineData("in-progress-present")]
+    public void SameKeyWriteResume_DryRun_WritesNothing(string cause)
+    {
+        using var workspace = CreateSameKeyResumeWorkspace(cause);
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, Pr));
+        ConfigureSameKeyResumeScenario(workspace, cause);
+
+        var before = workspace.ReadRunEvents();
+        var (exitCode, _) = Execute(workspace, write: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(before, workspace.ReadRunEvents());
+    }
+
+    [Fact]
+    public void ClosedThenLabelRemoved_AfterLabelChangedRecheckAbort_ExitsZeroWritesNoEvent()
+    {
+        using var workspace = CreateProceedWorkspace();
+        var labelMutator = new RecordingLabelMutator("intent-target", "intent-pr-created");
+        AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () => labelMutator;
+        BindIssueLookup(new SequencedIssueLookup(
+            OpenIssue("intent-target", "intent-pr-created"),
+            OpenIssue("intent-target")));
+
+        var (abortExit, abortResult) = Execute(workspace, write: true);
+        Assert.Equal(1, abortExit);
+        Assert.Equal("label-changed", abortResult.Cause);
+        Assert.Equal(AutomationPrCreatedStaleRecoveryCommand.EventAborted,
+            workspace.ReadRunEvents().Last().Event);
+
+        AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
+            new FakeIssueLookup(OpenIssue("intent-target"));
+        var (exitCode, result) = Execute(workspace, write: true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("closed-then-label-removed", result.Outcome);
+        Assert.False(result.Applied);
+        Assert.Equal(2, workspace.ReadRunEvents().Count);
+        Assert.DoesNotContain(workspace.ReadRunEvents(),
+            e => e.Event == AutomationPrCreatedStaleRecoveryCommand.EventRecovered);
+    }
+
+    [Fact]
+    public void ClosedThenLabelRemoved_AfterSameKeyResumePrMergedAbort_NeverWritesRecovered()
+    {
+        using var workspace = CreateProceedWorkspace();
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, Pr));
+        AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = () => new FakePrLookup(Merged(Pr));
+
+        var (abortExit, _) = Execute(workspace, write: true);
+        Assert.Equal(1, abortExit);
+
+        AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
+            new FakeIssueLookup(OpenIssue("intent-target"));
+        AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = () => new FakePrLookup(ClosedUnmerged(Pr));
+        var (exitCode, result) = Execute(workspace, write: true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("closed-then-label-removed", result.Outcome);
+        Assert.DoesNotContain(workspace.ReadRunEvents(),
+            e => e.Event == AutomationPrCreatedStaleRecoveryCommand.EventRecovered);
+    }
+
+    [Fact]
+    public void ClosedThenLabelRemoved_SupersededKeyOnly_LabelAbsent_ExitsZeroWritesNoEvent()
+    {
+        const int oldPr = 163;
+        const int movedPr = 174;
+        using var workspace = CreateProceedWorkspace(linkedPr: oldPr, publishPr: movedPr);
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventSuperseded, oldPr,
+            reason: "outcome of the earlier run unknown"));
+        AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
+            new FakeIssueLookup(OpenIssue("intent-target"));
+
+        var (exitCode, result) = Execute(workspace, write: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("closed-then-label-removed", result.Outcome);
+        Assert.Single(workspace.ReadRunEvents());
+    }
+
+    [Fact]
+    public void SupersededKeyOnly_LabelPresent_ProceedsWithNewStarted()
+    {
+        const int oldPr = 163;
+        const int movedPr = 174;
+        using var workspace = CreateProceedWorkspace(linkedPr: oldPr, publishPr: movedPr);
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventSuperseded, oldPr,
+            reason: "outcome of the earlier run unknown"));
+        var labelMutator = new RecordingLabelMutator("intent-target", "intent-pr-created");
+        AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () => labelMutator;
+
+        var (exitCode, result) = Execute(workspace, write: true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("recovered", result.Outcome);
+        var events = workspace.ReadRunEvents();
+        Assert.Contains(events, e => e.Event == AutomationPrCreatedStaleRecoveryCommand.EventStarted && e.Pr == oldPr);
+        Assert.Contains(events, e => e.Event == AutomationPrCreatedStaleRecoveryCommand.EventRecovered && e.Pr == oldPr);
+    }
+
+    [Fact]
+    public void Superseded_LabelAbsentRunNeverCompletesSupersededKey()
+    {
+        const int oldPr = 163;
+        const int currentPr = 174;
+        using var workspace = CreateProceedWorkspace(linkedPr: currentPr, publishPr: oldPr);
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, oldPr));
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventSuperseded, oldPr,
+            reason: "outcome of the earlier run unknown"));
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, currentPr));
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventRecovered, currentPr));
+        workspace.WriteQueueState(linkedPr: oldPr);
+        AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
+            new FakeIssueLookup(OpenIssue("intent-target"));
+        AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = () =>
+            new FakePrLookup(ClosedUnmerged(oldPr), ClosedUnmerged(currentPr));
+
+        var (exitCode, result) = Execute(workspace, write: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("closed-then-label-removed", result.Outcome);
+        Assert.Equal(4, workspace.ReadRunEvents().Count);
+    }
+
+    [Fact]
+    public void Superseded_FailedAppend_ExitsNonzeroBeforeStarted()
+    {
+        const int oldPr = 163;
+        const int currentPr = 174;
+        using var workspace = CreateProceedWorkspace(linkedPr: currentPr, publishPr: oldPr);
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, oldPr));
+        var runsPath = workspace.Context.GetRunLogPath();
+        File.SetAttributes(runsPath, FileAttributes.ReadOnly);
+        var labelMutator = new RecordingLabelMutator("intent-target", "intent-pr-created");
+        AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () => labelMutator;
+        AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = () =>
+            new FakePrLookup(ClosedUnmerged(currentPr));
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrCreatedStaleRecoveryCommand.Execute(
+            workspace.Context,
+            [
+                "--repo", Repo,
+                "--issue", Issue.ToString(),
+                "--execution-unit", Unit,
+                "--team", Team,
+                "--ruling", Ruling,
+                "--write",
+                "--format", "json",
+            ],
+            writer);
+
+        File.SetAttributes(runsPath, FileAttributes.Normal);
+        Assert.Equal(1, exitCode);
+        Assert.Contains("failed to append superseded event", writer.ToString(), StringComparison.Ordinal);
+        Assert.Single(workspace.ReadRunEvents());
+        Assert.DoesNotContain(workspace.ReadRunEvents(),
+            e => e.Event == AutomationPrCreatedStaleRecoveryCommand.EventSuperseded);
+        Assert.DoesNotContain(workspace.ReadRunEvents(),
+            e => e.Event == AutomationPrCreatedStaleRecoveryCommand.EventStarted && e.Pr == currentPr);
+    }
+
+    [Fact]
+    public void Refuse_StartedAmbiguous_LabelAbsent_TwoOpenStartedKeys()
+    {
+        using var workspace = CreateProceedWorkspace();
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, Pr));
+        workspace.AppendRunEvent(BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, 174,
+            ts: FixedNow.AddMinutes(1)));
+        AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
+            new FakeIssueLookup(OpenIssue("intent-target"));
+        var (exitCode, result) = Execute(workspace, write: false);
+        AssertRefusal(exitCode, result, "started-ambiguous", workspace);
     }
 
     // ── completion / audit / supersede / second rebuild ─────────────────
@@ -780,17 +1044,6 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
             handler.Method);
     }
 
-    [Theory]
-    [InlineData("MergedAt", "EvaluateClosedUnmergedPrState")]
-    [InlineData("UnitsAgree", "unit-mismatch")]
-    [InlineData("HasOpenClosingPr", "open-closing-pr")]
-    public void MutationGuard_SourceContainsCriticalCheck(string marker, string companion)
-    {
-        var source = File.ReadAllText(LocateSourceFile("AutomationPrCreatedStaleRecoveryCommand.cs"));
-        Assert.Contains(marker, source, StringComparison.Ordinal);
-        Assert.Contains(companion, source, StringComparison.Ordinal);
-    }
-
     [Fact]
     public void WorkerClaim_UnheldAlreadyCompleted_IncludesStaleRecoveryHint()
     {
@@ -862,8 +1115,9 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
         }
     }
 
+    // Head-only evidence hook; canonical base-vs-head output lives in g836-verify/wc.
     [Fact]
-    public void WorkerClaim_Evidence_WriteBaseVsHeadOutputs()
+    public void WorkerClaim_Evidence_WriteBaseVsHeadOutputs_HeadOnly()
     {
         var evidenceDir = Environment.GetEnvironmentVariable("G836_EVIDENCE_DIR");
         if (string.IsNullOrWhiteSpace(evidenceDir))
@@ -915,6 +1169,15 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
     }
 
     // ── helpers ─────────────────────────────────────────────────────────
+
+    private static RecoveryWorkspace CreateSameKeyResumeWorkspace(string cause) =>
+        cause switch
+        {
+            "queue-item-ambiguous" => CreateProceedWorkspace(duplicateQueueItem: true),
+            "unit-mismatch" => CreateProceedWorkspace(executionUnit: "G999"),
+            "repo-mismatch-created-issue-url" => CreateProceedWorkspace(createdIssueRepo: "Other-Org/other-repo"),
+            _ => CreateProceedWorkspace(),
+        };
 
     private static RecoveryWorkspace CreateProceedWorkspace(
         int? linkedPr = Pr,
@@ -993,6 +1256,66 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
         workspace.AssertHostArtifactsUnchanged();
     }
 
+    private static void ConfigureSameKeyResumeScenario(RecoveryWorkspace workspace, string cause)
+    {
+        switch (cause)
+        {
+            case "issue-unavailable":
+                BindIssueLookup(new SequencedIssueLookup(
+                    OpenIssue("intent-target", "intent-pr-created"),
+                    new InvalidOperationException("issue lookup failed")));
+                break;
+            case "issue-not-open":
+                BindIssueLookup(new SequencedIssueLookup(
+                    OpenIssue("intent-target", "intent-pr-created"),
+                    ClosedIssue()));
+                break;
+            case "target-absent":
+                BindIssueLookup(new SequencedIssueLookup(
+                    OpenIssue("intent-target", "intent-pr-created"),
+                    OpenIssue("intent-pr-created")));
+                break;
+            case "queue-item-ambiguous":
+            case "unit-mismatch":
+            case "repo-mismatch-created-issue-url":
+                SeedGitHubFakes(workspace, Pr);
+                break;
+            case "pr-state-unavailable":
+                AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = () =>
+                    new FakePrLookup(new InvalidOperationException("PR lookup failed"));
+                break;
+            case "pr-open":
+                AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = () =>
+                    new FakePrLookup(OpenPr(Pr));
+                break;
+            case "pr-merged":
+                AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = () =>
+                    new FakePrLookup(Merged(Pr));
+                break;
+            case "open-closing-pr":
+                AutomationPrCreatedStaleRecoveryCommand.CandidateListerFactory = () =>
+                    new FakeLister(prs: [OpenClosingPr(902, Issue)]);
+                break;
+            case "open-pr-list-unavailable":
+                AutomationPrCreatedStaleRecoveryCommand.CandidateListerFactory = () =>
+                    new FakeLister(listFailure: new InvalidOperationException("gh pr list failed"));
+                break;
+            case "claim-held":
+                BindClaimVerifier(new SequencedClaimVerifier(HeldClaim()));
+                break;
+            case "claim-unavailable":
+                BindClaimVerifier(new SequencedClaimVerifier(
+                    ClaimUnavailable(ClaimOwnershipVerification.StatusNotConfigured)));
+                break;
+            case "in-progress-present":
+                AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
+                    new FakeIssueLookup(OpenIssue("intent-target", "intent-pr-created", "intent-issue-in-progress"));
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(cause), cause, null);
+        }
+    }
+
     private static void ConfigureRecheckScenario(string scenario, RecordingLabelMutator labelMutator)
     {
         switch (scenario)
@@ -1041,6 +1364,40 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
 
     private static void BindLister(IGitHubAutomationCandidateLister lister) =>
         AutomationPrCreatedStaleRecoveryCommand.CandidateListerFactory = () => lister;
+
+    private static void BindClaimVerifier(SequencedClaimVerifier verifier) =>
+        AutomationPrCreatedStaleRecoveryCommand.ClaimVerifierFactory =
+            verifier.Verify;
+
+    private static ClaimOwnershipVerification UnheldClaim() => new(
+        Passed: true,
+        Status: ClaimOwnershipVerification.StatusUnheldAvailable,
+        Scope: $"execution-unit:{Unit}",
+        StoreConfigured: true,
+        InvokingTeam: Team,
+        Holder: null,
+        HolderTeam: null,
+        Detail: "unheld");
+
+    private static ClaimOwnershipVerification HeldClaim() => new(
+        Passed: false,
+        Status: ClaimOwnershipVerification.StatusOwned,
+        Scope: $"execution-unit:{Unit}",
+        StoreConfigured: true,
+        InvokingTeam: Team,
+        Holder: "builder",
+        HolderTeam: Team,
+        Detail: "owned");
+
+    private static ClaimOwnershipVerification ClaimUnavailable(string status) => new(
+        Passed: false,
+        Status: status,
+        Scope: $"execution-unit:{Unit}",
+        StoreConfigured: false,
+        InvokingTeam: Team,
+        Holder: null,
+        HolderTeam: null,
+        Detail: "unavailable");
 
     private static GitHubIssueLookupResult OpenIssue(params string[] labels) => new()
     {
@@ -1128,23 +1485,6 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
     {
         var match = System.Text.RegularExpressions.Regex.Match(url ?? string.Empty, @"/issues/(\d+)");
         return int.Parse(match.Groups[1].Value);
-    }
-
-    private static string LocateSourceFile(string fileName)
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            var candidate = Path.Combine(dir.FullName, "src", "IntentSystem.Cli", "Commands", fileName);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            dir = dir.Parent;
-        }
-
-        throw new FileNotFoundException($"Could not locate source file {fileName}");
     }
 
     // ── workspace ───────────────────────────────────────────────────────
@@ -1780,6 +2120,29 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
 
         public IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(string repo, IReadOnlyCollection<string> requiredLabels) =>
             Array.Empty<GitHubAutomationIssueCandidate>();
+    }
+
+    private sealed class SequencedClaimVerifier
+    {
+        private readonly Queue<ClaimOwnershipVerification> sequence = new();
+
+        public SequencedClaimVerifier(params ClaimOwnershipVerification[] steps)
+        {
+            foreach (var step in steps)
+            {
+                sequence.Enqueue(step);
+            }
+        }
+
+        public ClaimOwnershipVerification Verify(string repoRoot, string scope, string? team, bool allowUnheld)
+        {
+            if (sequence.Count == 0)
+            {
+                throw new InvalidOperationException("no more sequenced claim verification results");
+            }
+
+            return sequence.Dequeue();
+        }
     }
 
     private sealed class SequencedLister : IGitHubAutomationCandidateLister

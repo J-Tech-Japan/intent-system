@@ -36,6 +36,7 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
     public static Func<IGitHubPrLookup>? PrLookupFactory { get; set; }
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
     public static Func<IGitHubLabelMutator>? LabelMutatorFactory { get; set; }
+    public static Func<string, string, string?, bool, ClaimOwnershipVerification>? ClaimVerifierFactory { get; set; }
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
 
     private static readonly string[] NamedRecoveryEvents =
@@ -186,8 +187,11 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
                     warnings);
             }
 
-            var started = openStartedEvents[0];
-            if (currentKeyForAmbiguity is not null && RecoveryKey.Matches(started.Key, currentKeyForAmbiguity.Value))
+            var sameKeyStarted = currentKeyForAmbiguity is null
+                ? null
+                : openStartedEvents.FirstOrDefault(entry =>
+                    RecoveryKey.Matches(entry.Key, currentKeyForAmbiguity.Value));
+            if (sameKeyStarted is not null)
             {
                 resumeSameKey = true;
                 resumeKey = currentKeyForAmbiguity;
@@ -198,23 +202,6 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
             }
         }
 
-        var queueMatches = queueState.Items
-            .Where(item => MatchesLinkedIssue(item.LinkedIssue, repo!, issue!.Value))
-            .ToList();
-        if (queueMatches.Count == 0)
-        {
-            return Refuse(writer, format, repo!, issue!.Value, executionUnit!, team!, mode, "queue-item-missing",
-                null, false, warnings,
-                "refusing: no queue item matches the requested issue.");
-        }
-        if (queueMatches.Count > 1)
-        {
-            return Refuse(writer, format, repo!, issue!.Value, executionUnit!, team!, mode, "queue-item-ambiguous",
-                null, false, warnings,
-                "refusing: more than one queue item matches the requested issue.");
-        }
-
-        var queueItem = queueMatches[0];
         GitHubIssueLookupResult issueSnapshot;
         try
         {
@@ -222,17 +209,9 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
-            return Refuse(writer, format, repo!, issue!.Value, executionUnit!, team!, mode, "issue-unavailable",
-                null, false, warnings,
+            return MaybeAbortSameKeyResume(writer, context, format, repo!, issue!.Value, executionUnit!, team!, mode,
+                resumeSameKey, resumeKey, ruling!, warnings, "issue-unavailable",
                 $"refusing: issue lookup failed ({exception.Message}).");
-        }
-
-        var titleUnit = ParseTitleExecutionUnit(issueSnapshot.Title);
-        if (!UnitsAgree(queueItem.ExecutionUnit, executionUnit!, titleUnit))
-        {
-            return Refuse(writer, format, repo!, issue!.Value, executionUnit!, team!, mode, "unit-mismatch",
-                null, false, warnings,
-                "refusing: execution unit does not match the queue item, --execution-unit, and issue title token.");
         }
 
         if (!IsOpen(issueSnapshot.State))
@@ -250,28 +229,53 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
                 "refusing: issue does not carry intent-target.");
         }
 
+        var queueMatches = queueState.Items
+            .Where(item => MatchesLinkedIssue(item.LinkedIssue, repo!, issue!.Value))
+            .ToList();
+        if (queueMatches.Count == 0)
+        {
+            return MaybeAbortSameKeyResume(writer, context, format, repo!, issue!.Value, executionUnit!, team!, mode,
+                resumeSameKey, resumeKey, ruling!, warnings, "queue-item-missing",
+                "refusing: no queue item matches the requested issue.");
+        }
+        if (queueMatches.Count > 1)
+        {
+            return MaybeAbortSameKeyResume(writer, context, format, repo!, issue!.Value, executionUnit!, team!, mode,
+                resumeSameKey, resumeKey, ruling!, warnings, "queue-item-ambiguous",
+                "refusing: more than one queue item matches the requested issue.");
+        }
+
+        var queueItem = queueMatches[0];
+        var titleUnit = ParseTitleExecutionUnit(issueSnapshot.Title);
+        if (!UnitsAgree(queueItem.ExecutionUnit, executionUnit!, titleUnit))
+        {
+            return MaybeAbortSameKeyResume(writer, context, format, repo!, issue!.Value, executionUnit!, team!, mode,
+                resumeSameKey, resumeKey, ruling!, warnings, "unit-mismatch",
+                "refusing: execution unit does not match the queue item, --execution-unit, and issue title token.");
+        }
+
         var publishArtifact = TryReadPublishArtifact(context, executionUnit!);
         if (publishArtifact is not null
             && publishArtifact.CreatedIssueUrl is not null
             && AutomationPublishLifecycleRepairCommand.TryBindIssueRepository(publishArtifact, out var boundRepository)
             && !AutomationPublishLifecycleRepairCommand.RepositoryEquals(boundRepository!, repo!))
         {
-            return Refuse(writer, format, repo!, issue!.Value, executionUnit!, team!, mode, "repo-mismatch",
-                null, false, warnings,
+            return MaybeAbortSameKeyResume(writer, context, format, repo!, issue!.Value, executionUnit!, team!, mode,
+                resumeSameKey, resumeKey, ruling!, warnings, "repo-mismatch",
                 $"refusing: created_issue_url binds the unit to '{boundRepository}', not --repo '{repo}'.");
         }
 
         if (!TryParseLinkedPr(queueItem.LinkedPr, out var linkedPrRepo, out var linkedPrNumber))
         {
-            return Refuse(writer, format, repo!, issue!.Value, executionUnit!, team!, mode, "pr-linkage-missing",
-                null, false, warnings,
+            return MaybeAbortSameKeyResume(writer, context, format, repo!, issue!.Value, executionUnit!, team!, mode,
+                resumeSameKey, resumeKey, ruling!, warnings, "pr-linkage-missing",
                 "refusing: queue-state linked_pr is missing or unparseable.");
         }
 
         if (!AutomationPublishLifecycleRepairCommand.RepositoryEquals(linkedPrRepo!, repo!))
         {
-            return Refuse(writer, format, repo!, issue!.Value, executionUnit!, team!, mode, "repo-mismatch",
-                linkedPrNumber, false, warnings,
+            return MaybeAbortSameKeyResume(writer, context, format, repo!, issue!.Value, executionUnit!, team!, mode,
+                resumeSameKey, resumeKey, ruling!, warnings, "repo-mismatch",
                 $"refusing: queue-state linked_pr is in '{linkedPrRepo}', not --repo '{repo}'.");
         }
 
@@ -316,11 +320,7 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
                 $"refusing: open PR listing failed ({exception.Message}).");
         }
 
-        var claim = ClaimOwnershipVerifier.Verify(
-            context.RepoRoot,
-            $"execution-unit:{executionUnit}",
-            team,
-            allowUnheld: true);
+        var claim = VerifyClaim(context.RepoRoot, executionUnit!, team!);
         var claimRefusal = EvaluateClaimStatus(claim);
         if (claimRefusal is not null)
         {
@@ -468,48 +468,68 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
             }
         }
 
+        GitHubIssueLookupResult issueSnapshot;
         try
         {
-            var issueSnapshot = LookupIssue(repo, issue);
-            if (!IsOpen(issueSnapshot.State))
-            {
-                return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
-                    "issue-not-open", "re-check refused: issue is no longer OPEN.");
-            }
+            issueSnapshot = LookupIssue(repo, issue);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
+                "issue-unavailable", $"re-check failed closed: {exception.Message}");
+        }
 
-            var labels = LabelNames(issueSnapshot.Labels);
-            if (!labels.Contains(WorkerNextActionConstants.Labels.IntentTarget, StringComparer.Ordinal))
-            {
-                return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
-                    "target-absent", "re-check refused: intent-target is missing.");
-            }
-            if (labels.Contains(WorkerNextActionConstants.Labels.IntentIssueInProgress, StringComparer.Ordinal))
-            {
-                return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
-                    "in-progress-present", "re-check refused: intent-issue-in-progress is present.");
-            }
-            if (!labels.Contains(WorkerNextActionConstants.Labels.IntentPrCreated, StringComparer.Ordinal))
-            {
-                return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
-                    "label-changed", "re-check refused: intent-pr-created is already absent.");
-            }
+        if (!IsOpen(issueSnapshot.State))
+        {
+            return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
+                "issue-not-open", "re-check refused: issue is no longer OPEN.");
+        }
 
-            var claim = ClaimOwnershipVerifier.Verify(context.RepoRoot, $"execution-unit:{executionUnit}", team, allowUnheld: true);
-            var claimRefusal = EvaluateClaimStatus(claim);
-            if (claimRefusal is not null)
-            {
-                return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
-                    claimRefusal, $"re-check refused: claim status '{claim.Status}'.");
-            }
+        var labels = LabelNames(issueSnapshot.Labels);
+        if (!labels.Contains(WorkerNextActionConstants.Labels.IntentTarget, StringComparer.Ordinal))
+        {
+            return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
+                "target-absent", "re-check refused: intent-target is missing.");
+        }
+        if (labels.Contains(WorkerNextActionConstants.Labels.IntentIssueInProgress, StringComparer.Ordinal))
+        {
+            return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
+                "in-progress-present", "re-check refused: intent-issue-in-progress is present.");
+        }
+        if (!labels.Contains(WorkerNextActionConstants.Labels.IntentPrCreated, StringComparer.Ordinal))
+        {
+            return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
+                "label-changed", "re-check refused: intent-pr-created is already absent.");
+        }
 
-            var prState = LookupPr(repo, currentKey.PrNumber);
-            var prRefusal = EvaluateClosedUnmergedPrState(prState);
-            if (prRefusal is not null)
-            {
-                return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
-                    prRefusal, "re-check refused: linked PR state changed.");
-            }
+        var claim = VerifyClaim(context.RepoRoot, executionUnit, team);
+        var claimRefusal = EvaluateClaimStatus(claim);
+        if (claimRefusal is not null)
+        {
+            return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
+                claimRefusal, $"re-check refused: claim status '{claim.Status}'.");
+        }
 
+        GitHubPrLookupResult prState;
+        try
+        {
+            prState = LookupPr(repo, currentKey.PrNumber);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
+                "pr-state-unavailable", $"re-check failed closed: {exception.Message}");
+        }
+
+        var prRefusal = EvaluateClosedUnmergedPrState(prState);
+        if (prRefusal is not null)
+        {
+            return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
+                prRefusal, "re-check refused: linked PR state changed.");
+        }
+
+        try
+        {
             if (HasOpenClosingPr(repo, issue))
             {
                 return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
@@ -518,13 +538,8 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
-            var cause = exception.Message.Contains("issue", StringComparison.OrdinalIgnoreCase)
-                ? "issue-unavailable"
-                : exception.Message.Contains("PR", StringComparison.OrdinalIgnoreCase)
-                    ? "pr-state-unavailable"
-                    : "open-pr-list-unavailable";
             return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
-                cause, $"re-check failed closed: {exception.Message}");
+                "open-pr-list-unavailable", $"re-check failed closed: {exception.Message}");
         }
 
         var mutator = LabelMutatorFactory?.Invoke() ?? new GhCliGitHubLabelMutator();
@@ -651,7 +666,7 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
             var claimStatus = "unknown";
             try
             {
-                var claim = ClaimOwnershipVerifier.Verify(context.RepoRoot, $"execution-unit:{executionUnit}", team, allowUnheld: true);
+                var claim = VerifyClaim(context.RepoRoot, executionUnit, team);
                 claimStatus = claim.Status;
             }
             catch
@@ -993,6 +1008,17 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
             .ToArray();
     }
 
+    private static ClaimOwnershipVerification VerifyClaim(string repoRoot, string executionUnit, string team)
+    {
+        var scope = $"execution-unit:{executionUnit}";
+        if (ClaimVerifierFactory is not null)
+        {
+            return ClaimVerifierFactory(repoRoot, scope, team, true);
+        }
+
+        return ClaimOwnershipVerifier.Verify(repoRoot, scope, team, allowUnheld: true);
+    }
+
     private static GitHubIssueLookupResult LookupIssue(string repo, int issue) =>
         (IssueLookupFactory?.Invoke() ?? new GhCliGitHubIssueLookup()).Lookup(repo, issue);
 
@@ -1231,7 +1257,7 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
 
         public IReadOnlyList<OpenStartedEvent> FindOpenStartedEvents(string repo, string executionUnit, int issueNumber)
         {
-            var openByKey = new Dictionary<string, OpenStartedEvent>(StringComparer.Ordinal);
+            var openByKey = new Dictionary<string, List<OpenStartedEvent>>(StringComparer.Ordinal);
             foreach (var runEvent in events)
             {
                 if (!IsNamedRecoveryEvent(runEvent.Event) || !TryExtractKey(runEvent, out var key))
@@ -1249,17 +1275,26 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
                 var keyText = KeyText(key);
                 if (string.Equals(runEvent.Event, EventStarted, StringComparison.Ordinal))
                 {
-                    openByKey[keyText] = new OpenStartedEvent(key, runEvent);
+                    if (!openByKey.TryGetValue(keyText, out var openStarted))
+                    {
+                        openStarted = new List<OpenStartedEvent>();
+                        openByKey[keyText] = openStarted;
+                    }
+
+                    openStarted.Add(new OpenStartedEvent(key, runEvent));
                 }
                 else if (string.Equals(runEvent.Event, EventRecovered, StringComparison.Ordinal)
                          || string.Equals(runEvent.Event, EventAborted, StringComparison.Ordinal)
                          || string.Equals(runEvent.Event, EventSuperseded, StringComparison.Ordinal))
                 {
-                    openByKey.Remove(keyText);
+                    if (openByKey.TryGetValue(keyText, out var openStarted) && openStarted.Count > 0)
+                    {
+                        openStarted.RemoveAt(0);
+                    }
                 }
             }
 
-            return openByKey.Values.ToList();
+            return openByKey.Values.SelectMany(openStarted => openStarted).ToList();
         }
 
         public bool HasRecoveredForKey(RecoveryKey key) =>
