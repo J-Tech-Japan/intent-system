@@ -472,6 +472,19 @@ public sealed class AutomationPrCreatedStaleRecoveryCommandTests : IDisposable
     }
 
     [Fact]
+    public void Refuse_RepoMismatch_FromCreatedIssueUrl_UrlAndCreatedIssueNumberAgreeOnADifferentIssue()
+    {
+        // The review scenario: created_issue_url and created_issue_number both name
+        // issue 999 in the same repository while --issue is 836.
+        using var workspace = CreateProceedWorkspace(
+            createdIssueRepo: Repo,
+            createdIssueNumber: 999,
+            createdIssueUrl: IssueUrl(999));
+        var (exitCode, result) = Execute(workspace, write: false);
+        AssertRefusal(exitCode, result, "repo-mismatch", workspace);
+    }
+
+    [Fact]
     public void Refuse_RepoMismatch_FromCreatedIssueUrl_ForeignOrgWithMismatchedCreatedIssueNumber()
     {
         using var workspace = CreateProceedWorkspace(
