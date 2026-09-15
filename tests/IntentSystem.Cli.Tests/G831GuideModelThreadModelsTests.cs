@@ -19,9 +19,11 @@ public sealed class G831GuideModelThreadModelsTests
         var model = RenderJson().GetProperty("execution_orchestration_model");
         var threadModels = model.GetProperty("thread_models").EnumerateArray().ToArray();
 
-        Assert.Equal(["four-thread", "five-thread"], threadModels.Select(item => item.GetProperty("name").GetString()));
+        // G833 adds the third shape, solo-conductor, with the four judgment roles.
+        Assert.Equal(["four-thread", "five-thread", "solo-conductor"], threadModels.Select(item => item.GetProperty("name").GetString()));
         Assert.Equal(["architect", "orchestrator", "builder", "reviewer"], Roles(threadModels[0]));
         Assert.Equal(["architect", "orchestrator", "builder", "reviewer", "steward"], Roles(threadModels[1]));
+        Assert.Equal(["architect", "orchestrator", "builder", "reviewer"], Roles(threadModels[2]));
 
         var expectedAliases = new Dictionary<string, string>
         {

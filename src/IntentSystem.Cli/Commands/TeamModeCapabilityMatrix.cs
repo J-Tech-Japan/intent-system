@@ -60,6 +60,16 @@ internal sealed record TeamModeCapabilityMatrix
     [JsonIgnore]
     public bool IsAuthoringOnly => global::IntentSystem.Cli.Commands.TeamMode.IsAuthoringOnly(TeamMode);
 
+    [JsonIgnore]
+    public bool IsSoloConductor => global::IntentSystem.Cli.Commands.TeamMode.IsSoloConductor(TeamMode);
+
+    /// <summary>
+    /// G833: status, doctor, brief and stalled-work JSON carry the matrix for
+    /// every non-default team shape; delivery output stays unchanged.
+    /// </summary>
+    [JsonIgnore]
+    public bool EmittedInJson => IsAuthoringOnly || IsSoloConductor;
+
     public bool IsApplicable(string capabilityClass) =>
         !NotApplicableClasses.Contains(capabilityClass, StringComparer.Ordinal);
 
@@ -147,6 +157,20 @@ internal sealed record TeamModeCapabilityMatrix
         ArgumentNullException.ThrowIfNull(resolution);
 
         var source = resolution.Source == TeamModeSource.Recorded ? "recorded" : "default";
+        if (resolution.IsSoloConductor)
+        {
+            // G833: a solo conductor does delivery work, so every class stays
+            // active; delegation in particular remains observable because
+            // `notify delegate` is not refused for this team shape.
+            return new TeamModeCapabilityMatrix
+            {
+                TeamMode = global::IntentSystem.Cli.Commands.TeamMode.SoloConductor,
+                ModeSource = source,
+                ActiveClasses = TeamModeCapabilityClasses.All,
+                NotApplicableClasses = [],
+            };
+        }
+
         if (!resolution.IsAuthoringOnly)
         {
             return new TeamModeCapabilityMatrix

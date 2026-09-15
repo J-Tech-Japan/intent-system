@@ -161,7 +161,7 @@ internal static class IntentStatusCommand
         return new IntentStatusResult
         {
             Domain = domain,
-            CapabilityMatrix = capabilityMatrix.IsAuthoringOnly ? capabilityMatrix : null,
+            CapabilityMatrix = capabilityMatrix.EmittedInJson ? capabilityMatrix : null,
             QueueStatePath = queueStatePath,
             QueueStatePresent = queueState is not null,
             LatestCompleted = latestCompleted,

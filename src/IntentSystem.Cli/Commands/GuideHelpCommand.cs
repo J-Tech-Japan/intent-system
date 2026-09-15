@@ -339,6 +339,12 @@ internal static class GuideHelpCommand
             Purpose = "G807 metadata-free Steward operating contract: relay evidence, hand design judgment to architect, review judgment to reviewer, dispatch to orchestrator, preserve G796 ruling bytes, and refuse fabricated authority.",
             Example = "intent-cli guide steward-thread --format markdown"
         },
+        new GuideSubcommandEntry
+        {
+            Name = "solo-conductor",
+            Purpose = "G833 metadata-free solo conductor contract: the per-unit loop, blocking reviewer-independence rules, pacing, operator questions, host discipline, handoff durability, and limits.",
+            Example = "intent-cli guide solo-conductor --format markdown"
+        },
         // G664: application conversation to herdr-only team genesis.
         new GuideSubcommandEntry
         {

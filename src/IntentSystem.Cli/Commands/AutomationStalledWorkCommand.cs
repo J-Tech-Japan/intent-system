@@ -870,7 +870,7 @@ internal static class AutomationStalledWorkCommand
         return new AutomationStalledWorkResult
         {
             Domain = domain,
-            CapabilityMatrix = capabilityMatrix.IsAuthoringOnly ? capabilityMatrix : null,
+            CapabilityMatrix = capabilityMatrix.EmittedInJson ? capabilityMatrix : null,
             Repo = repo,
             RecordingRole = recordingRole,
             StaleMinutesThreshold = staleMinutes,

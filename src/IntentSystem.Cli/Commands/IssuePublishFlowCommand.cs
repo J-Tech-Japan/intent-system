@@ -1699,7 +1699,7 @@ internal static class IssuePublishFlowCommand
         return true;
     }
 
-    private static bool TryBuildAuthorization(
+    internal static bool TryBuildAuthorization(
         TeamModeResolution resolution,
         string? team,
         string? actorRole,

@@ -69,6 +69,11 @@ internal static class GuideBootstrapCommand
             {
                 return BuildAuthoringOnlyResult(routingRoot, domain.Trim(), team.Trim(), targetRepo, teamMode);
             }
+
+            if (teamMode.IsSoloConductor)
+            {
+                return BuildSoloConductorResult(routingRoot, domain.Trim(), team.Trim(), targetRepo, teamMode);
+            }
         }
 
         var state = InspectState(context, routingRoot, domain, team);
@@ -290,6 +295,120 @@ internal static class GuideBootstrapCommand
         };
     }
 
+    /// <summary>
+    /// G833: the solo conductor bootstrap. One conductor seat carries
+    /// architect, orchestrator and builder; a fresh independent reviewer
+    /// subagent carries the reviewer seat for every review. There is no seat
+    /// roster and no supervision requirement; every delivery gate still
+    /// applies. The conductor, not intent-cli, starts the reviewer subagent.
+    /// </summary>
+    private static BootstrapGuideResult BuildSoloConductorResult(
+        string routingRoot,
+        string domain,
+        string team,
+        string? targetRepo,
+        TeamModeResolution teamMode)
+    {
+        var repoArg = string.IsNullOrWhiteSpace(targetRepo) ? "<owner/repo>" : targetRepo.Trim();
+        return new BootstrapGuideResult
+        {
+            Process = "solo-conductor-team-bootstrap",
+            PreviewStatus = "preview-through-1.x",
+            Domain = domain,
+            Team = team,
+            TargetRepo = string.IsNullOrWhiteSpace(targetRepo) ? null : targetRepo.Trim(),
+            RoutingRoot = routingRoot,
+            TeamMode = TeamMode.SoloConductor,
+            TriggerPhrases = new BootstrapTriggerPhrases
+            {
+                English = "Run this work as a solo conductor.",
+                Japanese = "単独席モデルで進めて。",
+            },
+            SessionLayerCoverage = ["transport-independent"],
+            TargetSessionLayer = "not-applicable-team-mode",
+            TeamFormula = "one conductor seat (architect, orchestrator, builder) plus a fresh independent reviewer subagent per review; no seat roster",
+            State = BuildSoloConductorState(teamMode),
+            Flow = "solo-conductor",
+            Reachability = new BootstrapReachability
+            {
+                Command = CommandName,
+                Catalog = "intent-cli guide commands list --format json",
+                Advisor = $"intent-cli guide next --domain {domain} --team {team} --target-repo {repoArg} --format json",
+            },
+            // Null is intentional for solo-conductor, as for authoring-only:
+            // there are no seats to resolve launch models for.
+            ModelResolution = null!,
+            Steps =
+            [
+                new BootstrapStep
+                {
+                    Number = 1,
+                    Id = "accept-solo-conductor-model",
+                    Instruction = "Ask the operator to accept the solo conductor model: this seat carries architect, orchestrator, and builder; every review and re-review is carried by a fresh independent reviewer subagent and recorded as an independent subagent review; every delivery gate (claims, publish, review transitions, closeout, evidence records) still applies.",
+                    EmittedCommands = [],
+                },
+                new BootstrapStep
+                {
+                    Number = 2,
+                    Id = "verify-repository-and-claims",
+                    Instruction = "Verify access to the target repository and the claims prerequisite. The conductor works from its own host clone; reviews run against separate read-only clones.",
+                    EmittedCommands =
+                    [
+                        $"gh repo view {repoArg} --json nameWithOwner,defaultBranchRef",
+                        $"intent-cli claim verify --scope execution-unit:<execution-unit> --team {team} --format json",
+                    ],
+                },
+                new BootstrapStep
+                {
+                    Number = 3,
+                    Id = "confirm-isolated-reviewer",
+                    Instruction = "Confirm this runtime can start an isolated reviewer subagent that receives only the packet, review context, PR body, and read-only clone paths. The conductor starts it; intent-cli never starts or manages an agent. Supervision stays opt-in (G828): a team declared in `[supervision] opt_in_teams` still gets the supervision-setup recommendation from `guide next`.",
+                    EmittedCommands = [],
+                },
+                new BootstrapStep
+                {
+                    Number = 4,
+                    Id = "run-per-unit-loop",
+                    Instruction = "Read the solo conductor loop contract and run it one execution unit at a time.",
+                    EmittedCommands =
+                    [
+                        "intent-cli guide solo-conductor --format markdown",
+                    ],
+                },
+            ],
+            PartialStateRule = "Solo-conductor completion is measured from the recorded team mode; no seat roster or supervision cycle is part of this shape.",
+            NoExecutionBoundary =
+            [
+                "This guide renders questions and command text only; it does not start, launch, or manage a conductor or reviewer agent.",
+                "The target repository, claims, and delivery gates remain explicit prerequisites; no transport selection is inferred from team mode.",
+            ],
+            FinalHandoffStatement = "HANDOFF: This seat is the solo conductor. Run `intent-cli guide solo-conductor` for the per-unit loop; reviews are carried by fresh independent reviewer subagents.",
+        };
+    }
+
+    private static BootstrapGuideState BuildSoloConductorState(TeamModeResolution teamMode)
+    {
+        // `solo-conductor-unreadable` mirrors the authoring-only shape for
+        // symmetry; an unreadable team-mode record fails earlier today.
+        var measured = teamMode.IsSoloConductor && teamMode.Source == TeamModeSource.Recorded;
+        return new BootstrapGuideState
+        {
+            Name = measured ? "solo-conductor-complete" : "solo-conductor-unreadable",
+            Inspected = measured,
+            TopologyRecorded = false,
+            TopologyResolved = false,
+            SupervisionCycleRecorded = false,
+            Complete = measured,
+            CompletionBasis = measured
+                ? "recorded team_mode=solo-conductor is the durable acceptance of the one-seat shape; no seat roster or supervision cycle is required."
+                : "solo-conductor completion requires a recorded, readable team_mode entry.",
+            ExistingFacts = measured
+                ? ["recorded team_mode=solo-conductor", "conductor seat carries architect, orchestrator, and builder", "reviewer seat is a fresh independent subagent per review"]
+                : [],
+            MissingFacts = measured ? [] : ["recorded readable team_mode=solo-conductor"],
+        };
+    }
+
     private static BootstrapGuideState BuildAuthoringOnlyState(TeamModeResolution teamMode)
     {
         var measured = teamMode.IsAuthoringOnly && teamMode.Source == TeamModeSource.Recorded;
@@ -333,6 +452,11 @@ internal static class GuideBootstrapCommand
         if (teamMode.IsAuthoringOnly)
         {
             return BuildAuthoringOnlyState(teamMode);
+        }
+
+        if (teamMode.IsSoloConductor)
+        {
+            return BuildSoloConductorState(teamMode);
         }
 
         var topologyPath = NotifyRoleTopologyStore.ResolvePath(routingRoot, domainValue, teamValue);
@@ -425,6 +549,11 @@ internal static class GuideBootstrapCommand
             writer.WriteLine($"- verified READY record: `{modelResolution.LaunchEvidenceWorkflow.Verified.Command}`");
             writer.WriteLine($"- refusal record: `{modelResolution.LaunchEvidenceWorkflow.Refused.Command}`");
             writer.WriteLine($"- incident: {modelResolution.Incident}");
+            writer.WriteLine();
+        }
+        else if (result.Flow == "solo-conductor")
+        {
+            writer.WriteLine("Solo-conductor mode: accept the model, verify repository/claims, confirm an isolated reviewer subagent, then run `intent-cli guide solo-conductor` one unit at a time.");
             writer.WriteLine();
         }
         else

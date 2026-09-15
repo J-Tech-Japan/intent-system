@@ -100,6 +100,10 @@ internal static class GuideNextCommand
             return BuildAuthoringOnlyResult(domain.Trim(), team.Trim(), targetRepo, invokingRole);
         }
 
+        // G833: a recorded solo-conductor team keeps the full design decision
+        // set; only its bootstrap completeness and the additive team_mode differ.
+        var soloConductor = context is not null && !string.IsNullOrWhiteSpace(domain) && !string.IsNullOrWhiteSpace(team)
+            && TeamModeStore.Resolve(context.RepoRoot, domain.Trim(), team.Trim()).IsSoloConductor;
         var supervision = ReadSupervisionStatus(context, domain, team);
         var realignment = ReadRealignmentStatus(context, domain);
         var bootstrap = ReadBootstrapStatus(context, domain, team);
@@ -231,6 +235,7 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             Domain = string.IsNullOrWhiteSpace(domain) ? null : domain,
             Team = string.IsNullOrWhiteSpace(team) ? null : team,
             TargetRepo = string.IsNullOrWhiteSpace(targetRepo) ? null : targetRepo,
+            TeamMode = soloConductor ? global::IntentSystem.Cli.Commands.TeamMode.SoloConductor : null,
             Supervision = supervision,
             Realignment = realignment,
             Bootstrap = bootstrap,
@@ -507,6 +512,10 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             {
                 writer.WriteLine("- bootstrap state: unreadable; repair the recorded topology/state before deciding (fail closed)");
                 writer.WriteLine($"- read error: {result.Bootstrap.Error}");
+            }
+            else if (result.TeamMode == global::IntentSystem.Cli.Commands.TeamMode.SoloConductor && result.Bootstrap.Complete)
+            {
+                writer.WriteLine("- solo-conductor bootstrap: complete (team mode recorded; no seat roster required); bootstrap-resume recommendation: silent");
             }
             else if (!result.Bootstrap.TopologyRecorded)
             {
