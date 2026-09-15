@@ -136,6 +136,18 @@ internal static class WorkerClaimCommand
             }
         }
 
+        var warnings = new List<string>(decision.Warnings);
+        var staleRecoveryHint = TryBuildPrCreatedStaleRecoveryHint(
+            kind!,
+            repo!,
+            number,
+            claimVerification,
+            decision.Errors);
+        if (staleRecoveryHint is not null)
+        {
+            warnings.Add(staleRecoveryHint);
+        }
+
         var result = new WorkerClaimResult
         {
             Kind = kind!,
@@ -149,7 +161,7 @@ internal static class WorkerClaimCommand
             RemoveLabels = decision.RemoveLabels,
             CurrentLabels = currentNames,
             Errors = decision.Errors,
-            Warnings = decision.Warnings,
+            Warnings = warnings,
             Summary = decision.Summary,
             GithubOnly = githubOnly ? true : null,
         };
@@ -241,6 +253,64 @@ internal static class WorkerClaimCommand
     private static readonly Regex LeadingExecutionUnitPattern = new(
         @"^(?:[A-Z][A-Z0-9]*-G?[0-9]+|G[0-9]+)(?![A-Za-z0-9])",
         RegexOptions.Compiled);
+
+    private static readonly Regex ExecutionUnitScopePattern = new(
+        @"^execution-unit:(?<unit>(?:[A-Z][A-Z0-9]*-G?[0-9]+|G[0-9]+))$",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// G836: fail-soft hint for unheld already-completed refusals. Uses only
+    /// data already in hand; never throws and never changes exit codes.
+    /// </summary>
+    internal static string? TryBuildPrCreatedStaleRecoveryHint(
+        string kind,
+        string repo,
+        int number,
+        ClaimOwnershipVerification? claimVerification,
+        IReadOnlyList<string> errors)
+    {
+        try
+        {
+            if (!string.Equals(kind, GhCliGitHubLabelMutator.Kinds.Issue, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            if (!errors.Any(error =>
+                    error.StartsWith(WorkerClaimCompleteConstants.ErrorCodes.AlreadyCompleted, StringComparison.Ordinal)))
+            {
+                return null;
+            }
+
+            if (claimVerification is null)
+            {
+                return null;
+            }
+
+            if (claimVerification.Status != ClaimOwnershipVerification.StatusUnheld
+                && claimVerification.Status != ClaimOwnershipVerification.StatusUnheldAvailable)
+            {
+                return null;
+            }
+
+            var match = ExecutionUnitScopePattern.Match(claimVerification.Scope ?? string.Empty);
+            if (!match.Success)
+            {
+                return null;
+            }
+
+            var unit = match.Groups["unit"].Value;
+            var team = claimVerification.InvokingTeam ?? "<team>";
+            return
+                "if the recorded PR was closed unmerged, dry-run "
+                + $"`intent-cli automation pr-created-stale-recovery --repo {repo} --issue {number} "
+                + $"--execution-unit {unit} --team {team} --ruling <ruling>`";
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     private static void WriteText(TextWriter writer, WorkerClaimResult result)
     {
