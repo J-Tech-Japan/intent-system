@@ -179,7 +179,7 @@ internal static class GuideSoloConductorCommand
                 Instruction = "Wait for CI on the exact head SHA, record the approved transition, and merge only that head.",
                 Commands =
                 [
-                    Gh("gh run list --repo <owner/repo> --branch <branch> --json headSha,attempt,conclusion"),
+                    Gh("gh run list --repo <owner/repo> --commit <head-sha> --json databaseId,headSha,attempt,status,conclusion"),
                     IntentCli("intent-cli automation pr-transition --repo <owner/repo> --pr <pr> --transition approved --write"),
                     Gh("gh pr merge <pr> --repo <owner/repo> --squash --match-head-commit <head-sha>"),
                 ],
