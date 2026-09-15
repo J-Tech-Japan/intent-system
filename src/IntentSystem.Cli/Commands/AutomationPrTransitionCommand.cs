@@ -28,6 +28,14 @@ internal static class AutomationPrTransitionCommand
 
     public static Func<bool>? NestedProviderLauncher { get; set; }
 
+    /// <summary>
+    /// G834: test seam for the PR head read, next to the label read
+    /// (<see cref="MutatorFactory"/>). Production runs
+    /// <c>gh pr view &lt;n&gt; --repo &lt;repo&gt; --json headRefOid</c>. It is read only
+    /// for the approved transition of a declared team in a gated repository.
+    /// </summary>
+    public static Func<string, int, string>? PrHeadReader { get; set; }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -54,6 +62,8 @@ internal static class AutomationPrTransitionCommand
                 out var transition,
                 out var mode,
                 out var format,
+                out var headSha,
+                out var executionUnit,
                 out var error))
         {
             writer.WriteLine(error);
@@ -102,6 +112,48 @@ internal static class AutomationPrTransitionCommand
         }
 
         var removeLabels = ResolveRemoveLabelsForMode(transition!, mode, plan.RemoveLabels, currentLabels);
+
+        // G834: the cross-runtime review gate. PRs outside every declared
+        // team's repositories take none of this path, so their result output is
+        // byte-identical; a PR that resolves to an undeclared team is also
+        // unchanged. A refusal returns before the write block: no label changes
+        // and the CI wait is kept.
+        CrossRuntimeReviewTransitionOutcome? crossRuntimeReview = null;
+        if (string.Equals(transition, TransitionApproved, StringComparison.Ordinal)
+            && context.Config.CrossRuntimeReview.IsGatedRepo(repo))
+        {
+            var gate = EvaluateCrossRuntimeReviewGate(context, repo!, pr!.Value, headSha, executionUnit);
+            if (gate.Refusal is not null)
+            {
+                var refusedResult = new AutomationPrTransitionResult
+                {
+                    Repo = repo!,
+                    Pr = pr!.Value,
+                    Transition = transition!,
+                    Mode = mode,
+                    Applied = false,
+                    AddLabels = plan.AddLabels,
+                    RemoveLabels = removeLabels,
+                    CurrentLabels = currentLabels,
+                    Summary = BuildSummary(transition!, plan.AddLabels, removeLabels),
+                    Error = $"{gate.Refusal.Cause}: {gate.Refusal.Detail}",
+                    CrossRuntimeReview = gate.Refusal,
+                };
+
+                if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+                {
+                    writer.WriteLine(JsonSerializer.Serialize(refusedResult, JsonOptions));
+                }
+                else
+                {
+                    WriteText(writer, refusedResult);
+                }
+
+                return 1;
+            }
+
+            crossRuntimeReview = gate.Satisfied;
+        }
 
         var applied = false;
         var mayHaveApplied = false;
@@ -252,6 +304,7 @@ internal static class AutomationPrTransitionCommand
             Summary = BuildSummary(transition!, plan.AddLabels, removeLabels),
             CiWaitCleared = ciWaitCleared,
             CiWaitWarning = ciWaitWarning,
+            CrossRuntimeReview = crossRuntimeReview,
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -265,6 +318,87 @@ internal static class AutomationPrTransitionCommand
 
         return 0;
     }
+
+    /// <summary>
+    /// G834: resolution, head binding, and the shared gate for the approved
+    /// transition of a PR in a gated repository. Returns neither outcome for a
+    /// PR that resolves to an undeclared team, so that output stays unchanged.
+    /// </summary>
+    private static (CrossRuntimeReviewTransitionOutcome? Refusal, CrossRuntimeReviewTransitionOutcome? Satisfied) EvaluateCrossRuntimeReviewGate(
+        CliContext context,
+        string repo,
+        int pr,
+        string? headSha,
+        string? executionUnit)
+    {
+        var resolution = CrossRuntimeReviewTeamResolver.Resolve(
+            context.RepoRoot,
+            repo,
+            pr,
+            executionUnit,
+            "pass the linked unit to `intent-cli automation pr-transition` with `--execution-unit <unit>`");
+        if (!resolution.Resolved)
+        {
+            return (Outcome("refused", resolution.Cause!, $"{resolution.Detail} Fix: {resolution.Fix}", resolution, []), null);
+        }
+
+        if (!context.Config.CrossRuntimeReview.TryGetDeclared(resolution.Domain, resolution.Team, out var declaration))
+        {
+            return (null, null);
+        }
+
+        if (string.IsNullOrWhiteSpace(headSha))
+        {
+            return (Outcome("refused", CrossRuntimeReviewCauses.HeadRequired,
+                $"team '{resolution.Domain}/{resolution.Team}' declares cross-runtime review; pass `--head-sha <head-sha>` with the exact head the reviewers approved.",
+                resolution, []), null);
+        }
+
+        string currentHead;
+        try
+        {
+            currentHead = (PrHeadReader ?? GhCliGitHubLabelMutator.ReadPullRequestHeadSha)(repo, pr).Trim();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            return (Outcome("refused", CrossRuntimeReviewCauses.HeadStale,
+                $"the current head of PR #{pr} in {repo} could not be read, so --head-sha {headSha} cannot be confirmed: {exception.Message}",
+                resolution, []), null);
+        }
+
+        if (!string.Equals(currentHead, headSha, StringComparison.OrdinalIgnoreCase))
+        {
+            return (Outcome("refused", CrossRuntimeReviewCauses.HeadStale,
+                $"--head-sha {headSha} is not the current head of PR #{pr} in {repo} ({currentHead}); review and CI must bind to the current head.",
+                resolution, []), null);
+        }
+
+        var gate = CrossRuntimeReviewGate.Evaluate(
+            declaration,
+            resolution,
+            headSha,
+            CrossRuntimeReviewStore.Read(context.RepoRoot, repo, pr));
+        return gate.Passes
+            ? (null, Outcome(gate.Decision, null, null, resolution, gate.Reasons))
+            : (Outcome(gate.Decision, gate.PrimaryCause, string.Join(" ", gate.Reasons.Select(reason => $"[{reason.Cause}] {reason.Detail}")), resolution, gate.Reasons), null);
+    }
+
+    private static CrossRuntimeReviewTransitionOutcome Outcome(
+        string decision,
+        string? cause,
+        string? detail,
+        CrossRuntimeReviewResolution resolution,
+        IReadOnlyList<CrossRuntimeReviewGateReason> reasons) =>
+        new()
+        {
+            Decision = decision,
+            Cause = cause,
+            Detail = detail,
+            Reasons = reasons,
+            ExecutionUnit = resolution.ExecutionUnit,
+            Domain = resolution.Domain,
+            Team = resolution.Team,
+        };
 
     /// <summary>
     /// G824: the add/remove label sets each transition executes, exposed so
@@ -403,8 +537,12 @@ internal static class AutomationPrTransitionCommand
         out string? transition,
         out string mode,
         out string format,
+        out string? headSha,
+        out string? executionUnit,
         out string error)
     {
+        headSha = null;
+        executionUnit = null;
         repo = null;
         workdir = null;
         pr = null;
@@ -465,6 +603,27 @@ internal static class AutomationPrTransitionCommand
                     index++;
                     break;
 
+                case "--head-sha":
+                    if (index + 1 >= args.Length || !CrossRuntimeReviewPaths.IsFullHeadSha(args[index + 1]))
+                    {
+                        error = "--head-sha requires the PR's full 40-character hexadecimal head SHA (G834).";
+                        return false;
+                    }
+                    headSha = args[index + 1];
+                    index++;
+                    break;
+
+                case "--execution-unit":
+                    if (index + 1 >= args.Length
+                        || !KnowledgeWriteBackRecord.TryValidateExecutionUnit(args[index + 1], out var unitError))
+                    {
+                        error = "--execution-unit requires a canonical execution unit id (G834).";
+                        return false;
+                    }
+                    executionUnit = args[index + 1];
+                    index++;
+                    break;
+
                 case "--write":
                     mode = WorkerClaimCompleteConstants.Modes.Write;
                     break;
@@ -491,7 +650,7 @@ internal static class AutomationPrTransitionCommand
                     break;
 
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] --pr <n> --transition <review-start|request-update|approved|review-release> [--write] [--dry-run] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] --pr <n> --transition <review-start|request-update|approved|review-release> [--head-sha <sha>] [--execution-unit <unit>] [--write] [--dry-run] [--format text|json].";
                     return false;
             }
         }
@@ -554,6 +713,12 @@ internal static class AutomationPrTransitionCommand
             writer.WriteLine($"ci_wait_warning: {result.CiWaitWarning}");
         }
 
+        if (result.CrossRuntimeReview is not null)
+        {
+            writer.WriteLine($"cross_runtime_review: {result.CrossRuntimeReview.Decision}"
+                + (result.CrossRuntimeReview.Cause is null ? string.Empty : $" ({result.CrossRuntimeReview.Cause})"));
+        }
+
         // G535 review repair: phase-aware ambiguity reporting — only ever
         // emitted for a failed mutation whose outcome on GitHub is unknown.
         if (result.MayHaveApplied)
@@ -568,12 +733,13 @@ internal static class AutomationPrTransitionCommand
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("automation pr-transition");
-        writer.WriteLine("Usage: intent-cli automation pr-transition --repo <owner/repo> --pr <n> --transition <review-start|request-update|approved|review-release> [--write] [--dry-run] [--format text|json]");
+        writer.WriteLine("Usage: intent-cli automation pr-transition --repo <owner/repo> --pr <n> --transition <review-start|request-update|approved|review-release> [--head-sha <sha>] [--execution-unit <unit>] [--write] [--dry-run] [--format text|json]");
         writer.WriteLine("Supported transitions:");
         writer.WriteLine("- review-start");
         writer.WriteLine("- request-update");
         writer.WriteLine("- approved");
         writer.WriteLine("- review-release (G292: drop intent-pr-reviewing without adding intent-pr-request-update; use when host-owned metadata blocks closeout)");
+        writer.WriteLine("G834: for a PR in a repository listed by [[cross_runtime_review.teams]], approved resolves the team from queue-state, packet, and claim; a declared team requires --head-sha <sha> equal to the PR's current head and a satisfied cross-runtime review gate (`intent-cli review cross-runtime status`). Run it from the host root. --execution-unit <unit> names the unit of a PR the host queue has not linked.");
     }
 
     private sealed record TransitionPlan(
@@ -667,4 +833,38 @@ internal sealed record AutomationPrTransitionResult
     /// <summary>G535 review repair: the failure message, populated only when <see cref="Applied"/> is false.</summary>
     [JsonPropertyName("error")]
     public string? Error { get; init; }
+
+    /// <summary>
+    /// G834: present only for the approved transition of a PR in a gated
+    /// repository whose team is declared, or whose resolution was refused.
+    /// </summary>
+    [JsonPropertyName("cross_runtime_review")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CrossRuntimeReviewTransitionOutcome? CrossRuntimeReview { get; init; }
+}
+
+internal sealed record CrossRuntimeReviewTransitionOutcome
+{
+    [JsonPropertyName("decision")]
+    public required string Decision { get; init; }
+
+    [JsonPropertyName("cause")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Cause { get; init; }
+
+    [JsonPropertyName("detail")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Detail { get; init; }
+
+    [JsonPropertyName("reasons")]
+    public required IReadOnlyList<CrossRuntimeReviewGateReason> Reasons { get; init; }
+
+    [JsonPropertyName("execution_unit")]
+    public string? ExecutionUnit { get; init; }
+
+    [JsonPropertyName("domain")]
+    public string? Domain { get; init; }
+
+    [JsonPropertyName("team")]
+    public string? Team { get; init; }
 }

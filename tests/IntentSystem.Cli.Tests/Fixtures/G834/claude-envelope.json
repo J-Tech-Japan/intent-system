@@ -1,0 +1,20 @@
+{
+  "stop_reason": "tool_use",
+  "session_id": "68f88acb-a1bf-47eb-a1cf-ab5096147289",
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "is_error": false,
+  "num_turns": 2,
+  "subtype": "success",
+  "result": "{\"verdict\":\"approve\",\"head_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"blocking_findings\":[],\"notes\":[\"probe\"]}",
+  "structured_output": {
+    "verdict": "approve",
+    "head_sha": "0123456789abcdef0123456789abcdef01234567",
+    "blocking_findings": [],
+    "notes": [
+      "probe"
+    ]
+  },
+  "type": "result",
+  "duration_ms": 4953
+}

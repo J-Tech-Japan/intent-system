@@ -61,6 +61,7 @@ internal static class Program
                 || IsNotifyCommand(args)
                 || IsPromptClassCommand(args)
                 || IsClaimCommand(args)
+                || IsReviewCrossRuntimeCommand(args)
                 || IsHelpCommand(args))
             {
                 return CommandRouter.Execute(args, CreateBootstrapContext(currentDirectory, args), Console.Out);
@@ -172,6 +173,20 @@ internal static class Program
     private static bool IsClaimCommand(string[] args)
     {
         return args.Length >= 1 && string.Equals(args[0], "claim", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G834: <c>review cross-runtime</c> reaches its handler from any cwd so a
+    /// checkout without the host config gets the named
+    /// <c>cross-runtime-review-host-root-required</c> refusal instead of the
+    /// generic missing-host-state guidance. The bootstrap context still loads the
+    /// host config whenever the cwd is inside a host.
+    /// </summary>
+    private static bool IsReviewCrossRuntimeCommand(string[] args)
+    {
+        return args.Length >= 2
+            && string.Equals(args[0], "review", StringComparison.Ordinal)
+            && string.Equals(args[1], "cross-runtime", StringComparison.Ordinal);
     }
 
     private static bool IsGuideOneshotCommand(string[] args)

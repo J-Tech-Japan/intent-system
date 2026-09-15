@@ -32,6 +32,13 @@ internal static class CliRuntimeContracts
     public const string RetryBudgetKey = "retry_budget";
     // G828: explicit per-team supervision opt-in, as "<domain>/<team>" entries.
     public const string SupervisionOptInTeamsKey = "opt_in_teams";
+    // G834: declared cross-runtime implementation review, as
+    // [[cross_runtime_review.teams]] tables of team, conductor_runtime, repos.
+    public const string CrossRuntimeReviewSectionName = "cross_runtime_review";
+    public const string CrossRuntimeReviewTeamsKey = "teams";
+    public const string CrossRuntimeReviewTeamKey = "team";
+    public const string CrossRuntimeReviewConductorRuntimeKey = "conductor_runtime";
+    public const string CrossRuntimeReviewReposKey = "repos";
     public const string PostFixWorktreeProgressPolicyKey = "post_fix_worktree_progress_policy";
     public const string BaseBranchPolicyKey = "base_branch_policy";
     // G668: named branch-lane registry keys.

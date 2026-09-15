@@ -155,9 +155,11 @@ internal static class GuideSoloConductorCommand
             {
                 Number = 7,
                 Id = "independent-subagent-review",
-                Instruction = "Start a fresh reviewer subagent with only the review inputs, then record its verdict on the PR naming it an independent subagent review.",
+                Instruction = "Start a fresh reviewer subagent with only the review inputs, then record its verdict on the PR naming it an independent subagent review. For a team declared in `[[cross_runtime_review.teams]]` (G834), from the host root: render the request for a runtime other than the declared conductor runtime with `review cross-runtime request`; the seat runs the command in `<out-dir>/invocation.txt` itself in a read-only clone at the head; then `review cross-runtime record --write` both the same-runtime subagent verdict and the cross-runtime verdict, and post each rendered comment with `gh pr review --comment --body-file`. intent-cli renders the request and records verdicts; it does not start, launch, or manage the reviewer. Confirming each vendor's automation terms is the operator's responsibility.",
                 Commands =
                 [
+                    IntentCli("intent-cli review cross-runtime request --repo <owner/repo> --pr <pr> --head-sha <head-sha> --execution-unit <unit> --runtime <codex|claude|cursor> --clone <read-only-clone> --out-dir <out-dir> --format json"),
+                    IntentCli("intent-cli review cross-runtime record --repo <owner/repo> --pr <pr> --head-sha <head-sha> --execution-unit <unit> --kind implementation --runtime <runtime> --runtime-version <version> --verdict-file <verdict-file> --comment-out <review-body> --write --format json"),
                     Gh("gh pr review <pr> --repo <owner/repo> --comment --body-file <review-body>"),
                 ],
             },
@@ -165,7 +167,7 @@ internal static class GuideSoloConductorCommand
             {
                 Number = 8,
                 Id = "fix-and-delta-review",
-                Instruction = "Fix blocking findings, push, and have a new reviewer subagent re-review the delta against the new head before merge.",
+                Instruction = "Fix blocking findings, push, and have a new reviewer subagent re-review the delta against the new head before merge. For a declared team, a blocking finding from either reviewer stops merge, and the runtime that raised it must re-review the new head (`cross-runtime-review-rereview-missing` otherwise). A later approve on the same head supersedes that runtime's request-changes only when it comes from a fresh reviewer run, never a repeated prompt to the same session.",
                 Commands =
                 [
                     Git("git -C <isolated-clone> push origin <branch>"),
@@ -176,11 +178,12 @@ internal static class GuideSoloConductorCommand
             {
                 Number = 9,
                 Id = "exact-head-ci-and-merge",
-                Instruction = "Wait for CI on the exact head SHA, record the approved transition, and merge only that head.",
+                Instruction = "Wait for CI on the exact head SHA, record the approved transition from the host root with that head, and merge only that head. For a declared team the transition refuses unless the cross-runtime review gate on that head is satisfied; `review cross-runtime status` shows why.",
                 Commands =
                 [
                     Gh("gh run list --repo <owner/repo> --commit <head-sha> --json databaseId,headSha,attempt,status,conclusion"),
-                    IntentCli("intent-cli automation pr-transition --repo <owner/repo> --pr <pr> --transition approved --write"),
+                    IntentCli("intent-cli review cross-runtime status --repo <owner/repo> --pr <pr> --head-sha <head-sha> --execution-unit <unit> --format json"),
+                    IntentCli("intent-cli automation pr-transition --repo <owner/repo> --pr <pr> --transition approved --head-sha <head-sha> --write"),
                     Gh("gh pr merge <pr> --repo <owner/repo> --squash --match-head-commit <head-sha>"),
                 ],
             },
@@ -227,6 +230,7 @@ internal static class GuideSoloConductorCommand
             "Parallelism is 1; use the four-thread or five-thread model for throughput.",
             "Review independence depends on the subagent boundary; a runtime that cannot start an isolated subagent must not use this model.",
             "A deviation from an acceptance criterion is recorded as an architect decision before merge.",
+            "Cross-runtime review (G834) is required only for teams declared in `[[cross_runtime_review.teams]]`; the gate assumes an honest seat and is not a security boundary, because `gh pr merge` is not gated.",
         ],
         NoExecutionBoundary = "This guide renders text only. The conductor seat starts reviewer subagents; intent-cli does not start, launch, or manage any agent, and reads no host metadata to render this contract.",
     };

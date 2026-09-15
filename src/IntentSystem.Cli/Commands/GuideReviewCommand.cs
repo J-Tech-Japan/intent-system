@@ -226,6 +226,19 @@ internal static class GuideReviewCommand
         Summary = "When the review author is the PR author's same GitHub account, `gh pr review --approve` is rejected by GitHub. Submit a COMMENTED review with the sanctioned body-file form, then emit the canonical intent-cli notify report; the report carries the workflow verdict.",
     };
 
+    // G834: cross-runtime implementation review for declared teams. Distinct
+    // from the G789 seat-kind "cross-review" guidance. Rendered as a Markdown
+    // section only, so the pinned G789 JSON payload shape is unchanged.
+    internal static readonly IReadOnlyList<string> CrossRuntimeReviewRules = new[]
+    {
+        "Required only for a team declared in `[[cross_runtime_review.teams]]` of the host `.intent-cli/config.toml`, and only for PRs in that declaration's `repos`; undeclared teams need only the independent same-runtime subagent review.",
+        "From the host root, render the request: `intent-cli review cross-runtime request --repo <owner/repo> --pr <n> --head-sha <head-sha> --execution-unit <unit> --runtime codex|claude|cursor --clone <read-only-clone> --out-dir <dir>`. The seat runs the rendered `invocation.txt` itself in a read-only clone; intent-cli never runs it.",
+        "Record both verdicts on the same head — the independent same-runtime subagent review and the cross-runtime review — with `intent-cli review cross-runtime record ... --kind implementation --runtime <runtime> --runtime-version <version> --verdict-file <file> --write`, then post each rendered comment with `gh pr review <n> --comment --body-file <file>`.",
+        "A blocking finding from either reviewer stops merge. After the fix, the runtime that raised it re-reviews the new head; a superseding approve on the same head must come from a fresh reviewer run, not a repeated prompt to the same session.",
+        "`intent-cli review cross-runtime status --repo <owner/repo> --pr <n> --head-sha <head-sha> --execution-unit <unit>` shows the gate that `automation pr-transition --transition approved --head-sha <head-sha>` applies. The gate assumes an honest seat; it is not a security boundary.",
+        "Confirming each vendor's automation terms for headless reviewer runs is the operator's responsibility. intent-cli renders requests and records verdicts only; it does not start, launch, or manage any reviewer.",
+    };
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -685,6 +698,13 @@ internal static class GuideReviewCommand
         writer.WriteLine($"- review submission: `{result.SameAccountReviewVerdict.ReviewCommand}`");
         writer.WriteLine($"- canonical report: `{result.SameAccountReviewVerdict.ReportCommand}`");
         writer.WriteLine($"- {result.SameAccountReviewVerdict.Summary}");
+        writer.WriteLine();
+
+        writer.WriteLine("## Cross-runtime review (declared teams, G834)");
+        foreach (var rule in CrossRuntimeReviewRules)
+        {
+            writer.WriteLine($"- {rule}");
+        }
         writer.WriteLine();
 
         writer.WriteLine("## Guide reachability (G645/G696)");

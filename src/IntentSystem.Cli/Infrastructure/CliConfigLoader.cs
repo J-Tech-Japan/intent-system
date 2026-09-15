@@ -75,6 +75,7 @@ internal static class CliConfigLoader
         var supervision = ReadSupervision(rootTable);
         var run = ReadRun(rootTable);
         var directRun = ReadDirectRun(rootTable);
+        var crossRuntimeReview = ReadCrossRuntimeReview(rootTable);
 
         config = CreateConfig(
             domain,
@@ -93,7 +94,8 @@ internal static class CliConfigLoader
             roles,
             supervision,
             run,
-            directRun);
+            directRun,
+            crossRuntimeReview);
         return true;
     }
 
@@ -141,6 +143,7 @@ internal static class CliConfigLoader
         var supervision = ReadSupervision(rootTable);
         var run = ReadRun(rootTable);
         var directRun = ReadDirectRun(rootTable);
+        var crossRuntimeReview = ReadCrossRuntimeReview(rootTable);
 
         config = CreateConfig(
             domain,
@@ -159,7 +162,8 @@ internal static class CliConfigLoader
             roles,
             supervision,
             run,
-            directRun);
+            directRun,
+            crossRuntimeReview);
         return true;
     }
 
@@ -180,7 +184,8 @@ internal static class CliConfigLoader
         RoleMappings roles,
         SupervisionConfig supervision,
         RunConfig run,
-        DirectRunConfig directRun)
+        DirectRunConfig directRun,
+        CrossRuntimeReviewConfig crossRuntimeReview)
     {
         return new CliConfig
         {
@@ -203,7 +208,8 @@ internal static class CliConfigLoader
             Roles = roles,
             Supervision = supervision,
             Run = run,
-            DirectRun = directRun
+            DirectRun = directRun,
+            CrossRuntimeReview = crossRuntimeReview
         };
     }
 
@@ -538,13 +544,7 @@ internal static class CliConfigLoader
 
         foreach (var entry in entries)
         {
-            var segments = entry.Split('/');
-            if (segments.Length != 2
-                || segments.Any(segment =>
-                    segment.Length == 0
-                    || segment is "." or ".."
-                    || segment.Any(char.IsWhiteSpace)
-                    || segment.Contains('\\')))
+            if (!IsDomainTeamEntry(entry))
             {
                 throw new InvalidOperationException(
                     $"CLI config value 'supervision.{key}' entry '{entry}' must be '<domain>/<team>' with two non-empty segments and no whitespace.");
@@ -552,6 +552,174 @@ internal static class CliConfigLoader
         }
 
         return entries.Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    /// <summary>
+    /// G828/G834: the shared <c>&lt;domain&gt;/&lt;team&gt;</c> entry rule — exactly two
+    /// non-empty, whitespace-free segments that are safe path segments.
+    /// </summary>
+    private static bool IsDomainTeamEntry(string entry)
+    {
+        var segments = entry.Split('/');
+        return segments.Length == 2
+            && !segments.Any(segment =>
+                segment.Length == 0
+                || segment is "." or ".."
+                || segment.Any(char.IsWhiteSpace)
+                || segment.Contains('\\'));
+    }
+
+    /// <summary>
+    /// G834: <c>[[cross_runtime_review.teams]]</c>. Absent means no team is
+    /// declared. Every malformed shape fails and names the key, the entry, and the
+    /// field, so a declaration is never partially honored.
+    /// </summary>
+    private static CrossRuntimeReviewConfig ReadCrossRuntimeReview(TomlTable rootTable)
+    {
+        ArgumentNullException.ThrowIfNull(rootTable);
+
+        var section = CliRuntimeContracts.CrossRuntimeReviewSectionName;
+        var teamsKey = CliRuntimeContracts.CrossRuntimeReviewTeamsKey;
+        var qualified = $"{section}.{teamsKey}";
+        if (!rootTable.TryGetValue(section, out var rawSection))
+        {
+            return new CrossRuntimeReviewConfig();
+        }
+
+        if (rawSection is not TomlTable sectionTable)
+        {
+            throw new InvalidOperationException(
+                $"CLI config value '{section}' must be a table holding '[[{qualified}]]' entries.");
+        }
+
+        foreach (var key in sectionTable.Keys)
+        {
+            if (!string.Equals(key, teamsKey, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"CLI config value '{section}' has unknown key '{key}'; only '[[{qualified}]]' is supported.");
+            }
+        }
+
+        if (!sectionTable.TryGetValue(teamsKey, out var rawTeams))
+        {
+            return new CrossRuntimeReviewConfig();
+        }
+
+        IReadOnlyList<object> tables = rawTeams switch
+        {
+            TomlTableArray tableArray => tableArray.Cast<object>().ToArray(),
+            TomlArray array => array.Cast<object>().ToArray(),
+            _ => throw new InvalidOperationException(
+                $"CLI config value '{qualified}' must be an array of tables ('[[{qualified}]]')."),
+        };
+
+        var teams = new List<CrossRuntimeReviewTeamDeclaration>(tables.Count);
+        for (var index = 0; index < tables.Count; index++)
+        {
+            var entryName = $"{qualified}[{index}]";
+            if (tables[index] is not TomlTable table)
+            {
+                throw new InvalidOperationException(
+                    $"CLI config value '{qualified}' entry {index} ('{tables[index]}') must be a table with fields "
+                    + $"'{CliRuntimeContracts.CrossRuntimeReviewTeamKey}', '{CliRuntimeContracts.CrossRuntimeReviewConductorRuntimeKey}', and '{CliRuntimeContracts.CrossRuntimeReviewReposKey}'.");
+            }
+
+            foreach (var key in table.Keys)
+            {
+                if (key is not (CliRuntimeContracts.CrossRuntimeReviewTeamKey
+                    or CliRuntimeContracts.CrossRuntimeReviewConductorRuntimeKey
+                    or CliRuntimeContracts.CrossRuntimeReviewReposKey))
+                {
+                    throw new InvalidOperationException(
+                        $"CLI config value '{qualified}' entry {entryName} has unknown field '{key}'.");
+                }
+            }
+
+            var team = ReadCrossRuntimeReviewString(table, qualified, entryName, CliRuntimeContracts.CrossRuntimeReviewTeamKey);
+            if (!IsDomainTeamEntry(team))
+            {
+                throw new InvalidOperationException(
+                    $"CLI config value '{qualified}' entry {entryName} field '{CliRuntimeContracts.CrossRuntimeReviewTeamKey}' "
+                    + $"value '{team}' must be '<domain>/<team>' with two non-empty segments and no whitespace.");
+            }
+
+            entryName = $"{entryName} ('{team}')";
+            if (teams.Any(existing => string.Equals(existing.Team, team, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException(
+                    $"CLI config value '{qualified}' entry {entryName} field '{CliRuntimeContracts.CrossRuntimeReviewTeamKey}' "
+                    + "duplicates an earlier entry; declare each team once.");
+            }
+
+            var runtime = ReadCrossRuntimeReviewString(table, qualified, entryName, CliRuntimeContracts.CrossRuntimeReviewConductorRuntimeKey);
+            if (!CrossRuntimeReviewRuntimes.IsSupported(runtime))
+            {
+                throw new InvalidOperationException(
+                    $"CLI config value '{qualified}' entry {entryName} field '{CliRuntimeContracts.CrossRuntimeReviewConductorRuntimeKey}' "
+                    + $"value '{runtime}' is not a supported runtime ({CrossRuntimeReviewRuntimes.Describe()}).");
+            }
+
+            var repos = ReadCrossRuntimeReviewRepos(table, qualified, entryName);
+            teams.Add(new CrossRuntimeReviewTeamDeclaration
+            {
+                Team = team,
+                ConductorRuntime = runtime,
+                Repos = repos,
+            });
+        }
+
+        return new CrossRuntimeReviewConfig { Teams = teams };
+    }
+
+    private static string ReadCrossRuntimeReviewString(TomlTable table, string qualified, string entryName, string field)
+    {
+        if (!table.TryGetValue(field, out var raw))
+        {
+            throw new InvalidOperationException(
+                $"CLI config value '{qualified}' entry {entryName} is missing field '{field}'.");
+        }
+
+        if (raw is not string text || string.IsNullOrWhiteSpace(text))
+        {
+            throw new InvalidOperationException(
+                $"CLI config value '{qualified}' entry {entryName} field '{field}' must be a non-empty string.");
+        }
+
+        return text;
+    }
+
+    private static IReadOnlyList<string> ReadCrossRuntimeReviewRepos(TomlTable table, string qualified, string entryName)
+    {
+        var field = CliRuntimeContracts.CrossRuntimeReviewReposKey;
+        if (!table.TryGetValue(field, out var raw))
+        {
+            throw new InvalidOperationException(
+                $"CLI config value '{qualified}' entry {entryName} is missing field '{field}'.");
+        }
+
+        if (raw is not TomlArray array || array.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"CLI config value '{qualified}' entry {entryName} field '{field}' must be a non-empty array of '<owner>/<repo>' strings.");
+        }
+
+        var repos = new List<string>(array.Count);
+        foreach (var item in array)
+        {
+            if (item is not string repo || !CrossRuntimeReviewPaths.IsRepositoryName(repo))
+            {
+                throw new InvalidOperationException(
+                    $"CLI config value '{qualified}' entry {entryName} field '{field}' value '{item}' must be '<owner>/<repo>'.");
+            }
+
+            if (!repos.Contains(repo, StringComparer.OrdinalIgnoreCase))
+            {
+                repos.Add(repo);
+            }
+        }
+
+        return repos;
     }
 
     private static RunConfig ReadRun(TomlTable rootTable)

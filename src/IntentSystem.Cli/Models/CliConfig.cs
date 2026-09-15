@@ -13,6 +13,8 @@ internal sealed record CliConfig
     public RunConfig Run { get; init; } = new();
 
     public DirectRunConfig DirectRun { get; init; } = new();
+
+    public CrossRuntimeReviewConfig CrossRuntimeReview { get; init; } = new();
 }
 
 internal sealed record ProjectConfig
@@ -151,6 +153,54 @@ internal sealed record SupervisionConfig
         !string.IsNullOrWhiteSpace(domain)
         && !string.IsNullOrWhiteSpace(team)
         && OptInTeams.Contains($"{domain.Trim()}/{team.Trim()}", StringComparer.Ordinal);
+}
+
+/// <summary>
+/// G834: teams that declared cross-runtime implementation review, from
+/// <c>[[cross_runtime_review.teams]]</c>. Each entry names one exact
+/// <c>&lt;domain&gt;/&lt;team&gt;</c>, that team's declared conductor runtime, and
+/// the repositories the gate applies to. Nothing else declares a team: no record,
+/// claim, or caller argument does.
+/// </summary>
+internal sealed record CrossRuntimeReviewConfig
+{
+    public IReadOnlyList<CrossRuntimeReviewTeamDeclaration> Teams { get; init; } = [];
+
+    public const string Source = "config:cross_runtime_review.teams";
+
+    public bool TryGetDeclared(string? domain, string? team, out CrossRuntimeReviewTeamDeclaration declaration)
+    {
+        declaration = null!;
+        if (string.IsNullOrEmpty(domain) || string.IsNullOrEmpty(team))
+        {
+            return false;
+        }
+
+        var key = $"{domain}/{team}";
+        var match = Teams.FirstOrDefault(entry => string.Equals(entry.Team, key, StringComparison.Ordinal));
+        if (match is null)
+        {
+            return false;
+        }
+
+        declaration = match;
+        return true;
+    }
+
+    /// <summary>Repository names compare case-insensitively, as <c>CiWaitStore</c> does.</summary>
+    public bool IsGatedRepo(string? repo) =>
+        !string.IsNullOrWhiteSpace(repo)
+        && Teams.Any(entry => entry.Repos.Contains(repo.Trim(), StringComparer.OrdinalIgnoreCase));
+}
+
+internal sealed record CrossRuntimeReviewTeamDeclaration
+{
+    /// <summary>Exact <c>&lt;domain&gt;/&lt;team&gt;</c>.</summary>
+    public required string Team { get; init; }
+
+    public required string ConductorRuntime { get; init; }
+
+    public required IReadOnlyList<string> Repos { get; init; }
 }
 
 internal sealed record RunConfig
