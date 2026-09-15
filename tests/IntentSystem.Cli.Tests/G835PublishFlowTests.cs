@@ -31,6 +31,7 @@ public sealed class G835PublishFlowTests : IDisposable
         IssuePublishFlowCommand.CreatorFactory = () => throwingCreator;
         IssuePublishFlowCommand.UtcNowFactory = null;
         IssuePublishFlowCommand.AfterGateHook = null;
+        IssuePublishFlowCommand.BeforeLookupSnapshotHook = null;
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => defaultChecker;
     }
 
@@ -39,6 +40,7 @@ public sealed class G835PublishFlowTests : IDisposable
         IssuePublishFlowCommand.CreatorFactory = null;
         IssuePublishFlowCommand.UtcNowFactory = null;
         IssuePublishFlowCommand.AfterGateHook = null;
+        IssuePublishFlowCommand.BeforeLookupSnapshotHook = null;
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = null;
     }
 
@@ -545,6 +547,41 @@ public sealed class G835PublishFlowTests : IDisposable
         Assert.Equal(expectedTitle, recorder.LastTitle);
         Assert.Equal(expectedBodyBytes, recorder.LastBodyBytes);
         Assert.True(File.Exists(workspace.PublishYamlPath(Unit)));
+    }
+
+    [Fact]
+    public void PublishFlow_DeclaredTeam_CreatesWithTheSnapshotTitle_NotTheAnalysisTimeTitle()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        var directory = workspace.PacketDirectory(Unit);
+        string[] names = ["packet.yaml", "github-body.md", "review-context.md", "implementation.md"];
+
+        // The reviewed packet is the renamed one; approvals are recorded on its digest.
+        workspace.WriteFullPacket(Unit, Repo, bodyTitle: Title("renamed"));
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        var reviewed = names.ToDictionary(name => name, name => File.ReadAllBytes(Path.Combine(directory, name)));
+        var expectedTitle = IssuePublishFlowCommand.ResolveLookupTitle(Unit, reviewed["packet.yaml"], reviewed["github-body.md"]);
+
+        // Analysis reads the original title; the reviewed bytes land before the lookup snapshot.
+        workspace.WriteFullPacket(Unit, Repo);
+        workspace.SeedQueueState(Unit, Title());
+        IssuePublishFlowCommand.BeforeLookupSnapshotHook = () =>
+        {
+            foreach (var (name, bytes) in reviewed)
+            {
+                File.WriteAllBytes(Path.Combine(directory, name), bytes);
+            }
+        };
+        var recorder = new RecordingIssueCreator($"https://github.com/{Repo}/issues/836");
+        IssuePublishFlowCommand.CreatorFactory = () => recorder;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => defaultChecker;
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+        Assert.True(exit == 0, output);
+        Assert.Equal(1, recorder.CallCount);
+        Assert.Contains("renamed", expectedTitle, StringComparison.Ordinal);
+        Assert.Equal(expectedTitle, recorder.LastTitle);
+        Assert.Equal(reviewed["github-body.md"], recorder.LastBodyBytes);
     }
 
     // ── helpers ────────────────────────────────────────────────────────

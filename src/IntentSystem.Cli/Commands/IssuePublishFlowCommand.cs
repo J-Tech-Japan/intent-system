@@ -81,6 +81,9 @@ internal static class IssuePublishFlowCommand
     /// <summary>G835: test seam invoked after the design gate passes and before digest recheck on create.</summary>
     public static Action? AfterGateHook { get; set; }
 
+    /// <summary>G835: test seam invoked on the declared path immediately before the lookup snapshot is taken.</summary>
+    public static Action? BeforeLookupSnapshotHook { get; set; }
+
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -415,6 +418,7 @@ internal static class IssuePublishFlowCommand
             if (gatedPublishResolution.Resolved && gatedPublishResolution.Declared)
             {
                 var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
+                BeforeLookupSnapshotHook?.Invoke();
                 lookupSnapshotPacketYaml = File.ReadAllBytes(packetYamlPath);
                 lookupSnapshotGithubBody = File.ReadAllBytes(githubBodyPath);
                 lookupBody = DecodePacketText(lookupSnapshotGithubBody);
