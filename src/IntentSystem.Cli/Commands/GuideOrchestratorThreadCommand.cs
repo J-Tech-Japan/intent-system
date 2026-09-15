@@ -32,6 +32,18 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal static class GuideOrchestratorThreadCommand
 {
+    /// <summary>G832: canonical roles with their legacy aliases (G795), as <c>guide model</c> names them (G831).</summary>
+    internal const string ModelRolesPhrase =
+        "architect (design) / orchestrator (orchestration) / builder (implementation) / reviewer (review)";
+
+    /// <summary>G832: the optional Steward relay seat that turns the four-thread model into the five-thread model.</summary>
+    /// <summary>G832: the agmsg-mode summary names the G829 deprecation without repeating the full notice rendered in the preference sentence.</summary>
+    internal const string AgmsgModeDeprecationSentence =
+        "This transport is deprecated (G829): it keeps working, and `intent-cli session-layer set --mode herdr-only --write` moves the team to the preferred transport.";
+
+    internal const string StewardShapeSentence =
+        "An optional Steward relay seat, which is not a judgment seat, makes it the five-thread model (see `intent-cli guide steward-thread`).";
+
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
 
@@ -902,16 +914,20 @@ internal static class GuideOrchestratorThreadCommand
             // So it is stated mode-specifically rather than token-replaced,
             // which previously destroyed the authority sentence outright.
             Summary = herdrOnly
-                ? "PRIMARY four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / "
-                    + "implementation / review coordinate over the session layer this team runs — herdr-only here. "
+                ? "PRIMARY four-thread orchestrator model (ADR-012 / spec-26): " + ModelRolesPhrase
+                    + " coordinate over the session layer this team runs — herdr-only here. "
+                    + StewardShapeSentence + " "
                     + "The session layer carries natural-language delegation / progress / completion / blocker "
                     + "signals between threads; it is NOT workflow state. intent-cli and GitHub remain authoritative "
                     + "for domain status, queue-state, issue/PR facts, labels, CI, and closeout. Timer-loop mode "
                     + "remains fully supported as the simpler ALTERNATIVE for setups without an orchestrator thread "
                     + "(see Mode separation). The concrete herdr-only operating sections below cover provisioning, "
                     + "dispatch, bounded completion detection, the events boundary, recovery, and both switches."
-                : "PRIMARY four-thread orchestrator model over agmsg + herdr (ADR-012 / spec-26): design / orchestrator / "
-                    + "implementation / review coordinate over agmsg. agmsg carries natural-language delegation / "
+                : "PRIMARY four-thread orchestrator model over agmsg + herdr (ADR-012 / spec-26): " + ModelRolesPhrase
+                    + " coordinate over agmsg. "
+                    + StewardShapeSentence + " "
+                    + AgmsgModeDeprecationSentence + " "
+                    + "agmsg carries natural-language delegation / "
                     + "progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli "
                     + "and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, "
                     + "and closeout. Timer-loop mode remains fully supported as the simpler ALTERNATIVE for setups "
@@ -5330,8 +5346,9 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine(UsageLine);
         writer.WriteLine();
         writer.WriteLine("Renders paste-ready prompts for the PRIMARY four-thread orchestrator model over the selected session transport");
-        writer.WriteLine("(design/orchestrator/implementation/review) plus the implementation/review threads it");
-        writer.WriteLine("delegates to. agmsg is a signal layer only; intent-cli and GitHub remain authoritative.");
+        writer.WriteLine("(architect/orchestrator/builder/reviewer; legacy names design/orchestration/implementation/review are accepted)");
+        writer.WriteLine("plus the builder/reviewer threads it delegates to; an optional Steward relay seat makes it the five-thread model.");
+        writer.WriteLine("The session layer carries signals only; intent-cli and GitHub remain authoritative.");
         writer.WriteLine("Timer-loop mode remains fully supported as the simpler alternative and is not replaced.");
         writer.WriteLine();
         writer.WriteLine("--mode single-domain (default) scopes the orchestrator to one domain and treats other-domain");

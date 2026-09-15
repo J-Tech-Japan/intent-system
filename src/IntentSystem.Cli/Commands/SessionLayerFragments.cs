@@ -179,7 +179,9 @@ internal static class SessionLayerFragments
             Descriptive("- setup-ready (herdr-only) — concrete provisioning, logical-role→pane mapping, typed launch, and G556 READY procedures are present in the herdr-only operating sections.")),
         Fragment(
             S0,
-            Descriptive("PRIMARY four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / implementation / review coordinate over the session layer this team runs — herdr-only here."),
+            Descriptive("PRIMARY four-thread orchestrator model (ADR-012 / spec-26): " + GuideOrchestratorThreadCommand.ModelRolesPhrase + " coordinate over the session layer this team runs — herdr-only here."),
+            Scaffold(" "),
+            Descriptive(GuideOrchestratorThreadCommand.StewardShapeSentence),
             Scaffold(" "),
             Descriptive("The session layer carries natural-language delegation / progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, and closeout."),
             Scaffold(" "),
@@ -216,7 +218,13 @@ internal static class SessionLayerFragments
         Fragment(S0, Descriptive("- reviewer agent")),
         Fragment(
             S0,
-            Descriptive("PRIMARY four-thread orchestrator model over agmsg + herdr (ADR-012 / spec-26): design / orchestrator / implementation / review coordinate over agmsg. agmsg carries natural-language delegation / progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, and closeout."),
+            Descriptive("PRIMARY four-thread orchestrator model over agmsg + herdr (ADR-012 / spec-26): " + GuideOrchestratorThreadCommand.ModelRolesPhrase + " coordinate over agmsg."),
+            Scaffold(" "),
+            Descriptive(GuideOrchestratorThreadCommand.StewardShapeSentence),
+            Scaffold(" "),
+            Descriptive(GuideOrchestratorThreadCommand.AgmsgModeDeprecationSentence),
+            Scaffold(" "),
+            Descriptive("agmsg carries natural-language delegation / progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, and closeout."),
             Scaffold(" "),
             Descriptive("Timer-loop mode remains fully supported as the simpler ALTERNATIVE for setups without an orchestrator thread (see Mode separation).")),
         Fragment(
@@ -1212,7 +1220,9 @@ internal static class SessionLayerFragments
     [
         Fragment(
             "summary",
-            Descriptive("PRIMARY four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / implementation / review coordinate over the session layer this team runs — herdr-only here."),
+            Descriptive("PRIMARY four-thread orchestrator model (ADR-012 / spec-26): " + GuideOrchestratorThreadCommand.ModelRolesPhrase + " coordinate over the session layer this team runs — herdr-only here."),
+            Scaffold(" "),
+            Descriptive(GuideOrchestratorThreadCommand.StewardShapeSentence),
             Scaffold(" "),
             Descriptive("The session layer carries natural-language delegation / progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, and closeout."),
             Scaffold(" "),
@@ -1229,7 +1239,13 @@ internal static class SessionLayerFragments
         Fragment("setup_intake", Operative("missing-inputs — supply the 5 missing field(s) below to get a setup-ready plan.")),
         Fragment(
             "summary",
-            Descriptive("PRIMARY four-thread orchestrator model over agmsg + herdr (ADR-012 / spec-26): design / orchestrator / implementation / review coordinate over agmsg. agmsg carries natural-language delegation / progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, and closeout."),
+            Descriptive("PRIMARY four-thread orchestrator model over agmsg + herdr (ADR-012 / spec-26): " + GuideOrchestratorThreadCommand.ModelRolesPhrase + " coordinate over agmsg."),
+            Scaffold(" "),
+            Descriptive(GuideOrchestratorThreadCommand.StewardShapeSentence),
+            Scaffold(" "),
+            Descriptive(GuideOrchestratorThreadCommand.AgmsgModeDeprecationSentence),
+            Scaffold(" "),
+            Descriptive("agmsg carries natural-language delegation / progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, and closeout."),
             Scaffold(" "),
             Descriptive("Timer-loop mode remains fully supported as the simpler ALTERNATIVE for setups without an orchestrator thread (see Mode separation).")),
         Fragment("setup_intake", Descriptive("missing-inputs")),
