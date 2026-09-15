@@ -26,9 +26,9 @@ internal static class CrossRuntimeReviewRuntimes
     public static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> AllowedFlags =
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
         {
-            [Codex] = ["-s", "-C", "--output-schema", "-o", "-"],
-            [Claude] = ["-p", "--permission-mode", "--disallowedTools", "--output-format", "--json-schema"],
-            [Cursor] = ["-p", "--mode", "--sandbox", "--trust", "--workspace", "--output-format"],
+            [Codex] = ["-s", "-C", "--output-schema", "-o", "-", "-m"],
+            [Claude] = ["-p", "--permission-mode", "--disallowedTools", "--output-format", "--json-schema", "--model"],
+            [Cursor] = ["-p", "--mode", "--sandbox", "--trust", "--workspace", "--output-format", "--model"],
         };
 
     /// <summary>
@@ -53,25 +53,67 @@ internal static class CrossRuntimeReviewRuntimes
     /// interpolated path is POSIX single-quoted by
     /// <see cref="CrossRuntimeReviewPaths.ShellQuote"/>.
     /// </summary>
-    public static string RenderInvocation(string runtime, string clone, string outDir)
+    public static string RenderInvocation(string runtime, string clone, string outDir, string? model = null)
     {
         var quotedClone = CrossRuntimeReviewPaths.ShellQuote(clone);
         string Out(string file) => CrossRuntimeReviewPaths.ShellQuote(Path.Combine(outDir, file));
+        var modelFlag = string.IsNullOrEmpty(model) ? string.Empty : $" {ModelFlag(runtime, model)}";
 
         return runtime switch
         {
             Codex =>
-                $"codex exec -s read-only -C {quotedClone} --output-schema {Out(CrossRuntimeReviewFiles.Schema)} "
+                $"codex exec -s read-only -C {quotedClone}{modelFlag} --output-schema {Out(CrossRuntimeReviewFiles.Schema)} "
                 + $"-o {Out(CrossRuntimeReviewFiles.RawVerdict)} - < {Out(CrossRuntimeReviewFiles.Prompt)}",
             Claude =>
-                $"cd {quotedClone} && claude -p --permission-mode plan --disallowedTools Edit,Write,NotebookEdit --output-format json "
+                $"cd {quotedClone} && claude -p --permission-mode plan --disallowedTools Edit,Write,NotebookEdit --output-format json{modelFlag} "
                 + $"--json-schema \"$(cat {Out(CrossRuntimeReviewFiles.Schema)})\" < {Out(CrossRuntimeReviewFiles.Prompt)} "
                 + $"> {Out(CrossRuntimeReviewFiles.RawVerdict)}",
             Cursor =>
-                $"cursor-agent -p --mode ask --sandbox enabled --trust --workspace {quotedClone} --output-format json "
+                $"cursor-agent -p --mode ask --sandbox enabled --trust --workspace {quotedClone} --output-format json{modelFlag} "
                 + $"\"$(cat {Out(CrossRuntimeReviewFiles.Prompt)})\" > {Out(CrossRuntimeReviewFiles.RawVerdict)}",
             _ => throw new ArgumentOutOfRangeException(nameof(runtime), runtime, "Unsupported cross-runtime review runtime."),
         };
+    }
+
+    public static string ModelFlag(string runtime, string model) =>
+        runtime switch
+        {
+            Codex => $"-m {CrossRuntimeReviewPaths.ShellQuote(model)}",
+            Claude or Cursor => $"--model {CrossRuntimeReviewPaths.ShellQuote(model)}",
+            _ => throw new ArgumentOutOfRangeException(nameof(runtime), runtime, "Unsupported cross-runtime review runtime."),
+        };
+
+    public static bool TryValidateModel(string? model, out string error)
+    {
+        if (model is null)
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        if (model.Length == 0)
+        {
+            error = "model must not be empty.";
+            return false;
+        }
+
+        if (model[0] == '-')
+        {
+            error = "model must not start with '-'.";
+            return false;
+        }
+
+        foreach (var character in model)
+        {
+            if (char.GetUnicodeCategory(character) == System.Globalization.UnicodeCategory.Control)
+            {
+                error = "model must not contain Unicode control characters.";
+                return false;
+            }
+        }
+
+        error = string.Empty;
+        return true;
     }
 }
 
@@ -93,6 +135,7 @@ internal static class CrossRuntimeReviewCauses
     public const string PathInvalid = "cross-runtime-review-path-invalid";
     public const string OutDirNotEmpty = "cross-runtime-review-out-dir-not-empty";
     public const string PacketMissing = "cross-runtime-review-packet-missing";
+    public const string PacketInvalid = "cross-runtime-review-packet-invalid";
     public const string ArgumentInvalid = "cross-runtime-review-argument-invalid";
     public const string TeamUnresolved = "cross-runtime-review-team-unresolved";
     public const string UnitMismatch = "cross-runtime-review-unit-mismatch";
@@ -108,4 +151,10 @@ internal static class CrossRuntimeReviewCauses
     public const string RecordUnreadable = "cross-runtime-review-record-unreadable";
     public const string HeadRequired = "cross-runtime-review-head-required";
     public const string HeadStale = "cross-runtime-review-head-stale";
+    public const string ModelInvalid = "cross-runtime-review-model-invalid";
+    public const string DigestStale = "cross-runtime-review-digest-stale";
+    public const string DigestMismatch = "cross-runtime-review-digest-mismatch";
+    public const string DomainMismatch = "cross-runtime-review-domain-mismatch";
+    public const string TargetRepoMismatch = "cross-runtime-review-target-repo-mismatch";
+    public const string LookupInputChanged = "cross-runtime-review-lookup-input-changed";
 }

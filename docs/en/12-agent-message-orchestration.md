@@ -232,6 +232,42 @@ seat rather than acting as a security boundary.
 `[[cross_runtime_review.teams]]` and applies no gate. Refresh every intent-cli
 that transitions PRs for a declared team before relying on the gate.
 
+## Cross-runtime design review and model selection (G835 — preview-through-1.x)
+
+G835 extends the declared-team cross-runtime review surface in two ways:
+
+- **Design review gate.** For declared teams, a packet is reviewed before
+  `issue publish-flow --write` creates the GitHub issue. Records are bound to the
+  packet digest over `packet.yaml`, `github-body.md`, `review-context.md`, and
+  `implementation.md`. The canonical publish path refuses until that evidence is
+  complete. Other routes that create issues bypass this gate and are not part of
+  the canonical loop: `issue draft` / `issue create`, `issue publish-reviewed`,
+  `queue dispatch`, `bug implementation-issue`, and recovery from an existing
+  GitHub issue.
+- **Model selection.** `request` and `record` accept optional `--model <name>` for
+  both implementation and design kinds. The value is POSIX single-quoted in the
+  rendered invocation (`-m` for codex, `--model` for claude and cursor). Records
+  store `model` only when given.
+
+```text
+intent-cli review cross-runtime request --kind design --execution-unit <unit> --runtime codex|claude|cursor --out-dir <dir> [--clone <read-only-clone>] [--model <name>]
+intent-cli review cross-runtime record --kind design --execution-unit <unit> --packet-digest <sha256> --runtime <runtime> --runtime-version <text> --verdict-file <file> [--model <name>] [--write]
+intent-cli review cross-runtime status --kind design --execution-unit <unit>
+```
+
+Design records live under `.intent-cli/cross-runtime-reviews/design/<unit>/`.
+The design gate shares G834's approval rules with head replaced by digest, plus an
+epoch rule when a packet returns to an earlier digest. `issue publish-flow` on a
+gated `--repo` resolves domain and team from the packet and claim (not `--domain`),
+refuses `domain-mismatch` and `target-repo-mismatch` on the create path, and adds
+`cross_runtime_design_review` to the result JSON for declared teams and resolution
+refusals. Dry-run reports the gate; when durable artifacts already show a published
+issue, declared teams receive `idempotent-not-gated`.
+
+**Forward compatibility.** An intent-cli without G835 ignores design records and
+applies no publish-flow gate. Refresh every intent-cli that publishes packets for a
+declared team before relying on the design gate.
+
 ## Durable completion continuation chain (G695 — preview-through-1.x)
 
 G695 makes the completion-to-next-action boundary observable without changing

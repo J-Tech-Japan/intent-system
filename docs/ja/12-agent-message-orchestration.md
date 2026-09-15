@@ -213,6 +213,39 @@ seat のための guard であり security boundary ではありません。
 無視し、gate を適用しません。宣言済み team の PR を transition するすべての
 intent-cli を更新してから gate に依存してください。
 
+## cross-runtime design review と model 選択（G835 — preview-through-1.x）
+
+G835 は宣言済み team の cross-runtime review を次の 2 点で拡張します。
+
+- **design 査読 gate。** 宣言済み team では、packet は `issue publish-flow --write` が
+  GitHub issue を作る前に査読されます。record は `packet.yaml`、`github-body.md`、
+  `review-context.md`、`implementation.md` の packet digest に束縛されます。canonical
+  publish path は evidence が揃うまで拒否します。`issue draft` / `issue create`、
+  `issue publish-reviewed`、`queue dispatch`、`bug implementation-issue`、既存 GitHub
+  issue からの recovery はこの gate を通らず、canonical loop にも含まれません。
+- **model 選択。** `request` と `record` は implementation / design の両 kind で任意の
+  `--model <name>` を受け付けます。値は rendered invocation 内で POSIX の単一引用符で
+  囲まれます（codex は `-m`、claude / cursor は `--model`）。record は `--model` を渡したときだけ
+  `model` を保存します。
+
+```text
+intent-cli review cross-runtime request --kind design --execution-unit <unit> --runtime codex|claude|cursor --out-dir <dir> [--clone <read-only-clone>] [--model <name>]
+intent-cli review cross-runtime record --kind design --execution-unit <unit> --packet-digest <sha256> --runtime <runtime> --runtime-version <text> --verdict-file <file> [--model <name>] [--write]
+intent-cli review cross-runtime status --kind design --execution-unit <unit>
+```
+
+design record は `.intent-cli/cross-runtime-reviews/design/<unit>/` に保存されます。
+design gate は G834 の approve 規則を digest キーで共有し、packet が以前の digest に戻る
+ときは epoch 規則を加えます。gated `--repo` の `issue publish-flow` は domain / team を
+packet と claim から解決し（`--domain` ではない）、create path で `domain-mismatch` と
+`target-repo-mismatch` を拒否し、宣言済み team と resolution refusal では結果 JSON に
+`cross_runtime_design_review` を載せます。dry-run は gate を報告し、永続 artifact が
+既に published issue を示すとき、宣言済み team には `idempotent-not-gated` を返します。
+
+**前方互換性。** G835 を含まない intent-cli は design record を無視し、publish-flow gate を
+適用しません。宣言済み team の packet を publish する intent-cli を更新してから design
+gate に依存してください。
+
 ## completion continuation chain の永続記録（G695 — preview-through-1.x）
 
 G695 は、誰が実行権限を持つかを変更せずに completion から次の action までの境界を観測可能にします。

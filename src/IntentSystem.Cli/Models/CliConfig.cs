@@ -191,6 +191,45 @@ internal sealed record CrossRuntimeReviewConfig
     public bool IsGatedRepo(string? repo) =>
         !string.IsNullOrWhiteSpace(repo)
         && Teams.Any(entry => entry.Repos.Contains(repo.Trim(), StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// G835: when the packet's <c>&lt;domain&gt;/&lt;team&gt;</c> is undeclared but the
+    /// claim team is declared under another domain whose <c>repos</c> include
+    /// <paramref name="repo"/>.
+    /// </summary>
+    public bool TryFindDeclaredForTeamAndRepo(
+        string team,
+        string repo,
+        out CrossRuntimeReviewTeamDeclaration declaration,
+        out string declaredDomain)
+    {
+        declaration = null!;
+        declaredDomain = string.Empty;
+        if (string.IsNullOrWhiteSpace(team) || string.IsNullOrWhiteSpace(repo))
+        {
+            return false;
+        }
+
+        foreach (var entry in Teams)
+        {
+            var segments = entry.Team.Split('/');
+            if (segments.Length != 2 || !string.Equals(segments[1], team, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!entry.Repos.Contains(repo.Trim(), StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            declaration = entry;
+            declaredDomain = segments[0];
+            return true;
+        }
+
+        return false;
+    }
 }
 
 internal sealed record CrossRuntimeReviewTeamDeclaration

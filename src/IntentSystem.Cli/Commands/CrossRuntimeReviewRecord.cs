@@ -18,6 +18,7 @@ internal sealed record CrossRuntimeReviewRecord
 {
     public const string ArtifactKindValue = "cross-runtime-review-record";
     public const string KindImplementation = "implementation";
+    public const string KindDesign = "design";
     public const string RelationSameRuntime = "same-runtime";
     public const string RelationCrossRuntime = "cross-runtime";
 
@@ -60,6 +61,10 @@ internal sealed record CrossRuntimeReviewRecord
     /// </summary>
     [JsonPropertyName("relation")]
     public required string Relation { get; init; }
+
+    [JsonPropertyName("model")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Model { get; init; }
 
     [JsonPropertyName("verdict")]
     public required string Verdict { get; init; }
@@ -111,7 +116,7 @@ internal static class CrossRuntimeReviewStore
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
     public static string Sha256Hex(byte[] bytes) =>
@@ -138,14 +143,27 @@ internal static class CrossRuntimeReviewStore
     /// first so a record never names a copy that does not exist; a raw copy this
     /// call created is removed again when its record cannot be created.
     /// </summary>
-    public static CrossRuntimeReviewWriteResult Write(string repoRoot, CrossRuntimeReviewRecord record, byte[] rawVerdict)
+    public static CrossRuntimeReviewWriteResult Write(string repoRoot, CrossRuntimeReviewRecord record, byte[] rawVerdict) =>
+        WriteCreateNew(
+            CrossRuntimeReviewPaths.PrDirectory(repoRoot, record.Repo, record.Pr),
+            CrossRuntimeReviewPaths.PrRelativeDirectory(record.Repo, record.Pr),
+            FileStem(record),
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(Serialize(record)),
+            rawVerdict,
+            RecordRelativePath(record),
+            RawRelativePath(record));
+
+    internal static CrossRuntimeReviewWriteResult WriteCreateNew(
+        string directory,
+        string relativeDirectory,
+        string stem,
+        byte[] recordBytes,
+        byte[] rawVerdict,
+        string recordRelative,
+        string rawRelative)
     {
-        var directory = CrossRuntimeReviewPaths.PrDirectory(repoRoot, record.Repo, record.Pr);
-        var stem = FileStem(record);
         var recordPath = Path.Combine(directory, stem + RecordExtension);
         var rawPath = Path.Combine(directory, stem + RawCopySuffix);
-        var recordRelative = RecordRelativePath(record);
-        var rawRelative = RawRelativePath(record);
 
         try
         {
@@ -159,7 +177,7 @@ internal static class CrossRuntimeReviewStore
             CreateNew(rawPath, rawVerdict);
             try
             {
-                CreateNew(recordPath, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(Serialize(record)));
+                CreateNew(recordPath, recordBytes);
             }
             catch
             {

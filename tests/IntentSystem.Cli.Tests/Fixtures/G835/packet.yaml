@@ -1,0 +1,4 @@
+implementation_issue_packet:
+  issue_title: "G835 fixture"
+  domain: intent-cli
+  target_repo: J-Tech-Japan/intent-system

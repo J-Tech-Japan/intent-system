@@ -19,6 +19,7 @@ internal static class CrossRuntimeReviewVerdict
 
     public const string FieldVerdict = "verdict";
     public const string FieldHeadSha = "head_sha";
+    public const string FieldPacketDigest = "packet_digest";
     public const string FieldBlockingFindings = "blocking_findings";
     public const string FieldNotes = "notes";
     public const string FieldFile = "file";
@@ -27,6 +28,7 @@ internal static class CrossRuntimeReviewVerdict
 
     public static readonly IReadOnlyList<string> VerdictValues = [Approve, RequestChanges];
     public static readonly IReadOnlyList<string> TopLevelFields = [FieldVerdict, FieldHeadSha, FieldBlockingFindings, FieldNotes];
+    public static readonly IReadOnlyList<string> DesignTopLevelFields = [FieldVerdict, FieldPacketDigest, FieldBlockingFindings, FieldNotes];
     public static readonly IReadOnlyList<string> FindingFields = [FieldFile, FieldLine, FieldScenario];
 
     /// <summary>
@@ -37,8 +39,11 @@ internal static class CrossRuntimeReviewVerdict
     /// <c>--json-schema</c> ("no schema with key or ref"), measured 2026-09-14.
     /// </summary>
     public static string SchemaJson { get; } = BuildSchemaJson();
+    public static string DesignSchemaJson { get; } = BuildDesignSchemaJson();
 
-    private static string BuildSchemaJson()
+    private static string BuildDesignSchemaJson() => BuildSchemaJson(DesignTopLevelFields, FieldPacketDigest);
+
+    private static string BuildSchemaJson(IReadOnlyList<string> topLevelFields, string keyField)
     {
         var finding = new Dictionary<string, object>
         {
@@ -57,11 +62,11 @@ internal static class CrossRuntimeReviewVerdict
         {
             ["type"] = "object",
             ["additionalProperties"] = false,
-            ["required"] = TopLevelFields,
+            ["required"] = topLevelFields,
             ["properties"] = new Dictionary<string, object>
             {
                 [FieldVerdict] = new Dictionary<string, object> { ["type"] = "string", ["enum"] = VerdictValues },
-                [FieldHeadSha] = new Dictionary<string, object> { ["type"] = "string" },
+                [keyField] = new Dictionary<string, object> { ["type"] = "string" },
                 [FieldBlockingFindings] = new Dictionary<string, object> { ["type"] = "array", ["items"] = finding },
                 [FieldNotes] = new Dictionary<string, object>
                 {
@@ -73,6 +78,15 @@ internal static class CrossRuntimeReviewVerdict
 
         return JsonSerializer.Serialize(schema, new JsonSerializerOptions { WriteIndented = true }) + "\n";
     }
+
+    private static string BuildSchemaJson() => BuildSchemaJson(TopLevelFields, FieldHeadSha);
+
+    public static bool TryParseDesign(
+        string runtime,
+        string content,
+        out CrossRuntimeReviewDesignVerdictValue verdict,
+        out string error) =>
+        TryParseKeyed(runtime, content, TryValidateDesign, out verdict, out error);
 
     /// <summary>
     /// Extracts the verdict object from what <paramref name="runtime"/> wrote.
@@ -86,9 +100,17 @@ internal static class CrossRuntimeReviewVerdict
         string runtime,
         string content,
         out CrossRuntimeReviewVerdictValue verdict,
+        out string error) =>
+        TryParseKeyed(runtime, content, TryValidate, out verdict, out error);
+
+    private static bool TryParseKeyed<TVerdict>(
+        string runtime,
+        string content,
+        TryValidateDelegate<TVerdict> validate,
+        out TVerdict verdict,
         out string error)
     {
-        verdict = null!;
+        verdict = default!;
         JsonDocument document;
         try
         {
@@ -112,7 +134,7 @@ internal static class CrossRuntimeReviewVerdict
             switch (runtime)
             {
                 case CrossRuntimeReviewRuntimes.Codex:
-                    return TryValidate(root, out verdict, out error);
+                    return validate(root, out verdict, out error);
 
                 case CrossRuntimeReviewRuntimes.Claude:
                 {
@@ -128,7 +150,7 @@ internal static class CrossRuntimeReviewVerdict
                         return false;
                     }
 
-                    return TryValidate(structured, out verdict, out error);
+                    return validate(structured, out verdict, out error);
                 }
 
                 case CrossRuntimeReviewRuntimes.Cursor:
@@ -158,7 +180,7 @@ internal static class CrossRuntimeReviewVerdict
                             return false;
                         }
 
-                        return TryValidate(inner.RootElement, out verdict, out error);
+                        return validate(inner.RootElement, out verdict, out error);
                     }
                 }
 
@@ -168,6 +190,8 @@ internal static class CrossRuntimeReviewVerdict
             }
         }
     }
+
+    private delegate bool TryValidateDelegate<TVerdict>(JsonElement element, out TVerdict verdict, out string error);
 
     /// <summary>
     /// cursor-agent 2026.09.10 has no schema flag, and its measured
@@ -249,6 +273,61 @@ internal static class CrossRuntimeReviewVerdict
     /// </summary>
     public static bool TryValidate(JsonElement element, out CrossRuntimeReviewVerdictValue verdict, out string error)
     {
+        if (!TryValidateCommon(element, TopLevelFields, FieldHeadSha, out var common, out error))
+        {
+            verdict = null!;
+            return false;
+        }
+
+        verdict = new CrossRuntimeReviewVerdictValue
+        {
+            Verdict = common.Verdict,
+            HeadSha = common.Key,
+            BlockingFindings = common.BlockingFindings,
+            Notes = common.Notes,
+        };
+        return true;
+    }
+
+    public static bool TryValidateDesign(JsonElement element, out CrossRuntimeReviewDesignVerdictValue verdict, out string error)
+    {
+        if (!TryValidateCommon(element, DesignTopLevelFields, FieldPacketDigest, out var common, out error))
+        {
+            verdict = null!;
+            return false;
+        }
+
+        var digest = common.Key;
+        if (digest.Length != 64 || !digest.All(Uri.IsHexDigit))
+        {
+            error = $"'{FieldPacketDigest}' must be a 64-character hexadecimal SHA-256.";
+            verdict = null!;
+            return false;
+        }
+
+        verdict = new CrossRuntimeReviewDesignVerdictValue
+        {
+            Verdict = common.Verdict,
+            PacketDigest = digest.ToLowerInvariant(),
+            BlockingFindings = common.BlockingFindings,
+            Notes = common.Notes,
+        };
+        return true;
+    }
+
+    private sealed record ValidatedVerdictCommon(
+        string Verdict,
+        string Key,
+        IReadOnlyList<CrossRuntimeReviewFinding> BlockingFindings,
+        IReadOnlyList<string> Notes);
+
+    private static bool TryValidateCommon(
+        JsonElement element,
+        IReadOnlyList<string> topLevelFields,
+        string keyField,
+        out ValidatedVerdictCommon verdict,
+        out string error)
+    {
         verdict = null!;
         if (element.ValueKind != JsonValueKind.Object)
         {
@@ -256,7 +335,7 @@ internal static class CrossRuntimeReviewVerdict
             return false;
         }
 
-        if (!TryCheckFields(element, TopLevelFields, "verdict", out error))
+        if (!TryCheckFields(element, topLevelFields, "verdict", out error))
         {
             return false;
         }
@@ -269,10 +348,10 @@ internal static class CrossRuntimeReviewVerdict
             return false;
         }
 
-        var headElement = element.GetProperty(FieldHeadSha);
-        if (headElement.ValueKind != JsonValueKind.String)
+        var keyElement = element.GetProperty(keyField);
+        if (keyElement.ValueKind != JsonValueKind.String)
         {
-            error = $"'{FieldHeadSha}' must be a string.";
+            error = $"'{keyField}' must be a string.";
             return false;
         }
 
@@ -361,13 +440,7 @@ internal static class CrossRuntimeReviewVerdict
             return false;
         }
 
-        verdict = new CrossRuntimeReviewVerdictValue
-        {
-            Verdict = value,
-            HeadSha = headElement.GetString()!,
-            BlockingFindings = findings,
-            Notes = notes,
-        };
+        verdict = new ValidatedVerdictCommon(value, keyElement.GetString()!, findings, notes);
         error = string.Empty;
         return true;
     }
@@ -402,6 +475,17 @@ internal sealed record CrossRuntimeReviewVerdictValue
     public required string Verdict { get; init; }
 
     public required string HeadSha { get; init; }
+
+    public required IReadOnlyList<CrossRuntimeReviewFinding> BlockingFindings { get; init; }
+
+    public required IReadOnlyList<string> Notes { get; init; }
+}
+
+internal sealed record CrossRuntimeReviewDesignVerdictValue
+{
+    public required string Verdict { get; init; }
+
+    public required string PacketDigest { get; init; }
 
     public required IReadOnlyList<CrossRuntimeReviewFinding> BlockingFindings { get; init; }
 
