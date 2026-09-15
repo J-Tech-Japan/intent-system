@@ -36,11 +36,17 @@ internal static class GuideOrchestratorThreadCommand
     internal const string ModelRolesPhrase =
         "architect (design) / orchestrator (orchestration) / builder (implementation) / reviewer (review)";
 
-    /// <summary>G832: the optional Steward relay seat that turns the four-thread model into the five-thread model.</summary>
-    /// <summary>G832: the agmsg-mode summary names the G829 deprecation without repeating the full notice rendered in the preference sentence.</summary>
+    /// <summary>
+    /// G832: the agmsg-mode summary names the G829 deprecation without repeating
+    /// the full notice (the preference sentence already renders it, and G570
+    /// requires descriptive agmsg clauses surviving in herdr-only output to be
+    /// context-covered). It points to the session-layer section, whose command
+    /// carries the scope, instead of printing an unscoped command.
+    /// </summary>
     internal const string AgmsgModeDeprecationSentence =
-        "This transport is deprecated (G829): it keeps working, and `intent-cli session-layer set --mode herdr-only --write` moves the team to the preferred transport.";
+        "This transport is deprecated (G829) but keeps working; the session-layer lines at the top of this guide give the scoped `session-layer set` command that records herdr-only.";
 
+    /// <summary>G832: the optional Steward relay seat that turns the four-thread model into the five-thread model.</summary>
     internal const string StewardShapeSentence =
         "An optional Steward relay seat, which is not a judgment seat, makes it the five-thread model (see `intent-cli guide steward-thread`).";
 
@@ -5346,8 +5352,9 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine(UsageLine);
         writer.WriteLine();
         writer.WriteLine("Renders paste-ready prompts for the PRIMARY four-thread orchestrator model over the selected session transport");
-        writer.WriteLine("(architect/orchestrator/builder/reviewer; legacy names design/orchestration/implementation/review are accepted)");
-        writer.WriteLine("plus the builder/reviewer threads it delegates to; an optional Steward relay seat makes it the five-thread model.");
+        writer.WriteLine("(architect/orchestrator/builder/reviewer; legacy names design/orchestration/");
+        writer.WriteLine("implementation/review are accepted) plus the builder/reviewer threads it delegates to;");
+        writer.WriteLine("an optional Steward relay seat makes it the five-thread model.");
         writer.WriteLine("The session layer carries signals only; intent-cli and GitHub remain authoritative.");
         writer.WriteLine("Timer-loop mode remains fully supported as the simpler alternative and is not replaced.");
         writer.WriteLine();

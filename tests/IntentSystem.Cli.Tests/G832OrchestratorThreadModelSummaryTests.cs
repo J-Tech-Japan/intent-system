@@ -76,7 +76,9 @@ public sealed class G832OrchestratorThreadModelSummaryTests : IDisposable
         Assert.Equal(0, GuideOrchestratorThreadCommand.Execute(context, ["--help"], writer));
         var help = writer.ToString();
         Assert.Contains("architect/orchestrator/builder/reviewer", help, StringComparison.Ordinal);
-        Assert.Contains("design/orchestration/implementation/review", help, StringComparison.Ordinal);
+        Assert.Contains("design/orchestration/", help, StringComparison.Ordinal);
+        Assert.Contains("implementation/review are accepted", help, StringComparison.Ordinal);
+        Assert.DoesNotContain("session-layer set --mode herdr-only --write", GuideOrchestratorThreadCommand.AgmsgModeDeprecationSentence, StringComparison.Ordinal);
         Assert.Contains("optional Steward relay seat", help, StringComparison.Ordinal);
         Assert.DoesNotContain("agmsg is a signal layer only", help, StringComparison.Ordinal);
     }
