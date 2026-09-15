@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G834: <c>intent-cli review cross-runtime request|record|status</c> — one
+/// G834/G835: <c>intent-cli review cross-runtime request|record|status</c> — one
 /// review-group handler that dispatches its three subcommands itself.
 /// <list type="bullet">
 /// <item><c>request</c> renders <c>prompt.md</c>, <c>verdict.schema.json</c>, and
@@ -27,13 +27,13 @@ internal static class ReviewCrossRuntimeCommand
     private const string FormatMarkdown = "markdown";
 
     internal const string RequestUsage =
-        "Usage: intent-cli review cross-runtime request --repo <owner/repo> --pr <n> --head-sha <40-hex> --execution-unit <unit> --runtime codex|claude|cursor --clone <read-only-clone-path> --out-dir <dir> [--format json|markdown]";
+        "Usage: intent-cli review cross-runtime request (--repo <owner/repo> --pr <n> --head-sha <40-hex> --execution-unit <unit> --runtime codex|claude|cursor --clone <read-only-clone-path> --out-dir <dir> | --kind design --execution-unit <unit> --runtime codex|claude|cursor --out-dir <dir> [--clone <read-only-clone>]) [--model <name>] [--format json|markdown]";
 
     internal const string RecordUsage =
-        "Usage: intent-cli review cross-runtime record --repo <owner/repo> --pr <n> --head-sha <40-hex> --execution-unit <unit> --kind implementation --runtime codex|claude|cursor --runtime-version <text> --verdict-file <path> [--comment-out <path>] [--write] [--format json|markdown]";
+        "Usage: intent-cli review cross-runtime record (--repo <owner/repo> --pr <n> --head-sha <40-hex> --execution-unit <unit> --kind implementation | --kind design --execution-unit <unit> --packet-digest <sha256>) --runtime codex|claude|cursor --runtime-version <text> --verdict-file <path> [--model <name>] [--comment-out <path>] [--write] [--format json|markdown]";
 
     internal const string StatusUsage =
-        "Usage: intent-cli review cross-runtime status --repo <owner/repo> --pr <n> --head-sha <40-hex> --execution-unit <unit> [--format json|markdown]";
+        "Usage: intent-cli review cross-runtime status (--repo <owner/repo> --pr <n> --head-sha <40-hex> --execution-unit <unit> | --kind design --execution-unit <unit>) [--format json|markdown]";
 
     internal const string NoExecutionBoundary =
         "intent-cli renders text and records evidence only; the seat runs the reviewer and posts with gh. intent-cli does not start, launch, or manage any agent or provider process.";
@@ -61,6 +61,12 @@ internal static class ReviewCrossRuntimeCommand
     {
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+    };
+
+    private static readonly JsonSerializerOptions RequestJsonOptions = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
@@ -105,8 +111,32 @@ internal static class ReviewCrossRuntimeCommand
             return 1;
         }
 
+        var kind = ResolveKind(options, hasPrArguments: options.ContainsKey("--repo"));
+        if (string.Equals(kind, CrossRuntimeReviewRecord.KindDesign, StringComparison.Ordinal))
+        {
+            return ExecuteDesignRequest(context, options, writer, format);
+        }
+
+        return ExecuteImplementationRequest(context, options, writer, format);
+    }
+
+    private static int ExecuteImplementationRequest(
+        CliContext context,
+        Dictionary<string, string> options,
+        TextWriter writer,
+        string format)
+    {
+        if (options.TryGetValue("--kind", out var explicitKind)
+            && !string.Equals(explicitKind, CrossRuntimeReviewRecord.KindImplementation, StringComparison.Ordinal))
+        {
+            return Refuse(writer, format, "request", CrossRuntimeReviewCauses.ArgumentInvalid,
+                $"--kind must be '{CrossRuntimeReviewRecord.KindImplementation}' when PR arguments are given (got '{explicitKind}').",
+                $"pass --kind {CrossRuntimeReviewRecord.KindImplementation} or omit --kind.");
+        }
+
         if (!TryCommonArguments(options, writer, format, "request", out var repo, out var pr, out var head, out var unit)
-            || !TryRuntime(options, writer, format, "request", out var runtime))
+            || !TryRuntime(options, writer, format, "request", out var runtime)
+            || !TryOptionalModel(options, writer, format, "request", out var model))
         {
             return 1;
         }
@@ -164,7 +194,7 @@ internal static class ReviewCrossRuntimeCommand
 
         var prompt = RenderPrompt(repo, pr, head, unit, clone, body, reviewContext, implementation);
         var invocation = CrossRuntimeReviewRuntimes.InvocationLabel(runtime) + "\n"
-            + CrossRuntimeReviewRuntimes.RenderInvocation(runtime, clone, outDir) + "\n";
+            + CrossRuntimeReviewRuntimes.RenderInvocation(runtime, clone, outDir, model) + "\n";
 
         var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
         Directory.CreateDirectory(outDir);
@@ -176,11 +206,13 @@ internal static class ReviewCrossRuntimeCommand
         {
             Command = $"{CommandName} request",
             Outcome = "rendered",
+            Kind = CrossRuntimeReviewRecord.KindImplementation,
             Repo = repo,
             Pr = pr,
             HeadSha = head,
             ExecutionUnit = unit,
             Runtime = runtime,
+            Model = model,
             OutDir = outDir,
             Files = CrossRuntimeReviewFiles.Rendered.Select(name => Path.Combine(outDir, name)).ToArray(),
             Invocation = invocation.TrimEnd('\n'),
@@ -191,19 +223,148 @@ internal static class ReviewCrossRuntimeCommand
             Terms = TermsNotice,
         };
 
+        WriteRequestResult(writer, format, result);
+        return 0;
+    }
+
+    private static int ExecuteDesignRequest(
+        CliContext context,
+        Dictionary<string, string> options,
+        TextWriter writer,
+        string format)
+    {
+        foreach (var forbidden in new[] { "--repo", "--pr", "--head-sha" })
+        {
+            if (options.ContainsKey(forbidden))
+            {
+                return Refuse(writer, format, "request", CrossRuntimeReviewCauses.ArgumentInvalid,
+                    $"design review refuses {forbidden}; pass --kind design with --execution-unit, --runtime, and --out-dir only.",
+                    "omit PR arguments for design review request.");
+            }
+        }
+
+        if (!TryRequired(options, "--execution-unit", writer, format, "request", out var unit)
+            || !TryRuntime(options, writer, format, "request", out var runtime)
+            || !TryRequired(options, "--out-dir", writer, format, "request", out var outDirArgument)
+            || !TryOptionalModel(options, writer, format, "request", out var model))
+        {
+            return 1;
+        }
+
+        if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(unit, out var unitError))
+        {
+            return Refuse(writer, format, "request", CrossRuntimeReviewCauses.ArgumentInvalid, $"--execution-unit is invalid: {unitError}", "pass the canonical execution unit id.");
+        }
+
+        options.TryGetValue("--clone", out var cloneArgument);
+        foreach (var (flag, value) in new[] { ("--clone", cloneArgument), ("--out-dir", outDirArgument) }
+                     .Where(pair => !string.IsNullOrWhiteSpace(pair.Item2)))
+        {
+            if (!CrossRuntimeReviewPaths.IsRenderablePath(value!))
+            {
+                return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
+                    $"{flag} contains a newline or NUL and cannot be rendered as one shell argument.",
+                    $"pass a {flag} path without newline or NUL characters.");
+            }
+        }
+
+        var outDir = ResolvePath(context, outDirArgument);
+        var workspace = string.IsNullOrWhiteSpace(cloneArgument)
+            ? outDir
+            : ResolvePath(context, cloneArgument!);
+        var packetDirectory = CrossRuntimeReviewPaths.PacketDirectory(context.RepoRoot, unit);
+        if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out var missingPath))
+        {
+            return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PacketMissing,
+                $"packet file is missing: {missingPath}; a design reviewer cannot review against an incomplete packet.",
+                $"run from the host root that holds `.intent-cli/issues/{unit}/` with packet.yaml, github-body.md, review-context.md, and implementation.md.");
+        }
+
+        var digest = CrossRuntimeDesignReviewDigest.Compute(packet);
+        if (File.Exists(outDir))
+        {
+            return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
+                $"--out-dir '{outDir}' is a file.", "pass a new or empty directory.");
+        }
+
+        if (Directory.Exists(outDir))
+        {
+            var foreign = Directory.EnumerateFileSystemEntries(outDir)
+                .Select(Path.GetFileName)
+                .Where(name => !CrossRuntimeReviewFiles.Rendered.Contains(name, StringComparer.Ordinal))
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            if (foreign.Length > 0)
+            {
+                return Refuse(writer, format, "request", CrossRuntimeReviewCauses.OutDirNotEmpty,
+                    $"--out-dir '{outDir}' contains other entries: {string.Join(", ", foreign)}.",
+                    "pass a new or empty directory so a stale verdict can never be mixed with this request.");
+            }
+        }
+
+        var prompt = RenderDesignPrompt(unit, digest, packet, !string.IsNullOrWhiteSpace(cloneArgument));
+        var invocation = CrossRuntimeReviewRuntimes.InvocationLabel(runtime) + "\n"
+            + CrossRuntimeReviewRuntimes.RenderInvocation(runtime, workspace, outDir, model) + "\n";
+
+        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        Directory.CreateDirectory(outDir);
+        File.WriteAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Prompt), prompt, utf8);
+        File.WriteAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Schema), CrossRuntimeReviewVerdict.DesignSchemaJson, utf8);
+        File.WriteAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Invocation), invocation, utf8);
+
+        var result = new CrossRuntimeReviewRequestResult
+        {
+            Command = $"{CommandName} request",
+            Outcome = "rendered",
+            Kind = CrossRuntimeReviewRecord.KindDesign,
+            ExecutionUnit = unit,
+            PacketDigest = digest,
+            Runtime = runtime,
+            Model = model,
+            OutDir = outDir,
+            Workspace = workspace,
+            Files = CrossRuntimeReviewFiles.Rendered.Select(name => Path.Combine(outDir, name)).ToArray(),
+            Invocation = invocation.TrimEnd('\n'),
+            RunBy = "seat",
+            RawVerdictFile = Path.Combine(outDir, CrossRuntimeReviewFiles.RawVerdict),
+            ReadOnlyEnforcement = CrossRuntimeReviewRuntimes.ReadOnlyEnforcement[runtime],
+            NoExecutionBoundary = NoExecutionBoundary,
+            Terms = TermsNotice,
+        };
+
+        WriteRequestResult(writer, format, result);
+        return 0;
+    }
+
+    private static void WriteRequestResult(TextWriter writer, string format, CrossRuntimeReviewRequestResult result)
+    {
         if (format == FormatJson)
         {
-            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            writer.WriteLine(JsonSerializer.Serialize(result, RequestJsonOptions));
         }
         else
         {
-            writer.WriteLine("# Cross-runtime review request (G834)");
+            writer.WriteLine($"# Cross-runtime review request ({(string.Equals(result.Kind, CrossRuntimeReviewRecord.KindDesign, StringComparison.Ordinal) ? "G835 design" : "G834")})");
             writer.WriteLine();
-            writer.WriteLine($"- repo: {result.Repo}");
-            writer.WriteLine($"- pr: {result.Pr.ToString(CultureInfo.InvariantCulture)}");
-            writer.WriteLine($"- head sha: {result.HeadSha}");
+            if (result.Repo is not null)
+            {
+                writer.WriteLine($"- repo: {result.Repo}");
+                writer.WriteLine($"- pr: {result.Pr!.Value.ToString(CultureInfo.InvariantCulture)}");
+                writer.WriteLine($"- head sha: {result.HeadSha}");
+            }
+
+            if (result.PacketDigest is not null)
+            {
+                writer.WriteLine($"- packet digest: {result.PacketDigest}");
+            }
+
             writer.WriteLine($"- execution unit: {result.ExecutionUnit}");
             writer.WriteLine($"- runtime: {result.Runtime}");
+            if (result.Model is not null)
+            {
+                writer.WriteLine($"- model: {result.Model}");
+            }
+
             foreach (var file in result.Files)
             {
                 writer.WriteLine($"- rendered: {file}");
@@ -220,8 +381,6 @@ internal static class ReviewCrossRuntimeCommand
             writer.WriteLine(result.NoExecutionBoundary);
             writer.WriteLine(result.Terms);
         }
-
-        return 0;
     }
 
     internal static string RenderPrompt(
@@ -265,6 +424,56 @@ internal static class ReviewCrossRuntimeCommand
         return builder.ToString();
     }
 
+    internal static string RenderDesignPrompt(
+        string unit,
+        string packetDigest,
+        CrossRuntimeDesignReviewDigest.PacketBytes packet,
+        bool cloneGiven)
+    {
+        var builder = new StringBuilder();
+        builder.Append($"# Design review: {unit}\n\n");
+        builder.Append("You are an independent design reviewer. Judge the packet against the operator decisions it names, ");
+        builder.Append("the truth of the \"Current Observed State\" claims");
+        if (cloneGiven)
+        {
+            builder.Append(" (check these in the read-only clone when you can run commands)");
+        }
+
+        builder.Append(", gate soundness, testability, and the no-launch rule.\n\n");
+        builder.Append($"## Packet digest\n\n`{packetDigest}`\n\n");
+        builder.Append("Echo this exact digest in your verdict as `packet_digest`.\n\n");
+        builder.Append("## Packet files\n\n");
+        AppendEmbeddedFile(builder, CrossRuntimeDesignReviewDigest.PacketFileNames[0], packet.PacketYaml);
+        AppendEmbeddedFile(builder, CrossRuntimeDesignReviewDigest.PacketFileNames[1], packet.GithubBody);
+        AppendEmbeddedFile(builder, CrossRuntimeDesignReviewDigest.PacketFileNames[2], packet.ReviewContext);
+        AppendEmbeddedFile(builder, CrossRuntimeDesignReviewDigest.PacketFileNames[3], packet.Implementation);
+        builder.Append("## Output\n\n");
+        builder.Append("Return only one JSON object that matches the schema below, with no text before or after it.\n\n");
+        builder.Append($"- \"packet_digest\": echo the packet digest you reviewed ({packetDigest}).\n");
+        builder.Append("- \"verdict\": \"approve\" only when there is no blocking finding; \"blocking_findings\" must then be [].\n");
+        builder.Append("- \"verdict\": \"request-changes\" when there is at least one blocking finding.\n");
+        builder.Append("- \"notes\": non-blocking observations; may be [].\n\n");
+        builder.Append("```json\n");
+        builder.Append(CrossRuntimeReviewVerdict.DesignSchemaJson);
+        builder.Append("```\n");
+        return builder.ToString();
+    }
+
+    private static void AppendEmbeddedFile(StringBuilder builder, string fileName, byte[] bytes)
+    {
+        builder.Append($"### {fileName}\n\n");
+        builder.Append("```");
+        builder.Append(fileName);
+        builder.Append('\n');
+        builder.Append(new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(bytes));
+        if (bytes.Length == 0 || bytes[^1] != (byte)'\n')
+        {
+            builder.Append('\n');
+        }
+
+        builder.Append("```\n\n");
+    }
+
     // ── record ─────────────────────────────────────────────────────────
 
     internal static int ExecuteRecord(CliContext context, string[] args, TextWriter writer)
@@ -285,20 +494,36 @@ internal static class ReviewCrossRuntimeCommand
             return 1;
         }
 
-        if (!TryCommonArguments(options, writer, format, "record", out var repo, out var pr, out var head, out var unit)
-            || !TryRuntime(options, writer, format, "record", out var runtime)
-            || !TryRequired(options, "--kind", writer, format, "record", out var kind)
-            || !TryRequired(options, "--runtime-version", writer, format, "record", out var runtimeVersion)
-            || !TryRequired(options, "--verdict-file", writer, format, "record", out var verdictFileArgument))
+        var kind = ResolveKind(options, hasPrArguments: options.ContainsKey("--repo"));
+        if (string.Equals(kind, CrossRuntimeReviewRecord.KindDesign, StringComparison.Ordinal))
         {
-            return 1;
+            return ExecuteDesignRecord(context, options, writer, format);
         }
 
-        if (!string.Equals(kind, CrossRuntimeReviewRecord.KindImplementation, StringComparison.Ordinal))
+        return ExecuteImplementationRecord(context, options, writer, format);
+    }
+
+    private static int ExecuteImplementationRecord(
+        CliContext context,
+        Dictionary<string, string> options,
+        TextWriter writer,
+        string format)
+    {
+        if (options.TryGetValue("--kind", out var explicitKind)
+            && !string.Equals(explicitKind, CrossRuntimeReviewRecord.KindImplementation, StringComparison.Ordinal))
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.ArgumentInvalid,
-                $"--kind must be '{CrossRuntimeReviewRecord.KindImplementation}' (got '{kind}'); design review is G835.",
-                $"pass --kind {CrossRuntimeReviewRecord.KindImplementation}.");
+                $"--kind must be '{CrossRuntimeReviewRecord.KindImplementation}' when PR arguments are given (got '{explicitKind}').",
+                $"pass --kind {CrossRuntimeReviewRecord.KindImplementation} or omit --kind.");
+        }
+
+        if (!TryCommonArguments(options, writer, format, "record", out var repo, out var pr, out var head, out var unit)
+            || !TryRuntime(options, writer, format, "record", out var runtime)
+            || !TryRequired(options, "--runtime-version", writer, format, "record", out var runtimeVersion)
+            || !TryRequired(options, "--verdict-file", writer, format, "record", out var verdictFileArgument)
+            || !TryOptionalModel(options, writer, format, "record", out var model))
+        {
+            return 1;
         }
 
         var write = options.ContainsKey("--write");
@@ -380,11 +605,12 @@ internal static class ReviewCrossRuntimeCommand
             ExecutionUnit = resolution.ExecutionUnit!,
             Domain = resolution.Domain!,
             Team = resolution.Team!,
-            Kind = kind,
+            Kind = CrossRuntimeReviewRecord.KindImplementation,
             Runtime = runtime,
             RuntimeVersion = runtimeVersion,
             ConductorRuntime = declaration.ConductorRuntime,
             Relation = CrossRuntimeReviewRecord.RelationFor(runtime, declaration.ConductorRuntime),
+            Model = model,
             Verdict = verdict.Verdict,
             BlockingFindings = verdict.BlockingFindings,
             Notes = verdict.Notes,
@@ -464,6 +690,199 @@ internal static class ReviewCrossRuntimeCommand
         return 0;
     }
 
+    private static int ExecuteDesignRecord(
+        CliContext context,
+        Dictionary<string, string> options,
+        TextWriter writer,
+        string format)
+    {
+        foreach (var forbidden in new[] { "--repo", "--pr", "--head-sha" })
+        {
+            if (options.ContainsKey(forbidden))
+            {
+                return Refuse(writer, format, "record", CrossRuntimeReviewCauses.ArgumentInvalid,
+                    $"design review refuses {forbidden}; pass --kind design with --execution-unit and --packet-digest.",
+                    "omit PR arguments for design review record.");
+            }
+        }
+
+        if (!TryRequired(options, "--execution-unit", writer, format, "record", out var unit)
+            || !TryRequired(options, "--packet-digest", writer, format, "record", out var packetDigestArgument)
+            || !TryRuntime(options, writer, format, "record", out var runtime)
+            || !TryRequired(options, "--runtime-version", writer, format, "record", out var runtimeVersion)
+            || !TryRequired(options, "--verdict-file", writer, format, "record", out var verdictFileArgument)
+            || !TryOptionalModel(options, writer, format, "record", out var model))
+        {
+            return 1;
+        }
+
+        if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(unit, out var unitError))
+        {
+            return Refuse(writer, format, "record", CrossRuntimeReviewCauses.ArgumentInvalid, $"--execution-unit is invalid: {unitError}", "pass the canonical execution unit id.");
+        }
+
+        var designResolution = CrossRuntimeReviewDesignTeamResolver.Resolve(context.RepoRoot, unit);
+        if (!designResolution.Resolved)
+        {
+            return RefuseDesignResolution(writer, format, "record", designResolution);
+        }
+
+        if (!context.Config.CrossRuntimeReview.TryGetDeclared(designResolution.Domain!, designResolution.Team!, out var declaration))
+        {
+            return Refuse(writer, format, "record", CrossRuntimeReviewCauses.NotDeclared,
+                $"team '{designResolution.Domain}/{designResolution.Team}' is not declared in [[cross_runtime_review.teams]]; design review is not required.",
+                "declare the team in `.intent-cli/config.toml` under [[cross_runtime_review.teams]] if cross-runtime design review is required.");
+        }
+
+        var packetDirectory = CrossRuntimeReviewPaths.PacketDirectory(context.RepoRoot, unit);
+        if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out var missingPath))
+        {
+            return Refuse(writer, format, "record", CrossRuntimeReviewCauses.PacketMissing,
+                $"packet file is missing: {missingPath}.",
+                $"complete `.intent-cli/issues/{unit}/` with all four packet files.");
+        }
+
+        var currentDigest = CrossRuntimeDesignReviewDigest.Compute(packet);
+        if (!string.Equals(packetDigestArgument, currentDigest, StringComparison.OrdinalIgnoreCase))
+        {
+            return Refuse(writer, format, "record", CrossRuntimeReviewCauses.DigestStale,
+                $"--packet-digest '{packetDigestArgument}' does not match the current packet digest '{currentDigest}'.",
+                "re-run design review against the current packet bytes and pass the current digest.");
+        }
+
+        var verdictFile = ResolvePath(context, verdictFileArgument);
+        byte[] raw;
+        try
+        {
+            raw = File.ReadAllBytes(verdictFile);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
+                $"verdict file '{verdictFile}' could not be read: {exception.Message}",
+                "pass the file the rendered invocation wrote (verdict.raw.json).");
+        }
+
+        string content;
+        try
+        {
+            content = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(raw);
+        }
+        catch (DecoderFallbackException exception)
+        {
+            return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
+                $"verdict file '{verdictFile}' is not UTF-8: {exception.Message}", "pass the file the rendered invocation wrote.");
+        }
+
+        if (!CrossRuntimeReviewVerdict.TryParseDesign(runtime, content, out var verdict, out var verdictError))
+        {
+            return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
+                $"verdict file '{verdictFile}' is invalid for runtime '{runtime}': {verdictError}",
+                "re-run the reviewer with the pinned invocation; never hand-write a verdict.");
+        }
+
+        if (!string.Equals(verdict.PacketDigest, currentDigest, StringComparison.OrdinalIgnoreCase))
+        {
+            return Refuse(writer, format, "record", CrossRuntimeReviewCauses.DigestMismatch,
+                $"the verdict echoes packet_digest '{verdict.PacketDigest}' but the current digest is '{currentDigest}'.",
+                "re-run the design review against the current packet bytes.");
+        }
+
+        var write = options.ContainsKey("--write");
+        var recordedAt = (Clock ?? (() => DateTimeOffset.UtcNow))().ToUniversalTime();
+        var targetRepo = designResolution.TargetRepo ?? string.Empty;
+        var draft = new CrossRuntimeDesignReviewRecord
+        {
+            ArtifactKind = CrossRuntimeDesignReviewRecord.ArtifactKindValue,
+            PacketDigest = currentDigest,
+            TargetRepo = targetRepo,
+            ExecutionUnit = unit,
+            Domain = designResolution.Domain!,
+            Team = designResolution.Team!,
+            Kind = CrossRuntimeReviewRecord.KindDesign,
+            Runtime = runtime,
+            RuntimeVersion = runtimeVersion,
+            ConductorRuntime = declaration.ConductorRuntime,
+            Relation = CrossRuntimeReviewRecord.RelationFor(runtime, declaration.ConductorRuntime),
+            Model = model,
+            Verdict = verdict.Verdict,
+            BlockingFindings = verdict.BlockingFindings,
+            Notes = verdict.Notes,
+            RecordedAt = recordedAt,
+            RawVerdictFile = string.Empty,
+            RawVerdictSha256 = CrossRuntimeReviewStore.Sha256Hex(raw),
+        };
+        var record = draft with { RawVerdictFile = CrossRuntimeDesignReviewStore.RawRelativePath(draft) };
+        var recordRelative = CrossRuntimeDesignReviewStore.RecordRelativePath(record);
+        var commentBody = RenderDesignCommentBody(record, recordRelative);
+
+        string? commentOut = null;
+        if (write)
+        {
+            var stored = CrossRuntimeDesignReviewStore.Write(context.RepoRoot, record, raw);
+            if (!stored.Written)
+            {
+                return Refuse(writer, format, "record",
+                    stored.Error?.StartsWith(CrossRuntimeReviewCauses.RecordCollision, StringComparison.Ordinal) == true
+                        ? CrossRuntimeReviewCauses.RecordCollision
+                        : CrossRuntimeReviewCauses.ArgumentInvalid,
+                    stored.Error ?? "record could not be written.",
+                    "re-run `record --write`; an existing record is never overwritten.");
+            }
+
+            if (options.TryGetValue("--comment-out", out var commentOutArgument))
+            {
+                commentOut = ResolvePath(context, commentOutArgument);
+                var commentDirectory = Path.GetDirectoryName(commentOut);
+                if (!string.IsNullOrEmpty(commentDirectory))
+                {
+                    Directory.CreateDirectory(commentDirectory);
+                }
+
+                File.WriteAllText(commentOut, commentBody, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            }
+        }
+
+        var resolution = CrossRuntimeReviewDesignTeamResolver.ToCrossRuntimeResolution(designResolution);
+        var result = new CrossRuntimeDesignReviewRecordResult
+        {
+            Command = $"{CommandName} record",
+            Mode = write ? WorkerClaimCompleteConstants.Modes.Write : WorkerClaimCompleteConstants.Modes.DryRun,
+            Outcome = write ? "recorded" : "would-record",
+            Resolution = resolution,
+            DeclarationSource = Models.CrossRuntimeReviewConfig.Source,
+            Record = record,
+            RecordFile = recordRelative,
+            RawVerdictCopy = record.RawVerdictFile,
+            CommentBody = commentBody,
+            CommentOut = commentOut,
+            Durability = write
+                ? $"The record exists only in this checkout until it is committed and pushed: commit `{recordRelative}` and `{record.RawVerdictFile}` in the host and push."
+                : "Dry run: nothing was written. Re-run with --write to store the record.",
+        };
+
+        if (format == FormatJson)
+        {
+            writer.WriteLine(JsonSerializer.Serialize(result, RequestJsonOptions));
+        }
+        else
+        {
+            writer.WriteLine("# Cross-runtime design review record (G835)");
+            writer.WriteLine();
+            writer.WriteLine($"- mode: {result.Mode}");
+            writer.WriteLine($"- outcome: {result.Outcome}");
+            writer.WriteLine($"- record file: {result.RecordFile}");
+            writer.WriteLine($"- raw verdict copy: {result.RawVerdictCopy}");
+            writer.WriteLine($"- relation: {record.Relation} (conductor runtime {record.ConductorRuntime})");
+            writer.WriteLine($"- verdict: {record.Verdict}");
+            writer.WriteLine($"- durability: {result.Durability}");
+            writer.WriteLine();
+            writer.WriteLine(commentBody);
+        }
+
+        return 0;
+    }
+
     internal static string RenderCommentBody(CrossRuntimeReviewRecord record, string recordRelativePath)
     {
         var reviewer = record.Relation == CrossRuntimeReviewRecord.RelationCrossRuntime
@@ -474,6 +893,11 @@ internal static class ReviewCrossRuntimeCommand
         builder.Append($"- reviewer: {reviewer}\n");
         builder.Append($"- runtime: {record.Runtime}\n");
         builder.Append($"- runtime version: {record.RuntimeVersion}\n");
+        if (record.Model is not null)
+        {
+            builder.Append($"- model: {record.Model}\n");
+        }
+
         builder.Append($"- conductor runtime: {record.ConductorRuntime}\n");
         builder.Append($"- head SHA: {record.HeadSha}\n");
         builder.Append($"- kind: {record.Kind}\n");
@@ -509,6 +933,56 @@ internal static class ReviewCrossRuntimeCommand
         return builder.ToString();
     }
 
+    internal static string RenderDesignCommentBody(CrossRuntimeDesignReviewRecord record, string recordRelativePath)
+    {
+        var reviewer = record.Relation == CrossRuntimeReviewRecord.RelationCrossRuntime
+            ? "cross-runtime design review"
+            : "independent same-runtime subagent design review";
+        var builder = new StringBuilder();
+        builder.Append($"## {char.ToUpperInvariant(reviewer[0])}{reviewer[1..]}: {record.Verdict}\n\n");
+        builder.Append($"- reviewer: {reviewer}\n");
+        builder.Append($"- runtime: {record.Runtime}\n");
+        builder.Append($"- runtime version: {record.RuntimeVersion}\n");
+        if (record.Model is not null)
+        {
+            builder.Append($"- model: {record.Model}\n");
+        }
+
+        builder.Append($"- conductor runtime: {record.ConductorRuntime}\n");
+        builder.Append($"- packet digest: {record.PacketDigest}\n");
+        builder.Append($"- kind: {record.Kind}\n");
+        builder.Append($"- execution unit: {record.ExecutionUnit}\n");
+        builder.Append($"- verdict: {record.Verdict}\n\n");
+        builder.Append("### Blocking findings\n\n");
+        if (record.BlockingFindings.Count == 0)
+        {
+            builder.Append("- none\n");
+        }
+        else
+        {
+            foreach (var finding in record.BlockingFindings)
+            {
+                builder.Append($"- `{finding.File}:{finding.Line.ToString(CultureInfo.InvariantCulture)}` {finding.Scenario}\n");
+            }
+        }
+
+        builder.Append("\n### Notes\n\n");
+        if (record.Notes.Count == 0)
+        {
+            builder.Append("- none\n");
+        }
+        else
+        {
+            foreach (var note in record.Notes)
+            {
+                builder.Append($"- {note}\n");
+            }
+        }
+
+        builder.Append($"\nRecorded as `{recordRelativePath}` by `intent-cli review cross-runtime record --kind design`.\n");
+        return builder.ToString();
+    }
+
     // ── status ─────────────────────────────────────────────────────────
 
     internal static int ExecuteStatus(CliContext context, string[] args, TextWriter writer)
@@ -529,6 +1003,21 @@ internal static class ReviewCrossRuntimeCommand
             return 1;
         }
 
+        var kind = ResolveKind(options, hasPrArguments: options.ContainsKey("--repo"));
+        if (string.Equals(kind, CrossRuntimeReviewRecord.KindDesign, StringComparison.Ordinal))
+        {
+            return ExecuteDesignStatus(context, options, writer, format);
+        }
+
+        return ExecuteImplementationStatus(context, options, writer, format);
+    }
+
+    private static int ExecuteImplementationStatus(
+        CliContext context,
+        Dictionary<string, string> options,
+        TextWriter writer,
+        string format)
+    {
         if (!TryCommonArguments(options, writer, format, "status", out var repo, out var pr, out var head, out var unit))
         {
             return 1;
@@ -547,6 +1036,7 @@ internal static class ReviewCrossRuntimeCommand
         var result = new CrossRuntimeReviewStatusResult
         {
             Command = $"{CommandName} status",
+            Kind = CrossRuntimeReviewRecord.KindImplementation,
             Repo = repo,
             Pr = pr,
             HeadSha = head,
@@ -558,47 +1048,138 @@ internal static class ReviewCrossRuntimeCommand
             Gate = gate,
         };
 
+        WriteStatusResult(writer, format, result, gate, read.Records.Count, entry => entry.HeadSha);
+        return 0;
+    }
+
+    private static int ExecuteDesignStatus(
+        CliContext context,
+        Dictionary<string, string> options,
+        TextWriter writer,
+        string format)
+    {
+        foreach (var forbidden in new[] { "--repo", "--pr", "--head-sha" })
+        {
+            if (options.ContainsKey(forbidden))
+            {
+                return Refuse(writer, format, "status", CrossRuntimeReviewCauses.ArgumentInvalid,
+                    $"design review status refuses {forbidden}; pass --kind design --execution-unit <unit> only.",
+                    "omit PR arguments for design review status.");
+            }
+        }
+
+        if (!TryRequired(options, "--execution-unit", writer, format, "status", out var unit))
+        {
+            return 1;
+        }
+
+        if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(unit, out var unitError))
+        {
+            return Refuse(writer, format, "status", CrossRuntimeReviewCauses.ArgumentInvalid, $"--execution-unit is invalid: {unitError}", "pass the canonical execution unit id.");
+        }
+
+        var designResolution = CrossRuntimeReviewDesignTeamResolver.Resolve(context.RepoRoot, unit);
+        if (!designResolution.Resolved)
+        {
+            return RefuseDesignResolution(writer, format, "status", designResolution);
+        }
+
+        var resolution = CrossRuntimeReviewDesignTeamResolver.ToCrossRuntimeResolution(designResolution);
+        var declared = context.Config.CrossRuntimeReview.TryGetDeclared(resolution.Domain, resolution.Team, out var declaration);
+        var packetDirectory = CrossRuntimeReviewPaths.PacketDirectory(context.RepoRoot, unit);
+        string? digest = null;
+        if (CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out _))
+        {
+            digest = CrossRuntimeDesignReviewDigest.Compute(packet);
+        }
+
+        var read = CrossRuntimeDesignReviewStore.Read(context.RepoRoot, unit);
+        var gate = digest is null
+            ? new CrossRuntimeReviewGateResult
+            {
+                Decision = CrossRuntimeReviewGate.DecisionNotRequired,
+                Reasons = [],
+                Records = [],
+                Unreadable = read.Unreadable,
+            }
+            : CrossRuntimeReviewGate.EvaluateDesign(declared ? declaration : null, resolution, digest, read);
+        var result = new CrossRuntimeReviewStatusResult
+        {
+            Command = $"{CommandName} status",
+            Kind = CrossRuntimeReviewRecord.KindDesign,
+            ExecutionUnit = unit,
+            PacketDigest = digest,
+            Resolution = resolution,
+            Declared = declared,
+            DeclarationSource = declared ? Models.CrossRuntimeReviewConfig.Source : null,
+            ConductorRuntime = declared ? declaration.ConductorRuntime : null,
+            RecordFiles = read.Records.Select(stored => stored.RelativePath).ToArray(),
+            Gate = gate,
+        };
+
+        WriteStatusResult(writer, format, result, gate, read.Records.Count, entry => entry.PacketDigest);
+        return 0;
+    }
+
+    private static void WriteStatusResult(
+        TextWriter writer,
+        string format,
+        CrossRuntimeReviewStatusResult result,
+        CrossRuntimeReviewGateResult gate,
+        int totalRecords,
+        Func<CrossRuntimeReviewGateRecordEntry, string?> keySelector)
+    {
         if (format == FormatJson)
         {
-            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            writer.WriteLine(JsonSerializer.Serialize(result, RequestJsonOptions));
+            return;
         }
-        else
+
+        var label = string.Equals(result.Kind, CrossRuntimeReviewRecord.KindDesign, StringComparison.Ordinal)
+            ? "Cross-runtime design review status (G835)"
+            : "Cross-runtime review status (G834)";
+        writer.WriteLine($"# {label}");
+        writer.WriteLine();
+        if (result.Repo is not null)
         {
-            writer.WriteLine("# Cross-runtime review status (G834)");
-            writer.WriteLine();
-            writer.WriteLine($"- repo: {repo} pr: {pr.ToString(CultureInfo.InvariantCulture)} head: {head}");
-            writer.WriteLine($"- execution unit: {resolution.ExecutionUnit} ({resolution.ExecutionUnitSource})");
-            writer.WriteLine($"- domain: {resolution.Domain} ({resolution.DomainSource})");
-            writer.WriteLine($"- team: {resolution.Team} ({resolution.TeamSource})");
-            writer.WriteLine(declared
-                ? $"- declared: yes ({result.DeclarationSource}), conductor runtime {result.ConductorRuntime}"
-                : "- declared: no");
-            writer.WriteLine($"- decision: {gate.Decision}");
-            foreach (var reason in gate.Reasons)
-            {
-                writer.WriteLine($"  - {reason.Cause}: {reason.Detail}");
-            }
-
-            writer.WriteLine();
-            writer.WriteLine("## Records");
-            writer.WriteLine();
-            if (gate.Records.Count == 0 && gate.Unreadable.Count == 0)
-            {
-                writer.WriteLine(read.Records.Count == 0 ? "- none" : $"- {read.Records.Count} record(s); not evaluated for an undeclared team");
-            }
-
-            foreach (var entry in gate.Records)
-            {
-                writer.WriteLine($"- [{entry.Status}] {entry.Runtime} ({entry.Relation}) {entry.Verdict} on {entry.HeadSha} at {entry.RecordedAt:O}: {entry.File}");
-            }
-
-            foreach (var unreadable in gate.Unreadable)
-            {
-                writer.WriteLine($"- [unreadable] {unreadable.RelativePath}: {unreadable.Error}");
-            }
+            writer.WriteLine($"- repo: {result.Repo} pr: {result.Pr!.Value.ToString(CultureInfo.InvariantCulture)} head: {result.HeadSha}");
         }
 
-        return 0;
+        if (result.PacketDigest is not null)
+        {
+            writer.WriteLine($"- packet digest: {result.PacketDigest}");
+        }
+
+        writer.WriteLine($"- execution unit: {result.Resolution.ExecutionUnit} ({result.Resolution.ExecutionUnitSource})");
+        writer.WriteLine($"- domain: {result.Resolution.Domain} ({result.Resolution.DomainSource})");
+        writer.WriteLine($"- team: {result.Resolution.Team} ({result.Resolution.TeamSource})");
+        writer.WriteLine(result.Declared
+            ? $"- declared: yes ({result.DeclarationSource}), conductor runtime {result.ConductorRuntime}"
+            : "- declared: no");
+        writer.WriteLine($"- decision: {gate.Decision}");
+        foreach (var reason in gate.Reasons)
+        {
+            writer.WriteLine($"  - {reason.Cause}: {reason.Detail}");
+        }
+
+        writer.WriteLine();
+        writer.WriteLine("## Records");
+        writer.WriteLine();
+        if (gate.Records.Count == 0 && gate.Unreadable.Count == 0)
+        {
+            writer.WriteLine(totalRecords == 0 ? "- none" : $"- {totalRecords} record(s); not evaluated for an undeclared team");
+        }
+
+        foreach (var entry in gate.Records)
+        {
+            var key = keySelector(entry);
+            writer.WriteLine($"- [{entry.Status}] {entry.Runtime} ({entry.Relation}) {entry.Verdict} on {key} at {entry.RecordedAt:O}: {entry.File}");
+        }
+
+        foreach (var unreadable in gate.Unreadable)
+        {
+            writer.WriteLine($"- [unreadable] {unreadable.RelativePath}: {unreadable.Error}");
+        }
     }
 
     // ── shared ─────────────────────────────────────────────────────────
@@ -606,12 +1187,55 @@ internal static class ReviewCrossRuntimeCommand
     private static readonly IReadOnlyList<string> CommonValueFlags = ["--repo", "--pr", "--head-sha", "--execution-unit", "--format"];
 
     private static readonly FlagSet RequestFlags = new(
-        [.. CommonValueFlags, "--runtime", "--clone", "--out-dir"], []);
+        [.. CommonValueFlags, "--kind", "--runtime", "--clone", "--out-dir", "--model"], []);
 
     private static readonly FlagSet RecordFlags = new(
-        [.. CommonValueFlags, "--kind", "--runtime", "--runtime-version", "--verdict-file", "--comment-out"], ["--write", "--dry-run"]);
+        [.. CommonValueFlags, "--kind", "--runtime", "--runtime-version", "--verdict-file", "--packet-digest", "--comment-out", "--model"], ["--write", "--dry-run"]);
 
-    private static readonly FlagSet StatusFlags = new(CommonValueFlags, []);
+    private static readonly FlagSet StatusFlags = new([.. CommonValueFlags, "--kind"], []);
+
+    private static string ResolveKind(Dictionary<string, string> options, bool hasPrArguments)
+    {
+        if (options.TryGetValue("--kind", out var kind))
+        {
+            return kind;
+        }
+
+        return hasPrArguments
+            ? CrossRuntimeReviewRecord.KindImplementation
+            : CrossRuntimeReviewRecord.KindDesign;
+    }
+
+    private static bool TryOptionalModel(
+        Dictionary<string, string> options,
+        TextWriter writer,
+        string format,
+        string subcommand,
+        out string? model)
+    {
+        model = null;
+        if (!options.TryGetValue("--model", out var value))
+        {
+            return true;
+        }
+
+        if (!CrossRuntimeReviewRuntimes.TryValidateModel(value, out var error))
+        {
+            Refuse(writer, format, subcommand, CrossRuntimeReviewCauses.ModelInvalid, error, "pass a non-empty model name without leading '-' or control characters.");
+            return false;
+        }
+
+        model = value;
+        return true;
+    }
+
+    private static int RefuseDesignResolution(
+        TextWriter writer,
+        string format,
+        string subcommand,
+        CrossRuntimeReviewDesignTeamResolver.DesignResolution resolution) =>
+        Refuse(writer, format, subcommand, resolution.Cause!, resolution.Detail ?? string.Empty, resolution.Fix ?? string.Empty,
+            CrossRuntimeReviewDesignTeamResolver.ToCrossRuntimeResolution(resolution));
 
     private sealed record FlagSet(IReadOnlyList<string> ValueFlags, IReadOnlyList<string> SwitchFlags);
 
@@ -830,10 +1454,11 @@ internal static class ReviewCrossRuntimeCommand
 
     private static void WriteHelp(TextWriter writer)
     {
-        writer.WriteLine("review cross-runtime (G834)");
+        writer.WriteLine("review cross-runtime (G834/G835)");
         writer.WriteLine(RequestUsage);
         writer.WriteLine(RecordUsage);
         writer.WriteLine(StatusUsage);
+        writer.WriteLine("Use --kind design for packet-digest-keyed design review (G835); --kind implementation or PR arguments select implementation review (G834).");
         writer.WriteLine(NoExecutionBoundary);
         writer.WriteLine(TermsNotice);
     }
@@ -853,12 +1478,28 @@ internal sealed record CrossRuntimeReviewRequestResult
 {
     [JsonPropertyName("command")] public required string Command { get; init; }
     [JsonPropertyName("outcome")] public required string Outcome { get; init; }
-    [JsonPropertyName("repo")] public required string Repo { get; init; }
-    [JsonPropertyName("pr")] public required int Pr { get; init; }
-    [JsonPropertyName("head_sha")] public required string HeadSha { get; init; }
+    [JsonPropertyName("kind")] public required string Kind { get; init; }
+    [JsonPropertyName("repo")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Repo { get; init; }
+    [JsonPropertyName("pr")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Pr { get; init; }
+    [JsonPropertyName("head_sha")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HeadSha { get; init; }
+    [JsonPropertyName("packet_digest")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PacketDigest { get; init; }
     [JsonPropertyName("execution_unit")] public required string ExecutionUnit { get; init; }
     [JsonPropertyName("runtime")] public required string Runtime { get; init; }
+    [JsonPropertyName("model")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Model { get; init; }
     [JsonPropertyName("out_dir")] public required string OutDir { get; init; }
+    [JsonPropertyName("workspace")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Workspace { get; init; }
     [JsonPropertyName("files")] public required IReadOnlyList<string> Files { get; init; }
     [JsonPropertyName("invocation")] public required string Invocation { get; init; }
     [JsonPropertyName("run_by")] public required string RunBy { get; init; }
@@ -887,13 +1528,41 @@ internal sealed record CrossRuntimeReviewRecordResult
 internal sealed record CrossRuntimeReviewStatusResult
 {
     [JsonPropertyName("command")] public required string Command { get; init; }
-    [JsonPropertyName("repo")] public required string Repo { get; init; }
-    [JsonPropertyName("pr")] public required int Pr { get; init; }
-    [JsonPropertyName("head_sha")] public required string HeadSha { get; init; }
+    [JsonPropertyName("kind")] public required string Kind { get; init; }
+    [JsonPropertyName("repo")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Repo { get; init; }
+    [JsonPropertyName("pr")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Pr { get; init; }
+    [JsonPropertyName("head_sha")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HeadSha { get; init; }
+    [JsonPropertyName("packet_digest")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PacketDigest { get; init; }
+    [JsonPropertyName("execution_unit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExecutionUnit { get; init; }
     [JsonPropertyName("resolution")] public required CrossRuntimeReviewResolution Resolution { get; init; }
     [JsonPropertyName("declared")] public required bool Declared { get; init; }
     [JsonPropertyName("declaration_source")] public string? DeclarationSource { get; init; }
     [JsonPropertyName("conductor_runtime")] public string? ConductorRuntime { get; init; }
     [JsonPropertyName("record_files")] public required IReadOnlyList<string> RecordFiles { get; init; }
     [JsonPropertyName("gate")] public required CrossRuntimeReviewGateResult Gate { get; init; }
+}
+
+internal sealed record CrossRuntimeDesignReviewRecordResult
+{
+    [JsonPropertyName("command")] public required string Command { get; init; }
+    [JsonPropertyName("mode")] public required string Mode { get; init; }
+    [JsonPropertyName("outcome")] public required string Outcome { get; init; }
+    [JsonPropertyName("resolution")] public required CrossRuntimeReviewResolution Resolution { get; init; }
+    [JsonPropertyName("declaration_source")] public required string DeclarationSource { get; init; }
+    [JsonPropertyName("record")] public required CrossRuntimeDesignReviewRecord Record { get; init; }
+    [JsonPropertyName("record_file")] public required string RecordFile { get; init; }
+    [JsonPropertyName("raw_verdict_copy")] public required string RawVerdictCopy { get; init; }
+    [JsonPropertyName("comment_body")] public required string CommentBody { get; init; }
+    [JsonPropertyName("comment_out")] public string? CommentOut { get; init; }
+    [JsonPropertyName("durability")] public required string Durability { get; init; }
 }

@@ -60,6 +60,28 @@ internal static class CrossRuntimeReviewPaths
         return resolved;
     }
 
+    public static string DesignRelativeDirectory(string executionUnit) =>
+        $"{StoreRootRelativePath}/design/{executionUnit}";
+
+    public static string DesignDirectory(string repoRoot, string executionUnit)
+    {
+        if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out var error))
+        {
+            throw new InvalidOperationException(error);
+        }
+
+        var root = Path.GetFullPath(Path.Combine(repoRoot, StoreRootRelativePath.Replace('/', Path.DirectorySeparatorChar)));
+        var resolved = Path.GetFullPath(Path.Combine(repoRoot, DesignRelativeDirectory(executionUnit).Replace('/', Path.DirectorySeparatorChar)));
+        var prefix = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
+        if (!resolved.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"resolved cross-runtime design review directory for {executionUnit} escapes `{StoreRootRelativePath}` ({resolved}).");
+        }
+
+        return resolved;
+    }
+
     public static string PacketDirectory(string repoRoot, string executionUnit)
     {
         if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out var error))

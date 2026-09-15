@@ -77,6 +77,12 @@ internal static class IssuePublishFlowCommand
     /// <summary>G278: test seam for the durable-state event timestamp.</summary>
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
 
+    /// <summary>G835: test seam invoked after the design gate passes and before digest recheck on create.</summary>
+    public static Action? AfterGateHook { get; set; }
+
+    /// <summary>G835: test seam invoked after digest recheck and before <c>CreateIssue</c> on the declared create path.</summary>
+    public static Action? BeforeCreateIssueHook { get; set; }
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -328,6 +334,14 @@ internal static class IssuePublishFlowCommand
             return 1;
         }
 
+        var isGatedRepo = context.Config.CrossRuntimeReview.IsGatedRepo(repo!);
+        CrossRuntimeDesignReviewField? dryRunDesignReview = null;
+        if (!write && isGatedRepo)
+        {
+            dryRunDesignReview = BuildDryRunDesignReview(
+                context, executionUnit!, repo!, packetDirectory, analysis.HasExistingIssue);
+        }
+
         if (!write)
         {
             // Dry-run: PLAN only, never write. When the analyzer finds an
@@ -358,7 +372,8 @@ internal static class IssuePublishFlowCommand
                     : null,
                 externalHandoffPath: authorization.IsAuthoringOnly
                     ? PublishedExternalHandoffStore.ResolveRelativePath(executionUnit!)
-                    : null);
+                    : null,
+                crossRuntimeDesignReview: dryRunDesignReview);
             EmitResult(writer, dryRunResult, format);
             return 0;
         }
@@ -389,6 +404,24 @@ internal static class IssuePublishFlowCommand
         // already exists there (e.g. every local artifact was reset/lost
         // but the GitHub issue itself was never re-created), creating here
         // would produce a genuine duplicate.
+        CrossRuntimeReviewPublishResolver.PublishResolution? gatedPublishResolution = null;
+        byte[]? lookupSnapshotPacketYaml = null;
+        byte[]? lookupSnapshotGithubBody = null;
+        var lookupTitle = title!;
+        var lookupBody = githubBody!;
+        if (isGatedRepo)
+        {
+            gatedPublishResolution = CrossRuntimeReviewPublishResolver.Resolve(
+                context.RepoRoot, executionUnit!, repo!, context.Config.CrossRuntimeReview);
+            if (gatedPublishResolution.Resolved && gatedPublishResolution.Declared)
+            {
+                var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
+                lookupSnapshotPacketYaml = File.ReadAllBytes(packetYamlPath);
+                lookupSnapshotGithubBody = File.ReadAllBytes(githubBodyPath);
+                lookupBody = File.ReadAllText(githubBodyPath);
+            }
+        }
+
         IGitHubExistingIssueChecker existingIssueChecker;
         try
         {
@@ -418,7 +451,7 @@ internal static class IssuePublishFlowCommand
         GitHubExistingIssueLookupResult lookup;
         try
         {
-            lookup = existingIssueChecker.FindExistingIssue(repo!, executionUnit!, title!, File.ReadAllText(githubBodyPath));
+            lookup = existingIssueChecker.FindExistingIssue(repo!, executionUnit!, lookupTitle, lookupBody);
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
         {
@@ -470,6 +503,36 @@ internal static class IssuePublishFlowCommand
 
         if (lookup.Classification == GitHubExistingIssueClassification.Unique)
         {
+            if (gatedPublishResolution?.Declared == true
+                && lookupSnapshotPacketYaml is not null
+                && lookupSnapshotGithubBody is not null)
+            {
+                var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
+                if (!File.ReadAllBytes(packetYamlPath).AsSpan().SequenceEqual(lookupSnapshotPacketYaml)
+                    || !File.ReadAllBytes(githubBodyPath).AsSpan().SequenceEqual(lookupSnapshotGithubBody))
+                {
+                    var lookupChangedResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                        packetExists: true,
+                        githubBodyPresent: true,
+                        missingSections: Array.Empty<string>(),
+                        title: title,
+                        created: false,
+                        idempotent: false,
+                        durableStateSynced: false,
+                        issueUrl: null,
+                        issueNumber: null,
+                        queueStatePatched: false,
+                        publishYamlPatched: false,
+                        runsAppended: false,
+                        error: "packet.yaml or github-body.md changed after the GitHub lookup snapshot; refusing recovery.",
+                        titleSource: titleSource,
+                        cause: CrossRuntimeReviewCauses.LookupInputChanged,
+                        crossRuntimeDesignReview: BuildResolutionRefusalField(gatedPublishResolution));
+                    EmitResult(writer, lookupChangedResult, format);
+                    return 1;
+                }
+            }
+
             // G536 round-4 review repair: a unique, exact title+body match
             // already exists on GitHub even though every local artifact was
             // lost — feed that identity into the SAME shared analyzer/
@@ -501,6 +564,43 @@ internal static class IssuePublishFlowCommand
                 githubSourcedAnalysis,
                 context,
                 authorization);
+        }
+
+        if (isGatedRepo)
+        {
+            gatedPublishResolution ??= CrossRuntimeReviewPublishResolver.Resolve(
+                context.RepoRoot, executionUnit!, repo!, context.Config.CrossRuntimeReview);
+            var resolutionRefusal = TryBuildResolutionRefusal(
+                executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                title, titleSource, authorization, gatedPublishResolution);
+            if (resolutionRefusal is not null)
+            {
+                EmitResult(writer, resolutionRefusal, format);
+                return 1;
+            }
+
+            if (gatedPublishResolution.Declared)
+            {
+                return ExecuteDeclaredTeamCreate(
+                    writer,
+                    format,
+                    context,
+                    executionUnit!,
+                    domain,
+                    repo!,
+                    packetDirectory,
+                    githubBodyPath,
+                    publishYamlPath,
+                    queueStatePathForIdempotency,
+                    runLogPathForIdempotency,
+                    title!,
+                    titleSource,
+                    analysis,
+                    authorization,
+                    gatedPublishResolution,
+                    lookupSnapshotPacketYaml,
+                    lookupSnapshotGithubBody);
+            }
         }
 
         // G363 (PR #830 review repair): atomic-seed gate. The
@@ -1234,7 +1334,8 @@ internal static class IssuePublishFlowCommand
         IssuePublishAuthorization? authorization = null,
         bool? externalHandoffRecorded = null,
         string? externalHandoffPath = null,
-        string? cause = null)
+        string? cause = null,
+        CrossRuntimeDesignReviewField? crossRuntimeDesignReview = null)
     {
         var nextSteps = new List<string>();
         if (created)
@@ -1299,8 +1400,655 @@ internal static class IssuePublishFlowCommand
                 .ToArray(),
             WouldRestore = wouldRestore,
             Error = error,
-            Cause = cause
+            Cause = cause,
+            CrossRuntimeDesignReview = crossRuntimeDesignReview,
         };
+    }
+
+    private static CrossRuntimeDesignReviewField? BuildDryRunDesignReview(
+        CliContext context,
+        string executionUnit,
+        string repo,
+        string packetDirectory,
+        bool hasExistingIssue)
+    {
+        var resolution = CrossRuntimeReviewPublishResolver.Resolve(
+            context.RepoRoot, executionUnit, repo, context.Config.CrossRuntimeReview);
+        if (hasExistingIssue)
+        {
+            return resolution.Resolved && resolution.Declared
+                ? new CrossRuntimeDesignReviewField
+                {
+                    Decision = CrossRuntimeReviewGate.DecisionIdempotentNotGated,
+                    Reasons = [],
+                    Digest = TryComputePacketDigest(packetDirectory),
+                    Domain = resolution.Domain,
+                    Team = resolution.Team,
+                }
+                : null;
+        }
+
+        if (!resolution.Resolved || resolution.DomainMismatch)
+        {
+            return BuildResolutionRefusalField(resolution);
+        }
+
+        if (!resolution.Declared)
+        {
+            return null;
+        }
+
+        return EvaluateDeclaredDesignGate(context, resolution, packetDirectory);
+    }
+
+    private static IssuePublishFlowResult? TryBuildResolutionRefusal(
+        string executionUnit,
+        string domain,
+        string repo,
+        string packetDirectory,
+        string githubBodyPath,
+        string publishYamlPath,
+        bool write,
+        string? title,
+        string? titleSource,
+        IssuePublishAuthorization authorization,
+        CrossRuntimeReviewPublishResolver.PublishResolution resolution)
+    {
+        if (!resolution.Resolved)
+        {
+            return BuildResolutionRefusalResult(
+                executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write, title, titleSource, authorization,
+                resolution.Cause!, resolution.Detail ?? string.Empty, BuildResolutionRefusalField(resolution));
+        }
+
+        if (resolution.DomainMismatch)
+        {
+            var detail = $"packet domain '{resolution.Domain}' resolves team '{resolution.Domain}/{resolution.Team}' as undeclared, "
+                + $"but the claim team is declared under '{resolution.AlternateDeclaredDomain}' whose repos include '{repo}'.";
+            return BuildResolutionRefusalResult(
+                executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write, title, titleSource, authorization,
+                CrossRuntimeReviewCauses.DomainMismatch, detail, BuildResolutionRefusalField(resolution));
+        }
+
+        if (resolution.Declared && !TargetRepoMatches(resolution.TargetRepo, repo))
+        {
+            var detail = $"packet target_repo '{resolution.TargetRepo ?? "(missing)"}' does not match --repo '{repo}'.";
+            var fix = $"set implementation_issue_packet.target_repo to '{repo}' in `.intent-cli/issues/{executionUnit}/packet.yaml`.";
+            return BuildResolutionRefusalResult(
+                executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write, title, titleSource, authorization,
+                CrossRuntimeReviewCauses.TargetRepoMismatch, $"{detail} {fix}", BuildResolutionRefusalField(resolution));
+        }
+
+        return null;
+    }
+
+    private static IssuePublishFlowResult BuildResolutionRefusalResult(
+        string executionUnit,
+        string domain,
+        string repo,
+        string packetDirectory,
+        string githubBodyPath,
+        string publishYamlPath,
+        bool write,
+        string? title,
+        string? titleSource,
+        IssuePublishAuthorization authorization,
+        string cause,
+        string detail,
+        CrossRuntimeDesignReviewField designReview) =>
+        NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write,
+            packetExists: true,
+            githubBodyPresent: true,
+            missingSections: Array.Empty<string>(),
+            title: title,
+            created: false,
+            idempotent: false,
+            durableStateSynced: false,
+            issueUrl: null,
+            issueNumber: null,
+            queueStatePatched: false,
+            publishYamlPatched: false,
+            runsAppended: false,
+            error: detail,
+            titleSource: titleSource,
+            authorization: authorization,
+            cause: cause,
+            crossRuntimeDesignReview: designReview);
+
+    private static CrossRuntimeDesignReviewField BuildResolutionRefusalField(
+        CrossRuntimeReviewPublishResolver.PublishResolution resolution)
+    {
+        var cause = !resolution.Resolved
+            ? CrossRuntimeReviewCauses.TeamUnresolved
+            : resolution.DomainMismatch
+                ? CrossRuntimeReviewCauses.DomainMismatch
+                : CrossRuntimeReviewCauses.TargetRepoMismatch;
+        return new CrossRuntimeDesignReviewField
+        {
+            Decision = CrossRuntimeReviewGate.DecisionBlocked,
+            Reasons =
+            [
+                new CrossRuntimeReviewGateReason
+                {
+                    Cause = cause,
+                    Detail = resolution.Detail ?? string.Empty,
+                },
+            ],
+            Digest = null,
+            Domain = resolution.Domain,
+            Team = resolution.Team,
+        };
+    }
+
+    private static CrossRuntimeDesignReviewField EvaluateDeclaredDesignGate(
+        CliContext context,
+        CrossRuntimeReviewPublishResolver.PublishResolution resolution,
+        string packetDirectory)
+    {
+        if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out var missingPath))
+        {
+            return new CrossRuntimeDesignReviewField
+            {
+                Decision = CrossRuntimeReviewGate.DecisionBlocked,
+                Reasons =
+                [
+                    new CrossRuntimeReviewGateReason
+                    {
+                        Cause = CrossRuntimeReviewCauses.PacketMissing,
+                        Detail = $"packet file is missing: {missingPath}.",
+                    },
+                ],
+                Digest = null,
+                Domain = resolution.Domain,
+                Team = resolution.Team,
+            };
+        }
+
+        var digest = CrossRuntimeDesignReviewDigest.Compute(packet);
+        var gateResolution = new CrossRuntimeReviewResolution
+        {
+            Resolved = true,
+            ExecutionUnit = resolution.ExecutionUnit,
+            ExecutionUnitSource = CrossRuntimeReviewTeamResolver.SourceExecutionUnitArgument,
+            Domain = resolution.Domain,
+            DomainSource = CrossRuntimeReviewTeamResolver.SourcePacketDomain,
+            Team = resolution.Team,
+            TeamSource = CrossRuntimeReviewTeamResolver.SourceClaimTeam,
+        };
+        var read = CrossRuntimeDesignReviewStore.Read(context.RepoRoot, resolution.ExecutionUnit!);
+        var gate = CrossRuntimeReviewGate.EvaluateDesign(resolution.Declaration, gateResolution, digest, read);
+        return new CrossRuntimeDesignReviewField
+        {
+            Decision = gate.Decision,
+            Reasons = gate.Reasons,
+            Digest = digest,
+            Domain = resolution.Domain,
+            Team = resolution.Team,
+        };
+    }
+
+    private static string? TryComputePacketDigest(string packetDirectory) =>
+        CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out _)
+            ? CrossRuntimeDesignReviewDigest.Compute(packet)
+            : null;
+
+    private static bool TargetRepoMatches(string? targetRepo, string repo) =>
+        !string.IsNullOrWhiteSpace(targetRepo)
+        && string.Equals(targetRepo.Trim(), repo, StringComparison.OrdinalIgnoreCase);
+
+    private static int ExecuteDeclaredTeamCreate(
+        TextWriter writer,
+        string format,
+        CliContext context,
+        string executionUnit,
+        string domain,
+        string repo,
+        string packetDirectory,
+        string githubBodyPath,
+        string publishYamlPath,
+        string queueStatePath,
+        string runLogPath,
+        string title,
+        string? titleSource,
+        PublishDurableArtifactAnalysis analysis,
+        IssuePublishAuthorization authorization,
+        CrossRuntimeReviewPublishResolver.PublishResolution resolution,
+        byte[]? snapshotPacketYaml,
+        byte[]? snapshotGithubBody)
+    {
+        if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out var missingPath))
+        {
+            var missingResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: $"packet file is missing: {missingPath}.",
+                titleSource: titleSource,
+                authorization: authorization,
+                cause: CrossRuntimeReviewCauses.PacketMissing,
+                crossRuntimeDesignReview: new CrossRuntimeDesignReviewField
+                {
+                    Decision = CrossRuntimeReviewGate.DecisionBlocked,
+                    Reasons =
+                    [
+                        new CrossRuntimeReviewGateReason
+                        {
+                            Cause = CrossRuntimeReviewCauses.PacketMissing,
+                            Detail = $"packet file is missing: {missingPath}.",
+                        },
+                    ],
+                    Digest = null,
+                    Domain = resolution.Domain,
+                    Team = resolution.Team,
+                });
+            EmitResult(writer, missingResult, format);
+            return 1;
+        }
+
+        if (snapshotPacketYaml is null || snapshotGithubBody is null)
+        {
+            snapshotPacketYaml = packet.PacketYaml;
+            snapshotGithubBody = packet.GithubBody;
+        }
+
+        if (!QueueStateContainsExecutionUnit(queueStatePath, executionUnit))
+        {
+            var missingQueueItemResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: $"queue-state has no item with execution_unit `{executionUnit}`; "
+                    + "refusing to create the GitHub issue (atomic-seed gate, G363). "
+                    + $"Seed first: `intent-cli automation queue-seed-from-packet --execution-unit {executionUnit} --target-repo {repo} --write`, "
+                    + "then re-run `issue publish-flow --write`.",
+                titleSource: titleSource,
+                authorization: authorization,
+                crossRuntimeDesignReview: EvaluateDeclaredDesignGate(context, resolution, packetDirectory));
+            EmitResult(writer, missingQueueItemResult, format);
+            return 1;
+        }
+
+        var digest = CrossRuntimeDesignReviewDigest.Compute(packet);
+        var designReview = EvaluateDeclaredDesignGate(context, resolution, packetDirectory);
+        if (designReview.Decision is not CrossRuntimeReviewGate.DecisionSatisfied)
+        {
+            var gateResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: $"cross-runtime design review gate is not satisfied for digest {digest}.",
+                titleSource: titleSource,
+                authorization: authorization,
+                cause: designReview.Reasons.FirstOrDefault()?.Cause ?? CrossRuntimeReviewCauses.Missing,
+                crossRuntimeDesignReview: designReview);
+            EmitResult(writer, gateResult, format);
+            return 1;
+        }
+
+        AfterGateHook?.Invoke();
+
+        if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var currentPacket, out var currentMissing))
+        {
+            var staleResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: $"packet file is missing before create: {currentMissing}.",
+                titleSource: titleSource,
+                authorization: authorization,
+                cause: CrossRuntimeReviewCauses.PacketMissing,
+                crossRuntimeDesignReview: designReview);
+            EmitResult(writer, staleResult, format);
+            return 1;
+        }
+
+        var currentDigest = CrossRuntimeDesignReviewDigest.Compute(currentPacket);
+        if (!string.Equals(currentDigest, digest, StringComparison.Ordinal))
+        {
+            var staleResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: $"packet digest changed from '{digest}' to '{currentDigest}' before create; refusing publication.",
+                titleSource: titleSource,
+                authorization: authorization,
+                cause: CrossRuntimeReviewCauses.DigestStale,
+                crossRuntimeDesignReview: EvaluateDeclaredDesignGate(context, resolution, packetDirectory));
+            EmitResult(writer, staleResult, format);
+            return 1;
+        }
+
+        BeforeCreateIssueHook?.Invoke();
+
+        IIssueCreator creator;
+        try
+        {
+            creator = CreatorFactory?.Invoke() ?? new GhCliIssueCreator();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            var creatorErrorResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: $"failed to initialize GitHub issue creator: {exception.Message}",
+                titleSource: titleSource,
+                authorization: authorization,
+                crossRuntimeDesignReview: designReview);
+            EmitResult(writer, creatorErrorResult, format);
+            return 1;
+        }
+
+        var tempBodyPath = Path.Combine(Path.GetTempPath(), $"intent-cli-publish-{executionUnit}-{Guid.NewGuid():N}.md");
+        try
+        {
+            File.WriteAllBytes(tempBodyPath, currentPacket.GithubBody);
+            IssueCreateOutcome outcome;
+            try
+            {
+                outcome = creator.CreateIssue(repo, title, tempBodyPath);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or IOException)
+            {
+                var createErrorResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+                    packetExists: true,
+                    githubBodyPresent: true,
+                    missingSections: Array.Empty<string>(),
+                    title: title,
+                    created: false,
+                    idempotent: false,
+                    durableStateSynced: false,
+                    issueUrl: null,
+                    issueNumber: null,
+                    queueStatePatched: false,
+                    publishYamlPatched: false,
+                    runsAppended: false,
+                    error: $"gh issue create failed: {exception.Message}",
+                    titleSource: titleSource,
+                    authorization: authorization,
+                    crossRuntimeDesignReview: designReview);
+                EmitResult(writer, createErrorResult, format);
+                return 1;
+            }
+
+            return FinalizeSuccessfulCreate(
+                writer,
+                format,
+                context,
+                executionUnit,
+                domain,
+                repo,
+                packetDirectory,
+                githubBodyPath,
+                publishYamlPath,
+                queueStatePath,
+                runLogPath,
+                title,
+                titleSource,
+                analysis,
+                authorization,
+                outcome,
+                designReview);
+        }
+        finally
+        {
+            if (File.Exists(tempBodyPath))
+            {
+                File.Delete(tempBodyPath);
+            }
+        }
+    }
+
+    private static int FinalizeSuccessfulCreate(
+        TextWriter writer,
+        string format,
+        CliContext context,
+        string executionUnit,
+        string domain,
+        string repo,
+        string packetDirectory,
+        string githubBodyPath,
+        string publishYamlPath,
+        string queueStatePath,
+        string runLogPath,
+        string title,
+        string? titleSource,
+        PublishDurableArtifactAnalysis analysis,
+        IssuePublishAuthorization authorization,
+        IssueCreateOutcome outcome,
+        CrossRuntimeDesignReviewField? designReview)
+    {
+        var issueNumber = ParseIssueNumber(outcome.IssueUrl);
+        var publishedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+
+        bool queueStatePatched;
+        bool publishYamlPatched;
+        bool runsAppended;
+        PublishedExternalHandoffWriteResult? handoffWrite = null;
+        string? externalHandoffRef = null;
+        try
+        {
+            queueStatePatched = TryPatchQueueStateLinkedIssue(
+                queueStatePath,
+                executionUnit,
+                repo,
+                issueNumber,
+                outcome.IssueUrl,
+                publishedAt);
+
+            if (authorization.IsAuthoringOnly)
+            {
+                var handoff = new PublishedExternalHandoff
+                {
+                    RecordKind = PublishedExternalHandoffStore.RecordKind,
+                    ExecutionUnit = executionUnit,
+                    Domain = domain,
+                    Team = authorization.Team,
+                    TeamMode = TeamMode.AuthoringOnly,
+                    ActorRole = authorization.ActorRole!,
+                    DestinationOwnership = authorization.DestinationOwnership!,
+                    TargetRepo = repo,
+                    IssueNumber = issueNumber,
+                    IssueUrl = outcome.IssueUrl,
+                    OperatorAcceptanceEvidence = authorization.OperatorAcceptanceEvidence!,
+                    RecordedAt = publishedAt,
+                };
+                handoffWrite = PublishedExternalHandoffStore.Write(context.RepoRoot, handoff);
+                if (!handoffWrite.Succeeded)
+                {
+                    throw new InvalidOperationException(handoffWrite.Error
+                        ?? "published-external-handoff could not be recorded.");
+                }
+
+                externalHandoffRef = Path.GetRelativePath(context.RepoRoot, handoffWrite.Path).Replace('\\', '/');
+            }
+
+            publishYamlPatched = WritePublishArtifact(
+                publishYamlPath,
+                packetDirectory,
+                githubBodyPath,
+                executionUnit,
+                issueNumber,
+                outcome.IssueUrl,
+                authorization,
+                externalHandoffRef,
+                publishedAt);
+
+            runsAppended = AppendIssueCreatedRunEvent(
+                runLogPath,
+                executionUnit,
+                repo,
+                issueNumber,
+                outcome.IssueUrl,
+                publishedAt,
+                authorization,
+                externalHandoffRef);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            var partialResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: outcome.IssueUrl,
+                issueNumber: issueNumber,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: $"GitHub issue {outcome.IssueUrl} was created but parent durable state could not be updated: {exception.Message}. Reconcile via 'intent-cli automation reconcile' before re-running.",
+                titleSource: titleSource,
+                authorization: authorization,
+                externalHandoffRecorded: handoffWrite?.Succeeded,
+                externalHandoffPath: externalHandoffRef,
+                crossRuntimeDesignReview: designReview);
+            EmitResult(writer, partialResult, format);
+            return 1;
+        }
+
+        if (!queueStatePatched || !publishYamlPatched || !runsAppended)
+        {
+            var unsynchronizedReasons = new List<string>();
+            if (!queueStatePatched)
+            {
+                unsynchronizedReasons.Add(
+                    File.Exists(queueStatePath)
+                        ? $"queue-state.json has no item with execution_unit '{executionUnit}'"
+                        : $"queue-state.json not found at {queueStatePath}");
+            }
+            if (!publishYamlPatched)
+            {
+                unsynchronizedReasons.Add($"publish.yaml at {publishYamlPath} was not written");
+            }
+            if (!runsAppended)
+            {
+                unsynchronizedReasons.Add($"runs.jsonl at {runLogPath} did not receive the issue-created event");
+            }
+
+            var unsynchronizedResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: outcome.IssueUrl,
+                issueNumber: issueNumber,
+                queueStatePatched: queueStatePatched,
+                publishYamlPatched: publishYamlPatched,
+                runsAppended: runsAppended,
+                titleSource: titleSource,
+                error: $"GitHub issue {outcome.IssueUrl} was created but parent durable state is not fully synchronized: {string.Join("; ", unsynchronizedReasons)}. Reconcile via 'intent-cli automation reconcile' or seed the missing parent artifact, then re-run.",
+                crossRuntimeDesignReview: designReview);
+            EmitResult(writer, unsynchronizedResult, format);
+            return 1;
+        }
+
+        if (authorization.IsAuthoringOnly && handoffWrite?.Succeeded != true)
+        {
+            var handoffResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: outcome.IssueUrl,
+                issueNumber: issueNumber,
+                queueStatePatched: queueStatePatched,
+                publishYamlPatched: publishYamlPatched,
+                runsAppended: runsAppended,
+                error: "authoring-only publish created the GitHub issue but could not record published-external-handoff; refusing to report a complete publish.",
+                titleSource: titleSource,
+                authorization: authorization,
+                externalHandoffRecorded: false,
+                externalHandoffPath: externalHandoffRef,
+                crossRuntimeDesignReview: designReview);
+            EmitResult(writer, handoffResult, format);
+            return 1;
+        }
+
+        var successResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+            packetExists: true,
+            githubBodyPresent: true,
+            missingSections: Array.Empty<string>(),
+            title: title,
+            created: true,
+            idempotent: false,
+            durableStateSynced: true,
+            issueUrl: outcome.IssueUrl,
+            issueNumber: issueNumber,
+            queueStatePatched: queueStatePatched,
+            publishYamlPatched: publishYamlPatched,
+            runsAppended: runsAppended,
+            error: null,
+            titleSource: titleSource,
+            extraWarnings: analysis.Warnings,
+            authorization: authorization,
+            externalHandoffRecorded: handoffWrite?.Succeeded,
+            externalHandoffPath: externalHandoffRef,
+            crossRuntimeDesignReview: designReview);
+        EmitResult(writer, successResult, format);
+        return 0;
     }
 
     private static void EmitResult(TextWriter writer, IssuePublishFlowResult result, string format)
@@ -2279,4 +3027,26 @@ internal sealed record IssuePublishFlowResult
 
     [JsonPropertyName("cause")]
     public string? Cause { get; init; }
+
+    [JsonPropertyName("cross_runtime_design_review")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CrossRuntimeDesignReviewField? CrossRuntimeDesignReview { get; init; }
+}
+
+internal sealed record CrossRuntimeDesignReviewField
+{
+    [JsonPropertyName("decision")]
+    public required string Decision { get; init; }
+
+    [JsonPropertyName("reasons")]
+    public required IReadOnlyList<CrossRuntimeReviewGateReason> Reasons { get; init; }
+
+    [JsonPropertyName("digest")]
+    public string? Digest { get; init; }
+
+    [JsonPropertyName("domain")]
+    public string? Domain { get; init; }
+
+    [JsonPropertyName("team")]
+    public string? Team { get; init; }
 }
