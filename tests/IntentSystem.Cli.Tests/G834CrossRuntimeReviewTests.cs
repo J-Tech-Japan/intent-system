@@ -705,32 +705,48 @@ public sealed class G834CrossRuntimeReviewTests : IDisposable
     }
 
     [Fact]
-    public void Record_RefusesAVerdictForASupersededHead_SoALateOlderApproveCannotClearANewerBlock()
+    public void Record_RefusesAVerdictForASupersededHead_SoALateOlderApproveCannotClearARereviewRequirement()
     {
         var clock = new DateTimeOffset(2026, 9, 14, 13, 0, 0, TimeSpan.Zero);
         ReviewCrossRuntimeCommand.Clock = () => clock;
-        var h1Approve = WriteVerdictFile("claude", ClaudeEnvelope(Verdict("approve", H1)));
-        Assert.Equal(0, Route(["review", "cross-runtime", .. RecordArgs("claude", h1Approve, H1, write: true), "--format", "json"]).Item1);
-
-        clock = clock.AddMinutes(1);
-        var h2Block = WriteVerdictFile("codex", Verdict("request-changes", H2));
-        Assert.Equal(0, Route(["review", "cross-runtime", .. RecordArgs("codex", h2Block, H2, write: true), "--format", "json"]).Item1);
-
-        // A slow codex run on H1 finishes after the H2 block.
-        clock = clock.AddMinutes(1);
-        var lateH1 = WriteVerdictFile("codex", Verdict("approve", H1));
-        foreach (var write in new[] { false, true })
+        void Record(string runtime, string verdict, string head, int expectedExit)
         {
-            var (exit, output) = Route(["review", "cross-runtime", .. RecordArgs("codex", lateH1, H1, write), "--format", "json"]);
-            Assert.Equal(1, exit);
-            Assert.Contains(CrossRuntimeReviewCauses.HeadSuperseded, output, StringComparison.Ordinal);
+            clock = clock.AddMinutes(1);
+            var content = runtime == "codex" ? Verdict(verdict, head) : runtime == "claude" ? ClaudeEnvelope(Verdict(verdict, head)) : CursorEnvelope(Verdict(verdict, head));
+            var file = WriteVerdictFile(runtime, content);
+            var (exit, output) = Route(["review", "cross-runtime", .. RecordArgs(runtime, file, head, write: true), "--format", "json"]);
+            Assert.True(exit == expectedExit, output);
+            if (expectedExit != 0)
+            {
+                Assert.Contains(CrossRuntimeReviewCauses.HeadSuperseded, output, StringComparison.Ordinal);
+            }
         }
 
-        // A head never recorded before is a new head and is accepted.
-        clock = clock.AddMinutes(1);
-        var h3Approve = WriteVerdictFile("claude", ClaudeEnvelope(Verdict("approve", H3)));
-        Assert.Equal(0, Route(["review", "cross-runtime", .. RecordArgs("claude", h3Approve, H3, write: true), "--format", "json"]).Item1);
-        Assert.Equal(3, CrossRuntimeReviewStore.Read(root, Repo, Pr).Records.Count);
+        // codex blocks H1; the fix lands as H2 and the other runtimes approve it.
+        Record("claude", "approve", H1, 0);
+        Record("codex", "request-changes", H1, 0);
+        Record("claude", "approve", H2, 0);
+        Record("cursor", "approve", H2, 0);
+        string H2Decision() => CrossRuntimeReviewGate.Evaluate(Declaration("claude"), Resolution(), H2, CrossRuntimeReviewStore.Read(root, Repo, Pr)).Decision;
+        var before = CrossRuntimeReviewGate.Evaluate(Declaration("claude"), Resolution(), H2, CrossRuntimeReviewStore.Read(root, Repo, Pr));
+        Assert.Contains(before.Reasons, reason => reason.Cause == CrossRuntimeReviewCauses.RereviewMissing);
+
+        // A late codex approve for the superseded H1 is refused (dry-run too),
+        // so it cannot become codex's most recent earlier-head record.
+        var lateH1 = WriteVerdictFile("codex", Verdict("approve", H1));
+        var (dryExit, dryOutput) = Route(["review", "cross-runtime", .. RecordArgs("codex", lateH1, H1, write: false), "--format", "json"]);
+        Assert.Equal(1, dryExit);
+        Assert.Contains(CrossRuntimeReviewCauses.HeadSuperseded, dryOutput, StringComparison.Ordinal);
+        Record("codex", "approve", H1, 1);
+        var after = CrossRuntimeReviewGate.Evaluate(Declaration("claude"), Resolution(), H2, CrossRuntimeReviewStore.Read(root, Repo, Pr));
+        Assert.Contains(after.Reasons, reason => reason.Cause == CrossRuntimeReviewCauses.RereviewMissing);
+        Assert.NotEqual("satisfied", H2Decision());
+
+        // Re-recording the newest head and recording a never-seen head both pass.
+        Record("cursor", "approve", H2, 0);
+        Record("codex", "approve", H2, 0);
+        Assert.Equal("satisfied", H2Decision());
+        Record("claude", "approve", H3, 0);
     }
 
     // ── gate ───────────────────────────────────────────────────────────
