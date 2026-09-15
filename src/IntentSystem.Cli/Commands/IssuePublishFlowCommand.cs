@@ -2243,13 +2243,7 @@ internal static class IssuePublishFlowCommand
     public const string TitleSourceGithubBodyH1 = "github-body-h1";
     public const string TitleSourceFallbackUntitled = "fallback-untitled";
 
-    /// <summary>
-    /// G290: resolves the title in priority order: packet.yaml title (G826: `issue_title`, then legacy `title`) →
-    /// body H1 (`# Title`) → fallback `<execution-unit> (untitled)`. Returns
-    /// both the title and a structured source string so the caller can
-    /// report which path resolved it (and emit a warning when the fallback
-    /// fired).
-    /// </summary>
+    /// <summary>Decodes packet file bytes with the same BOM stripping used for publish-flow snapshots.</summary>
     internal static string DecodePacketText(byte[] bytes)
     {
         if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
@@ -2313,6 +2307,13 @@ internal static class IssuePublishFlowCommand
         return ($"{executionUnit} (untitled)", TitleSourceFallbackUntitled);
     }
 
+    /// <summary>
+    /// G290: resolves the title in priority order: packet.yaml title (G826: `issue_title`, then legacy `title`) →
+    /// body H1 (`# Title`) → fallback <c>&lt;execution-unit&gt; (untitled)</c>. Returns
+    /// both the title and a structured source string so the caller can
+    /// report which path resolved it (and emit a warning when the fallback
+    /// fired).
+    /// </summary>
     internal static (string Title, string Source) ResolveTitleWithSource(
         string executionUnit,
         string packetDirectory,

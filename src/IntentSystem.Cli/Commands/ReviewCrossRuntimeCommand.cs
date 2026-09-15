@@ -111,7 +111,7 @@ internal static class ReviewCrossRuntimeCommand
             return 1;
         }
 
-        var kind = ResolveKind(options, hasPrArguments: options.ContainsKey("--repo"));
+        var kind = ResolveKind(options);
         if (string.Equals(kind, CrossRuntimeReviewRecord.KindDesign, StringComparison.Ordinal))
         {
             return ExecuteDesignRequest(context, options, writer, format);
@@ -564,7 +564,11 @@ internal static class ReviewCrossRuntimeCommand
             return 1;
         }
 
-        var kind = ResolveKind(options, hasPrArguments: options.ContainsKey("--repo"));
+        if (!TryRequired(options, "--kind", writer, format, "record", out var kind))
+        {
+            return 1;
+        }
+
         if (string.Equals(kind, CrossRuntimeReviewRecord.KindDesign, StringComparison.Ordinal))
         {
             return ExecuteDesignRecord(context, options, writer, format);
@@ -1073,7 +1077,7 @@ internal static class ReviewCrossRuntimeCommand
             return 1;
         }
 
-        var kind = ResolveKind(options, hasPrArguments: options.ContainsKey("--repo"));
+        var kind = ResolveKind(options);
         if (string.Equals(kind, CrossRuntimeReviewRecord.KindDesign, StringComparison.Ordinal))
         {
             return ExecuteDesignStatus(context, options, writer, format);
@@ -1295,15 +1299,10 @@ internal static class ReviewCrossRuntimeCommand
 
     private static readonly FlagSet StatusFlags = new([.. CommonValueFlags, "--kind"], []);
 
-    private static string ResolveKind(Dictionary<string, string> options, bool hasPrArguments)
-    {
-        if (options.TryGetValue("--kind", out var kind))
-        {
-            return kind;
-        }
-
-        return CrossRuntimeReviewRecord.KindImplementation;
-    }
+    private static string ResolveKind(Dictionary<string, string> options) =>
+        options.TryGetValue("--kind", out var kind)
+            ? kind
+            : CrossRuntimeReviewRecord.KindImplementation;
 
     private static bool TryOptionalModel(
         Dictionary<string, string> options,

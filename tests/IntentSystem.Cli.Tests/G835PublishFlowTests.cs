@@ -196,6 +196,29 @@ public sealed class G835PublishFlowTests : IDisposable
     // ── body swap seams ────────────────────────────────────────────────
 
     [Fact]
+    public void PublishFlow_CreatorFactoryMutatesPacketDuringConstruction_RefusesDigestStale()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        workspace.CaptureDurableBaseline();
+        var bodyPath = workspace.GithubBodyPath(Unit);
+        IssuePublishFlowCommand.CreatorFactory = () =>
+        {
+            File.AppendAllText(bodyPath, "\nmutated-during-creator-factory\n");
+            return throwingCreator;
+        };
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+        Assert.Equal(1, exit);
+        using var result = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.DigestStale, result.RootElement.GetProperty("cause").GetString());
+        AssertZeroCreates();
+        AssertDurableStateUntouched(workspace);
+    }
+
+    [Fact]
     public void PublishFlow_BodySwap_AfterGate_RefusesDigestStale()
     {
         using var workspace = new G835PublishFlowWorkspace(declare: true);
@@ -275,9 +298,11 @@ public sealed class G835PublishFlowTests : IDisposable
         Assert.Equal(CrossRuntimeReviewCauses.DigestStale, result.RootElement.GetProperty("cause").GetString());
 
         Assert.Equal(1, checker.CallCount);
-        Assert.Equal(Title(), checker.LastTitle);
+        Assert.Equal(IssuePublishFlowCommand.FormatIssueTitle(Unit, Title()), checker.LastTitle);
+        Assert.DoesNotContain("mutated-on-disk", checker.LastBody, StringComparison.Ordinal);
         Assert.Contains("## Goal", checker.LastBody, StringComparison.Ordinal);
         Assert.Contains("mutated-on-disk", File.ReadAllText(packetYamlPath), StringComparison.Ordinal);
+        Assert.Contains("mutated-on-disk", File.ReadAllText(bodyPath), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -446,6 +471,15 @@ public sealed class G835PublishFlowTests : IDisposable
         Assert.Equal(1, exit);
         using var result = JsonDocument.Parse(output);
         Assert.Equal("missing", result.RootElement.GetProperty("cross_runtime_design_review").GetProperty("decision").GetString());
+        var digest = CrossRuntimeDesignReviewDigest.ComputeFromDirectory(workspace.PacketDirectory(Unit));
+        var designResolution = CrossRuntimeReviewDesignTeamResolver.Resolve(workspace.Context.RepoRoot, Unit);
+        var declaration = workspace.Context.Config.CrossRuntimeReview.Teams.Single(t => t.Team == $"{Domain}/{Team}");
+        var gate = CrossRuntimeReviewGate.EvaluateDesign(
+            declaration,
+            CrossRuntimeReviewDesignTeamResolver.ToCrossRuntimeResolution(designResolution),
+            digest,
+            CrossRuntimeDesignReviewStore.Read(workspace.Context.RepoRoot, Unit));
+        Assert.Contains(gate.Records, entry => entry.Status == CrossRuntimeReviewGate.StatusStaleEpoch);
         AssertZeroCreates();
         AssertDurableStateUntouched(workspace);
     }
@@ -493,15 +527,23 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.WriteFullPacket(Unit, Repo);
         workspace.SeedQueueState(Unit, Title());
         workspace.RecordSatisfiedDesignReviews(Unit);
-        var stub = new StubIssueCreator($"https://github.com/{Repo}/issues/835");
-        IssuePublishFlowCommand.CreatorFactory = () => stub;
+        var packetYamlPath = Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml");
+        var expectedBodyBytes = File.ReadAllBytes(workspace.GithubBodyPath(Unit));
+        var expectedTitle = IssuePublishFlowCommand.ResolveLookupTitle(
+            Unit,
+            File.ReadAllBytes(packetYamlPath),
+            expectedBodyBytes);
+        var recorder = new RecordingIssueCreator($"https://github.com/{Repo}/issues/835");
+        IssuePublishFlowCommand.CreatorFactory = () => recorder;
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => defaultChecker;
 
         var (exit, output) = Run(workspace, Unit, Repo, write: true);
         Assert.Equal(0, exit);
         using var result = JsonDocument.Parse(output);
         Assert.True(result.RootElement.GetProperty("created").GetBoolean());
-        Assert.Equal(1, stub.CallCount);
+        Assert.Equal(1, recorder.CallCount);
+        Assert.Equal(expectedTitle, recorder.LastTitle);
+        Assert.Equal(expectedBodyBytes, recorder.LastBodyBytes);
         Assert.True(File.Exists(workspace.PublishYamlPath(Unit)));
     }
 
@@ -569,6 +611,7 @@ public sealed class G835PublishFlowTests : IDisposable
         private byte[]? runsBaseline;
         private IReadOnlyDictionary<string, byte[]>? claimsBaseline;
         private IReadOnlyDictionary<string, byte[]>? handoffBaseline;
+        private int designReviewRecordedAtStep;
 
         public G835PublishFlowWorkspace(bool declare = false, string? heldTeam = Team, CrossRuntimeReviewTeamDeclaration[]? extraTeams = null)
         {
@@ -705,7 +748,7 @@ public sealed class G835PublishFlowTests : IDisposable
 
         public void RecordDesignReview(string unit, string runtime, string verdict)
         {
-            var recordedAt = new DateTimeOffset(2026, 9, 14, 12, 0, 0, TimeSpan.Zero).AddMinutes(runtime.GetHashCode() & 7);
+            var recordedAt = new DateTimeOffset(2026, 9, 14, 12, 0, 0, TimeSpan.Zero).AddMinutes(designReviewRecordedAtStep++);
             var digest = CrossRuntimeDesignReviewDigest.ComputeFromDirectory(PacketDirectory(unit));
             var verdictJson = JsonSerializer.Serialize(new
             {
@@ -743,12 +786,10 @@ public sealed class G835PublishFlowTests : IDisposable
 
         public void RecordSatisfiedDesignReviews(string unit)
         {
-            var recordedAt = new DateTimeOffset(2026, 9, 14, 12, 0, 0, TimeSpan.Zero);
             var digest = CrossRuntimeDesignReviewDigest.ComputeFromDirectory(Path.Combine(rootPath, ".intent-cli", "issues", unit));
-            var step = 0;
             foreach (var runtime in new[] { "claude", "cursor" })
             {
-                var at = recordedAt.AddMinutes(step++);
+                var at = new DateTimeOffset(2026, 9, 14, 12, 0, 0, TimeSpan.Zero).AddMinutes(designReviewRecordedAtStep++);
                 var verdict = JsonSerializer.Serialize(new
                 {
                     verdict = "approve",
@@ -1012,11 +1053,32 @@ public sealed class G835PublishFlowTests : IDisposable
 
         public GitHubExistingIssueLookupResult FindExistingIssue(string repo, string executionUnit, string expectedTitle, string expectedBody)
         {
-            LastTitle = expectedTitle;
-            LastBody = expectedBody;
             File.AppendAllText(packetYamlPath, "\nmutated-on-disk: true\n");
             File.AppendAllText(bodyPath, "\nmutated-on-disk\n");
+            LastTitle = expectedTitle;
+            LastBody = expectedBody;
             return inner.FindExistingIssue(repo, executionUnit, expectedTitle, expectedBody);
+        }
+    }
+
+    private sealed class RecordingIssueCreator : IIssueCreator
+    {
+        private readonly string url;
+
+        public RecordingIssueCreator(string url) => this.url = url;
+
+        public int CallCount { get; private set; }
+
+        public string? LastTitle { get; private set; }
+
+        public byte[]? LastBodyBytes { get; private set; }
+
+        public IssueCreateOutcome CreateIssue(string repo, string title, string bodyFilePath)
+        {
+            CallCount++;
+            LastTitle = title;
+            LastBodyBytes = File.ReadAllBytes(bodyFilePath);
+            return new IssueCreateOutcome(url);
         }
     }
 
