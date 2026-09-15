@@ -212,7 +212,8 @@ internal static class CrossRuntimeReviewStore
                 var record = Deserialize(File.ReadAllText(path), repoRoot, repo, pr, relative);
                 records.Add(new CrossRuntimeReviewStoredRecord(fileName, relative, record));
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException
+                or NotSupportedException or ArgumentException or FormatException or DecoderFallbackException)
             {
                 unreadable.Add(new CrossRuntimeReviewUnreadableRecord(relative, exception.Message));
             }

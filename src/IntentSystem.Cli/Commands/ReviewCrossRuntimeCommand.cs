@@ -133,11 +133,12 @@ internal static class ReviewCrossRuntimeCommand
         var body = Path.Combine(packetDirectory, "github-body.md");
         var reviewContext = Path.Combine(packetDirectory, "review-context.md");
         var implementation = Path.Combine(packetDirectory, "implementation.md");
-        if (!File.Exists(body))
+        var missingPacketFiles = new[] { body, reviewContext, implementation }.Where(path => !File.Exists(path)).ToArray();
+        if (missingPacketFiles.Length > 0)
         {
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PacketMissing,
-                $"packet issue contract '{body}' does not exist.",
-                $"run from the host root that holds `.intent-cli/issues/{unit}/`.");
+                $"packet review input(s) do not exist: {string.Join(", ", missingPacketFiles)}; a reviewer cannot review against an incomplete packet.",
+                $"run from the host root that holds `.intent-cli/issues/{unit}/` with github-body.md, review-context.md, and implementation.md.");
         }
 
         if (File.Exists(outDir))

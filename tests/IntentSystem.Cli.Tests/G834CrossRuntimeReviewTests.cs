@@ -489,6 +489,22 @@ public sealed class G834CrossRuntimeReviewTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("github-body.md")]
+    [InlineData("review-context.md")]
+    [InlineData("implementation.md")]
+    public void Request_RefusesAnIncompletePacket(string missing)
+    {
+        File.Delete(Path.Combine(root, ".intent-cli", "issues", Unit, missing));
+        var outDir = Path.Combine(root, "incomplete");
+        var (exit, output) = Route(["review", "cross-runtime", .. RequestArgs("codex", Path.Combine(root, "clone"), outDir), "--format", "json"]);
+        Assert.Equal(1, exit);
+        using var refusal = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.PacketMissing, refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Contains(missing, refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.False(Directory.Exists(outDir));
+    }
+
     [Fact]
     public void Request_RefusesAnOutDirWithForeignEntries_IncludingAStaleVerdict()
     {
