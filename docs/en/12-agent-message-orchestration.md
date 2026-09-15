@@ -172,7 +172,23 @@ read-only allow-list and is labeled as run by the seat; every interpolated path 
 POSIX single-quoted, and a path with a newline or NUL is refused. The schema uses
 only object, array, string, integer, enum, `required`, and
 `additionalProperties: false`, and declares no `$schema` keyword because Claude
-Code rejects the draft 2020-12 URI in `--json-schema`. intent-cli renders the
+Code rejects the draft 2020-12 URI in `--json-schema`.
+
+Read-only enforcement differs by runtime, as measured on 2026-09-14:
+
+- codex `exec -s read-only` is sandbox-enforced: the reviewer reads and runs
+  commands, and the sandbox refuses file writes.
+- claude `-p --permission-mode plan --disallowedTools Edit,Write,NotebookEdit`
+  removes the file-writing tools only. The Claude reviewer may run commands such as
+  builds and tests, and writes made through shell commands are not
+  sandbox-enforced.
+- cursor `-p --mode ask --sandbox enabled` refuses every non-read-only tool,
+  including all shell commands, so the Cursor reviewer reads files but cannot run
+  git or tests. `--mode plan` is not used: in a measured run a plan-mode agent
+  switched itself to agent mode and wrote files inside and outside its workspace,
+  and `--sandbox enabled` did not stop those writes.
+
+intent-cli renders the
 request and records verdicts; it does not start, launch, or manage the reviewer.
 Confirming each vendor's automation terms is the operator's responsibility.
 

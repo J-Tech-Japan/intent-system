@@ -157,7 +157,22 @@ allow-list から作られ、seat が実行するものとしてラベル付け�
 すべて POSIX の single quote で囲み、改行や NUL を含む path は拒否します。schema は
 object、array、string、integer、enum、`required`、`additionalProperties: false`
 だけを使い、Claude Code の `--json-schema` が draft 2020-12 の URI を拒否するため
-`$schema` keyword を持ちません。intent-cli は request を出力し verdict を記録する
+`$schema` keyword を持ちません。
+
+read-only の強制範囲は runtime ごとに異なります（2026-09-14 に実測）:
+
+- codex の `exec -s read-only` は sandbox で強制されます。reviewer はファイルを
+  読みコマンドを実行できますが、sandbox がファイル書き込みを拒否します。
+- claude の `-p --permission-mode plan --disallowedTools Edit,Write,NotebookEdit`
+  はファイル書き込み用の tool を外すだけです。Claude reviewer は build や test などの
+  コマンドを実行でき、shell コマンド経由の書き込みは sandbox で強制されません。
+- cursor の `-p --mode ask --sandbox enabled` は shell コマンドを含む read-only 以外の
+  すべての tool を拒否するため、Cursor reviewer はファイルを読めますが git や test は
+  実行できません。`--mode plan` は使いません。実測では plan mode の agent が自分で
+  agent mode に切り替え、workspace の内外にファイルを書き込み、`--sandbox enabled` は
+  その書き込みを止めませんでした。
+
+intent-cli は request を出力し verdict を記録する
 だけで、reviewer を起動・管理しません。各 vendor の automation terms の確認は
 operator の責任です。
 

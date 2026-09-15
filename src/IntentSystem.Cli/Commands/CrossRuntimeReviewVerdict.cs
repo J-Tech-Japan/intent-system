@@ -79,7 +79,7 @@ internal static class CrossRuntimeReviewVerdict
     /// codex: the bare object <c>-o</c> writes. claude: the measured
     /// <c>--output-format json</c> result envelope carrying
     /// <c>structured_output</c>. cursor: the <c>--output-format json</c> result
-    /// envelope whose <c>result</c> text is the verdict JSON. A bare object is
+    /// envelope whose <c>result</c> text ends with the verdict JSON. A bare object is
     /// refused for claude and cursor.
     /// </summary>
     public static bool TryParse(
@@ -144,14 +144,9 @@ internal static class CrossRuntimeReviewVerdict
                         return false;
                     }
 
-                    JsonDocument inner;
-                    try
+                    if (!TryParseTrailingObject(result.GetString()!, out var inner))
                     {
-                        inner = JsonDocument.Parse(result.GetString()!.Trim());
-                    }
-                    catch (JsonException exception)
-                    {
-                        error = $"cursor envelope 'result' is not the verdict JSON: {exception.Message}";
+                        error = "cursor envelope 'result' does not end with a verdict JSON object.";
                         return false;
                     }
 
@@ -172,6 +167,44 @@ internal static class CrossRuntimeReviewVerdict
                     return false;
             }
         }
+    }
+
+    /// <summary>
+    /// cursor-agent 2026.09.10 has no schema flag, and its measured
+    /// <c>--output-format json</c> envelope concatenates the agent's progress
+    /// narration and its final answer into <c>result</c> (for example
+    /// <c>"Running each probe ...{\"verdict\":...}"</c>). The verdict is the JSON
+    /// object that ends the text: the earliest <c>{</c> from which the whole
+    /// remainder parses as exactly one object. Nothing after it is tolerated.
+    /// </summary>
+    internal static bool TryParseTrailingObject(string text, out JsonDocument document)
+    {
+        document = null!;
+        var trimmed = text.TrimEnd();
+        if (!trimmed.EndsWith('}'))
+        {
+            return false;
+        }
+
+        for (var index = trimmed.IndexOf('{', StringComparison.Ordinal); index >= 0; index = trimmed.IndexOf('{', index + 1))
+        {
+            try
+            {
+                var candidate = JsonDocument.Parse(trimmed[index..]);
+                if (candidate.RootElement.ValueKind == JsonValueKind.Object)
+                {
+                    document = candidate;
+                    return true;
+                }
+
+                candidate.Dispose();
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        return false;
     }
 
     private static bool TryReadResultEnvelope(JsonElement root, string runtime, out string error)

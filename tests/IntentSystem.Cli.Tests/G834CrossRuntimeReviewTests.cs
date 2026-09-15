@@ -337,14 +337,15 @@ public sealed class G834CrossRuntimeReviewTests : IDisposable
         var expected = runtime switch
         {
             "codex" => $"codex exec -s read-only -C '{clone}' --output-schema '{outDir}/verdict.schema.json' -o '{outDir}/verdict.raw.json' - < '{outDir}/prompt.md'",
-            "claude" => $"cd '{clone}' && claude -p --permission-mode plan --output-format json --json-schema \"$(cat '{outDir}/verdict.schema.json')\" < '{outDir}/prompt.md' > '{outDir}/verdict.raw.json'",
-            _ => $"cursor-agent -p --mode plan --sandbox enabled --trust --workspace '{clone}' --output-format json \"$(cat '{outDir}/prompt.md')\" > '{outDir}/verdict.raw.json'",
+            "claude" => $"cd '{clone}' && claude -p --permission-mode plan --disallowedTools Edit,Write,NotebookEdit --output-format json --json-schema \"$(cat '{outDir}/verdict.schema.json')\" < '{outDir}/prompt.md' > '{outDir}/verdict.raw.json'",
+            _ => $"cursor-agent -p --mode ask --sandbox enabled --trust --workspace '{clone}' --output-format json \"$(cat '{outDir}/prompt.md')\" > '{outDir}/verdict.raw.json'",
         };
         Assert.Equal(expected, lines[1]);
 
         using var result = JsonDocument.Parse(output);
         Assert.Equal("rendered", result.RootElement.GetProperty("outcome").GetString());
         Assert.Equal("seat", result.RootElement.GetProperty("run_by").GetString());
+        Assert.Equal(CrossRuntimeReviewRuntimes.ReadOnlyEnforcement[runtime], result.RootElement.GetProperty("read_only_enforcement").GetString());
         Assert.Equal(lines[1], result.RootElement.GetProperty("invocation").GetString()!.Split('\n')[1]);
 
         var prompt = File.ReadAllText(Path.Combine(outDir, "prompt.md"));
@@ -446,9 +447,10 @@ public sealed class G834CrossRuntimeReviewTests : IDisposable
                 break;
             case "claude":
                 Assert.Equal("plan", tokens[tokens.IndexOf("--permission-mode") + 1]);
+                Assert.Equal("Edit,Write,NotebookEdit", tokens[tokens.IndexOf("--disallowedTools") + 1]);
                 break;
             default:
-                Assert.Equal("plan", tokens[tokens.IndexOf("--mode") + 1]);
+                Assert.Equal("ask", tokens[tokens.IndexOf("--mode") + 1]);
                 Assert.Equal("enabled", tokens[tokens.IndexOf("--sandbox") + 1]);
                 break;
         }
@@ -1087,6 +1089,15 @@ public sealed class G834CrossRuntimeReviewTests : IDisposable
         }
 
         Assert.Contains("operator's responsibility", solo.ToString(), StringComparison.Ordinal);
+        foreach (var text in new[] { solo.ToString(), review.ToString() })
+        {
+            Assert.Contains("codex `-s read-only` is sandbox-enforced", text, StringComparison.Ordinal);
+            Assert.Contains("shell-level writes are not sandbox-enforced", text, StringComparison.Ordinal);
+            Assert.Contains("cursor `--mode ask` refuses every non-read-only tool", text, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("not sandbox-enforced", CrossRuntimeReviewRuntimes.ReadOnlyEnforcement["claude"], StringComparison.Ordinal);
+        Assert.Contains("sandbox-enforced", CrossRuntimeReviewRuntimes.ReadOnlyEnforcement["codex"], StringComparison.Ordinal);
         Assert.Contains("operator's responsibility", review.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("cross-review ", string.Join("\n", GuideReviewCommand.CrossRuntimeReviewRules), StringComparison.Ordinal);
     }

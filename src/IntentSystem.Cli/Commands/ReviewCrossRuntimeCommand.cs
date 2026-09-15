@@ -186,6 +186,7 @@ internal static class ReviewCrossRuntimeCommand
             Invocation = invocation.TrimEnd('\n'),
             RunBy = "seat",
             RawVerdictFile = Path.Combine(outDir, CrossRuntimeReviewFiles.RawVerdict),
+            ReadOnlyEnforcement = CrossRuntimeReviewRuntimes.ReadOnlyEnforcement[runtime],
             NoExecutionBoundary = NoExecutionBoundary,
             Terms = TermsNotice,
         };
@@ -215,6 +216,7 @@ internal static class ReviewCrossRuntimeCommand
             writer.WriteLine(result.Invocation);
             writer.WriteLine("```");
             writer.WriteLine();
+            writer.WriteLine($"Read-only enforcement: {result.ReadOnlyEnforcement}");
             writer.WriteLine(result.NoExecutionBoundary);
             writer.WriteLine(result.Terms);
         }
@@ -247,8 +249,8 @@ internal static class ReviewCrossRuntimeCommand
         builder.Append($"- Read-only clone checked out at that head: {q(clone)}\n\n");
         builder.Append("## Rules\n\n");
         builder.Append("- Work read-only in the clone. Do not edit, create, or delete files; do not commit, push, or post anything.\n");
-        builder.Append($"- First confirm that `git -C {q(clone)} rev-parse HEAD` prints {head}. If it does not, return request-changes with one finding that names the mismatch.\n");
-        builder.Append("- The change under review is the commits on HEAD that are not on the base branch named in the issue contract.\n");
+        builder.Append($"- If you can run commands, first confirm that `git -C {q(clone)} rev-parse HEAD` prints {head}; if it does not, return request-changes with one finding that names the mismatch. If your runtime cannot run commands, say so in notes.\n");
+        builder.Append("- The change under review is the commits on HEAD that are not on the base branch named in the issue contract. If you cannot run git, review the target paths the issue contract names and say in notes that you could not list the commits.\n");
         builder.Append("- Judge the change against the issue contract and the review context: correctness, contract conformance, tests, and every blocking item the review context names.\n");
         builder.Append("- A blocking finding names the file, the line, and the concrete scenario that fails. Put non-blocking observations in notes.\n\n");
         builder.Append("## Output\n\n");
@@ -845,6 +847,7 @@ internal sealed record CrossRuntimeReviewRequestResult
     [JsonPropertyName("invocation")] public required string Invocation { get; init; }
     [JsonPropertyName("run_by")] public required string RunBy { get; init; }
     [JsonPropertyName("raw_verdict_file")] public required string RawVerdictFile { get; init; }
+    [JsonPropertyName("read_only_enforcement")] public required string ReadOnlyEnforcement { get; init; }
     [JsonPropertyName("no_execution_boundary")] public required string NoExecutionBoundary { get; init; }
     [JsonPropertyName("terms")] public required string Terms { get; init; }
 }

@@ -27,8 +27,21 @@ internal static class CrossRuntimeReviewRuntimes
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
         {
             [Codex] = ["-s", "-C", "--output-schema", "-o", "-"],
-            [Claude] = ["-p", "--permission-mode", "--output-format", "--json-schema"],
+            [Claude] = ["-p", "--permission-mode", "--disallowedTools", "--output-format", "--json-schema"],
             [Cursor] = ["-p", "--mode", "--sandbox", "--trust", "--workspace", "--output-format"],
+        };
+
+    /// <summary>
+    /// What each pinned invocation actually enforces, as measured on 2026-09-14
+    /// (G834 real runs and probes). Guides and the request output repeat these
+    /// statements so no seat assumes more isolation than a runtime provides.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, string> ReadOnlyEnforcement =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [Codex] = "codex `-s read-only` is sandbox-enforced: the reviewer can read and run commands, but the sandbox refuses file writes.",
+            [Claude] = "claude `--permission-mode plan --disallowedTools Edit,Write,NotebookEdit` removes the file-writing tools only. Command execution (for example building and running tests) is allowed, and writes made through shell commands are not sandbox-enforced.",
+            [Cursor] = "cursor `--mode ask` refuses every non-read-only tool, including all shell commands, so the reviewer reads files but cannot run git or tests. `--mode plan` was not used because a measured plan-mode run switched itself to agent mode and wrote files inside and outside the workspace; `--sandbox enabled` did not stop those writes.",
         };
 
     /// <summary>The first line of <c>invocation.txt</c>: who runs it.</summary>
@@ -51,11 +64,11 @@ internal static class CrossRuntimeReviewRuntimes
                 $"codex exec -s read-only -C {quotedClone} --output-schema {Out(CrossRuntimeReviewFiles.Schema)} "
                 + $"-o {Out(CrossRuntimeReviewFiles.RawVerdict)} - < {Out(CrossRuntimeReviewFiles.Prompt)}",
             Claude =>
-                $"cd {quotedClone} && claude -p --permission-mode plan --output-format json "
+                $"cd {quotedClone} && claude -p --permission-mode plan --disallowedTools Edit,Write,NotebookEdit --output-format json "
                 + $"--json-schema \"$(cat {Out(CrossRuntimeReviewFiles.Schema)})\" < {Out(CrossRuntimeReviewFiles.Prompt)} "
                 + $"> {Out(CrossRuntimeReviewFiles.RawVerdict)}",
             Cursor =>
-                $"cursor-agent -p --mode plan --sandbox enabled --trust --workspace {quotedClone} --output-format json "
+                $"cursor-agent -p --mode ask --sandbox enabled --trust --workspace {quotedClone} --output-format json "
                 + $"\"$(cat {Out(CrossRuntimeReviewFiles.Prompt)})\" > {Out(CrossRuntimeReviewFiles.RawVerdict)}",
             _ => throw new ArgumentOutOfRangeException(nameof(runtime), runtime, "Unsupported cross-runtime review runtime."),
         };
