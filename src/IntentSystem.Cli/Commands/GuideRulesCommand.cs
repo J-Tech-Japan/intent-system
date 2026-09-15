@@ -56,7 +56,7 @@ internal static class GuideRulesCommand
                 "intent-cli claim verify / claim release — inspect and hand off the execution-unit claim; lifecycle labels are only its shadow.",
                 "intent-cli automation pr-transition --repo <r> --pr <n> --transition <review-start|request-update|approved> --write — supported PR transitions.",
                 "intent-cli worker claim / worker complete — child-loop label ownership; do not invent transitions in prompts.",
-                "intent-cli automation pr-created-stale-recovery --repo <r> --issue <n> --execution-unit <unit> --team <team> --ruling <text> [--write] — recover a stale intent-pr-created shadow after an unmerged PR close; single-operator, not coordinated across concurrent writes."
+                "intent-cli automation pr-created-stale-recovery --repo <r> --issue <n> --execution-unit <unit> --team <team> --ruling <text> [--write] — recover a stale intent-pr-created shadow after an unmerged PR close; single-operator, not coordinated across concurrent writes. A later `worker complete` that replaces `linked_pr` may need operator review of the queue-state forward delta."
             }
         },
         [TopicChildIssueContract] = new RulesTopic

@@ -18,7 +18,7 @@ namespace IntentSystem.Cli.Commands;
 internal static class AutomationPrCreatedStaleRecoveryCommand
 {
     public const string EventStarted = "pr-created-stale-recovery-started";
-    public const string EventRecovered = "pr-created-stale-recovery-recovered";
+    public const string EventRecovered = "pr-created-stale-recovered";
     public const string EventAborted = "pr-created-stale-recovery-aborted";
     public const string EventSuperseded = "pr-created-stale-recovery-superseded";
     public const string By = "automation-pr-created-stale-recovery";
@@ -117,11 +117,11 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         {
             queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
         }
-        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
             return Refuse(writer, format, repo!, issue!.Value, executionUnit!, team!, mode, "host-state-missing",
                 null, false, warnings,
-                $"refusing: queue-state.json could not be parsed ({exception.Message}).");
+                $"refusing: queue-state.json could not be read or parsed ({exception.Message}).");
         }
 
         RecoveryRunLog runLog;
@@ -129,7 +129,7 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         {
             runLog = ReadRecoveryRunLog(context);
         }
-        catch (Exception exception) when (exception is JsonException or InvalidOperationException or IOException)
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
             return Refuse(writer, format, repo!, issue!.Value, executionUnit!, team!, mode, "runs-log-unreadable",
                 null, false, warnings,
@@ -166,7 +166,7 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
 
             if (!labelNames.Contains(WorkerNextActionConstants.Labels.IntentPrCreated, StringComparer.Ordinal))
             {
-                if (openStartedEvents.Select(entry => entry.Key).DistinctBy(key => $"{key.Repo}|{key.PrNumber}").Count() > 1)
+                if (openStartedEvents.Select(entry => entry.Key).DistinctBy(RecoveryKeyDistinctText).Count() > 1)
                 {
                     return Refuse(writer, format, repo!, issue!.Value, executionUnit!, team!, mode, "started-ambiguous",
                         null, false, warnings,
@@ -255,14 +255,12 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         }
 
         var publishArtifact = TryReadPublishArtifact(context, executionUnit!);
-        if (publishArtifact is not null
-            && publishArtifact.CreatedIssueUrl is not null
-            && AutomationPublishLifecycleRepairCommand.TryBindIssueRepository(publishArtifact, out var boundRepository)
-            && !AutomationPublishLifecycleRepairCommand.RepositoryEquals(boundRepository!, repo!))
+        var createdIssueUrlRefusal = EvaluateCreatedIssueUrlBinding(publishArtifact, repo!, issue!.Value);
+        if (createdIssueUrlRefusal is not null)
         {
             return MaybeAbortSameKeyResume(writer, context, format, repo!, issue!.Value, executionUnit!, team!, mode,
-                resumeSameKey, resumeKey, ruling!, warnings, "repo-mismatch",
-                $"refusing: created_issue_url binds the unit to '{boundRepository}', not --repo '{repo}'.");
+                resumeSameKey, resumeKey, ruling!, warnings, createdIssueUrlRefusal,
+                "refusing: publish.yaml created_issue_url does not match --repo and --issue.");
         }
 
         if (!TryParseLinkedPr(queueItem.LinkedPr, out var linkedPrRepo, out var linkedPrNumber))
@@ -304,13 +302,14 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
                 resumeSameKey, resumeKey, ruling!, warnings, prRefusal, "refusing: linked PR is not closed unmerged.");
         }
 
+        NoteOpenClosingPrListingLimit(warnings);
         try
         {
             if (HasOpenClosingPr(repo!, issue!.Value))
             {
                 return MaybeAbortSameKeyResume(writer, context, format, repo!, issue!.Value, executionUnit!, team!, mode,
                     resumeSameKey, resumeKey, ruling!, warnings, "open-closing-pr",
-                    "refusing: an OPEN PR closes this issue.");
+                    $"refusing: an OPEN PR closes this issue (checked at most the first {OpenPrListingLimit} OPEN pull requests).");
             }
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
@@ -445,12 +444,12 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         {
             try
             {
-                AppendSupersededEvent(context, target.Key, "outcome of the earlier run unknown");
+                AppendSupersededEvent(context, target.Key, ruling, claimStatus);
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException or UnauthorizedAccessException)
             {
-                writer.WriteLine($"failed to append superseded event: {exception.Message}");
-                return 1;
+                return FailPostStartedWrite(writer, format, repo, issue, executionUnit, team, currentKey.PrNumber, warnings,
+                    "superseded-event-append-failed", $"failed to append superseded event: {exception.Message}");
             }
         }
 
@@ -463,8 +462,8 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException or UnauthorizedAccessException)
             {
-                writer.WriteLine($"failed to append started event: {exception.Message}");
-                return 1;
+                return FailPostStartedWrite(writer, format, repo, issue, executionUnit, team, currentKey.PrNumber, warnings,
+                    "started-event-append-failed", $"failed to append started event: {exception.Message}");
             }
         }
 
@@ -528,12 +527,14 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
                 prRefusal, "re-check refused: linked PR state changed.");
         }
 
+        NoteOpenClosingPrListingLimit(warnings);
         try
         {
             if (HasOpenClosingPr(repo, issue))
             {
                 return AbortWrite(writer, context, format, repo, issue, executionUnit, team, currentKey, ruling, claimStatus, warnings,
-                    "open-closing-pr", "re-check refused: an OPEN PR closes this issue.");
+                    "open-closing-pr",
+                    $"re-check refused: an OPEN PR closes this issue (checked at most the first {OpenPrListingLimit} OPEN pull requests).");
             }
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
@@ -554,8 +555,8 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
-            writer.WriteLine($"label removal failed: {exception.Message}");
-            return 1;
+            return FailPostStartedWrite(writer, format, repo, issue, executionUnit, team, currentKey.PrNumber, warnings,
+                "label-removal-failed", $"label removal failed: {exception.Message}");
         }
 
         IReadOnlyList<GitHubAutomationLabel> readBack;
@@ -565,14 +566,15 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
-            writer.WriteLine($"label readback failed: {exception.Message}");
-            return 1;
+            return FailPostStartedWrite(writer, format, repo, issue, executionUnit, team, currentKey.PrNumber, warnings,
+                "label-readback-failed", $"label readback failed: {exception.Message}");
         }
 
         if (readBack.Any(label => string.Equals(label.Name, WorkerNextActionConstants.Labels.IntentPrCreated, StringComparison.Ordinal)))
         {
-            writer.WriteLine("label readback unconfirmed: intent-pr-created is still present after removal.");
-            return 1;
+            return FailPostStartedWrite(writer, format, repo, issue, executionUnit, team, currentKey.PrNumber, warnings,
+                "label-readback-unconfirmed",
+                "label readback unconfirmed: intent-pr-created is still present after removal.");
         }
 
         try
@@ -581,10 +583,10 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException or UnauthorizedAccessException)
         {
-            writer.WriteLine(
+            return FailPostStartedWrite(writer, format, repo, issue, executionUnit, team, currentKey.PrNumber, warnings,
+                "recovered-event-append-failed",
                 $"label removed but recovered event append failed: {exception.Message}. "
                 + "Re-run `intent-cli automation pr-created-stale-recovery --write` to complete the audit trail.");
-            return 1;
         }
 
         return EmitSuccess(writer, format, repo, issue, executionUnit, team, ModeWrite, "recovered",
@@ -617,6 +619,7 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         }
 
         var claimStatus = ExtractClaimStatusFromReason(started.Event.Reason) ?? "unknown";
+        warnings.Add("the earlier run may have aborted.");
         if (!write)
         {
             return EmitSuccess(writer, format, repo, issue, executionUnit, team, ModeDryRun, "recovery-completed",
@@ -705,9 +708,21 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
             return 1;
         }
 
-        warnings.Add("the earlier run may have aborted; a later label-absent run can take the completion path.");
         return Refuse(writer, format, repo, issue, executionUnit, team, ModeWrite, cause, key.PrNumber, false, warnings, summary);
     }
+
+    private static int FailPostStartedWrite(
+        TextWriter writer,
+        string format,
+        string repo,
+        int issue,
+        string executionUnit,
+        string team,
+        int linkedPr,
+        List<string> warnings,
+        string cause,
+        string summary) =>
+        Refuse(writer, format, repo, issue, executionUnit, team, ModeWrite, cause, linkedPr, false, warnings, summary);
 
     private static LabelRecoveryOutcome EvaluateLabelRecoveryState(
         RecoveryRunLog runLog,
@@ -733,7 +748,7 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
             {
                 return LabelRecoveryOutcome.Success(
                     "closed-then-label-removed",
-                    "an earlier run was closed without recovered; the label is already absent. No further recovery is needed; a fresh worker claim --team can proceed if the PR was closed unmerged.");
+                    "an earlier run was closed without recovered; the label is already absent. No further recovery is needed; a fresh `worker claim --team` can proceed if the current PR was closed unmerged, but not if it merged. If the removal itself needs an audit record, record the ruling in the host because this command does not invent a recovered event.");
             }
 
             if (!runLog.HasAnyRecoveryEventForKey(key))
@@ -855,9 +870,13 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         AppendRunEvent(context, key, EventAborted, $"{BuildReason(ruling, claimStatus, resumed: false, extra: null)}; {detail}");
     }
 
-    private static void AppendSupersededEvent(CliContext context, RecoveryKey key, string detail)
+    private static void AppendSupersededEvent(CliContext context, RecoveryKey key, string ruling, string claimStatus)
     {
-        AppendRunEvent(context, key, EventSuperseded, detail);
+        AppendRunEvent(
+            context,
+            key,
+            EventSuperseded,
+            $"{BuildReason(ruling, claimStatus, resumed: false, extra: null)}; outcome of the earlier run unknown");
     }
 
     private static void AppendRunEvent(CliContext context, RecoveryKey key, string eventName, string reason)
@@ -913,6 +932,59 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         var end = reason.IndexOf(';', start);
         return end < 0 ? reason[start..].Trim() : reason[start..end].Trim();
     }
+
+    private static string? EvaluateCreatedIssueUrlBinding(IssuePublishArtifact? publishArtifact, string repo, int issue)
+    {
+        if (publishArtifact?.CreatedIssueUrl is not { } rawUrl || string.IsNullOrWhiteSpace(rawUrl))
+        {
+            return null;
+        }
+
+        if (!TryParseCreatedIssueUrl(rawUrl, out var urlRepo, out var urlIssue))
+        {
+            return "repo-mismatch";
+        }
+
+        if (!AutomationPublishLifecycleRepairCommand.RepositoryEquals(urlRepo, repo) || urlIssue != issue)
+        {
+            return "repo-mismatch";
+        }
+
+        if (publishArtifact.CreatedIssueNumber is { } createdIssueNumber && createdIssueNumber != urlIssue)
+        {
+            return "repo-mismatch";
+        }
+
+        return null;
+    }
+
+    private static bool TryParseCreatedIssueUrl(string url, out string repo, out int issueNumber)
+    {
+        repo = string.Empty;
+        issueNumber = 0;
+        var match = LinkedIssueUrlPattern.Match(url.Trim());
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        repo = match.Groups["repo"].Value;
+        return int.TryParse(match.Groups["number"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out issueNumber)
+               && issueNumber > 0;
+    }
+
+    private static void NoteOpenClosingPrListingLimit(List<string> warnings)
+    {
+        const string note =
+            "open-closing-PR check considers at most the first 200 OPEN pull requests returned by the repository listing.";
+        if (!warnings.Contains(note))
+        {
+            warnings.Add(note);
+        }
+    }
+
+    private static string RecoveryKeyDistinctText(RecoveryKey key) =>
+        $"{key.Repo.ToLowerInvariant()}|{key.PrNumber}";
 
     private static IssuePublishArtifact? TryReadPublishArtifact(CliContext context, string executionUnit)
     {
