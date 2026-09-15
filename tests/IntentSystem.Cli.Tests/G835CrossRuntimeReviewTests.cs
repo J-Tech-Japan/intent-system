@@ -82,6 +82,20 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         }
     }
 
+    [Fact]
+    public void Request_AndRecord_RefuseEmptyModelString()
+    {
+        var outDir = Path.Combine(root, "empty-model");
+        var (requestExit, requestOutput) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--model", "", "--format", "json"]);
+        Assert.Equal(1, requestExit);
+        Assert.Contains(CrossRuntimeReviewCauses.ModelInvalid, requestOutput, StringComparison.Ordinal);
+
+        var verdict = WriteVerdictFile("codex", Verdict("approve", CurrentDigest()));
+        var (recordExit, recordOutput) = Route(["review", "cross-runtime", .. DesignRecordArgs("codex", verdict, CurrentDigest(), write: false), "--model", "", "--format", "json"]);
+        Assert.Equal(1, recordExit);
+        Assert.Contains(CrossRuntimeReviewCauses.ModelInvalid, recordOutput, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("-bad")]
     [InlineData("a\tb")]
@@ -294,6 +308,16 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         Assert.Equal(4, ReviewCrossRuntimeCommand.LongestBacktickRun(body));
         Assert.Contains("`````github-body.md\n" + body + "`````\n", prompt, StringComparison.Ordinal);
         Assert.Contains("```packet.yaml\n", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DesignRequest_RefusesNonUtf8PacketBytes()
+    {
+        File.WriteAllBytes(Path.Combine(PacketDir(Unit), "github-body.md"), [0xFF, 0xFE, 0x00]);
+        var outDir = Path.Combine(root, "design-out-invalid");
+        var (exit, output) = Route(["review", "cross-runtime", .. DesignRequestArgs("cursor", outDir), "--format", "json"]);
+        Assert.Equal(1, exit);
+        Assert.Contains(CrossRuntimeReviewCauses.PacketInvalid, output, StringComparison.Ordinal);
     }
 
     [Theory]

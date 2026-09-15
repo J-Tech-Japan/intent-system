@@ -22,14 +22,16 @@ public sealed class G835PublishFlowTests : IDisposable
     private const string OtherRepo = "J-Tech-Japan/other";
     private const string UndeclaredTeam = "other-team";
 
+    private readonly ThrowingIssueCreator throwingCreator = new();
+    private readonly StubExistingIssueChecker defaultChecker =
+        new(GitHubExistingIssueClassification.None);
+
     public G835PublishFlowTests()
     {
-        IssuePublishFlowCommand.CreatorFactory = null;
+        IssuePublishFlowCommand.CreatorFactory = () => throwingCreator;
         IssuePublishFlowCommand.UtcNowFactory = null;
         IssuePublishFlowCommand.AfterGateHook = null;
-        IssuePublishFlowCommand.BeforeCreateIssueHook = null;
-        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () =>
-            new StubExistingIssueChecker(GitHubExistingIssueClassification.None);
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => defaultChecker;
     }
 
     public void Dispose()
@@ -37,7 +39,6 @@ public sealed class G835PublishFlowTests : IDisposable
         IssuePublishFlowCommand.CreatorFactory = null;
         IssuePublishFlowCommand.UtcNowFactory = null;
         IssuePublishFlowCommand.AfterGateHook = null;
-        IssuePublishFlowCommand.BeforeCreateIssueHook = null;
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = null;
     }
 
@@ -73,12 +74,14 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.SeedQueueState(Unit, Title());
         var stub = new StubIssueCreator($"https://github.com/{Repo}/issues/8350");
         IssuePublishFlowCommand.CreatorFactory = () => stub;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => defaultChecker;
 
         var baseline = NormalizePublishOutput(Run(workspace, Unit, Repo, write, team: UndeclaredTeam));
         using var gated = new G835PublishFlowWorkspace(declare: true, heldTeam: UndeclaredTeam);
         gated.WriteMinimalPacket(Unit, Repo, targetRepoOverride: "submodules/intent-system");
         gated.SeedQueueState(Unit, Title());
         IssuePublishFlowCommand.CreatorFactory = () => stub;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => defaultChecker;
         var declaring = NormalizePublishOutput(Run(gated, Unit, Repo, write, team: UndeclaredTeam));
 
         Assert.Equal(baseline.Json, declaring.Json);
@@ -118,10 +121,12 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.SeedQueueState(Unit, Title());
         workspace.WriteClaim(Unit, "sekiban-dev");
 
+        workspace.CaptureDurableBaseline();
         var (exit, output) = Run(workspace, Unit, Repo, write: true, team: "sekiban-dev");
         Assert.Equal(1, exit);
         using var result = JsonDocument.Parse(output);
         Assert.Equal(CrossRuntimeReviewCauses.DomainMismatch, result.RootElement.GetProperty("cause").GetString());
+        AssertZeroCreates();
         AssertDurableStateUntouched(workspace);
     }
 
@@ -132,12 +137,28 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.WriteFullPacket(Unit, "J-Tech-Japan/wrong");
         workspace.SeedQueueState(Unit, Title());
 
+        workspace.CaptureDurableBaseline();
         var (exit, output) = Run(workspace, Unit, Repo, write: true);
         Assert.Equal(1, exit);
         using var result = JsonDocument.Parse(output);
         Assert.Equal(CrossRuntimeReviewCauses.TargetRepoMismatch, result.RootElement.GetProperty("cause").GetString());
         Assert.Contains(Repo, result.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+        AssertZeroCreates();
         AssertDurableStateUntouched(workspace);
+    }
+
+    [Fact]
+    public void PublishFlow_DryRun_TargetRepoMismatch_ReportsResolutionRefusal()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, "J-Tech-Japan/wrong");
+        workspace.SeedQueueState(Unit, Title());
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: false);
+        Assert.Equal(0, exit);
+        using var result = JsonDocument.Parse(output);
+        var review = result.RootElement.GetProperty("cross_runtime_design_review");
+        Assert.Equal(CrossRuntimeReviewCauses.TargetRepoMismatch, review.GetProperty("reasons")[0].GetProperty("cause").GetString());
     }
 
     [Fact]
@@ -148,6 +169,7 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.SeedQueueState(Unit, Title());
         var stub = new StubIssueCreator("https://github.com/J-Tech-Japan/intent-system/issues/9001");
         IssuePublishFlowCommand.CreatorFactory = () => stub;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => defaultChecker;
 
         var (exit, output) = Run(workspace, Unit, Repo, write: true, team: UndeclaredTeam);
         Assert.Equal(0, exit);
@@ -163,9 +185,11 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.WriteFullPacket(Unit, Repo);
         workspace.SeedQueueState(Unit, Title());
 
+        workspace.CaptureDurableBaseline();
         var (exit, output) = Run(workspace, Unit, Repo, write: true);
         Assert.Equal(1, exit);
         Assert.Contains(CrossRuntimeReviewCauses.TeamUnresolved, output, StringComparison.Ordinal);
+        AssertZeroCreates();
         AssertDurableStateUntouched(workspace);
     }
 
@@ -178,6 +202,7 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.WriteFullPacket(Unit, Repo);
         workspace.SeedQueueState(Unit, Title());
         workspace.RecordSatisfiedDesignReviews(Unit);
+        workspace.CaptureDurableBaseline();
         IssuePublishFlowCommand.AfterGateHook = () =>
             File.AppendAllText(workspace.GithubBodyPath(Unit), "\n");
 
@@ -185,6 +210,26 @@ public sealed class G835PublishFlowTests : IDisposable
         Assert.Equal(1, exit);
         using var result = JsonDocument.Parse(output);
         Assert.Equal(CrossRuntimeReviewCauses.DigestStale, result.RootElement.GetProperty("cause").GetString());
+        AssertZeroCreates();
+        AssertDurableStateUntouched(workspace);
+    }
+
+    [Fact]
+    public void PublishFlow_PacketSwapDuringLookup_RefusesDigestStale()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo, bodyTitle: Title());
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        workspace.CaptureDurableBaseline();
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () =>
+            new PacketSwapDuringLookupChecker(workspace, Unit, Repo, Title("B"));
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+        Assert.Equal(1, exit);
+        using var result = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.DigestStale, result.RootElement.GetProperty("cause").GetString());
+        AssertZeroCreates();
         AssertDurableStateUntouched(workspace);
     }
 
@@ -195,12 +240,14 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.WriteFullPacket(Unit, Repo);
         workspace.SeedQueueState(Unit, Title());
         var bodyPath = workspace.GithubBodyPath(Unit);
+        workspace.CaptureDurableBaseline();
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => new MutatingExistingIssueChecker(bodyPath);
 
         var (exit, output) = Run(workspace, Unit, Repo, write: true);
         Assert.Equal(1, exit);
         using var result = JsonDocument.Parse(output);
         Assert.Equal(CrossRuntimeReviewCauses.LookupInputChanged, result.RootElement.GetProperty("cause").GetString());
+        AssertZeroCreates();
         AssertDurableStateUntouched(workspace);
     }
 
@@ -212,14 +259,25 @@ public sealed class G835PublishFlowTests : IDisposable
         using var workspace = new G835PublishFlowWorkspace(declare: true);
         workspace.WriteFullPacket(Unit, Repo, bodyTitle: Title());
         workspace.SeedQueueState(Unit, Title());
-        var checker = new CapturingExistingIssueChecker(GitHubExistingIssueClassification.None);
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        var packetYamlPath = Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml");
+        var bodyPath = workspace.GithubBodyPath(Unit);
+        var checker = new PostSnapshotMutatingChecker(
+            packetYamlPath,
+            bodyPath,
+            GitHubExistingIssueClassification.None);
+        workspace.CaptureDurableBaseline();
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
 
-        Run(workspace, Unit, Repo, write: true);
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+        Assert.Equal(1, exit);
+        using var result = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.DigestStale, result.RootElement.GetProperty("cause").GetString());
 
         Assert.Equal(1, checker.CallCount);
         Assert.Equal(Title(), checker.LastTitle);
         Assert.Contains("## Goal", checker.LastBody, StringComparison.Ordinal);
+        Assert.Contains("mutated-on-disk", File.ReadAllText(packetYamlPath), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -244,12 +302,32 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.SeedQueueState(Unit, Title());
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = () =>
             new StubExistingIssueChecker(GitHubExistingIssueClassification.Unique, 55, $"https://github.com/{Repo}/issues/55");
+        IssuePublishFlowCommand.CreatorFactory = () => throwingCreator;
 
         var queueBefore = File.ReadAllBytes(workspace.QueueStatePath);
         var (exit, output) = Run(workspace, Unit, Repo, write: true);
         Assert.Equal(0, exit);
         using var result = JsonDocument.Parse(output);
         Assert.True(result.RootElement.GetProperty("durable_state_synced").GetBoolean());
+        Assert.NotEqual(queueBefore, File.ReadAllBytes(workspace.QueueStatePath));
+    }
+
+    [Fact]
+    public void PublishFlow_ExactlyOneRecovery_ProceedsWhenResolutionWouldFail()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true, heldTeam: null);
+        workspace.WriteTwoFilePacket(Unit, Repo);
+        workspace.SeedQueueState(Unit, Title());
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () =>
+            new StubExistingIssueChecker(GitHubExistingIssueClassification.Unique, 88, $"https://github.com/{Repo}/issues/88");
+        IssuePublishFlowCommand.CreatorFactory = () => throwingCreator;
+
+        var queueBefore = File.ReadAllBytes(workspace.QueueStatePath);
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+        Assert.Equal(0, exit);
+        using var result = JsonDocument.Parse(output);
+        Assert.True(result.RootElement.GetProperty("durable_state_synced").GetBoolean());
+        Assert.Equal(0, throwingCreator.CallCount);
         Assert.NotEqual(queueBefore, File.ReadAllBytes(workspace.QueueStatePath));
     }
 
@@ -303,10 +381,108 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.WriteFullPacket(Unit, Repo);
         workspace.SeedQueueState(Unit, Title());
 
+        workspace.CaptureDurableBaseline();
         var (exit, output) = Run(workspace, Unit, Repo, write: true);
         Assert.Equal(1, exit);
         using var result = JsonDocument.Parse(output);
         Assert.Contains("cross-runtime-review-missing", result.RootElement.GetProperty("cause").GetString(), StringComparison.Ordinal);
+        AssertZeroCreates();
+        AssertDurableStateUntouched(workspace);
+    }
+
+    [Fact]
+    public void PublishFlow_DeclaredTeam_GateBlocked_RefusesAndLeavesDurableStateUntouched()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordDesignReview(Unit, "claude", "request-changes");
+        workspace.RecordDesignReview(Unit, "cursor", "approve");
+        workspace.CaptureDurableBaseline();
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+        Assert.Equal(1, exit);
+        using var result = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.Blocked, result.RootElement.GetProperty("cause").GetString());
+        AssertZeroCreates();
+        AssertDurableStateUntouched(workspace);
+    }
+
+    [Fact]
+    public void PublishFlow_DeclaredTeam_GateRereviewMissing_RefusesAndLeavesDurableStateUntouched()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WritePacketVariant(Unit, Repo, "variant-a");
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordDesignReview(Unit, "claude", "approve");
+        workspace.RecordDesignReview(Unit, "codex", "request-changes");
+        workspace.WritePacketVariant(Unit, Repo, "variant-b");
+        workspace.RecordDesignReview(Unit, "claude", "approve");
+        workspace.RecordDesignReview(Unit, "cursor", "approve");
+        workspace.CaptureDurableBaseline();
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+        Assert.Equal(1, exit);
+        using var result = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.RereviewMissing, result.RootElement.GetProperty("cause").GetString());
+        AssertZeroCreates();
+        AssertDurableStateUntouched(workspace);
+    }
+
+    [Fact]
+    public void PublishFlow_DeclaredTeam_GateStaleEpoch_RefusesAndLeavesDurableStateUntouched()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WritePacketVariant(Unit, Repo, "epoch-a");
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordDesignReview(Unit, "claude", "approve");
+        workspace.RecordDesignReview(Unit, "cursor", "approve");
+        workspace.WritePacketVariant(Unit, Repo, "epoch-b");
+        workspace.RecordDesignReview(Unit, "codex", "request-changes");
+        workspace.WritePacketVariant(Unit, Repo, "epoch-a");
+        workspace.CaptureDurableBaseline();
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+        Assert.Equal(1, exit);
+        using var result = JsonDocument.Parse(output);
+        Assert.Equal("missing", result.RootElement.GetProperty("cross_runtime_design_review").GetProperty("decision").GetString());
+        AssertZeroCreates();
+        AssertDurableStateUntouched(workspace);
+    }
+
+    [Fact]
+    public void PublishFlow_DeclaredTeam_GateRecordUnreadable_RefusesAndLeavesDurableStateUntouched()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordDesignReview(Unit, "claude", "approve");
+        workspace.RecordDesignReview(Unit, "cursor", "approve");
+        var directory = CrossRuntimeReviewPaths.DesignDirectory(workspace.Context.RepoRoot, Unit);
+        File.WriteAllText(Path.Combine(directory, "20990101T000000Z-codex-zzzzzzz.json"), "{\"artifact_kind\":\"nope\"}");
+        workspace.CaptureDurableBaseline();
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+        Assert.Equal(1, exit);
+        using var result = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.RecordUnreadable, result.RootElement.GetProperty("cause").GetString());
+        AssertZeroCreates();
+        AssertDurableStateUntouched(workspace);
+    }
+
+    [Fact]
+    public void PublishFlow_DeclaredTeam_PacketMissing_RefusesAndLeavesDurableStateUntouched()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteTwoFilePacket(Unit, Repo);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.CaptureDurableBaseline();
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+        Assert.Equal(1, exit);
+        using var result = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.PacketMissing, result.RootElement.GetProperty("cause").GetString());
+        AssertZeroCreates();
         AssertDurableStateUntouched(workspace);
     }
 
@@ -319,6 +495,7 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.RecordSatisfiedDesignReviews(Unit);
         var stub = new StubIssueCreator($"https://github.com/{Repo}/issues/835");
         IssuePublishFlowCommand.CreatorFactory = () => stub;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => defaultChecker;
 
         var (exit, output) = Run(workspace, Unit, Repo, write: true);
         Assert.Equal(0, exit);
@@ -331,6 +508,8 @@ public sealed class G835PublishFlowTests : IDisposable
     // ── helpers ────────────────────────────────────────────────────────
 
     private static string Title() => "G835PF Publish-flow design gate";
+
+    private static string Title(string suffix) => $"G835PF Publish-flow design gate {suffix}";
 
     private static (int ExitCode, string Output) Run(
         G835PublishFlowWorkspace workspace,
@@ -378,18 +557,18 @@ public sealed class G835PublishFlowTests : IDisposable
         return (result.ExitCode, node.ToJsonString());
     }
 
-    private static void AssertDurableStateUntouched(G835PublishFlowWorkspace workspace)
-    {
-        Assert.False(File.Exists(workspace.PublishYamlPath(Unit)));
-        if (File.Exists(workspace.RunsLogPath))
-        {
-            Assert.Empty(File.ReadAllText(workspace.RunsLogPath));
-        }
-    }
+    private void AssertZeroCreates() => Assert.Equal(0, throwingCreator.CallCount);
+
+    private static void AssertDurableStateUntouched(G835PublishFlowWorkspace workspace) =>
+        workspace.AssertDurableBaselineUntouched(Unit);
 
     private sealed class G835PublishFlowWorkspace : IDisposable
     {
         private readonly string rootPath = Directory.CreateTempSubdirectory("g835-publish-flow-").FullName;
+        private byte[]? queueStateBaseline;
+        private byte[]? runsBaseline;
+        private IReadOnlyDictionary<string, byte[]>? claimsBaseline;
+        private IReadOnlyDictionary<string, byte[]>? handoffBaseline;
 
         public G835PublishFlowWorkspace(bool declare = false, string? heldTeam = Team, CrossRuntimeReviewTeamDeclaration[]? extraTeams = null)
         {
@@ -443,6 +622,32 @@ public sealed class G835PublishFlowTests : IDisposable
         public string PublishYamlPath(string unit) =>
             Path.Combine(rootPath, ".intent-cli", "issues", unit, "publish.yaml");
 
+        public string PacketDirectory(string unit) =>
+            Path.Combine(rootPath, ".intent-cli", "issues", unit);
+
+        public string ClaimsDirectory => Path.Combine(rootPath, ".intent-cli", "claims");
+
+        public string HandoffDirectory => Path.Combine(rootPath, PublishedExternalHandoffStore.RecordRootRelativePath);
+
+        public void CaptureDurableBaseline()
+        {
+            queueStateBaseline = File.Exists(QueueStatePath) ? File.ReadAllBytes(QueueStatePath) : Array.Empty<byte>();
+            runsBaseline = File.Exists(RunsLogPath) ? File.ReadAllBytes(RunsLogPath) : Array.Empty<byte>();
+            claimsBaseline = SnapshotDirectory(ClaimsDirectory);
+            handoffBaseline = SnapshotDirectory(HandoffDirectory);
+        }
+
+        public void AssertDurableBaselineUntouched(string unit)
+        {
+            Assert.False(File.Exists(PublishYamlPath(unit)));
+            var queueState = File.Exists(QueueStatePath) ? File.ReadAllBytes(QueueStatePath) : Array.Empty<byte>();
+            Assert.Equal(queueStateBaseline ?? Array.Empty<byte>(), queueState);
+            var runs = File.Exists(RunsLogPath) ? File.ReadAllBytes(RunsLogPath) : Array.Empty<byte>();
+            Assert.Equal(runsBaseline ?? Array.Empty<byte>(), runs);
+            Assert.Equal(claimsBaseline ?? new Dictionary<string, byte[]>(), SnapshotDirectory(ClaimsDirectory));
+            Assert.Equal(handoffBaseline ?? new Dictionary<string, byte[]>(), SnapshotDirectory(HandoffDirectory));
+        }
+
         public void WriteClaim(string unit, string team)
         {
             var claimPath = Path.Combine(rootPath, ClaimCommand.ClaimPath($"execution-unit:{unit}").Replace('/', Path.DirectorySeparatorChar));
@@ -485,6 +690,55 @@ public sealed class G835PublishFlowTests : IDisposable
             File.WriteAllText(Path.Combine(directory, "github-body.md"), BuildCompleteContractBody(bodyTitle ?? Title()));
             File.WriteAllText(Path.Combine(directory, "review-context.md"), "# review\n");
             File.WriteAllText(Path.Combine(directory, "implementation.md"), "# notes\n");
+        }
+
+        public void WritePacketVariant(string unit, string targetRepo, string variant)
+        {
+            var directory = PacketDirectory(unit);
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "packet.yaml"),
+                $"implementation_issue_packet:\n  issue_title: \"{Title()} {variant}\"\n  domain: {Domain}\n  target_repo: {targetRepo}\n");
+            File.WriteAllText(Path.Combine(directory, "github-body.md"), BuildCompleteContractBody($"{Title()} {variant}"));
+            File.WriteAllText(Path.Combine(directory, "review-context.md"), $"# review {variant}\n");
+            File.WriteAllText(Path.Combine(directory, "implementation.md"), $"# notes {variant}\n");
+        }
+
+        public void RecordDesignReview(string unit, string runtime, string verdict)
+        {
+            var recordedAt = new DateTimeOffset(2026, 9, 14, 12, 0, 0, TimeSpan.Zero).AddMinutes(runtime.GetHashCode() & 7);
+            var digest = CrossRuntimeDesignReviewDigest.ComputeFromDirectory(PacketDirectory(unit));
+            var verdictJson = JsonSerializer.Serialize(new
+            {
+                verdict,
+                packet_digest = digest,
+                blocking_findings = verdict == "request-changes"
+                    ? new[] { new { file = "x", line = 1, scenario = "x", finding = "x" } }
+                    : Array.Empty<object>(),
+                notes = new[] { "ok" },
+            });
+            var raw = Encoding.UTF8.GetBytes(runtime == "claude" ? ClaudeEnvelope(verdictJson) : CursorEnvelope(verdictJson));
+            var draft = new CrossRuntimeDesignReviewRecord
+            {
+                ArtifactKind = CrossRuntimeDesignReviewRecord.ArtifactKindValue,
+                PacketDigest = digest,
+                TargetRepo = Repo,
+                ExecutionUnit = unit,
+                Domain = Domain,
+                Team = Team,
+                Kind = CrossRuntimeReviewRecord.KindDesign,
+                Runtime = runtime,
+                RuntimeVersion = "2.1.269",
+                ConductorRuntime = "claude",
+                Relation = CrossRuntimeReviewRecord.RelationFor(runtime, "claude"),
+                Verdict = verdict,
+                BlockingFindings = verdict == "request-changes" ? [new CrossRuntimeReviewFinding { File = "x", Line = 1, Scenario = "x" }] : [],
+                Notes = ["ok"],
+                RecordedAt = recordedAt,
+                RawVerdictFile = string.Empty,
+                RawVerdictSha256 = CrossRuntimeReviewStore.Sha256Hex(raw),
+            };
+            var record = draft with { RawVerdictFile = CrossRuntimeDesignReviewStore.RawRelativePath(draft) };
+            Assert.True(CrossRuntimeDesignReviewStore.Write(rootPath, record, raw).Written);
         }
 
         public void RecordSatisfiedDesignReviews(string unit)
@@ -631,6 +885,33 @@ public sealed class G835PublishFlowTests : IDisposable
 
         private static string Fixture(string name) =>
             Path.Combine(RepoVersionPolicySource.RepoRoot(), "tests", "IntentSystem.Cli.Tests", "Fixtures", "G834", name);
+
+        private static Dictionary<string, byte[]> SnapshotDirectory(string directory)
+        {
+            var snapshot = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            if (!Directory.Exists(directory))
+            {
+                return snapshot;
+            }
+
+            foreach (var path in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).OrderBy(path => path, StringComparer.Ordinal))
+            {
+                snapshot[path] = File.ReadAllBytes(path);
+            }
+
+            return snapshot;
+        }
+    }
+
+    private sealed class ThrowingIssueCreator : IIssueCreator
+    {
+        public int CallCount { get; private set; }
+
+        public IssueCreateOutcome CreateIssue(string repo, string title, string bodyFilePath)
+        {
+            CallCount++;
+            throw new InvalidOperationException("tests must not reach real gh issue create");
+        }
     }
 
     private sealed class StubIssueCreator : IIssueCreator
@@ -706,6 +987,60 @@ public sealed class G835PublishFlowTests : IDisposable
                 Classification = GitHubExistingIssueClassification.Unique,
                 IssueNumber = 77,
                 IssueUrl = $"https://github.com/{repo}/issues/77",
+            };
+        }
+    }
+
+    private sealed class PostSnapshotMutatingChecker : IGitHubExistingIssueChecker
+    {
+        private readonly string packetYamlPath;
+        private readonly string bodyPath;
+        private readonly StubExistingIssueChecker inner;
+
+        public PostSnapshotMutatingChecker(string packetYamlPath, string bodyPath, GitHubExistingIssueClassification classification)
+        {
+            this.packetYamlPath = packetYamlPath;
+            this.bodyPath = bodyPath;
+            inner = new StubExistingIssueChecker(classification);
+        }
+
+        public int CallCount => inner.CallCount;
+
+        public string? LastTitle { get; private set; }
+
+        public string? LastBody { get; private set; }
+
+        public GitHubExistingIssueLookupResult FindExistingIssue(string repo, string executionUnit, string expectedTitle, string expectedBody)
+        {
+            LastTitle = expectedTitle;
+            LastBody = expectedBody;
+            File.AppendAllText(packetYamlPath, "\nmutated-on-disk: true\n");
+            File.AppendAllText(bodyPath, "\nmutated-on-disk\n");
+            return inner.FindExistingIssue(repo, executionUnit, expectedTitle, expectedBody);
+        }
+    }
+
+    private sealed class PacketSwapDuringLookupChecker : IGitHubExistingIssueChecker
+    {
+        private readonly G835PublishFlowWorkspace workspace;
+        private readonly string unit;
+        private readonly string targetRepo;
+        private readonly string alternateTitle;
+
+        public PacketSwapDuringLookupChecker(G835PublishFlowWorkspace workspace, string unit, string targetRepo, string alternateTitle)
+        {
+            this.workspace = workspace;
+            this.unit = unit;
+            this.targetRepo = targetRepo;
+            this.alternateTitle = alternateTitle;
+        }
+
+        public GitHubExistingIssueLookupResult FindExistingIssue(string repo, string executionUnit, string expectedTitle, string expectedBody)
+        {
+            workspace.WriteFullPacket(unit, targetRepo, bodyTitle: alternateTitle);
+            return new GitHubExistingIssueLookupResult
+            {
+                Classification = GitHubExistingIssueClassification.None,
             };
         }
     }

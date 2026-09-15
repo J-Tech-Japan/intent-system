@@ -26,7 +26,7 @@ internal static class CrossRuntimeReviewRuntimes
     public static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> AllowedFlags =
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
         {
-            [Codex] = ["-s", "-C", "--output-schema", "-o", "-", "-m", "--model"],
+            [Codex] = ["-s", "-C", "--output-schema", "-o", "-", "-m"],
             [Claude] = ["-p", "--permission-mode", "--disallowedTools", "--output-format", "--json-schema", "--model"],
             [Cursor] = ["-p", "--mode", "--sandbox", "--trust", "--workspace", "--output-format", "--model"],
         };
@@ -135,6 +135,7 @@ internal static class CrossRuntimeReviewCauses
     public const string PathInvalid = "cross-runtime-review-path-invalid";
     public const string OutDirNotEmpty = "cross-runtime-review-out-dir-not-empty";
     public const string PacketMissing = "cross-runtime-review-packet-missing";
+    public const string PacketInvalid = "cross-runtime-review-packet-invalid";
     public const string ArgumentInvalid = "cross-runtime-review-argument-invalid";
     public const string TeamUnresolved = "cross-runtime-review-team-unresolved";
     public const string UnitMismatch = "cross-runtime-review-unit-mismatch";

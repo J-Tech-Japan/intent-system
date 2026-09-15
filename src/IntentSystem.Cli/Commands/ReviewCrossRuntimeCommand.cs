@@ -202,11 +202,10 @@ internal static class ReviewCrossRuntimeCommand
         File.WriteAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Schema), CrossRuntimeReviewVerdict.SchemaJson, utf8);
         File.WriteAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Invocation), invocation, utf8);
 
-        var result = new CrossRuntimeReviewRequestResult
+        var result = new CrossRuntimeReviewImplementationRequestResult
         {
             Command = $"{CommandName} request",
             Outcome = "rendered",
-            Kind = CrossRuntimeReviewRecord.KindImplementation,
             Repo = repo,
             Pr = pr,
             HeadSha = head,
@@ -223,7 +222,7 @@ internal static class ReviewCrossRuntimeCommand
             Terms = TermsNotice,
         };
 
-        WriteRequestResult(writer, format, result);
+        WriteImplementationRequestResult(writer, format, result);
         return 0;
     }
 
@@ -302,7 +301,18 @@ internal static class ReviewCrossRuntimeCommand
             }
         }
 
-        var prompt = RenderDesignPrompt(unit, digest, packet, !string.IsNullOrWhiteSpace(cloneArgument));
+        string prompt;
+        try
+        {
+            prompt = RenderDesignPrompt(unit, digest, packet, !string.IsNullOrWhiteSpace(cloneArgument));
+        }
+        catch (DecoderFallbackException exception)
+        {
+            return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PacketInvalid,
+                $"packet file bytes are not valid UTF-8: {exception.Message}",
+                "repair the packet files under `.intent-cli/issues/` so every file is UTF-8 text.");
+        }
+
         var invocation = CrossRuntimeReviewRuntimes.InvocationLabel(runtime) + "\n"
             + CrossRuntimeReviewRuntimes.RenderInvocation(runtime, workspace, outDir, model) + "\n";
 
@@ -332,11 +342,22 @@ internal static class ReviewCrossRuntimeCommand
             Terms = TermsNotice,
         };
 
-        WriteRequestResult(writer, format, result);
+        WriteDesignRequestResult(writer, format, result);
         return 0;
     }
 
-    private static void WriteRequestResult(TextWriter writer, string format, CrossRuntimeReviewRequestResult result)
+    private static void WriteImplementationRequestResult(TextWriter writer, string format, CrossRuntimeReviewImplementationRequestResult result)
+    {
+        if (format == FormatJson)
+        {
+            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            return;
+        }
+
+        WriteImplementationRequestMarkdown(writer, result);
+    }
+
+    private static void WriteDesignRequestResult(TextWriter writer, string format, CrossRuntimeReviewRequestResult result)
     {
         if (format == FormatJson)
         {
@@ -344,7 +365,7 @@ internal static class ReviewCrossRuntimeCommand
         }
         else
         {
-            writer.WriteLine($"# Cross-runtime review request ({(string.Equals(result.Kind, CrossRuntimeReviewRecord.KindDesign, StringComparison.Ordinal) ? "G835 design" : "G834")})");
+            writer.WriteLine("# Cross-runtime review request (G835 design)");
             writer.WriteLine();
             if (result.Repo is not null)
             {
@@ -381,6 +402,37 @@ internal static class ReviewCrossRuntimeCommand
             writer.WriteLine(result.NoExecutionBoundary);
             writer.WriteLine(result.Terms);
         }
+    }
+
+    private static void WriteImplementationRequestMarkdown(TextWriter writer, CrossRuntimeReviewImplementationRequestResult result)
+    {
+        writer.WriteLine("# Cross-runtime review request (G834)");
+        writer.WriteLine();
+        writer.WriteLine($"- repo: {result.Repo}");
+        writer.WriteLine($"- pr: {result.Pr.ToString(CultureInfo.InvariantCulture)}");
+        writer.WriteLine($"- head sha: {result.HeadSha}");
+        writer.WriteLine($"- execution unit: {result.ExecutionUnit}");
+        writer.WriteLine($"- runtime: {result.Runtime}");
+        if (result.Model is not null)
+        {
+            writer.WriteLine($"- model: {result.Model}");
+        }
+
+        foreach (var file in result.Files)
+        {
+            writer.WriteLine($"- rendered: {file}");
+        }
+
+        writer.WriteLine();
+        writer.WriteLine("Run by the seat:");
+        writer.WriteLine();
+        writer.WriteLine("```sh");
+        writer.WriteLine(result.Invocation);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine($"Read-only enforcement: {result.ReadOnlyEnforcement}");
+        writer.WriteLine(result.NoExecutionBoundary);
+        writer.WriteLine(result.Terms);
     }
 
     internal static string RenderPrompt(
@@ -1051,10 +1103,9 @@ internal static class ReviewCrossRuntimeCommand
         var declared = context.Config.CrossRuntimeReview.TryGetDeclared(resolution.Domain, resolution.Team, out var declaration);
         var read = CrossRuntimeReviewStore.Read(context.RepoRoot, repo, pr);
         var gate = CrossRuntimeReviewGate.Evaluate(declared ? declaration : null, resolution, head, read);
-        var result = new CrossRuntimeReviewStatusResult
+        var result = new CrossRuntimeReviewImplementationStatusResult
         {
             Command = $"{CommandName} status",
-            Kind = CrossRuntimeReviewRecord.KindImplementation,
             Repo = repo,
             Pr = pr,
             HeadSha = head,
@@ -1066,7 +1117,7 @@ internal static class ReviewCrossRuntimeCommand
             Gate = gate,
         };
 
-        WriteStatusResult(writer, format, result, gate, read.Records.Count, entry => entry.HeadSha);
+        WriteImplementationStatusResult(writer, format, result, gate, read.Records.Count, entry => entry.HeadSha);
         return 0;
     }
 
@@ -1135,11 +1186,28 @@ internal static class ReviewCrossRuntimeCommand
             Gate = gate,
         };
 
-        WriteStatusResult(writer, format, result, gate, read.Records.Count, entry => entry.PacketDigest);
+        WriteDesignStatusResult(writer, format, result, gate, read.Records.Count, entry => entry.PacketDigest);
         return 0;
     }
 
-    private static void WriteStatusResult(
+    private static void WriteImplementationStatusResult(
+        TextWriter writer,
+        string format,
+        CrossRuntimeReviewImplementationStatusResult result,
+        CrossRuntimeReviewGateResult gate,
+        int totalRecords,
+        Func<CrossRuntimeReviewGateRecordEntry, string?> keySelector)
+    {
+        if (format == FormatJson)
+        {
+            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            return;
+        }
+
+        WriteStatusMarkdown(writer, "Cross-runtime review status (G834)", result.Repo, result.Pr, result.HeadSha, null, result.Resolution, result.Declared, result.DeclarationSource, result.ConductorRuntime, gate, totalRecords, keySelector);
+    }
+
+    private static void WriteDesignStatusResult(
         TextWriter writer,
         string format,
         CrossRuntimeReviewStatusResult result,
@@ -1153,26 +1221,41 @@ internal static class ReviewCrossRuntimeCommand
             return;
         }
 
-        var label = string.Equals(result.Kind, CrossRuntimeReviewRecord.KindDesign, StringComparison.Ordinal)
-            ? "Cross-runtime design review status (G835)"
-            : "Cross-runtime review status (G834)";
+        WriteStatusMarkdown(writer, "Cross-runtime design review status (G835)", result.Repo, result.Pr, result.HeadSha, result.PacketDigest, result.Resolution, result.Declared, result.DeclarationSource, result.ConductorRuntime, gate, totalRecords, keySelector);
+    }
+
+    private static void WriteStatusMarkdown(
+        TextWriter writer,
+        string label,
+        string? repo,
+        int? pr,
+        string? headSha,
+        string? packetDigest,
+        CrossRuntimeReviewResolution resolution,
+        bool declared,
+        string? declarationSource,
+        string? conductorRuntime,
+        CrossRuntimeReviewGateResult gate,
+        int totalRecords,
+        Func<CrossRuntimeReviewGateRecordEntry, string?> keySelector)
+    {
         writer.WriteLine($"# {label}");
         writer.WriteLine();
-        if (result.Repo is not null)
+        if (repo is not null)
         {
-            writer.WriteLine($"- repo: {result.Repo} pr: {result.Pr!.Value.ToString(CultureInfo.InvariantCulture)} head: {result.HeadSha}");
+            writer.WriteLine($"- repo: {repo} pr: {pr!.Value.ToString(CultureInfo.InvariantCulture)} head: {headSha}");
         }
 
-        if (result.PacketDigest is not null)
+        if (packetDigest is not null)
         {
-            writer.WriteLine($"- packet digest: {result.PacketDigest}");
+            writer.WriteLine($"- packet digest: {packetDigest}");
         }
 
-        writer.WriteLine($"- execution unit: {result.Resolution.ExecutionUnit} ({result.Resolution.ExecutionUnitSource})");
-        writer.WriteLine($"- domain: {result.Resolution.Domain} ({result.Resolution.DomainSource})");
-        writer.WriteLine($"- team: {result.Resolution.Team} ({result.Resolution.TeamSource})");
-        writer.WriteLine(result.Declared
-            ? $"- declared: yes ({result.DeclarationSource}), conductor runtime {result.ConductorRuntime}"
+        writer.WriteLine($"- execution unit: {resolution.ExecutionUnit} ({resolution.ExecutionUnitSource})");
+        writer.WriteLine($"- domain: {resolution.Domain} ({resolution.DomainSource})");
+        writer.WriteLine($"- team: {resolution.Team} ({resolution.TeamSource})");
+        writer.WriteLine(declared
+            ? $"- declared: yes ({declarationSource}), conductor runtime {conductorRuntime}"
             : "- declared: no");
         writer.WriteLine($"- decision: {gate.Decision}");
         foreach (var reason in gate.Reasons)
@@ -1219,9 +1302,7 @@ internal static class ReviewCrossRuntimeCommand
             return kind;
         }
 
-        return hasPrArguments
-            ? CrossRuntimeReviewRecord.KindImplementation
-            : CrossRuntimeReviewRecord.KindDesign;
+        return CrossRuntimeReviewRecord.KindImplementation;
     }
 
     private static bool TryOptionalModel(
@@ -1294,14 +1375,22 @@ internal static class ReviewCrossRuntimeCommand
                 return false;
             }
 
-            if (index + 1 >= args.Length || string.IsNullOrEmpty(args[index + 1]))
+            if (index + 1 >= args.Length)
             {
                 writer.WriteLine($"{argument} requires a value.");
                 writer.WriteLine(usage);
                 return false;
             }
 
-            options[argument] = args[++index];
+            var value = args[++index];
+            if (argument != "--model" && string.IsNullOrEmpty(value))
+            {
+                writer.WriteLine($"{argument} requires a value.");
+                writer.WriteLine(usage);
+                return false;
+            }
+
+            options[argument] = value;
         }
 
         if (options.TryGetValue("--format", out var requested))
@@ -1492,6 +1581,28 @@ internal sealed record CrossRuntimeReviewRefusal
     [JsonPropertyName("resolution")] public CrossRuntimeReviewResolution? Resolution { get; init; }
 }
 
+internal sealed record CrossRuntimeReviewImplementationRequestResult
+{
+    [JsonPropertyName("command")] public required string Command { get; init; }
+    [JsonPropertyName("outcome")] public required string Outcome { get; init; }
+    [JsonPropertyName("repo")] public required string Repo { get; init; }
+    [JsonPropertyName("pr")] public required int Pr { get; init; }
+    [JsonPropertyName("head_sha")] public required string HeadSha { get; init; }
+    [JsonPropertyName("execution_unit")] public required string ExecutionUnit { get; init; }
+    [JsonPropertyName("runtime")] public required string Runtime { get; init; }
+    [JsonPropertyName("model")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Model { get; init; }
+    [JsonPropertyName("out_dir")] public required string OutDir { get; init; }
+    [JsonPropertyName("files")] public required IReadOnlyList<string> Files { get; init; }
+    [JsonPropertyName("invocation")] public required string Invocation { get; init; }
+    [JsonPropertyName("run_by")] public required string RunBy { get; init; }
+    [JsonPropertyName("raw_verdict_file")] public required string RawVerdictFile { get; init; }
+    [JsonPropertyName("read_only_enforcement")] public required string ReadOnlyEnforcement { get; init; }
+    [JsonPropertyName("no_execution_boundary")] public required string NoExecutionBoundary { get; init; }
+    [JsonPropertyName("terms")] public required string Terms { get; init; }
+}
+
 internal sealed record CrossRuntimeReviewRequestResult
 {
     [JsonPropertyName("command")] public required string Command { get; init; }
@@ -1541,6 +1652,20 @@ internal sealed record CrossRuntimeReviewRecordResult
     [JsonPropertyName("comment_out")] public string? CommentOut { get; init; }
     [JsonPropertyName("post_command")] public required string PostCommand { get; init; }
     [JsonPropertyName("durability")] public required string Durability { get; init; }
+}
+
+internal sealed record CrossRuntimeReviewImplementationStatusResult
+{
+    [JsonPropertyName("command")] public required string Command { get; init; }
+    [JsonPropertyName("repo")] public required string Repo { get; init; }
+    [JsonPropertyName("pr")] public required int Pr { get; init; }
+    [JsonPropertyName("head_sha")] public required string HeadSha { get; init; }
+    [JsonPropertyName("resolution")] public required CrossRuntimeReviewResolution Resolution { get; init; }
+    [JsonPropertyName("declared")] public required bool Declared { get; init; }
+    [JsonPropertyName("declaration_source")] public string? DeclarationSource { get; init; }
+    [JsonPropertyName("conductor_runtime")] public string? ConductorRuntime { get; init; }
+    [JsonPropertyName("record_files")] public required IReadOnlyList<string> RecordFiles { get; init; }
+    [JsonPropertyName("gate")] public required CrossRuntimeReviewGateResult Gate { get; init; }
 }
 
 internal sealed record CrossRuntimeReviewStatusResult
