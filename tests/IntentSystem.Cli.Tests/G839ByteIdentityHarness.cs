@@ -21,7 +21,8 @@ internal static class G839ByteIdentityHarness
     internal const string Domain = "intent-cli";
     internal const string Repo = "J-Tech-Japan/intent-system";
     internal const string UngatedRepo = "J-Tech-Japan/other";
-    internal const string Unit = "G839-BYTE";
+    internal const string Unit = "G839";
+    internal const string WorkspaceRootPlaceholder = "{{G839_WORKSPACE_ROOT}}";
     internal const int Issue = 839;
     internal const int Pr = 1823;
     internal const string Team = "intent-cli-dev";
@@ -30,6 +31,27 @@ internal static class G839ByteIdentityHarness
     internal const string H3 = "3333333333333333333333333333333333333333";
 
     internal static readonly DateTimeOffset FixedNow = new(2026, 9, 16, 12, 0, 0, TimeSpan.Zero);
+
+    internal static string NormalizeCapturedOutput(string output, params string[] workspaceRoots)
+    {
+        var normalized = output;
+        foreach (var root in workspaceRoots
+                     .Where(root => !string.IsNullOrEmpty(root))
+                     .Distinct(StringComparer.Ordinal)
+                     .OrderByDescending(root => root.Length))
+        {
+            normalized = normalized.Replace(root, WorkspaceRootPlaceholder, StringComparison.Ordinal);
+            if (Path.DirectorySeparatorChar != '/')
+            {
+                normalized = normalized.Replace(
+                    root.Replace('\\', '/'),
+                    WorkspaceRootPlaceholder,
+                    StringComparison.Ordinal);
+            }
+        }
+
+        return normalized;
+    }
 
     internal static readonly string[] RecoveryScenarioIds =
     [
@@ -151,7 +173,7 @@ internal static class G839ByteIdentityHarness
             workspace.Context,
             ["--format", "json", "--domain", Domain],
             writer);
-        return writer.ToString();
+        return NormalizeCapturedOutput(writer.ToString(), workspace.RootPath);
     }
 
     private static string CaptureAutomationDoctor()
@@ -159,7 +181,7 @@ internal static class G839ByteIdentityHarness
         using var workspace = new DoctorWorkspace();
         using var writer = new StringWriter();
         AutomationDoctorCommand.Execute(workspace.Context, ["--format", "text"], writer);
-        return writer.ToString();
+        return NormalizeCapturedOutput(writer.ToString(), workspace.RootPath);
     }
 
 
@@ -451,6 +473,14 @@ internal static class G839ByteIdentityHarness
             {
                 WriteQueueState(linkedPr, publishPr ?? linkedPr, duplicateQueueItem, queueExecutionUnit);
             }
+            else
+            {
+                var queuePath = Context.GetQueueStatePath();
+                if (File.Exists(queuePath))
+                {
+                    File.Delete(queuePath);
+                }
+            }
 
             var issueDir = Path.Combine(RootPath, ".intent-cli", "issues", Unit);
             Directory.CreateDirectory(issueDir);
@@ -467,6 +497,18 @@ internal static class G839ByteIdentityHarness
                     PublishedLabelName = "intent-target",
                     LinkedPrNumber = publishPr ?? linkedPr,
                     LinkedPrUrl = $"https://github.com/{Repo}/pull/{publishPr ?? linkedPr}",
+                }));
+        }
+
+        public void WriteEmptyQueueState()
+        {
+            File.WriteAllText(
+                Context.GetQueueStatePath(),
+                QueueStateSerializer.Serialize(new QueueState
+                {
+                    SchemaVersion = "1",
+                    UpdatedAt = FixedNow,
+                    Items = Array.Empty<QueueItem>(),
                 }));
         }
 
@@ -597,6 +639,8 @@ internal static class G839ByteIdentityHarness
             };
         }
 
+        public string RootPath => rootPath;
+
         public CliContext Context { get; }
 
         public void WriteBindings(string content)
@@ -669,6 +713,8 @@ internal static class G839ByteIdentityHarness
                 },
             };
         }
+
+        public string RootPath => rootPath;
 
         public CliContext Context { get; }
 

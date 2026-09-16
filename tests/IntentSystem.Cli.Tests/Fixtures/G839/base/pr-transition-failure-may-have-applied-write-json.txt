@@ -1,14 +1,14 @@
 {
   "repo": "J-Tech-Japan/intent-system",
   "pr": 1823,
-  "transition": "approved",
+  "transition": "request-update",
   "mode": "write",
   "applied": false,
   "add_labels": [
-    "intent-pr-approved"
+    "intent-pr-request-update"
   ],
   "addLabels": [
-    "intent-pr-approved"
+    "intent-pr-request-update"
   ],
   "remove_labels": [
     "intent-pr-rereview-ready"
@@ -24,13 +24,19 @@
     "intent-target",
     "intent-pr-rereview-ready"
   ],
-  "summary": "Would apply host PR transition \u0027approved\u0027: add intent-pr-approved; remove intent-pr-rereview-ready.",
+  "summary": "Would apply host PR transition \u0027request-update\u0027: add intent-pr-request-update; remove intent-pr-rereview-ready.",
   "ci_wait_cleared": false,
-  "may_have_applied": false,
-  "mayHaveApplied": false,
-  "intended_labels": null,
-  "intendedLabels": null,
-  "recovery_command": null,
-  "recoveryCommand": null,
-  "error": "failed to apply PR transition on PR #1823 in J-Tech-Japan/intent-system: failed to apply PR transition"
+  "may_have_applied": true,
+  "mayHaveApplied": true,
+  "intended_labels": [
+    "intent-pr-request-update",
+    "intent-target"
+  ],
+  "intendedLabels": [
+    "intent-pr-request-update",
+    "intent-target"
+  ],
+  "recovery_command": "gh pr view 1823 --repo J-Tech-Japan/intent-system --json labels",
+  "recoveryCommand": "gh pr view 1823 --repo J-Tech-Japan/intent-system --json labels",
+  "error": "failed to confirm PR transition on PR #1823 in J-Tech-Japan/intent-system (the mutation may already have applied \u2014 do not assume it did not): simulated ambiguous gh API failure"
 }

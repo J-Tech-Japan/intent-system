@@ -1,14 +1,19 @@
 {
   "repo": "J-Tech-Japan/intent-system",
   "issue": 839,
-  "execution_unit": "G839-BYTE",
+  "execution_unit": "G839",
   "team": "intent-cli-dev",
   "mode": "write",
-  "outcome": "refused",
-  "cause": "unit-mismatch",
-  "linked_pr": null,
-  "applied": false,
-  "planned_mutations": [],
-  "warnings": [],
-  "summary": "refusing: execution unit does not match the queue item, --execution-unit, and issue title token."
+  "outcome": "recovered",
+  "cause": null,
+  "linked_pr": 1823,
+  "applied": true,
+  "planned_mutations": [
+    "remove only \u0027intent-pr-created\u0027 from issue #839",
+    "append \u0060pr-created-stale-recovery-started\u0060 (or reuse open started) then \u0060pr-created-stale-recovered\u0060 to runs.jsonl"
+  ],
+  "warnings": [
+    "open-closing-PR check considers at most the first 200 OPEN pull requests returned by the repository listing."
+  ],
+  "summary": "removed intent-pr-created for PR #1823 and appended recovered event."
 }

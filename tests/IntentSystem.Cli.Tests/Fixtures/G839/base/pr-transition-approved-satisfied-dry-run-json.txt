@@ -44,7 +44,7 @@
   "cross_runtime_review": {
     "decision": "satisfied",
     "reasons": [],
-    "execution_unit": "G839-BYTE",
+    "execution_unit": "G839",
     "domain": "intent-cli",
     "team": "intent-cli-dev"
   }

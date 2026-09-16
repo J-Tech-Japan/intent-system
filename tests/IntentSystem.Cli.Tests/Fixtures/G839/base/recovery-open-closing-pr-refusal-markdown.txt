@@ -1,8 +1,11 @@
 # automation pr-created-stale-recovery (J-Tech-Japan/intent-system #839)
 
-- execution_unit: G839-BYTE
+- execution_unit: G839
 - mode: dry-run
 - outcome: refused
-- cause: unit-mismatch
+- cause: open-closing-pr
 - applied: false
-- summary: refusing: execution unit does not match the queue item, --execution-unit, and issue title token.
+- summary: refusing: an OPEN PR closes this issue (checked at most the first 200 OPEN pull requests).
+
+## Warnings
+- open-closing-PR check considers at most the first 200 OPEN pull requests returned by the repository listing.

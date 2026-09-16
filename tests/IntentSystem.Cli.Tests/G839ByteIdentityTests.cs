@@ -51,6 +51,7 @@ public sealed partial class G839ByteIdentityTests
     {
         var expected = File.ReadAllText(FixturePath(fixtureId));
         var actual = CapturePrTransition(fixtureId);
+        G839FixtureExpectations.AssertMatchesFixtureName(fixtureId, actual);
         Assert.Equal(expected, actual);
     }
 
@@ -60,6 +61,7 @@ public sealed partial class G839ByteIdentityTests
     {
         var expected = File.ReadAllText(FixturePath(fixtureId));
         var actual = CapturePrTransition(fixtureId);
+        G839FixtureExpectations.AssertMatchesFixtureName(fixtureId, actual);
         Assert.Equal(expected, actual);
     }
 
@@ -69,6 +71,7 @@ public sealed partial class G839ByteIdentityTests
     {
         var expected = File.ReadAllText(FixturePath(fixtureId));
         var actual = G839ByteIdentityHarness.CapturePlannedLabelsConsumer(fixtureId);
+        G839FixtureExpectations.AssertMatchesFixtureName(fixtureId, actual);
         Assert.Equal(expected, actual);
     }
 

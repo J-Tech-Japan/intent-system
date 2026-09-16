@@ -1,11 +1,11 @@
 # Automation doctor
 status: ok
 read_only: true
-installed_cli_path: /var/folders/bs/1qh88g953fx8dccvxc9p5rhr0000gn/T/automation-doctor-g839-byte-identity/.intent-cli/bin/intent-cli
+installed_cli_path: {{G839_WORKSPACE_ROOT}}/.intent-cli/bin/intent-cli
 binary_source: cwd-local-shim
-host_data_root: /var/folders/bs/1qh88g953fx8dccvxc9p5rhr0000gn/T/automation-doctor-g839-byte-identity/.intent-cli
+host_data_root: {{G839_WORKSPACE_ROOT}}/.intent-cli
 github_api_status: healthy
-Host automation command preflight passed: required installed automation command surfaces are available (binary_source=cwd-local-shim, host_data_root=/var/folders/bs/1qh88g953fx8dccvxc9p5rhr0000gn/T/automation-doctor-g839-byte-identity/.intent-cli). No named team is declared or discovered; topology health is unjudged until an expected team is declared.
+Host automation command preflight passed: required installed automation command surfaces are available (binary_source=cwd-local-shim, host_data_root={{G839_WORKSPACE_ROOT}}/.intent-cli). No named team is declared or discovered; topology health is unjudged until an expected team is declared.
 
 ## Shared session-layer preflight
 verdict: unjudged

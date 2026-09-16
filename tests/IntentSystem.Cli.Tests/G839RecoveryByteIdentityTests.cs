@@ -17,6 +17,7 @@ public sealed partial class G839RecoveryByteIdentityTests
     {
         var expected = File.ReadAllText(FixturePath(fixtureId));
         var actual = CaptureRecovery(fixtureId);
+        G839FixtureExpectations.AssertMatchesFixtureName(fixtureId, actual);
         Assert.Equal(expected, actual);
     }
 
@@ -26,6 +27,7 @@ public sealed partial class G839RecoveryByteIdentityTests
     {
         var expected = File.ReadAllText(FixturePath(fixtureId));
         var actual = CaptureWorkerNextAction();
+        G839FixtureExpectations.AssertMatchesFixtureName(fixtureId, actual);
         Assert.Equal(expected, actual);
     }
 

@@ -28,7 +28,8 @@ public sealed partial class G839RecoveryByteIdentityTests
         }
 
         ConfigureRecoveryScenario(workspace, fixtureId);
-        return G839ByteIdentityHarness.RunRecovery(workspace, G839ByteIdentityHarness.BuildRecoveryArgs(fixtureId));
+        var output = G839ByteIdentityHarness.RunRecovery(workspace, G839ByteIdentityHarness.BuildRecoveryArgs(fixtureId));
+        return G839ByteIdentityHarness.NormalizeCapturedOutput(output, workspace.RootPath);
     }
 
     private static void ConfigureRecoveryScenario(G839ByteIdentityHarness.RecoveryWorkspace workspace, string fixtureId)
@@ -146,7 +147,7 @@ public sealed partial class G839RecoveryByteIdentityTests
                 return;
             case "recovery-queue-item-missing-refusal-json":
             case "recovery-queue-item-missing-refusal-markdown":
-                workspace.WriteProceedHostState(G839ByteIdentityHarness.Pr, includeQueueItem: false);
+                workspace.WriteEmptyQueueState();
                 return;
             case "recovery-queue-item-ambiguous-refusal-json":
             case "recovery-queue-item-ambiguous-refusal-markdown":
@@ -217,7 +218,7 @@ public sealed partial class G839RecoveryByteIdentityTests
             workspace.Context,
             ["--repo", G839ByteIdentityHarness.Repo, "--format", "json"],
             writer);
-        return writer.ToString();
+        return G839ByteIdentityHarness.NormalizeCapturedOutput(writer.ToString(), workspace.RootPath);
     }
 
     private sealed class WorkerNextActionSeams : IDisposable

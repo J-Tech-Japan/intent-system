@@ -1,6 +1,6 @@
 # automation pr-created-stale-recovery (J-Tech-Japan/intent-system #839)
 
-- execution_unit: G839-BYTE
+- execution_unit: G839
 - mode: dry-run
 - outcome: refused
 - cause: unit-mismatch

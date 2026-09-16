@@ -19,6 +19,7 @@ public sealed class G839PlannedLabelsPreflightByteIdentityTests
         const string fixtureId = "planned-labels-worker-pr-comment-preflight";
         var expected = File.ReadAllText(FixturePath(fixtureId));
         var actual = Capture();
+        G839FixtureExpectations.AssertMatchesFixtureName(fixtureId, actual);
         Assert.Equal(expected, actual);
     }
 
@@ -47,7 +48,7 @@ public sealed class G839PlannedLabelsPreflightByteIdentityTests
             workspace.Context,
             ["--repo", G839ByteIdentityHarness.Repo, "--pr", "616", "--format", "json"],
             writer);
-        return writer.ToString();
+        return G839ByteIdentityHarness.NormalizeCapturedOutput(writer.ToString(), workspace.RootPath);
     }
 
     private sealed class WorkerPrCommentPreflightSeams : IDisposable

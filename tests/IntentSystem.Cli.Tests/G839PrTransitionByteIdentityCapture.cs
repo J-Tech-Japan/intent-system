@@ -82,7 +82,7 @@ public sealed partial class G839ByteIdentityTests
                 || fixtureId.Contains("parse-error", StringComparison.Ordinal)
                 || fixtureId.StartsWith("pr-transition-refusal-", StringComparison.Ordinal)))
             {
-                return writer.ToString();
+                return G839ByteIdentityHarness.NormalizeCapturedOutput(writer.ToString(), root);
             }
 
             if (exit != 0)
@@ -91,7 +91,7 @@ public sealed partial class G839ByteIdentityTests
                     $"pr-transition capture for '{fixtureId}' exited {exit}: {writer}");
             }
 
-            return writer.ToString();
+            return G839ByteIdentityHarness.NormalizeCapturedOutput(writer.ToString(), root);
         }
 
         public void Dispose()
@@ -213,6 +213,7 @@ public sealed partial class G839ByteIdentityTests
                 var id when id.Contains("review-start", StringComparison.Ordinal) => "review-start",
                 var id when id.Contains("request-update", StringComparison.Ordinal) => "request-update",
                 var id when id.Contains("review-release", StringComparison.Ordinal) => "review-release",
+                var id when id.Contains("failure-may-have-applied", StringComparison.Ordinal) => "request-update",
                 _ => "approved",
             };
 
